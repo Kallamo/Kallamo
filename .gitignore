@@ -1,0 +1,13 @@
+node_modules/
+dist/
+out/
+*.log
+companion.db
+companion.db-journal
+.DS_Store
+.env
+.env.local
+.env.*.local
+.vscode/
+.idea/
+*.local

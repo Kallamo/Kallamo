@@ -1,0 +1,359 @@
+<div id="settings-modal" class="fixed inset-x-0 bottom-0 top-12 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-8 hidden transition-opacity duration-200">
+    <div class="w-full max-w-4xl h-full max-h-150 bg-[#000D11] rounded-xl shadow-2xl border border-gray-800/60 flex flex-col overflow-hidden">
+        
+        <div class="shrink-0 flex justify-between items-center h-14 w-full px-6 bg-[#011419] border-b border-gray-800/50">
+            <h2 class="text-lg font-bold text-white tracking-wide">Settings</h2>
+            <button id="btn-close-settings" class="text-gray-400 hover:text-[#ff5f56] transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+        </div>
+
+        <div class="flex flex-1 overflow-hidden">
+            
+            <div class="w-56 bg-[#011419] border-r border-gray-800/50 p-4 flex flex-col gap-2">
+                <button class="settings-tab active text-left px-4 py-2.5 rounded-md text-sm font-medium bg-[#1a2d32] text-white transition-colors" data-target="tab-api">
+                    API
+                </button>
+                <button class="settings-tab text-left px-4 py-2.5 rounded-md text-sm font-medium text-gray-400 hover:bg-[#1a2d32]/50 hover:text-gray-200 transition-colors" data-target="tab-interface">
+                    Interface
+                </button>
+                <button class="settings-tab text-left px-4 py-2.5 rounded-md text-sm font-medium text-gray-400 hover:bg-[#1a2d32]/50 hover:text-gray-200 transition-colors" data-target="tab-advanced">
+                    Advanced
+                </button>
+            </div>
+
+            <div class="flex-1 p-8 overflow-y-auto bg-[#000D11]">
+                
+                <div id="tab-api" class="tab-content block h-full flex flex-col">
+                    <div class="shrink-0 flex justify-between items-center mb-6 border-b border-gray-800 pb-3">
+                        <h3 class="text-xl font-bold text-white">API Profiles</h3>
+                        <button id="btn-add-profile" class="flex items-center space-x-1 bg-[#1a2d32] hover:bg-[#233a41] text-white text-sm font-medium py-1.5 px-3 rounded transition-colors border border-gray-700/50">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                            <span>Add Profile</span>
+                        </button>
+                    </div>
+
+                    <div id="api-profiles-list" class="flex-1 overflow-y-auto space-y-3 pr-2">
+                        <p id="empty-api-msg" class="text-sm text-gray-500 italic mt-4">No API profiles configured yet.</p>
+                    </div>
+
+                    <div id="new-profile-form" class="hidden flex-1 flex flex-col overflow-y-auto pr-2 pb-4">
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-bold text-gray-200 mb-1.5">Profile Name</label>
+                                <input type="text" id="api-profile-name" placeholder="e.g., OpenRouter, My Local LLM" class="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2.5 focus:outline-none focus:border-[#DDBA6E] focus:ring-1 focus:ring-[#DDBA6E] placeholder-gray-600">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-bold text-gray-200 mb-1.5">Provider</label>
+                                <select id="api-provider" class="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2.5 focus:outline-none focus:border-[#DDBA6E] focus:ring-1 focus:ring-[#DDBA6E] appearance-none">
+                                    <option value="OpenRouter">OpenRouter</option>
+                                    <option value="Anthropic">Anthropic</option>
+                                    <option value="Google AI">Google AI</option>
+                                    <option value="OpenAI">OpenAI</option>
+                                    <option value="Local">Local (LM Studio / Ollama)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <div id="toggle-base-url" class="flex items-center text-xs text-gray-400 mb-1.5 space-x-1 cursor-pointer hover:text-gray-300 select-none w-max">
+                                    <svg id="chevron-base-url" class="transform transition-transform duration-200" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                                    <span>Custom Base URL (optional)</span>
+                                </div>
+                                <div id="container-base-url" class="hidden transition-all duration-300">
+                                    <input type="text" id="api-base-url" placeholder="https://api.example.com/v1" class="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2.5 focus:outline-none focus:border-[#DDBA6E] focus:ring-1 focus:ring-[#DDBA6E] placeholder-gray-600 mb-1">
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-bold text-gray-200 mb-1.5">API Key</label>
+                                <div class="relative">
+                                    <input type="password" id="api-key" placeholder="sk-..." class="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2.5 focus:outline-none focus:border-[#DDBA6E] focus:ring-1 focus:ring-[#DDBA6E] placeholder-gray-600 pr-10">
+                                    <button type="button" id="btn-toggle-api-key" class="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-500 hover:text-gray-300 transition-colors">
+                                        <svg id="icon-eye-off" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
+                                        <svg id="icon-eye-open" class="hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="mt-6 border-t border-gray-800/80 pt-5">
+                                <div class="flex items-center justify-between mb-4">
+                                    <div class="flex items-center space-x-2 text-white font-bold text-sm">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+                                        <span>Models</span>
+                                    </div>
+                                    <div class="flex space-x-2">
+                                        <button type="button" id="btn-show-add-model" class="bg-transparent border border-gray-700 hover:bg-gray-800 text-white text-xs px-3 py-1.5 rounded transition-colors flex items-center space-x-1">
+                                            <span>+ Add</span>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div id="add-model-container" class="hidden mb-4 transition-all">
+                                    <div class="flex items-center space-x-2">
+                                        <div class="relative flex-1">
+                                            <svg class="absolute left-3 top-2.5 text-[#DDBA6E]" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                            <input type="text" id="new-model-input" placeholder="Type model name (e.g., gemini-3.1-pro)..." class="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md pl-9 pr-3 py-2 focus:outline-none focus:border-[#DDBA6E]">
+                                        </div>
+                                        <button type="button" id="btn-cancel-model" class="bg-transparent hover:bg-gray-800 text-gray-400 hover:text-white px-3 py-2 rounded text-sm transition-colors border border-gray-800">Cancel</button>
+                                        <button type="button" id="btn-confirm-model" class="bg-[#DDBA6E] hover:bg-[#ebd093] text-[#011419] px-3 py-2 rounded text-sm font-bold transition-colors">Confirm</button>
+                                    </div>
+                                </div>
+                                <div>
+                                    <p class="text-xs text-gray-500 mb-2 font-medium"><span id="model-count-display">0</span> Models</p>
+                                    <div id="models-container" class="flex flex-wrap gap-2 min-h-8"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mt-8 flex justify-end space-x-3 border-t border-gray-800 pt-4">
+                            <button id="btn-cancel-profile" class="px-4 py-2 text-sm font-medium text-gray-400 hover:text-white transition-colors">Cancel</button>
+                            <button id="btn-save-profile" class="px-4 py-2 text-sm font-medium bg-[#DDBA6E] hover:bg-[#ebd093] text-[#011419] rounded transition-colors">Create profile</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="tab-interface" class="tab-content hidden h-full flex-col">
+                    <div class="shrink-0 mb-6 border-b border-gray-800 pb-3">
+                        <h3 class="text-xl font-bold text-white">Interface Settings</h3>
+                        <p class="text-sm text-gray-400 mt-1">Customize the visual layout, typography, and developer visuals.</p>
+                    </div>
+
+                    <div class="flex-1 overflow-y-auto space-y-8 pr-2 custom-scrollbar pb-6">
+                        
+                        <div class="space-y-4">
+                            <h4 class="text-xs font-bold text-gray-500 uppercase tracking-wider">Global Theme</h4>
+                            <div class="flex items-center justify-between bg-[#051116] p-4 rounded-lg border border-gray-800/80">
+                                <div>
+                                    <span class="block text-sm text-gray-200 font-bold mb-1">Accent Color</span>
+                                    <span class="text-xs text-gray-500">Choose the primary color for the application.</span>
+                                </div>
+                                <div class="flex space-x-2" id="setting-color-group">
+                                    <button class="btn-theme-color w-6 h-6 rounded-full ring-2 ring-white ring-offset-2 ring-offset-[#051116] transition-all hover:scale-110" style="background-color: #DDBA6E;" data-color="#DDBA6E"></button>
+                                    <button class="btn-theme-color w-6 h-6 rounded-full ring-2 ring-transparent ring-offset-2 ring-offset-[#051116] transition-all hover:scale-110" style="background-color: #ff5f56;" data-color="#ff5f56"></button>
+                                    <button class="btn-theme-color w-6 h-6 rounded-full ring-2 ring-transparent ring-offset-2 ring-offset-[#051116] transition-all hover:scale-110" style="background-color: #3b82f6;" data-color="#3b82f6"></button>
+                                    <button class="btn-theme-color w-6 h-6 rounded-full ring-2 ring-transparent ring-offset-2 ring-offset-[#051116] transition-all hover:scale-110" style="background-color: #10b981;" data-color="#10b981"></button>
+                                    <button class="btn-theme-color w-6 h-6 rounded-full ring-2 ring-transparent ring-offset-2 ring-offset-[#051116] transition-all hover:scale-110" style="background-color: #8b5cf6;" data-color="#8b5cf6"></button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="space-y-4">
+                            <h4 class="text-xs font-bold text-gray-500 uppercase tracking-wider">Typography</h4>
+                            <div class="flex items-center justify-between bg-[#051116] p-4 rounded-lg border border-gray-800/80">
+                                <div>
+                                    <span class="block text-sm text-gray-200 font-bold mb-1">Font Family</span>
+                                    <span class="text-xs text-gray-500">Choose the global font for the workspace.</span>
+                                </div>
+                                <select id="setting-font-family" class="bg-[#011419] border border-gray-700 text-gray-200 text-sm rounded-md px-3 py-2 focus:outline-none focus:border-[#DDBA6E] cursor-pointer">
+                                    <option value="sans">Inter (Modern & Clean)</option>
+                                    <option value="serif">Merriweather (Classic Book)</option>
+                                </select>
+                            </div>
+                            <div class="flex items-center justify-between bg-[#051116] p-4 rounded-lg border border-gray-800/80">
+                                <div>
+                                    <span class="block text-sm text-gray-200 font-bold mb-1">Global Scale</span>
+                                    <span class="text-xs text-gray-500">Adjust the overall size of the application.</span>
+                                </div>
+                                <div class="flex bg-[#011419] border border-gray-700 rounded-lg p-1 space-x-1" id="setting-font-size-group">
+                                    <button class="btn-font-size px-4 py-1.5 rounded-md text-xs font-medium text-gray-500 hover:text-white transition-colors" data-size="small">Small</button>
+                                    <button class="btn-font-size px-4 py-1.5 rounded-md text-sm font-bold bg-[#1a2d32] text-white transition-colors shadow-sm border border-[#DDBA6E]/30" data-size="medium">Medium</button>
+                                    <button class="btn-font-size px-4 py-1.5 rounded-md text-base font-medium text-gray-500 hover:text-white transition-colors" data-size="large">Large</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="space-y-4">
+                            <h4 class="text-xs font-bold text-gray-500 uppercase tracking-wider">Chat Layout Mode</h4>
+                            <div class="grid grid-cols-2 gap-4" id="setting-layout-group">
+                                <button class="btn-chat-layout border-2 border-[#DDBA6E] bg-[#1a2d32] rounded-xl p-5 flex flex-col items-center gap-4 transition-all shadow-md" data-layout="bubbles">
+                                    <div class="w-full space-y-2.5">
+                                        <div class="w-3/4 h-3.5 bg-gray-600 rounded-full ml-auto"></div>
+                                        <div class="w-3/4 h-3.5 bg-[#DDBA6E] rounded-full theme-accent-bg"></div>
+                                    </div>
+                                    <span class="text-sm font-bold text-white">Standard (Bubbles)</span>
+                                </button>
+                                <button class="btn-chat-layout border-2 border-gray-800 bg-[#0a161d] hover:border-gray-600 rounded-xl p-5 flex flex-col items-center gap-4 transition-all opacity-60 hover:opacity-100" data-layout="document">
+                                    <div class="w-full space-y-2.5">
+                                        <div class="w-full h-2 bg-gray-600 rounded-full"></div>
+                                        <div class="w-4/5 h-2 bg-gray-600 rounded-full"></div>
+                                        <div class="w-full h-2 bg-[#DDBA6E] rounded-full mt-3 theme-accent-bg"></div>
+                                        <div class="w-3/5 h-2 bg-[#DDBA6E] rounded-full theme-accent-bg"></div>
+                                    </div>
+                                    <span class="text-sm font-bold text-gray-300">Document (Seamless)</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="space-y-4">
+                            <h4 class="text-xs font-bold text-gray-500 uppercase tracking-wider">Developer & Markdown</h4>
+                            <div class="flex items-center justify-between bg-[#051116] p-4 rounded-lg border border-gray-800/80">
+                                <div>
+                                    <span class="block text-sm text-gray-200 font-bold mb-1">Code Syntax Theme</span>
+                                    <span class="text-xs text-gray-500">Theme for generated code blocks.</span>
+                                </div>
+                                <select id="setting-code-theme" class="bg-[#011419] border border-gray-700 text-gray-200 text-sm rounded-md px-3 py-2 focus:outline-none focus:border-[#DDBA6E] cursor-pointer">
+                                    <option value="github-dark">GitHub Dark</option>
+                                    <option value="atom-one-dark">Atom One Dark</option>
+                                    <option value="tokyo-night-dark">Tokyo Night Dark</option>
+                                </select>
+                            </div>
+                            
+                            <div class="flex items-center justify-between bg-[#051116] p-4 rounded-lg border border-gray-800/80">
+                                <div>
+                                    <span class="block text-sm text-gray-200 font-bold mb-1">Show Line Numbers</span>
+                                    <span class="text-xs text-gray-500">Display line numbers in code blocks.</span>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="setting-line-numbers" class="sr-only peer">
+                                    <div class="w-9 h-5 bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#DDBA6E] theme-peer-checked"></div>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="space-y-4">
+                            <h4 class="text-xs font-bold text-gray-500 uppercase tracking-wider">Performance</h4>
+                            <div class="flex items-center justify-between bg-[#051116] p-4 rounded-lg border border-gray-800/80">
+                                <div>
+                                    <span class="block text-sm text-gray-200 font-bold mb-1">Enable Backdrop Blurs</span>
+                                    <span class="text-xs text-gray-500">Turn off to save battery and GPU memory.</span>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="setting-blur" class="sr-only peer" checked>
+                                    <div class="w-9 h-5 bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#DDBA6E] theme-peer-checked"></div>
+                                </label>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+                
+                <!-- Advanced Settings Tab -->
+                <div id="tab-advanced" class="tab-content hidden h-full flex-col">
+                    <div class="shrink-0 mb-6 border-b border-gray-800 pb-3">
+                        <h3 class="text-xl font-bold text-white">Advanced Options</h3>
+                        <p class="text-sm text-gray-400 mt-1">Under the hood configurations for RAG, Hardware, and Workspace management.</p>
+                    </div>
+
+                    <div class="flex-1 overflow-y-auto space-y-8 pr-2 custom-scrollbar pb-6">
+                        
+                        <!-- RAG & Context Tuning -->
+                        <div class="space-y-4">
+                            <h4 class="text-xs font-bold text-gray-500 uppercase tracking-wider">RAG & Context Tuning</h4>
+                            
+                            <div class="bg-[#051116] p-4 rounded-lg border border-gray-800/80 space-y-5">
+                                <div>
+                                    <div class="flex justify-between mb-1">
+                                        <span class="text-sm text-gray-200 font-bold">Chunk Size (Tokens)</span>
+                                        <span id="val-chunk-size" class="text-xs text-[#DDBA6E] font-mono">500</span>
+                                    </div>
+                                    <p class="text-xs text-gray-500 mb-2">Defines how large the text slices are when vectorizing documents. Smaller chunks = more precision; Larger = more context.</p>
+                                    <input type="range" id="setting-chunk-size" min="200" max="1000" step="50" value="500" class="w-full accent-[#DDBA6E]">
+                                </div>
+                                
+                                <div class="h-px bg-gray-800/50 w-full"></div>
+                                
+                                <div>
+                                    <div class="flex justify-between mb-1">
+                                        <span class="text-sm text-gray-200 font-bold">Similarity Threshold</span>
+                                        <span id="val-similarity" class="text-xs text-[#DDBA6E] font-mono">0.30</span>
+                                    </div>
+                                    <p class="text-xs text-gray-500 mb-2">How strict the vector engine should be when retrieving memories (0.1 = loose, 1.0 = exact match).</p>
+                                    <input type="range" id="setting-similarity" min="0.1" max="0.9" step="0.05" value="0.3" class="w-full accent-[#DDBA6E]">
+                                </div>
+
+                                <div class="h-px bg-gray-800/50 w-full"></div>
+                                
+                                <div>
+                                    <div class="flex justify-between mb-1">
+                                        <span class="text-sm text-gray-200 font-bold">Knowledge Base Top-K</span>
+                                        <span id="val-top-k-kb" class="text-xs text-[var(--app-accent)] font-mono">5</span>
+                                    </div>
+                                    <p class="text-xs text-gray-500 mb-2">Maximum number of profile knowledge blocks to inject per prompt.</p>
+                                    <input type="range" id="setting-top-k-kb" min="1" max="50" step="1" value="5" class="w-full accent-[var(--app-accent)]">
+                                </div>
+
+                                <div class="h-px bg-gray-800/50 w-full"></div>
+                                
+                                <div>
+                                    <div class="flex justify-between mb-1">
+                                        <span class="text-sm text-gray-200 font-bold">Chat Memory Top-K</span>
+                                        <span id="val-top-k-memory" class="text-xs text-[var(--app-accent)] font-mono">5</span>
+                                    </div>
+                                    <p class="text-xs text-gray-500 mb-2">Maximum number of archived chat memory blocks to inject per prompt.</p>
+                                    <input type="range" id="setting-top-k-memory" min="1" max="50" step="1" value="5" class="w-full accent-[var(--app-accent)]">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Data & Workspace -->
+                        <div class="space-y-4">
+                            <h4 class="text-xs font-bold text-gray-500 uppercase tracking-wider">Data & Workspace Management</h4>
+                            
+                            <div class="bg-[#051116] rounded-lg border border-gray-800/80 divide-y divide-gray-800/80">
+                                <div class="p-4 flex items-center justify-between">
+                                    <div>
+                                        <span class="block text-sm text-gray-200 font-bold mb-1">Workspace Folder</span>
+                                        <span class="text-xs text-gray-500">Open the local directory where all your JSONs and files are stored.</span>
+                                    </div>
+                                    <button id="btn-open-workspace" class="px-4 py-2 bg-[#1a2d32] hover:bg-[#243b52] text-white text-xs font-semibold rounded transition-colors border border-gray-700/50">Open Directory</button>
+                                </div>
+                                <div class="p-4 flex items-center justify-between">
+                                    <div>
+                                        <span class="block text-sm text-gray-200 font-bold mb-1">Export / Backup</span>
+                                        <span class="text-xs text-gray-500">Zip all chats, profiles, and databases into a single backup file.</span>
+                                    </div>
+                                    <button id="btn-backup-workspace" class="px-4 py-2 bg-[#1a2d32] hover:bg-[#243b52] text-white text-xs font-semibold rounded transition-colors border border-gray-700/50">Create Backup</button>
+                                </div>
+                                <div class="p-4 flex items-center justify-between">
+                                    <div>
+                                        <span class="block text-sm text-[#ff5f56] font-bold mb-1">Purge Vector Databases</span>
+                                        <span class="text-xs text-gray-500">Deletes all vector_db.json files. You will need to re-upload files to trigger re-indexing.</span>
+                                    </div>
+                                    <button id="btn-purge-vectors" class="px-4 py-2 bg-[#ff5f56]/10 hover:bg-[#ff5f56]/20 text-[#ff5f56] text-xs font-semibold rounded transition-colors border border-[#ff5f56]/30">Purge Data</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Hardware & Engine -->
+                        <div class="space-y-4">
+                            <h4 class="text-xs font-bold text-gray-500 uppercase tracking-wider">Hardware & Execution</h4>
+                            
+                            <div class="bg-[#051116] rounded-lg border border-gray-800/80 divide-y divide-gray-800/80">
+                                <div class="p-4 flex items-center justify-between">
+                                    <div class="pr-4">
+                                        <span class="block text-sm text-gray-200 font-bold mb-1">Embedding Execution Device</span>
+                                        <span class="text-xs text-gray-500">Force Transformers.js to use specific hardware for vector generation.</span>
+                                    </div>
+                                    <select id="setting-execution-device" class="bg-[#011419] border border-gray-700 text-gray-200 text-sm rounded-md px-3 py-2 focus:outline-none focus:border-[#DDBA6E] cursor-pointer shrink-0 w-48">
+                                        <option value="cpu">CPU (Native - Stable)</option>
+                                        <option value="wasm">CPU (WebAssembly)</option>
+                                    </select>
+                                </div>
+                                <div class="p-4 flex items-center justify-between">
+                                    <div>
+                                        <span class="block text-sm text-gray-200 font-bold mb-1">Clear Local HuggingFace Model</span>
+                                        <span class="text-xs text-gray-500">Deletes the downloaded MiniLM model cache to force a fresh download.</span>
+                                    </div>
+                                    <button id="btn-clear-model-cache" class="px-4 py-2 bg-[#1a2d32] hover:bg-[#243b52] text-white text-xs font-semibold rounded transition-colors border border-gray-700/50">Clear Cache</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Developer & Debugging -->
+                        <div class="space-y-4">
+                            <h4 class="text-xs font-bold text-gray-500 uppercase tracking-wider">Developer & Debugging</h4>
+                            
+                            <div class="flex items-center justify-between bg-[#051116] p-4 rounded-lg border border-gray-800/80">
+                                <div>
+                                    <span class="block text-sm text-gray-200 font-bold mb-1">Enable RAG Context Warnings</span>
+                                    <span class="text-xs text-gray-500">Shows a debug log above AI messages detailing injected context and tokens.</span>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="setting-rag-debug" class="sr-only peer">
+                                    <div class="w-9 h-5 bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[var(--app-accent)] theme-peer-checked"></div>
+                                </label>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+</div>

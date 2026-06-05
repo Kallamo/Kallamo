@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Writer Companion</title>
+    <link href="./output.css" rel="stylesheet">
+    <link id="hljs-theme" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Merriweather:ital,wght@0,300;0,400;0,700;1,300;1,400&display=swap" rel="stylesheet">
+</head>
+
+<body class="flex h-screen overflow-hidden bg-[#011419] text-white font-sans selection:bg-[#DDBA6E] selection:text-[#011419]">
+
+    <header class="absolute top-0 inset-x-0 flex justify-between items-center h-10 w-full px-2 select-none z-50">
+        <div class="absolute inset-0 titlebar-drag z-0"></div>
+        <div class="z-10 text-xs text-gray-400 font-semibold tracking-widest uppercase ml-2 pointer-events-none"></div>
+
+        <div class="z-10 flex space-x-1 items-center titlebar-nodrag pr-2">
+            <button id="btn-minimize" class="p-1.5 hover:bg-gray-700/50 rounded-md transition-colors group cursor-pointer flex items-center justify-center">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M1 6H11" stroke="#DDBA6E" class="group-hover:stroke-white transition-colors" stroke-width="1.5" stroke-linecap="round" /></svg>
+            </button>
+            <button id="btn-maximize" class="p-1.5 hover:bg-gray-700/50 rounded-md transition-colors group cursor-pointer flex items-center justify-center">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="1.5" y="1.5" width="9" height="9" stroke="#DDBA6E" class="group-hover:stroke-white transition-colors" stroke-width="1.5" /></svg>
+            </button>
+            <button id="btn-close" class="p-1.5 hover:bg-[#ff5f56] rounded-md transition-colors group cursor-pointer flex items-center justify-center">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2 2L10 10M10 2L2 10" stroke="#DDBA6E" class="group-hover:stroke-white transition-colors" stroke-width="1.5" stroke-linecap="round" /></svg>
+            </button>
+        </div>
+    </header>
+
+    <main class="flex-1 relative flex flex-col pt-10 overflow-hidden bg-[#011419] w-full" id="main-content">
+
+        <div id="view-dashboard" class="flex flex-col w-full h-full px-8 pb-8 pt-6 relative overflow-hidden">
+            
+            <div class="flex items-center justify-between mb-8 w-full max-w-7xl mx-auto shrink-0 mt-4">
+                <h1 class="text-3xl font-bold text-white tracking-wide">Chats</h1>
+                
+                <div class="flex items-center space-x-4">
+                    <div class="relative w-64">
+                        <svg class="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                        <input type="text" id="search-chats-input" placeholder="Search chats..." class="w-full bg-[#0a161d] border border-gray-800 text-gray-200 text-sm rounded-lg pl-9 pr-3 py-2 focus:outline-none focus:border-[var(--app-accent)] transition-colors">
+                    </div>
+
+                    <button id="btn-view-library-expanded" class="flex items-center space-x-2 px-4 py-2 bg-[#0a161d] hover:bg-[#1a2d32] border border-gray-800 rounded-lg text-gray-300 hover:text-white transition-colors text-sm font-medium">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+                        <span>Library</span>
+                    </button>
+
+                    <button id="btn-new-chat" class="flex items-center space-x-2 bg-[var(--app-accent)] hover:brightness-110 text-[#011419] font-bold px-4 py-2 rounded-lg transition-all shadow-sm active:scale-95 text-sm">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                        <span>New Chat</span>
+                    </button>
+                </div>
+            </div>
+
+            <div id="dashboard-chats-grid" class="w-full max-w-7xl mx-auto flex-1 overflow-y-auto custom-scrollbar pr-2 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 content-start">
+                </div>
+
+            <button id="btn-open-settings" class="absolute bottom-6 left-6 p-3 bg-[#0a161d] hover:bg-[#1a2d32] border border-gray-800 rounded-full text-gray-400 hover:text-white transition-all shadow-lg group titlebar-nodrag z-50">
+                <svg class="group-hover:rotate-90 transition-transform duration-500" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            </button>
+        </div>
+
+
+        <div id="view-active-chat" class="hidden flex w-full h-full relative overflow-hidden bg-[#011419]">
+            <div id="chat-bg-layer" class="absolute inset-0 z-0 bg-cover bg-center bg-no-repeat transition-all duration-300"></div>
+            <div id="chat-backdrop-layer" class="absolute inset-0 z-0 transition-all duration-300" style="background-color: #011419;"></div>
+
+            <div class="flex-1 flex flex-col h-full relative z-10 overflow-hidden">
+                <div class="flex items-center justify-between h-14 border-b border-gray-800/80 px-6 shrink-0 bg-[#011419]/80 backdrop-blur-md z-10 relative">
+                    <div class="flex items-center space-x-3">
+                        <button id="btn-back-to-dashboard" class="p-1.5 text-gray-400 hover:text-white hover:bg-white/10 rounded-md transition-colors mr-2">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+                        </button>
+                        <h2 id="current-chat-title" class="text-white font-medium text-sm truncate">Workspace Chat</h2>
+                    </div>
+                    <button id="btn-toggle-right-sidebar" class="p-1.5 text-gray-500 hover:text-white hover:bg-white/5 rounded-md transition-colors" title="Chat Settings">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
+                    </button>
+                </div>
+
+                <div id="chat-messages-container" class="flex-1 overflow-y-auto pt-6 pb-24 px-12 md:px-24 xl:px-48 custom-scrollbar space-y-6"></div>
+
+                <div class="shrink-0 p-6 pt-0 w-full max-w-4xl mx-auto">
+                    <div class="bg-[#051116] border border-gray-800/80 rounded-2xl flex flex-col px-2 py-2 shadow-lg shadow-black/20 focus-within:border-[var(--app-accent)]/50 transition-colors relative">
+                        <div id="pending-files-container" class="hidden w-full flex-wrap gap-2 px-2 pb-2 pt-1 border-b border-gray-800/50 mb-2"></div>
+                        <div class="flex items-end w-full">
+                            <input type="file" id="file-attachment-input" class="hidden" multiple>
+                            <button id="btn-attach-file" class="shrink-0 w-8 h-8 mb-1 mr-1 text-gray-500 hover:text-[var(--app-accent)] rounded-md hover:bg-white/5 flex items-center justify-center transition-colors" title="Attach files">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
+                            </button>
+                            <textarea id="chat-input" rows="1" placeholder="Type a message... (Shift+Enter for new line)" class="flex-1 bg-transparent text-gray-200 px-2 py-1.5 focus:outline-none text-sm placeholder-gray-600 resize-none max-h-62.5 overflow-y-auto leading-relaxed"></textarea>
+                            <div class="relative flex items-center pl-2 border-l border-gray-800/80 mx-2 mb-1 shrink-0" id="custom-profile-selector-container">
+                                <button id="btn-custom-profile" class="bg-transparent text-xs text-gray-400 font-medium focus:outline-none cursor-pointer flex items-center space-x-1 px-2 max-w-32.5 hover:text-white transition-colors">
+                                    <span id="custom-profile-label" class="truncate">Select a profile</span>
+                                    <svg class="text-gray-500 pointer-events-none" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                                </button>
+                                <div id="custom-profile-dropdown" class="hidden absolute bottom-full mb-3 right-0 w-48 bg-[#0a161d] border border-gray-800/80 rounded-lg shadow-[0_0_15px_rgba(0,0,0,0.5)] z-50 overflow-hidden flex flex-col">
+                                    <div id="custom-profile-list" class="max-h-40 overflow-y-auto custom-scrollbar flex flex-col"></div>
+                                    <div class="h-px bg-gray-800/80 w-full shrink-0"></div>
+                                    <button id="btn-dropdown-add-profile" class="w-full text-left px-3 py-2.5 text-xs text-[var(--app-accent)] hover:bg-[#1a2d32] transition-colors flex items-center space-x-2 shrink-0">
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                        <span>Add profile</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <button id="btn-send-message" class="shrink-0 w-9 h-9 mb-0.5 rounded-full bg-[var(--app-accent)] hover:brightness-110 flex items-center justify-center text-[#011419] transition-transform active:scale-95 shadow-md">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <aside id="chat-right-sidebar" class="hidden w-72 bg-[#040d12] border-l border-gray-800/40 flex-col transition-all duration-300 shrink-0 relative z-20">
+                <div class="flex border-b border-gray-800/50 px-2 pt-2 shrink-0">
+                    <button id="rs-tab-config" class="flex-1 pb-2 border-b-2 border-[var(--app-accent)] text-white text-xs uppercase font-bold tracking-wider transition-colors rs-tab">Configuration</button>
+                    <button id="rs-tab-files" class="flex-1 pb-2 border-b-2 border-transparent text-gray-600 hover:text-white text-xs uppercase font-bold tracking-wider transition-colors rs-tab">Files</button>
+                </div>
+
+                <div id="rs-view-config" class="flex flex-col h-full overflow-y-auto custom-scrollbar pb-10 space-y-3 p-3">
+                    <div class="sidebar-section bg-[#0a161d] border border-gray-800/80 rounded-lg p-3">
+                        <div class="flex items-center justify-between cursor-pointer rs-accordion-toggle">
+                            <span class="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Chat Memory</span>
+                            <svg class="text-gray-500 transform transition-transform duration-200" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                        </div>
+                        <div class="rs-accordion-content mt-3 space-y-3">
+                            <div>
+                                <div class="flex items-center justify-between mb-1">
+                                    <div class="flex items-center space-x-1.5">
+                                        <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wider">Max API Payload (Tokens)</label>
+                                        <svg data-tooltip="The absolute maximum number of tokens sent to the API. If the context (Lore + Chat + Current Message) exceeds this, older chat messages are silently truncated to prevent API rejection." width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-gray-500 cursor-help hover:text-[var(--app-accent)] transition-colors"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                                    </div>
+                                </div>
+                                <input type="number" id="chat-max-context" class="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:border-[var(--app-accent)] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none [-moz-appearance:textfield]" value="128000">
+                            </div>
+                            
+                            <div class="mt-4">
+                                <div class="flex justify-between items-center mb-1">
+                                    <div class="flex items-center space-x-1.5">
+                                        <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wider">Auto-Archive Threshold</label>
+                                        <svg data-tooltip="The visual limit for active chat memory. Reaching this prompts you to summarize and move older messages to the Vector DB, keeping the active context clean." width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-gray-500 cursor-help hover:text-[var(--app-accent)] transition-colors"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                                    </div>
+                                    <span id="token-count-display" class="text-[10px] text-gray-500 font-mono">~0 / 60000</span>
+                                </div>
+                                <div class="w-full h-1.5 bg-gray-800 rounded-full mb-2 overflow-hidden shadow-inner">
+                                    <div id="token-progress-bar" class="h-full bg-[var(--app-accent)] transition-all duration-500 ease-out" style="width: 0%;"></div>
+                                </div>
+                                <input type="number" id="chat-archive-threshold" class="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:border-[var(--app-accent)] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none [-moz-appearance:textfield]" value="60000">
+                            </div>
+
+                            <div class="h-px bg-gray-800/80 w-full my-2"></div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs text-gray-300">Auto-Summarize</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="auto-summarize-toggle" class="sr-only peer">
+                                    <div class="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-[var(--app-accent)]"></div>
+                                </label>
+                            </div>
+                            <button id="btn-manual-summarize" class="w-full bg-[#1a2d32] hover:bg-[#243b52] text-[var(--app-accent)] border border-[var(--app-accent)]/30 py-1.5 rounded text-xs font-semibold transition-colors">Summarize Now</button>
+                            <div id="chat-memories-list" class="space-y-2 max-h-32 overflow-y-auto custom-scrollbar mt-2 pt-2 border-t border-gray-800/80 empty:hidden"></div>
+                        </div>
+                    </div>
+
+                    <div class="sidebar-section bg-[#0a161d] border border-gray-800/80 rounded-lg p-3">
+                        <div class="flex items-center justify-between cursor-pointer rs-accordion-toggle">
+                            <span class="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Appearance</span>
+                            <svg class="text-gray-500 transform transition-transform duration-200 rotate-[-90deg]" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                        </div>
+                        <div class="rs-accordion-content mt-3 space-y-4 hidden">
+                            <div>
+                                <span class="block text-[10px] text-gray-400 uppercase mb-2">Background Image</span>
+                                <div id="bg-image-preview" class="w-full h-24 mb-2 rounded-md bg-[#051116] border border-gray-800 !bg-cover !bg-center !bg-no-repeat hidden relative group overflow-hidden">
+                                    <button id="btn-clear-bg" class="absolute inset-0 w-full h-full bg-black/70 text-white text-[10px] font-bold tracking-widest opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer">REMOVE IMAGE</button>
+                                </div>
+                                <input type="file" id="appearance-bg-image" accept="image/*" class="w-full text-xs text-gray-400 file:mr-2 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:font-semibold file:bg-[#1a2d32] file:text-[var(--app-accent)] hover:file:bg-[#243b52] cursor-pointer">
+                            </div>
+                            <div>
+                                <div class="flex justify-between text-[10px] text-gray-400 mb-1"><span>Backdrop Opacity</span><span id="val-bg-opacity">100%</span></div>
+                                <input type="range" id="appearance-bg-opacity" min="0" max="100" value="100" class="w-full accent-[var(--app-accent)]">
+                            </div>
+                            <div>
+                                <div class="flex justify-between text-[10px] text-gray-400 mb-1"><span>User Bubble Opacity</span><span id="val-user-opacity">100%</span></div>
+                                <input type="range" id="appearance-user-bubble" min="0" max="100" value="100" class="w-full accent-[var(--app-accent)]">
+                            </div>
+                            <div>
+                                <div class="flex justify-between text-[10px] text-gray-400 mb-1"><span>AI Box Opacity</span><span id="val-ai-opacity">0%</span></div>
+                                <input type="range" id="appearance-ai-bubble" min="0" max="100" value="0" class="w-full accent-[var(--app-accent)]">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="sidebar-section bg-[#0a161d] border border-gray-800/80 rounded-lg p-3">
+                        <div class="flex items-center justify-between cursor-pointer rs-accordion-toggle">
+                            <span class="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Active Profiles</span>
+                            <svg class="text-gray-500 transform transition-transform duration-200" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                        </div>
+                        <div class="rs-accordion-content mt-3">
+                            <input type="text" id="search-active-profiles" placeholder="Search profiles..." class="w-full bg-[#011419] border border-gray-800/80 text-white text-xs rounded-md px-3 py-2 mb-3 focus:outline-none focus:border-[var(--app-accent)] transition-colors" autocomplete="off">
+                            <div id="right-sidebar-profiles-list" class="space-y-2"></div>
+                        </div>
+                    </div>
+
+                    <div class="sidebar-section bg-[#0a161d] border border-gray-800/80 rounded-lg p-3">
+                        <div class="flex items-center justify-between cursor-pointer rs-accordion-toggle">
+                            <span class="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Agent Workflows</span>
+                            <svg class="text-gray-500 transform transition-transform duration-200 rotate-[-90deg]" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                        </div>
+                        <div class="rs-accordion-content mt-3 hidden">
+                            <input type="text" id="search-workflows" placeholder="Search workflows..." class="w-full bg-[#011419] border border-gray-800/80 text-white text-xs rounded-md px-3 py-2 mb-3 focus:outline-none focus:border-[var(--app-accent)] transition-colors" autocomplete="off">
+                            <div id="chat-workflows-list" class="space-y-2"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="rs-view-files" class="hidden flex-col h-full overflow-y-auto custom-scrollbar p-3"></div>
+            </aside>
+        </div>
+
+
+        <div id="view-profile-library" class="hidden flex-col w-full h-full px-8 pb-8 pt-6 relative bg-[#011419]">
+            
+            <div class="flex items-center justify-between mb-8 w-full max-w-6xl mx-auto shrink-0 mt-4">
+                <button id="btn-lib-back-to-dashboard" class="p-2 text-gray-400 hover:text-white hover:bg-[#0a161d] rounded-lg border border-transparent hover:border-gray-800 transition-colors flex items-center space-x-2">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+                    <span class="text-sm font-semibold">Back to Chats</span>
+                </button>
+
+                <div class="flex bg-[#0a161d] border border-gray-800 rounded-lg p-1 space-x-1 shadow-lg mx-auto relative right-12">
+                    <button id="lib-tab-profiles" class="px-8 py-2 rounded-md bg-[#1a2d32] text-white text-sm font-semibold transition-all shadow-sm">AI Profiles</button>
+                    <button id="lib-tab-workflows" class="px-8 py-2 rounded-md text-gray-500 hover:text-gray-300 text-sm font-semibold transition-all">Agent Workflows</button>
+                </div>
+            </div>
+
+            <div id="lib-view-profiles" class="w-full max-w-6xl mx-auto h-full flex flex-col overflow-hidden">
+                <div class="flex justify-between items-end mb-4 shrink-0">
+                    <div>
+                        <h2 class="text-2xl font-bold text-white tracking-wide">AI Profiles</h2>
+                        <p class="text-gray-400 text-sm mt-1">Manage and edit your AI personalities and Knowledge Bases.</p>
+                    </div>
+                    <button id="btn-lib-new-profile" class="flex items-center space-x-2 bg-[var(--app-accent)] hover:brightness-110 text-[#011419] font-bold px-4 py-2 rounded-md transition-all shadow-sm active:scale-95 text-sm">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                        <span>New Profile</span>
+                    </button>
+                </div>
+                <div id="writing-profiles-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 overflow-y-auto custom-scrollbar pb-8 pr-2"></div>
+            </div>
+
+            <div id="lib-view-workflows" class="w-full max-w-6xl mx-auto h-full hidden flex-col overflow-hidden">
+                <div class="flex justify-between items-end mb-4 shrink-0">
+                    <div>
+                        <h2 class="text-2xl font-bold text-white tracking-wide">Agent Workflows</h2>
+                        <p class="text-gray-400 text-sm mt-1">Build step-by-step logic chains to automate complex generations.</p>
+                    </div>
+                    <button id="btn-lib-new-workflow" class="flex items-center space-x-2 bg-[var(--app-accent)] hover:brightness-110 text-[#011419] font-bold px-4 py-2 rounded-md transition-all shadow-sm active:scale-95 text-sm">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                        <span>New Workflow</span>
+                    </button>
+                </div>
+                <div id="library-workflows-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 overflow-y-auto custom-scrollbar pb-8 pr-2"></div>
+            </div>
+
+        </div>
+
+    </main>
+
+    <div id="modals-container"></div>
+    <script src="./renderer.js"></script>
+</body>
+
+</html>

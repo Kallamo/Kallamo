@@ -1,0 +1,95 @@
+<div id="kb-manager-modal" class="fixed inset-x-0 bottom-0 top-12 z-60 bg-black/70 backdrop-blur-sm flex items-center justify-center p-8 hidden transition-opacity duration-200">
+    <div class="w-full max-w-5xl h-full max-h-[85vh] bg-[#000D11] rounded-xl shadow-2xl border border-[#3b82f6]/30 flex flex-col overflow-hidden">
+
+        <div class="shrink-0 flex justify-between items-center h-16 w-full px-6 bg-[#011419] border-b border-gray-800/50">
+            <div class="flex items-center space-x-3">
+                <div class="p-2 bg-[#3b82f6]/10 rounded-lg">
+                    <svg class="text-[#3b82f6]" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
+                </div>
+                <div>
+                    <h2 class="text-base font-bold text-white tracking-wide flex items-center space-x-2">
+                        <span>Knowledge Base Manager</span>
+                        <span id="kbm-profile-name" class="text-xs font-mono bg-[#1a2d32] text-gray-300 px-2 py-0.5 rounded border border-gray-700">Profile Name</span>
+                    </h2>
+                    <p class="text-[10px] text-gray-500 mt-0.5">Edit, delete or inject manual memories into the Vector Database.</p>
+                </div>
+            </div>
+            
+            <div class="flex items-center space-x-2">
+                <input type="file" id="kbm-add-searchable-input" class="hidden" accept=".txt,.md,.pdf,.docx">
+                <input type="file" id="kbm-add-constant-input" class="hidden" accept=".txt,.md,.pdf,.docx">
+                
+                <button id="btn-kbm-add-searchable" class="flex items-center space-x-1.5 px-3 py-1.5 bg-[#1a2d32] hover:bg-[#243b52] border border-[#3b82f6]/30 text-gray-200 text-xs font-bold rounded shadow-sm transition-colors">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><circle cx="10" cy="13" r="2"></circle><line x1="11.5" y1="14.5" x2="14" y2="17"></line></svg>
+                    <span>Add Searchable File</span>
+                </button>
+
+                <button id="btn-kbm-add-constant" class="flex items-center space-x-1.5 px-3 py-1.5 bg-[#DDBA6E]/10 hover:bg-[#DDBA6E]/20 border border-[#DDBA6E]/40 text-[#DDBA6E] text-xs font-bold rounded shadow-sm transition-colors">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>
+                    <span>Add Constant File</span>
+                </button>
+
+                <button id="btn-kbm-add-manual" class="flex items-center space-x-1.5 px-3 py-1.5 bg-[#3b82f6] hover:bg-[#2563eb] text-white text-xs font-bold rounded shadow-sm transition-colors">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                    <span>Add Manual Snippet</span>
+                </button>
+                
+                <button id="btn-close-kb-manager" class="text-gray-400 hover:text-[#ff5f56] transition-colors cursor-pointer p-1.5 rounded-md hover:bg-white/5 ml-2 border-l border-gray-800 pl-3">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            </div>
+        </div>
+
+        <div class="flex-1 flex overflow-hidden">
+            
+            <div class="w-64 bg-[#051116] border-r border-gray-800/80 flex flex-col shrink-0 p-4">
+                <span class="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-3 block">Filter by Source</span>
+                <div class="space-y-1" id="kbm-source-filters">
+                    <button class="w-full text-left px-3 py-2 rounded text-xs text-white bg-[#1a2d32] border border-[#3b82f6]/30 font-medium kbm-filter-btn" data-filter="all">All Memories</button>
+                    <button class="w-full text-left px-3 py-2 rounded text-xs text-gray-400 hover:bg-[#011419] hover:text-gray-200 transition-colors kbm-filter-btn" data-filter="manual">Custom Snippets</button>
+                    <button class="w-full text-left px-3 py-2 rounded text-xs text-gray-400 hover:bg-[#011419] hover:text-gray-200 transition-colors kbm-filter-btn" data-filter="constant">Constant Files</button>
+                    <button class="w-full text-left px-3 py-2 rounded text-xs text-gray-400 hover:bg-[#011419] hover:text-gray-200 transition-colors kbm-filter-btn" data-filter="rag">Searchable Chunks</button>
+                </div>
+            </div>
+
+            <div class="flex-1 bg-[#011419] flex flex-col relative">
+                
+                <div id="kbm-editor-panel" class="absolute inset-0 bg-[#051116]/95 backdrop-blur-sm z-10 hidden flex-col p-8">
+                    <div class="max-w-3xl w-full mx-auto bg-[#000D11] border border-gray-800 rounded-lg shadow-2xl p-6 flex flex-col h-full max-h-[500px]">
+                        <div class="flex justify-between items-center mb-4 shrink-0">
+                            <h3 id="kbm-editor-heading" class="text-sm font-bold text-[#DDBA6E] uppercase tracking-wider">Add Custom Memory</h3>
+                            <button id="btn-kbm-cancel-edit" class="text-gray-400 hover:text-white transition-colors text-xs font-semibold">Cancel</button>
+                        </div>
+                        <input type="hidden" id="kbm-edit-chunk-id">
+                        
+                        <div class="mb-3 shrink-0">
+                            <label class="block text-xs font-bold text-gray-400 mb-1">Snippet Title / Source</label>
+                            <input type="text" id="kbm-edit-title" class="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 focus:outline-none focus:border-[#3b82f6]" placeholder="e.g., The Hero's Origins">
+                        </div>
+
+                        <label class="block text-xs font-bold text-gray-400 mb-1">Memory Content</label>
+                        <textarea id="kbm-edit-textarea" class="flex-1 w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md p-4 focus:outline-none focus:border-[#3b82f6] resize-none font-mono custom-scrollbar" placeholder="Enter memory text here..."></textarea>
+                        
+                        <div class="mt-4 flex justify-end shrink-0">
+                            <button id="btn-kbm-save-edit" class="px-6 py-2 text-sm font-medium bg-[#3b82f6] hover:bg-[#2563eb] text-white rounded transition-colors shadow-md flex items-center space-x-2">
+                                <span>Save & Vectorize</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex-1 overflow-y-auto custom-scrollbar p-6">
+                    <div class="flex justify-between items-end mb-4">
+                        <span class="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Stored Knowledge Blocks (<span id="kbm-total-blocks">0</span>)</span>
+                        <div class="relative w-64">
+                            <svg class="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                            <input type="text" id="kbm-search-chunks" placeholder="Search in content..." class="w-full bg-[#051116] border border-gray-800 text-gray-200 text-xs rounded-md pl-8 pr-3 py-1.5 focus:outline-none focus:border-[#3b82f6] transition-colors">
+                        </div>
+                    </div>
+                    
+                    <div id="kbm-chunks-list" class="grid grid-cols-1 xl:grid-cols-2 gap-4 pb-8 content-start"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
