@@ -1,0 +1,114 @@
+@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Kaushan+Script&display=swap');
+
+
+:root {
+  --app-accent: #FBCB2D;
+}
+
+@theme {
+  --color-accent: var(--app-accent);
+  --color-bg-main: #011419;
+  --color-bg-card: #0a161d;
+  --color-bg-chat: #051116;
+  --color-bg-sidebar: #040d12;
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-serif: "Merriweather", Georgia, serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+body {
+  background-color: #011419;
+  color: #f3f4f6;
+  /* text-gray-100 */
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+/* Electron title bar rules */
+.titlebar-drag {
+  -webkit-app-region: drag;
+}
+
+.titlebar-nodrag {
+  -webkit-app-region: no-drag;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: #011419;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: #1a2d32;
+}
+
+/* Custom Scrollbar Helper for Inner Containers */
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: #0a161d;
+  border: 2px solid #011419;
+  border-radius: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: #1a2d32;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: #011419;
+}
+
+/* Custom ambient wave animation for Logo flutes */
+@keyframes logo-ambient-wave {
+  0%, 100%, 60% {
+    transform: translateY(0);
+  }
+  30% {
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes logo-active-equalizer {
+  0%, 100%, 75% {
+    transform: translateY(0);
+  }
+  35% {
+    transform: translateY(-12px);
+  }
+}
+
+.logo-flute {
+  transition: transform 0.4s ease;
+}
+
+/* Ambient animations - slow 4s cycle with 6px height and delays for ripple */
+.logo-flute-1 { animation: logo-ambient-wave 4s ease-in-out infinite; animation-delay: 0s; }
+.logo-flute-2 { animation: logo-ambient-wave 4s ease-in-out infinite; animation-delay: 0.25s; }
+.logo-flute-3 { animation: logo-ambient-wave 4s ease-in-out infinite; animation-delay: 0.5s; }
+.logo-flute-4 { animation: logo-ambient-wave 4s ease-in-out infinite; animation-delay: 0.75s; }
+.logo-flute-5 { animation: logo-ambient-wave 4s ease-in-out infinite; animation-delay: 1s; }
+
+/* Active animations when parent group is hovered - 1.8s cycle, 12px translation and breathing room */
+.group:hover .logo-flute-1,
+.logo-hover:hover .logo-flute-1 { animation: logo-active-equalizer 1.8s ease-in-out infinite; animation-delay: 0s; }
+
+.group:hover .logo-flute-2,
+.logo-hover:hover .logo-flute-2 { animation: logo-active-equalizer 1.8s ease-in-out infinite; animation-delay: 0.2s; }
+
+.group:hover .logo-flute-3,
+.logo-hover:hover .logo-flute-3 { animation: logo-active-equalizer 1.8s ease-in-out infinite; animation-delay: 0.4s; }
+
+.group:hover .logo-flute-4,
+.logo-hover:hover .logo-flute-4 { animation: logo-active-equalizer 1.8s ease-in-out infinite; animation-delay: 0.6s; }
+
+.group:hover .logo-flute-5,
+.logo-hover:hover .logo-flute-5 { animation: logo-active-equalizer 1.8s ease-in-out infinite; animation-delay: 0.8s; }
