@@ -168,6 +168,8 @@ ipcMain.on('window-close', (event) => {
   BrowserWindow.fromWebContents(event.sender).close();
 });
 
+ipcMain.handle('get-app-version', () => app.getVersion());
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();

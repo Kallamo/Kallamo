@@ -70,6 +70,13 @@ export default function SettingsModal({ onClose }) {
   const [confirmAction, setConfirmAction] = useState(null); // null | 'purge' | 'clearCache' | 'wipe'
   const [backupStatus, setBackupStatus] = useState(null); // null | { success: boolean, path?: string, error?: string }
   const [utilityStatus, setUtilityStatus] = useState(null); // null | { title: string, message: string }
+  const [appVersion, setAppVersion] = useState('1.0.0');
+
+  useEffect(() => {
+    if (electronAPI?.getAppVersion) {
+      electronAPI.getAppVersion().then(setAppVersion).catch(console.error);
+    }
+  }, [electronAPI]);
 
   // Colors list
   const colors = ['#FBCB2D', '#ff5f56', '#3b82f6', '#10b981', '#9c27b0'];
@@ -1218,7 +1225,7 @@ export default function SettingsModal({ onClose }) {
                   <div className="flex flex-col justify-center">
                     <div className="flex items-baseline space-x-3">
                       <Logotype height={44} className="text-white font-bold select-none pointer-events-none" cutColor="#000D11" />
-                      <span className="text-[10px] bg-accent/10 border border-accent/25 text-accent px-2 py-0.5 rounded-full font-bold uppercase tracking-wider select-none pointer-events-none">v1.0.0</span>
+                      <span className="text-[10px] bg-accent/10 border border-accent/25 text-accent px-2 py-0.5 rounded-full font-bold uppercase tracking-wider select-none pointer-events-none">v{appVersion}</span>
                     </div>
                     <p className="text-xs text-gray-500 mt-1 font-medium select-none pointer-events-none">Local-first, highly secure AI orchestration client.</p>
                   </div>

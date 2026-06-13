@@ -93,6 +93,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   respondToOverflow: (decision, editedText) => ipcRenderer.send('respond-to-overflow', { decision, editedText }),
 
   // --- UTILITIES ---
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
   openWorkspaceFolder: () => ipcRenderer.send('open-workspace-folder'),
   backupWorkspace: () => ipcRenderer.invoke('backup-workspace'),
   purgeVectors: () => ipcRenderer.invoke('purge-vectors'),
