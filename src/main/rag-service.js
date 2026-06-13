@@ -2,13 +2,20 @@ const fs = require('fs');
 const path = require('path');
 const mammoth = require('mammoth');
 const os = require('os');
-const { pipeline } = require('@huggingface/transformers');
+const { pipeline, env } = require('@huggingface/transformers');
 const db = require('./database');
 
 const appDataPath = process.env.APPDATA || (process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support') : path.join(os.homedir(), '.local', 'share'));
 const dataDir = path.join(appDataPath, 'Kallamo');
 const profilesDir = path.join(dataDir, 'AI Profiles');
 const chatsDir = path.join(dataDir, 'ChatHistory');
+
+// Configure Hugging Face Transformers cache directory to be writable
+const modelCacheDir = path.join(dataDir, 'ModelCache');
+if (!fs.existsSync(modelCacheDir)) {
+    fs.mkdirSync(modelCacheDir, { recursive: true });
+}
+env.cacheDir = modelCacheDir;
 
 let embeddingPipeline = null;
 

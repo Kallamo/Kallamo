@@ -1033,7 +1033,7 @@ export default function KbManagerModal({ profile, onClose }) {
                             onChange={(e) => handleTextareaChange(e, 'agentic')}
                             onKeyDown={(e) => handleTextareaKeyDown(e, 'agentic')}
                             className="flex-1 w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md p-4 focus:outline-none focus:border-accent resize-none font-mono custom-scrollbar leading-relaxed"
-                            placeholder='e.g., You are a search query optimizer. Extract the specific names, proper nouns, and primary search keywords from the user prompt. Always keep specific names and proper nouns intact (such as "Vaelen"). Output ONLY the optimized query terms without quotes, introduction, or explanation.'
+                            placeholder='e.g., You are a search query optimizer. Extract the specific names, proper nouns, and primary search keywords from the user prompt. Always keep specific names and proper nouns intact. Output ONLY the optimized query terms without quotes, introduction, or explanation.'
                           />
 
                           {/* Autocomplete Dropdown */}

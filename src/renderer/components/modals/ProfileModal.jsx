@@ -740,6 +740,14 @@ export default function ProfileModal({ profile, initialStep = 1, onClose, onSave
                   <span className="text-[10px] text-gray-600 mt-1">Supports TXT, PDF, MD, DOCX · Max 10 files</span>
                 </div>
 
+                {/* Notice about custom memory blocks */}
+                <div className="mt-3 bg-[#051116] border border-gray-800/80 rounded-lg p-3 flex items-start space-x-2.5 bg-accent/5">
+                  <Info className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+                  <div className="text-[10.5px] text-gray-400 leading-normal">
+                    <span className="font-bold text-gray-200 text-accent">Note:</span> You can add manual, custom memory snippets to this profile's knowledge base at any time after creation by using the <span className="text-accent font-semibold">Knowledge Base Manager</span>.
+                  </div>
+                </div>
+
                 {/* Live Vectorization Progress Bar */}
                 {isProcessingKb && kbProgressDetail && (
                   <div className="mt-3 bg-[#051116] border border-gray-800/80 rounded-lg p-3 animate-in fade-in duration-200">
@@ -940,7 +948,7 @@ export default function ProfileModal({ profile, initialStep = 1, onClose, onSave
                               onChange={(e) => handleTextareaChange(e, 'agentic')}
                               onKeyDown={(e) => handleTextareaKeyDown(e, 'agentic')}
                               className="flex-1 w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md p-3 focus:outline-none focus:border-accent resize-none font-mono custom-scrollbar"
-                              placeholder='e.g., You are a search query optimizer. Extract the specific names, proper nouns, and primary search keywords from the user prompt. Always keep specific names and proper nouns intact (such as "Vaelen"). Output ONLY the optimized query terms without quotes, introduction, or explanation.'
+                              placeholder='e.g., You are a search query optimizer. Extract the specific names, proper nouns, and primary search keywords from the user prompt. Always keep specific names and proper nouns intact. Output ONLY the optimized query terms without quotes, introduction, or explanation.'
                             />
 
                             {/* Autocomplete Dropdown */}

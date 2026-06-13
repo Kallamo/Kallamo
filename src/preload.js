@@ -19,7 +19,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteKbFile: (profileId, fileName) => ipcRenderer.invoke('delete-kb-file', { profileId, fileName }),
   getProfileKbBlocks: (profileId) => ipcRenderer.invoke('get-profile-kb-blocks', { profileId }),
   saveProfileKbBlocks: (profileId, blocks) => ipcRenderer.invoke('save-profile-kb-blocks', { profileId, blocks }),
-  vectorizeKbChunk: (text, source) => ipcRenderer.invoke('vectorize-kb-chunk', { text, source }),
+  vectorizeKbChunk: (text, source, keywords) => ipcRenderer.invoke('vectorize-kb-chunk', { text, source, keywords }),
   addProfileConstantFile: (profileId, file) => ipcRenderer.invoke('add-profile-constant-file', { profileId, name: file.name, path: file.path, size: file.size }),
   addProfileSearchableFile: (profileId, file) => ipcRenderer.invoke('add-profile-searchable-file', { profileId, name: file.name, path: file.path, size: file.size }),
 
