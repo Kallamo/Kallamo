@@ -385,7 +385,7 @@ Kallamo manages long conversations through an automatic archiving system that co
 
 ### Token Estimation
 
-Tokens are estimated as `Math.ceil(text.length / 4)` — a heuristic approximation of tokenizer output sufficient for context budget calculations.
+Tokens are counted with the `gpt-tokenizer` BPE tokenizer (`encode(text).length`), with a `Math.ceil(text.length / 4)` heuristic as a fallback if encoding fails. The BPE count is accurate for OpenAI models and a close approximation for the other providers, giving reliable context-budget calculations.
 
 ### Auto-Summarization Trigger
 

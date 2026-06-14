@@ -70,7 +70,8 @@ function awsSignV4({ accessKeyId, secretAccessKey, region, service, method, path
     const dateStamp = amzDate.substr(0, 8);
     
     headers["x-amz-date"] = amzDate;
-    
+    headers["x-amz-content-sha256"] = hash(body);
+
     const canonicalUri = path;
     const canonicalQueryString = "";
     
@@ -150,7 +151,8 @@ async function sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory, 
     try {
         const variables = db.prepare('SELECT key, value FROM variables').all();
         for (const variable of variables) {
-            const regex = new RegExp(`\\{\\{\\s*${variable.key}\\s*\\}\\}`, 'g');
+            const safeKey = variable.key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const regex = new RegExp(`\\{\\{\\s*${safeKey}\\s*\\}\\}`, 'g');
             if (systemPrompt) systemPrompt = systemPrompt.replace(regex, variable.value);
             if (newPrompt) newPrompt = newPrompt.replace(regex, variable.value);
         }
@@ -197,7 +199,7 @@ async function sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory, 
                 "Authorization": `Bearer ${apiKey}`
             };
             if (provider === 'openrouter') {
-                requestHeaders["HTTP-Referer"] = "https://github.com/google/deepmind";
+                requestHeaders["HTTP-Referer"] = "https://github.com/Kallamo/Kallamo";
                 requestHeaders["X-Title"] = "Kallamo";
             }
             

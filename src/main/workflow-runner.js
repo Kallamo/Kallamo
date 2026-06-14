@@ -1,5 +1,6 @@
 const db = require('./database');
 const { sendApiRequest } = require('./api-engine');
+const { encode } = require('gpt-tokenizer');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -25,9 +26,13 @@ let overflowDeferred = null;
 
 // --- TOKEN UTILITIES ---
 
-// Estimate tokens using character length divided by 4
 function estimateTokens(str) {
-    return Math.ceil((str || '').length / 4);
+    if (!str) return 0;
+    try {
+        return encode(str).length;
+    } catch (e) {
+        return Math.ceil(str.length / 4);
+    }
 }
 
 // Format history messages into standard list, respecting max context tokens
