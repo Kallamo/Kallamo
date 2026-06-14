@@ -1,6 +1,6 @@
 {
   "name": "kallamo",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A bring-your-own-key AI orchestration platform — build personas, feed them knowledge, chain them into workflows, and let them remember everything.",
   "desktopName": "Kallamo",
   "main": "src/main.js",
@@ -88,6 +88,9 @@
     "vite": "^8.0.16"
   },
   "dependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
+    "@fontsource-variable/jetbrains-mono": "^5.2.8",
+    "@fontsource-variable/merriweather": "^5.2.6",
     "@huggingface/transformers": "^4.2.0",
     "adm-zip": "^0.5.17",
     "better-sqlite3": "^12.10.0",

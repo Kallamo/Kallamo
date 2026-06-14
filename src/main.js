@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, protocol } = require('electron');
+const { app, BrowserWindow, ipcMain, protocol, session } = require('electron');
 app.setName('Kallamo');
 const path = require('path');
 const fs = require('fs');
@@ -31,6 +31,21 @@ const MIME_TYPES = {
   '.mp3': 'audio/mpeg',
   '.wav': 'audio/wav',
 };
+
+// Extensions the app-file protocol is allowed to serve. This is the set of file types the app
+// actually renders/previews (images, media, PDFs, and text/code shown in FilePreviewModal).
+// Anything outside this list (e.g. .db, .sqlite, .env, .pem, key files, executables, or
+// extension-less files) is refused, so a compromised renderer cannot read sensitive files
+// off disk via this protocol.
+const SERVABLE_EXTENSIONS = new Set([
+  // images
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico',
+  // documents / media
+  '.pdf', '.mp4', '.webm', '.mov', '.ogg', '.mp3', '.wav',
+  // text & code previews
+  '.txt', '.md', '.json', '.js', '.jsx', '.ts', '.tsx', '.css', '.html',
+  '.py', '.rs', '.go', '.sh', '.bat', '.yml', '.yaml', '.sql', '.xml',
+]);
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'app-file', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }
@@ -120,13 +135,24 @@ app.whenReady().then(() => {
 
       const filePath = path.normalize(rawPath);
 
-      if (!fs.existsSync(filePath)) {
+      const ext = path.extname(filePath).toLowerCase();
+      if (!SERVABLE_EXTENSIONS.has(ext)) {
+        console.warn(`[app-file] Refused to serve disallowed file type: ${filePath}`);
+        return new Response('Forbidden file type', { status: 403 });
+      }
+
+      let stats;
+      try {
+        stats = fs.statSync(filePath);
+      } catch {
         console.error(`[app-file] File not found: ${filePath}`);
         return new Response('File not found', { status: 404 });
       }
+      if (!stats.isFile()) {
+        return new Response('Not a file', { status: 403 });
+      }
 
       const buffer = fs.readFileSync(filePath);
-      const ext = path.extname(filePath).toLowerCase();
       const mimeType = MIME_TYPES[ext] || 'application/octet-stream';
 
       console.log(`[app-file] Serving: ${filePath} (${mimeType}, ${buffer.length} bytes)`);
@@ -140,6 +166,36 @@ app.whenReady().then(() => {
       return new Response('Error loading local resource', { status: 500 });
     }
   });
+
+  // Content-Security-Policy. Applied only in packaged builds — in development the Vite dev
+  // server needs inline scripts, eval and a websocket connection for HMR, which a strict CSP
+  // would block. All runtime assets (fonts, highlight.js themes, JS bundle) are self-hosted,
+  // so production can lock down to the app's own origin. connect-src is intentionally tight:
+  // all external AI API calls happen in the main (Node) process, not the renderer, so even a
+  // compromised renderer cannot exfiltrate data to an arbitrary server.
+  if (app.isPackaged) {
+    const csp = [
+      "default-src 'self'",
+      "script-src 'self'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob: app-file:",
+      "media-src 'self' app-file:",
+      "object-src 'self' app-file:",
+      "font-src 'self' data:",
+      "connect-src 'self' app-file:",
+      "base-uri 'none'",
+      "form-action 'none'",
+    ].join('; ');
+
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          'Content-Security-Policy': [csp],
+        },
+      });
+    });
+  }
 
   createWindow();
 

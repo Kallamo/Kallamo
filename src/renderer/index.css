@@ -1,5 +1,4 @@
 @import "tailwindcss";
-@import url('https://fonts.googleapis.com/css2?family=Kaushan+Script&display=swap');
 
 
 :root {
@@ -12,16 +11,16 @@
   --color-bg-card: #0a161d;
   --color-bg-chat: #051116;
   --color-bg-sidebar: #040d12;
-  --font-sans: "Inter", system-ui, sans-serif;
-  --font-serif: "Merriweather", Georgia, serif;
-  --font-mono: "JetBrains Mono", monospace;
+  --font-sans: "Inter Variable", "Inter", system-ui, sans-serif;
+  --font-serif: "Merriweather Variable", "Merriweather", Georgia, serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", monospace;
 }
 
 body {
   background-color: #011419;
   color: #f3f4f6;
   /* text-gray-100 */
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: 'Inter Variable', 'Inter', system-ui, sans-serif;
 }
 
 /* Electron title bar rules */

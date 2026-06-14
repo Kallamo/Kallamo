@@ -10,6 +10,17 @@ import ProfileErrorModal from './components/modals/ProfileErrorModal';
 import ContextOverflowModal from './components/modals/ContextOverflowModal';
 import { X, CheckCircle, AlertCircle, Info } from 'lucide-react';
 
+// Self-hosted highlight.js themes (bundled by Vite, served from the app origin instead of a CDN)
+import atomOneDarkThemeUrl from 'highlight.js/styles/atom-one-dark.css?url';
+import githubDarkThemeUrl from 'highlight.js/styles/github-dark.css?url';
+import tokyoNightDarkThemeUrl from 'highlight.js/styles/tokyo-night-dark.css?url';
+
+const HLJS_THEME_URLS = {
+  'atom-one-dark': atomOneDarkThemeUrl,
+  'github-dark': githubDarkThemeUrl,
+  'tokyo-night-dark': tokyoNightDarkThemeUrl,
+};
+
 function MainLayout() {
   const {
     currentView,
@@ -92,13 +103,7 @@ function MainLayout() {
     if (settings?.interface?.codeTheme) {
       const themeLink = document.getElementById('hljs-theme');
       if (themeLink) {
-        let themeUrl = "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css";
-        if (settings.interface.codeTheme === 'github-dark') {
-          themeUrl = "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css";
-        } else if (settings.interface.codeTheme === 'tokyo-night-dark') {
-          themeUrl = "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/tokyo-night-dark.min.css";
-        }
-        themeLink.href = themeUrl;
+        themeLink.href = HLJS_THEME_URLS[settings.interface.codeTheme] || HLJS_THEME_URLS['atom-one-dark'];
       }
     }
   }, [settings?.interface?.codeTheme]);

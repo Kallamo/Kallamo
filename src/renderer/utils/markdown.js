@@ -1,21 +1,33 @@
 import hljs from 'highlight.js';
 
-export function escapeHTML(str) { 
-    return str.replace(/[&<>'"]/g, tag => ({ 
-        '&': '&amp;', 
-        '<': '&lt;', 
-        '>': '&gt;', 
-        "'": '&#39;', 
-        '"': '&quot;' 
-    }[tag] || tag)); 
+export function escapeHTML(str) {
+    return str.replace(/[&<>'"]/g, tag => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        "'": '&#39;',
+        '"': '&quot;'
+    }[tag] || tag));
+}
+
+// Reject dangerous URL schemes (javascript:, vbscript:, non-image data:) so AI-generated or
+// imported markdown cannot inject script via image/link URLs. Returns '' for unsafe URLs.
+export function sanitizeUrl(url) {
+    const trimmed = String(url || '').trim();
+    // Strip whitespace/control chars before the scheme check so obfuscation like
+    // "java\tscript:" or "java\nscript:" cannot slip past.
+    const scheme = trimmed.replace(new RegExp('[\u0000-\u0020]+', 'g'), '').toLowerCase();
+    if (/^(?:javascript|vbscript|file|about):/.test(scheme)) return '';
+    if (/^data:/.test(scheme) && !/^data:image\//.test(scheme)) return '';
+    return trimmed;
 }
 
 export function parseInlineMarkdown(text) {
     let safeText = escapeHTML(text);
     safeText = safeText.replace(/\*\*(.*?)\*\*/g, '<strong class="text-accent font-bold">$1</strong>');
     safeText = safeText.replace(/\*(.*?)\*/g, '<em class="italic text-gray-300">$1</em>');
-    safeText = safeText.replace(/`(.*?)`/g, '<code class="bg-[#1a2d32] text-accent px-1.5 py-0.5 rounded text-xs font-mono border border-gray-700/60" style="display: inline !important; width: auto !important; white-space: normal !important; vertical-align: baseline;">$1</code>');   
-     
+    safeText = safeText.replace(/`(.*?)`/g, '<code class="bg-[#1a2d32] text-accent px-1.5 py-0.5 rounded text-xs font-mono border border-gray-700/60" style="display: inline !important; width: auto !important; white-space: normal !important; vertical-align: baseline;">$1</code>');
+
     return safeText;
 }
 
@@ -23,7 +35,7 @@ export function parseMarkdown(text, lineNumbersEnabled = false) {
     if (!text) return '';
 
     let codeBlocks = [];
-    let imageBlocks = []; 
+    let imageBlocks = [];
 
     let parsedText = text.replace(/^(#{1,6})\s+(.*)$/gm, '\n\n$1 $2\n\n');
 
@@ -31,12 +43,12 @@ export function parseMarkdown(text, lineNumbersEnabled = false) {
     parsedText = parsedText.replace(codeBlockRegex, (match, lang, code) => {
         const id = 'code-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
         const langLabel = lang ? lang.toUpperCase() : 'CODE';
-        
+
         let coloredCode = '';
         const rawCode = code.trim();
         const lineCount = rawCode.split('\n').length;
         const lineNumbers = Array.from({length: lineCount}, (_, i) => i + 1).join('\n');
-        
+
         try {
             if (lang && hljs.getLanguage(lang)) {
                 coloredCode = hljs.highlight(rawCode, { language: lang }).value;
@@ -46,7 +58,7 @@ export function parseMarkdown(text, lineNumbersEnabled = false) {
         } catch (e) {
             coloredCode = escapeHTML(rawCode);
         }
-        
+
         const codeWidgetHtml = `
         <div class="my-4 rounded-lg overflow-hidden bg-[#011419] border border-gray-800 shadow-lg font-sans select-none w-full min-w-0 max-w-full">
             <div class="flex items-center justify-between px-4 py-2 bg-[#0a161d] border-b border-gray-800 shrink-0">
@@ -63,15 +75,33 @@ export function parseMarkdown(text, lineNumbersEnabled = false) {
                 </div>
             </div>
         </div>`;
-        
+
         codeBlocks.push(codeWidgetHtml);
         return `\n\n__CODE_BLOCK_PLACEHOLDER_${codeBlocks.length - 1}__\n\n`;
     });
 
     parsedText = parsedText.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, url) => {
+        const cleanUrl = sanitizeUrl(url);
+        if (!cleanUrl) return ''; // drop images whose URL uses an unsafe scheme
+
+        const srcAttr = escapeHTML(cleanUrl);
+        const altAttr = escapeHTML(alt);
+
+        // Build a value that is safe inside BOTH the double-quoted onclick attribute and the
+        // single-quoted JS string it wraps. Do NOT HTML-entity-escape the apostrophe here: the
+        // browser decodes entities before the JS parser runs, which would re-open the string.
+        // Backslash-escape it for JS, and HTML-escape only the attribute-breaking characters.
+        const jsUrl = cleanUrl
+            .replace(/\\/g, '\\\\')
+            .replace(/'/g, "\\'")
+            .replace(/"/g, '&quot;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/[\r\n]/g, '');
+
         const imgHtml = `
             <div class="my-3 rounded-lg overflow-hidden border border-gray-800/80 shadow-md inline-block">
-                <img src="${url}" alt="${alt}" class="max-w-full h-auto object-cover max-h-[400px] cursor-zoom-in hover:opacity-90 transition-opacity" onclick="window.open('${url}', '_blank')">
+                <img src="${srcAttr}" alt="${altAttr}" class="max-w-full h-auto object-cover max-h-[400px] cursor-zoom-in hover:opacity-90 transition-opacity" onclick="window.open('${jsUrl}', '_blank')">
             </div>`;
         imageBlocks.push(imgHtml);
         return `\n\n__IMAGE_BLOCK_PLACEHOLDER_${imageBlocks.length - 1}__\n\n`;
@@ -164,10 +194,10 @@ export function parseMarkdown(text, lineNumbersEnabled = false) {
         }
 
         const lines = block.split('\n');
-        
+
         let isOrderedList = lines.every(line => /^\s*\d+\.\s+/.test(line)) || /^\s*\d+\.\s+/.test(lines[0]);
         let isUnorderedList = lines.every(line => /^\s*[\*\-]\s+/.test(line)) || /^\s*[\*\-]\s+/.test(lines[0]);
-        
+
         if (isOrderedList || isUnorderedList) {
             let currentType = isOrderedList ? 'ol' : 'ul';
             let listClass = isOrderedList ? 'list-decimal' : 'list-disc';
@@ -176,12 +206,12 @@ export function parseMarkdown(text, lineNumbersEnabled = false) {
                 closeListIfNeeded();
             }
 
-            if (!inList) { 
-                htmlResult.push(`<${currentType} class="my-2 space-y-1 ml-4 ${listClass}">`); 
-                inList = true; 
+            if (!inList) {
+                htmlResult.push(`<${currentType} class="my-2 space-y-1 ml-4 ${listClass}">`);
+                inList = true;
                 listType = currentType;
             }
-            
+
             lines.forEach(line => {
                 let cleanLine = line.replace(/^\s*([\*\-]|\d+\.)\s+/, '');
                 htmlResult.push(`<li class="pl-1 text-sm text-gray-200 leading-relaxed">${parseInlineMarkdown(cleanLine)}</li>`);
