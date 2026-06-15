@@ -2,6 +2,12 @@
 
 All notable changes to Kallamo are documented in this file. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2026-06-15
+
+### Fixed
+- Fixed an issue in the Knowledge Base Manager where newly added searchable (RAG) files would not appear in the blocks list or counts and were not searchable.
+- Disabled Electron's built-in spellchecker to prevent red correction lines on non-English texts.
+
 ## [1.0.2] - 2026-06-14
 
 ### Security
