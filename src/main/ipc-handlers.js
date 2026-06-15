@@ -1559,6 +1559,9 @@ ipcMain.handle('add-profile-searchable-file', async (event, { profileId, name, p
     vectorDB.push(...fileVectors);
     fs.writeFileSync(vectorDbPath, JSON.stringify(vectorDB, null, 2));
 
+    deleteChunksFromDb(profileId, 'profile_kb', name);
+    insertChunksToDb(profileId, 'profile_kb', fileVectors);
+
     if (event && event.sender) {
       event.sender.send('vectorization-progress', {
         type: 'profile',
