@@ -17,14 +17,13 @@ function getMimeType(filePath) {
 
 // --- AUTHENTICATION & SIGNING HELPERS ---
 
-// GCP Access Token generation using RS256 JWT assertion
 async function getGcpAccessToken(serviceAccountJsonStr) {
     if (!serviceAccountJsonStr) {
         throw new Error("GCP Service Account JSON is empty.");
     }
     const sa = JSON.parse(serviceAccountJsonStr);
     const jwtHeader = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
-    
+
     const nowSecs = Math.floor(Date.now() / 1000);
     const jwtClaim = Buffer.from(JSON.stringify({
         iss: sa.client_email,
@@ -33,25 +32,25 @@ async function getGcpAccessToken(serviceAccountJsonStr) {
         exp: nowSecs + 3600,
         iat: nowSecs
     })).toString("base64url");
-    
+
     const signatureInput = `${jwtHeader}.${jwtClaim}`;
     const sign = crypto.createSign("RSA-SHA256");
     sign.update(signatureInput);
     const signature = sign.sign(sa.private_key, "base64url");
-    
+
     const assertion = `${signatureInput}.${signature}`;
-    
+
     const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${assertion}`
     });
-    
+
     if (!tokenRes.ok) {
         const errText = await tokenRes.text();
         throw new Error(`GCP OAuth Token exchange failed: ${errText}`);
     }
-    
+
     const tokenData = await tokenRes.json();
     return tokenData.access_token;
 }
@@ -68,22 +67,22 @@ function hash(string) {
 function awsSignV4({ accessKeyId, secretAccessKey, region, service, method, path, headers, body }) {
     const amzDate = new Date().toISOString().replace(/[:\-]|\.\d{3}/g, "");
     const dateStamp = amzDate.substr(0, 8);
-    
+
     headers["x-amz-date"] = amzDate;
     headers["x-amz-content-sha256"] = hash(body);
 
     const canonicalUri = path;
     const canonicalQueryString = "";
-    
+
     const sortedHeaderNames = Object.keys(headers).map(h => h.toLowerCase()).sort();
     const canonicalHeaders = sortedHeaderNames.map(h => {
         const originalName = Object.keys(headers).find(k => k.toLowerCase() === h);
         return `${h}:${headers[originalName].toString().trim()}`;
     }).join("\n") + "\n";
-    
+
     const signedHeaders = sortedHeaderNames.join(";");
     const payloadHash = hash(body);
-    
+
     const canonicalRequest = [
         method,
         canonicalUri,
@@ -92,7 +91,7 @@ function awsSignV4({ accessKeyId, secretAccessKey, region, service, method, path
         signedHeaders,
         payloadHash
     ].join("\n");
-    
+
     const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
     const stringToSign = [
         "AWS4-HMAC-SHA256",
@@ -100,13 +99,13 @@ function awsSignV4({ accessKeyId, secretAccessKey, region, service, method, path
         credentialScope,
         hash(canonicalRequest)
     ].join("\n");
-    
+
     const kDate = hmac("AWS4" + secretAccessKey, dateStamp);
     const kRegion = hmac(kDate, region);
     const kService = hmac(kRegion, service);
     const kSigning = hmac(kService, "aws4_request");
     const signature = hmac(kSigning, stringToSign, "hex");
-    
+
     headers["Authorization"] = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
 }
 
@@ -117,8 +116,12 @@ function parseResponse(data, provider) {
         switch (provider.toLowerCase()) {
             case 'openai':
             case 'openrouter':
-            case 'local':
-                return data.choices[0].message.content;
+            case 'local': {
+                const message = data.choices[0].message;
+                const reasoning = message.reasoning_content || message.reasoning;
+                const content = message.content || '';
+                return reasoning ? `<think>${reasoning}</think>${content}` : content;
+            }
             case 'anthropic':
                 return data.content[0].text;
             case 'google ai':
@@ -147,7 +150,6 @@ function parseResponse(data, provider) {
 // --- CORE API REQUESTS ---
 
 async function sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory, newPrompt, temperature, maxTokens, manualMode, manualJson, abortSignal, attachedImages }) {
-    // Resolve dynamic variables in prompts
     try {
         const variables = db.prepare('SELECT key, value FROM variables').all();
         for (const variable of variables) {
@@ -168,7 +170,7 @@ async function sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory, 
     const provider = apiProfile.provider.toLowerCase();
     const apiKey = db.decryptApiKey(apiProfile.apiKey);
     const baseUrl = apiProfile.baseUrl;
-    
+
     let customConfig = {};
     if (apiProfile.customConfig) {
         try {
@@ -178,12 +180,11 @@ async function sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory, 
             console.error("Failed to parse customConfig in sendApiRequest:", e);
         }
     }
-    
+
     let requestHeaders = {};
     let requestBody = {};
     let endpoint = "";
 
-    // Normalize role strings: API expects 'assistant' instead of 'ai' for OpenAI/Anthropic/Gemini
     const cleanHistory = chatHistory.map(msg => ({
         role: msg.role === 'ai' ? 'assistant' : msg.role,
         content: msg.content
@@ -202,12 +203,12 @@ async function sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory, 
                 requestHeaders["HTTP-Referer"] = "https://github.com/Kallamo/Kallamo";
                 requestHeaders["X-Title"] = "Kallamo";
             }
-            
+
             let userContent = newPrompt;
             if (attachedImages && attachedImages.length > 0) {
-                const isVisionModel = provider === 'openai' || provider === 'openrouter' || 
-                                     (provider === 'local' && (model.toLowerCase().includes('vision') || model.toLowerCase().includes('llava') || model.toLowerCase().includes('vl')));
-                
+                const isVisionModel = provider === 'openai' || provider === 'openrouter' ||
+                    (provider === 'local' && (model.toLowerCase().includes('vision') || model.toLowerCase().includes('llava') || model.toLowerCase().includes('vl')));
+
                 if (isVisionModel) {
                     userContent = [{ type: "text", text: newPrompt }];
                     for (const img of attachedImages) {
@@ -229,7 +230,7 @@ async function sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory, 
                     userContent = `${newPrompt}\n\n[Attached Image(s): ${imageNames}]`;
                 }
             }
-            
+
             requestBody = {
                 model: model,
                 messages: [
@@ -239,7 +240,7 @@ async function sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory, 
                 ],
                 temperature: temperature ?? 0.7,
                 max_tokens: maxTokens ?? 1000,
-                stream: false 
+                stream: false
             };
             break;
         }
@@ -249,9 +250,9 @@ async function sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory, 
             requestHeaders = {
                 "Content-Type": "application/json",
                 "x-api-key": apiKey,
-                "anthropic-version": "2023-06-01" 
+                "anthropic-version": "2023-06-01"
             };
-            
+
             let userContent = newPrompt;
             if (attachedImages && attachedImages.length > 0) {
                 userContent = [{ type: "text", text: newPrompt }];
@@ -272,10 +273,10 @@ async function sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory, 
                     }
                 }
             }
-            
+
             requestBody = {
                 model: model,
-                system: systemPrompt, 
+                system: systemPrompt,
                 messages: [...cleanHistory, { role: "user", content: userContent }],
                 temperature: temperature ?? 0.7,
                 max_tokens: maxTokens ?? 1000,
@@ -289,7 +290,7 @@ async function sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory, 
             requestHeaders = {
                 "Content-Type": "application/json"
             };
-            
+
             const geminiParts = [{ text: newPrompt }];
             if (attachedImages && attachedImages.length > 0) {
                 for (const img of attachedImages) {
@@ -335,7 +336,7 @@ async function sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory, 
             const gcpRegion = customConfig.gcpRegion || 'us-central1';
             const gcpProjectId = customConfig.gcpProjectId;
             endpoint = `https://${gcpRegion}-aiplatform.googleapis.com/v1/projects/${gcpProjectId}/locations/${gcpRegion}/publishers/google/models/${model}:generateContent`;
-            
+
             const gcpToken = await getGcpAccessToken(customConfig.gcpServiceAccount);
             requestHeaders = {
                 "Content-Type": "application/json",
@@ -440,7 +441,7 @@ async function sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory, 
                     compiledPrompt += `<|start_header_id|>${roleName}<|end_header_id|>\n\n${msg.content}<|eot_id|>\n`;
                 }
                 compiledPrompt += `<|start_header_id|>user<|end_header_id|>\n\n${bedrockPrompt}<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n\n`;
-                
+
                 requestBody = {
                     prompt: compiledPrompt,
                     max_gen_len: maxTokens ?? 1000,
@@ -505,7 +506,7 @@ async function sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory, 
             try {
                 const errorData = await response.json();
                 errorMsg = errorData.error?.message || JSON.stringify(errorData);
-            } catch (e) {}
+            } catch (e) { }
             throw new Error(errorMsg);
         }
 
@@ -592,12 +593,12 @@ async function getEmbeddings(text, apiProfileId, modelName) {
             try {
                 const errorData = await response.json();
                 errorMsg = errorData.error?.message || JSON.stringify(errorData);
-            } catch (e) {}
+            } catch (e) { }
             throw new Error(errorMsg);
         }
 
         const data = await response.json();
-        
+
         if (provider === 'google ai') {
             if (data.embedding && data.embedding.values) {
                 return data.embedding.values;

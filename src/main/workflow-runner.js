@@ -10,14 +10,14 @@ const dataDir = path.join(appDataPath, 'Kallamo');
 const chatsDir = path.join(dataDir, 'ChatHistory');
 const profilesDir = path.join(dataDir, 'AI Profiles');
 
-const { 
-  searchKnowledgeBase, 
-  searchChatKnowledgeBase, 
-  searchChatMemories, 
-  extractTextFromFile,
-  chunkText,
-  vectorizeChunks,
-  insertChunksToDb
+const {
+    searchKnowledgeBase,
+    searchChatKnowledgeBase,
+    searchChatMemories,
+    extractTextFromFile,
+    chunkText,
+    vectorizeChunks,
+    insertChunksToDb
 } = require('./rag-service');
 
 let activeRun = null;
@@ -39,19 +39,19 @@ function estimateTokens(str) {
 function formatActiveHistory(messages, maxTokensAllowed) {
     let tokensUsed = 0;
     const history = [];
-    
+
     for (let i = messages.length - 1; i >= 0; i--) {
         const msg = messages[i];
         let content = msg.content || '';
-        
+
         if (msg.attachedFiles) {
             let files = [];
             try {
-                files = typeof msg.attachedFiles === 'string' 
-                    ? JSON.parse(msg.attachedFiles) 
+                files = typeof msg.attachedFiles === 'string'
+                    ? JSON.parse(msg.attachedFiles)
                     : msg.attachedFiles;
-            } catch (e) {}
-            
+            } catch (e) { }
+
             if (Array.isArray(files) && files.length > 0) {
                 const fileMarkers = files.map(f => `File - ${f.name}`).join('\n');
                 content = `${fileMarkers}\n${content}`;
@@ -353,7 +353,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                     const chatKbFiles = typeof chat.knowledgeFiles === 'string'
                         ? JSON.parse(chat.knowledgeFiles)
                         : (chat.knowledgeFiles || []);
-                    
+
                     for (const file of chatKbFiles) {
                         try {
                             if (!file.strategy || file.strategy === 'constant' || file.strategy === 'full_context') {
@@ -408,7 +408,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                 const initialSystemTokens = estimateTokens(compiledSystemPrompt + contextBlock);
                 const initialRemainingTokens = maxContextTokens - initialInputTokens - initialSystemTokens;
                 const ragActiveMessages = activeMessages.slice(-10);
-                
+
                 let ragChatHistory = [];
                 if (i === 0 || includeChatHistory) {
                     ragChatHistory = formatActiveHistory(ragActiveMessages, initialRemainingTokens);
@@ -422,7 +422,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                         ? `--- DETAILED RESEARCH CONTEXT ---\n${agenticResult.contextGathered}`
                         : `--- AGENTIC RETRIEVED RESEARCH RESULTS ---\n${agenticResult.agenticResponse}`;
                     contextBlock += `\n\n${combinedContext}\n`;
-                    
+
                     let agenticResponseTokens = 0;
                     if (!agenticResult.contextGathered) {
                         agenticResponseTokens = estimateTokens(agenticResult.agenticResponse);
@@ -463,7 +463,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                                 .filter(c => c.type === 'manual')
                                 .map(c => (c.name || c.source || '').toLowerCase());
                         }
-                    } catch (e) {}
+                    } catch (e) { }
 
                     searchableChunks = results
                         .filter(r => {
@@ -541,7 +541,14 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
 
             let chatHistory = [];
             if (i === 0 || includeChatHistory) {
-                chatHistory = formatActiveHistory(activeMessages, remainingTokens);
+                let historySource = activeMessages;
+                if (i === 0) {
+                    const last = activeMessages[activeMessages.length - 1];
+                    if (last && last.role === 'user') {
+                        historySource = activeMessages.slice(0, -1);
+                    }
+                }
+                chatHistory = formatActiveHistory(historySource, remainingTokens);
             }
 
             let historyMessagesTokens = 0;
@@ -586,7 +593,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                         return { success: false, cancelled: true };
                     }
                     console.error(`API Error in step ${i + 1} (${profile.name}):`, apiError);
-                    
+
                     webContents.send('workflow-error', {
                         step: i + 1,
                         profileName: profile.name,
@@ -650,7 +657,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
 
             lastAgenticRagResponse = agenticRagResponse;
             lastAgenticRagContextGathered = agenticRagContextGathered;
-            
+
             totalProfileKbTokens += profileKbTokens;
             totalChatKbTokens += chatKbTokens;
             totalChatHistoryTokens += chatHistoryTokens;
@@ -662,7 +669,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
 
         if (finalOutput && lastProfileUsed) {
             const aiMsgId = 'msg_' + Math.random().toString(36).substr(2, 9);
-            
+
             const debugObj = {
                 workflowStatus: isWorkflow ? `Workflow complete (${steps.length} steps)` : '',
                 agenticRagResponse: lastAgenticRagResponse,
@@ -805,7 +812,7 @@ async function executeSummarizationInternal({ chatId, selectedMessages, newSumma
     if (fs.existsSync(dbPath)) {
         try {
             vectorDB = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
-        } catch (err) {}
+        } catch (err) { }
     }
     vectorDB = vectorDB.concat(vectors);
     fs.writeFileSync(dbPath, JSON.stringify(vectorDB, null, 2));
@@ -879,11 +886,11 @@ function readEntireKbFile(ownerId, fileName) {
 async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory = [], webContents = null, includeChatContext = true) {
     console.log(`[Agentic RAG] Starting autonomous retrieval loop for: ${profile.name}`);
     const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
-    
+
     let currentTurn = 1;
     const maxTurns = 2; // User requested: limit to 2 turns for better cost/speed
     let finished = false;
-    
+
     const retrievedProfileChunks = new Map();
     const retrievedChatChunks = new Map();
     const retrievedMemories = new Map();
@@ -990,7 +997,7 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
 
             const toolCalls = [];
             let match;
-            
+
             while ((match = toolCallRegex.exec(agentOutput)) !== null) {
                 toolCalls.push({ name: match[1], arg: match[2] });
             }
@@ -1046,8 +1053,8 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
 
                     for (const [filename, data] of readFiles.entries()) {
                         const filenameLower = filename.toLowerCase();
-                        const matches = allowedSources.some(src => 
-                            filenameLower.includes(src) || 
+                        const matches = allowedSources.some(src =>
+                            filenameLower.includes(src) ||
                             src.includes(filenameLower)
                         );
                         if (!matches) {
@@ -1079,11 +1086,11 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
             let turnResults = "";
             for (const call of toolCalls) {
                 console.log(`[Agentic RAG] Executing tool: ${call.name} with: "${call.arg}"`);
-                
+
                 if (call.name === 'search_kb') {
                     const rawProfileResults = await searchKnowledgeBase(call.arg, profile.id);
                     const rawChatKbResults = includeChatContext ? await searchChatKnowledgeBase(call.arg, chatId) : [];
-                    
+
                     const knowledgeFiles = JSON.parse(profile.knowledgeFiles || '[]');
                     let constantSnippetTitles = [];
                     try {
@@ -1095,7 +1102,7 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                                 .filter(c => c.type === 'manual')
                                 .map(c => (c.name || c.source || '').toLowerCase());
                         }
-                    } catch (e) {}
+                    } catch (e) { }
 
                     const profileResults = rawProfileResults.filter(r => {
                         const fileMatch = knowledgeFiles.find(f => f.name.toLowerCase() === r.source.toLowerCase());
@@ -1114,7 +1121,7 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                             chatKbFiles = typeof chat.knowledgeFiles === 'string'
                                 ? JSON.parse(chat.knowledgeFiles)
                                 : (chat.knowledgeFiles || []);
-                        } catch (e) {}
+                        } catch (e) { }
                     }
                     const chatKbResults = rawChatKbResults.filter(r => {
                         const fileMatch = chatKbFiles.find(f => f.name.toLowerCase() === r.source.toLowerCase());
@@ -1123,7 +1130,7 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                         }
                         return true;
                     });
-                    
+
                     profileResults.forEach(r => {
                         retrievedProfileChunks.set(r.id, { text: r.text, source: r.source });
                     });
@@ -1132,24 +1139,24 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                             retrievedChatChunks.set(r.id, { text: r.text, source: r.source });
                         });
                     }
-                    
+
                     const combined = [...profileResults, ...chatKbResults];
-                    
+
                     if (combined.length === 0) {
                         turnResults += `\nTool [search_kb] for "${call.arg}": No matches found.\n`;
                     } else {
-                        turnResults += `\nTool [search_kb] for "${call.arg}" results:\n` + combined.map((r, idx) => `[Result ${idx+1} from ${r.source}]: ${r.text}`).join('\n\n') + '\n';
+                        turnResults += `\nTool [search_kb] for "${call.arg}" results:\n` + combined.map((r, idx) => `[Result ${idx + 1} from ${r.source}]: ${r.text}`).join('\n\n') + '\n';
                     }
                 } else if (call.name === 'search_memories') {
                     const rawMemResults = includeChatContext ? await searchChatMemories(call.arg, chatId) : [];
-                    
+
                     let chatMemoryBlocks = [];
                     if (includeChatContext && chat && chat.memoryBlocks) {
                         try {
                             chatMemoryBlocks = typeof chat.memoryBlocks === 'string'
                                 ? JSON.parse(chat.memoryBlocks)
                                 : (chat.memoryBlocks || []);
-                        } catch (e) {}
+                        } catch (e) { }
                     }
                     const memResults = rawMemResults.filter(r => {
                         const snippetMatch = chatMemoryBlocks.find(b => b.id === r.blockId || (b.title && b.title.toLowerCase() === r.source.toLowerCase()));
@@ -1158,17 +1165,17 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                         }
                         return true;
                     });
-                    
+
                     if (includeChatContext) {
                         memResults.forEach(r => {
                             retrievedMemories.set(r.id, { text: r.text, source: r.source });
                         });
                     }
- 
+
                     if (memResults.length === 0) {
                         turnResults += `\nTool [search_memories] for "${call.arg}": No matches found.\n`;
                     } else {
-                        turnResults += `\nTool [search_memories] for "${call.arg}" results:\n` + memResults.map((r, idx) => `[Memory match ${idx+1}]: ${r.text}`).join('\n\n') + '\n';
+                        turnResults += `\nTool [search_memories] for "${call.arg}" results:\n` + memResults.map((r, idx) => `[Memory match ${idx + 1}]: ${r.text}`).join('\n\n') + '\n';
                     }
                 } else if (call.name === 'read_file') {
                     let isConstant = false;
@@ -1178,7 +1185,7 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                         if (fileMatch && (!fileMatch.strategy || fileMatch.strategy === 'constant' || fileMatch.strategy === 'full_context')) {
                             isConstant = true;
                         }
-                    } catch (e) {}
+                    } catch (e) { }
 
                     if (!isConstant && includeChatContext && chat && chat.knowledgeFiles) {
                         try {
@@ -1189,7 +1196,7 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                             if (fileMatch && (!fileMatch.strategy || fileMatch.strategy === 'constant' || fileMatch.strategy === 'full_context')) {
                                 isConstant = true;
                             }
-                        } catch (e) {}
+                        } catch (e) { }
                     }
 
                     if (!isConstant) {
@@ -1203,7 +1210,7 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                                     isConstant = true;
                                 }
                             }
-                        } catch (e) {}
+                        } catch (e) { }
                     }
 
                     if (!isConstant && includeChatContext && chat && chat.memoryBlocks) {
@@ -1213,9 +1220,9 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                                 : chat.memoryBlocks;
                             const snippetMatch = snippets.find(s => s.type === 'manual' && (s.title || s.source || '').toLowerCase() === call.arg.toLowerCase() && s.strategy === 'constant');
                             if (snippetMatch) {
-                                    isConstant = true;
+                                isConstant = true;
                             }
-                        } catch (e) {}
+                        } catch (e) { }
                     }
 
                     if (isConstant) {
@@ -1227,11 +1234,11 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                             fileText = readEntireKbFile(chatId, call.arg);
                             fileSource = 'chat';
                         }
-                        
+
                         if (!fileText.startsWith("[System: File not found")) {
                             readFiles.set(call.arg, { text: fileText, source: fileSource });
                         }
-                        
+
                         turnResults += `\nTool [read_file] for "${call.arg}" contents:\n${fileText}\n`;
                     }
                 }
@@ -1239,7 +1246,7 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
 
             messages.push({ role: 'assistant', content: agentOutput });
             messages.push({ role: 'user', content: `TOOL RESULTS:\n${turnResults}\n\nWhat is your next step?` });
-            
+
             currentTurn++;
 
         } catch (err) {
