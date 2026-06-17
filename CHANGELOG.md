@@ -2,6 +2,12 @@
 
 All notable changes to Kallamo are documented in this file. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.5] - 2026-06-17
+
+### Fixed
+- Reasoning / "thinking" output from local models that return it in a separate field (e.g. reasoning models via LM Studio) is now correctly shown in its own collapsible block. This completes the partial fix from 1.0.4.
+- Fixed the current message being duplicated in the request sent to the model.
+
 ## [1.0.4] - 2026-06-17
 
 ### Added
