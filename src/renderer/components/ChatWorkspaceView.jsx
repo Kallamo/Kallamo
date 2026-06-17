@@ -33,7 +33,8 @@ const safeParseDebugNotice = (notice) => {
 const parseMessageContent = (content) => {
   if (!content) return { thinking: '', response: '' };
 
-  const thinkingRegex = /<thinking>([\s\S]*?)<\/thinking>/i;
+  // Match both <thinking>...</thinking> and <think>...</think> (case-insensitive)
+  const thinkingRegex = /<think(?:ing)?>([\s\S]*?)<\/think(?:ing)?>/i;
   const match = thinkingRegex.exec(content);
 
   if (match) {
@@ -42,10 +43,12 @@ const parseMessageContent = (content) => {
     return { thinking, response };
   }
 
-  if (content.includes('<thinking>')) {
-    const parts = content.split('<thinking>');
+  // Handle partial/unclosed <thinking> or <think> streams
+  const partialMatch = content.match(/<think(?:ing)?>/i);
+  if (partialMatch) {
+    const parts = content.split(partialMatch[0]);
     const before = parts[0].trim();
-    const thinking = parts[1].trim();
+    const thinking = (parts[1] || '').trim();
     return { thinking, response: before };
   }
 

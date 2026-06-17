@@ -64,8 +64,72 @@ if (fs.existsSync(oldDbPath) && !fs.existsSync(dbPath)) {
   }
 }
 
+// --- WORKSPACE RESTORE BOOT SWAP FLOW ---
+const markerPath = path.join(dataDir, 'RESTORE_PENDING.json');
+if (fs.existsSync(markerPath)) {
+  try {
+    const marker = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
+    const stagedPath = path.join(dataDir, marker.staged || 'restore-staged.db');
+    if (fs.existsSync(stagedPath)) {
+      const walPath = `${dbPath}-wal`;
+      const shmPath = `${dbPath}-shm`;
+      if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+      if (fs.existsSync(walPath)) fs.unlinkSync(walPath);
+      if (fs.existsSync(shmPath)) fs.unlinkSync(shmPath);
+
+      try {
+        fs.renameSync(stagedPath, dbPath);
+      } catch (err) {
+        fs.copyFileSync(stagedPath, dbPath);
+        fs.unlinkSync(stagedPath);
+      }
+    }
+
+    if (!fs.existsSync(dbPath)) {
+      throw new Error("Staged database failed to deploy to active path.");
+    }
+
+    fs.unlinkSync(markerPath);
+    console.log("[Workspace Restore] Restored database successfully from staged backup.");
+  } catch (err) {
+    console.error("Failed to restore workspace at boot:", err);
+    if (!fs.existsSync(dbPath)) {
+      try {
+        const files = fs.readdirSync(dataDir);
+        const backups = files
+          .filter(f => f.startsWith('pre-restore-backup-') && f.endsWith('.db'))
+          .map(f => {
+            const part = f.substring('pre-restore-backup-'.length, f.length - '.db'.length);
+            const ts = parseInt(part, 10);
+            return { file: f, ts };
+          })
+          .filter(b => !isNaN(b.ts))
+          .sort((a, b) => b.ts - a.ts);
+
+        if (backups.length > 0) {
+          const recoverySrc = path.join(dataDir, backups[0].file);
+          console.warn(`[Workspace Restore] Restoration failed; attempting recovery using safety snapshot: ${recoverySrc}`);
+          fs.copyFileSync(recoverySrc, dbPath);
+        }
+      } catch (recoveryErr) {
+        console.error("Fatal: Recovery from pre-restore backup failed:", recoveryErr);
+      }
+    }
+    if (fs.existsSync(markerPath)) {
+      try { fs.unlinkSync(markerPath); } catch (e) {}
+    }
+  } finally {
+    // Best-effort cleanup of any leftover staged file
+    const stagedLeftover = path.join(dataDir, 'restore-staged.db');
+    if (fs.existsSync(stagedLeftover)) {
+      try { fs.unlinkSync(stagedLeftover); } catch (e) {}
+    }
+  }
+}
+
 const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
+
 
 // --- ENCRYPTION HELPERS ---
 
@@ -408,6 +472,17 @@ try {
   }
 } catch (e) {
   console.error("Migration error patching memoryBlocks data:", e);
+}
+
+// Initialize RAG model metadata stamp (used to detect model upgrades)
+try {
+  const existingMeta = db.prepare("SELECT value FROM settings WHERE key = 'rag_model_metadata'").get();
+  if (!existingMeta) {
+    // First run — stamp will be written after successful re-index
+    console.log("Database: No rag_model_metadata found. Will be created after first indexing.");
+  }
+} catch (e) {
+  console.error("Migration error checking rag_model_metadata:", e);
 }
 
 function migrateData() {

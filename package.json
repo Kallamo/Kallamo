@@ -1,6 +1,6 @@
 {
   "name": "kallamo",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "A bring-your-own-key AI orchestration platform — build personas, feed them knowledge, chain them into workflows, and let them remember everything.",
   "desktopName": "Kallamo",
   "main": "src/main.js",
@@ -21,7 +21,8 @@
     "files": [
       "dist/**/*",
       "src/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/onnxruntime-web/**/*"
     ],
     "fileAssociations": [
       {
@@ -45,6 +46,7 @@
       "icon": "src/assets/icon.ico"
     },
     "nsis": {
+      "artifactName": "${productName}-Setup-${version}.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
@@ -71,6 +73,11 @@
         "owner": "Kallamo",
         "repo": "Kallamo"
       }
+    ],
+    "compression": "maximum",
+    "electronLanguages": [
+      "en-US",
+      "pt-BR"
     ]
   },
   "keywords": [],

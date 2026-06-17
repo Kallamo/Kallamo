@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const mammoth = require('mammoth');
 const os = require('os');
+
 const { pipeline, env } = require('@huggingface/transformers');
 const db = require('./database');
 
@@ -17,13 +18,20 @@ if (!fs.existsSync(modelCacheDir)) {
 }
 env.cacheDir = modelCacheDir;
 
+
+
 let embeddingPipeline = null;
 
 // --- CORE RAG UTILITIES ---
 
+// Current local embedding model identifier (used for version-stamp checks)
+const RAG_MODEL_ID = 'Xenova/multilingual-e5-small';
+const RAG_MODEL_DIM = 384;
+
 function chunkText(text, maxChunkSize = 1000) {
     if (!text || text.trim().length === 0) return [];
-    
+
+    const overlapSize = Math.floor(maxChunkSize * 0.15);
     const chunks = [];
     const paragraphs = text.split(/\n\s*\n/);
     let currentChunk = "";
@@ -36,7 +44,9 @@ function chunkText(text, maxChunkSize = 1000) {
             if (currentChunk.length > 50) {
                 chunks.push(currentChunk.trim());
             }
-            currentChunk = "";
+            // Keep the trailing portion as overlap seed for the next chunk
+            const tail = currentChunk.slice(-overlapSize).trim();
+            currentChunk = tail.length > 0 ? tail : "";
         }
 
         currentChunk += (currentChunk.length > 0 ? "\n\n" : "") + cleanPara;
@@ -63,7 +73,7 @@ function calculateSimilarity(vecA, vecB) {
 
 async function extractTextFromFile(filePath) {
     const ext = path.extname(filePath).toLowerCase();
-    
+
     // Skip binary media and archive formats to prevent garbage character generation
     const mediaExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.mp4', '.webm', '.mov', '.mp3', '.wav', '.ogg', '.flac', '.zip', '.tar', '.gz', '.klp', '.klkb', '.db'];
     if (mediaExtensions.includes(ext)) {
@@ -83,13 +93,13 @@ async function extractTextFromFile(filePath) {
         }
         return text;
     }
-    
+
     if (ext === '.docx') {
         const dataBuffer = fs.readFileSync(filePath);
         const result = await mammoth.extractRawText({ buffer: dataBuffer });
-        return result.value; 
+        return result.value;
     }
-    
+
     return fs.readFileSync(filePath, 'utf-8');
 }
 
@@ -97,34 +107,19 @@ async function extractTextFromFile(filePath) {
 
 async function getEmbeddingPipeline() {
     if (!embeddingPipeline) {
-        let executionDevice = 'cpu';
-        try {
-            const rowAdvanced = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
-            if (rowAdvanced) {
-                const advanced = JSON.parse(rowAdvanced.value);
-                executionDevice = advanced.executionDevice || 'cpu';
-            }
-        } catch (e) {
-            console.error("Error reading settings for executionDevice:", e);
-        }
-
-        if (executionDevice === 'auto' || executionDevice === 'webgpu' || executionDevice === 'gpu') {
-            executionDevice = 'cpu';
-        }
-
-        embeddingPipeline = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
+        embeddingPipeline = await pipeline('feature-extraction', RAG_MODEL_ID, {
             quantized: true,
-            device: executionDevice
+            device: 'cpu'
         });
     }
     return embeddingPipeline;
 }
 
-async function generateEmbeddingVector(text) {
+async function generateEmbeddingVector(text, isQuery = false) {
     let embeddingEngine = 'local';
     let apiProfileId = '';
     let modelName = '';
-    
+
     try {
         const rowAdvanced = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
         if (rowAdvanced) {
@@ -141,8 +136,10 @@ async function generateEmbeddingVector(text) {
         const { getEmbeddings } = require('./api-engine');
         return await getEmbeddings(text, apiProfileId, modelName);
     } else {
+        // E5 models expect 'query: ' or 'passage: ' prefixes
+        const prefixedText = isQuery ? `query: ${text}` : `passage: ${text}`;
         const pipe = await getEmbeddingPipeline();
-        const output = await pipe(text, { pooling: 'mean', normalize: true });
+        const output = await pipe(prefixedText, { pooling: 'mean', normalize: true });
         return Array.from(output.data);
     }
 }
@@ -150,11 +147,11 @@ async function generateEmbeddingVector(text) {
 async function vectorizeChunks(chunks, sourceFileName, progressCallback, keywords = []) {
     const vectors = [];
     const tagsString = Array.isArray(keywords) && keywords.length > 0 ? `Tags: ${keywords.join(', ')}\n` : '';
-    
+
     for (let i = 0; i < chunks.length; i++) {
         const originalChunk = chunks[i];
         const enrichedText = `Document: ${sourceFileName}\n${tagsString}Content: ${originalChunk}`;
-        
+
         try {
             const vector = await generateEmbeddingVector(enrichedText);
             vectors.push({
@@ -182,6 +179,9 @@ function insertChunksToDb(ownerId, ownerType, vectors) {
         INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt)
         VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
+    const deleteFts = db.prepare(`
+        DELETE FROM knowledge_chunks_fts WHERE chunkId = ?
+    `);
     const insertFts = db.prepare(`
         INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text)
         VALUES (?, ?)
@@ -190,6 +190,7 @@ function insertChunksToDb(ownerId, ownerType, vectors) {
     db.transaction(() => {
         for (const v of vectors) {
             insertChunk.run(v.id, ownerId, ownerType, v.source, v.text, JSON.stringify(v.vector), Date.now());
+            deleteFts.run(v.id);
             insertFts.run(v.id, v.text);
         }
     })();
@@ -218,15 +219,15 @@ async function executeHybridSearch(queryText, ownerId, ownerType, threshold = 0.
         const candidateRows = db.prepare('SELECT * FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ?').all(ownerId, ownerType);
         if (candidateRows.length === 0) return [];
 
-        const queryVector = await generateEmbeddingVector(queryText);
+        const queryVector = await generateEmbeddingVector(queryText, true);
 
         const denseResults = candidateRows
             .map(row => {
                 let parsedVector = [];
                 try {
                     parsedVector = JSON.parse(row.vector);
-                } catch (e) {}
-                
+                } catch (e) { }
+
                 return {
                     id: row.id,
                     source: row.source,
@@ -256,7 +257,7 @@ async function executeHybridSearch(queryText, ownerId, ownerType, threshold = 0.
                             FROM knowledge_chunks_fts
                             WHERE knowledge_chunks_fts MATCH ?
                         `).all(simpleQuery);
-                    } catch (err) {}
+                    } catch (err) { }
                 }
             }
         }
@@ -291,7 +292,7 @@ async function executeHybridSearch(queryText, ownerId, ownerType, threshold = 0.
                     let parsedVector = [];
                     try {
                         parsedVector = JSON.parse(dbRow.vector);
-                    } catch (e) {}
+                    } catch (e) { }
                     const similarityScore = parsedVector && parsedVector.length === queryVector.length
                         ? calculateSimilarity(queryVector, parsedVector)
                         : 0;
@@ -333,7 +334,7 @@ async function searchKnowledgeBase(queryText, profileId) {
             threshold = parseFloat(advanced.similarity) || 0.3;
             k = parseInt(advanced.topKKB, 10) || 5;
         }
-    } catch (e) {}
+    } catch (e) { }
 
     return await executeHybridSearch(queryText, profileId, 'profile_kb', threshold, k);
 }
@@ -348,7 +349,7 @@ async function searchChatKnowledgeBase(queryText, chatId) {
             threshold = parseFloat(advanced.similarity) || 0.3;
             k = parseInt(advanced.topKKB, 10) || 5;
         }
-    } catch (e) {}
+    } catch (e) { }
 
     return await executeHybridSearch(queryText, chatId, 'chat_kb', threshold, k);
 }
@@ -363,7 +364,7 @@ async function searchChatMemories(queryText, chatId) {
             threshold = parseFloat(advanced.similarity) || 0.3;
             k = parseInt(advanced.topKMemory, 10) || 5;
         }
-    } catch (e) {}
+    } catch (e) { }
 
     return await executeHybridSearch(queryText, chatId, 'chat_memory', threshold, k);
 }
@@ -377,6 +378,9 @@ async function saveChatMemory(title, summary, chatId) {
         INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt)
         VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
+    const deleteFts = db.prepare(`
+        DELETE FROM knowledge_chunks_fts WHERE chunkId = ?
+    `);
     const insertFts = db.prepare(`
         INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text)
         VALUES (?, ?)
@@ -384,6 +388,7 @@ async function saveChatMemory(title, summary, chatId) {
 
     db.transaction(() => {
         insertChunk.run(chunkId, chatId, 'chat_memory', title, summary, JSON.stringify(vector), Date.now());
+        deleteFts.run(chunkId);
         insertFts.run(chunkId, summary);
     })();
 
@@ -399,8 +404,12 @@ async function saveChatMemory(title, summary, chatId) {
 // --- EXPORTS ---
 
 module.exports = {
+    RAG_MODEL_ID,
+    RAG_MODEL_DIM,
     chunkText,
     extractTextFromFile,
+    generateEmbeddingVector,
+    getEmbeddingPipeline,
     vectorizeChunks,
     insertChunksToDb,
     deleteChunksFromDb,

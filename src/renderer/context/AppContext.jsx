@@ -26,7 +26,9 @@ const api = window.electronAPI || {
   respondToOverflow: () => { },
   installUpdate: () => { },
   onUpdateAvailable: () => () => { },
-  onUpdateDownloaded: () => () => { }
+  onUpdateDownloaded: () => () => { },
+  onReindexProgress: () => () => { },
+  onUpdateOutdated: () => () => { }
 };
 
 export const AppProvider = ({ children }) => {
@@ -56,6 +58,12 @@ export const AppProvider = ({ children }) => {
   // --- AUTO-UPDATER STATE ---
   const [updateStatus, setUpdateStatus] = useState('idle'); // 'idle' | 'available' | 'downloaded'
   const [updateVersion, setUpdateVersion] = useState('');
+
+  // --- RAG RE-INDEX STATE ---
+  const [reindexingProgress, setReindexingProgress] = useState(null); // { status, message, ... }
+
+  // --- PLATFORM UPDATE OUTDATED STATE ---
+  const [updateOutdatedUrl, setUpdateOutdatedUrl] = useState('');
 
   // --- TOAST NOTIFICATIONS ---
   const [toast, setToast] = useState(null); // { message, type: 'success' | 'error' | 'info', show: boolean }
@@ -143,12 +151,31 @@ export const AppProvider = ({ children }) => {
       showToast(`Update v${version} has been downloaded and is ready to install!`, 'success', 8000);
     }) : () => { };
 
+    const unsubReindexProgress = api.onReindexProgress ? api.onReindexProgress((data) => {
+      setReindexingProgress(data);
+      if (data.status === 'completed') {
+        showToast(data.message || 'Knowledge Base upgrade complete!', 'success', 6000);
+        setTimeout(() => setReindexingProgress(null), 3000);
+      } else if (data.status === 'error') {
+        showToast(data.message || 'Re-indexing failed.', 'error', 8000);
+        setTimeout(() => setReindexingProgress(null), 5000);
+      }
+    }) : () => { };
+
+    const unsubUpdateOutdated = api.onUpdateOutdated ? api.onUpdateOutdated((data) => {
+      setUpdateStatus('outdated');
+      setUpdateVersion(data.version);
+      setUpdateOutdatedUrl(data.url);
+    }) : () => { };
+
     return () => {
       unsubProgress();
       unsubError();
       unsubOverflowEvent();
       unsubUpdateAvailable();
       unsubUpdateDownloaded();
+      unsubReindexProgress();
+      unsubUpdateOutdated();
     };
   }, []);
 
@@ -601,7 +628,8 @@ export const AppProvider = ({ children }) => {
       editError, setEditError,
       lastGeneratedMessageId, setLastGeneratedMessageId,
       toast, showToast,
-      updateStatus, updateVersion,
+      updateStatus, updateVersion, updateOutdatedUrl,
+      reindexingProgress,
       electronAPI: api
     }}>
       {children}

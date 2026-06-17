@@ -4,7 +4,7 @@ const fs = require('fs');
 const AdmZip = require('adm-zip');
 const os = require('os');
 const db = require('./database');
-const { chunkText, extractTextFromFile, vectorizeChunks, insertChunksToDb, deleteChunksFromDb, searchKnowledgeBase, searchChatKnowledgeBase, searchChatMemories } = require('./rag-service');
+const { chunkText, extractTextFromFile, vectorizeChunks, insertChunksToDb, deleteChunksFromDb, searchKnowledgeBase, searchChatKnowledgeBase, searchChatMemories, RAG_MODEL_ID, RAG_MODEL_DIM, generateEmbeddingVector } = require('./rag-service');
 
 // Resolve the APPDATA data path
 const appDataPath = process.env.APPDATA || (process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support') : path.join(os.homedir(), '.local', 'share'));
@@ -436,6 +436,10 @@ ipcMain.handle('save-writing-profile', async (event, profile) => {
 ipcMain.handle('delete-writing-profile', async (event, id) => {
   try {
     db.prepare('DELETE FROM writing_profiles WHERE id = ?').run(id);
+
+    // Cascade: remove this profile's KB chunks and any now-orphaned FTS rows
+    db.prepare('DELETE FROM knowledge_chunks WHERE ownerId = ?').run(id);
+    db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId NOT IN (SELECT id FROM knowledge_chunks)').run();
 
     const profileFolder = path.join(profilesDir, id);
     if (fs.existsSync(profileFolder)) {
@@ -2437,18 +2441,120 @@ ipcMain.handle('backup-workspace', async (event) => {
     });
 
     if (filePath) {
-      const dbFile = path.join(dataDir, 'kallamo.db');
-      if (fs.existsSync(dbFile)) {
-        fs.copyFileSync(dbFile, filePath);
-        return { success: true, filePath };
-      } else {
-        throw new Error("Source database file not found.");
-      }
+      await db.backup(filePath);
+      return { success: true, filePath };
     }
     return { cancelled: true };
   } catch (err) {
     console.error("Backup failed:", err);
     throw err;
+  }
+});
+
+ipcMain.handle('restore-workspace', async (event) => {
+  try {
+    const { BrowserWindow } = require('electron');
+    const win = BrowserWindow.fromWebContents(event.sender);
+
+    const { filePaths } = await dialog.showOpenDialog(win, {
+      title: 'Import Workspace Backup',
+      filters: [{ name: 'SQLite Database', extensions: ['db'] }],
+      properties: ['openFile']
+    });
+
+    if (!filePaths || filePaths.length === 0) {
+      return { cancelled: true };
+    }
+
+    const pickedFile = filePaths[0];
+
+    const Database = require('better-sqlite3');
+    let tempDb;
+    try {
+      tempDb = new Database(pickedFile, { readonly: true });
+
+      const integrity = tempDb.pragma('integrity_check', { simple: true });
+      if (integrity !== 'ok') {
+        throw new Error("Database integrity check failed.");
+      }
+
+      const requiredTables = ['chats', 'messages', 'knowledge_chunks', 'settings'];
+      for (const table of requiredTables) {
+        const row = tempDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table);
+        if (!row) {
+          throw new Error(`Required table "${table}" is missing.`);
+        }
+      }
+    } catch (validationErr) {
+      console.error("Backup validation failed:", validationErr);
+      return { success: false, error: `Invalid backup file: ${validationErr.message}` };
+    } finally {
+      if (tempDb) {
+        try { tempDb.close(); } catch (e) { }
+      }
+    }
+
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'warning',
+      buttons: ['Cancel', 'Restore & Restart'],
+      defaultId: 0,
+      title: 'Restore Workspace',
+      message: 'This will replace ALL current data. A safety backup of your current workspace will be saved. Continue?',
+      detail: 'The application will restart to complete the restore process safely.'
+    });
+
+    if (response !== 1) {
+      return { cancelled: true };
+    }
+
+    // WAL-safe snapshot of the current DB before overwriting (db.backup, not copyFileSync)
+    const timestamp = Date.now();
+    const safetyBackupPath = path.join(dataDir, `pre-restore-backup-${timestamp}.db`);
+    await db.backup(safetyBackupPath);
+
+    // Prune pre-restore-backup-* to keep last 5
+    try {
+      const files = fs.readdirSync(dataDir);
+      const backups = files
+        .filter(f => f.startsWith('pre-restore-backup-') && f.endsWith('.db'))
+        .map(f => {
+          const part = f.substring('pre-restore-backup-'.length, f.length - '.db'.length);
+          const ts = parseInt(part, 10);
+          return { file: f, ts };
+        })
+        .filter(b => !isNaN(b.ts))
+        .sort((a, b) => b.ts - a.ts); // newest first
+
+      if (backups.length > 5) {
+        const filesToDelete = backups.slice(5);
+        for (const b of filesToDelete) {
+          const bp = path.join(dataDir, b.file);
+          if (fs.existsSync(bp)) fs.unlinkSync(bp);
+        }
+      }
+    } catch (e) {
+      console.error("Failed to prune old safety backups:", e);
+    }
+
+    const stagedPath = path.join(dataDir, 'restore-staged.db');
+    fs.copyFileSync(pickedFile, stagedPath);
+
+    const markerPath = path.join(dataDir, 'RESTORE_PENDING.json');
+    fs.writeFileSync(markerPath, JSON.stringify({
+      staged: 'restore-staged.db',
+      ts: timestamp,
+      sourceName: path.basename(pickedFile)
+    }, null, 2), 'utf8');
+
+    setTimeout(() => {
+      app.relaunch();
+      app.exit(0);
+    }, 1000);
+
+    return { success: true };
+  } catch (err) {
+    console.error("Restore failed:", err);
+    return { success: false, error: err.message || 'An unexpected error occurred.' };
   }
 });
 
@@ -3097,6 +3203,281 @@ ipcMain.handle('variables:delete', async (event, id) => {
     throw e;
   }
 });
+
+// --- STARTUP RAG MODEL RE-INDEXING ---
+// Detects when the local embedding model has changed and re-vectorizes
+// all knowledge base content automatically in the background.
+const { app } = require('electron');
+
+async function performReindexIfNeeded() {
+  try {
+    const metaRow = db.prepare("SELECT value FROM settings WHERE key = 'rag_model_metadata'").get();
+    let needsReindex = false;
+
+    if (metaRow) {
+      try {
+        const meta = JSON.parse(metaRow.value);
+        if (meta.model !== RAG_MODEL_ID || meta.dimension !== RAG_MODEL_DIM) {
+          needsReindex = true;
+        }
+      } catch (e) {
+        needsReindex = true;
+      }
+    } else {
+      // No stamp exists — check if there are existing chunks that need re-vectorizing
+      const chunkCount = db.prepare('SELECT COUNT(*) as cnt FROM knowledge_chunks').get();
+      if (chunkCount && chunkCount.cnt > 0) {
+        needsReindex = true;
+      } else {
+        // Fresh install, no data — just stamp it
+        db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run(
+          'rag_model_metadata',
+          JSON.stringify({ model: RAG_MODEL_ID, dimension: RAG_MODEL_DIM })
+        );
+        return;
+      }
+    }
+
+    if (!needsReindex) return;
+
+    console.log('[Re-Index] Model mismatch detected. Starting background re-indexing...');
+
+    const windows = BrowserWindow.getAllWindows();
+    const sender = windows.length > 0 ? windows[0].webContents : null;
+    const sendProgress = (data) => {
+      if (sender && !sender.isDestroyed()) {
+        sender.send('reindex-progress', data);
+      }
+    };
+
+    sendProgress({ status: 'started', message: 'Upgrading Knowledge Base...' });
+
+    // Pre-flight: make sure the embedding pipeline actually loads before touching any data.
+    try {
+      const { getEmbeddingPipeline } = require('./rag-service');
+      await getEmbeddingPipeline();
+    } catch (preflightErr) {
+      console.error('[Re-Index] Embedding pipeline failed to load. Aborting WITHOUT stamping:', preflightErr);
+      sendProgress({ status: 'error', message: `Re-indexing aborted: embedding model failed to load.` });
+      return; // <-- critical: do NOT proceed, do NOT stamp
+    }
+
+    let successCount = 0;
+    let failureCount = 0;
+
+    // Re-index chat memories
+    const memoryChunks = db.prepare("SELECT * FROM knowledge_chunks WHERE ownerType = 'chat_memory'").all();
+    let processed = 0;
+    const totalMemories = memoryChunks.length;
+
+    for (const chunk of memoryChunks) {
+      try {
+        const newVector = await generateEmbeddingVector(chunk.text, false);
+        db.prepare('UPDATE knowledge_chunks SET vector = ? WHERE id = ?').run(
+          JSON.stringify(newVector), chunk.id
+        );
+        successCount++;
+      } catch (e) {
+        failureCount++;
+        console.error(`[Re-Index] Failed to re-vectorize memory chunk ${chunk.id}:`, e);
+      }
+      processed++;
+      sendProgress({
+        status: 'running',
+        phase: 'memories',
+        current: processed,
+        total: totalMemories,
+        message: `Re-indexing memories (${processed}/${totalMemories})...`
+      });
+    }
+
+    // Re-index file-based knowledge bases
+    let chunkSize = 500;
+    try {
+      const rowAdvanced = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
+      if (rowAdvanced) {
+        const advanced = JSON.parse(rowAdvanced.value);
+        chunkSize = parseInt(advanced.chunkSize, 10) || 500;
+      }
+    } catch (e) { }
+
+    const fileOwners = db.prepare(
+      "SELECT DISTINCT ownerId, ownerType FROM knowledge_chunks WHERE ownerType IN ('profile_kb', 'chat_kb')"
+    ).all();
+
+    let fileTotal = 0;
+    for (const owner of fileOwners) {
+      const sourcesCount = db.prepare(
+        'SELECT COUNT(DISTINCT source) AS c FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ?'
+      ).get(owner.ownerId, owner.ownerType);
+      fileTotal += (sourcesCount ? sourcesCount.c : 0);
+    }
+    let fileProcessed = 0;
+
+    for (const owner of fileOwners) {
+      const sources = db.prepare(
+        'SELECT DISTINCT source FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ?'
+      ).all(owner.ownerId, owner.ownerType);
+
+      for (const srcRow of sources) {
+        const sourceName = srcRow.source;
+        sendProgress({
+          status: 'running',
+          phase: 'files',
+          current: fileProcessed + 1,
+          total: fileTotal,
+          message: `Re-indexing: ${sourceName}...`
+        });
+
+        // Try to find the original file to re-extract text
+        let baseDir;
+        if (owner.ownerType === 'profile_kb') {
+          baseDir = path.join(profilesDir, owner.ownerId, 'KnowledgeBase');
+        } else {
+          baseDir = path.join(chatsDir, owner.ownerId, 'KnowledgeBase');
+        }
+
+        const filePath = path.join(baseDir, sourceName);
+        let success = false;
+
+        if (fs.existsSync(filePath)) {
+          try {
+            const text = await extractTextFromFile(filePath);
+            if (text && text.trim().length > 0) {
+              const chunks = chunkText(text, chunkSize);
+              const vectors = await vectorizeChunks(chunks, sourceName, null);
+
+              deleteChunksFromDb(owner.ownerId, owner.ownerType, sourceName);
+              insertChunksToDb(owner.ownerId, owner.ownerType, vectors);
+              successCount += vectors.length;
+              success = true;
+            }
+          } catch (e) {
+            console.error(`[Re-Index] Failed to re-index file ${sourceName} from disk, falling back to database chunks:`, e);
+          }
+        }
+
+        if (!success) {
+          console.log(`[Re-Index] Re-vectorizing database chunks directly for ${sourceName} (no source file — re-embedding stored chunks).`);
+          const existingChunks = db.prepare('SELECT id, text FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ? AND source = ?').all(owner.ownerId, owner.ownerType, sourceName);
+          for (const chunk of existingChunks) {
+            try {
+              const newVector = await generateEmbeddingVector(chunk.text, false);
+              db.prepare('UPDATE knowledge_chunks SET vector = ? WHERE id = ?').run(
+                JSON.stringify(newVector), chunk.id
+              );
+              successCount++;
+            } catch (err) {
+              failureCount++;
+              console.error(`[Re-Index] Failed to re-vectorize database chunk ${chunk.id}:`, err);
+            }
+          }
+        }
+        fileProcessed++;
+      }
+    }
+
+    // Re-index manual snippets
+    const manualChunks = db.prepare(
+      "SELECT * FROM knowledge_chunks WHERE id LIKE 'manual_%'"
+    ).all();
+
+    let manualProcessed = 0;
+    const totalManual = manualChunks.length;
+
+    for (const chunk of manualChunks) {
+      try {
+        const newVector = await generateEmbeddingVector(chunk.text, false);
+        db.prepare('UPDATE knowledge_chunks SET vector = ? WHERE id = ?').run(
+          JSON.stringify(newVector), chunk.id
+        );
+        successCount++;
+      } catch (e) {
+        failureCount++;
+        console.error(`[Re-Index] Failed to re-vectorize manual chunk ${chunk.id}:`, e);
+      }
+      manualProcessed++;
+      sendProgress({
+        status: 'running',
+        phase: 'manual',
+        current: manualProcessed,
+        total: totalManual,
+        message: `Re-indexing manual snippets (${manualProcessed}/${totalManual})...`
+      });
+    }
+
+    if (failureCount === 0) {
+      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run(
+        'rag_model_metadata',
+        JSON.stringify({ model: RAG_MODEL_ID, dimension: RAG_MODEL_DIM })
+      );
+      sendProgress({ status: 'completed', message: 'Knowledge Base upgrade complete!' });
+      console.log(`[Re-Index] Completed successfully. ${successCount} chunks re-indexed.`);
+    } else {
+      // Do NOT stamp — leaves the old stamp so the next launch retries.
+      sendProgress({
+        status: 'error',
+        message: `Re-indexing incomplete: ${failureCount} chunk(s) failed. Will retry on next launch.`
+      });
+      console.error(`[Re-Index] ${failureCount} failures, ${successCount} successes. Stamp NOT written; will retry.`);
+    }
+
+  } catch (error) {
+    console.error('[Re-Index] Fatal error during re-indexing:', error);
+    const windows = BrowserWindow.getAllWindows();
+    if (windows.length > 0 && !windows[0].webContents.isDestroyed()) {
+      windows[0].webContents.send('reindex-progress', {
+        status: 'error',
+        message: `Re-indexing failed: ${error.message}`
+      });
+    }
+  }
+}
+
+app.whenReady().then(() => {
+  // One-time orphan + FTS cleanup (v1)
+  try {
+    const done = db.prepare("SELECT value FROM settings WHERE key = 'orphan_cleanup_v1'").get();
+    if (!done) {
+      // SAFETY GUARD: only proceed if the owner tables are intact.
+      // If both owner tables are empty but chunks exist, the DB is in a degenerate/half-loaded
+      // state — abort rather than mass-delete everything.
+      const profCount = db.prepare('SELECT COUNT(*) c FROM writing_profiles').get().c;
+      const chatCount = db.prepare('SELECT COUNT(*) c FROM chats').get().c;
+      const chunkCount = db.prepare('SELECT COUNT(*) c FROM knowledge_chunks').get().c;
+
+      if (chunkCount === 0 || profCount > 0 || chatCount > 0) {
+        // profile_kb chunks whose owner no longer exists in writing_profiles
+        const profOrphans = db.prepare(
+          "DELETE FROM knowledge_chunks WHERE ownerType = 'profile_kb' AND ownerId NOT IN (SELECT id FROM writing_profiles)"
+        ).run().changes;
+
+        // chat_kb / chat_memory chunks whose owner no longer exists in chats
+        const chatOrphans = db.prepare(
+          "DELETE FROM knowledge_chunks WHERE ownerType IN ('chat_kb','chat_memory') AND ownerId NOT IN (SELECT id FROM chats)"
+        ).run().changes;
+
+        // Rebuild FTS from scratch so it exactly mirrors knowledge_chunks (removes dupes + orphans)
+        db.prepare('DELETE FROM knowledge_chunks_fts').run();
+        db.prepare('INSERT INTO knowledge_chunks_fts (chunkId, text) SELECT id, text FROM knowledge_chunks').run();
+
+        db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('orphan_cleanup_v1', ?)")
+          .run(JSON.stringify({ profOrphans, chatOrphans, ts: Date.now() }));
+        console.log(`[Cleanup] Removed ${profOrphans} profile + ${chatOrphans} chat orphan chunks; FTS rebuilt.`);
+      } else {
+        console.warn('[Cleanup] Skipped: owner tables look empty while chunks exist (degenerate state).');
+      }
+    }
+  } catch (e) {
+    console.error('[Cleanup] Orphan cleanup failed (non-fatal):', e);
+  }
+
+  // Small delay to ensure the renderer has loaded and IPC listeners are registered
+  setTimeout(() => {
+    performReindexIfNeeded();
+  }, 3000);
+});
+
 
 
 

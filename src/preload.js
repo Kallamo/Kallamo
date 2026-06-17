@@ -96,6 +96,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
   openWorkspaceFolder: () => ipcRenderer.send('open-workspace-folder'),
   backupWorkspace: () => ipcRenderer.invoke('backup-workspace'),
+  restoreWorkspace: () => ipcRenderer.invoke('restore-workspace'),
   purgeVectors: () => ipcRenderer.invoke('purge-vectors'),
   clearModelCache: () => ipcRenderer.invoke('clear-model-cache'),
 
@@ -130,5 +131,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (event, version) => callback(version);
     ipcRenderer.on('update-downloaded', listener);
     return () => ipcRenderer.off('update-downloaded', listener);
+  },
+
+  // --- RAG RE-INDEX PROGRESS ---
+  onReindexProgress: (callback) => {
+    const listener = (event, data) => callback(data);
+    ipcRenderer.on('reindex-progress', listener);
+    return () => ipcRenderer.off('reindex-progress', listener);
+  },
+
+  // --- PLATFORM UPDATE NOTIFICATION (macOS/Linux .deb) ---
+  onUpdateOutdated: (callback) => {
+    const listener = (event, data) => callback(data);
+    ipcRenderer.on('update-outdated', listener);
+    return () => ipcRenderer.off('update-outdated', listener);
   }
 });

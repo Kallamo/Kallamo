@@ -234,28 +234,79 @@ app.on('window-all-closed', () => {
 });
 
 // --- AUTO-UPDATER LIFECYCLE ---
+
+// Lightweight semver comparison (returns 1 if a > b, -1 if a < b, 0 if equal)
+function compareSemver(a, b) {
+  const pa = a.replace(/^v/, '').split('.').map(Number);
+  const pb = b.replace(/^v/, '').split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    const na = pa[i] || 0;
+    const nb = pb[i] || 0;
+    if (na > nb) return 1;
+    if (na < nb) return -1;
+  }
+  return 0;
+}
+
 function setupAutoUpdater(mainWindow) {
   if (!app.isPackaged) {
     log.info('Auto-updater: Skipping update checks in development environment.');
     return;
   }
 
-  log.info('Auto-updater: Checking for updates...');
-  autoUpdater.checkForUpdatesAndNotify();
+  // Determine if electron-updater can handle this platform/target
+  const platform = process.platform;
+  const isAppImage = !!process.env.APPIMAGE;
+  const canAutoUpdate = platform === 'win32' || isAppImage;
 
-  autoUpdater.on('update-available', (info) => {
-    log.info(`Auto-updater: Update available. Version: ${info.version}`);
-    mainWindow.webContents.send('update-available', info.version);
-  });
+  if (canAutoUpdate) {
+    log.info('Auto-updater: Checking for updates via electron-updater...');
+    autoUpdater.checkForUpdatesAndNotify();
 
-  autoUpdater.on('update-downloaded', (info) => {
-    log.info(`Auto-updater: Update downloaded. Version: ${info.version}`);
-    mainWindow.webContents.send('update-downloaded', info.version);
-  });
+    autoUpdater.on('update-available', (info) => {
+      log.info(`Auto-updater: Update available. Version: ${info.version}`);
+      mainWindow.webContents.send('update-available', info.version);
+    });
 
-  autoUpdater.on('error', (err) => {
-    log.error('Auto-updater: Error detected during lifecycle checks:', err);
-  });
+    autoUpdater.on('update-downloaded', (info) => {
+      log.info(`Auto-updater: Update downloaded. Version: ${info.version}`);
+      mainWindow.webContents.send('update-downloaded', info.version);
+    });
+
+    autoUpdater.on('error', (err) => {
+      log.error('Auto-updater: Error detected during lifecycle checks:', err);
+    });
+  } else {
+    // macOS / Linux .deb — check latest.json for newer version
+    log.info('Auto-updater: Platform does not support auto-update. Checking latest.json...');
+
+    const https = require('https');
+    const latestUrl = 'https://kallamo.github.io/latest.json';
+
+    https.get(latestUrl, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const latest = JSON.parse(data);
+          const currentVersion = app.getVersion();
+          if (latest.version && compareSemver(latest.version, currentVersion) > 0) {
+            log.info(`Auto-updater: Newer version available: ${latest.version} (current: ${currentVersion})`);
+            mainWindow.webContents.send('update-outdated', {
+              version: latest.version,
+              url: latest.url || 'https://github.com/Kallamo/Kallamo/releases/latest'
+            });
+          } else {
+            log.info('Auto-updater: App is up to date.');
+          }
+        } catch (e) {
+          log.error('Auto-updater: Failed to parse latest.json:', e);
+        }
+      });
+    }).on('error', (err) => {
+      log.error('Auto-updater: Failed to fetch latest.json:', err);
+    });
+  }
 }
 
 ipcMain.on('install-update', () => {

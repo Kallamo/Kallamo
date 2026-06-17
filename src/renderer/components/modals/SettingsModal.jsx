@@ -13,7 +13,8 @@ export default function SettingsModal({ onClose }) {
     electronAPI,
     showToast,
     updateStatus,
-    updateVersion
+    updateVersion,
+    updateOutdatedUrl
   } = useApp();
 
   const [activeTab, setActiveTab] = useState('api'); // 'api' | 'interface' | 'advanced'
@@ -70,6 +71,7 @@ export default function SettingsModal({ onClose }) {
   const [confirmAction, setConfirmAction] = useState(null); // null | 'purge' | 'clearCache' | 'wipe'
   const [backupStatus, setBackupStatus] = useState(null); // null | { success: boolean, path?: string, error?: string }
   const [utilityStatus, setUtilityStatus] = useState(null); // null | { title: string, message: string }
+  const [restoring, setRestoring] = useState(false);
   const [appVersion, setAppVersion] = useState('1.0.0');
 
   useEffect(() => {
@@ -294,6 +296,32 @@ export default function SettingsModal({ onClose }) {
         }
       } catch (err) {
         setBackupStatus({ success: false, error: err.message || 'Backup error occurred' });
+      }
+    }
+  };
+
+  const handleRestore = async () => {
+    if (electronAPI.restoreWorkspace) {
+      try {
+        setRestoring(true);
+        const result = await electronAPI.restoreWorkspace();
+        if (result && result.success) {
+          // Keep restoring state true as the app will relaunch in 1 second.
+        } else {
+          setRestoring(false);
+          if (result && result.error) {
+            setUtilityStatus({
+              title: 'Restore Failed',
+              message: result.error
+            });
+          }
+        }
+      } catch (err) {
+        setRestoring(false);
+        setUtilityStatus({
+          title: 'Restore Failed',
+          message: err.message || 'An error occurred during workspace restore.'
+        });
       }
     }
   };
@@ -1195,6 +1223,20 @@ export default function SettingsModal({ onClose }) {
 
                       <div className="p-4 flex items-center justify-between">
                         <div className="pr-4">
+                          <span className="block text-sm text-gray-200 font-bold">Import / Restore Data</span>
+                          <span className="text-xs text-gray-500">Wipe all current workspace data and configurations, and restore them from a previously exported backup file. Note: The app will restart to complete the process safely.</span>
+                        </div>
+                        <button
+                          onClick={handleRestore}
+                          className="px-3 py-1.5 bg-[#1a2d32] hover:bg-[#243b52] text-white text-xs font-semibold rounded-lg transition-colors border border-gray-700/50 flex items-center space-x-1.5 cursor-pointer shrink-0 ml-4"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>Restore Backup</span>
+                        </button>
+                      </div>
+
+                      <div className="p-4 flex items-center justify-between">
+                        <div className="pr-4">
                           <span className="block text-sm text-red-400 font-bold">Purge Vector DB Cache</span>
                           <span className="text-xs text-gray-500">Delete all compiled vector indices. Cached knowledge files will require rebuilding to support search features.</span>
                         </div>
@@ -1246,6 +1288,11 @@ export default function SettingsModal({ onClose }) {
                           <h4 className="text-sm font-bold text-accent leading-tight">Downloading update v{updateVersion}...</h4>
                           <p className="text-xs text-gray-400">Downloading files in the background.</p>
                         </>
+                      ) : updateStatus === 'outdated' ? (
+                        <>
+                          <h4 className="text-sm font-bold text-amber-400 leading-tight">New version v{updateVersion} available!</h4>
+                          <p className="text-xs text-gray-400">Auto-update is not supported on this platform. Please download the update manually.</p>
+                        </>
                       ) : (
                         <>
                           <h4 className="text-sm font-bold text-gray-200 leading-tight">Kallamo is up to date</h4>
@@ -1260,6 +1307,16 @@ export default function SettingsModal({ onClose }) {
                       >
                         <span>Restart & Install</span>
                       </button>
+                    )}
+                    {updateStatus === 'outdated' && updateOutdatedUrl && (
+                      <a
+                        href={updateOutdatedUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="shrink-0 text-xs font-bold text-[#011419] bg-amber-400 hover:bg-amber-300 px-4 py-2 rounded-lg transition-all active:scale-95 cursor-pointer flex items-center space-x-1.5 no-underline"
+                      >
+                        <span>Download v{updateVersion}</span>
+                      </a>
                     )}
                   </div>
 
@@ -1418,6 +1475,21 @@ export default function SettingsModal({ onClose }) {
                 OK
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* RESTORING FULL-SCREEN OVERLAY */}
+      {restoring && (
+        <div className="fixed inset-0 z-[70] flex flex-col items-center justify-center bg-black/90 select-none p-4 animate-in fade-in duration-150">
+          <div className="flex flex-col items-center space-y-4 text-center">
+            <div className="w-12 h-12 rounded-full border-4 border-accent/20 border-t-accent animate-spin" />
+            <h3 className="text-lg font-bold text-white uppercase tracking-wider text-accent">
+              Restoring Workspace
+            </h3>
+            <p className="text-xs text-gray-400 max-w-xs leading-relaxed">
+              Replacing active database files with backup. The application will restart automatically in a moment...
+            </p>
           </div>
         </div>
       )}
