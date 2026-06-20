@@ -7,6 +7,7 @@ import ConfirmDialog from '../ui/ConfirmDialog';
 import TextInput from '../ui/TextInput';
 import Textarea from '../ui/Textarea';
 import Badge from '../ui/Badge';
+import TokenBadge from '../ui/TokenBadge';
 import EmptyState from '../ui/EmptyState';
 import Checkbox from '../ui/Checkbox';
 import RenameFilesModal from '../ui/RenameFilesModal';
@@ -62,6 +63,7 @@ export default function KbManagerModal({ profile, onClose }) {
   const [tagSuggestionsOpen, setTagSuggestionsOpen] = useState(false);
   const [editorStrategy, setEditorStrategy] = useState('rag_search');
   const [viewingFileBlock, setViewingFileBlock] = useState(null);
+  const [tokenMap, setTokenMap] = useState({}); // blockId -> count, fallback for blocks lacking a stored tokenCount
 
   const handleAddTag = () => {
     if (!tagInput.trim()) return;
@@ -583,7 +585,6 @@ export default function KbManagerModal({ profile, onClose }) {
           const updatedBlocks = [newBlock, ...blocks];
           await electronAPI.saveProfileKbBlocks(profile.id, updatedBlocks);
           setBlocks(updatedBlocks);
-          setActiveFilter('manual');
         } else {
           // Vectorize snippet text with tags
           const vectorData = await electronAPI.vectorizeKbChunk(text, title, editorKeywords);
@@ -602,7 +603,6 @@ export default function KbManagerModal({ profile, onClose }) {
             const updatedBlocks = [newBlock, ...blocks];
             await electronAPI.saveProfileKbBlocks(profile.id, updatedBlocks);
             setBlocks(updatedBlocks);
-            setActiveFilter('manual');
           }
         }
       }
@@ -796,12 +796,49 @@ export default function KbManagerModal({ profile, onClose }) {
         source: source,
         text: `Contains ${chunks.length} searchable chunk(s). Click to view and manage chunks.`,
         keywords: Array.from(new Set(chunks.flatMap(c => c.keywords || []))),
+        tokenCount: chunks.reduce((sum, c) => sum + (c.tokenCount || 0), 0),
         chunks: chunks
       });
     });
 
     return list;
   }, [blocks]);
+
+  // Resolve a block's token count, falling back to the IPC-computed map for blocks
+  // (e.g. freshly-created custom snippets) that don't yet carry a stored count.
+  const tokenOf = (b) => b.tokenCount || tokenMap[b.id] || 0;
+
+  // Count any block missing a stored tokenCount accurately in the main process
+  useEffect(() => {
+    const missing = blocks.filter(b => !b.tokenCount && (b.text || '').length > 0 && tokenMap[b.id] == null);
+    if (missing.length === 0 || !electronAPI?.countTokens) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const counts = await electronAPI.countTokens(missing.map(b => b.text || ''));
+        if (cancelled) return;
+        setTokenMap(prev => {
+          const next = { ...prev };
+          missing.forEach((b, i) => { next[b.id] = counts[i] || 0; });
+          return next;
+        });
+      } catch (e) { /* leave at 0 on failure */ }
+    })();
+    return () => { cancelled = true; };
+  }, [blocks, tokenMap]);
+
+  // Token budgeting: separate always-on (constant) context from searchable knowledge
+  const tokenTotals = React.useMemo(() => {
+    let alwaysOn = 0;
+    let searchable = 0;
+    groupedBlocks.forEach(b => {
+      const t = b.tokenCount || tokenMap[b.id] || 0;
+      const isAlwaysOn = b.type === 'constant'
+        || (b.type === 'manual' && (b.strategy === 'constant' || b.rawItem?.strategy === 'constant'));
+      if (isAlwaysOn) alwaysOn += t; else searchable += t;
+    });
+    return { alwaysOn, searchable };
+  }, [groupedBlocks, tokenMap]);
 
   // Filter and Search logic
   let filteredBlocks = groupedBlocks.filter(b => {
@@ -876,7 +913,7 @@ export default function KbManagerModal({ profile, onClose }) {
                         className="w-full flex items-center space-x-2.5 text-left px-3 py-2 rounded-lg text-xs font-semibold text-gray-300 hover:text-white hover:bg-white/5 cursor-pointer transition-colors"
                       >
                         <Edit3 className="w-3.5 h-3.5 text-accent" />
-                        <span>Add Manual Snippet</span>
+                        <span>Add Custom Memory</span>
                       </button>
                       <button
                         onClick={() => {
@@ -977,7 +1014,7 @@ export default function KbManagerModal({ profile, onClose }) {
               <nav className="flex flex-col space-y-1">
                 {[
                   { id: 'all', label: 'All Memories' },
-                  { id: 'manual', label: 'Custom Snippets' },
+                  { id: 'manual', label: 'Custom Memory' },
                   { id: 'constant', label: 'Constant Files' },
                   { id: 'rag', label: 'Searchable Chunks' }
                 ].map(item => (
@@ -1173,9 +1210,21 @@ export default function KbManagerModal({ profile, onClose }) {
               <>
                 {/* Search inputs */}
                 <div className="shrink-0 flex items-center justify-between mb-4">
-                  <span className="text-xs text-gray-400 font-bold font-sans">
-                    STORED KNOWLEDGE BLOCKS ({filteredBlocks.length})
-                  </span>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs text-gray-400 font-bold font-sans">
+                      STORED KNOWLEDGE BLOCKS ({filteredBlocks.length})
+                    </span>
+                    <span className="flex flex-col gap-1 text-[10px] text-gray-500">
+                      <span className="flex items-center gap-1.5" title="Always-on context is injected into every prompt.">
+                        <span className="uppercase tracking-wider w-16">Always-on</span>
+                        <TokenBadge tokens={tokenTotals.alwaysOn} />
+                      </span>
+                      <span className="flex items-center gap-1.5" title="Searchable knowledge is retrieved on demand, not injected into every prompt.">
+                        <span className="uppercase tracking-wider w-16">Searchable</span>
+                        <TokenBadge tokens={tokenTotals.searchable} />
+                      </span>
+                    </span>
+                  </div>
                   <TextInput
                     placeholder="Search in content..."
                     value={searchQuery}
@@ -1249,6 +1298,7 @@ export default function KbManagerModal({ profile, onClose }) {
                               <span className="text-[11px] text-gray-400 font-semibold truncate" title={block.source}>
                                 {block.source}
                               </span>
+                              <TokenBadge tokens={tokenOf(block)} className="shrink-0" />
                             </div>
                             <div className="flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" onClick={(e) => e.stopPropagation()}>
                               {block.type !== 'rag_file' && (
@@ -1334,7 +1384,7 @@ export default function KbManagerModal({ profile, onClose }) {
                   <div key={chunk.id} className="bg-[#00080B] border border-gray-800/80 rounded-lg p-3 flex flex-col relative group/chunk">
                     <div className="flex justify-between items-center mb-2">
                       <span className="text-[9px] font-mono text-gray-500">
-                        Chunk #{idx + 1} ({chunk.text.length} chars)
+                        Chunk #{idx + 1} (~{(chunk.tokenCount || tokenMap[chunk.id] || 0).toLocaleString()} tokens)
                       </span>
                       <div className="flex space-x-1 opacity-0 group-hover/chunk:opacity-100 transition-opacity">
                         <button

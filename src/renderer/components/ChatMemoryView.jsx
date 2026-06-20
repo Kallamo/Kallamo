@@ -6,6 +6,7 @@ import ConfirmDialog from './ui/ConfirmDialog';
 import TextInput from './ui/TextInput';
 import Textarea from './ui/Textarea';
 import Badge from './ui/Badge';
+import TokenBadge from './ui/TokenBadge';
 import EmptyState from './ui/EmptyState';
 import Checkbox from './ui/Checkbox';
 import RenameFilesModal from './ui/RenameFilesModal';
@@ -18,6 +19,7 @@ export default function ChatMemoryView({
   const { writingProfiles, settings, refreshChats, showToast } = useApp();
   const [activeFilter, setActiveFilter] = useState('all'); // 'all' | 'constants' | 'rag' | 'snippets' | 'summarized'
   const [searchQuery, setSearchQuery] = useState('');
+  const [summaryTokens, setSummaryTokens] = useState({}); // { [blockId]: approxTokenCount } for history-summary blocks
   const [confirmDialog, setConfirmDialog] = useState(null); // { message, onConfirm }
   const [pendingUpload, setPendingUpload] = useState(null); // { fresh, conflicts, type }
   const [uploadingAction, setUploadingAction] = useState(null); // 'skip' | 'rename' | 'replace' | null
@@ -276,6 +278,7 @@ export default function ChatMemoryView({
     title: b.title,
     summary: b.summary,
     profiles: b.profiles || [],
+    tokenCount: summaryTokens[b.id] || 0,
     raw: b
   }));
 
@@ -305,6 +308,7 @@ export default function ChatMemoryView({
         summary: `Contains ${chunks.length} searchable chunk(s). Click to view and manage chunks.`,
         keywords: Array.from(new Set(chunks.flatMap(c => c.keywords || []))),
         profiles: Array.from(new Set(chunks.flatMap(c => c.profiles || []))),
+        tokenCount: chunks.reduce((sum, c) => sum + (c.tokenCount || 0), 0),
         chunks: chunks
       });
     });
@@ -319,6 +323,41 @@ export default function ChatMemoryView({
       ...summaryBlocks
     ];
   }, [groupedBlocks, summaryBlocks]);
+
+  // History-summary blocks live in chat.memoryBlocks (not knowledge_chunks), so count
+  // their tokens accurately in the main process rather than guessing in the renderer.
+  const summarySignature = summaryBlocks.map(b => `${b.id}:${(b.summary || '').length}`).join('|');
+  useEffect(() => {
+    const items = summaryBlocks.map(b => ({ id: b.id, text: b.summary || '' }));
+    if (items.length === 0 || !electronAPI?.countTokens) {
+      setSummaryTokens({});
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const counts = await electronAPI.countTokens(items.map(i => i.text));
+        if (cancelled) return;
+        const map = {};
+        items.forEach((it, idx) => { map[it.id] = counts[idx] || 0; });
+        setSummaryTokens(map);
+      } catch (e) { /* leave counts at 0 on failure */ }
+    })();
+    return () => { cancelled = true; };
+  }, [summarySignature]);
+
+  // Token budgeting: always-on (constant) context is the part injected into every prompt
+  const tokenTotals = React.useMemo(() => {
+    let alwaysOn = 0;
+    let searchable = 0;
+    combinedBlocks.forEach(b => {
+      const t = b.tokenCount || 0;
+      const isAlwaysOn = b.type === 'constant'
+        || (b.type === 'manual' && (b.strategy === 'constant' || b.rawItem?.strategy === 'constant'));
+      if (isAlwaysOn) alwaysOn += t; else searchable += t;
+    });
+    return { alwaysOn, searchable };
+  }, [combinedBlocks]);
 
   // Filter combined blocks list
   const filteredBlocks = combinedBlocks.filter(b => {
@@ -792,9 +831,21 @@ export default function ChatMemoryView({
                   : 'bg-transparent border-gray-800 text-gray-400 hover:text-white hover:border-gray-700'
                   }`}
               >
-                {category === 'summarized' ? 'History' : category}
+                {category === 'summarized' ? 'History' : category === 'snippets' ? 'Custom Memory' : category}
               </button>
             ))}
+          </div>
+
+          {/* Context budget for this chat */}
+          <div className="flex flex-col gap-1 text-[10px] text-gray-500">
+            <span className="flex items-center gap-1.5" title="Always-on context is injected into every prompt. Amber/red means it is approaching or exceeding this chat's context window.">
+              <span className="uppercase tracking-wider w-16">Always-on</span>
+              <TokenBadge tokens={tokenTotals.alwaysOn} max={chat?.maxContext || 128000} />
+            </span>
+            <span className="flex items-center gap-1.5" title="Searchable knowledge is retrieved on demand, not injected into every prompt.">
+              <span className="uppercase tracking-wider w-16">Searchable</span>
+              <TokenBadge tokens={tokenTotals.searchable} />
+            </span>
           </div>
 
           {/* Search & Unified +Add Dropdown */}
@@ -849,7 +900,7 @@ export default function ChatMemoryView({
                       className="w-full text-left px-3 py-2 text-[10px] uppercase font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors flex items-center space-x-2"
                     >
                       <Plus className="w-3.5 h-3.5 text-accent" />
-                      <span>Custom Snippet</span>
+                      <span>Custom Memory</span>
                     </button>
                     <button
                       onClick={() => {
@@ -984,6 +1035,8 @@ export default function ChatMemoryView({
                           <span className={`text-[7px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${getBadgeStyle(block)}`}>
                             {getBadgeLabel(block)}
                           </span>
+
+                          <TokenBadge tokens={block.tokenCount || 0} className="shrink-0" />
 
                           {isRenameActive ? (
                             <input
@@ -1357,8 +1410,8 @@ export default function ChatMemoryView({
                 <Plus className="w-4 h-4 text-accent" />
                 <span className="text-xs font-bold text-white uppercase tracking-wider">
                   {editingBlock
-                    ? (editingBlock.type === 'snippet' ? "Edit Memory Snippet" : "Edit Memory Block")
-                    : "Create Memory Snippet"}
+                    ? (editingBlock.type === 'snippet' ? "Edit Custom Memory" : "Edit Memory Block")
+                    : "Create Custom Memory"}
                 </span>
               </div>
               <button

@@ -3,6 +3,18 @@ const path = require('path');
 const mammoth = require('mammoth');
 const os = require('os');
 const db = require('./database');
+const { encode } = require('gpt-tokenizer/encoding/o200k_base');
+
+// Approximate token count using the same encoding the app uses everywhere else.
+// Computed once at write time and stored, so the UI can read it for free.
+function countTokens(text) {
+    if (!text) return 0;
+    try {
+        return encode(text).length;
+    } catch (e) {
+        return Math.ceil(text.length / 4);
+    }
+}
 
 const appDataPath = process.env.APPDATA || (process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support') : path.join(os.homedir(), '.local', 'share'));
 const dataDir = path.join(appDataPath, 'Kallamo');
@@ -212,7 +224,8 @@ async function vectorizeChunks(chunks, sourceFileName, progressCallback, keyword
                 id: `chunk_${Date.now()}_${Math.random().toString(36).substring(2, 7)}_${i}`,
                 source: sourceFileName,
                 text: enrichedText,
-                vector: vector
+                vector: vector,
+                tokenCount: countTokens(enrichedText)
             });
         } catch (err) {
             console.error(`Failed to generate vector for chunk ${i} of ${sourceFileName}:`, err);
@@ -230,8 +243,8 @@ async function vectorizeChunks(chunks, sourceFileName, progressCallback, keyword
 
 function insertChunksToDb(ownerId, ownerType, vectors) {
     const insertChunk = db.prepare(`
-        INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, tokenCount)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const deleteFts = db.prepare(`
         DELETE FROM knowledge_chunks_fts WHERE chunkId = ?
@@ -243,7 +256,7 @@ function insertChunksToDb(ownerId, ownerType, vectors) {
 
     db.transaction(() => {
         for (const v of vectors) {
-            insertChunk.run(v.id, ownerId, ownerType, v.source, v.text, JSON.stringify(v.vector), Date.now());
+            insertChunk.run(v.id, ownerId, ownerType, v.source, v.text, JSON.stringify(v.vector), Date.now(), v.tokenCount || countTokens(v.text));
             deleteFts.run(v.id);
             insertFts.run(v.id, v.text);
         }
@@ -429,8 +442,8 @@ async function saveChatMemory(title, summary, chatId) {
     const chunkId = `mem_${Date.now()}`;
 
     const insertChunk = db.prepare(`
-        INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, tokenCount)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const deleteFts = db.prepare(`
         DELETE FROM knowledge_chunks_fts WHERE chunkId = ?
@@ -440,8 +453,10 @@ async function saveChatMemory(title, summary, chatId) {
         VALUES (?, ?)
     `);
 
+    const memoryTokens = countTokens(summary);
+
     db.transaction(() => {
-        insertChunk.run(chunkId, chatId, 'chat_memory', title, summary, JSON.stringify(vector), Date.now());
+        insertChunk.run(chunkId, chatId, 'chat_memory', title, summary, JSON.stringify(vector), Date.now(), memoryTokens);
         deleteFts.run(chunkId);
         insertFts.run(chunkId, summary);
     })();
@@ -451,6 +466,7 @@ async function saveChatMemory(title, summary, chatId) {
         title: title,
         text: summary,
         vector: vector,
+        tokenCount: memoryTokens,
         createdAt: Date.now()
     };
 }
@@ -460,6 +476,7 @@ async function saveChatMemory(title, summary, chatId) {
 module.exports = {
     RAG_MODEL_ID,
     RAG_MODEL_DIM,
+    countTokens,
     chunkText,
     extractTextFromFile,
     generateEmbeddingVector,

@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteWritingProfile: (id) => ipcRenderer.invoke('delete-writing-profile', id),
   uploadKbFile: (profileId, file) => ipcRenderer.invoke('upload-kb-file', { profileId, name: file.name, path: file.path, size: file.size }),
   deleteKbFile: (profileId, fileName) => ipcRenderer.invoke('delete-kb-file', { profileId, fileName }),
+  countTokens: (texts) => ipcRenderer.invoke('count-tokens', texts),
   getProfileKbBlocks: (profileId) => ipcRenderer.invoke('get-profile-kb-blocks', { profileId }),
   saveProfileKbBlocks: (profileId, blocks) => ipcRenderer.invoke('save-profile-kb-blocks', { profileId, blocks }),
   vectorizeKbChunk: (text, source, keywords) => ipcRenderer.invoke('vectorize-kb-chunk', { text, source, keywords }),

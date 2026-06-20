@@ -6,7 +6,7 @@ const os = require('os');
 const https = require('https');
 const crypto = require('crypto');
 const db = require('./database');
-const { chunkText, extractTextFromFile, vectorizeChunks, insertChunksToDb, deleteChunksFromDb, searchKnowledgeBase, searchChatKnowledgeBase, searchChatMemories, RAG_MODEL_ID, RAG_MODEL_DIM, generateEmbeddingVector } = require('./rag-service');
+const { chunkText, extractTextFromFile, vectorizeChunks, insertChunksToDb, deleteChunksFromDb, searchKnowledgeBase, searchChatKnowledgeBase, searchChatMemories, RAG_MODEL_ID, RAG_MODEL_DIM, generateEmbeddingVector, countTokens } = require('./rag-service');
 
 // Resolve the APPDATA data path
 const appDataPath = process.env.APPDATA || (process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support') : path.join(os.homedir(), '.local', 'share'));
@@ -1423,11 +1423,20 @@ ipcMain.handle('delete-kb-file', async (event, { profileId, fileName }) => {
   }
 });
 
+ipcMain.handle('count-tokens', async (event, texts) => {
+  try {
+    if (Array.isArray(texts)) return texts.map(t => countTokens(t || ''));
+    return countTokens(texts || '');
+  } catch (e) {
+    return Array.isArray(texts) ? texts.map(() => 0) : 0;
+  }
+});
+
 ipcMain.handle('get-profile-kb-blocks', async (event, { profileId }) => {
   try {
     const loadedKbData = [];
 
-    const chunks = db.prepare('SELECT id, source, text, vector, createdAt FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ?').all(profileId, 'profile_kb');
+    const chunks = db.prepare('SELECT id, source, text, vector, createdAt, tokenCount FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ?').all(profileId, 'profile_kb');
     chunks.forEach((v) => {
       let cleanText = v.text || '';
       if (cleanText.startsWith('Document:') && cleanText.includes('\nContent: ')) {
@@ -1450,6 +1459,7 @@ ipcMain.handle('get-profile-kb-blocks', async (event, { profileId }) => {
         type: blockType,
         source: v.source,
         text: cleanText,
+        tokenCount: v.tokenCount || countTokens(v.text),
         rawItem: {
           id: v.id,
           source: v.source,
@@ -1542,6 +1552,7 @@ ipcMain.handle('get-profile-kb-blocks', async (event, { profileId }) => {
               type: 'constant',
               source: file.name,
               text: content || '',
+              tokenCount: countTokens(content || ''),
               rawItem: file
             });
           }
@@ -1568,6 +1579,7 @@ ipcMain.handle('get-profile-kb-blocks', async (event, { profileId }) => {
             text: mc.content || mc.text || '',
             strategy: 'constant',
             keywords: mc.keywords || [],
+            tokenCount: countTokens(mc.content || mc.text || ''),
             rawItem: {
               id: mc.id,
               source: mc.name || mc.source || 'Custom Memory',
@@ -1579,6 +1591,13 @@ ipcMain.handle('get-profile-kb-blocks', async (event, { profileId }) => {
         }
       } catch (e) {
         console.error("Error parsing profile knowledgeFiles:", e);
+      }
+    }
+
+    // Ensure every block carries an approximate token count for the UI
+    for (const b of loadedKbData) {
+      if (b.tokenCount == null) {
+        b.tokenCount = countTokens(b.text || '');
       }
     }
 
@@ -1644,8 +1663,8 @@ ipcMain.handle('save-profile-kb-blocks', async (event, { profileId, blocks }) =>
       }
 
       const insertChunk = db.prepare(`
-        INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, tokenCount)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const insertFts = db.prepare(`
         INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text)
@@ -1664,7 +1683,8 @@ ipcMain.handle('save-profile-kb-blocks', async (event, { profileId, blocks }) =>
               b.source,
               textToStore,
               JSON.stringify(chunk.vector),
-              chunk.createdAt || Date.now()
+              chunk.createdAt || Date.now(),
+              countTokens(textToStore)
             );
             insertFts.run(b.id, textToStore);
           }
@@ -1912,7 +1932,27 @@ ipcMain.handle('save-chat', async (event, chat) => {
     const exists = db.prepare('SELECT id, knowledgeFiles, syncToCloud FROM chats WHERE id = ?').get(chat.id);
     const backdropOpacityDefault = chat.backdropOpacity ?? 75;
 
-    const newKbStr = typeof chat.knowledgeFiles === 'string' ? chat.knowledgeFiles : JSON.stringify(chat.knowledgeFiles || []);
+    // Preserve server-managed index metadata (lastIndexedMtime) that the renderer doesn't
+    // track. Without this, every chat save (e.g. adding a profile) ships a knowledgeFiles
+    // blob missing lastIndexedMtime, which both makes the comparison below always differ
+    // and wipes the stored mtime — forcing a needless full re-index of every KB file.
+    let incomingKb = typeof chat.knowledgeFiles === 'string'
+      ? JSON.parse(chat.knowledgeFiles || '[]')
+      : (chat.knowledgeFiles || []);
+    if (exists && exists.knowledgeFiles) {
+      try {
+        const oldKb = JSON.parse(exists.knowledgeFiles);
+        const oldByKey = new Map(oldKb.map(f => [f.internalPath || f.name, f]));
+        incomingKb = incomingKb.map(f => {
+          const old = oldByKey.get(f.internalPath || f.name);
+          if (old && old.lastIndexedMtime != null && f.lastIndexedMtime == null) {
+            return { ...f, lastIndexedMtime: old.lastIndexedMtime };
+          }
+          return f;
+        });
+      } catch (e) { }
+    }
+    const newKbStr = JSON.stringify(incomingKb);
     let kbChanged = true;
     if (exists) {
       kbChanged = (exists.knowledgeFiles !== newKbStr);
@@ -1986,8 +2026,8 @@ ipcMain.handle('save-chat', async (event, chat) => {
       );
     }
 
-    if (kbChanged && chat.knowledgeFiles) {
-      indexChatKnowledgeBase(event.sender, chat.id, chat.knowledgeFiles).catch(e => {
+    if (kbChanged && incomingKb.length > 0) {
+      indexChatKnowledgeBase(event.sender, chat.id, incomingKb).catch(e => {
         console.error("Background chat indexing error:", e);
       });
     }
@@ -3124,6 +3164,13 @@ ipcMain.handle('get-chat-kb-blocks', async (event, { chatId }) => {
         }
       } catch (e) {
         console.error("Error parsing chat knowledgeFiles:", e);
+      }
+    }
+
+    // Ensure every block carries an approximate token count for the UI
+    for (const b of loadedKbData) {
+      if (b.tokenCount == null) {
+        b.tokenCount = countTokens(b.text || '');
       }
     }
 

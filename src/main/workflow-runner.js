@@ -403,6 +403,17 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                 contextBlock += `\n\n--- CONSTANT CONTEXT SYSTEM BACKGROUND ---\n${constantKnowledge}\n`;
             }
 
+            // Fail fast when constant / full-context knowledge alone already exceeds the
+            // context window. Uses the token counts already accumulated while building the
+            // context (no re-tokenization of the huge block), so it both prevents a doomed
+            // "prompt too long" API call (wasted tokens) and avoids the UI freeze caused by
+            // repeatedly tokenizing oversized constant context and running the agentic loop.
+            const constantKnowledgeTokens = profileKbTokens + chatKbTokens;
+            const projectedConstantTokens = constantKnowledgeTokens + estimateTokens(compiledSystemPrompt) + estimateTokens(currentInput);
+            if (projectedConstantTokens >= maxContextTokens) {
+                throw new Error(`Profile "${profile.name}": its constant / full-context knowledge is ~${projectedConstantTokens.toLocaleString()} tokens, which exceeds this chat's context window of ${maxContextTokens.toLocaleString()} tokens. Reduce the constant knowledge or switch those knowledge files to RAG search strategy.`);
+            }
+
             if (profile.isAgentic === 1) {
                 const initialInputTokens = estimateTokens(currentInput);
                 const initialSystemTokens = estimateTokens(compiledSystemPrompt + contextBlock);
