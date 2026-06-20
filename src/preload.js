@@ -120,6 +120,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.off('import-progress', listener);
   },
 
+  // --- LOCAL AI ENGINE (v1.0.5) ---
+  getEngineStatus: () => ipcRenderer.invoke('get-engine-status'),
+  downloadEngine: () => ipcRenderer.invoke('download-engine'),
+  cancelEngineDownload: () => ipcRenderer.invoke('cancel-engine-download'),
+  deleteEngine: () => ipcRenderer.invoke('delete-engine'),
+  onDownloadEngineProgress: (callback) => {
+    const listener = (event, data) => callback(data);
+    ipcRenderer.on('download-engine-progress', listener);
+    return () => ipcRenderer.off('download-engine-progress', listener);
+  },
+  onSettingsChanged: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('settings-changed', listener);
+    return () => ipcRenderer.off('settings-changed', listener);
+  },
+
   // --- AUTO-UPDATER ---
   installUpdate: () => ipcRenderer.send('install-update'),
   onUpdateAvailable: (callback) => {

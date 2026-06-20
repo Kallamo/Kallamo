@@ -3,13 +3,45 @@ import { useApp } from '../../context/AppContext';
 import { X, Search, Database, UploadCloud, FileText, Trash2, Edit3, Save, Cpu, Plus, Loader, Info, Check, HelpCircle, Download } from 'lucide-react';
 import { parseMarkdown, escapeHTML } from '../../utils/markdown';
 import ImportProgressModal from './ImportProgressModal';
+import ConfirmDialog from '../ui/ConfirmDialog';
+import TextInput from '../ui/TextInput';
+import Textarea from '../ui/Textarea';
+import Badge from '../ui/Badge';
+import EmptyState from '../ui/EmptyState';
+import Checkbox from '../ui/Checkbox';
+import RenameFilesModal from '../ui/RenameFilesModal';
 
 export default function KbManagerModal({ profile, onClose }) {
-  const { electronAPI, settings, handleSaveProfile, variables, showToast } = useApp();
+  const { electronAPI, settings, handleSaveProfile, variables, showToast, openSettings } = useApp();
   const [blocks, setBlocks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState('all'); // 'all', 'manual', 'constant', 'rag', 'agentic-rag'
+  const [confirmDialog, setConfirmDialog] = useState(null); // { message, onConfirm }
+  const [vectorizeError, setVectorizeError] = useState(null);
+  const [pendingUpload, setPendingUpload] = useState(null);
+  const [uploadingAction, setUploadingAction] = useState(null);
+  const [renamePrompt, setRenamePrompt] = useState(null); // { fresh, conflicts, type }
+
+  const openSettingsToEmbedding = () => openSettings('advanced', 'embedding');
+
+  const getUniqueName = (originalName, existingSources, extraNames = new Set()) => {
+    const lastDot = originalName.lastIndexOf('.');
+    let base = originalName;
+    let ext = '';
+    if (lastDot !== -1) {
+      base = originalName.substring(0, lastDot);
+      ext = originalName.substring(lastDot);
+    }
+    const existingSet = new Set(existingSources.map(s => s.toLowerCase()));
+    let newName = originalName;
+    let counter = 2;
+    while (existingSet.has(newName.toLowerCase()) || extraNames.has(newName.toLowerCase())) {
+      newName = `${base} (${counter})${ext}`;
+      counter++;
+    }
+    return newName;
+  };
 
   // Vectorization & upload status
   const [isProcessing, setIsProcessing] = useState(false);
@@ -206,90 +238,167 @@ export default function KbManagerModal({ profile, onClose }) {
     return () => unsub();
   }, [profile?.id, electronAPI]);
 
-  // --- Add Searchable File(s) (RAG) ---
-  const handleAddSearchableFile = async (e) => {
-    const files = Array.from(e.target.files);
-    if (files.length === 0) return;
-
+  // --- Upload batch function ---
+  const uploadFileBatch = async (files, renameMapping = {}, deleteBeforeUpload = false, type = 'searchable') => {
     setIsProcessing(true);
     let processed = 0;
-    const skipped = [];
+    let addedCount = 0;
 
     for (const file of files) {
-      // Check if filename already exists
-      const exists = blocks.some(b => b.source.toLowerCase() === file.name.toLowerCase());
-      if (exists) {
-        skipped.push(file.name);
-        continue;
+      processed++;
+      const targetName = renameMapping[file.name] || file.name;
+      setProgressMsg(`Reading ${targetName} (${processed}/${files.length})...`);
+
+      if (deleteBeforeUpload) {
+        try {
+          await electronAPI.deleteKbFile(profile.id, file.name);
+          setBlocks(prev => prev.filter(b => b.source !== file.name));
+          setSelectedBlockIds(prev => prev.filter(id => {
+            const block = blocks.find(b => b.id === id);
+            return !block || block.source !== file.name;
+          }));
+        } catch (err) {
+          console.error(`Failed to delete existing file ${file.name} for replacement:`, err);
+        }
       }
 
-      processed++;
-      setProgressMsg(`Reading ${file.name} (${processed}/${files.length - skipped.length})...`);
-
       try {
-        const result = await electronAPI.addProfileSearchableFile(profile.id, {
-          name: file.name,
-          path: file.path || '',
-          size: file.size
-        });
-
-        if (result && result.blocks) {
-          setBlocks(prev => [...prev, ...result.blocks]);
+        if (type === 'searchable') {
+          const result = await electronAPI.addProfileSearchableFile(profile.id, {
+            name: targetName,
+            path: file.path || '',
+            size: file.size
+          });
+          if (result && result.blocks) {
+            setBlocks(prev => [...prev, ...result.blocks]);
+            addedCount++;
+          }
+        } else {
+          const newBlock = await electronAPI.addProfileConstantFile(profile.id, {
+            name: targetName,
+            path: file.path || '',
+            size: file.size
+          });
+          if (newBlock) {
+            setBlocks(prev => [...prev, newBlock]);
+            addedCount++;
+          }
         }
       } catch (err) {
-        console.error(`Failed to add searchable file ${file.name}:`, err);
+        console.error(`Failed to add file ${file.name}:`, err);
+        const isConfig = typeof err?.message === 'string' && err.message.includes('EMBEDDING_CONFIG_MISSING');
+        setVectorizeError({
+          kind: isConfig ? 'config' : 'generic',
+          message: isConfig
+            ? "Vectorization needs an embedding engine. You selected an external API but it isn't configured yet."
+            : `Could not vectorize "${targetName}". This is usually caused by the embedding provider, the network, or the file itself — not Kallamo.\n\nDetails: ${err?.message || 'Unknown error'}`
+        });
+        break; // stop processing the rest of the batch on a hard failure
       }
     }
 
     setIsProcessing(false);
     setProgressMsg('');
-    searchableInputRef.current.value = '';
+    await loadBlocks(); // refresh fully
 
-    if (skipped.length > 0) {
-      alert(`Skipped ${skipped.length} file(s) that already exist:\n${skipped.join('\n')}`);
+    if (addedCount > 0) {
+      showToast(`Added ${addedCount} file(s)`, 'success');
+    }
+  };
+
+  const handleResolveConflicts = async (action) => {
+    if (!pendingUpload) return;
+    setUploadingAction(action);
+
+    const { fresh, conflicts, type } = pendingUpload;
+    const renameMapping = {};
+    let deleteBeforeUpload = false;
+    let filesToUpload = [...fresh];
+
+    if (action === 'rename') {
+      // Hand off to the manual rename modal instead of auto-renaming.
+      setUploadingAction(null);
+      setPendingUpload(null);
+      setRenamePrompt({ fresh, conflicts, type });
+      return;
+    } else if (action === 'replace') {
+      deleteBeforeUpload = true;
+      filesToUpload = [...fresh, ...conflicts];
+    } else {
+      // action === 'skip'
+      const skippedCount = conflicts.length;
+      if (skippedCount > 0) {
+        showToast(`Skipped ${skippedCount} file(s) that already exist`, 'info');
+      }
+    }
+
+    try {
+      if (filesToUpload.length > 0) {
+        await uploadFileBatch(filesToUpload, renameMapping, deleteBeforeUpload, type);
+      }
+    } finally {
+      setUploadingAction(null);
+      setPendingUpload(null);
+    }
+  };
+
+  const handleConfirmRename = async (renameMapping) => {
+    if (!renamePrompt) return;
+    const { fresh, conflicts, type } = renamePrompt;
+    setUploadingAction('rename');
+    try {
+      await uploadFileBatch([...fresh, ...conflicts], renameMapping, false, type);
+    } finally {
+      setUploadingAction(null);
+      setRenamePrompt(null);
+    }
+  };
+
+  // --- Add Searchable File(s) (RAG) ---
+  const handleAddSearchableFile = async (e) => {
+    const files = Array.from(e.target.files);
+    e.target.value = '';
+    if (files.length === 0) return;
+
+    const fresh = [];
+    const conflicts = [];
+    for (const file of files) {
+      const exists = blocks.some(b => b.source.toLowerCase() === file.name.toLowerCase());
+      if (exists) {
+        conflicts.push(file);
+      } else {
+        fresh.push(file);
+      }
+    }
+
+    if (conflicts.length > 0) {
+      setPendingUpload({ fresh, conflicts, type: 'searchable' });
+    } else {
+      await uploadFileBatch(fresh, {}, false, 'searchable');
     }
   };
 
   // --- Add Constant File(s) ---
   const handleAddConstantFile = async (e) => {
     const files = Array.from(e.target.files);
+    e.target.value = '';
     if (files.length === 0) return;
 
-    setIsProcessing(true);
-    let processed = 0;
-    const skipped = [];
-
+    const fresh = [];
+    const conflicts = [];
     for (const file of files) {
       const exists = blocks.some(b => b.source.toLowerCase() === file.name.toLowerCase());
       if (exists) {
-        skipped.push(file.name);
-        continue;
-      }
-
-      processed++;
-      setProgressMsg(`Reading ${file.name} (${processed}/${files.length - skipped.length})...`);
-
-      try {
-        const newBlock = await electronAPI.addProfileConstantFile(profile.id, {
-          name: file.name,
-          path: file.path || '',
-          size: file.size
-        });
-
-        if (newBlock) {
-          setBlocks(prev => [...prev, newBlock]);
-        }
-      } catch (err) {
-        console.error(`Failed to add constant file ${file.name}:`, err);
+        conflicts.push(file);
+      } else {
+        fresh.push(file);
       }
     }
 
-    setIsProcessing(false);
-    setProgressMsg('');
-    constantInputRef.current.value = '';
-
-    if (skipped.length > 0) {
-      alert(`Skipped ${skipped.length} file(s) that already exist:\n${skipped.join('\n')}`);
+    if (conflicts.length > 0) {
+      setPendingUpload({ fresh, conflicts, type: 'constant' });
+    } else {
+      await uploadFileBatch(fresh, {}, false, 'constant');
     }
   };
 
@@ -311,7 +420,7 @@ export default function KbManagerModal({ profile, onClose }) {
       await electronAPI.saveProfileKbBlocks(profile.id, updatedBlocks);
     } catch (err) {
       console.error("Error deleting block:", err);
-      alert("Failed to delete block. Reloading list.");
+      showToast("Failed to delete block. Reloading list.", "error");
       loadBlocks();
     }
   };
@@ -336,30 +445,16 @@ export default function KbManagerModal({ profile, onClose }) {
       setIsProcessing(true);
       setProgressMsg(`Deleting file and chunks: ${fileName}...`);
 
-      // 1. Delete physical file & DB chunks
       await electronAPI.deleteKbFile(profile.id, fileName);
 
-      // 2. Remove file from profile's JSON metadata list
-      const currentKbFiles = profile.knowledgeFiles
-        ? (typeof profile.knowledgeFiles === 'string' ? JSON.parse(profile.knowledgeFiles) : profile.knowledgeFiles)
-        : [];
-      const updatedKbFiles = currentKbFiles.filter(f => f.name.toLowerCase() !== fileName.toLowerCase());
-
-      const updatedProfile = {
-        ...profile,
-        knowledgeFiles: JSON.stringify(updatedKbFiles)
-      };
-      await handleSaveProfile(updatedProfile);
-
-      // 3. Clear selection of deleted block IDs
       const deletedBlockIds = blocks.filter(b => b.source === fileName).map(b => b.id);
       setSelectedBlockIds(prev => prev.filter(id => !deletedBlockIds.includes(id)));
 
       setDeleteTargetBlock(null);
-      loadBlocks();
+      await loadBlocks();
     } catch (err) {
       console.error("Error deleting entire file:", err);
-      alert("Failed to delete file.");
+      showToast(`Failed to delete file "${fileName}".`, "error");
     } finally {
       setIsProcessing(false);
       setProgressMsg("");
@@ -379,7 +474,7 @@ export default function KbManagerModal({ profile, onClose }) {
       loadBlocks();
     } catch (err) {
       console.error("Error in bulk delete:", err);
-      alert("Failed to delete selected blocks.");
+      showToast("Failed to delete selected blocks.", "error");
       loadBlocks();
     } finally {
       setIsProcessing(false);
@@ -642,7 +737,7 @@ export default function KbManagerModal({ profile, onClose }) {
       setTimeout(() => setSaveSuccess(false), 3000);
     } catch (err) {
       console.error("Error saving Agentic RAG settings:", err);
-      alert("Failed to save Agentic RAG settings.");
+      showToast("Failed to save Agentic RAG settings.", "error");
     } finally {
       setSavingAgenticSettings(false);
     }
@@ -727,21 +822,6 @@ export default function KbManagerModal({ profile, onClose }) {
 
   const isBlurEnabled = settings?.interface?.blur ?? true;
 
-  // File Badge color mapping
-  const getBadgeStyles = (block) => {
-    if (block.type === 'constant') {
-      return 'bg-[#FBCB2D]/20 text-[#FBCB2D] border-[#FBCB2D]/30';
-    }
-    if (block.type === 'manual') {
-      return block.strategy === 'constant'
-        ? 'bg-[#FBCB2D]/20 text-[#FBCB2D] border-[#FBCB2D]/30'
-        : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
-    }
-    if (block.type === 'rag_file') {
-      return 'bg-[#3b82f6]/20 text-[#3b82f6] border-[#3b82f6]/30';
-    }
-    return 'bg-[#3b82f6]/20 text-[#3b82f6] border-[#3b82f6]/30';
-  };
 
   const getBadgeLabel = (block) => {
     if (block.type === 'constant') return 'CONSTANT';
@@ -1096,17 +1176,13 @@ export default function KbManagerModal({ profile, onClose }) {
                   <span className="text-xs text-gray-400 font-bold font-sans">
                     STORED KNOWLEDGE BLOCKS ({filteredBlocks.length})
                   </span>
-
-                  <div className="relative w-64">
-                    <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-gray-500" />
-                    <input
-                      type="text"
-                      placeholder="Search in content..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full bg-[#011419] border border-gray-800 rounded-md pl-8 pr-3 py-1.5 text-xs text-gray-300 placeholder-gray-500 focus:outline-none focus:border-accent"
-                    />
-                  </div>
+                  <TextInput
+                    placeholder="Search in content..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    icon={Search}
+                    containerClassName="w-64"
+                  />
                 </div>
 
                 {/* List of cards */}
@@ -1117,11 +1193,11 @@ export default function KbManagerModal({ profile, onClose }) {
                       <span className="text-xs">Loading Knowledge Base chunks...</span>
                     </div>
                   ) : filteredBlocks.length === 0 ? (
-                    <div className="w-full h-full flex flex-col items-center justify-center text-gray-600 py-20 border border-dashed border-gray-800/80 rounded-xl bg-[#011419]/20">
-                      <Database className="w-10 h-10 opacity-30 mb-2" />
-                      <span className="text-xs font-semibold">No knowledge blocks found</span>
-                      <span className="text-[10px] text-gray-500 mt-0.5">Upload document files or add manual snippets to populate the brain.</span>
-                    </div>
+                    <EmptyState
+                      icon={Database}
+                      title="No knowledge blocks found"
+                      subtitle="Upload document files or add manual snippets to populate the brain."
+                    />
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pb-4">
                       {filteredBlocks.map((block) => (
@@ -1145,24 +1221,31 @@ export default function KbManagerModal({ profile, onClose }) {
                               {/* Selection Checkbox */}
                               {block.type !== 'rag_file' ? (
                                 <div className="shrink-0 select-none" onClick={(e) => e.stopPropagation()}>
-                                  <div
-                                    onClick={() => handleToggleSelectBlock(block.id)}
-                                    className={`w-4 h-4 rounded-sm border flex items-center justify-center cursor-pointer transition-all duration-200 hover:scale-105 active:scale-95 ${selectedBlockIds.includes(block.id)
-                                      ? 'bg-accent border-accent text-[#011419] shadow-[0_0_8px_rgba(221,186,110,0.4)]'
-                                      : 'border-gray-700 bg-[#011419]/90 hover:border-accent/50'
-                                      }`}
-                                  >
-                                    {selectedBlockIds.includes(block.id) && <Check className="w-3 h-3 stroke-[3.5]" />}
-                                  </div>
+                                  <Checkbox
+                                    checked={selectedBlockIds.includes(block.id)}
+                                    onChange={() => handleToggleSelectBlock(block.id)}
+                                    size="sm"
+                                  />
                                 </div>
                               ) : (
                                 <div className="shrink-0 text-blue-400">
                                   <FileText className="w-4 h-4" />
                                 </div>
                               )}
-                              <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded border tracking-wider shrink-0 font-sans ${getBadgeStyles(block)}`}>
+                              <Badge
+                                tone={
+                                  block.type === 'constant'
+                                    ? 'amber'
+                                    : block.type === 'manual'
+                                    ? (block.strategy === 'constant' ? 'amber' : 'emerald')
+                                    : block.type === 'rag_file'
+                                    ? 'blue'
+                                    : 'gray'
+                                }
+                                className="shrink-0"
+                              >
                                 {getBadgeLabel(block)}
-                              </span>
+                              </Badge>
                               <span className="text-[11px] text-gray-400 font-semibold truncate" title={block.source}>
                                 {block.source}
                               </span>
@@ -1180,15 +1263,17 @@ export default function KbManagerModal({ profile, onClose }) {
                               <button
                                 onClick={() => {
                                   if (block.type === 'rag_file') {
-                                    if (window.confirm(`Are you sure you want to delete the entire file "${block.source}" and all its searchable chunks?`)) {
-                                      handleDeleteEntireFile(block.source);
-                                    }
+                                    setConfirmDialog({
+                                      message: `Delete the Searchable File "${block.source}"? This erases all of its indexed chunks. To remove a single chunk instead, open the file block and delete the chunk from inside it.`,
+                                      confirmLabel: "Delete Searchable File",
+                                      onConfirm: () => handleDeleteEntireFile(block.source)
+                                    });
                                   } else {
                                     handleDeleteBlock(block);
                                   }
                                 }}
                                 className="p-1 text-gray-500 hover:text-red-500 hover:bg-red-500/10 rounded transition-colors cursor-pointer"
-                                title={block.type === 'rag_file' ? "Delete Entire File" : "Delete Block"}
+                                title={block.type === 'rag_file' ? "Delete Searchable File" : "Delete Block"}
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
@@ -1204,12 +1289,12 @@ export default function KbManagerModal({ profile, onClose }) {
                           {block.keywords && block.keywords.length > 0 && (
                             <div className="flex flex-wrap gap-1 mt-2.5 select-none shrink-0">
                               {block.keywords.map((tag, tagIdx) => (
-                                <span
+                                <Badge
                                   key={tagIdx}
-                                  className="px-1.5 py-0.5 bg-accent/15 border border-accent/25 text-accent text-[9px] font-bold uppercase tracking-wider rounded"
+                                  tone="accent"
                                 >
                                   {tag}
-                                </span>
+                                </Badge>
                               ))}
                             </div>
                           )}
@@ -1262,27 +1347,30 @@ export default function KbManagerModal({ profile, onClose }) {
                           <Edit3 className="w-3 h-3" />
                         </button>
                         <button
-                          onClick={async () => {
-                            if (window.confirm("Are you sure you want to delete this specific chunk?")) {
-                              if (viewingFileBlock.chunks.length === 1) {
-                                await handleDeleteEntireFile(viewingFileBlock.source);
-                                setViewingFileBlock(null);
-                              } else {
-                                const remainingBlocks = blocks.filter(b => b.id !== chunk.id);
-                                setBlocks(remainingBlocks);
-                                try {
-                                  await electronAPI.saveProfileKbBlocks(profile.id, remainingBlocks);
-                                  setViewingFileBlock(curr => ({
-                                    ...curr,
-                                    chunks: curr.chunks.filter(c => c.id !== chunk.id)
-                                  }));
-                                } catch (err) {
-                                  console.error("Error deleting chunk:", err);
-                                  alert("Failed to delete chunk.");
-                                  loadBlocks();
+                          onClick={() => {
+                            setConfirmDialog({
+                              message: "Are you sure you want to delete this specific chunk?",
+                              onConfirm: async () => {
+                                if (viewingFileBlock.chunks.length === 1) {
+                                  await handleDeleteEntireFile(viewingFileBlock.source);
+                                  setViewingFileBlock(null);
+                                } else {
+                                  const remainingBlocks = blocks.filter(b => b.id !== chunk.id);
+                                  setBlocks(remainingBlocks);
+                                  try {
+                                    await electronAPI.saveProfileKbBlocks(profile.id, remainingBlocks);
+                                    setViewingFileBlock(curr => ({
+                                      ...curr,
+                                      chunks: curr.chunks.filter(c => c.id !== chunk.id)
+                                    }));
+                                  } catch (err) {
+                                    console.error("Error deleting chunk:", err);
+                                    showToast("Failed to delete chunk.", "error");
+                                    loadBlocks();
+                                  }
                                 }
                               }
-                            }
+                            });
                           }}
                           className="p-1 text-gray-500 hover:text-red-500 hover:bg-red-500/10 rounded cursor-pointer"
                           title="Delete Chunk"
@@ -1316,23 +1404,19 @@ export default function KbManagerModal({ profile, onClose }) {
               </div>
 
               <div className="flex-1 flex flex-col space-y-4 min-h-0">
-                <div>
-                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Title / Source</label>
-                  <input
-                    type="text"
-                    value={editorTitle}
-                    onChange={(e) => setEditorTitle(e.target.value)}
-                    readOnly={editingBlock && editingBlock.type !== 'manual'}
-                    placeholder="e.g. Lore Bible Rule #1"
-                    className="w-full bg-[#00080B] border border-gray-800 text-gray-200 text-xs rounded-md px-3 py-2 focus:outline-none focus:border-accent disabled:opacity-60 read-only:bg-gray-900/30 read-only:text-gray-500"
-                  />
-                  {editingBlock && editingBlock.type !== 'manual' && (
-                    <span className="text-[9px] text-gray-500 mt-1 flex items-center space-x-1">
-                      <Info className="w-3 h-3 text-gray-500" />
-                      <span>Original file sources are read-only.</span>
-                    </span>
-                  )}
-                </div>
+                <TextInput
+                  label="Title / Source"
+                  value={editorTitle}
+                  onChange={(e) => setEditorTitle(e.target.value)}
+                  readOnly={editingBlock && editingBlock.type !== 'manual'}
+                  placeholder="e.g. Lore Bible Rule #1"
+                />
+                {editingBlock && editingBlock.type !== 'manual' && (
+                  <span className="text-[9px] text-gray-500 mt-1 flex items-center space-x-1">
+                    <Info className="w-3 h-3 text-gray-500" />
+                    <span>Original file sources are read-only.</span>
+                  </span>
+                )}
 
                 {(!editingBlock || editingBlock.type === 'manual') && (
                   <div>
@@ -1366,16 +1450,15 @@ export default function KbManagerModal({ profile, onClose }) {
                   </div>
                 )}
 
-                <div className="flex-1 flex flex-col">
-                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Memory Text Content</label>
-                  <textarea
-                    ref={editorTextareaRef}
-                    value={editorText}
-                    onChange={(e) => setEditorText(e.target.value)}
-                    placeholder="Type raw knowledge data here..."
-                    className="w-full flex-1 bg-[#00080B] border border-gray-800 text-gray-200 text-xs rounded-md p-3 focus:outline-none focus:border-accent font-mono resize-none custom-scrollbar"
-                  />
-                </div>
+                <Textarea
+                  ref={editorTextareaRef}
+                  label="Memory Text Content"
+                  value={editorText}
+                  onChange={(e) => setEditorText(e.target.value)}
+                  placeholder="Type raw knowledge data here..."
+                  monospace
+                  className="flex-1 min-h-[150px]"
+                />
 
                 {(!editingBlock || editingBlock.type === 'manual') && (
                   <div className="flex flex-col space-y-1.5 shrink-0">
@@ -1385,9 +1468,10 @@ export default function KbManagerModal({ profile, onClose }) {
                     {editorKeywords.length > 0 && (
                       <div className="flex flex-wrap gap-1.5 mb-1 p-2 bg-[#00080B] border border-gray-800/80 rounded-md">
                         {editorKeywords.map((tag, idx) => (
-                          <span
+                          <Badge
                             key={idx}
-                            className="flex items-center space-x-1.5 px-2 py-0.5 bg-accent/15 border border-accent/25 text-accent text-[10px] font-bold rounded-lg"
+                            tone="accent"
+                            className="flex items-center space-x-1.5"
                           >
                             <span>{tag}</span>
                             <button
@@ -1397,7 +1481,7 @@ export default function KbManagerModal({ profile, onClose }) {
                             >
                               <X className="w-3 h-3" />
                             </button>
-                          </span>
+                          </Badge>
                         ))}
                       </div>
                     )}
@@ -1405,7 +1489,7 @@ export default function KbManagerModal({ profile, onClose }) {
                     {/* Add Tag Row */}
                     <div className="flex space-x-2">
                       <div className="relative flex-1">
-                        <input
+                        <TextInput
                           type="text"
                           value={tagInput}
                           onChange={(e) => {
@@ -1421,7 +1505,6 @@ export default function KbManagerModal({ profile, onClose }) {
                           }}
                           placeholder="Type a tag..."
                           disabled={savingEditor}
-                          className="w-full bg-[#00080B] border border-gray-800 text-gray-200 text-xs rounded-md px-3 py-2 focus:outline-none focus:border-accent font-sans"
                         />
 
                         {/* Suggestions Dropdown */}
@@ -1538,85 +1621,50 @@ export default function KbManagerModal({ profile, onClose }) {
 
           {/* Delete Confirmation Overlay Modal */}
           {deleteTargetBlock && (
-            <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-              <div className="bg-[#051116] border border-gray-800 rounded-2xl p-6 max-w-sm w-full shadow-2xl animate-in zoom-in-95 duration-200 flex flex-col space-y-4">
-                <div className="flex items-center space-x-3 text-red-500">
-                  <div className="p-2 bg-red-500/10 rounded-lg">
-                    <Trash2 className="w-5 h-5" />
-                  </div>
-                  <h4 className="text-xs font-bold text-white uppercase tracking-wider">Confirm Deletion</h4>
-                </div>
-
-                <p className="text-[11px] text-gray-400 leading-relaxed font-sans select-text">
-                  You are about to delete a memory block from <strong className="text-gray-205">{deleteTargetBlock.source}</strong>.
-                  {deleteTargetBlock.type === 'rag' || deleteTargetBlock.type === 'constant' ? (
-                    <span>
-                      This block belongs to file <strong className="text-white">{deleteTargetBlock.source}</strong>.
-                      You can delete only this specific chunk, or remove the entire file and all its indexed chunks.
-                    </span>
-                  ) : (
-                    <span>This action is permanent and will clear the text block and its associated search vectors.</span>
-                  )}
-                </p>
-
-                <div className="flex flex-col space-y-2 mt-4 select-none">
-                  {(deleteTargetBlock.type === 'rag' || deleteTargetBlock.type === 'constant') && (
-                    <button
-                      onClick={() => handleDeleteEntireFile(deleteTargetBlock.source)}
-                      className="w-full py-2 bg-red-950/45 hover:bg-red-900 border border-red-900/40 hover:border-red-900/80 text-red-200 text-[10px] uppercase font-bold rounded-lg transition-colors cursor-pointer"
-                    >
-                      Delete Entire File ({deleteTargetBlock.source})
-                    </button>
-                  )}
-                  <button
-                    onClick={confirmDeleteBlock}
-                    className="w-full py-2 bg-red-650 hover:bg-red-600 text-white text-[10px] uppercase font-bold rounded-lg transition-colors cursor-pointer"
-                  >
-                    {deleteTargetBlock.type === 'rag' || deleteTargetBlock.type === 'constant' ? 'Delete Only This Block' : 'Confirm Delete'}
-                  </button>
-                  <button
-                    onClick={() => setDeleteTargetBlock(null)}
-                    className="w-full py-2 bg-[#0a161d] hover:bg-[#1a2d32] border border-gray-800 text-gray-400 hover:text-white text-[10px] uppercase font-bold rounded-lg transition-colors cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            </div>
+            <ConfirmDialog
+              tone="danger"
+              title="Confirm Deletion"
+              message={
+                deleteTargetBlock.type === 'constant'
+                  ? `You are about to delete ${deleteTargetBlock.source}. This permanently removes the constant file from the AI context.`
+                  : `You are about to delete ${deleteTargetBlock.source}. This action is permanent and will clear the text block and its associated search vectors.`
+              }
+              actions={[
+                {
+                  label: 'Cancel',
+                  variant: 'ghost',
+                  onClick: () => setDeleteTargetBlock(null),
+                },
+                {
+                  label: deleteTargetBlock.type === 'constant' ? 'Delete File' : 'Confirm Delete',
+                  variant: 'danger',
+                  onClick: confirmDeleteBlock,
+                },
+              ]}
+              onClose={() => setDeleteTargetBlock(null)}
+            />
           )}
 
           {/* Bulk Delete Confirmation Modal */}
           {isBulkDeleteConfirmOpen && (
-            <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-              <div className="bg-[#051116] border border-gray-800 rounded-2xl p-6 max-w-sm w-full shadow-2xl animate-in zoom-in-95 duration-200 flex flex-col space-y-4">
-                <div className="flex items-center space-x-3 text-red-500">
-                  <div className="p-2 bg-red-500/10 rounded-lg">
-                    <Trash2 className="w-5 h-5" />
-                  </div>
-                  <h4 className="text-xs font-bold text-white uppercase tracking-wider">Confirm Bulk Deletion</h4>
-                </div>
-
-                <p className="text-[11px] text-gray-400 leading-relaxed font-sans">
-                  Are you sure you want to delete <strong className="text-white">{selectedBlockIds.length}</strong> selected memory blocks?
-                  This action is permanent and cannot be undone.
-                </p>
-
-                <div className="flex justify-end space-x-3 mt-4 select-none">
-                  <button
-                    onClick={() => setIsBulkDeleteConfirmOpen(false)}
-                    className="px-4 py-2 bg-[#0a161d] hover:bg-[#1a2d32] border border-gray-800 text-gray-400 hover:text-white text-[10px] uppercase font-bold rounded-lg transition-colors cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleBulkDelete}
-                    className="px-4 py-2 bg-red-650 hover:bg-red-500 text-white text-[10px] uppercase font-bold rounded-lg transition-colors cursor-pointer shadow-lg shadow-red-950/20"
-                  >
-                    Delete All
-                  </button>
-                </div>
-              </div>
-            </div>
+            <ConfirmDialog
+              tone="danger"
+              title="Confirm Bulk Deletion"
+              message={`Are you sure you want to delete ${selectedBlockIds.length} selected memory blocks? This action is permanent and cannot be undone.`}
+              actions={[
+                {
+                  label: 'Cancel',
+                  variant: 'ghost',
+                  onClick: () => setIsBulkDeleteConfirmOpen(false),
+                },
+                {
+                  label: 'Delete All',
+                  variant: 'danger',
+                  onClick: handleBulkDelete,
+                },
+              ]}
+              onClose={() => setIsBulkDeleteConfirmOpen(false)}
+            />
           )}
 
         </div>
@@ -1628,6 +1676,105 @@ export default function KbManagerModal({ profile, onClose }) {
           progress={kbProgress}
           statusText={kbProgressStatus}
           title={kbOpType === 'export' ? "Exporting Knowledge Base" : "Importing Knowledge Base"}
+        />
+      )}
+
+      {confirmDialog && (
+        <ConfirmDialog
+          tone="danger"
+          title="Confirm Deletion"
+          message={confirmDialog.message}
+          actions={[
+            {
+              label: 'Cancel',
+              variant: 'ghost',
+              onClick: () => setConfirmDialog(null),
+            },
+            {
+              label: confirmDialog.confirmLabel || 'Delete',
+              variant: 'danger',
+              onClick: async () => {
+                const fn = confirmDialog.onConfirm;
+                setConfirmDialog(null);
+                if (fn) await fn();
+              },
+            },
+          ]}
+          onClose={() => setConfirmDialog(null)}
+        />
+      )}
+
+      {vectorizeError && (
+        <ConfirmDialog
+          tone="warning"
+          title={vectorizeError.kind === 'config' ? 'Embedding Not Configured' : 'Vectorization Failed'}
+          message={vectorizeError.message}
+          actions={
+            vectorizeError.kind === 'config'
+              ? [
+                  {
+                    label: 'Cancel',
+                    variant: 'ghost',
+                    onClick: () => setVectorizeError(null),
+                  },
+                  {
+                    label: 'Open Embedding Settings',
+                    variant: 'primary',
+                    onClick: () => {
+                      setVectorizeError(null);
+                      onClose();
+                      openSettingsToEmbedding();
+                    },
+                  },
+                ]
+              : [
+                  {
+                    label: 'Close',
+                    variant: 'ghost',
+                    onClick: () => setVectorizeError(null),
+                  },
+                ]
+          }
+          onClose={() => setVectorizeError(null)}
+        />
+      )}
+
+      {pendingUpload && (
+        <ConfirmDialog
+          tone="warning"
+          title="Duplicate File Detected"
+          message={`The following file(s) already exist in your Knowledge Base:\n\n${pendingUpload.conflicts.map(f => `• ${f.name}`).join('\n')}\n\nChoose how you want to resolve these conflicts. Cancel will skip duplicate files.`}
+          actions={[
+            {
+              label: 'Cancel',
+              variant: 'ghost',
+              loading: uploadingAction === 'skip',
+              onClick: () => handleResolveConflicts('skip'),
+            },
+            {
+              label: 'Rename',
+              variant: 'primary',
+              loading: uploadingAction === 'rename',
+              onClick: () => handleResolveConflicts('rename'),
+            },
+            {
+              label: 'Replace',
+              variant: 'danger',
+              loading: uploadingAction === 'replace',
+              onClick: () => handleResolveConflicts('replace'),
+            },
+          ]}
+          onClose={() => handleResolveConflicts('skip')}
+        />
+      )}
+
+      {renamePrompt && (
+        <RenameFilesModal
+          files={renamePrompt.conflicts}
+          existingNames={blocks.map(b => b.source)}
+          loading={uploadingAction === 'rename'}
+          onCancel={() => setRenamePrompt(null)}
+          onConfirm={handleConfirmRename}
         />
       )}
 

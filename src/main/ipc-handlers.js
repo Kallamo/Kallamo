@@ -3,6 +3,8 @@ const path = require('path');
 const fs = require('fs');
 const AdmZip = require('adm-zip');
 const os = require('os');
+const https = require('https');
+const crypto = require('crypto');
 const db = require('./database');
 const { chunkText, extractTextFromFile, vectorizeChunks, insertChunksToDb, deleteChunksFromDb, searchKnowledgeBase, searchChatKnowledgeBase, searchChatMemories, RAG_MODEL_ID, RAG_MODEL_DIM, generateEmbeddingVector } = require('./rag-service');
 
@@ -62,6 +64,12 @@ async function indexProfileKnowledgeBase(sender, profileId, knowledgeFilesInput)
   for (const src of existingChunksSources) {
     const allKnownFiles = new Set(knowledgeFiles.map(f => f.name));
     if (!allKnownFiles.has(src)) {
+      // Don't GC manual snippets — they are not represented in knowledgeFiles
+      const onlyManual = db.prepare(
+        "SELECT COUNT(*) AS cnt FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ? AND source = ? AND id NOT LIKE 'manual_%' AND id NOT LIKE 'mem_%'"
+      ).get(profileId, 'profile_kb', src);
+      if (onlyManual.cnt === 0) continue;
+
       console.log(`[RAG Indexer] Garbage collecting deleted profile file chunks: ${src}`);
       deleteChunksFromDb(profileId, 'profile_kb', src);
       vectorDB = vectorDB.filter(c => c.source !== src);
@@ -197,6 +205,12 @@ async function indexChatKnowledgeBase(sender, chatId, knowledgeFilesInput) {
   for (const src of existingChunksSources) {
     const allKnownFiles = new Set(knowledgeFiles.map(f => f.name));
     if (!allKnownFiles.has(src)) {
+      // Don't GC manual snippets — they are not represented in knowledgeFiles
+      const onlyManual = db.prepare(
+        "SELECT COUNT(*) AS cnt FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ? AND source = ? AND id NOT LIKE 'manual_%' AND id NOT LIKE 'mem_%'"
+      ).get(chatId, 'chat_kb', src);
+      if (onlyManual.cnt === 0) continue;
+
       console.log(`[Chat RAG Indexer] Garbage collecting deleted chat file chunks: ${src}`);
       deleteChunksFromDb(chatId, 'chat_kb', src);
       modified = true;
@@ -449,6 +463,266 @@ ipcMain.handle('delete-writing-profile', async (event, id) => {
     return { success: true };
   } catch (e) {
     console.error("Error deleting writing profile:", e);
+    throw e;
+  }
+});
+
+// --- LOCAL AI ENGINE MANAGERS (v1.0.5) ---
+
+const ENGINE_ASSETS = {
+  'win32-x64': {
+    url: 'https://github.com/Kallamo/Kallamo/releases/download/engine-onnx-1.24.3/onnxruntime-node-1.24.3-win32-x64.zip',
+    sha256: '34df0f5957732f8da940fb6acd6869b341496d48fcfeb8aac8aa74d98104c67e'
+  },
+  'win32-arm64': {
+    url: 'https://github.com/Kallamo/Kallamo/releases/download/engine-onnx-1.24.3/onnxruntime-node-1.24.3-win32-arm64.zip',
+    sha256: 'c92b91cf4fd34a110cba1ea1fde630ea44f6dea2213955ff6af1fe4fbcac592c'
+  },
+  'darwin-arm64': {
+    url: 'https://github.com/Kallamo/Kallamo/releases/download/engine-onnx-1.24.3/onnxruntime-node-1.24.3-darwin-arm64.zip',
+    sha256: '1bc4a3f428875f057183741e2cd70f5e758e2fe720297d5f851e32288cb18d13'
+  },
+  'linux-x64': {
+    url: 'https://github.com/Kallamo/Kallamo/releases/download/engine-onnx-1.24.3/onnxruntime-node-1.24.3-linux-x64.zip',
+    sha256: 'b1a9adde0a0558a0e1b6712429285ec9c8b41a7c35ee9361b20382fc9f5eef24'
+  },
+  'linux-arm64': {
+    url: 'https://github.com/Kallamo/Kallamo/releases/download/engine-onnx-1.24.3/onnxruntime-node-1.24.3-linux-arm64.zip',
+    sha256: '07c75780822c2a2ee0b5b0fc187cd68aaea4f51b534e0a4d06c854b617002723'
+  }
+};
+
+function downloadFileWithProgress(url, destPath, progressCallback, abortSignal) {
+  return new Promise((resolve, reject) => {
+    const cleanupAndReject = (err) => {
+      try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch {}
+      reject(err);
+    };
+
+    function get(currentUrl, redirectsLeft = 5) {
+      const req = https.get(currentUrl, (res) => {
+        // Follow 301/302/303/307/308
+        if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+          res.resume(); // drain
+          if (redirectsLeft <= 0) return cleanupAndReject(new Error('Too many redirects'));
+          return get(res.headers.location, redirectsLeft - 1);
+        }
+
+        if (res.statusCode !== 200) {
+          res.resume();
+          return cleanupAndReject(new Error(`Download failed: HTTP ${res.statusCode}`));
+        }
+
+        const total = parseInt(res.headers['content-length'], 10) || 0;
+        let loaded = 0;
+        const file = fs.createWriteStream(destPath);
+
+        res.on('data', (c) => {
+          loaded += c.length;
+          if (progressCallback) progressCallback(loaded, total);
+        });
+
+        res.pipe(file); // backpressure handled by pipe
+        file.on('finish', () => file.close(() => resolve())); // resolve only after flush
+        file.on('error', cleanupAndReject);
+        res.on('error', cleanupAndReject);
+      });
+
+      req.setTimeout(60000, () => req.destroy(new Error('Download timed out')));
+      req.on('error', cleanupAndReject);
+
+      if (abortSignal) {
+        abortSignal.addEventListener('abort', () => req.destroy(new Error('Download cancelled')), { once: true });
+      }
+    }
+    get(url);
+  });
+}
+
+function computeSha256(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256');
+    const stream = fs.createReadStream(filePath);
+    stream.on('data', (data) => hash.update(data));
+    stream.on('end', () => resolve(hash.digest('hex')));
+    stream.on('error', (err) => reject(err));
+  });
+}
+
+function safeSend(sender, channel, data) {
+  if (sender && !sender.isDestroyed()) {
+    sender.send(channel, data);
+  }
+}
+
+ipcMain.handle('get-engine-status', async (event) => {
+  try {
+    const { isLocalEngineInstalled } = require('./rag-service');
+    return {
+      installed: isLocalEngineInstalled(),
+      platform: process.platform,
+      arch: process.arch
+    };
+  } catch (e) {
+    console.error("Error checking engine status:", e);
+    throw e;
+  }
+});
+
+let isDownloadingEngine = false;
+let activeDownloadAbort = null;
+
+async function executeEngineDownload(sender, isBackground = false) {
+  if (isDownloadingEngine) {
+    throw new Error('An engine download is already in progress.');
+  }
+
+  const { runtimeDir, isLocalEngineInstalled } = require('./rag-service');
+  const tempZip = path.join(runtimeDir, 'engine-download-temp.zip');
+  const stagingDir = path.join(runtimeDir, 'staging');
+  const finalDir = path.join(runtimeDir, 'node_modules', 'onnxruntime-node');
+
+  const abortController = new AbortController();
+  activeDownloadAbort = abortController;
+
+  try {
+    isDownloadingEngine = true;
+    const platformKey = `${process.platform}-${process.arch}`;
+    const asset = ENGINE_ASSETS[platformKey];
+
+    if (!asset) {
+      throw new Error(`Local AI Engine is not supported on this platform: ${platformKey}`);
+    }
+
+    // Ensure runtime directory exists
+    if (!fs.existsSync(runtimeDir)) {
+      fs.mkdirSync(runtimeDir, { recursive: true });
+    }
+
+    // 1. Download
+    safeSend(sender, 'download-engine-progress', { status: 'downloading', loaded: 0, total: 100, percent: 0, isBackground });
+
+    await downloadFileWithProgress(asset.url, tempZip, (loaded, total) => {
+      const percent = total > 0 ? Math.round((loaded / total) * 100) : 0;
+      safeSend(sender, 'download-engine-progress', { status: 'downloading', loaded, total, percent, isBackground });
+    }, abortController.signal);
+
+    // 2. Verify Checksum
+    safeSend(sender, 'download-engine-progress', { status: 'verifying', percent: 100, isBackground });
+
+    if (asset.sha256 && asset.sha256 !== 'mock_sha256_placeholder' && !asset.sha256.startsWith('YOUR_')) {
+      const computedHash = await computeSha256(tempZip);
+      if (computedHash !== asset.sha256) {
+        throw new Error(`SHA-256 integrity check failed. Expected: ${asset.sha256}, Got: ${computedHash}`);
+      }
+    } else {
+      console.warn(`[Engine Download] Skipping checksum verification (mock or unset hash).`);
+    }
+
+    // 3. Extract to staging directory (atomic install)
+    safeSend(sender, 'download-engine-progress', { status: 'extracting', percent: 100, isBackground });
+
+    // Clean up any previous staging attempt
+    if (fs.existsSync(stagingDir)) {
+      fs.rmSync(stagingDir, { recursive: true, force: true });
+    }
+    fs.mkdirSync(stagingDir, { recursive: true });
+
+    const zip = new AdmZip(tempZip);
+    const entries = zip.getEntries();
+    const hasNestedNodeModules = entries.some(e => e.entryName.startsWith('node_modules/'));
+    const stagingTarget = hasNestedNodeModules
+      ? stagingDir  // zip has node_modules/ prefix — extract at staging root
+      : path.join(stagingDir, 'onnxruntime-node');
+
+    if (!fs.existsSync(stagingTarget)) {
+      fs.mkdirSync(stagingTarget, { recursive: true });
+    }
+    zip.extractAllTo(stagingTarget, true);
+
+    // 4. Verify staged install has the actual native binary
+    const stagedOnnxDir = hasNestedNodeModules
+      ? path.join(stagingDir, 'node_modules', 'onnxruntime-node')
+      : path.join(stagingDir, 'onnxruntime-node');
+
+    const stagedPackageJson = path.join(stagedOnnxDir, 'package.json');
+    if (!fs.existsSync(stagedPackageJson)) {
+      throw new Error('Extraction failed: package.json not found in the staged engine package. The zip structure may be invalid.');
+    }
+
+    // Check for the native .node binary
+    const { findNodeBinary } = require('./rag-service');
+    if (typeof findNodeBinary === 'function' && !findNodeBinary(stagedOnnxDir)) {
+      throw new Error('Extraction failed: Native .node binary not found in the staged engine package. The bundle may be corrupt or for a different platform.');
+    }
+
+    // 5. Atomic swap: remove old install, move staging into place
+    const nodeModulesDir = path.join(runtimeDir, 'node_modules');
+    if (!fs.existsSync(nodeModulesDir)) {
+      fs.mkdirSync(nodeModulesDir, { recursive: true });
+    }
+    if (fs.existsSync(finalDir)) {
+      fs.rmSync(finalDir, { recursive: true, force: true });
+    }
+    fs.renameSync(stagedOnnxDir, finalDir);
+
+    // 6. Completed
+    safeSend(sender, 'download-engine-progress', { status: 'completed', percent: 100, isBackground });
+
+    // Trigger startup reindexing now that the engine is installed successfully
+    if (isBackground) {
+      console.log('[Auto-Download] Download completed successfully. Initiating background re-indexing...');
+      performReindexIfNeeded();
+    }
+
+    return { success: true };
+  } catch (e) {
+    console.error("Error downloading local engine:", e);
+    const errorMsg = e.message === 'Download cancelled' ? 'Download was cancelled.' : e.message;
+    safeSend(sender, 'download-engine-progress', { status: 'error', error: errorMsg, isBackground });
+    throw e;
+  } finally {
+    isDownloadingEngine = false;
+    activeDownloadAbort = null;
+
+    // Clean up temp zip
+    if (fs.existsSync(tempZip)) {
+      try { fs.unlinkSync(tempZip); } catch (err) {
+        console.error("Failed to delete temp engine zip:", err);
+      }
+    }
+    // Clean up staging directory
+    if (fs.existsSync(stagingDir)) {
+      try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch (err) {
+        console.error("Failed to delete staging directory:", err);
+      }
+    }
+  }
+}
+
+ipcMain.handle('cancel-engine-download', async () => {
+  if (activeDownloadAbort) {
+    activeDownloadAbort.abort();
+    return { success: true };
+  }
+  return { success: false, reason: 'No active download' };
+});
+
+ipcMain.handle('download-engine', async (event) => {
+  return executeEngineDownload(event.sender, false);
+});
+
+ipcMain.handle('delete-engine', async (event) => {
+  try {
+    const { runtimeDir, resetLocalEngine } = require('./rag-service');
+    if (fs.existsSync(runtimeDir)) {
+      fs.rmSync(runtimeDir, { recursive: true, force: true });
+    }
+    // Reset in-memory engine state so a same-session re-download/re-init works cleanly
+    resetLocalEngine();
+    return { success: true };
+  } catch (e) {
+    console.error("Error deleting local engine:", e);
     throw e;
   }
 });
@@ -3211,6 +3485,34 @@ const { app } = require('electron');
 
 async function performReindexIfNeeded() {
   try {
+    const { isLocalEngineInstalled } = require('./rag-service');
+
+    let embeddingEngine = 'local';
+    try {
+      const rowAdvanced = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
+      if (rowAdvanced) {
+        const advanced = JSON.parse(rowAdvanced.value);
+        embeddingEngine = advanced.embeddingEngine || 'local';
+      }
+    } catch (e) { }
+
+    if (embeddingEngine !== 'local') {
+      console.log('[Re-Index] External embedding engine selected. Skipping local model re-index.');
+      return;
+    }
+
+    if (!isLocalEngineInstalled()) {
+      console.log('[Re-Index] Local embedding engine is not installed. Skipping background re-indexing.');
+      const windows = BrowserWindow.getAllWindows();
+      if (windows.length > 0 && !windows[0].webContents.isDestroyed()) {
+        windows[0].webContents.send('reindex-progress', {
+          status: 'idle',
+          message: 'Download the Local AI Engine to finish indexing.'
+        });
+      }
+      return;
+    }
+
     const metaRow = db.prepare("SELECT value FROM settings WHERE key = 'rag_model_metadata'").get();
     let needsReindex = false;
 
@@ -3434,6 +3736,86 @@ async function performReindexIfNeeded() {
   }
 }
 
+async function autoDownloadEngineIfNeeded() {
+  try {
+    const { isLocalEngineInstalled } = require('./rag-service');
+
+    // 1. Check if embeddingEngine is 'local'
+    let embeddingEngine = 'local';
+    try {
+      const rowAdvanced = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
+      if (rowAdvanced) {
+        const advanced = JSON.parse(rowAdvanced.value);
+        embeddingEngine = advanced.embeddingEngine || 'local';
+      }
+    } catch (e) { }
+
+    if (embeddingEngine !== 'local') {
+      console.log('[Auto-Download] Embedding engine is not local. Skipping auto-download.');
+      performReindexIfNeeded();
+      return;
+    }
+
+    // 2. Check if platform is supported
+    const platformKey = `${process.platform}-${process.arch}`;
+    const asset = ENGINE_ASSETS[platformKey];
+    if (!asset) {
+      console.log(`[Auto-Download] Unsupported platform: ${platformKey}.`);
+      
+      // Fallback only if a valid external profile already exists
+      try {
+        const apiProfiles = db.prepare('SELECT id FROM api_profiles').all();
+        const rowAdvanced = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
+        const advanced = rowAdvanced ? JSON.parse(rowAdvanced.value) : {};
+        
+        let hasValidExternalProfile = false;
+        if (apiProfiles.length > 0 && advanced.embeddingApiProfileId) {
+          hasValidExternalProfile = apiProfiles.some(p => p.id === advanced.embeddingApiProfileId);
+        }
+
+        if (hasValidExternalProfile) {
+          console.log('[Auto-Download] Valid external profile configured. Switching to external embedding engine...');
+          advanced.embeddingEngine = 'external';
+          db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('advanced', JSON.stringify(advanced));
+          
+          // Notify the renderer to refresh settings
+          const windows = BrowserWindow.getAllWindows();
+          if (windows.length > 0 && !windows[0].webContents.isDestroyed()) {
+            windows[0].webContents.send('settings-changed');
+          }
+        }
+      } catch (e) {
+        console.error('[Auto-Download] Failed to fall back to external engine settings:', e);
+      }
+      return;
+    }
+
+    // 3. Check if engine is installed
+    if (isLocalEngineInstalled()) {
+      console.log('[Auto-Download] Local AI Engine is already installed.');
+      performReindexIfNeeded();
+      return;
+    }
+
+    // 4. Run download in the background
+    console.log('[Auto-Download] Local AI Engine is absent. Starting background auto-download...');
+    const windows = BrowserWindow.getAllWindows();
+    const sender = windows.length > 0 ? windows[0].webContents : null;
+
+    if (!sender) {
+      console.log('[Auto-Download] No window sender found. Aborting background download.');
+      return;
+    }
+
+    executeEngineDownload(sender, true).catch(err => {
+      console.error('[Auto-Download] Background engine download failed:', err);
+    });
+
+  } catch (error) {
+    console.error('[Auto-Download] Error checking auto-download on startup:', error);
+  }
+}
+
 app.whenReady().then(() => {
   // One-time orphan + FTS cleanup (v1)
   try {
@@ -3474,7 +3856,7 @@ app.whenReady().then(() => {
 
   // Small delay to ensure the renderer has loaded and IPC listeners are registered
   setTimeout(() => {
-    performReindexIfNeeded();
+    autoDownloadEngineIfNeeded();
   }, 3000);
 });
 

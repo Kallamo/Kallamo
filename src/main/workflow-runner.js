@@ -1,6 +1,6 @@
 const db = require('./database');
 const { sendApiRequest } = require('./api-engine');
-const { encode } = require('gpt-tokenizer');
+const { encode } = require('gpt-tokenizer/encoding/o200k_base');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');

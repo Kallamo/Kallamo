@@ -2,15 +2,44 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Database, Plus, Trash2, Edit, Search, HelpCircle, Check, ChevronDown, Sparkles, FileText, Info, X as XIcon, Brain, Loader, Download, Upload } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import ImportProgressModal from './modals/ImportProgressModal';
+import ConfirmDialog from './ui/ConfirmDialog';
+import TextInput from './ui/TextInput';
+import Textarea from './ui/Textarea';
+import Badge from './ui/Badge';
+import EmptyState from './ui/EmptyState';
+import Checkbox from './ui/Checkbox';
+import RenameFilesModal from './ui/RenameFilesModal';
 
 export default function ChatMemoryView({
   chat,
   onSaveChat,
   electronAPI
 }) {
-  const { writingProfiles, settings, refreshChats } = useApp();
+  const { writingProfiles, settings, refreshChats, showToast } = useApp();
   const [activeFilter, setActiveFilter] = useState('all'); // 'all' | 'constants' | 'rag' | 'snippets' | 'summarized'
   const [searchQuery, setSearchQuery] = useState('');
+  const [confirmDialog, setConfirmDialog] = useState(null); // { message, onConfirm }
+  const [pendingUpload, setPendingUpload] = useState(null); // { fresh, conflicts, type }
+  const [uploadingAction, setUploadingAction] = useState(null); // 'skip' | 'rename' | 'replace' | null
+  const [renamePrompt, setRenamePrompt] = useState(null); // { fresh, conflicts, type }
+
+  const getUniqueName = (originalName, existingSources, extraNames = new Set()) => {
+    const lastDot = originalName.lastIndexOf('.');
+    let base = originalName;
+    let ext = '';
+    if (lastDot !== -1) {
+      base = originalName.substring(0, lastDot);
+      ext = originalName.substring(lastDot);
+    }
+    const existingSet = new Set(existingSources.map(s => s.toLowerCase()));
+    let newName = originalName;
+    let counter = 2;
+    while (existingSet.has(newName.toLowerCase()) || extraNames.has(newName.toLowerCase())) {
+      newName = `${base} (${counter})${ext}`;
+      counter++;
+    }
+    return newName;
+  };
 
   // Export / Import KB progress states
   const [kbProgress, setKbProgress] = useState(0);
@@ -151,7 +180,7 @@ export default function ChatMemoryView({
       }
     } catch (e) {
       console.error("Failed to export Workspace Knowledge Base:", e);
-      alert("Failed to export Workspace Knowledge Base.");
+      showToast("Failed to export Workspace Knowledge Base.", "error");
     } finally {
       if (unsub) unsub();
       setKbOpType(null);
@@ -181,7 +210,7 @@ export default function ChatMemoryView({
       }
     } catch (e) {
       console.error("Failed to import Workspace Knowledge Base:", e);
-      alert("Failed to import Workspace Knowledge Base.");
+      showToast("Failed to import Workspace Knowledge Base.", "error");
     } finally {
       if (unsub) unsub();
       setKbOpType(null);
@@ -380,26 +409,39 @@ export default function ChatMemoryView({
     }
   };
 
-  // Upload file
-  const handleDirectFileUpload = async (e) => {
-    const files = Array.from(e.target.files);
-    if (files.length === 0) return;
-
+  const uploadFileBatch = async (files, renameMapping = {}, deleteBeforeUpload = false) => {
+    setIsProcessing(true);
+    let processed = 0;
     const updatedKbFiles = [...kbFiles];
-    const skipped = [];
 
-    for (const f of files) {
-      if (updatedKbFiles.some(existing => existing.name.toLowerCase() === f.name.toLowerCase())) {
-        skipped.push(f.name);
-        continue;
+    for (const file of files) {
+      processed++;
+      const targetName = renameMapping[file.name] || file.name;
+      setProgressMsg(`Reading ${targetName} (${processed}/${files.length})...`);
+
+      if (deleteBeforeUpload) {
+        try {
+          await electronAPI.deleteChatKbFile(chat.id, file.name);
+          setBlocks(prev => prev.filter(b => b.source !== file.name));
+          setSelectedBlockIds(prev => prev.filter(id => {
+            const block = blocks.find(b => b.id === id);
+            return !block || block.source !== file.name;
+          }));
+          const existingIdx = updatedKbFiles.findIndex(existing => existing.name.toLowerCase() === file.name.toLowerCase());
+          if (existingIdx !== -1) {
+            updatedKbFiles.splice(existingIdx, 1);
+          }
+        } catch (err) {
+          console.error(`Failed to delete existing file ${file.name} for replacement:`, err);
+        }
       }
 
       try {
         if (electronAPI.uploadChatKbFile) {
           const savedFile = await electronAPI.uploadChatKbFile(chat.id, {
-            name: f.name,
-            path: f.path || '',
-            size: f.size
+            name: targetName,
+            path: file.path || '',
+            size: file.size
           });
 
           if (savedFile) {
@@ -414,7 +456,8 @@ export default function ChatMemoryView({
           }
         }
       } catch (err) {
-        console.error("Error uploading file:", err);
+        console.error(`Failed to upload file ${file.name}:`, err);
+        break; // stop processing the rest of the batch on failure
       }
     }
 
@@ -422,10 +465,78 @@ export default function ChatMemoryView({
       ...chat,
       knowledgeFiles: JSON.stringify(updatedKbFiles)
     });
-    e.target.value = '';
 
-    if (skipped.length > 0) {
-      alert(`Skipped ${skipped.length} file(s) that already exist:\n${skipped.join('\n')}`);
+    setIsProcessing(false);
+    setProgressMsg('');
+    setTimeout(() => loadBlocks(), 500); // refresh list
+  };
+
+  const handleResolveConflicts = async (action) => {
+    if (!pendingUpload) return;
+    setUploadingAction(action);
+
+    const { fresh, conflicts } = pendingUpload;
+    const renameMapping = {};
+    let deleteBeforeUpload = false;
+    let filesToUpload = [...fresh];
+
+    if (action === 'rename') {
+      // Hand off to the manual rename modal instead of auto-renaming.
+      setUploadingAction(null);
+      setPendingUpload(null);
+      setRenamePrompt({ fresh, conflicts, type: pendingUpload.type });
+      return;
+    } else if (action === 'replace') {
+      deleteBeforeUpload = true;
+      filesToUpload = [...fresh, ...conflicts];
+    } else {
+      // action === 'skip'
+      // no-op, just upload fresh ones
+    }
+
+    try {
+      if (filesToUpload.length > 0) {
+        await uploadFileBatch(filesToUpload, renameMapping, deleteBeforeUpload);
+      }
+    } finally {
+      setUploadingAction(null);
+      setPendingUpload(null);
+    }
+  };
+
+  const handleConfirmRename = async (renameMapping) => {
+    if (!renamePrompt) return;
+    const { fresh, conflicts } = renamePrompt;
+    setUploadingAction('rename');
+    try {
+      await uploadFileBatch([...fresh, ...conflicts], renameMapping, false);
+    } finally {
+      setUploadingAction(null);
+      setRenamePrompt(null);
+    }
+  };
+
+  // Upload file
+  const handleDirectFileUpload = async (e) => {
+    const files = Array.from(e.target.files);
+    e.target.value = '';
+    if (files.length === 0) return;
+
+    const fresh = [];
+    const conflicts = [];
+    for (const file of files) {
+      const exists = kbFiles.some(existing => existing.name.toLowerCase() === file.name.toLowerCase());
+      if (exists) {
+        conflicts.push(file);
+      } else {
+        fresh.push(file);
+      }
+    }
+
+    if (conflicts.length > 0) {
+      setPendingUpload({ fresh, conflicts });
+    } else {
+      await uploadFileBatch(fresh, {}, false);
     }
   };
 
@@ -447,7 +558,7 @@ export default function ChatMemoryView({
       loadBlocks();
     } catch (err) {
       console.error("Error deleting memory block:", err);
-      alert("Failed to delete memory block.");
+      showToast("Failed to delete memory block.", "error");
     }
   };
 
@@ -491,7 +602,7 @@ export default function ChatMemoryView({
       loadBlocks();
     } catch (err) {
       console.error("Error deleting entire file:", err);
-      alert("Failed to delete file.");
+      showToast("Failed to delete file.", "error");
     } finally {
       setIsProcessing(false);
       setProgressMsg("");
@@ -520,7 +631,7 @@ export default function ChatMemoryView({
       loadBlocks();
     } catch (err) {
       console.error("Error doing bulk delete:", err);
-      alert("Failed to delete some blocks.");
+      showToast("Failed to delete some blocks.", "error");
     } finally {
       setIsProcessing(false);
       setProgressMsg("");
@@ -1053,9 +1164,10 @@ export default function ChatMemoryView({
                       <button
                         onClick={() => {
                           if (block.type === 'rag_file') {
-                            if (window.confirm(`Are you sure you want to delete the entire file "${block.source}" and all its searchable chunks?`)) {
-                              handleDeleteEntireFile(block.source);
-                            }
+                            setConfirmDialog({
+                              message: `Are you sure you want to delete the entire file "${block.source}" and all its searchable chunks?`,
+                              onConfirm: () => handleDeleteEntireFile(block.source)
+                            });
                           } else {
                             setDeleteTarget(block);
                           }
@@ -1259,34 +1371,29 @@ export default function ChatMemoryView({
 
             {/* Body */}
             <div className="p-5 flex flex-col space-y-4">
-              <div className="flex flex-col space-y-1.5">
-                <label className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">Title / Source</label>
-                <input
-                  type="text"
-                  value={editorTitle}
-                  onChange={(e) => setEditorTitle(e.target.value)}
-                  placeholder="e.g. Character's Backstory..."
-                  disabled={savingSnippet || (editingBlock && editingBlock.type !== 'snippet')}
-                  className="bg-[#011419] border border-gray-800 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-accent transition-colors font-sans disabled:opacity-50 read-only:opacity-50"
-                />
-                {editingBlock && editingBlock.type !== 'snippet' && (
-                  <span className="text-[9px] text-gray-500 mt-1 flex items-center space-x-1">
-                    <Info className="w-3.5 h-3.5 text-gray-500" />
-                    <span>Original file sources are read-only.</span>
-                  </span>
-                )}
-              </div>
+              <TextInput
+                label="Title / Source"
+                value={editorTitle}
+                onChange={(e) => setEditorTitle(e.target.value)}
+                placeholder="e.g. Character's Backstory..."
+                disabled={savingSnippet || (editingBlock && editingBlock.type !== 'snippet')}
+              />
+              {editingBlock && editingBlock.type !== 'snippet' && (
+                <span className="text-[9px] text-gray-500 mt-1 flex items-center space-x-1">
+                  <Info className="w-3.5 h-3.5 text-gray-500" />
+                  <span>Original file sources are read-only.</span>
+                </span>
+              )}
 
-              <div className="flex flex-col space-y-1.5">
-                <label className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">Memory Content</label>
-                <textarea
-                  value={editorText}
-                  onChange={(e) => setEditorText(e.target.value)}
-                  placeholder="Enter custom context for the AI here..."
-                  disabled={savingSnippet}
-                  className="bg-[#011419] border border-gray-800 rounded-xl px-3 py-2.5 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-accent transition-colors resize-none h-40 font-sans"
-                />
-              </div>
+              <Textarea
+                label="Memory Content"
+                value={editorText}
+                onChange={(e) => setEditorText(e.target.value)}
+                placeholder="Enter custom context for the AI here..."
+                disabled={savingSnippet}
+                monospace
+                className="h-40"
+              />
 
               {(!editingBlock || editingBlock.type === 'snippet') && (
                 <div className="flex flex-col space-y-1.5">
@@ -1328,9 +1435,10 @@ export default function ChatMemoryView({
                   {editorKeywords.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mb-1 p-2 bg-[#011419] border border-gray-800/80 rounded-xl">
                       {editorKeywords.map((tag, idx) => (
-                        <span
+                        <Badge
                           key={idx}
-                          className="flex items-center space-x-1.5 px-2 py-0.5 bg-accent/15 border border-accent/25 text-accent text-[10px] font-bold rounded-lg"
+                          tone="accent"
+                          className="flex items-center space-x-1.5"
                         >
                           <span>{tag}</span>
                           <button
@@ -1340,7 +1448,7 @@ export default function ChatMemoryView({
                           >
                             <XIcon className="w-3 h-3" />
                           </button>
-                        </span>
+                        </Badge>
                       ))}
                     </div>
                   )}
@@ -1348,7 +1456,7 @@ export default function ChatMemoryView({
                   {/* Add Tag Row */}
                   <div className="flex space-x-2">
                     <div className="relative flex-1">
-                      <input
+                      <TextInput
                         type="text"
                         value={tagInput}
                         onChange={(e) => {
@@ -1364,7 +1472,6 @@ export default function ChatMemoryView({
                         }}
                         placeholder="Type a tag..."
                         disabled={savingSnippet}
-                        className="w-full bg-[#011419] border border-gray-800 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-accent transition-colors font-sans"
                       />
 
                       {/* Suggestions Dropdown */}
@@ -1695,27 +1802,30 @@ export default function ChatMemoryView({
                       <Edit className="w-3.5 h-3.5" />
                     </button>
                     <button
-                      onClick={async () => {
-                        if (window.confirm("Are you sure you want to delete this specific chunk?")) {
-                          if (viewingFileBlock.chunks.length === 1) {
-                            await handleDeleteEntireFile(viewingFileBlock.source);
-                            setViewingFileBlock(null);
-                          } else {
-                            try {
-                              const mappedBlock = {
-                                id: chunk.id,
-                                type: chunk.type === 'snippet' ? 'manual' : chunk.type,
-                                source: chunk.source,
-                                text: chunk.text
-                              };
-                              await electronAPI.deleteChatKbBlock(chat.id, mappedBlock);
-                              await loadBlocks();
-                            } catch (err) {
-                              console.error("Error deleting chunk:", err);
-                              alert("Failed to delete chunk.");
+                      onClick={() => {
+                        setConfirmDialog({
+                          message: "Are you sure you want to delete this specific chunk?",
+                          onConfirm: async () => {
+                            if (viewingFileBlock.chunks.length === 1) {
+                              await handleDeleteEntireFile(viewingFileBlock.source);
+                              setViewingFileBlock(null);
+                            } else {
+                              try {
+                                const mappedBlock = {
+                                  id: chunk.id,
+                                  type: chunk.type === 'snippet' ? 'manual' : chunk.type,
+                                  source: chunk.source,
+                                  text: chunk.text
+                                };
+                                await electronAPI.deleteChatKbBlock(chat.id, mappedBlock);
+                                await loadBlocks();
+                              } catch (err) {
+                                console.error("Error deleting chunk:", err);
+                                showToast("Failed to delete chunk.", "error");
+                              }
                             }
                           }
-                        }
+                        });
                       }}
                       className="p-1 text-gray-500 hover:text-red-500 hover:bg-red-500/10 rounded cursor-pointer"
                       title="Delete Chunk"
@@ -1738,6 +1848,59 @@ export default function ChatMemoryView({
           progress={kbProgress}
           statusText={kbProgressStatus}
           title={kbOpType === 'export' ? "Exporting Workspace KB" : "Importing Workspace KB"}
+        />
+      )}
+
+      {confirmDialog && (
+        <ConfirmDialog
+          isOpen={!!confirmDialog}
+          message={confirmDialog.message}
+          confirmLabel={confirmDialog.confirmLabel || "Delete"}
+          onConfirm={async () => {
+            const fn = confirmDialog.onConfirm;
+            setConfirmDialog(null);
+            if (fn) await fn();
+          }}
+          onClose={() => setConfirmDialog(null)}
+        />
+      )}
+
+      {pendingUpload && (
+        <ConfirmDialog
+          tone="warning"
+          title="Duplicate File Detected"
+          message={`The following file(s) already exist in this workspace memory:\n\n${pendingUpload.conflicts.map(f => `• ${f.name}`).join('\n')}\n\nChoose how you want to resolve these conflicts. Cancel will skip duplicate files.`}
+          actions={[
+            {
+              label: 'Cancel',
+              variant: 'ghost',
+              loading: uploadingAction === 'skip',
+              onClick: () => handleResolveConflicts('skip'),
+            },
+            {
+              label: 'Rename',
+              variant: 'primary',
+              loading: uploadingAction === 'rename',
+              onClick: () => handleResolveConflicts('rename'),
+            },
+            {
+              label: 'Replace',
+              variant: 'danger',
+              loading: uploadingAction === 'replace',
+              onClick: () => handleResolveConflicts('replace'),
+            },
+          ]}
+          onClose={() => handleResolveConflicts('skip')}
+        />
+      )}
+
+      {renamePrompt && (
+        <RenameFilesModal
+          files={renamePrompt.conflicts}
+          existingNames={kbFiles.map(f => f.name)}
+          loading={uploadingAction === 'rename'}
+          onCancel={() => setRenamePrompt(null)}
+          onConfirm={handleConfirmRename}
         />
       )}
 

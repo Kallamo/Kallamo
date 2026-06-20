@@ -3,7 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { X, Plus, Key, Link2, Eye, EyeOff, Monitor, Settings, Layout, Layers, HardDrive, Trash2, FolderOpen, RefreshCw, Cpu, Database, Palette, Type } from 'lucide-react';
 import Logo, { Logotype } from '../../logo';
 
-export default function SettingsModal({ onClose }) {
+export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const {
     settings,
     handleSaveSettings,
@@ -14,10 +14,28 @@ export default function SettingsModal({ onClose }) {
     showToast,
     updateStatus,
     updateVersion,
-    updateOutdatedUrl
+    updateOutdatedUrl,
+    engineStatus,
+    downloadEngine,
+    deleteEngine
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState('api'); // 'api' | 'interface' | 'advanced'
+  const [activeTab, setActiveTab] = useState(initialTab || 'api'); // 'api' | 'interface' | 'advanced'
+
+  useEffect(() => {
+    if (initialSection === 'embedding' && activeTab === 'advanced') {
+      const timer = setTimeout(() => {
+        const el = document.getElementById('embedding-config');
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+  }, [initialSection, activeTab]);
+
+  const platformKey = `${engineStatus.platform || ''}-${engineStatus.arch || ''}`;
+  const isPlatformUnsupported = engineStatus.platform && !['win32-x64', 'win32-arm64', 'darwin-arm64', 'linux-x64', 'linux-arm64'].includes(platformKey);
 
   // API Tab State
   const [showAddApiForm, setShowAddApiForm] = useState(false);
@@ -1019,35 +1037,83 @@ export default function SettingsModal({ onClose }) {
                       <div className="h-px bg-gray-800/50 w-full"></div>
 
                       {/* Embedding Engine Config */}
-                      <div>
+                      <div id="embedding-config">
                         <span className="block text-sm text-gray-200 font-bold mb-1">Vector Embedding Engine</span>
                         <p className="text-[10px] text-gray-500 mb-3">
                           Generate vector embeddings locally on your hardware or offload calculations to an external API provider.
                         </p>
-                        <div className="flex flex-col sm:flex-row sm:space-x-6 space-y-2 sm:space-y-0">
-                          <label className="flex items-center space-x-2 text-xs text-gray-300 cursor-pointer">
-                            <input
-                              type="radio"
-                              name="embeddingEngine"
-                              value="local"
-                              checked={embeddingEngine === 'local'}
-                              onChange={() => updateSetting('advanced', 'embeddingEngine', 'local')}
-                              className="accent-accent"
-                            />
-                            <span>Local Engine (Offline & Private MiniLM-L6)</span>
-                          </label>
-                          <label className="flex items-center space-x-2 text-xs text-gray-300 cursor-pointer">
-                            <input
-                              type="radio"
-                              name="embeddingEngine"
-                              value="external"
-                              checked={embeddingEngine === 'external'}
-                              onChange={() => updateSetting('advanced', 'embeddingEngine', 'external')}
-                              className="accent-accent"
-                            />
-                            <span>External API (Requires configured connection below)</span>
-                          </label>
+                        <div className="flex flex-col mb-4 space-y-3">
+                          <div className="flex flex-col sm:flex-row sm:space-x-6 space-y-2 sm:space-y-0">
+                            <label className={`flex items-center space-x-2 text-xs text-gray-300 ${isPlatformUnsupported ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
+                              <input
+                                type="radio"
+                                name="embeddingEngine"
+                                value="local"
+                                checked={embeddingEngine === 'local'}
+                                disabled={isPlatformUnsupported}
+                                onChange={async () => {
+                                  if (isPlatformUnsupported) return;
+                                  updateSetting('advanced', 'embeddingEngine', 'local');
+                                  if (!engineStatus.installed) {
+                                    await downloadEngine();
+                                  }
+                                }}
+                                className="accent-accent"
+                              />
+                              <span>Local Engine (Offline & Private multilingual-e5)</span>
+                            </label>
+                            <label className="flex items-center space-x-2 text-xs text-gray-300 cursor-pointer">
+                              <input
+                                type="radio"
+                                name="embeddingEngine"
+                                value="external"
+                                checked={embeddingEngine === 'external'}
+                                onChange={() => updateSetting('advanced', 'embeddingEngine', 'external')}
+                                className="accent-accent"
+                              />
+                              <span>External API (Requires configured connection below)</span>
+                            </label>
+                          </div>
+                          {isPlatformUnsupported && (
+                            <p className="text-red-400/90 text-[10px] leading-relaxed">
+                              ⚠️ Local AI is not supported on Intel Mac. Please configure an external embedding provider.
+                            </p>
+                          )}
                         </div>
+
+                        {/* Local Engine Manage Row */}
+                        {!isPlatformUnsupported && (
+                          <div className="p-3 bg-[#0d1b22]/45 rounded-lg border border-gray-800 flex items-center justify-between text-xs mt-3 select-none">
+                            <div className="flex items-center space-x-2.5">
+                              <span className={`w-2 h-2 rounded-full ${engineStatus.installed ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                              <div className="flex flex-col">
+                                <span className="text-gray-200 font-bold">Local AI Engine Status</span>
+                                <span className="text-[10px] text-gray-500">
+                                  {engineStatus.installed 
+                                    ? `Installed (${engineStatus.platform}-${engineStatus.arch})` 
+                                    : 'Not Installed (Will download on demand)'}
+                                </span>
+                              </div>
+                            </div>
+                            {engineStatus.installed ? (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmAction('deleteEngine')}
+                                className="px-3 py-1.5 bg-red-600/10 hover:bg-red-650/20 text-red-400 font-semibold rounded-md border border-red-600/20 transition-all cursor-pointer select-none"
+                              >
+                                Delete Engine
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => downloadEngine()}
+                                className="px-3 py-1.5 bg-accent hover:brightness-110 text-[#011419] font-bold rounded-md transition-all cursor-pointer select-none"
+                              >
+                                Download Engine
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </div>
 
                       {embeddingEngine === 'external' && (
@@ -1401,12 +1467,18 @@ export default function SettingsModal({ onClose }) {
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 select-none p-4 animate-in fade-in duration-150">
           <div className="w-[400px] bg-[#011419] border border-gray-800 rounded-xl shadow-2xl p-6 flex flex-col space-y-4 animate-in zoom-in-95 duration-200">
             <h3 className="text-base font-bold text-white uppercase tracking-wider">
-              {confirmAction === 'purge' ? 'Purge Vector DB Cache' : 'Clear Embeddings Cache'}
+              {confirmAction === 'purge'
+                ? 'Purge Vector DB Cache'
+                : confirmAction === 'clearCache'
+                  ? 'Clear Embeddings Cache'
+                  : 'Delete Local AI Engine'}
             </h3>
             <p className="text-xs text-gray-300 leading-relaxed">
               {confirmAction === 'purge'
                 ? 'Are you sure you want to purge all cached vector databases? This will require re-uploading Knowledge Base files to re-index them.'
-                : 'Are you sure you want to clear HuggingFace download cache? This forces model downloads on next index.'}
+                : confirmAction === 'clearCache'
+                  ? 'Are you sure you want to clear HuggingFace download cache? This forces model downloads on next index.'
+                  : 'Are you sure you want to uninstall and delete the Local AI Engine runtime files? You can re-download them at any time.'}
             </p>
             <div className="flex justify-end space-x-3 pt-2">
               <button
@@ -1422,6 +1494,12 @@ export default function SettingsModal({ onClose }) {
                     await handlePurgeVectors();
                   } else if (action === 'clearCache') {
                     await handleClearCache();
+                  } else if (action === 'deleteEngine') {
+                    setConfirmAction(null);
+                    await deleteEngine();
+                    if (embeddingEngine === 'local') {
+                      updateSetting('advanced', 'embeddingEngine', 'external');
+                    }
                   }
                 }}
                 className="px-4 py-2 text-xs font-bold bg-red-600 hover:bg-red-700 text-white rounded transition-colors cursor-pointer"

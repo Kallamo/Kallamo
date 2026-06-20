@@ -2,8 +2,6 @@ const fs = require('fs');
 const path = require('path');
 const mammoth = require('mammoth');
 const os = require('os');
-
-const { pipeline, env } = require('@huggingface/transformers');
 const db = require('./database');
 
 const appDataPath = process.env.APPDATA || (process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support') : path.join(os.homedir(), '.local', 'share'));
@@ -16,11 +14,56 @@ const modelCacheDir = path.join(dataDir, 'ModelCache');
 if (!fs.existsSync(modelCacheDir)) {
     fs.mkdirSync(modelCacheDir, { recursive: true });
 }
-env.cacheDir = modelCacheDir;
 
+const runtimeDir = path.join(dataDir, 'runtime');
 
+function isLocalEngineInstalled() {
+    const onnxDir = path.join(runtimeDir, 'node_modules', 'onnxruntime-node');
+    const packageJsonPath = path.join(onnxDir, 'package.json');
+    if (!fs.existsSync(packageJsonPath)) return false;
+
+    // Verify the native .node binary actually exists (not just package.json)
+    try {
+        return findNodeBinary(onnxDir);
+    } catch (e) {
+        return false;
+    }
+}
+
+function findNodeBinary(dir) {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+        if (entry.isFile() && entry.name.endsWith('.node')) return true;
+        if (entry.isDirectory()) {
+            if (findNodeBinary(path.join(dir, entry.name))) return true;
+        }
+    }
+    return false;
+}
+
+let engineInitialized = false;
+
+function ensureLocalEngine() {
+    if (engineInitialized) return;
+
+    if (!isLocalEngineInstalled()) {
+        throw new Error('Local AI Engine is not installed. Please download it from Settings or Onboarding.');
+    }
+
+    // Resolve module from runtime directory
+    const nodeModulesPath = path.join(runtimeDir, 'node_modules');
+    process.env.NODE_PATH = nodeModulesPath + path.delimiter + (process.env.NODE_PATH || '');
+    require('module').Module._initPaths();
+
+    engineInitialized = true;
+}
 
 let embeddingPipeline = null;
+
+function resetLocalEngine() {
+    engineInitialized = false;
+    embeddingPipeline = null;
+}
 
 // --- CORE RAG UTILITIES ---
 
@@ -106,6 +149,10 @@ async function extractTextFromFile(filePath) {
 // --- VECTORIZATION ENGINE ---
 
 async function getEmbeddingPipeline() {
+    ensureLocalEngine();
+    const { pipeline, env } = require('@huggingface/transformers');
+    env.cacheDir = modelCacheDir;
+
     if (!embeddingPipeline) {
         embeddingPipeline = await pipeline('feature-extraction', RAG_MODEL_ID, {
             quantized: true,
@@ -132,9 +179,16 @@ async function generateEmbeddingVector(text, isQuery = false) {
         console.error("Error reading embedding settings:", e);
     }
 
-    if (embeddingEngine === 'external' && apiProfileId) {
+    if (embeddingEngine === 'external') {
+        if (!apiProfileId) {
+            throw new Error("[EMBEDDING_CONFIG_MISSING] External embedding API is selected but no API profile is configured.");
+        }
         const { getEmbeddings } = require('./api-engine');
-        return await getEmbeddings(text, apiProfileId, modelName);
+        try {
+            return await getEmbeddings(text, apiProfileId, modelName);
+        } catch (e) {
+            throw e;
+        }
     } else {
         // E5 models expect 'query: ' or 'passage: ' prefixes
         const prefixedText = isQuery ? `query: ${text}` : `passage: ${text}`;
@@ -416,5 +470,10 @@ module.exports = {
     searchKnowledgeBase,
     searchChatKnowledgeBase,
     searchChatMemories,
-    saveChatMemory
+    saveChatMemory,
+    isLocalEngineInstalled,
+    findNodeBinary,
+    ensureLocalEngine,
+    resetLocalEngine,
+    runtimeDir
 };

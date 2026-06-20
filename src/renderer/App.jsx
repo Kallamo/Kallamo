@@ -28,12 +28,20 @@ function MainLayout() {
     showErrorModal,
     errorData,
     settings,
+    handleSaveSettings,
     electronAPI,
     writingProfiles,
     chats,
     toast,
     showToast,
-    reindexingProgress
+    reindexingProgress,
+    engineStatus,
+    engineDownloadProgress,
+    setEngineDownloadProgress,
+    downloadEngine,
+    cancelEngineDownload,
+    settingsRequest,
+    clearSettingsRequest
   } = useApp();
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [activeTasks, setActiveTasks] = useState({});
@@ -187,8 +195,75 @@ function MainLayout() {
     <div className={`flex-1 relative flex flex-col pt-10 overflow-hidden bg-[#011419] w-full h-full select-none ${fontClass}`}>
       <TitleBar />
 
+      {/* Local AI Engine Download Progress Overlay */}
+      {engineDownloadProgress && !engineDownloadProgress.isBackground && (
+        <div className="absolute inset-0 z-[9999] flex items-center justify-center bg-[#011419]/95 backdrop-blur-sm">
+          <div className="flex flex-col items-center space-y-6 max-w-md text-center px-8 animate-in fade-in zoom-in-95 duration-300">
+            <div className="relative">
+              <svg className="animate-spin text-accent w-12 h-12" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            </div>
+
+            <h2 className="text-xl font-bold text-white capitalize">
+              {engineDownloadProgress.status === 'downloading' && 'Downloading Local AI Engine'}
+              {engineDownloadProgress.status === 'verifying' && 'Verifying Integrity Check'}
+              {engineDownloadProgress.status === 'extracting' && 'Extracting Local AI Files'}
+              {engineDownloadProgress.status === 'completed' && 'Installation Successful'}
+              {engineDownloadProgress.status === 'error' && 'Installation Error'}
+            </h2>
+
+            <p className="text-sm text-gray-400 leading-relaxed">
+              {engineDownloadProgress.status === 'downloading' && 'This needs a one-time download of the native runtime (~25 MB). Please do not close the application.'}
+              {engineDownloadProgress.status === 'verifying' && 'Validating SHA-256 package checksum.'}
+              {engineDownloadProgress.status === 'extracting' && 'Decompressing binary modules into the application workspace. This may take up to a minute.'}
+              {engineDownloadProgress.status === 'completed' && 'Engine successfully set up! Directing to dashboard...'}
+              {engineDownloadProgress.status === 'error' && `Error during setup: ${engineDownloadProgress.error}`}
+            </p>
+
+            {/* Progress Bar */}
+            {engineDownloadProgress.status === 'downloading' && (
+              <div className="w-full bg-[#0a161d] rounded-full h-2 overflow-hidden">
+                <div
+                  className="bg-accent h-full rounded-full transition-all duration-300"
+                  style={{ width: `${engineDownloadProgress.percent || 0}%` }}
+                />
+              </div>
+            )}
+
+            {engineDownloadProgress.status === 'downloading' && (
+              <p className="text-xs text-gray-500 font-medium">
+                {engineDownloadProgress.percent || 0}% completed
+                {engineDownloadProgress.loaded && engineDownloadProgress.total && (
+                  ` (${(engineDownloadProgress.loaded / (1024 * 1024)).toFixed(1)} / ${(engineDownloadProgress.total / (1024 * 1024)).toFixed(1)} MB)`
+                )}
+              </p>
+            )}
+
+            {engineDownloadProgress.status === 'downloading' && (
+              <button
+                onClick={() => cancelEngineDownload()}
+                className="mt-2 px-5 py-2 bg-transparent hover:bg-gray-800/50 text-gray-400 hover:text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer border border-gray-700/50"
+              >
+                Cancel Download
+              </button>
+            )}
+
+            {engineDownloadProgress.status === 'error' && (
+              <button
+                onClick={() => setEngineDownloadProgress(null)}
+                className="mt-4 px-5 py-2 bg-[#d32f2f] hover:bg-red-700 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+              >
+                Close
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Full-screen Re-Index Upgrade Overlay */}
-      {reindexingProgress && reindexingProgress.status !== 'completed' && (
+      {reindexingProgress && (reindexingProgress.status === 'started' || reindexingProgress.status === 'running') && (
         <div className="absolute inset-0 z-[9999] flex items-center justify-center bg-[#011419]/95 backdrop-blur-sm">
           <div className="flex flex-col items-center space-y-6 max-w-md text-center px-8">
             <div className="relative">
@@ -289,6 +364,47 @@ function MainLayout() {
         </div>
       )}
 
+      {/* Discreet Background Engine Download Indicator */}
+      {engineDownloadProgress && engineDownloadProgress.isBackground && (
+        <div className="fixed bottom-6 right-6 z-50 w-76 bg-[#051116] border border-gray-800 rounded-xl p-4 shadow-2xl flex flex-col space-y-3 animate-in slide-in-from-bottom duration-300">
+          <div className="flex items-center space-x-2.5">
+            <div className="relative">
+              <svg className="animate-spin text-accent w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            </div>
+            <span className="text-[11px] font-bold text-white uppercase tracking-wider">
+              {engineDownloadProgress.status === 'downloading' && 'Downloading Local AI Engine...'}
+              {engineDownloadProgress.status === 'verifying' && 'Verifying Integrity...'}
+              {engineDownloadProgress.status === 'extracting' && 'Setting up AI files...'}
+              {engineDownloadProgress.status === 'completed' && 'Setup complete!'}
+            </span>
+          </div>
+          {engineDownloadProgress.status === 'downloading' && (
+            <div className="w-full">
+              <div className="w-full bg-[#0a161d] rounded-full h-1.5 overflow-hidden">
+                <div
+                  className="bg-accent h-full rounded-full transition-all duration-300"
+                  style={{ width: `${engineDownloadProgress.percent || 0}%` }}
+                />
+              </div>
+              <div className="flex justify-between items-center mt-1.5">
+                <span className="text-[10px] text-gray-500 font-medium">
+                  {engineDownloadProgress.percent || 0}% completed
+                </span>
+                <button
+                  onClick={() => cancelEngineDownload()}
+                  className="text-[10px] text-gray-400 hover:text-white transition-colors cursor-pointer underline"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Global Toast Notification */}
       {toast && toast.show && (
         <div className={`fixed top-16 right-6 z-[9999] flex items-center space-x-3 bg-[#0a161d]/90 backdrop-blur-md border border-gray-800 rounded-xl px-4 py-3.5 shadow-2xl animate-in slide-in-from-top-4 duration-300 max-w-sm`}>
@@ -300,7 +416,7 @@ function MainLayout() {
           <div className="flex-1 text-xs font-semibold text-gray-200 leading-relaxed pr-2">
             {toast.message}
           </div>
-          <button 
+          <button
             onClick={() => showToast(toast.message, toast.type, 0)}
             className="text-gray-500 hover:text-white transition-colors cursor-pointer shrink-0"
           >
@@ -310,8 +426,15 @@ function MainLayout() {
       )}
 
       {/* Global Modals */}
-      {showSettingsModal && (
-        <SettingsModal onClose={() => setShowSettingsModal(false)} />
+      {(showSettingsModal || settingsRequest) && (
+        <SettingsModal
+          initialTab={settingsRequest?.tab}
+          initialSection={settingsRequest?.section}
+          onClose={() => {
+            setShowSettingsModal(false);
+            clearSettingsRequest();
+          }}
+        />
       )}
       {showErrorModal && (
         errorData?.isWorkflow ? <WorkflowErrorModal /> : <ProfileErrorModal />

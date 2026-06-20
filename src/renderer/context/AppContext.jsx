@@ -65,6 +65,10 @@ export const AppProvider = ({ children }) => {
   // --- PLATFORM UPDATE OUTDATED STATE ---
   const [updateOutdatedUrl, setUpdateOutdatedUrl] = useState('');
 
+  // --- LOCAL ENGINE DOWNLOADER STATE ---
+  const [engineStatus, setEngineStatus] = useState({ installed: false, platform: '', arch: '' });
+  const [engineDownloadProgress, setEngineDownloadProgress] = useState(null); // { status: 'idle'|'downloading'|'verifying'|'extracting'|'completed'|'error', loaded, total, percent, error }
+
   // --- TOAST NOTIFICATIONS ---
   const [toast, setToast] = useState(null); // { message, type: 'success' | 'error' | 'info', show: boolean }
   const toastTimeoutRef = useRef(null);
@@ -112,6 +116,8 @@ export const AppProvider = ({ children }) => {
 
       const fetchedVariables = await api.getVariables();
       setVariables(fetchedVariables || []);
+
+      await refreshEngineStatus();
     } catch (error) {
       console.error("Error loading initial data:", error);
     }
@@ -152,6 +158,12 @@ export const AppProvider = ({ children }) => {
     }) : () => { };
 
     const unsubReindexProgress = api.onReindexProgress ? api.onReindexProgress((data) => {
+      if (data.status === 'idle') {
+        // Engine not installed — inform without blocking the UI
+        showToast(data.message || 'Download the Local AI Engine to enable local indexing.', 'info', 8000);
+        setReindexingProgress(null);
+        return;
+      }
       setReindexingProgress(data);
       if (data.status === 'completed') {
         showToast(data.message || 'Knowledge Base upgrade complete!', 'success', 6000);
@@ -168,6 +180,24 @@ export const AppProvider = ({ children }) => {
       setUpdateOutdatedUrl(data.url);
     }) : () => { };
 
+    const unsubDownloadEngineProgress = api.onDownloadEngineProgress ? api.onDownloadEngineProgress((data) => {
+      setEngineDownloadProgress(data);
+      if (data.status === 'completed') {
+        showToast("Local AI Engine installed successfully!", "success");
+        setTimeout(() => setEngineDownloadProgress(null), 3000);
+      } else if (data.status === 'error') {
+        showToast(data.isBackground
+          ? "Local AI Engine setup failed. Will retry on next launch."
+          : `Engine installation failed: ${data.error}`, "error");
+        setTimeout(() => setEngineDownloadProgress(null), 5000);
+      }
+    }) : () => { };
+
+    const unsubSettingsChanged = api.onSettingsChanged ? api.onSettingsChanged(() => {
+      console.log('Settings changed in database, reloading...');
+      loadInitialData();
+    }) : () => { };
+
     return () => {
       unsubProgress();
       unsubError();
@@ -176,10 +206,61 @@ export const AppProvider = ({ children }) => {
       unsubUpdateDownloaded();
       unsubReindexProgress();
       unsubUpdateOutdated();
+      unsubDownloadEngineProgress();
+      unsubSettingsChanged();
     };
   }, []);
 
   // --- OPERATIONS & ACTIONS ---
+  const refreshEngineStatus = async () => {
+    if (api.getEngineStatus) {
+      try {
+        const status = await api.getEngineStatus();
+        setEngineStatus(status);
+      } catch (err) {
+        console.error("Failed to get engine status:", err);
+      }
+    }
+  };
+
+  const downloadEngine = async () => {
+    if (!api.downloadEngine) return;
+    setEngineDownloadProgress({ status: 'downloading', loaded: 0, total: 100, percent: 0 });
+    try {
+      await api.downloadEngine();
+      await refreshEngineStatus();
+    } catch (err) {
+      console.error("Failed to download engine:", err);
+      // Don't show error state for user-initiated cancellation (handled by cancel handler's progress event)
+      if (err.message && !err.message.includes('cancelled')) {
+        setEngineDownloadProgress({ status: 'error', error: err.message || 'Download failed' });
+      }
+    }
+  };
+
+  const cancelEngineDownload = async () => {
+    if (api.cancelEngineDownload) {
+      try {
+        await api.cancelEngineDownload();
+      } catch (err) {
+        console.error("Failed to cancel engine download:", err);
+      }
+    }
+    setEngineDownloadProgress(null);
+  };
+
+  const deleteEngine = async () => {
+    if (!api.deleteEngine) return;
+    try {
+      await api.deleteEngine();
+      await refreshEngineStatus();
+      showToast("Local AI Engine uninstalled successfully.", "success");
+    } catch (err) {
+      console.error("Failed to delete engine:", err);
+      showToast("Failed to delete Local AI Engine.", "error");
+    }
+  };
+
   const updateAccentColor = (color) => {
     document.documentElement.style.setProperty('--app-accent', color);
   };
@@ -604,11 +685,16 @@ export const AppProvider = ({ children }) => {
     setOverflowData(null);
   };
 
+  const [settingsRequest, setSettingsRequest] = useState(null);
+  const openSettings = (tab = 'api', section = null) => setSettingsRequest({ tab, section });
+  const clearSettingsRequest = () => setSettingsRequest(null);
+
   const activeChat = chats.find(c => c.id === activeChatId);
 
   return (
     <AppContext.Provider value={{
       currentView, setCurrentView,
+      settingsRequest, openSettings, clearSettingsRequest,
       chats, setChats,
       writingProfiles, setWritingProfiles,
       workflows, setWorkflows,
@@ -630,6 +716,7 @@ export const AppProvider = ({ children }) => {
       toast, showToast,
       updateStatus, updateVersion, updateOutdatedUrl,
       reindexingProgress,
+      engineStatus, setEngineStatus, engineDownloadProgress, setEngineDownloadProgress, refreshEngineStatus, downloadEngine, cancelEngineDownload, deleteEngine,
       electronAPI: api
     }}>
       {children}
