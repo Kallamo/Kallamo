@@ -14,7 +14,7 @@ const api = window.electronAPI || {
   getVariables: async () => [], saveVariable: async () => { }, deleteVariable: async () => { },
   getSettings: async () => ({
     interface: { fontFamily: 'sans', fontSize: 'medium', layout: 'bubbles', blur: true, accentColor: '#FBCB2D', codeTheme: 'github-dark', lineNumbers: false },
-    advanced: { chunkSize: 500, similarity: 0.3, topKKB: 5, topKMemory: 5, executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, embeddingEngine: 'local', embeddingApiProfileId: '', embeddingModelName: '' }
+    advanced: { chunkSize: 500, similarity: 0.3, topKKB: 5, topKMemory: 5, executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, embeddingEngine: 'local', embeddingApiProfileId: '', embeddingModelName: '', rerankerEnabled: false, rerankTopN: 25 }
   }),
   saveSettings: async () => { },
   sendMessage: async () => { },
@@ -41,7 +41,7 @@ export const AppProvider = ({ children }) => {
   const [variables, setVariables] = useState([]);
   const [settings, setSettings] = useState({
     interface: { fontFamily: 'sans', fontSize: 'medium', layout: 'bubbles', blur: true, accentColor: '#FBCB2D', codeTheme: 'github-dark', lineNumbers: false },
-    advanced: { chunkSize: 500, similarity: 0.3, topKKB: 5, topKMemory: 5, executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, embeddingEngine: 'local', embeddingApiProfileId: '', embeddingModelName: '' }
+    advanced: { chunkSize: 500, similarity: 0.3, topKKB: 5, topKMemory: 5, executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, embeddingEngine: 'local', embeddingApiProfileId: '', embeddingModelName: '', rerankerEnabled: false, rerankTopN: 25 }
   });
 
   const [activeChatId, setActiveChatId] = useState(null);
