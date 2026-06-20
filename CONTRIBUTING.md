@@ -135,7 +135,7 @@ A maintainer will review your PR. Expect questions or change requests. This is n
 
 Before any contribution can be merged, you must read and agree to the [Kallamo Contributor License Agreement](CLA.md). You confirm your agreement by checking the CLA box in the pull request template.
 
-The CLA exists to keep the project's licensing clear and to protect both you and the project. In short: you keep all rights to your original work (the license you grant is non-exclusive), while allowing the project to use, distribute, and relicense it as needed. Please read the [full text](CLA.md) before contributing.
+The CLA exists to keep the project's licensing clear and to protect both you and the project. In short: you keep all rights to your original work (the license you grant is non-exclusive), while allowing the project to use, distribute, and potentially relicense it in the future. Crucially, any version already released under the AGPL stays open under the AGPL forever, so no contributor is ever locked in. Please read the [full text](CLA.md) before contributing.
 
 ---
 
