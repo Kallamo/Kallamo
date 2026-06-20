@@ -30,7 +30,6 @@ export default function LibraryView() {
 
   const [activeTab, setActiveTab] = useState('profiles'); // 'profiles' | 'workflows' | 'variables'
   
-  // Modals state
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [profileToEdit, setProfileToEdit] = useState(null);
   const [profileInitialStep, setProfileInitialStep] = useState(1); // 1 or 2 (KB step)

@@ -446,6 +446,13 @@ try {
     db.exec("ALTER TABLE api_profiles ADD COLUMN customConfig TEXT");
     console.log("Database Migration: Added customConfig column to api_profiles table.");
   }
+
+  const kcTableInfo = db.pragma("table_info(knowledge_chunks)");
+  const kcColumns = kcTableInfo.map(col => col.name);
+  if (!kcColumns.includes('tokenCount')) {
+    db.exec("ALTER TABLE knowledge_chunks ADD COLUMN tokenCount INTEGER DEFAULT 0");
+    console.log("Database Migration: Added tokenCount column to knowledge_chunks table.");
+  }
 } catch (e) {
   console.error("Migration error adding columns to database tables:", e);
 }

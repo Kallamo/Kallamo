@@ -38,11 +38,8 @@ const MIME_TYPES = {
 // extension-less files) is refused, so a compromised renderer cannot read sensitive files
 // off disk via this protocol.
 const SERVABLE_EXTENSIONS = new Set([
-  // images
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico',
-  // documents / media
   '.pdf', '.mp4', '.webm', '.mov', '.ogg', '.mp3', '.wav',
-  // text & code previews
   '.txt', '.md', '.json', '.js', '.jsx', '.ts', '.tsx', '.css', '.html',
   '.py', '.rs', '.go', '.sh', '.bat', '.yml', '.yaml', '.sql', '.xml',
 ]);

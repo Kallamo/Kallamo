@@ -35,3 +35,16 @@ You are not expected to provide support for your Contributions, except to the ex
 ## 6. Project Owner Rights
 
 You acknowledge and agree that the Project Owner is under no obligation to accept, merge, or use any Contribution you submit. The Project Owner reserves the right to re-license the Project (including your Contributions) under other licenses (including proprietary or dual-licensing models) or transfer ownership of the Project's intellectual property.
+
+### 6.1 Why this right exists
+
+Kallamo is more than its source code: it carries a brand, a design identity, and a long-term vision that the Project Owner has invested in heavily. This clause exists so that the Project can remain sustainable and adapt to future opportunities (such as dual-licensing, partnerships, or a transfer of ownership) without legal ambiguity. It is not intended as a way to take advantage of Contributors, and the Project Owner intends to credit and acknowledge all Contributors.
+
+### 6.2 The AGPL guarantee
+
+This re-licensing right applies only to future distributions. Any version of the Project already released under the GNU Affero General Public License (AGPL) remains permanently available under the AGPL. This means:
+
+*   The released code stays open and can never be retroactively closed.
+*   The community is always free to use, study, modify, and fork any AGPL-released version.
+
+No Contributor is ever locked in: even if the Project Owner re-licenses or transfers the Project in the future, the open AGPL codebase remains available to everyone.

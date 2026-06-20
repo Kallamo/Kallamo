@@ -17,7 +17,6 @@ export default function ChatModal({ chat, onClose }) {
   // Keep a single unique ID for the chat being configured
   const [chatId] = useState(() => chat?.id || 'chat_' + Math.random().toString(36).substr(2, 9));
   
-  // Basic Settings State
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [bgImage, setBgImage] = useState('');
@@ -27,24 +26,18 @@ export default function ChatModal({ chat, onClose }) {
   const [userBubbleOpacity, setUserBubbleOpacity] = useState(100);
   const [aiBubbleOpacity, setAiBubbleOpacity] = useState(0);
 
-  // Ingestion Strategy
   const [ingestionStrategy, setIngestionStrategy] = useState('full_context'); // 'full_context' | 'rag_search'
 
-  // Pre-activate Selections
   const [activeProfiles, setActiveProfiles] = useState([]);
   const [activeWorkflows, setActiveWorkflows] = useState([]);
   
-  // Searches
   const [searchProfiles, setSearchProfiles] = useState('');
   const [searchWorkflows, setSearchWorkflows] = useState('');
   
-  // Knowledge Base Files state
   const [knowledgeFiles, setKnowledgeFiles] = useState([]);
   
-  // Dropzone drag-over state
   const [isDragging, setIsDragging] = useState(false);
   
-  // Refs
   const fileInputRef = useRef(null);
   const bgInputRef = useRef(null);
 
@@ -94,7 +87,6 @@ export default function ChatModal({ chat, onClose }) {
     }
   }, [chat]);
 
-  // Handle Cover Image upload
   const handleBgImageUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -107,26 +99,22 @@ export default function ChatModal({ chat, onClose }) {
     }
   };
 
-  // Remove Cover Image
   const handleRemoveBgImage = () => {
     setBgImage('');
   };
 
-  // Profile checkboxes toggle
   const handleToggleProfile = (profileId) => {
     setActiveProfiles(prev => 
       prev.includes(profileId) ? prev.filter(id => id !== profileId) : [...prev, profileId]
     );
   };
 
-  // Workflow checkboxes toggle
   const handleToggleWorkflow = (workflowId) => {
     setActiveWorkflows(prev => 
       prev.includes(workflowId) ? prev.filter(id => id !== workflowId) : [...prev, workflowId]
     );
   };
 
-  // Global Chat Knowledge Base file upload
   const handleFileUpload = async (e) => {
     const files = Array.from(e.target.files);
     if (files.length === 0) return;
@@ -201,7 +189,6 @@ export default function ChatModal({ chat, onClose }) {
     setKnowledgeFiles(updatedFiles);
   };
 
-  // Remove RAG file
   const removeFile = async (fileName) => {
     try {
       await electronAPI.deleteChatKbFile(chatId, fileName);
@@ -211,7 +198,6 @@ export default function ChatModal({ chat, onClose }) {
     }
   };
 
-  // Save Chat Workspace
   const handleSave = async () => {
     if (!title.trim()) return;
 

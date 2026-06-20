@@ -37,7 +37,6 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const platformKey = `${engineStatus.platform || ''}-${engineStatus.arch || ''}`;
   const isPlatformUnsupported = engineStatus.platform && !['win32-x64', 'win32-arm64', 'darwin-arm64', 'linux-x64', 'linux-arm64'].includes(platformKey);
 
-  // API Tab State
   const [showAddApiForm, setShowAddApiForm] = useState(false);
   const [editingApiId, setEditingApiId] = useState(null);
   const [apiName, setApiName] = useState('');
@@ -47,23 +46,19 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [apiKey, setApiKey] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
 
-  // Vertex AI specific states
   const [gcpProjectId, setGcpProjectId] = useState('');
   const [gcpRegion, setGcpRegion] = useState('us-central1');
   const [gcpServiceAccount, setGcpServiceAccount] = useState('');
 
-  // AWS Bedrock specific states
   const [awsAccessKeyId, setAwsAccessKeyId] = useState('');
   const [awsSecretAccessKey, setAwsSecretAccessKey] = useState('');
   const [awsRegion, setAwsRegion] = useState('us-east-1');
 
 
-  // Models in the active API form
   const [modelsList, setModelsList] = useState([]);
   const [newModelName, setNewModelName] = useState('');
   const [showAddModelField, setShowAddModelField] = useState(false);
 
-  // Settings states mapped from context
   const [accentColor, setAccentColor] = useState(settings.interface.accentColor || '#FBCB2D');
   const [fontFamily, setFontFamily] = useState(settings.interface.fontFamily || 'sans');
   const [fontSize, setFontSize] = useState(settings.interface.fontSize || 'medium');
@@ -72,7 +67,6 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [lineNumbers, setLineNumbers] = useState(settings.interface.lineNumbers || false);
   const [blurEnabled, setBlurEnabled] = useState(settings.interface.blur ?? true);
 
-  // Advanced Tab State
   const [chunkSize, setChunkSize] = useState(settings.advanced.chunkSize || 500);
   const [similarity, setSimilarity] = useState(settings.advanced.similarity || 0.3);
   const [topKKB, setTopKKB] = useState(settings.advanced.topKKB || 5);
@@ -86,7 +80,6 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [embeddingModelName, setEmbeddingModelName] = useState(settings.advanced.embeddingModelName || '');
   const [rerankerEnabled, setRerankerEnabled] = useState(settings.advanced.rerankerEnabled || false);
 
-  // Custom Confirmation / Alert States
   const [confirmAction, setConfirmAction] = useState(null); // null | 'purge' | 'clearCache' | 'wipe'
   const [backupStatus, setBackupStatus] = useState(null); // null | { success: boolean, path?: string, error?: string }
   const [utilityStatus, setUtilityStatus] = useState(null); // null | { title: string, message: string }
@@ -99,7 +92,6 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     }
   }, [electronAPI]);
 
-  // Colors list
   const colors = ['#FBCB2D', '#ff5f56', '#3b82f6', '#10b981', '#9c27b0'];
 
   // Keep ref of settings to prevent stale closures in debounce timeout
@@ -215,7 +207,6 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     }, 300);
   };
 
-  // Handle saving API Connections
   const openNewApiForm = () => {
     setEditingApiId(null);
     setApiName('');
