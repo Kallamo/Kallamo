@@ -42,19 +42,15 @@ export default function RightSidebar({ isOpen, onClose, onTriggerSummarize }) {
     };
   });
 
-  // Modal displays
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showWorkflowModal, setShowWorkflowModal] = useState(false);
 
-  // Searches
   const [searchProfiles, setSearchProfiles] = useState('');
   const [searchWorkflows, setSearchWorkflows] = useState('');
 
-  // Editing memory block title state
   const [editingBlockId, setEditingBlockId] = useState(null);
   const [editingBlockTitle, setEditingBlockTitle] = useState('');
 
-  // Local state for chat settings inputs
   const [maxContext, setMaxContext] = useState(128000);
   const [archiveThreshold, setArchiveThreshold] = useState(60000);
   const [autoSummarize, setAutoSummarize] = useState(false);
@@ -62,7 +58,6 @@ export default function RightSidebar({ isOpen, onClose, onTriggerSummarize }) {
 
 
 
-  // Ref for file input
   const bgInputRef = useRef(null);
 
   // Sync inputs with activeChat

@@ -44,12 +44,10 @@ export default function KbManagerModal({ profile, onClose }) {
     return newName;
   };
 
-  // Vectorization & upload status
   const [isProcessing, setIsProcessing] = useState(false);
   const [progressMsg, setProgressMsg] = useState('');
   const [progressDetail, setProgressDetail] = useState(null); // { fileName, current, total }
 
-  // Editor Drawer/Form State
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingBlock, setEditingBlock] = useState(null); // null means adding new manual snippet
   const [editorTitle, setEditorTitle] = useState('');
@@ -57,7 +55,6 @@ export default function KbManagerModal({ profile, onClose }) {
   const [editorError, setEditorError] = useState('');
   const [savingEditor, setSavingEditor] = useState(false);
 
-  // Custom manual snippet tag/keywords states
   const [editorKeywords, setEditorKeywords] = useState([]);
   const [tagInput, setTagInput] = useState('');
   const [tagSuggestionsOpen, setTagSuggestionsOpen] = useState(false);
@@ -76,20 +73,16 @@ export default function KbManagerModal({ profile, onClose }) {
     setTagSuggestionsOpen(false);
   };
 
-  // Multi-selection states
   const [selectedBlockIds, setSelectedBlockIds] = useState([]);
   const [isBulkDeleteConfirmOpen, setIsBulkDeleteConfirmOpen] = useState(false);
 
-  // Delete confirmation state
   const [deleteTargetBlock, setDeleteTargetBlock] = useState(null);
 
-  // Hidden File Input Refs
   const searchableInputRef = useRef(null);
   const constantInputRef = useRef(null);
   const editorTextareaRef = useRef(null);
   const agenticTextareaRef = useRef(null);
 
-  // Agentic RAG settings states
   const [isAgentic, setIsAgentic] = useState(profile?.isAgentic === 1 || profile?.isAgentic === true);
   const [agenticPrompt, setAgenticPrompt] = useState(profile?.agenticPrompt || '');
   const [agenticPromptMode, setAgenticPromptMode] = useState('editor'); // 'editor' | 'preview'
@@ -103,7 +96,6 @@ export default function KbManagerModal({ profile, onClose }) {
   const [kbProgressStatus, setKbProgressStatus] = useState('');
   const [kbOpType, setKbOpType] = useState(null); // 'export' | 'import' | null
 
-  // Autocomplete variables state
   const [acState, setAcState] = useState({
     isOpen: false,
     search: '',
@@ -171,7 +163,6 @@ export default function KbManagerModal({ profile, onClose }) {
     }
   };
 
-  // Load knowledge blocks from disk
   const loadBlocks = async () => {
     if (!profile?.id) return;
     try {
@@ -840,7 +831,6 @@ export default function KbManagerModal({ profile, onClose }) {
     return { alwaysOn, searchable };
   }, [groupedBlocks, tokenMap]);
 
-  // Filter and Search logic
   let filteredBlocks = groupedBlocks.filter(b => {
     const query = searchQuery.toLowerCase();
     if (b.type === 'rag_file') {

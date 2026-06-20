@@ -18,7 +18,6 @@ export default function ProfileModal({ profile, initialStep = 1, onClose, onSave
   // Generate a stable profile ID immediately so KB files go to the correct folder
   const [profileId] = useState(() => profile?.id || 'profile_' + Math.random().toString(36).substr(2, 9));
 
-  // Form State
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [color, setColor] = useState('#FBCB2D');
@@ -30,24 +29,19 @@ export default function ProfileModal({ profile, initialStep = 1, onClose, onSave
   const [manualJson, setManualJson] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
 
-  // KB & Agentic RAG state
   const [ingestionStrategy, setIngestionStrategy] = useState('full_context');
   const [knowledgeFiles, setKnowledgeFiles] = useState([]);
   const [isAgentic, setIsAgentic] = useState(false);
   const [agenticPrompt, setAgenticPrompt] = useState('');
 
-  // KB Processing states
   const [isProcessingKb, setIsProcessingKb] = useState(false);
   const [kbProgress, setKbProgress] = useState('');
   const [kbProgressDetail, setKbProgressDetail] = useState(null); // { fileName, current, total }
 
-  // Drag and drop state
   const [isDragging, setIsDragging] = useState(false);
 
-  // Delete confirmation state
   const [fileToDelete, setFileToDelete] = useState(null);
 
-  // Variable editor and autocomplete states
   const [systemPromptMode, setSystemPromptMode] = useState('editor');
   const [agenticPromptMode, setAgenticPromptMode] = useState('editor');
 
@@ -59,7 +53,6 @@ export default function ProfileModal({ profile, initialStep = 1, onClose, onSave
   });
   const [acIndex, setAcIndex] = useState(0);
 
-  // Refs
   const fileInputRef = useRef(null);
   const systemTextareaRef = useRef(null);
   const agenticTextareaRef = useRef(null);

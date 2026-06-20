@@ -15,7 +15,6 @@ export default function ChatFilesView({
   const [loading, setLoading] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null); // file object for delete confirmation
 
-  // Parse knowledge files from chat
   const kbFiles = chat?.knowledgeFiles
     ? (typeof chat.knowledgeFiles === 'string' ? JSON.parse(chat.knowledgeFiles) : chat.knowledgeFiles)
     : [];

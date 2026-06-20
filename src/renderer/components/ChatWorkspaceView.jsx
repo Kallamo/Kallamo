@@ -132,38 +132,29 @@ export default function ChatWorkspaceView() {
   const [selectedTargetId, setSelectedTargetId] = useState(''); // Selected profile or workflow ID
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
 
-  // Expanded user bubbles
   const [expandedUserMessages, setExpandedUserMessages] = useState({});
   const [expandedThinking, setExpandedThinking] = useState({});
   const [expandedAgenticRag, setExpandedAgenticRag] = useState({});
 
-  // Inline editing message
   const [editingMessageId, setEditingMessageId] = useState(null);
   const [editingMessageText, setEditingMessageText] = useState('');
 
-  // Copied message feedback
   const [copiedId, setCopiedId] = useState(null);
   const [copiedRagId, setCopiedRagId] = useState(null);
 
-  // 3-dots dropdown menu state
   const [openMenuId, setOpenMenuId] = useState(null);
 
-  // Custom alert confirmation modal state
   const [confirmDeleteData, setConfirmDeleteData] = useState(null);
   const [deleteAttachedFiles, setDeleteAttachedFiles] = useState(true);
 
-  // Pending attachments
   const [pendingFiles, setPendingFiles] = useState([]);
 
-  // Drag and drop state
   const [isDragging, setIsDragging] = useState(false);
   const dragCounter = useRef(0);
 
-  // Auto-summarization selection modal states
   const [summarizeModalOpen, setSummarizeModalOpen] = useState(false);
   const [isVectorizing, setIsVectorizing] = useState(false);
 
-  // Workspace sub-views & previews
   const [activeSubView, setActiveSubView] = useState('chat'); // 'chat' | 'memory' | 'files'
   const [previewFile, setPreviewFile] = useState(null);
 
@@ -496,7 +487,6 @@ export default function ChatWorkspaceView() {
     }
   };
 
-  // Code copying delegator
   const handleContainerClick = (e) => {
     if (!e.target.closest('.three-dots-button')) {
       setOpenMenuId(null);

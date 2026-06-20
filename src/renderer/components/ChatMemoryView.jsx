@@ -43,12 +43,10 @@ export default function ChatMemoryView({
     return newName;
   };
 
-  // Export / Import KB progress states
   const [kbProgress, setKbProgress] = useState(0);
   const [kbProgressStatus, setKbProgressStatus] = useState('');
   const [kbOpType, setKbOpType] = useState(null); // 'export' | 'import' | null
 
-  // Custom manual snippet editor states
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingBlock, setEditingBlock] = useState(null); // null means adding a new snippet
   const [editorTitle, setEditorTitle] = useState('');
@@ -56,7 +54,6 @@ export default function ChatMemoryView({
   const [savingSnippet, setSavingSnippet] = useState(false);
   const [editorError, setEditorError] = useState('');
 
-  // Custom manual snippet tag/keywords states
   const [editorKeywords, setEditorKeywords] = useState([]);
   const [tagInput, setTagInput] = useState('');
   const [tagSuggestionsOpen, setTagSuggestionsOpen] = useState(false);
@@ -74,46 +71,35 @@ export default function ChatMemoryView({
     setTagSuggestionsOpen(false);
   };
 
-  // Granular blocks state
   const [blocks, setBlocks] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // Multi-selection states
   const [selectedBlockIds, setSelectedBlockIds] = useState([]);
   const [isBulkDeleteConfirmOpen, setIsBulkDeleteConfirmOpen] = useState(false);
 
-  // Vectorization & upload status
   const [isProcessing, setIsProcessing] = useState(false);
   const [progressMsg, setProgressMsg] = useState('');
   const [progressDetail, setProgressDetail] = useState(null); // { fileName, current, total }
 
-  // Scoping dropdown active block ID state
   const [activeScopingBlockId, setActiveScopingBlockId] = useState(null);
 
-  // RAG Query Simulator states
   const [simQuery, setSimQuery] = useState('');
   const [simResults, setSimResults] = useState(null);
   const [simLoading, setSimLoading] = useState(false);
 
-  // Inline rename states
   const [renamingId, setRenamingId] = useState(null);
   const [renameTitle, setRenameTitle] = useState('');
 
-  // Delete confirmation state
   const [deleteTarget, setDeleteTarget] = useState(null); // normalized block object
 
-  // Hidden file input state for memory uploads
   const fileInputRef = useRef(null);
   const [uploadStrategy, setUploadStrategy] = useState('full_context');
   const [addDropdownOpen, setAddDropdownOpen] = useState(false);
 
-  // Selected memory block for history messages log viewer modal
   const [selectedSummaryBlock, setSelectedSummaryBlock] = useState(null);
 
-  // Selector state for simulator AI Profile ID
   const [simProfileId, setSimProfileId] = useState('');
 
-  // Load knowledge blocks from disk
   const loadBlocks = async () => {
     if (!chat?.id) return;
     try {
@@ -555,7 +541,6 @@ export default function ChatMemoryView({
     }
   };
 
-  // Upload file
   const handleDirectFileUpload = async (e) => {
     const files = Array.from(e.target.files);
     e.target.value = '';
@@ -579,7 +564,6 @@ export default function ChatMemoryView({
     }
   };
 
-  // Delete memory block/file handler
   const handleDeleteTarget = async () => {
     if (!deleteTarget) return;
     try {
@@ -677,7 +661,6 @@ export default function ChatMemoryView({
     }
   };
 
-  // Save custom snippet or edited block
   const handleSaveSnippet = async () => {
     if (!editorText.trim()) {
       setEditorError("Content cannot be empty");
@@ -740,7 +723,6 @@ export default function ChatMemoryView({
     }
   };
 
-  // Inline rename
   const executeRename = async (block) => {
     if (!renameTitle.trim()) return;
     try {
@@ -771,7 +753,6 @@ export default function ChatMemoryView({
     }
   };
 
-  // Live Query Sim
   const handleTestSearch = async () => {
     if (!simQuery.trim()) return;
     setSimLoading(true);
@@ -787,7 +768,6 @@ export default function ChatMemoryView({
     }
   };
 
-  // Helpers for badge styles
   const getBadgeStyle = (block) => {
     if (block.type === 'constant') {
       return 'bg-[#FBCB2D]/15 border-[#FBCB2D]/30 text-[#FBCB2D]';
