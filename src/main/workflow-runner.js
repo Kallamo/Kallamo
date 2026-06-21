@@ -29,8 +29,9 @@ let overflowDeferred = null;
 function formatRagDebugSection(label, resultObjs) {
     if (!Array.isArray(resultObjs) || resultObjs.length === 0) return '';
     const lines = resultObjs.map((r, idx) => {
-        const rawScore = typeof r.fusionScore === 'number' ? r.fusionScore : (r.score || 0);
-        const scoreLabel = `fusion ${rawScore.toFixed(4)}`;
+        const fusion = typeof r.fusionScore === 'number' ? r.fusionScore : (r.score || 0);
+        const cosine = typeof r.score === 'number' ? r.score : fusion;
+        const scoreLabel = `fusion ${fusion.toFixed(4)} | cos ${cosine.toFixed(4)}`;
         const fullText = (r.text || '').trim();
         return `${idx + 1}. [${r.source}] (${scoreLabel})\n${fullText}`;
     });

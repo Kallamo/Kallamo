@@ -218,8 +218,15 @@ async function vectorizeChunks(chunks, sourceFileName, progressCallback, keyword
         const originalChunk = chunks[i];
         const enrichedText = `Document: ${sourceFileName}\n${tagsString}Content: ${originalChunk}`;
 
+        // EXPERIMENT (boilerplate-raw): embed only the chunk content + tags, NOT the
+        // constant "Document:/Content:" scaffold. That scaffold is identical across every
+        // chunk, so it injects a shared vector component that compresses cosine spread and
+        // makes unrelated chunks look ~0.84 alike. The enrichedText is still stored/shown to
+        // the LLM; only the vector changes. Requires a re-index to take effect.
+        const embeddingInput = `${tagsString}${originalChunk}`;
+
         try {
-            const vector = await generateEmbeddingVector(enrichedText);
+            const vector = await generateEmbeddingVector(embeddingInput);
             vectors.push({
                 id: `chunk_${Date.now()}_${Math.random().toString(36).substring(2, 7)}_${i}`,
                 source: sourceFileName,
@@ -281,6 +288,11 @@ function deleteChunksFromDb(ownerId, ownerType, sourceFileName) {
 
 // --- HYBRID SEARCH ENGINE ---
 
+// Weight favoring dense (semantic) similarity over sparse (BM25 keyword) in the
+// fused score. Dense is the trustworthy signal; sparse mainly breaks ties and
+// rescues exact keyword matches. Tuned with the 🔬 debug panel.
+const ALPHA_DENSE = 0.7;
+
 async function executeHybridSearch(queryText, ownerId, ownerType, threshold = 0.3, k = 5) {
     try {
         const candidateRows = db.prepare('SELECT * FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ?').all(ownerId, ownerType);
@@ -288,24 +300,28 @@ async function executeHybridSearch(queryText, ownerId, ownerType, threshold = 0.
 
         const queryVector = await generateEmbeddingVector(queryText, true);
 
-        const denseResults = candidateRows
-            .map(row => {
-                let parsedVector = [];
-                try {
-                    parsedVector = JSON.parse(row.vector);
-                } catch (e) { }
+        // Dense pass: real cosine similarity (0-1, vectors are normalized) for EVERY
+        // candidate. No pre-filtering here — the threshold is now a single final
+        // cutoff applied after fusion (Item 2), so sparse-only chunks can't bypass it.
+        const denseMap = new Map();
+        for (const row of candidateRows) {
+            let parsedVector = [];
+            try {
+                parsedVector = JSON.parse(row.vector);
+            } catch (e) { }
+            const cosine = parsedVector.length === queryVector.length
+                ? calculateSimilarity(queryVector, parsedVector)
+                : 0;
+            denseMap.set(row.id, {
+                id: row.id,
+                source: row.source,
+                text: row.text,
+                createdAt: row.createdAt,
+                denseScore: cosine
+            });
+        }
 
-                return {
-                    id: row.id,
-                    source: row.source,
-                    text: row.text,
-                    score: calculateSimilarity(queryVector, parsedVector),
-                    createdAt: row.createdAt
-                };
-            })
-            .filter(r => r.score >= threshold)
-            .sort((a, b) => b.score - a.score);
-
+        // Sparse pass: BM25 keyword relevance.
         let sparseResults = [];
         const ftsQuery = queryText.replace(/"/g, '""').trim();
         if (ftsQuery.length > 0) {
@@ -329,61 +345,42 @@ async function executeHybridSearch(queryText, ownerId, ownerType, threshold = 0.
             }
         }
 
-        sparseResults.sort((a, b) => a.rank - b.rank);
-
-        const denseRankMap = new Map();
-        denseResults.forEach((res, index) => {
-            denseRankMap.set(res.id, index);
-        });
-
-        const sparseRankMap = new Map();
-        sparseResults.forEach((res, index) => {
-            sparseRankMap.set(res.chunkId, index);
-        });
-
-        const allChunkIds = new Set([...denseRankMap.keys(), ...sparseRankMap.keys()]);
-        const fusedResults = [];
-
-        for (const chunkId of allChunkIds) {
-            const denseIndex = denseRankMap.get(chunkId);
-            const sparseIndex = sparseRankMap.get(chunkId);
-
-            const w_dense = denseIndex !== undefined ? (1 / (60 + denseIndex + 1)) : 0;
-            const w_sparse = sparseIndex !== undefined ? (1 / (60 + sparseIndex + 1)) : 0;
-            const fusionScore = w_dense + w_sparse;
-
-            let chunkData = denseResults.find(r => r.id === chunkId);
-            if (!chunkData) {
-                const dbRow = candidateRows.find(r => r.id === chunkId);
-                if (dbRow) {
-                    let parsedVector = [];
-                    try {
-                        parsedVector = JSON.parse(dbRow.vector);
-                    } catch (e) { }
-                    const similarityScore = parsedVector && parsedVector.length === queryVector.length
-                        ? calculateSimilarity(queryVector, parsedVector)
-                        : 0;
-                    chunkData = {
-                        id: dbRow.id,
-                        source: dbRow.source,
-                        text: dbRow.text,
-                        score: similarityScore,
-                        createdAt: dbRow.createdAt
-                    };
-                }
-            }
-
-            if (chunkData) {
-                fusedResults.push({
-                    ...chunkData,
-                    fusionScore
-                });
-            }
+        // SQLite bm25() returns negative scores (more negative = more relevant).
+        // Convert to positive relevance and min-max normalize to [0,1] within the
+        // result set so it's comparable to the dense cosine (Item 1: magnitude-aware).
+        const sparseNormMap = new Map();
+        if (sparseResults.length > 0) {
+            const relevances = sparseResults.map(r => -r.rank);
+            const minRel = Math.min(...relevances);
+            const maxRel = Math.max(...relevances);
+            const span = maxRel - minRel;
+            sparseResults.forEach((r, i) => {
+                const norm = span > 0 ? (relevances[i] - minRel) / span : 1;
+                sparseNormMap.set(r.chunkId, norm);
+            });
         }
 
-        fusedResults.sort((a, b) => b.fusionScore - a.fusionScore);
+        // Fusion: magnitude-aware weighted blend instead of pure RRF. This preserves
+        // the real spread so noise scores low instead of compressing to ~0.016.
+        const fusedResults = [];
+        for (const chunkData of denseMap.values()) {
+            const sparseNorm = sparseNormMap.get(chunkData.id) || 0;
+            const fusionScore = ALPHA_DENSE * chunkData.denseScore + (1 - ALPHA_DENSE) * sparseNorm;
+            fusedResults.push({
+                ...chunkData,
+                score: chunkData.denseScore,
+                fusionScore
+            });
+        }
 
-        return fusedResults.slice(0, k);
+        // Item 2: a single honest cutoff. The Similarity Threshold now prunes by real
+        // cosine similarity across ALL results — dense and sparse-only alike — closing
+        // the BM25 noise leak (keyword-only matches with low similarity no longer enter).
+        const pruned = fusedResults
+            .filter(r => r.denseScore >= threshold)
+            .sort((a, b) => b.fusionScore - a.fusionScore);
+
+        return pruned.slice(0, k);
 
     } catch (error) {
         console.error(`Error in executeHybridSearch for owner ${ownerId}:`, error);
