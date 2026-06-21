@@ -276,6 +276,19 @@ db.exec(`
     text
   );
 
+  CREATE TABLE IF NOT EXISTS constant_memory (
+    id TEXT PRIMARY KEY,
+    ownerId TEXT NOT NULL,
+    ownerType TEXT NOT NULL DEFAULT 'profile',
+    title TEXT,
+    content TEXT NOT NULL,
+    keywords TEXT,
+    createdAt INTEGER,
+    last_modified INTEGER DEFAULT 0
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_constant_memory_owner ON constant_memory(ownerId, ownerType);
+
   CREATE TRIGGER IF NOT EXISTS chats_last_modified_trigger
   AFTER UPDATE ON chats
   FOR EACH ROW
@@ -492,191 +505,6 @@ try {
   console.error("Migration error checking rag_model_metadata:", e);
 }
 
-function migrateData() {
-  const apiDir = path.join(dataDir, 'API Connections');
-  const profilesDir = path.join(dataDir, 'AI Profiles');
-  const chatsDir = path.join(dataDir, 'ChatHistory');
-  const workflowsDir = path.join(dataDir, 'Workflows');
-  const settingsFile = path.join(dataDir, 'settings.json');
-
-  const loadFilesFromDir = (dir) => {
-    const arr = [];
-    if (fs.existsSync(dir)) {
-      fs.readdirSync(dir).forEach(file => {
-        if (file.endsWith('.json')) {
-          try { arr.push(JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'))); }
-          catch (e) { console.error(`Error loading JSON ${file}`, e); }
-        }
-      });
-    }
-    return arr;
-  };
-
-  if (fs.existsSync(apiDir)) {
-    const apis = loadFilesFromDir(apiDir);
-    if (apis.length > 0) {
-      const insertApi = db.prepare(`
-        INSERT OR IGNORE INTO api_profiles (id, name, provider, baseUrl, apiKey, models)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `);
-      db.transaction(() => {
-        for (const api of apis) {
-          insertApi.run(
-            api.id,
-            api.name || 'Untitled API',
-            api.provider || 'openai',
-            api.baseUrl || '',
-            db.encryptApiKey(api.apiKey || ''),
-            JSON.stringify(api.models || [])
-          );
-        }
-      })();
-      console.log(`Migrated ${apis.length} API connections.`);
-    }
-    try { fs.renameSync(apiDir, `${apiDir}_migrated`); } catch (e) { }
-  }
-
-  if (fs.existsSync(profilesDir)) {
-    const profiles = [];
-    fs.readdirSync(profilesDir).forEach(item => {
-      const pFolder = path.join(profilesDir, item);
-      if (fs.existsSync(pFolder) && fs.statSync(pFolder).isDirectory() && !item.endsWith('_migrated')) {
-        const files = fs.readdirSync(pFolder);
-        const jsonFile = files.find(f => f.endsWith('.json'));
-        if (jsonFile) {
-          try { profiles.push(JSON.parse(fs.readFileSync(path.join(pFolder, jsonFile), 'utf8'))); } catch (e) { }
-        }
-      }
-    });
-    if (profiles.length > 0) {
-      const insertProfile = db.prepare(`
-        INSERT OR IGNORE INTO writing_profiles (
-          id, name, description, color, apiProfileId, model, temperature, maxTokens,
-          systemPrompt, knowledgeFiles, manualMode, manualJson, isAgentic, agenticPrompt
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-      db.transaction(() => {
-        for (const p of profiles) {
-          insertProfile.run(
-            p.id,
-            p.name || 'Untitled Profile',
-            p.description || '',
-            p.color || '#FBCB2D',
-            p.apiProfileId || '',
-            p.model || '',
-            p.temperature ?? 0.7,
-            p.maxTokens ?? 1000,
-            p.systemPrompt || '',
-            JSON.stringify(p.knowledgeFiles || []),
-            p.manualMode ? 1 : 0,
-            p.manualJson || '',
-            p.isAgentic ? 1 : 0,
-            p.agenticPrompt || ''
-          );
-        }
-      })();
-      console.log(`Migrated ${profiles.length} profiles.`);
-    }
-    try { fs.renameSync(profilesDir, `${profilesDir}_migrated`); } catch (e) { }
-  }
-
-  if (fs.existsSync(chatsDir)) {
-    const chats = [];
-    fs.readdirSync(chatsDir).forEach(item => {
-      const cFolder = path.join(chatsDir, item);
-      if (fs.existsSync(cFolder) && fs.statSync(cFolder).isDirectory() && !item.endsWith('_migrated')) {
-        const jsonFile = path.join(cFolder, `${item}.json`);
-        if (fs.existsSync(jsonFile)) {
-          try { chats.push(JSON.parse(fs.readFileSync(jsonFile, 'utf8'))); } catch (e) { }
-        }
-      }
-    });
-    if (chats.length > 0) {
-      const insertChat = db.prepare(`
-        INSERT OR IGNORE INTO chats (
-          id, title, updatedAt, isPinned, maxContext, archiveThreshold, summarizedIndex,
-          activeProfiles, activeWorkflows, backgroundImage, backdropOpacity, userBubbleOpacity, aiBubbleOpacity
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-      const insertMessage = db.prepare(`
-        INSERT OR IGNORE INTO messages (id, chatId, role, content, aiName, aiColor, debugNotice, attachedFiles, createdAt)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-      db.transaction(() => {
-        for (const c of chats) {
-          const visual = c.visualConfig || {};
-          insertChat.run(
-            c.id,
-            c.title || 'Untitled Chat',
-            c.updatedAt || Date.now(),
-            c.isPinned ? 1 : 0,
-            c.maxContext ?? 128000,
-            c.archiveThreshold ?? 60000,
-            c.summarizedIndex ?? 0,
-            JSON.stringify(c.activeProfiles || []),
-            JSON.stringify(c.activeWorkflows || []),
-            visual.backgroundImage || '',
-            visual.backdropOpacity ?? 75,
-            visual.userBubbleOpacity ?? 100,
-            visual.aiBubbleOpacity ?? 0
-          );
-          if (c.messages && c.messages.length > 0) {
-            for (const msg of c.messages) {
-              insertMessage.run(
-                msg.id || `${c.id}_msg_${Math.random()}`,
-                c.id,
-                msg.role || 'user',
-                msg.content || '',
-                msg.aiName || '',
-                msg.aiColor || '',
-                msg.debugNotice || '',
-                JSON.stringify(msg.attachedFiles || []),
-                msg.createdAt || Date.now()
-              );
-            }
-          }
-        }
-      })();
-      console.log(`Migrated ${chats.length} chats with their messages.`);
-    }
-    try { fs.renameSync(chatsDir, `${chatsDir}_migrated`); } catch (e) { }
-  }
-
-  if (fs.existsSync(workflowsDir)) {
-    const wfs = loadFilesFromDir(workflowsDir);
-    if (wfs.length > 0) {
-      const insertWorkflow = db.prepare(`
-        INSERT OR IGNORE INTO workflows (id, name, entryProfileId, steps)
-        VALUES (?, ?, ?, ?)
-      `);
-      db.transaction(() => {
-        for (const w of wfs) {
-          insertWorkflow.run(
-            w.id,
-            w.name || 'Untitled Workflow',
-            w.entryProfileId || '',
-            JSON.stringify(w.steps || [])
-          );
-        }
-      })();
-      console.log(`Migrated ${wfs.length} workflows.`);
-    }
-    try { fs.renameSync(workflowsDir, `${workflowsDir}_migrated`); } catch (e) { }
-  }
-
-  if (fs.existsSync(settingsFile)) {
-    try {
-      const s = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-      db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('interface', JSON.stringify(s.interface || {}));
-      db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('advanced', JSON.stringify(s.advanced || {}));
-      console.log('Migrated settings.');
-    } catch (e) {
-      console.error('Error migrating settings.json:', e);
-    }
-    try { fs.renameSync(settingsFile, `${settingsFile}_migrated`); } catch (e) { }
-  }
-}
-
 // Scan and migrate legacy vector JSON files to SQLite knowledge_chunks table
 function migrateVectorsToSQLite() {
   const profilesDir = path.join(dataDir, 'AI Profiles');
@@ -828,17 +656,119 @@ function encryptExistingKeys() {
   }
 }
 
+// --- CONSTANT MEMORY HELPERS (manual always-on snippets) ---
+
+db.getConstantSnippets = function(ownerId, ownerType = 'profile') {
+  try {
+    const rows = db.prepare(
+      'SELECT id, title, content, keywords, createdAt FROM constant_memory WHERE ownerId = ? AND ownerType = ? ORDER BY createdAt ASC'
+    ).all(ownerId, ownerType);
+    return rows.map(r => ({
+      id: r.id,
+      title: r.title || 'Custom Memory',
+      content: r.content || '',
+      keywords: r.keywords ? JSON.parse(r.keywords) : [],
+      createdAt: r.createdAt
+    }));
+  } catch (e) {
+    console.error('[Constant Memory] getConstantSnippets failed:', e);
+    return [];
+  }
+};
+
+db.replaceConstantSnippets = function(ownerId, snippets, ownerType = 'profile') {
+  try {
+    const del = db.prepare('DELETE FROM constant_memory WHERE ownerId = ? AND ownerType = ?');
+    const ins = db.prepare(`
+      INSERT OR REPLACE INTO constant_memory (id, ownerId, ownerType, title, content, keywords, createdAt, last_modified)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    db.transaction(() => {
+      del.run(ownerId, ownerType);
+      for (const s of (snippets || [])) {
+        ins.run(
+          s.id || `manual_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          ownerId,
+          ownerType,
+          s.title || s.name || s.source || 'Custom Memory',
+          s.content || s.text || '',
+          JSON.stringify(s.keywords || []),
+          s.createdAt || Date.now(),
+          Date.now()
+        );
+      }
+    })();
+  } catch (e) {
+    console.error('[Constant Memory] replaceConstantSnippets failed:', e);
+  }
+};
+
+db.deleteConstantSnippetByTitle = function(ownerId, title, ownerType = 'profile') {
+  try {
+    db.prepare('DELETE FROM constant_memory WHERE ownerId = ? AND ownerType = ? AND title = ?').run(ownerId, ownerType, title);
+  } catch (e) {
+    console.error('[Constant Memory] deleteConstantSnippetByTitle failed:', e);
+  }
+};
+
+// Migrate legacy profile full_context.json manual snippets into the constant_memory table.
+// File-content caches in the same JSON are intentionally dropped (re-derived from disk on demand).
+function migrateConstantMemoryToSQLite() {
+  const profilesDir = path.join(dataDir, 'AI Profiles');
+  if (!fs.existsSync(profilesDir)) return;
+
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO constant_memory (id, ownerId, ownerType, title, content, keywords, createdAt, last_modified)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  try {
+    fs.readdirSync(profilesDir).forEach(profileId => {
+      const fcPath = path.join(profilesDir, profileId, 'KnowledgeBase', 'full_context.json');
+      if (!fs.existsSync(fcPath)) return;
+      try {
+        const data = JSON.parse(fs.readFileSync(fcPath, 'utf8'));
+        if (Array.isArray(data)) {
+          const manual = data.filter(c => c.type === 'manual');
+          if (manual.length > 0) {
+            db.transaction(() => {
+              for (const m of manual) {
+                insert.run(
+                  m.id || `manual_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+                  profileId,
+                  'profile',
+                  m.name || m.source || 'Custom Memory',
+                  m.content || m.text || '',
+                  JSON.stringify(m.keywords || []),
+                  m.createdAt || Date.now(),
+                  Date.now()
+                );
+              }
+            })();
+            console.log(`[Constant Memory Migration] Migrated ${manual.length} manual snippets for profile ${profileId}`);
+          }
+        }
+        fs.renameSync(fcPath, fcPath + '.bak');
+      } catch (e) {
+        console.error(`[Constant Memory Migration] Failed for profile ${profileId}:`, e);
+      }
+    });
+  } catch (e) {
+    console.error('[Constant Memory Migration] Error reading profiles directory:', e);
+  }
+}
+
 // --- CORE EXECUTION ---
 
 // Perform migrations when the app is ready so safeStorage is available
 if (app.isReady()) {
-  migrateData();
   migrateVectorsToSQLite();
+  migrateConstantMemoryToSQLite();
   encryptExistingKeys();
 } else {
   app.whenReady().then(() => {
-    migrateData();
     migrateVectorsToSQLite();
+    migrateConstantMemoryToSQLite();
     encryptExistingKeys();
   });
 }

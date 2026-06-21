@@ -348,17 +348,12 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
             }
 
             try {
-                const kbDir = path.join(profilesDir, profile.id, 'KnowledgeBase');
-                const fullContextPath = path.join(kbDir, 'full_context.json');
-                if (fs.existsSync(fullContextPath)) {
-                    const constantData = JSON.parse(fs.readFileSync(fullContextPath, 'utf8'));
-                    const manualConstants = constantData.filter(c => c.type === 'manual');
-                    for (const mc of manualConstants) {
-                        const content = mc.content || mc.text || '';
-                        const title = mc.name || mc.source || 'Custom Memory';
-                        constantKnowledge += `\n\n--- KNOWLEDGE SNIPPET: ${title} ---\n${content}\n------------------\n`;
-                        profileKbTokens += estimateTokens(content);
-                    }
+                const manualConstants = db.getConstantSnippets(profile.id);
+                for (const mc of manualConstants) {
+                    const content = mc.content || '';
+                    const title = mc.title || 'Custom Memory';
+                    constantKnowledge += `\n\n--- KNOWLEDGE SNIPPET: ${title} ---\n${content}\n------------------\n`;
+                    profileKbTokens += estimateTokens(content);
                 }
             } catch (e) {
                 console.error(`Error loading profile constant manual snippets:`, e);
@@ -483,14 +478,8 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                 if (results && results.length > 0) {
                     let constantSnippetTitles = [];
                     try {
-                        const kbDir = path.join(profilesDir, profile.id, 'KnowledgeBase');
-                        const fullContextPath = path.join(kbDir, 'full_context.json');
-                        if (fs.existsSync(fullContextPath)) {
-                            const constantData = JSON.parse(fs.readFileSync(fullContextPath, 'utf8'));
-                            constantSnippetTitles = constantData
-                                .filter(c => c.type === 'manual')
-                                .map(c => (c.name || c.source || '').toLowerCase());
-                        }
+                        constantSnippetTitles = db.getConstantSnippets(profile.id)
+                            .map(c => (c.title || '').toLowerCase());
                     } catch (e) { }
 
                     searchableChunks = results
@@ -836,20 +825,7 @@ async function executeSummarizationInternal({ chatId, selectedMessages, newSumma
         }
     }
 
-    const memoryDir = path.join(chatsDir, chatId, 'Memory');
-    if (!fs.existsSync(memoryDir)) fs.mkdirSync(memoryDir, { recursive: true });
-    const dbPath = path.join(memoryDir, 'vector_db.json');
-
-    let vectorDB = [];
-    if (fs.existsSync(dbPath)) {
-        try {
-            vectorDB = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
-        } catch (err) { }
-    }
-    vectorDB = vectorDB.concat(vectors);
-    fs.writeFileSync(dbPath, JSON.stringify(vectorDB, null, 2));
-
-    // Sync to SQLite database so it's searchable in the current session
+    // Persist summarized vectors to SQLite so they're searchable
     try {
         insertChunksToDb(chatId, 'chat_memory', vectors);
     } catch (dbErr) {
@@ -1126,14 +1102,8 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                     const knowledgeFiles = JSON.parse(profile.knowledgeFiles || '[]');
                     let constantSnippetTitles = [];
                     try {
-                        const kbDir = path.join(profilesDir, profile.id, 'KnowledgeBase');
-                        const fullContextPath = path.join(kbDir, 'full_context.json');
-                        if (fs.existsSync(fullContextPath)) {
-                            const constantData = JSON.parse(fs.readFileSync(fullContextPath, 'utf8'));
-                            constantSnippetTitles = constantData
-                                .filter(c => c.type === 'manual')
-                                .map(c => (c.name || c.source || '').toLowerCase());
-                        }
+                        constantSnippetTitles = db.getConstantSnippets(profile.id)
+                            .map(c => (c.title || '').toLowerCase());
                     } catch (e) { }
 
                     const profileResults = rawProfileResults.filter(r => {
@@ -1233,14 +1203,10 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
 
                     if (!isConstant) {
                         try {
-                            const kbDir = path.join(profilesDir, profile.id, 'KnowledgeBase');
-                            const fullContextPath = path.join(kbDir, 'full_context.json');
-                            if (fs.existsSync(fullContextPath)) {
-                                const constantData = JSON.parse(fs.readFileSync(fullContextPath, 'utf8'));
-                                const snippetMatch = constantData.find(c => c.type === 'manual' && (c.name || c.source || '').toLowerCase() === call.arg.toLowerCase());
-                                if (snippetMatch) {
-                                    isConstant = true;
-                                }
+                            const snippetMatch = db.getConstantSnippets(profile.id)
+                                .find(c => (c.title || '').toLowerCase() === call.arg.toLowerCase());
+                            if (snippetMatch) {
+                                isConstant = true;
                             }
                         } catch (e) { }
                     }

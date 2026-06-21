@@ -24,16 +24,6 @@ async function indexProfileKnowledgeBase(sender, profileId, knowledgeFilesInput)
   if (!fs.existsSync(kbDir)) {
     fs.mkdirSync(kbDir, { recursive: true });
   }
-  const vectorDbPath = path.join(kbDir, 'vector_db.json');
-
-  let vectorDB = [];
-  if (fs.existsSync(vectorDbPath)) {
-    try {
-      vectorDB = JSON.parse(fs.readFileSync(vectorDbPath, 'utf8'));
-    } catch (e) {
-      console.error("Error reading vector_db.json:", e);
-    }
-  }
 
   let chunkSize = 500;
   try {
@@ -56,7 +46,6 @@ async function indexProfileKnowledgeBase(sender, profileId, knowledgeFilesInput)
     if (allKnownFiles.has(src) && !activeRagSources.has(src)) {
       console.log(`[RAG Indexer] Garbage collecting chunks for profile file: ${src}`);
       deleteChunksFromDb(profileId, 'profile_kb', src);
-      vectorDB = vectorDB.filter(c => c.source !== src);
       modified = true;
     }
   }
@@ -72,7 +61,6 @@ async function indexProfileKnowledgeBase(sender, profileId, knowledgeFilesInput)
 
       console.log(`[RAG Indexer] Garbage collecting deleted profile file chunks: ${src}`);
       deleteChunksFromDb(profileId, 'profile_kb', src);
-      vectorDB = vectorDB.filter(c => c.source !== src);
       modified = true;
     }
   }
@@ -102,7 +90,6 @@ async function indexProfileKnowledgeBase(sender, profileId, knowledgeFilesInput)
     console.log(`[RAG Indexer] Indexing/Re-indexing file: ${file.name}`);
 
     deleteChunksFromDb(profileId, 'profile_kb', file.name);
-    vectorDB = vectorDB.filter(c => c.source !== file.name);
 
     try {
       if (sender) {
@@ -134,8 +121,6 @@ async function indexProfileKnowledgeBase(sender, profileId, knowledgeFilesInput)
 
       insertChunksToDb(profileId, 'profile_kb', vectors);
 
-      vectorDB.push(...vectors);
-
       file.lastIndexedMtime = currentMtime;
       modified = true;
       console.log(`[RAG Indexer] Indexed ${chunks.length} chunks for ${file.name}`);
@@ -154,7 +139,6 @@ async function indexProfileKnowledgeBase(sender, profileId, knowledgeFilesInput)
   }
 
   if (modified) {
-    fs.writeFileSync(vectorDbPath, JSON.stringify(vectorDB, null, 2));
     db.prepare('UPDATE writing_profiles SET knowledgeFiles = ? WHERE id = ?').run(JSON.stringify(knowledgeFiles), profileId);
   }
 
@@ -1405,16 +1389,7 @@ ipcMain.handle('delete-kb-file', async (event, { profileId, fileName }) => {
       db.prepare('UPDATE writing_profiles SET knowledgeFiles = ? WHERE id = ?').run(JSON.stringify(updatedFiles), profileId);
     }
 
-    const fullContextPath = path.join(profilesDir, profileId, 'KnowledgeBase', 'full_context.json');
-    if (fs.existsSync(fullContextPath)) {
-      try {
-        let constantData = JSON.parse(fs.readFileSync(fullContextPath, 'utf8'));
-        constantData = constantData.filter(c => c.name !== fileName);
-        fs.writeFileSync(fullContextPath, JSON.stringify(constantData, null, 2));
-      } catch (e) {
-        console.error("Error cleaning up profile full_context.json cache:", e);
-      }
-    }
+    db.deleteConstantSnippetByTitle(profileId, fileName, 'profile');
 
     return { success: true };
   } catch (e) {
@@ -1475,17 +1450,6 @@ ipcMain.handle('get-profile-kb-blocks', async (event, { profileId }) => {
     if (profileRow && profileRow.knowledgeFiles) {
       try {
         const files = JSON.parse(profileRow.knowledgeFiles);
-        const kbDir = path.join(profilesDir, profileId, 'KnowledgeBase');
-        const fullContextPath = path.join(kbDir, 'full_context.json');
-
-        let constantData = [];
-        if (fs.existsSync(fullContextPath)) {
-          try {
-            constantData = JSON.parse(fs.readFileSync(fullContextPath, 'utf8'));
-          } catch (err) {
-            console.error("Error reading full_context.json:", err);
-          }
-        }
 
         for (let idx = 0; idx < files.length; idx++) {
           const file = files[idx];
@@ -1503,44 +1467,14 @@ ipcMain.handle('get-profile-kb-blocks', async (event, { profileId }) => {
               })();
             }
 
-            if (file.internalPath && !fs.existsSync(file.internalPath)) {
-              const migratedPath = file.internalPath.replace(/\\AI Profiles\\|\\ChatHistory\\/, (match) => {
-                return match === '\\AI Profiles\\' ? '\\AI Profiles_migrated\\' : '\\ChatHistory_migrated\\';
-              });
-              if (fs.existsSync(migratedPath)) {
-                try {
-                  const fileDir = path.dirname(file.internalPath);
-                  if (!fs.existsSync(fileDir)) {
-                    fs.mkdirSync(fileDir, { recursive: true });
-                  }
-                  fs.copyFileSync(migratedPath, file.internalPath);
-                  console.log(`[Self-Healing Profile] Recovered file: ${migratedPath} -> ${file.internalPath}`);
-                } catch (copyErr) {
-                  console.error(`[Self-Healing Profile] Failed to copy migrated file:`, copyErr);
-                }
-              }
-            }
-
             let content = '';
-            const found = constantData.find(c => c.name === file.name);
-            if (found) {
-              content = found.content;
-            }
-
-            if (!content && file.internalPath && fs.existsSync(file.internalPath)) {
+            if (file.internalPath && fs.existsSync(file.internalPath)) {
               try {
                 const ext = path.extname(file.name).toLowerCase();
                 if (ext === '.txt' || ext === '.md' || ext === '.json' || ext === '.csv') {
                   content = fs.readFileSync(file.internalPath, 'utf8');
                 } else {
                   content = await extractTextFromFile(file.internalPath);
-                }
-
-                if (content && content.trim()) {
-                  if (!constantData.some(c => c.name === file.name)) {
-                    constantData.push({ name: file.name, content: content.trim() });
-                    fs.writeFileSync(fullContextPath, JSON.stringify(constantData, null, 2));
-                  }
                 }
               } catch (e) {
                 console.error("Error reading constant file fallback:", e);
@@ -1558,7 +1492,7 @@ ipcMain.handle('get-profile-kb-blocks', async (event, { profileId }) => {
           }
         }
 
-        const manualConstants = constantData.filter(c => c.type === 'manual');
+        const manualConstants = db.getConstantSnippets(profileId);
         for (const mc of manualConstants) {
           const dbRows = db.prepare('SELECT id FROM knowledge_chunks WHERE ownerId = ? AND id = ?').all(profileId, mc.id);
           if (dbRows.length > 0) {
@@ -1575,15 +1509,15 @@ ipcMain.handle('get-profile-kb-blocks', async (event, { profileId }) => {
           loadedKbData.push({
             id: mc.id,
             type: 'manual',
-            source: mc.name || mc.source || 'Custom Memory',
-            text: mc.content || mc.text || '',
+            source: mc.title || 'Custom Memory',
+            text: mc.content || '',
             strategy: 'constant',
             keywords: mc.keywords || [],
-            tokenCount: countTokens(mc.content || mc.text || ''),
+            tokenCount: countTokens(mc.content || ''),
             rawItem: {
               id: mc.id,
-              source: mc.name || mc.source || 'Custom Memory',
-              text: mc.content || mc.text || '',
+              source: mc.title || 'Custom Memory',
+              text: mc.content || '',
               strategy: 'constant',
               keywords: mc.keywords || []
             }
@@ -1615,39 +1549,15 @@ ipcMain.handle('save-profile-kb-blocks', async (event, { profileId, blocks }) =>
       fs.mkdirSync(kbDir, { recursive: true });
     }
 
-    const vectorDbPath = path.join(kbDir, 'vector_db.json');
-    const fullContextPath = path.join(kbDir, 'full_context.json');
-
     const isConstantSnippet = (b) => b.type === 'manual' && (b.strategy === 'constant' || b.rawItem?.strategy === 'constant');
 
-    const vectorData = blocks.filter(item => item.type === 'rag' || (item.type === 'manual' && !isConstantSnippet(item))).map(item => item.rawItem);
-
-    const constantData = [];
-    blocks.filter(item => item.type === 'constant').forEach(item => {
-      constantData.push(item.rawItem);
-    });
-    blocks.filter(item => isConstantSnippet(item)).forEach(b => {
-      constantData.push({
-        id: b.id,
-        type: 'manual',
-        name: b.source,
-        content: b.text,
-        strategy: 'constant',
-        keywords: b.keywords
-      });
-    });
-
-    if (vectorData.length > 0) {
-      fs.writeFileSync(vectorDbPath, JSON.stringify(vectorData, null, 2));
-    } else if (fs.existsSync(vectorDbPath)) {
-      fs.unlinkSync(vectorDbPath);
-    }
-
-    if (constantData.length > 0) {
-      fs.writeFileSync(fullContextPath, JSON.stringify(constantData, null, 2));
-    } else if (fs.existsSync(fullContextPath)) {
-      fs.unlinkSync(fullContextPath);
-    }
+    const manualSnippets = blocks.filter(item => isConstantSnippet(item)).map(b => ({
+      id: b.id,
+      title: b.source,
+      content: b.text,
+      keywords: b.keywords || []
+    }));
+    db.replaceConstantSnippets(profileId, manualSnippets, 'profile');
 
     const activeBlockIds = new Set(blocks.filter(b => b.type === 'rag' || (b.type === 'manual' && !isConstantSnippet(b))).map(b => b.id));
     const existingDbChunks = db.prepare('SELECT id FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ?').all(profileId, 'profile_kb');
@@ -1763,18 +1673,6 @@ ipcMain.handle('add-profile-constant-file', async (event, { profileId, name, pat
 
     const newRawItem = { name: name, content: text.trim() };
 
-    const fullContextPath = path.join(kbDir, 'full_context.json');
-    let constantData = [];
-    if (fs.existsSync(fullContextPath)) {
-      try {
-        constantData = JSON.parse(fs.readFileSync(fullContextPath, 'utf8'));
-      } catch (err) { }
-    }
-    if (!constantData.some(c => c.name === name)) {
-      constantData.push(newRawItem);
-      fs.writeFileSync(fullContextPath, JSON.stringify(constantData, null, 2));
-    }
-
     const profileRow = db.prepare('SELECT knowledgeFiles FROM writing_profiles WHERE id = ?').get(profileId);
     let knowledgeFiles = [];
     if (profileRow && profileRow.knowledgeFiles) {
@@ -1846,16 +1744,6 @@ ipcMain.handle('add-profile-searchable-file', async (event, { profileId, name, p
         });
       }
     });
-
-    const vectorDbPath = path.join(kbDir, 'vector_db.json');
-    let vectorDB = [];
-    if (fs.existsSync(vectorDbPath)) {
-      try {
-        vectorDB = JSON.parse(fs.readFileSync(vectorDbPath, 'utf8'));
-      } catch (err) { }
-    }
-    vectorDB.push(...fileVectors);
-    fs.writeFileSync(vectorDbPath, JSON.stringify(vectorDB, null, 2));
 
     deleteChunksFromDb(profileId, 'profile_kb', name);
     insertChunksToDb(profileId, 'profile_kb', fileVectors);
@@ -2927,24 +2815,6 @@ ipcMain.handle('save-chat-manual-snippet', async (event, { chatId, snippetId, ti
       })();
     }
 
-    const memoryDir = path.join(chatsDir, chatId, 'Memory');
-    if (!fs.existsSync(memoryDir)) {
-      fs.mkdirSync(memoryDir, { recursive: true });
-    }
-    const dbPath = path.join(memoryDir, 'vector_db.json');
-    let vectorDB = [];
-    if (fs.existsSync(dbPath)) {
-      try {
-        vectorDB = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
-      } catch (e) { }
-    }
-    if (chunk) {
-      chunk.id = snippetId;
-      chunk.blockId = snippetId;
-      vectorDB = vectorDB.filter(c => c.blockId !== snippetId);
-      vectorDB.push(chunk);
-      fs.writeFileSync(dbPath, JSON.stringify(vectorDB, null, 2));
-    }
     return { success: true };
   } catch (e) {
     console.error("Error saving manual chat snippet vector:", e);
@@ -3122,24 +2992,6 @@ ipcMain.handle('get-chat-kb-blocks', async (event, { chatId }) => {
               })();
             }
 
-            if (file.internalPath && !fs.existsSync(file.internalPath)) {
-              const migratedPath = file.internalPath.replace(/\\AI Profiles\\|\\ChatHistory\\/, (match) => {
-                return match === '\\AI Profiles\\' ? '\\AI Profiles_migrated\\' : '\\ChatHistory_migrated\\';
-              });
-              if (fs.existsSync(migratedPath)) {
-                try {
-                  const fileDir = path.dirname(file.internalPath);
-                  if (!fs.existsSync(fileDir)) {
-                    fs.mkdirSync(fileDir, { recursive: true });
-                  }
-                  fs.copyFileSync(migratedPath, file.internalPath);
-                  console.log(`[Self-Healing Chat] Recovered file: ${migratedPath} -> ${file.internalPath}`);
-                } catch (copyErr) {
-                  console.error(`[Self-Healing Chat] Failed to copy migrated file:`, copyErr);
-                }
-              }
-            }
-
             let content = '';
             if (file.internalPath && fs.existsSync(file.internalPath)) {
               try {
@@ -3218,22 +3070,6 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
           chunk.id = snippetId;
           chunk.blockId = snippetId;
           chunk.keywords = cleanKeywords;
-
-          const memoryDir = path.join(chatsDir, chatId, 'Memory');
-          if (!fs.existsSync(memoryDir)) {
-            fs.mkdirSync(memoryDir, { recursive: true });
-          }
-          const dbPath = path.join(memoryDir, 'vector_db.json');
-          let vectorDB = [];
-          if (fs.existsSync(dbPath)) {
-            try {
-              vectorDB = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
-            } catch (e) { }
-          }
-
-          vectorDB = vectorDB.filter(c => c.blockId !== snippetId);
-          vectorDB.push(chunk);
-          fs.writeFileSync(dbPath, JSON.stringify(vectorDB, null, 2));
 
           const insertChunk = db.prepare(`
             INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt)

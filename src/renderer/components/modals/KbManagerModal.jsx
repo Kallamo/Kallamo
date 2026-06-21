@@ -1054,11 +1054,11 @@ export default function KbManagerModal({ profile, onClose }) {
                 </div>
                 <div className="flex justify-between text-[10px] text-gray-400">
                   <span>Searchable:</span>
-                  <span>{blocks.filter(b => b.type !== 'constant').length}</span>
+                  <span>{blocks.filter(b => !(b.type === 'constant' || (b.type === 'manual' && (b.strategy === 'constant' || b.rawItem?.strategy === 'constant')))).length}</span>
                 </div>
                 <div className="flex justify-between text-[10px] text-gray-400">
                   <span>Constant:</span>
-                  <span>{blocks.filter(b => b.type === 'constant').length}</span>
+                  <span>{blocks.filter(b => b.type === 'constant' || (b.type === 'manual' && (b.strategy === 'constant' || b.rawItem?.strategy === 'constant'))).length}</span>
                 </div>
               </div>
             </div>
