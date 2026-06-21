@@ -78,7 +78,6 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [embeddingEngine, setEmbeddingEngine] = useState(settings.advanced.embeddingEngine || 'local');
   const [embeddingApiProfileId, setEmbeddingApiProfileId] = useState(settings.advanced.embeddingApiProfileId || '');
   const [embeddingModelName, setEmbeddingModelName] = useState(settings.advanced.embeddingModelName || '');
-  const [rerankerEnabled, setRerankerEnabled] = useState(settings.advanced.rerankerEnabled || false);
 
   const [confirmAction, setConfirmAction] = useState(null); // null | 'purge' | 'clearCache' | 'wipe'
   const [backupStatus, setBackupStatus] = useState(null); // null | { success: boolean, path?: string, error?: string }
@@ -98,16 +97,16 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const settingsRef = useRef({
     accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled,
     chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug,
-    embeddingEngine, embeddingApiProfileId, embeddingModelName, rerankerEnabled
+    embeddingEngine, embeddingApiProfileId, embeddingModelName
   });
 
   useEffect(() => {
     settingsRef.current = {
       accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled,
       chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug,
-      embeddingEngine, embeddingApiProfileId, embeddingModelName, rerankerEnabled
+      embeddingEngine, embeddingApiProfileId, embeddingModelName
     };
-  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName, rerankerEnabled]);
+  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName]);
 
   // Handle immediate save for selects and color choices
   const updateSetting = async (category, key, value) => {
@@ -127,7 +126,6 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       if (key === 'tokenDebug') setTokenDebug(value);
       if (key === 'embeddingEngine') setEmbeddingEngine(value);
       if (key === 'embeddingApiProfileId') setEmbeddingApiProfileId(value);
-      if (key === 'rerankerEnabled') setRerankerEnabled(value);
     }
 
     const current = settingsRef.current;
@@ -152,9 +150,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         tokenDebug: key === 'tokenDebug' ? value : current.tokenDebug,
         embeddingEngine: key === 'embeddingEngine' ? value : current.embeddingEngine,
         embeddingApiProfileId: key === 'embeddingApiProfileId' ? value : current.embeddingApiProfileId,
-        embeddingModelName: current.embeddingModelName,
-        rerankerEnabled: key === 'rerankerEnabled' ? value : current.rerankerEnabled,
-        rerankTopN: current.rerankTopN
+        embeddingModelName: current.embeddingModelName
       }
     };
 
@@ -198,9 +194,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
           ragDebug: current.ragDebug,
           embeddingEngine: current.embeddingEngine,
           embeddingApiProfileId: current.embeddingApiProfileId,
-          embeddingModelName: key === 'embeddingModelName' ? value : current.embeddingModelName,
-          rerankerEnabled: current.rerankerEnabled,
-          rerankTopN: current.rerankTopN
+          embeddingModelName: key === 'embeddingModelName' ? value : current.embeddingModelName
         }
       };
       await handleSaveSettings(newSettings);
@@ -1033,25 +1027,6 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
 
                       <div className="h-px bg-gray-800/50 w-full"></div>
 
-                      {/* Reranker toggle */}
-                      <div className="flex items-center justify-between">
-                        <div className="pr-4">
-                          <span className="block text-sm text-gray-200 font-bold">Reranker (higher retrieval quality)</span>
-                          <span className="text-[10px] text-gray-500">Re-ranks the top candidates with a multilingual cross-encoder for more relevant results. Downloads a ~280MB model on first use and adds a short delay per search.</span>
-                        </div>
-                        <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                          <input
-                            type="checkbox"
-                            checked={rerankerEnabled}
-                            onChange={(e) => updateSetting('advanced', 'rerankerEnabled', e.target.checked)}
-                            className="sr-only peer"
-                          />
-                          <div className="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
-                        </label>
-                      </div>
-
-                      <div className="h-px bg-gray-800/50 w-full"></div>
-
                       {/* Embedding Engine Config */}
                       <div id="embedding-config">
                         <span className="block text-sm text-gray-200 font-bold mb-1">Vector Embedding Engine</span>
@@ -1218,8 +1193,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       {/* Live RAG Debug logs toggle */}
                       <div className="p-4 flex items-center justify-between">
                         <div className="pr-4">
-                          <span className="block text-sm text-gray-200 font-bold">Enable RAG Context Warnings</span>
-                          <span className="text-xs text-gray-500">Show floating banners inside active chat messages detailing search performance and context information.</span>
+                          <span className="block text-sm text-gray-200 font-bold">Show Retrieved Chunks & RAG Diagnostics</span>
+                          <span className="text-xs text-gray-500">Adds a per-message drop-down listing the exact chunks retrieved by RAG, with their source and fusion/similarity score, plus context warnings.</span>
                         </div>
                         <label className="relative inline-flex items-center cursor-pointer shrink-0">
                           <input

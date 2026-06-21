@@ -24,6 +24,19 @@ let activeRun = null;
 let errorDeferred = null;
 let overflowDeferred = null;
 
+// Formats a retrieved result set for the RAG debug panel: source + fusion/similarity
+// score + the full chunk text.
+function formatRagDebugSection(label, resultObjs) {
+    if (!Array.isArray(resultObjs) || resultObjs.length === 0) return '';
+    const lines = resultObjs.map((r, idx) => {
+        const rawScore = typeof r.fusionScore === 'number' ? r.fusionScore : (r.score || 0);
+        const scoreLabel = `fusion ${rawScore.toFixed(4)}`;
+        const fullText = (r.text || '').trim();
+        return `${idx + 1}. [${r.source}] (${scoreLabel})\n${fullText}`;
+    });
+    return `${label} (${resultObjs.length}):\n${lines.join('\n\n')}\n`;
+}
+
 // --- TOKEN UTILITIES ---
 
 function estimateTokens(str) {
@@ -266,6 +279,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
 
         let lastAgenticRagResponse = '';
         let lastAgenticRagContextGathered = '';
+        let lastStandardRagDebug = '';
         let totalProfileKbTokens = 0;
         let totalChatKbTokens = 0;
         let totalChatHistoryTokens = 0;
@@ -294,6 +308,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
             let chatHistoryTokens = 0;
             let agenticRagResponse = '';
             let agenticRagContextGathered = '';
+            let standardRagDebug = '';
             let agenticInputTokens = 0;
             let agenticOutputTokens = 0;
 
@@ -463,6 +478,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                 let chatMemories = [];
                 let searchQuery = currentInput;
                 const results = await searchKnowledgeBase(searchQuery, profile.id);
+                standardRagDebug += formatRagDebugSection('PROFILE KB', results);
                 if (results && results.length > 0) {
                     let constantSnippetTitles = [];
                     try {
@@ -494,6 +510,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
 
                 if (includeChatContext && chat) {
                     const chatKbResults = await searchChatKnowledgeBase(currentInput, chatId);
+                    standardRagDebug += formatRagDebugSection('CHAT KB', chatKbResults);
                     if (chatKbResults && chatKbResults.length > 0) {
                         const chatKbFiles = typeof chat.knowledgeFiles === 'string'
                             ? JSON.parse(chat.knowledgeFiles)
@@ -512,6 +529,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
 
                 if (includeChatContext && chat) {
                     const memoryResults = await searchChatMemories(currentInput, chatId);
+                    standardRagDebug += formatRagDebugSection('CHAT MEMORY', memoryResults);
                     if (memoryResults && memoryResults.length > 0) {
                         const blocksList = typeof chat.memoryBlocks === 'string'
                             ? JSON.parse(chat.memoryBlocks)
@@ -668,6 +686,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
 
             lastAgenticRagResponse = agenticRagResponse;
             lastAgenticRagContextGathered = agenticRagContextGathered;
+            if (standardRagDebug) lastStandardRagDebug = standardRagDebug;
 
             totalProfileKbTokens += profileKbTokens;
             totalChatKbTokens += chatKbTokens;
@@ -685,6 +704,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                 workflowStatus: isWorkflow ? `Workflow complete (${steps.length} steps)` : '',
                 agenticRagResponse: lastAgenticRagResponse,
                 agenticRagContextGathered: lastAgenticRagContextGathered,
+                standardRagContextGathered: lastStandardRagDebug,
                 tokens: {
                     knowledgeBase: totalProfileKbTokens + totalChatKbTokens,
                     profileKb: totalProfileKbTokens,

@@ -135,12 +135,14 @@ export default function ChatWorkspaceView() {
   const [expandedUserMessages, setExpandedUserMessages] = useState({});
   const [expandedThinking, setExpandedThinking] = useState({});
   const [expandedAgenticRag, setExpandedAgenticRag] = useState({});
+  const [expandedStandardRag, setExpandedStandardRag] = useState({});
 
   const [editingMessageId, setEditingMessageId] = useState(null);
   const [editingMessageText, setEditingMessageText] = useState('');
 
   const [copiedId, setCopiedId] = useState(null);
   const [copiedRagId, setCopiedRagId] = useState(null);
+  const [copiedStandardRagId, setCopiedStandardRagId] = useState(null);
 
   const [openMenuId, setOpenMenuId] = useState(null);
 
@@ -201,6 +203,12 @@ export default function ChatWorkspaceView() {
     navigator.clipboard.writeText(textToCopy);
     setCopiedRagId(id);
     setTimeout(() => setCopiedRagId(null), 2000);
+  };
+
+  const handleCopyStandardRag = (id, debugObj) => {
+    navigator.clipboard.writeText(debugObj.standardRagContextGathered || '');
+    setCopiedStandardRagId(id);
+    setTimeout(() => setCopiedStandardRagId(null), 2000);
   };
 
   const isImage = (name) => /\.(png|jpe?g|gif|webp)$/i.test(name);
@@ -931,6 +939,35 @@ export default function ChatWorkspaceView() {
                                           <div className="pl-2 border-l border-gray-800 text-gray-500 whitespace-pre-wrap max-h-48 overflow-y-auto custom-scrollbar">{debugObj.agenticRagContextGathered}</div>
                                         </div>
                                       )}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* RAG Retrieval Debug Panel (retrieved chunks + scores) */}
+                              {settings.advanced.ragDebug && debugObj?.standardRagContextGathered && (
+                                <div className="mb-1 ml-1.5 select-none">
+                                  <div className="flex items-center space-x-2">
+                                    <button
+                                      onClick={() => setExpandedStandardRag(prev => ({ ...prev, [msg.id]: !prev[msg.id] }))}
+                                      className="flex items-center space-x-1 text-[9px] text-gray-500 hover:text-accent font-bold uppercase tracking-wider cursor-pointer"
+                                    >
+                                      <span>🔬 Retrieved Chunks (RAG)</span>
+                                      <ChevronDown className={`w-2.5 h-2.5 transition-transform ${expandedStandardRag[msg.id] ? 'rotate-180' : ''}`} />
+                                    </button>
+                                    <span className="text-gray-800">|</span>
+                                    <button
+                                      onClick={() => handleCopyStandardRag(msg.id, debugObj)}
+                                      className="flex items-center space-x-1 text-[9px] text-gray-500 hover:text-accent font-bold uppercase tracking-wider cursor-pointer"
+                                      title="Copy retrieved chunks to clipboard"
+                                    >
+                                      <Copy className="w-2.5 h-2.5 animate-pulse-slow" />
+                                      <span>{copiedStandardRagId === msg.id ? 'Copied!' : 'Copy Chunks'}</span>
+                                    </button>
+                                  </div>
+                                  {expandedStandardRag[msg.id] && (
+                                    <div className="mt-1 p-3 bg-[#051116] border border-gray-800 rounded-lg text-[10px] font-mono text-gray-400 max-w-xl max-h-72 overflow-y-auto custom-scrollbar shadow-md animate-in fade-in duration-200">
+                                      <div className="text-gray-500 whitespace-pre-wrap">{debugObj.standardRagContextGathered}</div>
                                     </div>
                                   )}
                                 </div>

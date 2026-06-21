@@ -71,14 +71,10 @@ function ensureLocalEngine() {
 }
 
 let embeddingPipeline = null;
-let rerankerModel = null;
-let rerankerTokenizer = null;
 
 function resetLocalEngine() {
     engineInitialized = false;
     embeddingPipeline = null;
-    rerankerModel = null;
-    rerankerTokenizer = null;
 }
 
 // --- CORE RAG UTILITIES ---
@@ -86,9 +82,6 @@ function resetLocalEngine() {
 // Current local embedding model identifier (used for version-stamp checks)
 const RAG_MODEL_ID = 'Xenova/multilingual-e5-small';
 const RAG_MODEL_DIM = 384;
-
-// Multilingual cross-encoder reranker (downloaded on demand, quantized; not bundled)
-const RERANKER_MODEL_ID = 'onnx-community/bge-reranker-v2-m3-ONNX';
 
 function chunkText(text, maxChunkSize = 1000) {
     if (!text || text.trim().length === 0) return [];
@@ -179,51 +172,6 @@ async function getEmbeddingPipeline() {
         });
     }
     return embeddingPipeline;
-}
-
-// --- RERANKER (cross-encoder) ---
-
-async function getReranker() {
-    ensureLocalEngine();
-    const { AutoModelForSequenceClassification, AutoTokenizer, env } = require('@huggingface/transformers');
-    env.cacheDir = modelCacheDir;
-
-    if (!rerankerModel || !rerankerTokenizer) {
-        rerankerTokenizer = await AutoTokenizer.from_pretrained(RERANKER_MODEL_ID);
-        rerankerModel = await AutoModelForSequenceClassification.from_pretrained(RERANKER_MODEL_ID, {
-            dtype: 'q8',
-            device: 'cpu'
-        });
-    }
-    return { model: rerankerModel, tokenizer: rerankerTokenizer };
-}
-
-// Re-judges (query, chunk) pairs with the cross-encoder and returns the top-k.
-// Falls back to the input order on any failure so retrieval never breaks.
-async function rerankResults(queryText, results, k) {
-    if (!Array.isArray(results) || results.length === 0) return results;
-    try {
-        const { model, tokenizer } = await getReranker();
-        const queries = new Array(results.length).fill(queryText);
-        const passages = results.map(r => r.text || '');
-        const inputs = tokenizer(queries, {
-            text_pair: passages,
-            padding: true,
-            truncation: true
-        });
-        const { logits } = await model(inputs);
-        const scores = logits.sigmoid().tolist();
-
-        const reranked = results.map((r, i) => ({
-            ...r,
-            rerankScore: Array.isArray(scores[i]) ? scores[i][0] : scores[i]
-        }));
-        reranked.sort((a, b) => b.rerankScore - a.rerankScore);
-        return reranked.slice(0, k);
-    } catch (e) {
-        console.error('Reranker failed, falling back to fusion order:', e);
-        return results.slice(0, k);
-    }
 }
 
 async function generateEmbeddingVector(text, isQuery = false) {
@@ -435,23 +383,6 @@ async function executeHybridSearch(queryText, ownerId, ownerType, threshold = 0.
 
         fusedResults.sort((a, b) => b.fusionScore - a.fusionScore);
 
-        // Optional cross-encoder rerank pass over the top-N fusion candidates
-        let rerankEnabled = false;
-        let rerankTopN = 25;
-        try {
-            const rowAdvanced = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
-            if (rowAdvanced) {
-                const advanced = JSON.parse(rowAdvanced.value);
-                rerankEnabled = advanced.rerankerEnabled === true;
-                rerankTopN = parseInt(advanced.rerankTopN, 10) || 25;
-            }
-        } catch (e) { }
-
-        if (rerankEnabled && fusedResults.length > 1) {
-            const candidates = fusedResults.slice(0, rerankTopN);
-            return await rerankResults(queryText, candidates, k);
-        }
-
         return fusedResults.slice(0, k);
 
     } catch (error) {
@@ -551,8 +482,6 @@ module.exports = {
     generateEmbeddingVector,
     getEmbeddingPipeline,
     vectorizeChunks,
-    getReranker,
-    rerankResults,
     insertChunksToDb,
     deleteChunksFromDb,
     searchKnowledgeBase,

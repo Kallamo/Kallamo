@@ -131,6 +131,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('download-engine-progress', listener);
     return () => ipcRenderer.off('download-engine-progress', listener);
   },
+
   onSettingsChanged: (callback) => {
     const listener = () => callback();
     ipcRenderer.on('settings-changed', listener);
