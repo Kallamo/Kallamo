@@ -19,7 +19,7 @@ export default function EmptyState({
       {Icon && <Icon className="w-10 h-10 text-gray-600 opacity-40 mb-3" />}
       <span className="text-xs font-semibold text-gray-400">{title}</span>
       {subtitle && (
-        <span className="text-[11px] text-gray-500 mt-1 max-w-md leading-relaxed">{subtitle}</span>
+        <span className="caption mt-1 max-w-md">{subtitle}</span>
       )}
       {action && <div className="mt-4">{action}</div>}
     </div>

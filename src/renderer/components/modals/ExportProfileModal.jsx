@@ -119,7 +119,7 @@ export default function ExportProfileModal({ profile, onClose, onExport }) {
             <div className="flex items-center justify-between bg-[#051116] border border-gray-800/60 rounded-xl p-4">
               <div className="pr-4 flex-1">
                 <span className="text-xs font-bold text-gray-200 block mb-1">Export Knowledge Base</span>
-                <p className="text-[10px] text-gray-500 leading-tight">Include all documents, constant files, and custom memory blocks.</p>
+                <p className="caption">Include all documents, constant files, and custom memory blocks.</p>
               </div>
               <div className="shrink-0 select-none">
                 <div

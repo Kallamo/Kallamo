@@ -141,7 +141,7 @@ export default function ExportWorkflowModal({ workflow, onClose, onExport }) {
                   <div key={p.id} className="flex items-center space-x-2.5 px-2 py-1 rounded bg-[#011419]/50 border border-gray-800/50">
                     <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: p.color }} />
                     <span className="text-xs text-gray-300 font-semibold font-sans">{p.name}</span>
-                    <span className="text-[9px] text-gray-500 font-sans italic truncate flex-1 pr-2">({p.description || 'No description'})</span>
+                    <span className="caption italic truncate flex-1 pr-2">({p.description || 'No description'})</span>
                   </div>
                 ))}
               </div>
@@ -153,7 +153,7 @@ export default function ExportWorkflowModal({ workflow, onClose, onExport }) {
             <div className="flex items-center justify-between bg-[#051116] border border-gray-800/60 rounded-xl p-4">
               <div className="pr-4 flex-1">
                 <span className="text-xs font-bold text-gray-200 block mb-1 font-sans">Export Knowledge Bases</span>
-                <p className="text-[10px] text-gray-500 leading-tight font-sans">Include all documents, manual snippets, and constant files for the associated AI Profiles.</p>
+                <p className="caption">Include all documents, manual snippets, and constant files for the associated AI Profiles.</p>
               </div>
               <div className="shrink-0 select-none">
                 <div

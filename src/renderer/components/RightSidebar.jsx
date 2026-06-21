@@ -333,7 +333,7 @@ export default function RightSidebar({ isOpen, onClose, onTriggerSummarize }) {
                   </div>
                 </div>
               )}
-              <p className="text-[10px] text-gray-400 line-clamp-2 leading-relaxed">{block.summary}</p>
+              <p className="caption line-clamp-2">{block.summary}</p>
               <button 
                 onClick={() => deleteMemoryBlock(block.id)}
                 className="absolute top-1 right-1 p-1 text-gray-600 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer" 
@@ -441,7 +441,7 @@ export default function RightSidebar({ isOpen, onClose, onTriggerSummarize }) {
       />
       
       {filteredProfiles.length === 0 ? (
-        <span className="text-[10px] text-gray-500 italic block">No profiles found</span>
+        <span className="caption italic block">No profiles found</span>
       ) : (
         filteredProfiles.map(p => {
           const isActive = activeProfilesList.includes(p.id);
@@ -483,7 +483,7 @@ export default function RightSidebar({ isOpen, onClose, onTriggerSummarize }) {
       />
 
       {filteredWorkflows.length === 0 ? (
-        <span className="text-[10px] text-gray-500 italic block">No workflows found</span>
+        <span className="caption italic block">No workflows found</span>
       ) : (
         filteredWorkflows.map(wf => {
           const isActive = activeWorkflowsList.includes(wf.id);

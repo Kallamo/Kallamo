@@ -334,7 +334,7 @@ export default function ChatModal({ chat, onClose }) {
                 
                 <div className="flex-1 overflow-y-auto custom-scrollbar p-1.5 space-y-1">
                   {filteredProfiles.length === 0 ? (
-                    <span className="text-[10px] text-gray-600 italic block p-1 font-sans">No profiles found</span>
+                    <span className="caption italic block p-1">No profiles found</span>
                   ) : (
                     filteredProfiles.map(p => {
                       const isSelected = activeProfiles.includes(p.id);
@@ -382,7 +382,7 @@ export default function ChatModal({ chat, onClose }) {
                 
                 <div className="flex-1 overflow-y-auto custom-scrollbar p-1.5 space-y-1">
                   {filteredWorkflows.length === 0 ? (
-                    <span className="text-[10px] text-gray-600 italic block p-1 font-sans">No workflows found</span>
+                    <span className="caption italic block p-1">No workflows found</span>
                   ) : (
                     filteredWorkflows.map(w => {
                       const isSelected = activeWorkflows.includes(w.id);
@@ -435,7 +435,7 @@ export default function ChatModal({ chat, onClose }) {
                 />
                 <div>
                   <span className="text-xs font-bold text-gray-200 group-hover:text-accent transition-colors font-sans">Constant Memory</span>
-                  <p className="text-[9px] text-gray-500 mt-0.5 leading-tight font-sans">Inject full file directly into every prompt (Always loaded).</p>
+                  <p className="caption mt-0.5">Inject full file directly into every prompt (Always loaded).</p>
                 </div>
               </label>
               <div className="w-px bg-gray-800/80"></div>
@@ -450,7 +450,7 @@ export default function ChatModal({ chat, onClose }) {
                 />
                 <div>
                   <span className="text-xs font-bold text-gray-200 group-hover:text-accent transition-colors font-sans">Searchable (RAG)</span>
-                  <p className="text-[9px] text-gray-500 mt-0.5 leading-tight font-sans">Chunk the document and load relevant snippets dynamically using vector search.</p>
+                  <p className="caption mt-0.5">Chunk the document and load relevant snippets dynamically using vector search.</p>
                 </div>
               </label>
             </div>
@@ -463,7 +463,7 @@ export default function ChatModal({ chat, onClose }) {
               className="border-2 border-dashed border-gray-800 hover:border-accent bg-[#011419]/50 rounded-xl p-4 text-center cursor-pointer transition-colors group"
             >
               <UploadCloud className="mx-auto mb-1 text-gray-600 group-hover:text-accent transition-colors w-6 h-6" />
-              <p className="text-[11px] text-gray-400 font-medium font-sans">Drag and drop document files here, or <span className="text-accent font-sans">browse files</span></p>
+              <p className="caption font-medium">Drag and drop document files here, or <span className="text-accent font-sans">browse files</span></p>
               <input 
                 type="file" 
                 ref={fileInputRef}

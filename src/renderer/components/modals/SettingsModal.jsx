@@ -457,7 +457,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
 
                     <div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">
                       {apiProfiles.length === 0 ? (
-                        <p className="text-sm text-gray-500 italic mt-4">No API profiles configured yet. Click "Add Connection" to create one.</p>
+                        <p className="caption italic mt-4">No API profiles configured yet. Click "Add Connection" to create one.</p>
                       ) : (
                         apiProfiles.map(ap => {
                           const mList = ap.models ? (typeof ap.models === 'string' ? JSON.parse(ap.models) : ap.models) : [];
@@ -468,7 +468,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                             >
                               <div className="flex flex-col space-y-1 overflow-hidden">
                                 <span className="text-sm font-bold text-white truncate">{ap.name}</span>
-                                <span className="text-xs text-gray-400">{ap.provider} — {mList.length} models</span>
+                                <span className="caption">{ap.provider} — {mList.length} models</span>
                               </div>
                               <div className="flex space-x-2 shrink-0">
                                 <button
@@ -499,7 +499,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       </h4>
                       <div>
                         <label className="block text-xs font-bold text-gray-400 mb-1">Connection Name</label>
-                        <p className="text-[10px] text-gray-500 mb-1.5">A friendly identifier to reference this client configuration (e.g., Anthropic Prod, Ollama Local).</p>
+                        <p className="caption mb-1.5">A friendly identifier to reference this client configuration (e.g., Anthropic Prod, Ollama Local).</p>
                         <input
                           type="text"
                           value={apiName}
@@ -510,7 +510,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       </div>
                       <div>
                         <label className="block text-xs font-bold text-gray-400 mb-1">Provider</label>
-                        <p className="text-[10px] text-gray-500 mb-1.5">The cloud gateway or local interface hosting the target models.</p>
+                        <p className="caption mb-1.5">The cloud gateway or local interface hosting the target models.</p>
                         <select
                           value={apiProvider}
                           onChange={(e) => setApiProvider(e.target.value)}
@@ -530,7 +530,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                         <>
                           <div>
                             <label className="block text-xs font-bold text-gray-400 mb-1">GCP Project ID</label>
-                            <p className="text-[10px] text-gray-500 mb-1.5">The unique project identifier assigned within your Google Cloud console.</p>
+                            <p className="caption mb-1.5">The unique project identifier assigned within your Google Cloud console.</p>
                             <input
                               type="text"
                               value={gcpProjectId}
@@ -541,7 +541,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           </div>
                           <div>
                             <label className="block text-xs font-bold text-gray-400 mb-1">GCP Region</label>
-                            <p className="text-[10px] text-gray-500 mb-1.5">The regional zone where Vertex endpoint resources are physically hosted.</p>
+                            <p className="caption mb-1.5">The regional zone where Vertex endpoint resources are physically hosted.</p>
                             <input
                               type="text"
                               value={gcpRegion}
@@ -552,7 +552,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           </div>
                           <div>
                             <label className="block text-xs font-bold text-gray-400 mb-1">Service Account JSON Key</label>
-                            <p className="text-[10px] text-gray-500 mb-1.5">Paste the complete text content of the downloaded service account private key JSON file.</p>
+                            <p className="caption mb-1.5">Paste the complete text content of the downloaded service account private key JSON file.</p>
                             <textarea
                               value={gcpServiceAccount}
                               onChange={(e) => setGcpServiceAccount(e.target.value)}
@@ -566,7 +566,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                         <>
                           <div>
                             <label className="block text-xs font-bold text-gray-400 mb-1">AWS Access Key ID</label>
-                            <p className="text-[10px] text-gray-500 mb-1.5">The access key credential used to verify user signature headers for Bedrock calls.</p>
+                            <p className="caption mb-1.5">The access key credential used to verify user signature headers for Bedrock calls.</p>
                             <input
                               type="text"
                               value={awsAccessKeyId}
@@ -577,7 +577,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           </div>
                           <div>
                             <label className="block text-xs font-bold text-gray-400 mb-1">AWS Secret Access Key</label>
-                            <p className="text-[10px] text-gray-500 mb-1.5">The secret cryptographic access key associated with your IAM credentials.</p>
+                            <p className="caption mb-1.5">The secret cryptographic access key associated with your IAM credentials.</p>
                             <div className="relative flex items-center">
                               <input
                                 type={showApiKey ? 'text' : 'password'}
@@ -597,7 +597,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           </div>
                           <div>
                             <label className="block text-xs font-bold text-gray-400 mb-1">AWS Region</label>
-                            <p className="text-[10px] text-gray-500 mb-1.5">The global AWS datacenter region hosting your Bedrock instances.</p>
+                            <p className="caption mb-1.5">The global AWS datacenter region hosting your Bedrock instances.</p>
                             <input
                               type="text"
                               value={awsRegion}
@@ -620,7 +620,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                             </button>
                             {showBaseUrl && (
                               <>
-                                <p className="text-[10px] text-gray-500 mb-1.5">An alternative base URL route to query local servers or private API reverse proxies.</p>
+                                <p className="caption mb-1.5">An alternative base URL route to query local servers or private API reverse proxies.</p>
                                 <input
                                   type="text"
                                   value={apiBaseUrl}
@@ -635,7 +635,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           {/* API Key */}
                           <div>
                             <label className="block text-xs font-bold text-gray-400 mb-1">API Key / Secret</label>
-                            <p className="text-[10px] text-gray-500 mb-1.5">The primary verification token or key secret to sign client request calls.</p>
+                            <p className="caption mb-1.5">The primary verification token or key secret to sign client request calls.</p>
                             <div className="relative flex items-center">
                               <input
                                 type={showApiKey ? 'text' : 'password'}
@@ -697,7 +697,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
 
                         <div className="flex flex-wrap gap-1.5 min-h-[36px]">
                           {modelsList.length === 0 ? (
-                            <span className="text-[10px] text-gray-500 italic">No models registered. Select "+ Add Model" to support AI execution.</span>
+                            <span className="caption italic">No models registered. Select "+ Add Model" to support AI execution.</span>
                           ) : (
                             modelsList.map(m => (
                               <span
@@ -747,7 +747,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                     <Layout className="w-5 h-5 text-accent" />
                     <span>Interface settings</span>
                   </h3>
-                  <p className="text-xs text-gray-400 mt-1">Customize the visual layout, typography, and default behavior.</p>
+                  <p className="caption mt-1">Customize the visual layout, typography, and default behavior.</p>
                 </div>
 
                 <div className="space-y-6">
@@ -762,7 +762,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       <div className="p-4 flex items-center justify-between">
                         <div>
                           <span className="block text-sm text-gray-200 font-bold">Accent Color</span>
-                          <span className="text-xs text-gray-500">Pick the application gold or color accents for system highlights.</span>
+                          <span className="caption">Pick the application gold or color accents for system highlights.</span>
                         </div>
                         <div className="flex space-x-2">
                           {colors.map(c => (
@@ -781,7 +781,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       <div className="p-4 flex items-center justify-between">
                         <div>
                           <span className="block text-sm text-gray-200 font-bold">Enable Backdrop Blurs</span>
-                          <span className="text-xs text-gray-500">Apply glassmorphism blur effects to background elements (disabling improves performance on older hardware).</span>
+                          <span className="caption">Apply glassmorphism blur effects to background elements (disabling improves performance on older hardware).</span>
                         </div>
                         <label className="relative inline-flex items-center cursor-pointer">
                           <input
@@ -807,7 +807,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       <div className="p-4 flex items-center justify-between">
                         <div>
                           <span className="block text-sm text-gray-200 font-bold">Font Family</span>
-                          <span className="text-xs text-gray-500">Select the global typography family for active workspace views.</span>
+                          <span className="caption">Select the global typography family for active workspace views.</span>
                         </div>
                         <select
                           value={fontFamily}
@@ -824,7 +824,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       <div className="p-4 flex items-center justify-between">
                         <div>
                           <span className="block text-sm text-gray-200 font-bold">Global Scale</span>
-                          <span className="text-xs text-gray-500">Adjust the relative text size inside active workspace views.</span>
+                          <span className="caption">Adjust the relative text size inside active workspace views.</span>
                         </div>
                         <div className="flex bg-[#011419] border border-gray-700 rounded-lg p-1 space-x-1">
                           {['small', 'medium', 'large'].map(sz => (
@@ -854,7 +854,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       {/* Layout Mode selection */}
                       <div className="flex flex-col space-y-2.5">
                         <span className="text-sm font-bold text-gray-200">Chat Layout Mode</span>
-                        <p className="text-xs text-gray-500">Switch between standard speech bubbles or a clean, distraction-free document layout.</p>
+                        <p className="caption">Switch between standard speech bubbles or a clean, distraction-free document layout.</p>
                         <div className="grid grid-cols-2 gap-4">
                           <button
                             onClick={() => updateSetting('interface', 'layout', 'bubbles')}
@@ -892,7 +892,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                         {/* Markdown Syntax highlight theme */}
                         <div className="flex flex-col space-y-1.5">
                           <span className="block text-sm text-gray-200 font-bold">Code Syntax Theme</span>
-                          <span className="text-xs text-gray-500">Choose the color scheme for code blocks inside chat messages.</span>
+                          <span className="caption">Choose the color scheme for code blocks inside chat messages.</span>
                           <select
                             value={codeTheme}
                             onChange={(e) => updateSetting('interface', 'codeTheme', e.target.value)}
@@ -908,7 +908,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                         <div className="flex flex-col space-y-1.5 justify-between">
                           <div>
                             <span className="block text-sm text-gray-200 font-bold">Show Line Numbers</span>
-                            <span className="text-xs text-gray-500">Render index numbers on the left margin of code blocks.</span>
+                            <span className="caption">Render index numbers on the left margin of code blocks.</span>
                           </div>
                           <div className="pt-2">
                             <label className="relative inline-flex items-center cursor-pointer">
@@ -938,7 +938,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                     <Monitor className="w-5 h-5 text-accent" />
                     <span>Advanced Options</span>
                   </h3>
-                  <p className="text-xs text-gray-400 mt-1">Configure advanced settings for the local search engine, data management, and diagnostics.</p>
+                  <p className="caption mt-1">Configure advanced settings for the local search engine, data management, and diagnostics.</p>
                 </div>
 
                 <div className="space-y-6">
@@ -955,7 +955,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           <span className="text-sm text-gray-200 font-bold">Chunk Size (Characters)</span>
                           <span className="text-xs text-accent font-mono font-bold">{chunkSize}</span>
                         </div>
-                        <p className="text-[11px] text-gray-400 leading-relaxed mb-2">The character length limit used to slice imported knowledge documents into distinct vector blocks.</p>
+                        <p className="caption mb-2">The character length limit used to slice imported knowledge documents into distinct vector blocks.</p>
                         <input
                           type="range"
                           min="200"
@@ -975,7 +975,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           <span className="text-sm text-gray-200 font-bold">Retrieval Strictness</span>
                           <span className="text-xs text-accent font-mono font-bold">{Math.round(similarity * 100)}%</span>
                         </div>
-                        <p className="text-[11px] text-gray-400 leading-relaxed mb-2">Sets how closely retrieved content must match your query. Lower values bring in more loosely related content; higher values keep only the closest matches.</p>
+                        <p className="caption mb-2">Sets how closely retrieved content must match your query. Lower values bring in more loosely related content; higher values keep only the closest matches.</p>
                         <input
                           type="range"
                           min="0"
@@ -996,7 +996,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           else if (pct < 100) label = 'Strict — only strongly matching content gets through.';
                           else label = 'Exact only — keeps just the closest matches.';
                           return (
-                            <p className={`text-[11px] mt-1.5 font-medium leading-relaxed ${recommended ? 'text-accent/90' : 'text-gray-400'}`}>
+                            <p className={`mt-1.5 font-medium ${recommended ? 'caption-accent' : 'caption'}`}>
                               {label}
                             </p>
                           );
@@ -1011,7 +1011,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           <span className="text-sm text-gray-200 font-bold">Knowledge Base Top-K</span>
                           <span className="text-xs text-accent font-mono font-bold">{topKKB}</span>
                         </div>
-                        <p className="text-[11px] text-gray-400 leading-relaxed mb-2">The maximum number of matching text blocks fetched from the profile's knowledge base to feed the AI prompt.</p>
+                        <p className="caption mb-2">The maximum number of matching text blocks fetched from the profile's knowledge base to feed the AI prompt.</p>
                         <input
                           type="range"
                           min="1"
@@ -1031,7 +1031,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           <span className="text-sm text-gray-200 font-bold">Chat Memory Top-K</span>
                           <span className="text-xs text-accent font-mono font-bold">{topKMemory}</span>
                         </div>
-                        <p className="text-[11px] text-gray-400 leading-relaxed mb-2">The maximum number of semantic memory snippets recalled from past archived conversations per message.</p>
+                        <p className="caption mb-2">The maximum number of semantic memory snippets recalled from past archived conversations per message.</p>
                         <input
                           type="range"
                           min="1"
@@ -1048,7 +1048,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       {/* Embedding Engine Config */}
                       <div id="embedding-config">
                         <span className="block text-sm text-gray-200 font-bold mb-1">Vector Embedding Engine</span>
-                        <p className="text-[10px] text-gray-500 mb-3">
+                        <p className="caption mb-3">
                           Generate vector embeddings locally on your hardware or offload calculations to an external API provider.
                         </p>
                         <div className="flex flex-col mb-4 space-y-3">
@@ -1097,8 +1097,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                               <span className={`w-2 h-2 rounded-full ${engineStatus.installed ? 'bg-emerald-500' : 'bg-red-500'}`} />
                               <div className="flex flex-col">
                                 <span className="text-gray-200 font-bold">Local AI Engine Status</span>
-                                <span className="text-[10px] text-gray-500">
-                                  {engineStatus.installed 
+                                <span className="caption">
+                                  {engineStatus.installed
                                     ? `Installed (${engineStatus.platform}-${engineStatus.arch})` 
                                     : 'Not Installed (Will download on demand)'}
                                 </span>
@@ -1130,7 +1130,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                               <label className="block text-xs font-bold text-gray-400 mb-1">API Connection</label>
-                              <p className="text-[10px] text-gray-500 mb-1.5">Select the API connection profile to use for remote vector calculations.</p>
+                              <p className="caption mb-1.5">Select the API connection profile to use for remote vector calculations.</p>
                               <select
                                 value={embeddingApiProfileId}
                                 onChange={(e) => updateSetting('advanced', 'embeddingApiProfileId', e.target.value)}
@@ -1145,7 +1145,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
 
                             <div>
                               <label className="block text-xs font-bold text-gray-400 mb-1">Embedding Model Name</label>
-                              <p className="text-[10px] text-gray-500 mb-1.5">Specify the exact model name from your provider to generate embedding vectors.</p>
+                              <p className="caption mb-1.5">Specify the exact model name from your provider to generate embedding vectors.</p>
                               <input
                                 type="text"
                                 value={embeddingModelName}
@@ -1153,7 +1153,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                                 placeholder="e.g. text-embedding-3-small"
                                 className="w-full bg-[#011419] border border-gray-700 text-gray-200 text-xs rounded-md px-3 py-2 focus:outline-none focus:border-accent"
                               />
-                              <p className="text-[9px] text-gray-500 mt-1">
+                              <p className="caption mt-1">
                                 OpenAI: <code>text-embedding-3-small</code> | Google: <code>text-embedding-004</code>.
                               </p>
                             </div>
@@ -1173,7 +1173,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       <div className="p-4 flex items-center justify-between">
                         <div className="pr-4">
                           <span className="block text-sm text-gray-200 font-bold mb-1">Embedding Execution Device</span>
-                          <span className="text-xs text-gray-500">Configure whether the local embedding model runs inside a WebAssembly container or directly on your CPU.</span>
+                          <span className="caption">Configure whether the local embedding model runs inside a WebAssembly container or directly on your CPU.</span>
                         </div>
                         <select
                           value={executionDevice}
@@ -1188,7 +1188,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       <div className="p-4 flex items-center justify-between">
                         <div>
                           <span className="block text-sm text-gray-200 font-bold">Clear Local Embeddings Cache</span>
-                          <span className="text-xs text-gray-500">Delete downloaded model cache files from disk (will force a fresh download upon next RAG indexing task).</span>
+                          <span className="caption">Delete downloaded model cache files from disk (will force a fresh download upon next RAG indexing task).</span>
                         </div>
                         <button
                           onClick={() => setConfirmAction('clearCache')}
@@ -1212,7 +1212,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       <div className="p-4 flex items-center justify-between">
                         <div className="pr-4">
                           <span className="block text-sm text-gray-200 font-bold">Show Retrieved Chunks & RAG Diagnostics</span>
-                          <span className="text-xs text-gray-500">Adds a per-message drop-down listing the exact chunks retrieved by RAG, with their source and fusion/similarity score, plus context warnings.</span>
+                          <span className="caption">Adds a per-message drop-down listing the exact chunks retrieved by RAG, with their source and fusion/similarity score, plus context warnings.</span>
                         </div>
                         <label className="relative inline-flex items-center cursor-pointer shrink-0">
                           <input
@@ -1229,7 +1229,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       <div className="p-4 flex items-center justify-between">
                         <div className="pr-4">
                           <span className="block text-sm text-gray-200 font-bold">Show Agentic RAG Responses</span>
-                          <span className="text-xs text-gray-500">Enable secondary diagnostic drop-downs mapping intermediate reasoning thoughts from RAG agents.</span>
+                          <span className="caption">Enable secondary diagnostic drop-downs mapping intermediate reasoning thoughts from RAG agents.</span>
                         </div>
                         <label className="relative inline-flex items-center cursor-pointer shrink-0">
                           <input
@@ -1246,7 +1246,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       <div className="p-4 flex items-center justify-between">
                         <div className="pr-4">
                           <span className="block text-sm text-gray-200 font-bold">Show Token Usage Breakdown</span>
-                          <span className="text-xs text-gray-500">Render quantitative token counters in AI message headers outlining context ingestion weights.</span>
+                          <span className="caption">Render quantitative token counters in AI message headers outlining context ingestion weights.</span>
                         </div>
                         <label className="relative inline-flex items-center cursor-pointer shrink-0">
                           <input
@@ -1271,7 +1271,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       <div className="p-4 flex items-center justify-between">
                         <div className="pr-4">
                           <span className="block text-sm text-gray-200 font-bold">Workspace Folder</span>
-                          <span className="text-xs text-gray-500">Open the underlying directory where local documents, memory files, and configurations are stored.</span>
+                          <span className="caption">Open the underlying directory where local documents, memory files, and configurations are stored.</span>
                         </div>
                         <button
                           onClick={handleOpenWorkspace}
@@ -1285,7 +1285,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       <div className="p-4 flex items-center justify-between">
                         <div className="pr-4">
                           <span className="block text-sm text-gray-200 font-bold">Export / Backup Data</span>
-                          <span className="text-xs text-gray-500">Compress local databases, workspace settings, and cached models into a safe backup file.</span>
+                          <span className="caption">Compress local databases, workspace settings, and cached models into a safe backup file.</span>
                         </div>
                         <button
                           onClick={handleBackup}
@@ -1299,7 +1299,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       <div className="p-4 flex items-center justify-between">
                         <div className="pr-4">
                           <span className="block text-sm text-gray-200 font-bold">Import / Restore Data</span>
-                          <span className="text-xs text-gray-500">Wipe all current workspace data and configurations, and restore them from a previously exported backup file. Note: The app will restart to complete the process safely.</span>
+                          <span className="caption">Wipe all current workspace data and configurations, and restore them from a previously exported backup file. Note: The app will restart to complete the process safely.</span>
                         </div>
                         <button
                           onClick={handleRestore}
@@ -1313,7 +1313,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       <div className="p-4 flex items-center justify-between">
                         <div className="pr-4">
                           <span className="block text-sm text-red-400 font-bold">Purge Vector DB Cache</span>
-                          <span className="text-xs text-gray-500">Delete all compiled vector indices. Cached knowledge files will require rebuilding to support search features.</span>
+                          <span className="caption">Delete all compiled vector indices. Cached knowledge files will require rebuilding to support search features.</span>
                         </div>
                         <button
                           onClick={() => setConfirmAction('purge')}
@@ -1344,7 +1344,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       <Logotype height={44} className="text-white font-bold select-none pointer-events-none" cutColor="#000D11" />
                       <span className="text-[10px] bg-accent/10 border border-accent/25 text-accent px-2 py-0.5 rounded-full font-bold uppercase tracking-wider select-none pointer-events-none">v{appVersion}</span>
                     </div>
-                    <p className="text-xs text-gray-500 mt-1 font-medium select-none pointer-events-none">Local-first, highly secure AI orchestration client.</p>
+                    <p className="caption mt-1 font-medium select-none pointer-events-none">Local-first, highly secure AI orchestration client.</p>
                   </div>
                 </div>
 
@@ -1356,22 +1356,22 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       {updateStatus === 'downloaded' ? (
                         <>
                           <h4 className="text-sm font-bold text-emerald-400 leading-tight">Update v{updateVersion} is ready to install!</h4>
-                          <p className="text-xs text-gray-400">The new version has been downloaded. Click install to restart and apply.</p>
+                          <p className="caption">The new version has been downloaded. Click install to restart and apply.</p>
                         </>
                       ) : updateStatus === 'available' ? (
                         <>
                           <h4 className="text-sm font-bold text-accent leading-tight">Downloading update v{updateVersion}...</h4>
-                          <p className="text-xs text-gray-400">Downloading files in the background.</p>
+                          <p className="caption">Downloading files in the background.</p>
                         </>
                       ) : updateStatus === 'outdated' ? (
                         <>
                           <h4 className="text-sm font-bold text-amber-400 leading-tight">New version v{updateVersion} available!</h4>
-                          <p className="text-xs text-gray-400">Auto-update is not supported on this platform. Please download the update manually.</p>
+                          <p className="caption">Auto-update is not supported on this platform. Please download the update manually.</p>
                         </>
                       ) : (
                         <>
                           <h4 className="text-sm font-bold text-gray-200 leading-tight">Kallamo is up to date</h4>
-                          <p className="text-xs text-gray-400">You are running the latest version of the application.</p>
+                          <p className="caption">You are running the latest version of the application.</p>
                         </>
                       )}
                     </div>
@@ -1441,7 +1441,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                     <div className="space-y-1">
                       <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest block mb-1 select-none pointer-events-none">Contributors</span>
                       <h4 className="text-sm font-bold text-gray-200">Future Contributors & Community</h4>
-                      <p className="text-xs text-gray-400 leading-relaxed">Kallamo is built under the open-source <strong className="font-bold text-gray-300">AGPL-3.0 License</strong> and welcomes contributions. Join the development, submit pull requests, or file bug reports on our GitHub organization!</p>
+                      <p className="caption">Kallamo is built under the open-source <strong className="font-bold text-gray-300">AGPL-3.0 License</strong> and welcomes contributions. Join the development, submit pull requests, or file bug reports on our GitHub organization!</p>
                     </div>
 
                     <div className="flex flex-wrap gap-2.5 pt-3.5 border-t border-gray-800/60">
@@ -1574,7 +1574,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
             <h3 className="text-lg font-bold text-white uppercase tracking-wider text-accent">
               Restoring Workspace
             </h3>
-            <p className="text-xs text-gray-400 max-w-xs leading-relaxed">
+            <p className="caption max-w-xs">
               Replacing active database files with backup. The application will restart automatically in a moment...
             </p>
           </div>

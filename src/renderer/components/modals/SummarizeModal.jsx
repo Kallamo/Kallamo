@@ -85,7 +85,7 @@ export default function SummarizeModal({
         <div className="flex items-center justify-between p-5 border-b border-gray-800/80">
           <div className="flex flex-col">
             <h3 className="text-sm font-bold text-white uppercase tracking-wider">Archive & Summarize Memory</h3>
-            <span className="text-[10px] text-gray-500 mt-0.5">Select blocks of history to vectorize and move to long-term memory</span>
+            <span className="caption mt-0.5">Select blocks of history to vectorize and move to long-term memory</span>
           </div>
           <button
             disabled={isVectorizing}

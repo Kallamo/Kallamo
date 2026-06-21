@@ -128,12 +128,6 @@ export default function ProfileModal({ profile, initialStep = 1, onClose, onSave
     const files = Array.from(fileList);
     if (files.length === 0) return;
 
-    if (knowledgeFiles.length + files.length > 10) {
-      setKbProgress('⚠ Maximum of 10 files allowed.');
-      setTimeout(() => setKbProgress(''), 3000);
-      return;
-    }
-
     const updatedFiles = [...knowledgeFiles];
     for (const f of files) {
       if (updatedFiles.some(existing => existing.name === f.name)) {
@@ -595,7 +589,7 @@ export default function ProfileModal({ profile, initialStep = 1, onClose, onSave
                     </div>
                   ) : (
                     <div className="mb-4">
-                      <p className="text-[10px] text-gray-500 mb-2">Inject raw JSON properties into the API payload.</p>
+                      <p className="caption mb-2">Inject raw JSON properties into the API payload.</p>
                       <textarea
                         value={manualJson}
                         onChange={(e) => setManualJson(e.target.value)}
@@ -670,8 +664,8 @@ export default function ProfileModal({ profile, initialStep = 1, onClose, onSave
               {/* Left Column: Files Upload & Management */}
               <div className="col-span-7 flex flex-col h-full border-r border-gray-800/60 pr-8">
                 <div className="flex justify-between items-end mb-4 border-b border-gray-800 pb-2">
-                  <h3 className="text-sm font-bold text-accent uppercase tracking-wider">Knowledge Base Manager</h3>
-                  <span className="text-[10px] text-gray-500 font-mono">{knowledgeFiles.length} / 10 FILES</span>
+                  <h3 className="text-sm font-bold text-accent uppercase tracking-wider">Knowledge Base</h3>
+                  <span className="text-[10px] text-gray-500 font-mono">{knowledgeFiles.length} {knowledgeFiles.length === 1 ? 'FILE' : 'FILES'}</span>
                 </div>
 
                 {/* Default Strategy Radio Options */}
@@ -687,7 +681,7 @@ export default function ProfileModal({ profile, initialStep = 1, onClose, onSave
                     />
                     <div>
                       <span className="text-sm font-bold text-gray-200 group-hover:text-accent transition-colors">Constant Memory</span>
-                      <p className="text-[10px] text-gray-500 mt-0.5 leading-tight">Full file injected into every API call. Best for small reference docs.</p>
+                      <p className="caption mt-0.5">Full file injected into every API call. Best for small reference docs.</p>
                     </div>
                   </label>
                   <div className="w-px bg-gray-800/80"></div>
@@ -702,7 +696,7 @@ export default function ProfileModal({ profile, initialStep = 1, onClose, onSave
                     />
                     <div>
                       <span className="text-sm font-bold text-gray-200 group-hover:text-accent transition-colors">Searchable (RAG)</span>
-                      <p className="text-[10px] text-gray-500 mt-0.5 leading-tight">Chunked and vectorized. Relevant snippets retrieved via semantic search.</p>
+                      <p className="caption mt-0.5">Chunked and vectorized. Relevant snippets retrieved via semantic search.</p>
                     </div>
                   </label>
                 </div>
@@ -730,7 +724,7 @@ export default function ProfileModal({ profile, initialStep = 1, onClose, onSave
                   <p className="text-xs text-gray-400 text-center">
                     <span className="font-bold text-gray-200">Click to upload</span> or drag files here
                   </p>
-                  <span className="text-[10px] text-gray-600 mt-1">Supports TXT, PDF, MD, DOCX · Max 10 files</span>
+                  <span className="caption mt-1">Supports TXT, PDF, MD, DOCX</span>
                 </div>
 
                 {/* Notice about custom memory blocks */}
@@ -778,7 +772,7 @@ export default function ProfileModal({ profile, initialStep = 1, onClose, onSave
                     <div className="flex flex-col items-center justify-center py-10 text-gray-600">
                       <Database className="w-8 h-8 opacity-30 mb-2" />
                       <span className="text-xs">No files in Knowledge Base</span>
-                      <span className="text-[10px] text-gray-700 mt-1">Upload documents to give this profile contextual memory</span>
+                      <span className="caption mt-1">Upload documents to give this profile contextual memory</span>
                     </div>
                   ) : (
                     knowledgeFiles.map((file, index) => {
@@ -891,7 +885,7 @@ export default function ProfileModal({ profile, initialStep = 1, onClose, onSave
                         <div className="flex items-center space-x-1.5 mb-1">
                           <span className="text-sm font-bold text-gray-200">Enable Agentic RAG</span>
                         </div>
-                        <p className="text-[10px] text-gray-500 leading-tight">Runs a two-pass query generation loop to fetch accurate vector memories.</p>
+                        <p className="caption leading-tight">Runs a two-pass query generation loop to fetch accurate vector memories.</p>
                       </div>
                       <label className="relative inline-flex items-center cursor-pointer shrink-0 mt-1">
                         <input
@@ -959,7 +953,7 @@ export default function ProfileModal({ profile, initialStep = 1, onClose, onSave
                     {!isAgentic && (
                       <div className="flex-1 flex flex-col items-center justify-center text-gray-600 opacity-50">
                         <Info className="w-6 h-6 mb-2" />
-                        <span className="text-[10px] text-center leading-tight">
+                        <span className="caption text-center">
                           When enabled, the AI will autonomously search your Knowledge Base before generating responses.
                         </span>
                       </div>

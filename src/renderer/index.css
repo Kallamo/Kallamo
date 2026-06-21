@@ -23,6 +23,24 @@ body {
   font-family: 'Inter Variable', 'Inter', system-ui, sans-serif;
 }
 
+/* Auxiliary / help text — single source of truth for small caption text.
+   Use `caption` on any <p>/<span>/<label> of descriptive helper prose.
+   Compose with spacing/italic as needed (e.g. `caption mb-2`).
+   Use `caption-accent` for the "recommended" highlighted variant. */
+@utility caption {
+  font-size: 0.75rem;
+  line-height: 1.625;
+  color: #9ca3af;
+  font-family: var(--font-sans);
+}
+
+@utility caption-accent {
+  font-size: 0.75rem;
+  line-height: 1.625;
+  color: color-mix(in srgb, var(--app-accent) 90%, transparent);
+  font-family: var(--font-sans);
+}
+
 /* Electron title bar rules */
 .titlebar-drag {
   -webkit-app-region: drag;

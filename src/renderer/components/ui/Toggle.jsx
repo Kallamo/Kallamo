@@ -40,7 +40,7 @@ export default function Toggle({
       <div className="min-w-0">
         {label && <span className="block text-sm font-bold text-gray-200">{label}</span>}
         {description && (
-          <p className="text-xs text-gray-500 leading-relaxed mt-1">{description}</p>
+          <p className="caption mt-1">{description}</p>
         )}
       </div>
       <div className="mt-0.5">{control}</div>

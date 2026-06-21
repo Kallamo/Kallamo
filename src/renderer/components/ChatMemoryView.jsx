@@ -977,12 +977,12 @@ export default function ChatMemoryView({
           {loading ? (
             <div className="flex flex-col items-center justify-center h-64 text-center">
               <div className="animate-spin h-6 w-6 border-2 border-accent border-t-transparent rounded-full mb-2" />
-              <p className="text-xs text-gray-500 font-medium">Loading memory blocks...</p>
+              <p className="caption font-medium">Loading memory blocks...</p>
             </div>
           ) : filteredBlocks.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-64 text-center">
               <Database className="w-12 h-12 text-gray-800 mb-3" />
-              <p className="text-xs text-gray-500 font-medium">No memory blocks found matching your query.</p>
+              <p className="caption font-medium">No memory blocks found matching your query.</p>
             </div>
           ) : (
             filteredBlocks.map((block) => {
@@ -1147,7 +1147,7 @@ export default function ChatMemoryView({
 
                                   if (displayProfiles.length === 0) {
                                     return (
-                                      <div className="p-2 text-center text-[9px] text-gray-500 leading-normal font-sans italic">
+                                      <div className="p-2 caption text-center italic">
                                         No active AI Profiles in this chat workspace.
                                       </div>
                                     );
@@ -1247,7 +1247,7 @@ export default function ChatMemoryView({
         </div>
 
         <div className="bg-[#051116]/80 border border-gray-800 rounded-xl p-3.5 flex flex-col space-y-3 shrink-0">
-          <p className="text-[10px] text-gray-500 leading-normal font-sans">
+          <p className="caption">
             Test how the AI retrieves memories. Type a phrase or prompt below to run a local vector similarity match.
           </p>
 
@@ -1318,7 +1318,7 @@ export default function ChatMemoryView({
         <div className="flex-1 mt-4 flex flex-col min-h-[200px]">
           {!simResults ? (
             <div className="flex-1 border border-dashed border-gray-800/40 rounded-xl flex items-center justify-center text-center p-4 select-none">
-              <span className="text-[10px] text-gray-600 italic font-sans">No query simulated yet</span>
+              <span className="caption italic">No query simulated yet</span>
             </div>
           ) : (simResults.kbResults.length === 0 && simResults.memoryResults.length === 0 && (!simResults.profileResults || simResults.profileResults.length === 0)) ? (
             <div className="flex-1 border border-dashed border-red-900/10 rounded-xl bg-red-950/5 flex items-center justify-center text-center p-4 select-none">
@@ -1338,7 +1338,7 @@ export default function ChatMemoryView({
               <div className="space-y-2">
                 <span className="block text-[8px] font-bold text-gray-500 uppercase tracking-widest px-1">Chat Memories & Files</span>
                 {(simResults.kbResults.length === 0 && simResults.memoryResults.length === 0) ? (
-                  <p className="text-[10px] text-gray-600 italic px-1 font-sans">No matching chat files or snippets found.</p>
+                  <p className="caption italic px-1">No matching chat files or snippets found.</p>
                 ) : (
                   <div className="space-y-2">
                     {simResults.kbResults.map((res, i) => (
@@ -1375,7 +1375,7 @@ export default function ChatMemoryView({
                     AI Profile Memories ({writingProfiles.find(p => p.id === simProfileId)?.name})
                   </span>
                   {!simResults.profileResults || simResults.profileResults.length === 0 ? (
-                    <p className="text-[10px] text-gray-600 italic px-1 font-sans">No matching profile memories found.</p>
+                    <p className="caption italic px-1">No matching profile memories found.</p>
                   ) : (
                     <div className="space-y-2">
                       {simResults.profileResults.map((res, i) => (
@@ -1430,7 +1430,7 @@ export default function ChatMemoryView({
                 disabled={savingSnippet || (editingBlock && editingBlock.type !== 'snippet')}
               />
               {editingBlock && editingBlock.type !== 'snippet' && (
-                <span className="text-[9px] text-gray-500 mt-1 flex items-center space-x-1">
+                <span className="caption mt-1 flex items-center space-x-1">
                   <Info className="w-3.5 h-3.5 text-gray-500" />
                   <span>Original file sources are read-only.</span>
                 </span>
@@ -1620,7 +1620,7 @@ export default function ChatMemoryView({
               <h4 className="text-xs font-bold text-white uppercase tracking-wider">Confirm Deletion</h4>
             </div>
 
-            <p className="text-[11px] text-gray-400 leading-relaxed font-sans">
+            <p className="caption">
               You are about to delete <strong className="text-gray-200">{deleteTarget.title}</strong>.
               {deleteTarget.type === 'rag' || deleteTarget.type === 'constant' ? (
                 <span>
@@ -1669,7 +1669,7 @@ export default function ChatMemoryView({
               <h4 className="text-xs font-bold text-white uppercase tracking-wider">Confirm Bulk Deletion</h4>
             </div>
 
-            <p className="text-[11px] text-gray-400 leading-relaxed font-sans">
+            <p className="caption">
               Are you sure you want to delete <strong className="text-white">{selectedBlockIds.length}</strong> selected memory blocks?
               This action is permanent and cannot be undone.
             </p>
@@ -1727,7 +1727,7 @@ export default function ChatMemoryView({
                 <div className="flex flex-col items-center justify-center py-12 text-gray-500 text-xs font-sans select-none space-y-2">
                   <Info className="w-5 h-5 text-gray-600" />
                   <p className="italic">No detailed message transcript available for this block.</p>
-                  <p className="text-[10px] text-gray-600 text-center max-w-sm leading-relaxed">
+                  <p className="caption text-center max-w-sm">
                     This memory was archived before the transcript-saving feature was active.
                     The AI-generated summary above and the vectorized search data are still fully functional.
                   </p>

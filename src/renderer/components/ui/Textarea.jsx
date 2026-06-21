@@ -38,7 +38,7 @@ const Textarea = React.forwardRef(function Textarea({
         {...rest}
       />
       <div className="flex items-center justify-between mt-1">
-        <span className={`text-[10px] ${invalid ? 'text-red-400 font-semibold' : 'text-gray-500'}`}>
+        <span className={`${invalid ? 'text-xs text-red-400 font-semibold' : 'caption'}`}>
           {error || hint || ''}
         </span>
         {showCount && maxLength != null && (

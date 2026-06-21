@@ -586,7 +586,7 @@ export default function LibraryView() {
                       </button>
                     </div>
 
-                    <p className="text-[10px] text-gray-500 mt-2 truncate italic shrink-0" title={v.description}>{v.description || 'No description'}</p>
+                    <p className="caption mt-2 truncate italic shrink-0" title={v.description}>{v.description || 'No description'}</p>
                     
                     <div className="mt-2 p-2 rounded bg-black/25 border border-gray-800/40 text-[10px] font-mono text-gray-400 overflow-y-auto max-h-[60px] custom-scrollbar flex-1 whitespace-pre-wrap select-text">
                       {v.value}

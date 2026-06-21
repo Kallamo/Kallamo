@@ -28,7 +28,7 @@ export default function SectionCard({
               </div>
             )}
             {description && (
-              <p className="text-xs text-gray-500 leading-relaxed mt-1 max-w-xl">{description}</p>
+              <p className="caption mt-1 max-w-xl">{description}</p>
             )}
           </div>
           {action && <div className="shrink-0">{action}</div>}

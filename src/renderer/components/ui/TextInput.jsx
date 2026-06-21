@@ -39,7 +39,7 @@ export default function TextInput({
         />
       </div>
       {(error || hint) && (
-        <span className={`text-[10px] mt-1 ${invalid ? 'text-red-400 font-semibold' : 'text-gray-500'}`}>
+        <span className={`mt-1 ${invalid ? 'text-xs text-red-400 font-semibold' : 'caption'}`}>
           {error || hint}
         </span>
       )}

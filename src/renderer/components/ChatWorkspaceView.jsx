@@ -1327,7 +1327,7 @@ export default function ChatWorkspaceView() {
                               </div>
                             ) : (
                               <div className="flex flex-col items-center py-2 px-2 border border-dashed border-gray-800/60 rounded-lg bg-black/10 select-none">
-                                <span className="text-[10px] text-gray-500 italic">No AI Profiles Active</span>
+                                <span className="caption italic">No AI Profiles Active</span>
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -1371,7 +1371,7 @@ export default function ChatWorkspaceView() {
                               </div>
                             ) : (
                               <div className="flex flex-col items-center py-2 px-2 border border-dashed border-gray-800/60 rounded-lg bg-black/10 select-none">
-                                <span className="text-[10px] text-gray-500 italic">No Workflows Active</span>
+                                <span className="caption italic">No Workflows Active</span>
                                 <button
                                   type="button"
                                   onClick={() => {

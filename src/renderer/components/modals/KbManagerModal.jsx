@@ -874,7 +874,7 @@ export default function KbManagerModal({ profile, onClose }) {
                 <h2 className="text-base font-bold text-white tracking-wide">Knowledge Base Manager</h2>
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-gray-800 text-gray-400 uppercase tracking-wider">{profile?.name}</span>
               </div>
-              <p className="text-[11px] text-gray-500 mt-0.5">Edit, delete or inject manual memories into the Vector Database.</p>
+              <p className="caption mt-0.5">Edit, delete or inject manual memories into the Vector Database.</p>
             </div>
           </div>
 
@@ -1072,7 +1072,7 @@ export default function KbManagerModal({ profile, onClose }) {
                 <div className="flex justify-between items-center mb-6 shrink-0 border-b border-gray-800 pb-3">
                   <div>
                     <h3 className="text-base font-bold text-white tracking-wide">Smart Search Agent (Agentic RAG)</h3>
-                    <p className="text-xs text-gray-500 mt-1">Configure autonomous context retrieval rules for this AI profile.</p>
+                    <p className="caption mt-1">Configure autonomous context retrieval rules for this AI profile.</p>
                   </div>
                 </div>
 
@@ -1084,7 +1084,7 @@ export default function KbManagerModal({ profile, onClose }) {
                         <div className="flex items-center space-x-1.5 mb-1.5">
                           <span className="text-sm font-bold text-gray-200">Enable Agentic RAG Search</span>
                         </div>
-                        <p className="text-xs text-gray-500 leading-relaxed max-w-xl">
+                        <p className="caption max-w-xl">
                           When active, the AI will evaluate the conversation context first and create dynamic search queries targeting the vector store instead of doing simple matches, leading to significantly better retrieval relevance.
                         </p>
                       </div>
@@ -1452,7 +1452,7 @@ export default function KbManagerModal({ profile, onClose }) {
                   placeholder="e.g. Lore Bible Rule #1"
                 />
                 {editingBlock && editingBlock.type !== 'manual' && (
-                  <span className="text-[9px] text-gray-500 mt-1 flex items-center space-x-1">
+                  <span className="caption mt-1 flex items-center space-x-1">
                     <Info className="w-3 h-3 text-gray-500" />
                     <span>Original file sources are read-only.</span>
                   </span>

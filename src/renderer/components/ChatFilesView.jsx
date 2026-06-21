@@ -248,7 +248,7 @@ export default function ChatFilesView({
         ) : filteredFiles.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64 text-center">
             <Folder className="w-12 h-12 text-gray-800 mb-3" />
-            <p className="text-xs text-gray-500 font-medium">No files found matching the filter.</p>
+            <p className="caption font-medium">No files found matching the filter.</p>
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
@@ -363,7 +363,7 @@ export default function ChatFilesView({
         <div className="absolute inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center animate-in fade-in duration-200">
           <div className="bg-[#051116] border border-red-900/30 rounded-2xl p-6 max-w-sm w-full mx-4 shadow-2xl animate-in zoom-in-95 duration-200">
             <h4 className="text-xs font-bold text-white uppercase tracking-wider">Delete File</h4>
-            <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">
+            <p className="caption mt-2">
               Are you sure you want to delete <strong className="text-gray-200">{deleteTarget.name}</strong>?
               This will remove the file permanently from the disk and clear any associated RAG vector memory chunks.
             </p>

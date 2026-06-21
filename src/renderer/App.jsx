@@ -233,7 +233,7 @@ function MainLayout() {
             )}
 
             {engineDownloadProgress.status === 'downloading' && (
-              <p className="text-xs text-gray-500 font-medium">
+              <p className="caption font-medium">
                 {engineDownloadProgress.percent || 0}% completed
                 {engineDownloadProgress.loaded && engineDownloadProgress.total && (
                   ` (${(engineDownloadProgress.loaded / (1024 * 1024)).toFixed(1)} / ${(engineDownloadProgress.total / (1024 * 1024)).toFixed(1)} MB)`
@@ -283,7 +283,7 @@ function MainLayout() {
                 style={{ width: reindexingProgress.total ? `${Math.round((reindexingProgress.current / reindexingProgress.total) * 100)}%` : '30%' }}
               />
             </div>
-            <p className="text-xs text-gray-500 font-medium">{reindexingProgress.message || 'Processing...'}</p>
+            <p className="caption font-medium">{reindexingProgress.message || 'Processing...'}</p>
           </div>
         </div>
       )}
@@ -356,7 +356,7 @@ function MainLayout() {
                 </button>
               </div>
 
-              <div className="text-[10px] text-gray-400 font-medium break-all">
+              <div className="caption font-medium break-all">
                 {task.message}
               </div>
             </div>
@@ -390,7 +390,7 @@ function MainLayout() {
                 />
               </div>
               <div className="flex justify-between items-center mt-1.5">
-                <span className="text-[10px] text-gray-500 font-medium">
+                <span className="caption font-medium">
                   {engineDownloadProgress.percent || 0}% completed
                 </span>
                 <button
