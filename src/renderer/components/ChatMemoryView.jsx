@@ -638,15 +638,33 @@ export default function ChatMemoryView({
       setProgressMsg("Deleting selected blocks...");
 
       const blocksToDelete = combinedBlocks.filter(b => selectedBlockIds.includes(b.id));
+      const deletedFileNames = [];
 
       for (const block of blocksToDelete) {
-        const mappedBlock = {
-          id: block.id,
-          type: block.type === 'snippet' ? 'manual' : block.type,
-          source: block.title,
-          text: block.summary
-        };
-        await electronAPI.deleteChatKbBlock(chat.id, mappedBlock);
+        if (block.type === 'rag_file') {
+          // Files use the dedicated path that removes the physical file + all its chunks,
+          // not the single-block delete (which can't resolve a synthetic file_ id).
+          await electronAPI.deleteChatKbFile(chat.id, block.source);
+          deletedFileNames.push(block.source);
+        } else {
+          const mappedBlock = {
+            id: block.id,
+            type: block.type === 'snippet' ? 'manual' : block.type,
+            source: block.title,
+            text: block.summary
+          };
+          await electronAPI.deleteChatKbBlock(chat.id, mappedBlock);
+        }
+      }
+
+      // Drop any deleted files from the JSON metadata registry in one pass
+      if (deletedFileNames.length > 0) {
+        const lowered = deletedFileNames.map(n => n.toLowerCase());
+        const updatedKbFiles = kbFiles.filter(f => !lowered.includes(f.name.toLowerCase()));
+        await onSaveChat({
+          ...chat,
+          knowledgeFiles: JSON.stringify(updatedKbFiles)
+        });
       }
 
       setSelectedBlockIds([]);
@@ -986,7 +1004,7 @@ export default function ChatMemoryView({
                     }`}
                 >
                   {/* Selection Checkbox */}
-                  {block.type !== 'summarized' && block.type !== 'rag_file' && (
+                  {block.type !== 'summarized' && (
                     <div className="pt-1.5 shrink-0 select-none" onClick={(e) => e.stopPropagation()}>
                       <div
                         onClick={() => handleToggleSelectBlock(block.id)}
@@ -1886,14 +1904,25 @@ export default function ChatMemoryView({
 
       {confirmDialog && (
         <ConfirmDialog
-          isOpen={!!confirmDialog}
+          tone="danger"
           message={confirmDialog.message}
-          confirmLabel={confirmDialog.confirmLabel || "Delete"}
-          onConfirm={async () => {
-            const fn = confirmDialog.onConfirm;
-            setConfirmDialog(null);
-            if (fn) await fn();
-          }}
+          actions={[
+            {
+              label: 'Cancel',
+              variant: 'ghost',
+              onClick: () => setConfirmDialog(null)
+            },
+            {
+              label: confirmDialog.confirmLabel || 'Delete',
+              variant: 'danger',
+              autoFocus: true,
+              onClick: async () => {
+                const fn = confirmDialog.onConfirm;
+                setConfirmDialog(null);
+                if (fn) await fn();
+              }
+            }
+          ]}
           onClose={() => setConfirmDialog(null)}
         />
       )}

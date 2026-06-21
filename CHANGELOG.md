@@ -18,6 +18,8 @@ All notable changes to Kallamo are documented in this file. This project follows
 - Adding a custom memory no longer switches the active filter tab away from your current view.
 - Reasoning / "thinking" output from local models that return it in a separate field (e.g. reasoning models via LM Studio) is now correctly shown in its own collapsible block. This completes the partial fix from 1.0.4.
 - Fixed the current message being duplicated in the request sent to the model.
+- The RAG diagnostics toggles (Agentic and Token breakdown) no longer switch themselves off when you adjust a Knowledge Base or chunk slider; your debug preferences now persist correctly.
+- Bulk delete in Workspace Memory now works on knowledge files: files show a selection checkbox like other blocks, and selecting them (including via Select All) removes the file and all of its searchable chunks instead of silently skipping them.
 
 ## [1.0.4] - 2026-06-17
 
