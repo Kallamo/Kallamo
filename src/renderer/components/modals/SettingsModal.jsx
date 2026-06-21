@@ -192,6 +192,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
           topKMemory: key === 'topKMemory' ? Number(value) : Number(current.topKMemory),
           executionDevice: current.executionDevice,
           ragDebug: current.ragDebug,
+          agenticDebug: current.agenticDebug,
+          tokenDebug: current.tokenDebug,
           embeddingEngine: current.embeddingEngine,
           embeddingApiProfileId: current.embeddingApiProfileId,
           embeddingModelName: key === 'embeddingModelName' ? value : current.embeddingModelName
