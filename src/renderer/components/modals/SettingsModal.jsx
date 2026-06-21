@@ -955,7 +955,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           <span className="text-sm text-gray-200 font-bold">Chunk Size (Characters)</span>
                           <span className="text-xs text-accent font-mono font-bold">{chunkSize}</span>
                         </div>
-                        <p className="text-[10px] text-gray-500 mb-2">The character length limit used to slice imported knowledge documents into distinct vector blocks.</p>
+                        <p className="text-[11px] text-gray-400 leading-relaxed mb-2">The character length limit used to slice imported knowledge documents into distinct vector blocks.</p>
                         <input
                           type="range"
                           min="200"
@@ -969,22 +969,38 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
 
                       <div className="h-px bg-gray-800/50 w-full"></div>
 
-                      {/* Similarity */}
+                      {/* Retrieval Strictness */}
                       <div>
                         <div className="flex justify-between mb-1">
-                          <span className="text-sm text-gray-200 font-bold">Similarity Threshold</span>
-                          <span className="text-xs text-accent font-mono font-bold">{similarity}</span>
+                          <span className="text-sm text-gray-200 font-bold">Retrieval Strictness</span>
+                          <span className="text-xs text-accent font-mono font-bold">{Math.round(similarity * 100)}%</span>
                         </div>
-                        <p className="text-[10px] text-gray-500 mb-2">The minimum similarity score required to retrieve a knowledge chunk (0.1 includes everything, 0.9 includes only exact matches).</p>
+                        <p className="text-[11px] text-gray-400 leading-relaxed mb-2">Sets how closely retrieved content must match your query. Lower values bring in more loosely related content; higher values keep only the closest matches.</p>
                         <input
                           type="range"
-                          min="0.1"
-                          max="0.9"
+                          min="0"
+                          max="1"
                           step="0.05"
                           value={similarity}
                           onChange={(e) => updateSettingWithDebounce('similarity', parseFloat(e.target.value))}
                           className="w-full accent-accent cursor-pointer"
                         />
+                        {(() => {
+                          const pct = Math.round(similarity * 100);
+                          let label, recommended = false;
+                          if (pct === 0) label = 'Everything is retrieved — no filtering applied.';
+                          else if (pct < 30) label = 'Very broad — maximum context, may include loosely related material.';
+                          else if (pct < 45) { label = 'Balanced — recommended for wide, exploratory questions.'; recommended = true; }
+                          else if (pct < 65) label = 'Moderate — a solid general-purpose setting.';
+                          else if (pct < 85) { label = 'Focused — recommended for specific, narrow lookups.'; recommended = true; }
+                          else if (pct < 100) label = 'Strict — only strongly matching content gets through.';
+                          else label = 'Exact only — keeps just the closest matches.';
+                          return (
+                            <p className={`text-[11px] mt-1.5 font-medium leading-relaxed ${recommended ? 'text-accent/90' : 'text-gray-400'}`}>
+                              {label}
+                            </p>
+                          );
+                        })()}
                       </div>
 
                       <div className="h-px bg-gray-800/50 w-full"></div>
@@ -995,7 +1011,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           <span className="text-sm text-gray-200 font-bold">Knowledge Base Top-K</span>
                           <span className="text-xs text-accent font-mono font-bold">{topKKB}</span>
                         </div>
-                        <p className="text-[10px] text-gray-500 mb-2">The maximum number of matching text blocks fetched from the profile's knowledge base to feed the AI prompt.</p>
+                        <p className="text-[11px] text-gray-400 leading-relaxed mb-2">The maximum number of matching text blocks fetched from the profile's knowledge base to feed the AI prompt.</p>
                         <input
                           type="range"
                           min="1"
@@ -1015,7 +1031,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           <span className="text-sm text-gray-200 font-bold">Chat Memory Top-K</span>
                           <span className="text-xs text-accent font-mono font-bold">{topKMemory}</span>
                         </div>
-                        <p className="text-[10px] text-gray-500 mb-2">The maximum number of semantic memory snippets recalled from past archived conversations per message.</p>
+                        <p className="text-[11px] text-gray-400 leading-relaxed mb-2">The maximum number of semantic memory snippets recalled from past archived conversations per message.</p>
                         <input
                           type="range"
                           min="1"

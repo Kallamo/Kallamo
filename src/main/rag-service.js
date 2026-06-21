@@ -83,6 +83,29 @@ function resetLocalEngine() {
 const RAG_MODEL_ID = 'Xenova/multilingual-e5-small';
 const RAG_MODEL_DIM = 384;
 
+// Minimum amount of REAL informational content (after stripping scaffold/empty labels)
+// a chunk must have to be indexed. Empty NPC/form skeletons ("Nome:\n● Raça:\n...") are
+// pure structure with no content, yet score high cosine on facet-listing queries
+// ("leaders, factions, population, economy") and poison the top results. Tune with 🔬.
+const MIN_MEANINGFUL_CHARS = 60;
+
+// Length of actual content in a chunk, ignoring bullet markers, lone bullets, and
+// empty "Label:" lines (a field label with no value after the colon).
+function meaningfulContentLength(text) {
+    if (!text) return 0;
+    const kept = [];
+    for (const rawLine of text.split('\n')) {
+        let line = rawLine.trim();
+        if (!line) continue;
+        // Strip leading bullet/list markers
+        line = line.replace(/^[●○•◦▪‣·\-\*▪○\s]+/, '').trim();
+        if (!line) continue;                 // lone bullet
+        if (/^[^:]{1,40}:\s*$/.test(line)) continue; // empty "Label:" with no value
+        kept.push(line);
+    }
+    return kept.join(' ').replace(/\s+/g, ' ').trim().length;
+}
+
 function chunkText(text, maxChunkSize = 1000) {
     if (!text || text.trim().length === 0) return [];
 
@@ -113,7 +136,9 @@ function chunkText(text, maxChunkSize = 1000) {
         chunks[chunks.length - 1] += "\n\n" + currentChunk.trim();
     }
 
-    return chunks;
+    // Drop low-information chunks (empty form skeletons, label-only fragments) so they
+    // never enter the index and poison retrieval.
+    return chunks.filter(c => meaningfulContentLength(c) >= MIN_MEANINGFUL_CHARS);
 }
 
 function calculateSimilarity(vecA, vecB) {
@@ -293,8 +318,18 @@ function deleteChunksFromDb(ownerId, ownerType, sourceFileName) {
 // rescues exact keyword matches. Tuned with the 🔬 debug panel.
 const ALPHA_DENSE = 0.7;
 
+// Real similarity scores live in a narrow high band (normalized e5 cosines rarely
+// drop below ~0.70 even for unrelated text), so a raw 0-1 threshold is meaningless.
+// The Retrieval Strictness slider sends a 0-1 dial which we map onto this band: the
+// low end only trims obvious off-topic noise, the high end keeps near-exact matches.
+const SIMILARITY_FLOOR_MIN = 0.70;
+const SIMILARITY_FLOOR_MAX = 0.88;
+
 async function executeHybridSearch(queryText, ownerId, ownerType, threshold = 0.3, k = 5) {
     try {
+        // Map the 0-1 strictness dial onto the cosine band where real matches live.
+        const cosineFloor = SIMILARITY_FLOOR_MIN + threshold * (SIMILARITY_FLOOR_MAX - SIMILARITY_FLOOR_MIN);
+
         const candidateRows = db.prepare('SELECT * FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ?').all(ownerId, ownerType);
         if (candidateRows.length === 0) return [];
 
@@ -377,7 +412,7 @@ async function executeHybridSearch(queryText, ownerId, ownerType, threshold = 0.
         // cosine similarity across ALL results — dense and sparse-only alike — closing
         // the BM25 noise leak (keyword-only matches with low similarity no longer enter).
         const pruned = fusedResults
-            .filter(r => r.denseScore >= threshold)
+            .filter(r => r.denseScore >= cosineFloor)
             .sort((a, b) => b.fusionScore - a.fusionScore);
 
         return pruned.slice(0, k);
