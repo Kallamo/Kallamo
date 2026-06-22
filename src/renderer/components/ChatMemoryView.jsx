@@ -384,17 +384,9 @@ export default function ChatMemoryView({
             : b
         ));
       } else if (block.type === 'snippet') {
-        const updatedBlocks = memoryBlocks.map(b => {
-          if (b.id === block.id) {
-            const list = b.profiles || [];
-            const newList = list.includes(profileId) ? list.filter(id => id !== profileId) : [...list, profileId];
-            return { ...b, profiles: newList };
-          }
-          return b;
-        });
-        await onSaveChat({ ...chat, memoryBlocks: JSON.stringify(updatedBlocks) });
-
-        // Update profiles in vector_db.json
+        // Persist via saveChatKbBlock so the backend merges into the fresh
+        // memoryBlocks from the DB. Rebuilding the whole JSON from the (possibly
+        // stale) chat prop would clobber any snippets added this session.
         const targetBlock = blocks.find(b => b.id === block.id);
         if (targetBlock) {
           const newList = targetBlock.profiles.includes(profileId) ? targetBlock.profiles.filter(id => id !== profileId) : [...targetBlock.profiles, profileId];
@@ -403,9 +395,12 @@ export default function ChatMemoryView({
             type: 'manual',
             source: targetBlock.source,
             text: targetBlock.text,
-            profiles: newList
+            profiles: newList,
+            keywords: targetBlock.keywords || [],
+            strategy: targetBlock.strategy || 'rag_search'
           });
         }
+        await refreshChats(chat.id);
         loadBlocks();
       }
     } catch (err) {
@@ -732,6 +727,9 @@ export default function ChatMemoryView({
       }
       setEditorOpen(false);
       setEditingBlock(null);
+      // Refresh the chat prop so its memoryBlocks stays in sync with the DB.
+      // Otherwise a later rename/scope edit could write back a stale copy.
+      await refreshChats(chat.id);
       loadBlocks();
     } catch (err) {
       console.error("Error saving block editor:", err);
@@ -745,14 +743,9 @@ export default function ChatMemoryView({
     if (!renameTitle.trim()) return;
     try {
       if (block.type === 'snippet') {
-        const updatedBlocks = memoryBlocks.map(b => {
-          if (b.id === block.id) {
-            return { ...b, title: renameTitle.trim() };
-          }
-          return b;
-        });
-        await onSaveChat({ ...chat, memoryBlocks: JSON.stringify(updatedBlocks) });
-
+        // Persist via saveChatKbBlock so the backend merges the rename into the
+        // fresh memoryBlocks from the DB. Rebuilding the whole JSON from the
+        // (possibly stale) chat prop would clobber snippets added this session.
         const targetBlock = blocks.find(b => b.id === block.id);
         if (targetBlock) {
           await electronAPI.saveChatKbBlock(chat.id, {
@@ -760,9 +753,12 @@ export default function ChatMemoryView({
             type: 'manual',
             source: renameTitle.trim(),
             text: targetBlock.text,
-            profiles: targetBlock.profiles
+            profiles: targetBlock.profiles,
+            keywords: targetBlock.keywords || [],
+            strategy: targetBlock.strategy || 'rag_search'
           });
         }
+        await refreshChats(chat.id);
         loadBlocks();
       }
       setRenamingId(null);
