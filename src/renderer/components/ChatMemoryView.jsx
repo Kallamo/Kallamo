@@ -9,6 +9,7 @@ import Badge from './ui/Badge';
 import TokenBadge from './ui/TokenBadge';
 import EmptyState from './ui/EmptyState';
 import Checkbox from './ui/Checkbox';
+import Toggle from './ui/Toggle';
 import RenameFilesModal from './ui/RenameFilesModal';
 
 export default function ChatMemoryView({
@@ -128,7 +129,8 @@ export default function ChatMemoryView({
           summary: b.text,
           profiles: blockProfiles,
           keywords: b.rawItem.keywords || b.keywords || [],
-          strategy: b.strategy || b.rawItem.strategy || 'rag_search'
+          strategy: b.strategy || b.rawItem.strategy || 'rag_search',
+          enabled: b.enabled !== false
         };
       });
       setBlocks(mappedData);
@@ -295,6 +297,7 @@ export default function ChatMemoryView({
         keywords: Array.from(new Set(chunks.flatMap(c => c.keywords || []))),
         profiles: Array.from(new Set(chunks.flatMap(c => c.profiles || []))),
         tokenCount: chunks.reduce((sum, c) => sum + (c.tokenCount || 0), 0),
+        enabled: chunks.every(c => c.enabled !== false),
         chunks: chunks
       });
     });
@@ -337,6 +340,7 @@ export default function ChatMemoryView({
     let alwaysOn = 0;
     let searchable = 0;
     combinedBlocks.forEach(b => {
+      if (b.enabled === false) return;
       const t = b.tokenCount || 0;
       const isAlwaysOn = b.type === 'constant'
         || (b.type === 'manual' && (b.strategy === 'constant' || b.rawItem?.strategy === 'constant'));
@@ -584,6 +588,24 @@ export default function ChatMemoryView({
     setSelectedBlockIds(prev =>
       prev.includes(blockId) ? prev.filter(id => id !== blockId) : [...prev, blockId]
     );
+  };
+
+  // Enable/disable a memory unit. OFF = ignored by injection/retrieval and dropped
+  // from the token counter. Non-destructive — the content stays put.
+  const handleToggleEnabled = async (block, nextEnabled) => {
+    setBlocks(prev => prev.map(b => {
+      if (block.type === 'rag_file') {
+        return b.type === 'rag' && b.source === block.source ? { ...b, enabled: nextEnabled } : b;
+      }
+      return b.id === block.id ? { ...b, enabled: nextEnabled } : b;
+    }));
+    try {
+      await electronAPI.toggleChatKbBlockEnabled(chat.id, block, nextEnabled);
+    } catch (e) {
+      console.error("Failed to toggle chat memory block:", e);
+      showToast("Failed to update memory switch.", "error");
+      loadBlocks();
+    }
   };
 
   const handleSelectAll = () => {
@@ -997,7 +1019,7 @@ export default function ChatMemoryView({
                   className={`group relative bg-[#0a161d]/45 border rounded-xl p-4 transition-all flex items-start space-x-3.5 ${
                     block.type === 'rag_file' ? 'cursor-pointer hover:border-blue-500/50' : ''
                   } ${selectedBlockIds.includes(block.id) ? 'border-accent/40 bg-accent/5' : 'border-gray-800/80 hover:border-gray-800'
-                    }`}
+                    } ${block.enabled === false ? 'opacity-50' : ''}`}
                 >
                   {/* Selection Checkbox */}
                   {block.type !== 'summarized' && (
@@ -1021,7 +1043,7 @@ export default function ChatMemoryView({
                   )}
 
                   <div className="flex-1 flex flex-col justify-between min-w-0">
-                    <div className="flex items-start justify-between pr-32">
+                    <div className="flex items-start justify-between pr-44">
 
                       <div className="flex-1 min-w-0 mr-4">
                         {/* Badge and Title */}
@@ -1098,6 +1120,15 @@ export default function ChatMemoryView({
 
                   {/* Actions overlay panel right side */}
                   <div className="absolute top-4 right-4 flex items-center space-x-2 select-none" onClick={(e) => e.stopPropagation()}>
+
+                    {/* Enable/disable switch (everything except history summaries) */}
+                    {block.type !== 'summarized' && (
+                      <Toggle
+                        checked={block.enabled !== false}
+                        onChange={(next) => handleToggleEnabled(block, next)}
+                        className="shrink-0"
+                      />
+                    )}
 
                     {/* Ingestion Strategy Switch (Files only) */}
                     {(block.type === 'rag' || block.type === 'constant' || block.type === 'rag_file') && (

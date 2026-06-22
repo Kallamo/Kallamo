@@ -1411,7 +1411,7 @@ ipcMain.handle('get-profile-kb-blocks', async (event, { profileId }) => {
   try {
     const loadedKbData = [];
 
-    const chunks = db.prepare('SELECT id, source, text, vector, createdAt, tokenCount FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ?').all(profileId, 'profile_kb');
+    const chunks = db.prepare('SELECT id, source, text, vector, createdAt, tokenCount, enabled FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ?').all(profileId, 'profile_kb');
     chunks.forEach((v) => {
       let cleanText = v.text || '';
       if (cleanText.startsWith('Document:') && cleanText.includes('\nContent: ')) {
@@ -1435,6 +1435,7 @@ ipcMain.handle('get-profile-kb-blocks', async (event, { profileId }) => {
         source: v.source,
         text: cleanText,
         tokenCount: v.tokenCount || countTokens(v.text),
+        enabled: v.enabled !== 0,
         rawItem: {
           id: v.id,
           source: v.source,
@@ -1487,6 +1488,7 @@ ipcMain.handle('get-profile-kb-blocks', async (event, { profileId }) => {
               source: file.name,
               text: content || '',
               tokenCount: countTokens(content || ''),
+              enabled: file.enabled !== false,
               rawItem: file
             });
           }
@@ -1514,6 +1516,7 @@ ipcMain.handle('get-profile-kb-blocks', async (event, { profileId }) => {
             strategy: 'constant',
             keywords: mc.keywords || [],
             tokenCount: countTokens(mc.content || ''),
+            enabled: mc.enabled !== false,
             rawItem: {
               id: mc.id,
               source: mc.title || 'Custom Memory',
@@ -1555,7 +1558,8 @@ ipcMain.handle('save-profile-kb-blocks', async (event, { profileId, blocks }) =>
       id: b.id,
       title: b.source,
       content: b.text,
-      keywords: b.keywords || []
+      keywords: b.keywords || [],
+      enabled: b.enabled !== false
     }));
     db.replaceConstantSnippets(profileId, manualSnippets, 'profile');
 
@@ -1573,8 +1577,8 @@ ipcMain.handle('save-profile-kb-blocks', async (event, { profileId, blocks }) =>
       }
 
       const insertChunk = db.prepare(`
-        INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, tokenCount)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, tokenCount, enabled)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const insertFts = db.prepare(`
         INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text)
@@ -1594,7 +1598,8 @@ ipcMain.handle('save-profile-kb-blocks', async (event, { profileId, blocks }) =>
               textToStore,
               JSON.stringify(chunk.vector),
               chunk.createdAt || Date.now(),
-              countTokens(textToStore)
+              countTokens(textToStore),
+              b.enabled === false ? 0 : 1
             );
             insertFts.run(b.id, textToStore);
           }
@@ -1628,6 +1633,85 @@ ipcMain.handle('save-profile-kb-blocks', async (event, { profileId, blocks }) =>
     return { success: true };
   } catch (e) {
     console.error("Error saving KB blocks to disk:", e);
+    throw e;
+  }
+});
+
+ipcMain.handle('toggle-kb-block-enabled', async (event, { profileId, block, enabled }) => {
+  try {
+    const val = enabled ? 1 : 0;
+    const isConstantSnippet = block.type === 'manual'
+      && (block.strategy === 'constant' || block.rawItem?.strategy === 'constant');
+
+    if (block.type === 'rag_file') {
+      db.prepare('UPDATE knowledge_chunks SET enabled = ? WHERE ownerId = ? AND ownerType = ? AND source = ?')
+        .run(val, profileId, 'profile_kb', block.source);
+    } else if (isConstantSnippet) {
+      db.prepare('UPDATE constant_memory SET enabled = ? WHERE ownerId = ? AND id = ?')
+        .run(val, profileId, block.id);
+    } else if (block.type === 'manual' || block.type === 'rag') {
+      db.prepare('UPDATE knowledge_chunks SET enabled = ? WHERE ownerId = ? AND id = ?')
+        .run(val, profileId, block.id);
+    } else if (block.type === 'constant') {
+      const row = db.prepare('SELECT knowledgeFiles FROM writing_profiles WHERE id = ?').get(profileId);
+      if (row && row.knowledgeFiles) {
+        const files = JSON.parse(row.knowledgeFiles);
+        const target = files.find(f => f.name === block.source);
+        if (target) {
+          target.enabled = enabled;
+          db.prepare('UPDATE writing_profiles SET knowledgeFiles = ? WHERE id = ?')
+            .run(JSON.stringify(files), profileId);
+        }
+      }
+    }
+
+    return { success: true };
+  } catch (e) {
+    console.error("Error toggling KB block enabled state:", e);
+    throw e;
+  }
+});
+
+ipcMain.handle('toggle-chat-kb-block-enabled', async (event, { chatId, block, enabled }) => {
+  try {
+    const val = enabled ? 1 : 0;
+    const isConstantSnippet = (block.type === 'snippet' || block.type === 'manual')
+      && (block.strategy === 'constant' || block.rawItem?.strategy === 'constant');
+
+    if (block.type === 'rag_file') {
+      db.prepare('UPDATE knowledge_chunks SET enabled = ? WHERE ownerId = ? AND ownerType = ? AND source = ?')
+        .run(val, chatId, 'chat_kb', block.source);
+    } else if (block.type === 'constant') {
+      const row = db.prepare('SELECT knowledgeFiles FROM chats WHERE id = ?').get(chatId);
+      if (row && row.knowledgeFiles) {
+        const files = JSON.parse(row.knowledgeFiles);
+        const target = files.find(f => f.name === block.source);
+        if (target) {
+          target.enabled = enabled;
+          db.prepare('UPDATE chats SET knowledgeFiles = ? WHERE id = ?').run(JSON.stringify(files), chatId);
+        }
+      }
+    } else if (block.type === 'snippet' || block.type === 'manual') {
+      // Persist the flag on the memoryBlocks JSON entry (drives constant injection + UI state)
+      const row = db.prepare('SELECT memoryBlocks FROM chats WHERE id = ?').get(chatId);
+      if (row && row.memoryBlocks) {
+        const memoryBlocks = JSON.parse(row.memoryBlocks);
+        const target = memoryBlocks.find(b => b.id === block.id);
+        if (target) {
+          target.enabled = enabled;
+          db.prepare('UPDATE chats SET memoryBlocks = ? WHERE id = ?').run(JSON.stringify(memoryBlocks), chatId);
+        }
+      }
+      // Searchable snippets are also a vector row (chat_memory) — gate retrieval too
+      if (!isConstantSnippet) {
+        db.prepare('UPDATE knowledge_chunks SET enabled = ? WHERE ownerId = ? AND id = ?')
+          .run(val, chatId, block.id);
+      }
+    }
+
+    return { success: true };
+  } catch (e) {
+    console.error("Error toggling chat KB block enabled state:", e);
     throw e;
   }
 });
@@ -2764,16 +2848,6 @@ ipcMain.handle('purge-vectors', async (event) => {
   try {
     db.prepare('DELETE FROM knowledge_chunks').run();
     db.prepare('DELETE FROM knowledge_chunks_fts').run();
-
-    if (fs.existsSync(profilesDir)) {
-      const folders = fs.readdirSync(profilesDir);
-      for (const folder of folders) {
-        const vDb = path.join(profilesDir, folder, 'KnowledgeBase', 'vector_db.json');
-        if (fs.existsSync(vDb)) {
-          fs.unlinkSync(vDb);
-        }
-      }
-    }
     console.log("Vector DB cache purged successfully.");
     return { success: true };
   } catch (err) {
@@ -2824,40 +2898,9 @@ ipcMain.handle('save-chat-manual-snippet', async (event, { chatId, snippetId, ti
 
 ipcMain.handle('delete-chat-manual-snippet', async (event, { chatId, snippetId }) => {
   try {
-    const dbPaths = [
-      path.join(chatsDir, chatId, 'Memory', 'vector_db.json'),
-      path.join(chatsDir, chatId, 'Memory', 'vector_db.json.bak')
-    ];
-    let chunkIdsToDelete = [snippetId];
-
-    for (const dbPath of dbPaths) {
-      if (fs.existsSync(dbPath)) {
-        try {
-          let vectorDB = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
-          const targetChunks = vectorDB.filter(chunk => chunk.blockId === snippetId || chunk.id === snippetId);
-          targetChunks.forEach(c => {
-            if (c.id) chunkIdsToDelete.push(c.id);
-          });
-
-          const originalLength = vectorDB.length;
-          const filteredDB = vectorDB.filter(chunk => chunk.blockId !== snippetId && chunk.id !== snippetId);
-          if (filteredDB.length !== originalLength) {
-            fs.writeFileSync(dbPath, JSON.stringify(filteredDB, null, 2));
-            console.log(`[Chat Memory Clean] Deleted snippet ${snippetId} vectors from JSON`);
-          }
-        } catch (err) {
-          console.error("Error cleaning vector DB on snippet delete:", err);
-        }
-      }
-    }
-
     db.transaction(() => {
-      const deleteChunk = db.prepare('DELETE FROM knowledge_chunks WHERE ownerId = ? AND id = ?');
-      const deleteFts = db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId = ?');
-      for (const id of chunkIdsToDelete) {
-        deleteChunk.run(chatId, id);
-        deleteFts.run(id);
-      }
+      db.prepare('DELETE FROM knowledge_chunks WHERE ownerId = ? AND id = ?').run(chatId, snippetId);
+      db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId = ?').run(snippetId);
     })();
 
     return { success: true };
@@ -2871,7 +2914,7 @@ ipcMain.handle('get-chat-kb-blocks', async (event, { chatId }) => {
   try {
     const loadedKbData = [];
 
-    const ragChunks = db.prepare('SELECT id, source, text FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ?').all(chatId, 'chat_kb');
+    const ragChunks = db.prepare('SELECT id, source, text, enabled FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ?').all(chatId, 'chat_kb');
     ragChunks.forEach((v) => {
       let cleanText = v.text || '';
       if (cleanText.startsWith('Document:') && cleanText.includes('\nContent: ')) {
@@ -2882,6 +2925,7 @@ ipcMain.handle('get-chat-kb-blocks', async (event, { chatId }) => {
         type: 'rag',
         source: v.source,
         text: cleanText,
+        enabled: v.enabled !== 0,
         rawItem: v
       });
     });
@@ -2900,18 +2944,6 @@ ipcMain.handle('get-chat-kb-blocks', async (event, { chatId }) => {
               db.prepare('DELETE FROM knowledge_chunks WHERE ownerId = ? AND id = ?').run(chatId, v.id);
               db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId = ?').run(v.id);
             })();
-
-            const dbPath = path.join(chatsDir, chatId, 'Memory', 'vector_db.json');
-            if (fs.existsSync(dbPath)) {
-              try {
-                let vectorDB = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
-                const originalLength = vectorDB.length;
-                vectorDB = vectorDB.filter(chunk => chunk.blockId !== v.id);
-                if (vectorDB.length !== originalLength) {
-                  fs.writeFileSync(dbPath, JSON.stringify(vectorDB, null, 2));
-                }
-              } catch (err) { }
-            }
             continue;
           }
 
@@ -2962,6 +2994,7 @@ ipcMain.handle('get-chat-kb-blocks', async (event, { chatId }) => {
             source: v.title || v.source || 'Custom Memory',
             text: cleanText,
             strategy: v.strategy || 'rag_search',
+            enabled: v.enabled !== false,
             rawItem: {
               ...rawItem,
               strategy: v.strategy || 'rag_search'
@@ -3010,6 +3043,7 @@ ipcMain.handle('get-chat-kb-blocks', async (event, { chatId }) => {
               type: 'constant',
               source: file.name,
               text: content || '',
+              enabled: file.enabled !== false,
               rawItem: file
             });
           }
@@ -3045,24 +3079,21 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
         }).filter(Boolean)
         : [];
 
+      // Resolve the enable flag up front so a rebuilt searchable chunk keeps it
+      // (the INSERT below would otherwise reset enabled to the default).
+      const existingMemoryRow = db.prepare('SELECT memoryBlocks FROM chats WHERE id = ?').get(chatId);
+      const existingEntry = existingMemoryRow && existingMemoryRow.memoryBlocks
+        ? JSON.parse(existingMemoryRow.memoryBlocks).find(b => b.id === snippetId)
+        : null;
+      const resolvedEnabled = block.enabled !== undefined
+        ? block.enabled !== false
+        : (existingEntry ? existingEntry.enabled !== false : true);
+
       if (block.strategy === 'constant') {
         db.transaction(() => {
           db.prepare('DELETE FROM knowledge_chunks WHERE ownerId = ? AND id = ?').run(chatId, snippetId);
           db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId = ?').run(snippetId);
         })();
-
-        const memoryDir = path.join(chatsDir, chatId, 'Memory');
-        const dbPath = path.join(memoryDir, 'vector_db.json');
-        if (fs.existsSync(dbPath)) {
-          try {
-            let vectorDB = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
-            const originalLen = vectorDB.length;
-            vectorDB = vectorDB.filter(c => c.blockId !== snippetId);
-            if (vectorDB.length !== originalLen) {
-              fs.writeFileSync(dbPath, JSON.stringify(vectorDB, null, 2));
-            }
-          } catch (e) { }
-        }
       } else {
         const vectorData = await vectorizeChunks([block.text], block.source || 'Custom Memory', null, cleanKeywords);
         const chunk = vectorData[0] || null;
@@ -3072,8 +3103,8 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
           chunk.keywords = cleanKeywords;
 
           const insertChunk = db.prepare(`
-            INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, enabled)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
           `);
           const insertFts = db.prepare(`
             INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text)
@@ -3087,7 +3118,8 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
               block.source || 'Custom Memory',
               chunk.text,
               JSON.stringify(chunk.vector),
-              Date.now()
+              Date.now(),
+              resolvedEnabled ? 1 : 0
             );
             insertFts.run(snippetId, chunk.text);
           })();
@@ -3107,7 +3139,8 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
         type: 'manual',
         strategy: block.strategy || 'rag_search',
         profiles: block.profiles || [],
-        keywords: cleanKeywords
+        keywords: cleanKeywords,
+        enabled: resolvedEnabled
       };
 
       const index = memoryBlocks.findIndex(b => b.id === snippetId);
@@ -3162,29 +3195,6 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
 ipcMain.handle('delete-chat-kb-block', async (event, { chatId, block }) => {
   try {
     if (block.type === 'manual' || block.type === 'summarized') {
-      const dbPaths = [
-        path.join(chatsDir, chatId, 'Memory', 'vector_db.json'),
-        path.join(chatsDir, chatId, 'Memory', 'vector_db.json.bak')
-      ];
-      let chunkIdsToDelete = [block.id];
-
-      for (const dbPath of dbPaths) {
-        if (fs.existsSync(dbPath)) {
-          try {
-            let vectorDB = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
-            const targetChunks = vectorDB.filter(chunk => chunk.blockId === block.id || chunk.id === block.id);
-            targetChunks.forEach(c => {
-              if (c.id) chunkIdsToDelete.push(c.id);
-            });
-
-            const filteredDB = vectorDB.filter(chunk => chunk.blockId !== block.id && chunk.id !== block.id);
-            fs.writeFileSync(dbPath, JSON.stringify(filteredDB, null, 2));
-          } catch (err) {
-            console.error("Error cleaning chat vector DB on block delete:", err);
-          }
-        }
-      }
-
       const chatRow = db.prepare('SELECT memoryBlocks FROM chats WHERE id = ?').get(chatId);
       if (chatRow && chatRow.memoryBlocks) {
         let memoryBlocks = JSON.parse(chatRow.memoryBlocks);
@@ -3193,12 +3203,8 @@ ipcMain.handle('delete-chat-kb-block', async (event, { chatId, block }) => {
       }
 
       db.transaction(() => {
-        const deleteChunk = db.prepare('DELETE FROM knowledge_chunks WHERE ownerId = ? AND id = ?');
-        const deleteFts = db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId = ?');
-        for (const id of chunkIdsToDelete) {
-          deleteChunk.run(chatId, id);
-          deleteFts.run(id);
-        }
+        db.prepare('DELETE FROM knowledge_chunks WHERE ownerId = ? AND id = ?').run(chatId, block.id);
+        db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId = ?').run(block.id);
       })();
     }
     else if (block.type === 'constant') {

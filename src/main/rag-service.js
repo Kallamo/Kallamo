@@ -330,7 +330,7 @@ async function executeHybridSearch(queryText, ownerId, ownerType, threshold = 0.
         // Map the 0-1 strictness dial onto the cosine band where real matches live.
         const cosineFloor = SIMILARITY_FLOOR_MIN + threshold * (SIMILARITY_FLOOR_MAX - SIMILARITY_FLOOR_MIN);
 
-        const candidateRows = db.prepare('SELECT * FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ?').all(ownerId, ownerType);
+        const candidateRows = db.prepare('SELECT * FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ? AND enabled = 1').all(ownerId, ownerType);
         if (candidateRows.length === 0) return [];
 
         const queryVector = await generateEmbeddingVector(queryText, true);

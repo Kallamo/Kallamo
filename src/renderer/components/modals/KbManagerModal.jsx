@@ -10,6 +10,7 @@ import Badge from '../ui/Badge';
 import TokenBadge from '../ui/TokenBadge';
 import EmptyState from '../ui/EmptyState';
 import Checkbox from '../ui/Checkbox';
+import Toggle from '../ui/Toggle';
 import RenameFilesModal from '../ui/RenameFilesModal';
 
 export default function KbManagerModal({ profile, onClose }) {
@@ -424,6 +425,25 @@ export default function KbManagerModal({ profile, onClose }) {
     );
   };
 
+  // Enable/disable a memory unit. OFF = ignored by injection/retrieval and dropped
+  // from the token counter. Non-destructive — the content stays put.
+  const handleToggleEnabled = async (block, nextEnabled) => {
+    // Optimistic local update on the ungrouped per-chunk blocks state
+    setBlocks(prev => prev.map(b => {
+      if (block.type === 'rag_file') {
+        return b.type === 'rag' && b.source === block.source ? { ...b, enabled: nextEnabled } : b;
+      }
+      return b.id === block.id ? { ...b, enabled: nextEnabled } : b;
+    }));
+    try {
+      await electronAPI.toggleKbBlockEnabled(profile.id, block, nextEnabled);
+    } catch (e) {
+      console.error("Failed to toggle memory block:", e);
+      showToast("Failed to update memory switch.", "error");
+      loadBlocks();
+    }
+  };
+
   const handleSelectAll = () => {
     const selectable = filteredBlocks.map(b => b.id);
     setSelectedBlockIds(selectable);
@@ -788,6 +808,7 @@ export default function KbManagerModal({ profile, onClose }) {
         text: `Contains ${chunks.length} searchable chunk(s). Click to view and manage chunks.`,
         keywords: Array.from(new Set(chunks.flatMap(c => c.keywords || []))),
         tokenCount: chunks.reduce((sum, c) => sum + (c.tokenCount || 0), 0),
+        enabled: chunks.every(c => c.enabled !== false),
         chunks: chunks
       });
     });
@@ -823,6 +844,7 @@ export default function KbManagerModal({ profile, onClose }) {
     let alwaysOn = 0;
     let searchable = 0;
     groupedBlocks.forEach(b => {
+      if (b.enabled === false) return;
       const t = b.tokenCount || tokenMap[b.id] || 0;
       const isAlwaysOn = b.type === 'constant'
         || (b.type === 'manual' && (b.strategy === 'constant' || b.rawItem?.strategy === 'constant'));
@@ -1252,7 +1274,7 @@ export default function KbManagerModal({ profile, onClose }) {
                           } ${selectedBlockIds.includes(block.id)
                             ? 'border-accent/40 bg-accent/5'
                             : 'border-gray-800/80 hover:border-gray-700'
-                            }`}
+                            } ${block.enabled === false ? 'opacity-50' : ''}`}
                         >
                           {/* Card Header */}
                           <div className="flex justify-between items-start mb-2 shrink-0">
@@ -1290,7 +1312,13 @@ export default function KbManagerModal({ profile, onClose }) {
                               </span>
                               <TokenBadge tokens={tokenOf(block)} className="shrink-0" />
                             </div>
-                            <div className="flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center space-x-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                              <Toggle
+                                checked={block.enabled !== false}
+                                onChange={(next) => handleToggleEnabled(block, next)}
+                                className="shrink-0"
+                              />
+                              <div className="flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                               {block.type !== 'rag_file' && (
                                 <button
                                   onClick={() => openEditor(block)}
@@ -1317,6 +1345,7 @@ export default function KbManagerModal({ profile, onClose }) {
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
+                              </div>
                             </div>
                           </div>
 

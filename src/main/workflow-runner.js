@@ -332,6 +332,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
 
             for (const file of knowledgeFiles) {
                 try {
+                    if (file.enabled === false) continue;
                     if (!file.strategy || file.strategy === 'constant' || file.strategy === 'full_context') {
                         if (fs.existsSync(file.internalPath)) {
                             let fileContent = readEntireKbFile(profile.id, file.name);
@@ -350,6 +351,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
             try {
                 const manualConstants = db.getConstantSnippets(profile.id);
                 for (const mc of manualConstants) {
+                    if (mc.enabled === false) continue;
                     const content = mc.content || '';
                     const title = mc.title || 'Custom Memory';
                     constantKnowledge += `\n\n--- KNOWLEDGE SNIPPET: ${title} ---\n${content}\n------------------\n`;
@@ -367,6 +369,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
 
                     for (const file of chatKbFiles) {
                         try {
+                            if (file.enabled === false) continue;
                             if (!file.strategy || file.strategy === 'constant' || file.strategy === 'full_context') {
                                 if (file.profiles && file.profiles.length > 0 && !file.profiles.includes(profile.id)) {
                                     continue;
@@ -396,6 +399,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                         : (chat.memoryBlocks || []);
                     const constantSnippets = snippets.filter(s => s.type === 'manual' && s.strategy === 'constant');
                     for (const s of constantSnippets) {
+                        if (s.enabled === false) continue;
                         if (s.profiles && s.profiles.length > 0 && !s.profiles.includes(profile.id)) {
                             continue;
                         }

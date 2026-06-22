@@ -260,7 +260,8 @@ db.exec(`
     source TEXT NOT NULL,
     text TEXT NOT NULL,
     vector TEXT NOT NULL,
-    createdAt INTEGER NOT NULL
+    createdAt INTEGER NOT NULL,
+    enabled INTEGER DEFAULT 1
   );
 
   CREATE TABLE IF NOT EXISTS deleted_records (
@@ -284,7 +285,8 @@ db.exec(`
     content TEXT NOT NULL,
     keywords TEXT,
     createdAt INTEGER,
-    last_modified INTEGER DEFAULT 0
+    last_modified INTEGER DEFAULT 0,
+    enabled INTEGER DEFAULT 1
   );
 
   CREATE INDEX IF NOT EXISTS idx_constant_memory_owner ON constant_memory(ownerId, ownerType);
@@ -466,6 +468,17 @@ try {
     db.exec("ALTER TABLE knowledge_chunks ADD COLUMN tokenCount INTEGER DEFAULT 0");
     console.log("Database Migration: Added tokenCount column to knowledge_chunks table.");
   }
+  if (!kcColumns.includes('enabled')) {
+    db.exec("ALTER TABLE knowledge_chunks ADD COLUMN enabled INTEGER DEFAULT 1");
+    console.log("Database Migration: Added enabled column to knowledge_chunks table.");
+  }
+
+  const cmTableInfo = db.pragma("table_info(constant_memory)");
+  const cmColumns = cmTableInfo.map(col => col.name);
+  if (!cmColumns.includes('enabled')) {
+    db.exec("ALTER TABLE constant_memory ADD COLUMN enabled INTEGER DEFAULT 1");
+    console.log("Database Migration: Added enabled column to constant_memory table.");
+  }
 } catch (e) {
   console.error("Migration error adding columns to database tables:", e);
 }
@@ -503,121 +516,6 @@ try {
   }
 } catch (e) {
   console.error("Migration error checking rag_model_metadata:", e);
-}
-
-// Scan and migrate legacy vector JSON files to SQLite knowledge_chunks table
-function migrateVectorsToSQLite() {
-  const profilesDir = path.join(dataDir, 'AI Profiles');
-  const chatsDir = path.join(dataDir, 'ChatHistory');
-
-  const insertChunk = db.prepare(`
-    INSERT OR IGNORE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `);
-  const insertFts = db.prepare(`
-    INSERT OR IGNORE INTO knowledge_chunks_fts (chunkId, text)
-    VALUES (?, ?)
-  `);
-
-  if (fs.existsSync(profilesDir)) {
-    try {
-      fs.readdirSync(profilesDir).forEach(profileId => {
-        const dbPath = path.join(profilesDir, profileId, 'KnowledgeBase', 'vector_db.json');
-        if (fs.existsSync(dbPath)) {
-          try {
-            const vectorDB = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
-            if (Array.isArray(vectorDB) && vectorDB.length > 0) {
-              db.transaction(() => {
-                for (const chunk of vectorDB) {
-                  const chunkId = chunk.id || `chunk_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-                  insertChunk.run(
-                    chunkId,
-                    profileId,
-                    'profile_kb',
-                    chunk.source || 'Unknown Source',
-                    chunk.text || '',
-                    JSON.stringify(chunk.vector || []),
-                    chunk.createdAt || Date.now()
-                  );
-                  insertFts.run(chunkId, chunk.text || '');
-                }
-              })();
-              console.log(`Vector Migration: Migrated ${vectorDB.length} chunks for profile ${profileId}`);
-            }
-            fs.renameSync(dbPath, dbPath + '.bak');
-          } catch (e) {
-            console.error(`Error migrating profile vector DB for ${profileId}:`, e);
-          }
-        }
-      });
-    } catch (err) {
-      console.error("Error reading profiles directory during vector migration:", err);
-    }
-  }
-
-  if (fs.existsSync(chatsDir)) {
-    try {
-      fs.readdirSync(chatsDir).forEach(chatId => {
-        const kbPath = path.join(chatsDir, chatId, 'KnowledgeBase', 'vector_db.json');
-        if (fs.existsSync(kbPath)) {
-          try {
-            const vectorDB = JSON.parse(fs.readFileSync(kbPath, 'utf8'));
-            if (Array.isArray(vectorDB) && vectorDB.length > 0) {
-              db.transaction(() => {
-                for (const chunk of vectorDB) {
-                  const chunkId = chunk.id || `chunk_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-                  insertChunk.run(
-                    chunkId,
-                    chatId,
-                    'chat_kb',
-                    chunk.source || 'Unknown Source',
-                    chunk.text || '',
-                    JSON.stringify(chunk.vector || []),
-                    chunk.createdAt || Date.now()
-                  );
-                  insertFts.run(chunkId, chunk.text || '');
-                }
-              })();
-              console.log(`Vector Migration: Migrated ${vectorDB.length} KB chunks for chat ${chatId}`);
-            }
-            fs.renameSync(kbPath, kbPath + '.bak');
-          } catch (e) {
-            console.error(`Error migrating chat KB vector DB for ${chatId}:`, e);
-          }
-        }
-
-        const memPath = path.join(chatsDir, chatId, 'Memory', 'vector_db.json');
-        if (fs.existsSync(memPath)) {
-          try {
-            const vectorDB = JSON.parse(fs.readFileSync(memPath, 'utf8'));
-            if (Array.isArray(vectorDB) && vectorDB.length > 0) {
-              db.transaction(() => {
-                for (const chunk of vectorDB) {
-                  const chunkId = chunk.id || `chunk_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-                  insertChunk.run(
-                    chunkId,
-                    chatId,
-                    'chat_memory',
-                    chunk.title || 'Summarized History',
-                    chunk.text || '',
-                    JSON.stringify(chunk.vector || []),
-                    chunk.createdAt || Date.now()
-                  );
-                  insertFts.run(chunkId, chunk.text || '');
-                }
-              })();
-              console.log(`Vector Migration: Migrated ${vectorDB.length} memory chunks for chat ${chatId}`);
-            }
-            fs.renameSync(memPath, memPath + '.bak');
-          } catch (e) {
-            console.error(`Error migrating chat memories vector DB for ${chatId}:`, e);
-          }
-        }
-      });
-    } catch (err) {
-      console.error("Error reading chats directory during vector migration:", err);
-    }
-  }
 }
 
 function encryptExistingKeys() {
@@ -661,14 +559,15 @@ function encryptExistingKeys() {
 db.getConstantSnippets = function(ownerId, ownerType = 'profile') {
   try {
     const rows = db.prepare(
-      'SELECT id, title, content, keywords, createdAt FROM constant_memory WHERE ownerId = ? AND ownerType = ? ORDER BY createdAt ASC'
+      'SELECT id, title, content, keywords, createdAt, enabled FROM constant_memory WHERE ownerId = ? AND ownerType = ? ORDER BY createdAt ASC'
     ).all(ownerId, ownerType);
     return rows.map(r => ({
       id: r.id,
       title: r.title || 'Custom Memory',
       content: r.content || '',
       keywords: r.keywords ? JSON.parse(r.keywords) : [],
-      createdAt: r.createdAt
+      createdAt: r.createdAt,
+      enabled: r.enabled !== 0
     }));
   } catch (e) {
     console.error('[Constant Memory] getConstantSnippets failed:', e);
@@ -680,8 +579,8 @@ db.replaceConstantSnippets = function(ownerId, snippets, ownerType = 'profile') 
   try {
     const del = db.prepare('DELETE FROM constant_memory WHERE ownerId = ? AND ownerType = ?');
     const ins = db.prepare(`
-      INSERT OR REPLACE INTO constant_memory (id, ownerId, ownerType, title, content, keywords, createdAt, last_modified)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO constant_memory (id, ownerId, ownerType, title, content, keywords, createdAt, last_modified, enabled)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     db.transaction(() => {
       del.run(ownerId, ownerType);
@@ -694,7 +593,8 @@ db.replaceConstantSnippets = function(ownerId, snippets, ownerType = 'profile') 
           s.content || s.text || '',
           JSON.stringify(s.keywords || []),
           s.createdAt || Date.now(),
-          Date.now()
+          Date.now(),
+          s.enabled === false ? 0 : 1
         );
       }
     })();
@@ -762,12 +662,10 @@ function migrateConstantMemoryToSQLite() {
 
 // Perform migrations when the app is ready so safeStorage is available
 if (app.isReady()) {
-  migrateVectorsToSQLite();
   migrateConstantMemoryToSQLite();
   encryptExistingKeys();
 } else {
   app.whenReady().then(() => {
-    migrateVectorsToSQLite();
     migrateConstantMemoryToSQLite();
     encryptExistingKeys();
   });

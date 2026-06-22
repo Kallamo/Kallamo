@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   countTokens: (texts) => ipcRenderer.invoke('count-tokens', texts),
   getProfileKbBlocks: (profileId) => ipcRenderer.invoke('get-profile-kb-blocks', { profileId }),
   saveProfileKbBlocks: (profileId, blocks) => ipcRenderer.invoke('save-profile-kb-blocks', { profileId, blocks }),
+  toggleKbBlockEnabled: (profileId, block, enabled) => ipcRenderer.invoke('toggle-kb-block-enabled', { profileId, block, enabled }),
+  toggleChatKbBlockEnabled: (chatId, block, enabled) => ipcRenderer.invoke('toggle-chat-kb-block-enabled', { chatId, block, enabled }),
   vectorizeKbChunk: (text, source, keywords) => ipcRenderer.invoke('vectorize-kb-chunk', { text, source, keywords }),
   addProfileConstantFile: (profileId, file) => ipcRenderer.invoke('add-profile-constant-file', { profileId, name: file.name, path: file.path, size: file.size }),
   addProfileSearchableFile: (profileId, file) => ipcRenderer.invoke('add-profile-searchable-file', { profileId, name: file.name, path: file.path, size: file.size }),
