@@ -261,7 +261,8 @@ db.exec(`
     text TEXT NOT NULL,
     vector TEXT NOT NULL,
     createdAt INTEGER NOT NULL,
-    enabled INTEGER DEFAULT 1
+    enabled INTEGER DEFAULT 1,
+    manuallyEdited INTEGER DEFAULT 0
   );
 
   CREATE TABLE IF NOT EXISTS deleted_records (
@@ -471,6 +472,10 @@ try {
   if (!kcColumns.includes('enabled')) {
     db.exec("ALTER TABLE knowledge_chunks ADD COLUMN enabled INTEGER DEFAULT 1");
     console.log("Database Migration: Added enabled column to knowledge_chunks table.");
+  }
+  if (!kcColumns.includes('manuallyEdited')) {
+    db.exec("ALTER TABLE knowledge_chunks ADD COLUMN manuallyEdited INTEGER DEFAULT 0");
+    console.log("Database Migration: Added manuallyEdited column to knowledge_chunks table.");
   }
 
   const cmTableInfo = db.pragma("table_info(constant_memory)");

@@ -18,9 +18,11 @@ export default function Badge({
   dot = false,
   children,
   className = '',
+  title,
 }) {
   return (
     <span
+      title={title}
       className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border
         text-[9px] font-bold uppercase tracking-wider whitespace-nowrap ${TONES[tone] || TONES.gray} ${className}`}
     >

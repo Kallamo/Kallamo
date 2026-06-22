@@ -554,7 +554,10 @@ export default function KbManagerModal({ profile, onClose }) {
               item.rawItem = vectorData;
               item.rawItem.id = item.id;
               item.rawItem.strategy = editorStrategy;
+              item.rawItem.manuallyEdited = true;
             }
+            // Mark file-derived chunks so a re-index won't discard the edit
+            item.manuallyEdited = true;
           }
 
           // Save blocks back to disk
@@ -1402,8 +1405,11 @@ export default function KbManagerModal({ profile, onClose }) {
                 {viewingFileBlock.chunks.map((chunk, idx) => (
                   <div key={chunk.id} className="bg-[#00080B] border border-gray-800/80 rounded-lg p-3 flex flex-col relative group/chunk">
                     <div className="flex justify-between items-center mb-2">
-                      <span className="text-[9px] font-mono text-gray-500">
+                      <span className="text-[9px] font-mono text-gray-500 flex items-center gap-1.5">
                         Chunk #{idx + 1} (~{(chunk.tokenCount || tokenMap[chunk.id] || 0).toLocaleString()} tokens)
+                        {chunk.manuallyEdited && (
+                          <Badge tone="accent" title="Manually edited. Survives Knowledge Base re-indexing.">edited</Badge>
+                        )}
                       </span>
                       <div className="flex space-x-1 opacity-0 group-hover/chunk:opacity-100 transition-opacity">
                         <button

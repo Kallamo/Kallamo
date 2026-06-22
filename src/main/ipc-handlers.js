@@ -711,6 +711,104 @@ ipcMain.handle('delete-engine', async (event) => {
   }
 });
 
+// Collect searchable file chunks for any source that has at least one manually-edited
+// chunk. We carry the WHOLE source (not just the edited chunks) so the importer can
+// restore a consistent chunk set and skip re-chunking that file from disk. Manual
+// snippets (manual_/mem_) travel in manual_blocks.json, so they're excluded here.
+function collectEditedSearchableChunks(ownerId, ownerType) {
+  const editedSources = db.prepare(
+    "SELECT DISTINCT source FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ? AND manuallyEdited = 1 AND id NOT LIKE 'manual_%' AND id NOT LIKE 'mem_%'"
+  ).all(ownerId, ownerType).map(r => r.source);
+  if (editedSources.length === 0) return [];
+
+  const selectChunks = db.prepare(
+    "SELECT id, source, text, manuallyEdited FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ? AND source = ? AND id NOT LIKE 'manual_%' AND id NOT LIKE 'mem_%' ORDER BY id"
+  );
+  const out = [];
+  for (const source of editedSources) {
+    for (const v of selectChunks.all(ownerId, ownerType, source)) {
+      let cleanText = v.text || '';
+      if (cleanText.startsWith('Document:') && cleanText.includes('\nContent: ')) {
+        cleanText = cleanText.substring(cleanText.indexOf('\nContent: ') + 10);
+      }
+      let keywords = [];
+      const tagsMatch = v.text ? v.text.match(/Tags: (.*)\n/) : null;
+      if (tagsMatch && tagsMatch[1]) {
+        keywords = tagsMatch[1].split(',').map(k => k.trim());
+      }
+      out.push({
+        source: v.source,
+        text: cleanText,
+        keywords,
+        manuallyEdited: v.manuallyEdited === 1
+      });
+    }
+  }
+  return out;
+}
+
+// Restore searchable chunks carried by an exported KB sidecar. Re-vectorizes each
+// chunk's text with the LOCAL embedding model (so it's model-agnostic across the
+// sender/receiver), preserves the manuallyEdited flag, and marks the owning file
+// 'rag_search' + matching mtime so the background indexer skips re-chunking it (which
+// would discard the edits) and the constant-file handler won't delete the chunks.
+// `renameMap` maps the original exported source name to the (possibly renamed) local
+// file name. `files` is the live knowledgeFiles array (mutated in place).
+async function restoreSearchableChunks(ownerId, ownerType, sidecarChunks, renameMap, files) {
+  if (!Array.isArray(sidecarChunks) || sidecarChunks.length === 0) return;
+
+  const bySource = new Map();
+  for (const c of sidecarChunks) {
+    const importedName = (renameMap && renameMap[c.source]) || c.source;
+    if (!bySource.has(importedName)) bySource.set(importedName, []);
+    bySource.get(importedName).push(c);
+  }
+
+  const insertChunk = db.prepare(`
+    INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, tokenCount, enabled, manuallyEdited)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const insertFts = db.prepare(`
+    INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text)
+    VALUES (?, ?)
+  `);
+
+  for (const [importedName, chunks] of bySource.entries()) {
+    // Drop anything previously indexed for this source so we don't duplicate chunks.
+    deleteChunksFromDb(ownerId, ownerType, importedName);
+
+    for (let i = 0; i < chunks.length; i++) {
+      const c = chunks[i];
+      const cleanKeywords = Array.isArray(c.keywords)
+        ? c.keywords.map(k => { const t = k.trim().toLowerCase(); return t.startsWith('#') ? t : `#${t}`; }).filter(Boolean)
+        : [];
+      const vectorData = await vectorizeChunks([c.text], importedName, null, cleanKeywords);
+      const chunk = vectorData[0] || null;
+      if (!chunk) continue;
+      const chunkId = `chunk_${Date.now()}_${Math.random().toString(36).substring(2, 7)}_${i}`;
+      const textToStore = chunk.text;
+      db.transaction(() => {
+        insertChunk.run(
+          chunkId, ownerId, ownerType, importedName, textToStore,
+          JSON.stringify(chunk.vector), Date.now(), countTokens(textToStore), 1,
+          c.manuallyEdited ? 1 : 0
+        );
+        insertFts.run(chunkId, textToStore);
+      })();
+    }
+
+    const fileEntry = files && files.find(f => f.name === importedName);
+    if (fileEntry) {
+      fileEntry.strategy = 'rag_search';
+      try {
+        if (fileEntry.internalPath && fs.existsSync(fileEntry.internalPath)) {
+          fileEntry.lastIndexedMtime = fs.statSync(fileEntry.internalPath).mtimeMs;
+        }
+      } catch (e) { /* leave mtime unset; indexer will re-chunk as a fallback */ }
+    }
+  }
+}
+
 // Export AI Profile Config (.klp custom zip packaging, stripped of API links, variables resolved, optional KB)
 ipcMain.handle('export-ai-profile', async (event, { profile, exportKb }) => {
   try {
@@ -760,6 +858,11 @@ ipcMain.handle('export-ai-profile', async (event, { profile, exportKb }) => {
         }
       });
       zip.addFile('manual_blocks.json', Buffer.from(JSON.stringify(manualBlocks, null, 2), 'utf8'));
+
+      const editedChunks = collectEditedSearchableChunks(profile.id, 'profile_kb');
+      if (editedChunks.length > 0) {
+        zip.addFile('searchable_chunks.json', Buffer.from(JSON.stringify(editedChunks, null, 2), 'utf8'));
+      }
 
       const profileRow = db.prepare('SELECT knowledgeFiles FROM writing_profiles WHERE id = ?').get(profile.id);
       if (profileRow && profileRow.knowledgeFiles) {
@@ -893,6 +996,17 @@ ipcMain.handle('import-ai-profile', async (event) => {
           }
         }
       }
+
+      const searchableEntry = zip.getEntry('searchable_chunks.json');
+      if (searchableEntry) {
+        event.sender.send('import-progress', { progress: 90, status: 'Restoring edited searchable chunks...' });
+        try {
+          const sidecar = JSON.parse(zip.readAsText(searchableEntry));
+          await restoreSearchableChunks(newProfileId, 'profile_kb', sidecar, null, knowledgeFilesMetadata);
+        } catch (err) {
+          console.error("Error restoring searchable chunks during profile import:", err);
+        }
+      }
     }
 
     event.sender.send('import-progress', { progress: 95, status: 'Saving profile to database...' });
@@ -995,6 +1109,11 @@ ipcMain.handle('export-knowledge-base', async (event, { profileId, profileName }
     });
     zip.addFile('manual_blocks.json', Buffer.from(JSON.stringify(manualBlocks, null, 2), 'utf8'));
 
+    const editedChunks = collectEditedSearchableChunks(profileId, 'profile_kb');
+    if (editedChunks.length > 0) {
+      zip.addFile('searchable_chunks.json', Buffer.from(JSON.stringify(editedChunks, null, 2), 'utf8'));
+    }
+
     const profileRow = db.prepare('SELECT knowledgeFiles FROM writing_profiles WHERE id = ?').get(profileId);
     if (profileRow && profileRow.knowledgeFiles) {
       try {
@@ -1052,6 +1171,7 @@ ipcMain.handle('import-knowledge-base', async (event, { profileId }) => {
 
     const filesEntries = zip.getEntries().filter(entry => entry.entryName.startsWith('files/') && !entry.isDirectory);
     const manualBlocksEntry = zip.getEntry('manual_blocks.json');
+    const renameMap = {};
 
     event.sender.send('import-progress', { progress: 20, status: 'Extracting knowledge files...' });
 
@@ -1068,6 +1188,8 @@ ipcMain.handle('import-knowledge-base', async (event, { profileId }) => {
         importFileName = `${baseName}${ext}`;
         fileCollision = currentFiles.some(f => f.name.toLowerCase() === importFileName.toLowerCase());
       }
+
+      renameMap[path.basename(entry.entryName)] = importFileName;
 
       const destPath = path.join(kbDir, importFileName);
       const contentBuffer = entry.getData();
@@ -1123,6 +1245,17 @@ ipcMain.handle('import-knowledge-base', async (event, { profileId }) => {
       }
     }
 
+    const searchableEntry = zip.getEntry('searchable_chunks.json');
+    if (searchableEntry) {
+      event.sender.send('import-progress', { progress: 90, status: 'Restoring edited searchable chunks...' });
+      try {
+        const sidecar = JSON.parse(zip.readAsText(searchableEntry));
+        await restoreSearchableChunks(profileId, 'profile_kb', sidecar, renameMap, currentFiles);
+      } catch (err) {
+        console.error("Error restoring searchable chunks during KB import:", err);
+      }
+    }
+
     event.sender.send('import-progress', { progress: 95, status: 'Finalizing database configurations...' });
     const update = db.prepare('UPDATE writing_profiles SET knowledgeFiles = ? WHERE id = ?');
     update.run(JSON.stringify(currentFiles), profileId);
@@ -1168,6 +1301,11 @@ ipcMain.handle('export-chat-knowledge-base', async (event, { chatId, chatTitle }
       }
     }
     zip.addFile('manual_blocks.json', Buffer.from(JSON.stringify(manualBlocks, null, 2), 'utf8'));
+
+    const editedChunks = collectEditedSearchableChunks(chatId, 'chat_kb');
+    if (editedChunks.length > 0) {
+      zip.addFile('searchable_chunks.json', Buffer.from(JSON.stringify(editedChunks, null, 2), 'utf8'));
+    }
 
     if (chatRow && chatRow.knowledgeFiles) {
       try {
@@ -1229,6 +1367,7 @@ ipcMain.handle('import-chat-knowledge-base', async (event, { chatId }) => {
 
     const filesEntries = zip.getEntries().filter(entry => entry.entryName.startsWith('files/') && !entry.isDirectory);
     const manualBlocksEntry = zip.getEntry('manual_blocks.json');
+    const renameMap = {};
 
     event.sender.send('import-progress', { progress: 20, status: 'Extracting files...' });
 
@@ -1245,6 +1384,8 @@ ipcMain.handle('import-chat-knowledge-base', async (event, { chatId }) => {
         importFileName = `${baseName}${ext}`;
         fileCollision = currentFiles.some(f => f.name.toLowerCase() === importFileName.toLowerCase());
       }
+
+      renameMap[path.basename(entry.entryName)] = importFileName;
 
       const destPath = path.join(chatKbDir, importFileName);
       const filesDestPath = path.join(chatFilesDir, importFileName);
@@ -1316,6 +1457,17 @@ ipcMain.handle('import-chat-knowledge-base', async (event, { chatId }) => {
           chunk.keywords = cleanKeywords;
           insertChunksToDb(chatId, 'chat_memory', [chunk]);
         }
+      }
+    }
+
+    const searchableEntry = zip.getEntry('searchable_chunks.json');
+    if (searchableEntry) {
+      event.sender.send('import-progress', { progress: 90, status: 'Restoring edited searchable chunks...' });
+      try {
+        const sidecar = JSON.parse(zip.readAsText(searchableEntry));
+        await restoreSearchableChunks(chatId, 'chat_kb', sidecar, renameMap, currentFiles);
+      } catch (err) {
+        console.error("Error restoring searchable chunks during chat KB import:", err);
       }
     }
 
@@ -1411,7 +1563,7 @@ ipcMain.handle('get-profile-kb-blocks', async (event, { profileId }) => {
   try {
     const loadedKbData = [];
 
-    const chunks = db.prepare('SELECT id, source, text, vector, createdAt, tokenCount, enabled FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ?').all(profileId, 'profile_kb');
+    const chunks = db.prepare('SELECT id, source, text, vector, createdAt, tokenCount, enabled, manuallyEdited FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ?').all(profileId, 'profile_kb');
     chunks.forEach((v) => {
       let cleanText = v.text || '';
       if (cleanText.startsWith('Document:') && cleanText.includes('\nContent: ')) {
@@ -1436,13 +1588,15 @@ ipcMain.handle('get-profile-kb-blocks', async (event, { profileId }) => {
         text: cleanText,
         tokenCount: v.tokenCount || countTokens(v.text),
         enabled: v.enabled !== 0,
+        manuallyEdited: v.manuallyEdited === 1,
         rawItem: {
           id: v.id,
           source: v.source,
           text: v.text,
           vector: JSON.parse(v.vector || '[]'),
           createdAt: v.createdAt,
-          keywords: keywords
+          keywords: keywords,
+          manuallyEdited: v.manuallyEdited === 1
         }
       });
     });
@@ -1577,8 +1731,8 @@ ipcMain.handle('save-profile-kb-blocks', async (event, { profileId, blocks }) =>
       }
 
       const insertChunk = db.prepare(`
-        INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, tokenCount, enabled)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, tokenCount, enabled, manuallyEdited)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const insertFts = db.prepare(`
         INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text)
@@ -1590,6 +1744,7 @@ ipcMain.handle('save-profile-kb-blocks', async (event, { profileId, blocks }) =>
           const chunk = b.rawItem;
           if (chunk && chunk.vector) {
             const textToStore = chunk.text || `Document: ${b.source}\nContent: ${b.text}`;
+            const manuallyEdited = (b.manuallyEdited || chunk.manuallyEdited) ? 1 : 0;
             insertChunk.run(
               b.id,
               profileId,
@@ -1599,7 +1754,8 @@ ipcMain.handle('save-profile-kb-blocks', async (event, { profileId, blocks }) =>
               JSON.stringify(chunk.vector),
               chunk.createdAt || Date.now(),
               countTokens(textToStore),
-              b.enabled === false ? 0 : 1
+              b.enabled === false ? 0 : 1,
+              manuallyEdited
             );
             insertFts.run(b.id, textToStore);
           }
@@ -2914,7 +3070,7 @@ ipcMain.handle('get-chat-kb-blocks', async (event, { chatId }) => {
   try {
     const loadedKbData = [];
 
-    const ragChunks = db.prepare('SELECT id, source, text, enabled FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ?').all(chatId, 'chat_kb');
+    const ragChunks = db.prepare('SELECT id, source, text, enabled, manuallyEdited FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ?').all(chatId, 'chat_kb');
     ragChunks.forEach((v) => {
       let cleanText = v.text || '';
       if (cleanText.startsWith('Document:') && cleanText.includes('\nContent: ')) {
@@ -2926,6 +3082,7 @@ ipcMain.handle('get-chat-kb-blocks', async (event, { chatId }) => {
         source: v.source,
         text: cleanText,
         enabled: v.enabled !== 0,
+        manuallyEdited: v.manuallyEdited === 1,
         rawItem: v
       });
     });
@@ -3173,7 +3330,7 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
       const vectorData = await vectorizeChunks([block.text], block.source);
       const chunk = vectorData[0] || null;
       if (chunk) {
-        db.prepare('UPDATE knowledge_chunks SET text = ?, vector = ? WHERE id = ?').run(
+        db.prepare('UPDATE knowledge_chunks SET text = ?, vector = ?, manuallyEdited = 1 WHERE id = ?').run(
           chunk.text,
           JSON.stringify(chunk.vector),
           block.id
@@ -3531,7 +3688,15 @@ async function performReindexIfNeeded() {
         const filePath = path.join(baseDir, sourceName);
         let success = false;
 
-        if (fs.existsSync(filePath)) {
+        // If any chunk of this file was manually edited, never re-chunk from disk
+        // (that would discard the edits). Fall through to re-embedding the stored
+        // chunk text instead, which still upgrades vectors for the new model.
+        const editedCount = db.prepare(
+          'SELECT COUNT(*) AS c FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ? AND source = ? AND manuallyEdited = 1'
+        ).get(owner.ownerId, owner.ownerType, sourceName);
+        const hasManualEdits = editedCount && editedCount.c > 0;
+
+        if (!hasManualEdits && fs.existsSync(filePath)) {
           try {
             const text = await extractTextFromFile(filePath);
             if (text && text.trim().length > 0) {
@@ -3549,7 +3714,7 @@ async function performReindexIfNeeded() {
         }
 
         if (!success) {
-          console.log(`[Re-Index] Re-vectorizing database chunks directly for ${sourceName} (no source file — re-embedding stored chunks).`);
+          console.log(`[Re-Index] Re-vectorizing database chunks directly for ${sourceName} (${hasManualEdits ? 'has manual edits' : 'no source file'} — re-embedding stored chunks).`);
           const existingChunks = db.prepare('SELECT id, text FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ? AND source = ?').all(owner.ownerId, owner.ownerType, sourceName);
           for (const chunk of existingChunks) {
             try {
