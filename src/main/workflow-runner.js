@@ -996,7 +996,8 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                 temperature: 0.1,
                 maxTokens: 4000,
                 manualMode: false,
-                manualJson: ''
+                manualJson: '',
+                abortSignal: activeRun?.controller?.signal
             });
 
             agenticRagOutputTokens += estimateTokens(agentOutput);
