@@ -272,6 +272,47 @@ db.exec(`
     deleted_at INTEGER NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS folders (
+    id TEXT PRIMARY KEY,
+    workspaceId TEXT NOT NULL,
+    name TEXT NOT NULL,
+    parentId TEXT,
+    createdAt INTEGER,
+    last_modified INTEGER DEFAULT 0
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_folders_workspace ON folders(workspaceId);
+
+  CREATE TABLE IF NOT EXISTS documents (
+    id TEXT PRIMARY KEY,
+    workspaceId TEXT NOT NULL,
+    folderId TEXT,
+    title TEXT NOT NULL,
+    content TEXT,
+    sheetColor TEXT,
+    defaultFont TEXT,
+    sheetWidth INTEGER DEFAULT 720,
+    pageSize TEXT DEFAULT 'A4',
+    pageWidth INTEGER DEFAULT 794,
+    pageHeight INTEGER DEFAULT 1123,
+    marginTop INTEGER DEFAULT 96,
+    marginRight INTEGER DEFAULT 96,
+    marginBottom INTEGER DEFAULT 96,
+    marginLeft INTEGER DEFAULT 96,
+    defaultFontSize INTEGER DEFAULT 18,
+    lineHeight REAL DEFAULT 1.6,
+    paragraphSpacing INTEGER DEFAULT 12,
+    textAlign TEXT DEFAULT 'left',
+    firstLineIndent INTEGER DEFAULT 0,
+    wordGoal INTEGER DEFAULT 0,
+    vectorized INTEGER DEFAULT 0,
+    createdAt INTEGER,
+    updatedAt INTEGER,
+    last_modified INTEGER DEFAULT 0
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_documents_workspace ON documents(workspaceId);
+
   CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_owner ON knowledge_chunks(ownerId, ownerType);
 
   CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_chunks_fts USING fts5(
@@ -430,6 +471,10 @@ try {
     db.exec("ALTER TABLE chats ADD COLUMN syncToCloud INTEGER DEFAULT 0");
     console.log("Database Migration: Added syncToCloud column to chats table.");
   }
+  if (!columns.includes('writingDeskDefaults')) {
+    db.exec("ALTER TABLE chats ADD COLUMN writingDeskDefaults TEXT");
+    console.log("Database Migration: Added writingDeskDefaults column to chats table.");
+  }
 
   const msgTableInfo = db.pragma("table_info(messages)");
   const msgColumns = msgTableInfo.map(col => col.name);
@@ -488,6 +533,32 @@ try {
   if (!cmColumns.includes('enabled')) {
     db.exec("ALTER TABLE constant_memory ADD COLUMN enabled INTEGER DEFAULT 1");
     console.log("Database Migration: Added enabled column to constant_memory table.");
+  }
+
+  // Writing Desk page geometry + typography. The documents table is recent,
+  // so existing installs may already have it without these columns.
+  const docTableInfo = db.pragma("table_info(documents)");
+  const docColumns = docTableInfo.map(col => col.name);
+  const docColumnDefs = [
+    ["pageSize", "TEXT DEFAULT 'A4'"],
+    ["pageWidth", "INTEGER DEFAULT 794"],
+    ["pageHeight", "INTEGER DEFAULT 1123"],
+    ["marginTop", "INTEGER DEFAULT 96"],
+    ["marginRight", "INTEGER DEFAULT 96"],
+    ["marginBottom", "INTEGER DEFAULT 96"],
+    ["marginLeft", "INTEGER DEFAULT 96"],
+    ["defaultFontSize", "INTEGER DEFAULT 18"],
+    ["lineHeight", "REAL DEFAULT 1.6"],
+    ["paragraphSpacing", "INTEGER DEFAULT 12"],
+    ["textAlign", "TEXT DEFAULT 'left'"],
+    ["firstLineIndent", "INTEGER DEFAULT 0"],
+    ["wordGoal", "INTEGER DEFAULT 0"],
+  ];
+  for (const [name, def] of docColumnDefs) {
+    if (!docColumns.includes(name)) {
+      db.exec(`ALTER TABLE documents ADD COLUMN ${name} ${def}`);
+      console.log(`Database Migration: Added ${name} column to documents table.`);
+    }
   }
 } catch (e) {
   console.error("Migration error adding columns to database tables:", e);

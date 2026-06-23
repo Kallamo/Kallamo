@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
-import { ArrowLeft, Sliders, Paperclip, Send, Cpu, Workflow, X, MoreVertical, Copy, Edit, RotateCw, Play, Square, ChevronDown, Plus, ChevronLeft, ChevronRight, Brain, Folder, MessageSquare, Trash2, RotateCcw } from 'lucide-react';
+import { ArrowLeft, Sliders, Paperclip, Send, Cpu, Workflow, X, MoreVertical, Copy, Edit, RotateCw, Play, Square, ChevronDown, Plus, ChevronLeft, ChevronRight, Brain, Folder, MessageSquare, Trash2, RotateCcw, PenTool } from 'lucide-react';
 import RightSidebar from './RightSidebar';
 import SummarizeModal from './modals/SummarizeModal';
 import ChatFilesView from './ChatFilesView';
 import ChatMemoryView from './ChatMemoryView';
+import WritingDeskView from './WritingDeskView';
 import FilePreviewModal from './modals/FilePreviewModal';
 import DeleteModal from './modals/DeleteModal';
 import { parseMarkdown } from '../utils/markdown';
@@ -632,6 +633,21 @@ export default function ChatWorkspaceView() {
               <span className={`text-[10px] font-bold uppercase tracking-wider transition-all duration-300 ml-0 opacity-0 group-hover:opacity-100 ${activeSubView === 'files' ? 'opacity-100 ml-1.5 max-w-[80px]' : 'max-w-0 group-hover:ml-1.5 group-hover:max-w-[80px]'
                 } overflow-hidden whitespace-nowrap`}>
                 Files
+              </span>
+            </button>
+
+            {/* Writing Desk Tab */}
+            <button
+              onClick={() => setActiveSubView('writing')}
+              className={`group flex items-center h-8 rounded-md transition-all duration-300 ease-out cursor-pointer overflow-hidden ${activeSubView === 'writing'
+                ? 'bg-accent text-[#011419] font-extrabold shadow-sm max-w-[130px] px-3'
+                : 'text-gray-400 hover:text-white hover:bg-white/5 max-w-[32px] px-1.5 hover:max-w-[130px] hover:px-3'
+                }`}
+            >
+              <PenTool className="w-4.5 h-4.5 shrink-0" />
+              <span className={`text-[10px] font-bold uppercase tracking-wider transition-all duration-300 ml-0 opacity-0 group-hover:opacity-100 ${activeSubView === 'writing' ? 'opacity-100 ml-1.5 max-w-[80px]' : 'max-w-0 group-hover:ml-1.5 group-hover:max-w-[80px]'
+                } overflow-hidden whitespace-nowrap`}>
+                Writing
               </span>
             </button>
           </div>
@@ -1424,6 +1440,11 @@ export default function ChatWorkspaceView() {
           <ChatMemoryView
             chat={activeChat}
             onSaveChat={handleSaveChat}
+            electronAPI={electronAPI}
+          />
+        ) : activeSubView === 'writing' ? (
+          <WritingDeskView
+            chat={activeChat}
             electronAPI={electronAPI}
           />
         ) : (

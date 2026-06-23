@@ -195,6 +195,15 @@ app.whenReady().then(() => {
     });
   }
 
+  // Auto-grant the local-fonts permission so the Writing Desk can enumerate the user's
+  // installed fonts via queryLocalFonts(). Everything else stays denied by default.
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    callback(permission === 'local-fonts');
+  });
+  session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
+    return permission === 'local-fonts';
+  });
+
   createWindow();
 
   app.on('activate', () => {

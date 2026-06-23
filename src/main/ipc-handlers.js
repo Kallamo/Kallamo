@@ -2048,6 +2048,294 @@ ipcMain.handle('add-profile-searchable-file', async (event, { profileId, name, p
 // ==========================================
 // --- WORKSPACE CHATS IPC HANDLERS ---
 // ==========================================
+// --- WRITING DESK: DOCUMENTS & FOLDERS ---
+
+// Wrap plain text (e.g. from a .docx/.pdf import) into a minimal ProseMirror doc
+// so imported chapters share the same content format the editor produces.
+function plainTextToProseMirror(text) {
+  const paragraphs = String(text || '').split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+  const content = paragraphs.length > 0
+    ? paragraphs.map(p => ({ type: 'paragraph', content: [{ type: 'text', text: p }] }))
+    : [{ type: 'paragraph' }];
+  return JSON.stringify({ type: 'doc', content });
+}
+
+// Remove a document's searchable chunks (owner = document) and their FTS rows.
+function deleteDocumentChunks(documentId) {
+  try {
+    const ids = db.prepare("SELECT id FROM knowledge_chunks WHERE ownerId = ? AND ownerType = 'document'").all(documentId);
+    const delFts = db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId = ?');
+    for (const row of ids) delFts.run(row.id);
+    db.prepare("DELETE FROM knowledge_chunks WHERE ownerId = ? AND ownerType = 'document'").run(documentId);
+  } catch (e) {
+    console.error('[Writing Desk] Failed to delete document chunks:', e);
+  }
+}
+
+ipcMain.handle('get-writing-tree', async (event, { workspaceId }) => {
+  try {
+    const folders = db.prepare('SELECT * FROM folders WHERE workspaceId = ? ORDER BY name COLLATE NOCASE').all(workspaceId);
+    const documents = db.prepare(
+      'SELECT id, workspaceId, folderId, title, sheetColor, defaultFont, sheetWidth, updatedAt FROM documents WHERE workspaceId = ? ORDER BY title COLLATE NOCASE'
+    ).all(workspaceId);
+    return { folders, documents };
+  } catch (e) {
+    console.error('[Writing Desk] Error loading tree:', e);
+    return { folders: [], documents: [] };
+  }
+});
+
+// Per-workspace Writing Desk defaults (new chapters inherit these). Stored as JSON
+// on the chats row; null when the workspace has never customized them.
+ipcMain.handle('get-writing-desk-config', async (event, { workspaceId }) => {
+  try {
+    const row = db.prepare('SELECT writingDeskDefaults FROM chats WHERE id = ?').get(workspaceId);
+    return row && row.writingDeskDefaults ? JSON.parse(row.writingDeskDefaults) : null;
+  } catch (e) {
+    console.error('[Writing Desk] Error loading workspace config:', e);
+    return null;
+  }
+});
+
+ipcMain.handle('save-writing-desk-config', async (event, { workspaceId, config }) => {
+  try {
+    db.prepare('UPDATE chats SET writingDeskDefaults = ?, last_modified = ? WHERE id = ?')
+      .run(JSON.stringify(config || {}), Date.now(), workspaceId);
+    return { success: true };
+  } catch (e) {
+    console.error('[Writing Desk] Error saving workspace config:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('get-document', async (event, { id }) => {
+  try {
+    return db.prepare('SELECT * FROM documents WHERE id = ?').get(id) || null;
+  } catch (e) {
+    console.error('[Writing Desk] Error loading document:', e);
+    return null;
+  }
+});
+
+ipcMain.handle('create-folder', async (event, { workspaceId, name, parentId }) => {
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  db.prepare('INSERT INTO folders (id, workspaceId, name, parentId, createdAt, last_modified) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(id, workspaceId, name || 'New folder', parentId || null, now, now);
+  return { id, workspaceId, name: name || 'New folder', parentId: parentId || null, createdAt: now };
+});
+
+ipcMain.handle('rename-folder', async (event, { id, name }) => {
+  db.prepare('UPDATE folders SET name = ?, last_modified = ? WHERE id = ?').run(name, Date.now(), id);
+  return { success: true };
+});
+
+ipcMain.handle('move-folder', async (event, { id, parentId }) => {
+  db.prepare('UPDATE folders SET parentId = ?, last_modified = ? WHERE id = ?').run(parentId || null, Date.now(), id);
+  return { success: true };
+});
+
+ipcMain.handle('delete-folder', async (event, { id }) => {
+  try {
+    // Cascade: gather the folder subtree, delete their documents (and chunks), then the folders.
+    const allFolders = db.prepare('SELECT id, parentId FROM folders WHERE workspaceId = (SELECT workspaceId FROM folders WHERE id = ?)').all(id);
+    const toDelete = new Set([id]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const f of allFolders) {
+        if (f.parentId && toDelete.has(f.parentId) && !toDelete.has(f.id)) {
+          toDelete.add(f.id);
+          grew = true;
+        }
+      }
+    }
+    const delDoc = db.prepare('DELETE FROM documents WHERE folderId = ?');
+    const delFolder = db.prepare('DELETE FROM folders WHERE id = ?');
+    for (const folderId of toDelete) {
+      const docs = db.prepare('SELECT id FROM documents WHERE folderId = ?').all(folderId);
+      for (const d of docs) deleteDocumentChunks(d.id);
+      delDoc.run(folderId);
+      delFolder.run(folderId);
+    }
+    return { success: true };
+  } catch (e) {
+    console.error('[Writing Desk] Error deleting folder:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+// Page geometry + typography columns a new document can inherit from its workspace
+// defaults. Anything omitted falls back to the column DEFAULT in the schema.
+const PAGE_COLUMNS = [
+  'sheetColor', 'defaultFont', 'pageSize', 'pageWidth', 'pageHeight',
+  'marginTop', 'marginRight', 'marginBottom', 'marginLeft',
+  'defaultFontSize', 'lineHeight', 'paragraphSpacing', 'textAlign', 'firstLineIndent', 'wordGoal'
+];
+
+function insertDocumentWithDefaults({ workspaceId, folderId, title, content, defaults }) {
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  const cols = ['id', 'workspaceId', 'folderId', 'title', 'content', 'createdAt', 'updatedAt', 'last_modified'];
+  const vals = [id, workspaceId, folderId || null, title, content, now, now, now];
+  if (defaults && typeof defaults === 'object') {
+    for (const c of PAGE_COLUMNS) {
+      if (defaults[c] !== undefined && defaults[c] !== null) {
+        cols.push(c);
+        vals.push(defaults[c]);
+      }
+    }
+  }
+  const placeholders = cols.map(() => '?').join(', ');
+  db.prepare(`INSERT INTO documents (${cols.join(', ')}) VALUES (${placeholders})`).run(...vals);
+  return db.prepare('SELECT * FROM documents WHERE id = ?').get(id);
+}
+
+ipcMain.handle('create-document', async (event, { workspaceId, folderId, title, content, defaults }) => {
+  const docContent = content || JSON.stringify({ type: 'doc', content: [{ type: 'paragraph' }] });
+  return insertDocumentWithDefaults({ workspaceId, folderId, title: title || 'Untitled', content: docContent, defaults });
+});
+
+ipcMain.handle('rename-document', async (event, { id, title }) => {
+  db.prepare('UPDATE documents SET title = ?, last_modified = ? WHERE id = ?').run(title, Date.now(), id);
+  return { success: true };
+});
+
+ipcMain.handle('move-document', async (event, { id, folderId }) => {
+  db.prepare('UPDATE documents SET folderId = ?, last_modified = ? WHERE id = ?').run(folderId || null, Date.now(), id);
+  return { success: true };
+});
+
+ipcMain.handle('delete-document', async (event, { id }) => {
+  try {
+    deleteDocumentChunks(id);
+    db.prepare('DELETE FROM documents WHERE id = ?').run(id);
+    return { success: true };
+  } catch (e) {
+    console.error('[Writing Desk] Error deleting document:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('save-document-content', async (event, { id, content }) => {
+  const now = Date.now();
+  db.prepare('UPDATE documents SET content = ?, updatedAt = ?, vectorized = 0, last_modified = ? WHERE id = ?')
+    .run(content, now, now, id);
+  return { success: true, updatedAt: now };
+});
+
+ipcMain.handle('save-document-sheet', async (event, { id, sheetColor, defaultFont, sheetWidth }) => {
+  db.prepare('UPDATE documents SET sheetColor = ?, defaultFont = ?, sheetWidth = ?, last_modified = ? WHERE id = ?')
+    .run(sheetColor || null, defaultFont || null, sheetWidth ?? 720, Date.now(), id);
+  return { success: true };
+});
+
+// Partial update of page geometry / typography columns. Only whitelisted keys present in
+// `page` are written, so the editor can persist a single changed control at a time.
+ipcMain.handle('save-document-page', async (event, { id, page }) => {
+  if (!page || typeof page !== 'object') return { success: false };
+  const keys = Object.keys(page).filter(k => PAGE_COLUMNS.includes(k));
+  if (keys.length === 0) return { success: true };
+  const setClause = keys.map(k => `${k} = ?`).join(', ');
+  const vals = keys.map(k => page[k]);
+  db.prepare(`UPDATE documents SET ${setClause}, last_modified = ? WHERE id = ?`).run(...vals, Date.now(), id);
+  return { success: true };
+});
+
+// Export a chapter to PDF. The renderer composes a self-contained HTML document; here we
+// load it in a hidden window and print it paginated via webContents.printToPDF.
+ipcMain.handle('export-document-pdf', async (event, { html, title, pageSize, pageWidth, pageHeight, margins }) => {
+  let pdfWin = null;
+  try {
+    const parent = BrowserWindow.getFocusedWindow();
+    const saveResult = await dialog.showSaveDialog(parent, {
+      title: 'Export chapter to PDF',
+      defaultPath: `${(title || 'chapter').replace(/[\\/:*?"<>|]/g, '_')}.pdf`,
+      filters: [{ name: 'PDF', extensions: ['pdf'] }]
+    });
+    if (saveResult.canceled || !saveResult.filePath) return { canceled: true };
+
+    pdfWin = new BrowserWindow({ show: false, webPreferences: { sandbox: true, javascript: false } });
+    await pdfWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+
+    const px2micron = (px) => Math.round((px / 96) * 25400);
+    const opts = {
+      printBackground: true,
+      margins: margins ? {
+        top: (margins.top || 0) / 96,
+        right: (margins.right || 0) / 96,
+        bottom: (margins.bottom || 0) / 96,
+        left: (margins.left || 0) / 96,
+      } : undefined,
+    };
+    if (pageSize === 'A4' || pageSize === 'Letter') opts.pageSize = pageSize;
+    else if (pageWidth && pageHeight) opts.pageSize = { width: px2micron(pageWidth), height: px2micron(pageHeight) };
+
+    const data = await pdfWin.webContents.printToPDF(opts);
+    fs.writeFileSync(saveResult.filePath, data);
+    return { success: true, filePath: saveResult.filePath };
+  } catch (e) {
+    console.error('[Writing Desk] PDF export failed:', e);
+    return { error: e.message };
+  } finally {
+    if (pdfWin && !pdfWin.isDestroyed()) pdfWin.close();
+  }
+});
+
+// Export a chapter to .docx from its HTML using html-to-docx.
+ipcMain.handle('export-document-docx', async (event, { html, title, margins }) => {
+  try {
+    const parent = BrowserWindow.getFocusedWindow();
+    const saveResult = await dialog.showSaveDialog(parent, {
+      title: 'Export chapter to Word',
+      defaultPath: `${(title || 'chapter').replace(/[\\/:*?"<>|]/g, '_')}.docx`,
+      filters: [{ name: 'Word document', extensions: ['docx'] }]
+    });
+    if (saveResult.canceled || !saveResult.filePath) return { canceled: true };
+
+    const htmlToDocx = require('html-to-docx');
+    const px2twip = (px) => Math.round((px / 96) * 1440);
+    const buffer = await htmlToDocx(html, null, {
+      margins: margins ? {
+        top: px2twip(margins.top || 0),
+        right: px2twip(margins.right || 0),
+        bottom: px2twip(margins.bottom || 0),
+        left: px2twip(margins.left || 0),
+      } : undefined,
+    });
+    fs.writeFileSync(saveResult.filePath, buffer);
+    return { success: true, filePath: saveResult.filePath };
+  } catch (e) {
+    console.error('[Writing Desk] DOCX export failed:', e);
+    return { error: e.message };
+  }
+});
+
+ipcMain.handle('import-document', async (event, { workspaceId, folderId, defaults }) => {
+  try {
+    const win = BrowserWindow.getFocusedWindow();
+    const openResult = await dialog.showOpenDialog(win, {
+      title: 'Import chapter',
+      properties: ['openFile'],
+      filters: [{ name: 'Documents', extensions: ['docx', 'pdf', 'txt', 'md'] }]
+    });
+    if (openResult.canceled || !openResult.filePaths || openResult.filePaths.length === 0) {
+      return { canceled: true };
+    }
+    const filePath = openResult.filePaths[0];
+    const text = await extractTextFromFile(filePath);
+    const baseName = path.basename(filePath, path.extname(filePath));
+    const document = insertDocumentWithDefaults({
+      workspaceId, folderId, title: baseName || 'Imported',
+      content: plainTextToProseMirror(text), defaults
+    });
+    return { document };
+  } catch (e) {
+    console.error('[Writing Desk] Import failed:', e);
+    return { error: e.message };
+  }
+});
+
 ipcMain.handle('get-chats', async () => {
   try {
     const rows = db.prepare(`

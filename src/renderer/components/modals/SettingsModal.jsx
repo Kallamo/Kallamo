@@ -66,6 +66,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [codeTheme, setCodeTheme] = useState(settings.interface.codeTheme || 'github-dark');
   const [lineNumbers, setLineNumbers] = useState(settings.interface.lineNumbers || false);
   const [blurEnabled, setBlurEnabled] = useState(settings.interface.blur ?? true);
+  const [writingToolbar, setWritingToolbar] = useState(settings.interface.writingToolbar || 'fixed');
 
   const [chunkSize, setChunkSize] = useState(settings.advanced.chunkSize || 500);
   const [similarity, setSimilarity] = useState(settings.advanced.similarity || 0.3);
@@ -95,18 +96,18 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
 
   // Keep ref of settings to prevent stale closures in debounce timeout
   const settingsRef = useRef({
-    accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled,
+    accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled, writingToolbar,
     chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug,
     embeddingEngine, embeddingApiProfileId, embeddingModelName
   });
 
   useEffect(() => {
     settingsRef.current = {
-      accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled,
+      accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled, writingToolbar,
       chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug,
       embeddingEngine, embeddingApiProfileId, embeddingModelName
     };
-  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName]);
+  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName]);
 
   // Handle immediate save for selects and color choices
   const updateSetting = async (category, key, value) => {
@@ -119,6 +120,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       if (key === 'codeTheme') setCodeTheme(value);
       if (key === 'lineNumbers') setLineNumbers(value);
       if (key === 'blur') setBlurEnabled(value);
+      if (key === 'writingToolbar') setWritingToolbar(value);
     } else if (category === 'advanced') {
       if (key === 'executionDevice') setExecutionDevice(value);
       if (key === 'ragDebug') setRagDebug(value);
@@ -137,7 +139,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         layout: key === 'layout' ? value : current.layout,
         codeTheme: key === 'codeTheme' ? value : current.codeTheme,
         lineNumbers: key === 'lineNumbers' ? value : current.lineNumbers,
-        blur: key === 'blur' ? value : current.blur
+        blur: key === 'blur' ? value : current.blur,
+        writingToolbar: key === 'writingToolbar' ? value : current.writingToolbar
       },
       advanced: {
         chunkSize: Number(current.chunkSize),
@@ -183,7 +186,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
           layout: current.layout,
           codeTheme: current.codeTheme,
           lineNumbers: current.lineNumbers,
-          blur: current.blur
+          blur: current.blur,
+          writingToolbar: current.writingToolbar
         },
         advanced: {
           chunkSize: key === 'chunkSize' ? Number(value) : Number(current.chunkSize),
@@ -837,6 +841,28 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                                 }`}
                             >
                               {sz.charAt(0).toUpperCase() + sz.slice(1)}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Writing Desk toolbar placement */}
+                      <div className="p-4 flex items-center justify-between">
+                        <div>
+                          <span className="block text-sm text-gray-200 font-bold">Writing Desk Toolbar</span>
+                          <span className="caption">Show the formatting toolbar fixed at the top, or as a bubble over the selection.</span>
+                        </div>
+                        <div className="flex bg-[#011419] border border-gray-700 rounded-lg p-1 space-x-1">
+                          {['fixed', 'bubble'].map(mode => (
+                            <button
+                              key={mode}
+                              onClick={() => updateSetting('interface', 'writingToolbar', mode)}
+                              className={`px-3 py-1 rounded-md text-xs font-semibold cursor-pointer transition-all ${writingToolbar === mode
+                                ? 'bg-[#1a2d32] text-white border border-accent/30 font-bold shadow'
+                                : 'text-gray-500 hover:text-white'
+                                }`}
+                            >
+                              {mode.charAt(0).toUpperCase() + mode.slice(1)}
                             </button>
                           ))}
                         </div>
