@@ -21,6 +21,7 @@ All notable changes to Kallamo are documented in this file. This project follows
 - The RAG diagnostics toggles (Agentic and Token breakdown) no longer switch themselves off when you adjust a Knowledge Base or chunk slider; your debug preferences now persist correctly.
 - Bulk delete in Workspace Memory now works on knowledge files: files show a selection checkbox like other blocks, and selecting them (including via Select All) removes the file and all of its searchable chunks instead of silently skipping them.
 - Fixed data loss in Workspace Memory: renaming a custom memory's title or changing its profile scope could wipe every other custom memory added in the same session. These edits now update only the targeted block instead of overwriting the whole memory store from a stale copy. Renaming or rescoping also no longer clears a memory's tags or resets its retrieval strategy.
+- Slow local generations no longer fail with a "fetch failed" error. Long responses from local models (e.g. large models running at a few tokens per second) that took more than five minutes were being cut off; they now have up to 30 minutes to complete. Cancelling a generation also reliably stops the local model mid-response, including during Agentic RAG research steps.
 
 ## [1.0.4] - 2026-06-17
 
