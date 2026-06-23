@@ -33,6 +33,7 @@ export default function ProfileModal({ profile, initialStep = 1, onClose, onSave
   const [knowledgeFiles, setKnowledgeFiles] = useState([]);
   const [isAgentic, setIsAgentic] = useState(false);
   const [agenticPrompt, setAgenticPrompt] = useState('');
+  const [agenticMaxTurns, setAgenticMaxTurns] = useState(3);
 
   const [isProcessingKb, setIsProcessingKb] = useState(false);
   const [kbProgress, setKbProgress] = useState('');
@@ -79,6 +80,11 @@ export default function ProfileModal({ profile, initialStep = 1, onClose, onSave
       );
       setIsAgentic(profile.isAgentic === true || profile.isAgentic === 1);
       setAgenticPrompt(profile.agenticPrompt || '');
+      setAgenticMaxTurns(
+        Number.isInteger(profile.agenticMaxTurns)
+          ? Math.min(5, Math.max(1, profile.agenticMaxTurns))
+          : 3
+      );
     }
   }, [profile]);
 
@@ -374,6 +380,7 @@ export default function ProfileModal({ profile, initialStep = 1, onClose, onSave
       manualJson: manualJson.trim(),
       isAgentic: isAgentic ? 1 : 0,
       agenticPrompt: agenticPrompt.trim(),
+      agenticMaxTurns: agenticMaxTurns,
       syncToCloud: profile?.syncToCloud ?? 0
     };
 
@@ -900,6 +907,30 @@ export default function ProfileModal({ profile, initialStep = 1, onClose, onSave
 
                     {isAgentic && (
                       <div className="flex-col flex flex-1 animate-in fade-in duration-200 min-h-0 relative">
+                        <div className="shrink-0 mb-3 pb-3 border-b border-gray-800/80 flex items-center justify-between gap-4">
+                          <div className="min-w-0">
+                            <span className="text-sm font-bold text-gray-200">Max research turns</span>
+                            <p className="caption leading-tight mt-0.5">
+                              THOUGHT/ACTION loops before answering. 1 = single search pass (cheapest); 3 = balanced; more = deeper multi-hop, higher cost.
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            {[1, 2, 3, 4, 5].map((n) => (
+                              <button
+                                key={n}
+                                type="button"
+                                onClick={() => setAgenticMaxTurns(n)}
+                                className={`w-8 h-8 rounded-md text-sm font-medium transition-colors cursor-pointer ${agenticMaxTurns === n
+                                  ? 'bg-accent text-[#011419]'
+                                  : 'bg-[#011419] border border-gray-800 text-gray-400 hover:text-gray-200'
+                                  }`}
+                              >
+                                {n}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
                         <div className="flex justify-between items-center mb-2">
                           <label className="block text-xs font-bold text-accent">Agentic System Prompt</label>
 
@@ -928,7 +959,7 @@ export default function ProfileModal({ profile, initialStep = 1, onClose, onSave
                         </div>
 
                         {agenticPromptMode === 'editor' ? (
-                          <div className="flex-1 relative flex flex-col min-h-0">
+                          <div className="flex-1 relative flex flex-col min-h-[220px]">
                             <textarea
                               ref={agenticTextareaRef}
                               value={agenticPrompt}
@@ -943,7 +974,7 @@ export default function ProfileModal({ profile, initialStep = 1, onClose, onSave
                           </div>
                         ) : (
                           <div
-                            className="flex-1 w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md p-3 overflow-y-auto custom-scrollbar select-text leading-relaxed markdown-body"
+                            className="flex-1 w-full min-h-[220px] bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md p-3 overflow-y-auto custom-scrollbar select-text leading-relaxed markdown-body"
                             dangerouslySetInnerHTML={{ __html: renderPromptPreview(agenticPrompt) }}
                           />
                         )}

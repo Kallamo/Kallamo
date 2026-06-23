@@ -86,6 +86,11 @@ export default function KbManagerModal({ profile, onClose }) {
 
   const [isAgentic, setIsAgentic] = useState(profile?.isAgentic === 1 || profile?.isAgentic === true);
   const [agenticPrompt, setAgenticPrompt] = useState(profile?.agenticPrompt || '');
+  const [agenticMaxTurns, setAgenticMaxTurns] = useState(
+    Number.isInteger(profile?.agenticMaxTurns)
+      ? Math.min(5, Math.max(1, profile.agenticMaxTurns))
+      : 3
+  );
   const [agenticPromptMode, setAgenticPromptMode] = useState('editor'); // 'editor' | 'preview'
   const [savingAgenticSettings, setSavingAgenticSettings] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -110,7 +115,7 @@ export default function KbManagerModal({ profile, onClose }) {
     setKbProgress(0);
     setKbProgressStatus('Initializing export...');
     setKbOpType('export');
-    
+
     let unsub = null;
     if (electronAPI?.onExportProgress) {
       unsub = electronAPI.onExportProgress((data) => {
@@ -175,7 +180,7 @@ export default function KbManagerModal({ profile, onClose }) {
         strategy: b.strategy || b.rawItem?.strategy || 'rag_search'
       }));
       setBlocks(mappedData);
-      
+
       setViewingFileBlock(current => {
         if (!current) return null;
         const updatedChunks = mappedData.filter(b => b.type === 'rag' && b.source === current.source);
@@ -742,7 +747,8 @@ export default function KbManagerModal({ profile, onClose }) {
     const updatedProfile = {
       ...profile,
       isAgentic: isAgentic ? 1 : 0,
-      agenticPrompt: agenticPrompt.trim()
+      agenticPrompt: agenticPrompt.trim(),
+      agenticMaxTurns: agenticMaxTurns
     };
 
     try {
@@ -915,7 +921,7 @@ export default function KbManagerModal({ profile, onClose }) {
                   <Plus className="w-3.5 h-3.5" strokeWidth={2.5} />
                   <span>Add</span>
                 </button>
-                
+
                 {isAddMenuOpen && (
                   <>
                     <div className="fixed inset-0 z-30" onClick={() => setIsAddMenuOpen(false)} />
@@ -1071,23 +1077,23 @@ export default function KbManagerModal({ profile, onClose }) {
               </button>
 
               <div className="bg-[#051116] border border-gray-800/60 rounded-lg p-3">
-              <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider block mb-1">Knowledge Stats</span>
-              <div className="text-xs text-gray-300 font-mono space-y-1">
-                <div className="flex justify-between">
-                  <span>Total Blocks:</span>
-                  <span className="text-white font-bold">{blocks.length}</span>
-                </div>
-                <div className="flex justify-between text-[10px] text-gray-400">
-                  <span>Searchable:</span>
-                  <span>{blocks.filter(b => !(b.type === 'constant' || (b.type === 'manual' && (b.strategy === 'constant' || b.rawItem?.strategy === 'constant')))).length}</span>
-                </div>
-                <div className="flex justify-between text-[10px] text-gray-400">
-                  <span>Constant:</span>
-                  <span>{blocks.filter(b => b.type === 'constant' || (b.type === 'manual' && (b.strategy === 'constant' || b.rawItem?.strategy === 'constant'))).length}</span>
+                <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider block mb-1">Knowledge Stats</span>
+                <div className="text-xs text-gray-300 font-mono space-y-1">
+                  <div className="flex justify-between">
+                    <span>Total Blocks:</span>
+                    <span className="text-white font-bold">{blocks.length}</span>
+                  </div>
+                  <div className="flex justify-between text-[10px] text-gray-400">
+                    <span>Searchable:</span>
+                    <span>{blocks.filter(b => !(b.type === 'constant' || (b.type === 'manual' && (b.strategy === 'constant' || b.rawItem?.strategy === 'constant')))).length}</span>
+                  </div>
+                  <div className="flex justify-between text-[10px] text-gray-400">
+                    <span>Constant:</span>
+                    <span>{blocks.filter(b => b.type === 'constant' || (b.type === 'manual' && (b.strategy === 'constant' || b.rawItem?.strategy === 'constant'))).length}</span>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
           </div>
 
           {/* Right Main Grid */}
@@ -1127,12 +1133,39 @@ export default function KbManagerModal({ profile, onClose }) {
                     </div>
                   </div>
 
+                  {/* Max research turns block */}
+                  {isAgentic && (
+                    <div className="bg-[#0a161d] border border-gray-800/80 rounded-xl p-5 flex items-center justify-between gap-4">
+                      <div>
+                        <span className="text-sm font-bold text-gray-200">Max research turns</span>
+                        <p className="caption leading-tight mt-0.5">
+                          THOUGHT/ACTION loops before answering.<br />1 = single search pass (cheapest); 3 = balanced; more = deeper multi-hop, higher cost.
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {[1, 2, 3, 4, 5].map((n) => (
+                          <button
+                            key={n}
+                            type="button"
+                            onClick={() => setAgenticMaxTurns(n)}
+                            className={`w-8 h-8 rounded-md text-sm font-medium transition-colors cursor-pointer ${agenticMaxTurns === n
+                              ? 'bg-accent text-[#011419]'
+                              : 'bg-[#011419] border border-gray-800 text-gray-400 hover:text-gray-200'
+                              }`}
+                          >
+                            {n}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {/* System Prompt block */}
                   {isAgentic && (
                     <div className="bg-[#0a161d] border border-gray-800/80 rounded-xl p-5 flex flex-col min-h-[360px] relative">
                       <div className="flex justify-between items-center mb-4 shrink-0 pb-1.5 border-b border-gray-800/60">
                         <label className="block text-xs font-bold text-accent uppercase tracking-wider">Agentic System Prompt</label>
-                        
+
                         {/* Editor / Preview Toggles */}
                         <div className="flex bg-[#011419] p-0.5 rounded border border-gray-800 text-[10px] font-bold uppercase tracking-wider select-none shrink-0 z-10 space-x-0.5">
                           <button
@@ -1272,11 +1305,10 @@ export default function KbManagerModal({ profile, onClose }) {
                               setViewingFileBlock(block);
                             }
                           }}
-                          className={`bg-[#0a161d] border rounded-lg p-4 flex flex-col hover:shadow-lg transition-all group h-[180px] overflow-hidden ${
-                            block.type === 'rag_file' ? 'cursor-pointer hover:border-blue-500/50' : ''
-                          } ${selectedBlockIds.includes(block.id)
-                            ? 'border-accent/40 bg-accent/5'
-                            : 'border-gray-800/80 hover:border-gray-700'
+                          className={`bg-[#0a161d] border rounded-lg p-4 flex flex-col hover:shadow-lg transition-all group h-[180px] overflow-hidden ${block.type === 'rag_file' ? 'cursor-pointer hover:border-blue-500/50' : ''
+                            } ${selectedBlockIds.includes(block.id)
+                              ? 'border-accent/40 bg-accent/5'
+                              : 'border-gray-800/80 hover:border-gray-700'
                             } ${block.enabled === false ? 'opacity-50' : ''}`}
                         >
                           {/* Card Header */}
@@ -1301,10 +1333,10 @@ export default function KbManagerModal({ profile, onClose }) {
                                   block.type === 'constant'
                                     ? 'amber'
                                     : block.type === 'manual'
-                                    ? (block.strategy === 'constant' ? 'amber' : 'emerald')
-                                    : block.type === 'rag_file'
-                                    ? 'blue'
-                                    : 'gray'
+                                      ? (block.strategy === 'constant' ? 'amber' : 'emerald')
+                                      : block.type === 'rag_file'
+                                        ? 'blue'
+                                        : 'gray'
                                 }
                                 className="shrink-0"
                               >
@@ -1322,32 +1354,32 @@ export default function KbManagerModal({ profile, onClose }) {
                                 className="shrink-0"
                               />
                               <div className="flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                              {block.type !== 'rag_file' && (
+                                {block.type !== 'rag_file' && (
+                                  <button
+                                    onClick={() => openEditor(block)}
+                                    className="p-1 text-gray-500 hover:text-white hover:bg-white/5 rounded transition-colors cursor-pointer"
+                                    title="Edit Block"
+                                  >
+                                    <Edit3 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
                                 <button
-                                  onClick={() => openEditor(block)}
-                                  className="p-1 text-gray-500 hover:text-white hover:bg-white/5 rounded transition-colors cursor-pointer"
-                                  title="Edit Block"
+                                  onClick={() => {
+                                    if (block.type === 'rag_file') {
+                                      setConfirmDialog({
+                                        message: `Delete the Searchable File "${block.source}"? This erases all of its indexed chunks. To remove a single chunk instead, open the file block and delete the chunk from inside it.`,
+                                        confirmLabel: "Delete Searchable File",
+                                        onConfirm: () => handleDeleteEntireFile(block.source)
+                                      });
+                                    } else {
+                                      handleDeleteBlock(block);
+                                    }
+                                  }}
+                                  className="p-1 text-gray-500 hover:text-red-500 hover:bg-red-500/10 rounded transition-colors cursor-pointer"
+                                  title={block.type === 'rag_file' ? "Delete Searchable File" : "Delete Block"}
                                 >
-                                  <Edit3 className="w-3.5 h-3.5" />
+                                  <Trash2 className="w-3.5 h-3.5" />
                                 </button>
-                              )}
-                              <button
-                                onClick={() => {
-                                  if (block.type === 'rag_file') {
-                                    setConfirmDialog({
-                                      message: `Delete the Searchable File "${block.source}"? This erases all of its indexed chunks. To remove a single chunk instead, open the file block and delete the chunk from inside it.`,
-                                      confirmLabel: "Delete Searchable File",
-                                      onConfirm: () => handleDeleteEntireFile(block.source)
-                                    });
-                                  } else {
-                                    handleDeleteBlock(block);
-                                  }
-                                }}
-                                className="p-1 text-gray-500 hover:text-red-500 hover:bg-red-500/10 rounded transition-colors cursor-pointer"
-                                title={block.type === 'rag_file' ? "Delete Searchable File" : "Delete Block"}
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
                               </div>
                             </div>
                           </div>
@@ -1500,11 +1532,10 @@ export default function KbManagerModal({ profile, onClose }) {
                       <button
                         type="button"
                         onClick={() => setEditorStrategy('rag_search')}
-                        className={`flex-1 py-1.5 rounded-lg border text-xs font-bold transition-all flex flex-col items-center justify-center space-y-0.5 cursor-pointer ${
-                          editorStrategy === 'rag_search'
-                            ? 'bg-[#3b82f6]/20 border-[#3b82f6] text-[#3b82f6] shadow-[0_0_12px_rgba(59,130,246,0.2)]'
-                            : 'bg-[#00080B] border-gray-850 text-gray-500 hover:text-gray-300 hover:border-gray-700'
-                        }`}
+                        className={`flex-1 py-1.5 rounded-lg border text-xs font-bold transition-all flex flex-col items-center justify-center space-y-0.5 cursor-pointer ${editorStrategy === 'rag_search'
+                          ? 'bg-[#3b82f6]/20 border-[#3b82f6] text-[#3b82f6] shadow-[0_0_12px_rgba(59,130,246,0.2)]'
+                          : 'bg-[#00080B] border-gray-850 text-gray-500 hover:text-gray-300 hover:border-gray-700'
+                          }`}
                       >
                         <span>Searchable (RAG)</span>
                         <span className="text-[8px] font-normal opacity-70">Indexed for vector searches</span>
@@ -1512,11 +1543,10 @@ export default function KbManagerModal({ profile, onClose }) {
                       <button
                         type="button"
                         onClick={() => setEditorStrategy('constant')}
-                        className={`flex-1 py-1.5 rounded-lg border text-xs font-bold transition-all flex flex-col items-center justify-center space-y-0.5 cursor-pointer ${
-                          editorStrategy === 'constant'
-                            ? 'bg-[#FBCB2D]/20 border-[#FBCB2D] text-[#FBCB2D] shadow-[0_0_12px_rgba(251,203,45,0.2)]'
-                            : 'bg-[#00080B] border-gray-850 text-gray-500 hover:text-gray-300 hover:border-gray-700'
-                        }`}
+                        className={`flex-1 py-1.5 rounded-lg border text-xs font-bold transition-all flex flex-col items-center justify-center space-y-0.5 cursor-pointer ${editorStrategy === 'constant'
+                          ? 'bg-[#FBCB2D]/20 border-[#FBCB2D] text-[#FBCB2D] shadow-[0_0_12px_rgba(251,203,45,0.2)]'
+                          : 'bg-[#00080B] border-gray-850 text-gray-500 hover:text-gray-300 hover:border-gray-700'
+                          }`}
                       >
                         <span>Constant (Injected)</span>
                         <span className="text-[8px] font-normal opacity-70">Always in AI prompt context</span>
@@ -1787,28 +1817,28 @@ export default function KbManagerModal({ profile, onClose }) {
           actions={
             vectorizeError.kind === 'config'
               ? [
-                  {
-                    label: 'Cancel',
-                    variant: 'ghost',
-                    onClick: () => setVectorizeError(null),
+                {
+                  label: 'Cancel',
+                  variant: 'ghost',
+                  onClick: () => setVectorizeError(null),
+                },
+                {
+                  label: 'Open Embedding Settings',
+                  variant: 'primary',
+                  onClick: () => {
+                    setVectorizeError(null);
+                    onClose();
+                    openSettingsToEmbedding();
                   },
-                  {
-                    label: 'Open Embedding Settings',
-                    variant: 'primary',
-                    onClick: () => {
-                      setVectorizeError(null);
-                      onClose();
-                      openSettingsToEmbedding();
-                    },
-                  },
-                ]
+                },
+              ]
               : [
-                  {
-                    label: 'Close',
-                    variant: 'ghost',
-                    onClick: () => setVectorizeError(null),
-                  },
-                ]
+                {
+                  label: 'Close',
+                  variant: 'ghost',
+                  onClick: () => setVectorizeError(null),
+                },
+              ]
           }
           onClose={() => setVectorizeError(null)}
         />

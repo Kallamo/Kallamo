@@ -442,16 +442,19 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
 
                 const agenticResult = await executeAgenticRagLoop(profile, chatId, currentInput, ragChatHistory, webContents, includeChatContext);
                 if (agenticResult) {
-                    // Prevent duplicate token recitation: if detailed research context is gathered, only include it.
-                    // Otherwise, fall back to the agent's research summary response text.
+                    // If detailed research context was gathered, include only it (prevents duplicate token recitation).
+                    // If NOTHING was retrieved, do NOT pass the agent's 1-sentence summary off as facts — emit an
+                    // explicit notice so the main AI knows retrieval ran and found nothing, instead of hallucinating
+                    // document-based facts (fail-loud degradation).
+                    const noContextNotice = `--- RAG NOTICE ---\nNo relevant context was retrieved from the knowledge base or memory for this request. Answer using only the conversation and the user's instructions; do not fabricate document-based facts.`;
                     const combinedContext = agenticResult.contextGathered
                         ? `--- DETAILED RESEARCH CONTEXT ---\n${agenticResult.contextGathered}`
-                        : `--- AGENTIC RETRIEVED RESEARCH RESULTS ---\n${agenticResult.agenticResponse}`;
+                        : noContextNotice;
                     contextBlock += `\n\n${combinedContext}\n`;
 
                     let agenticResponseTokens = 0;
                     if (!agenticResult.contextGathered) {
-                        agenticResponseTokens = estimateTokens(agenticResult.agenticResponse);
+                        agenticResponseTokens = estimateTokens(noContextNotice);
                     }
                     const hasProfileTokens = (agenticResult.profileKbTokens || 0) > 0;
                     const hasChatTokens = (agenticResult.chatKbTokens || 0) > 0;
@@ -900,8 +903,13 @@ async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory 
     const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
 
     let currentTurn = 1;
-    const maxTurns = 2; // User requested: limit to 2 turns for better cost/speed
+    // Per-profile configurable depth (clamped 1-5). Higher = better multi-hop reasoning, higher cost.
+    const maxTurns = Math.min(5, Math.max(1, Number.isInteger(profile.agenticMaxTurns) ? profile.agenticMaxTurns : 3));
     let finished = false;
+    let correctionRetries = 0;
+    const maxCorrectionRetries = 1; // Free retry (does not consume a turn) when the model emits neither a tool call nor finish.
+    let loopDegraded = false; // True if a retrieval error forced an early break; surfaced to the caller.
+    const MAX_AGENT_FILE_CHARS = 5000; // read_file truncation for the agent's reasoning only; full text still flows to final context.
 
     const retrievedProfileChunks = new Map();
     const retrievedChatChunks = new Map();
@@ -925,7 +933,7 @@ async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory 
 ${mainInstruction}
 
 You are an expert Research Assistant Agent. Your task is to investigate the knowledge bases and memories of the chat to retrieve all relevant details needed to answer the user's prompt.
-You must run in a loop of THOUGHT and ACTION (tool calls), up to 2 turns maximum.
+You must run in a loop of THOUGHT and ACTION (tool calls), up to ${maxTurns} turns maximum.
 At each turn, analyze what you have found so far, and output either one or more tool calls OR your final research findings inside the finish block.
 
 CONVERSATION HISTORY:
@@ -1004,21 +1012,47 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
 
             console.log(`[Agentic RAG] Agent output:\n${agentOutput}`);
 
-            const toolCallRegex = /<tool_call\s+name="([^"]+)"\s+(?:query|filename)="([^"]+)"\s*\/>/gi;
-            const finishRegex = /<finish(?:\s+sources="([^"]+)")?>([\s\S]*?)<\/finish>/i;
+            // Tolerant attribute parser: accepts double quotes, single quotes, or unquoted values, in any order.
+            const parseAttrs = (attrStr) => {
+                const attrs = {};
+                const attrRegex = /([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g;
+                let m;
+                while ((m = attrRegex.exec(attrStr)) !== null) {
+                    attrs[m[1].toLowerCase()] = (m[2] ?? m[3] ?? m[4] ?? '').trim();
+                }
+                return attrs;
+            };
 
+            const KNOWN_TOOLS = ['search_kb', 'read_file', 'search_memories'];
+
+            // Tolerant tool_call parsing: self-closing or not, any quote style, any attribute order,
+            // arg under several aliases, or as the element's inner text.
             const toolCalls = [];
-            let match;
-
-            while ((match = toolCallRegex.exec(agentOutput)) !== null) {
-                toolCalls.push({ name: match[1], arg: match[2] });
+            const toolBlockRegex = /<tool_call\b([^>]*?)\/?>([\s\S]*?<\/tool_call>)?/gi;
+            let tb;
+            while ((tb = toolBlockRegex.exec(agentOutput)) !== null) {
+                const attrs = parseAttrs(tb[1] || '');
+                const name = (attrs.name || '').toLowerCase();
+                let arg = attrs.query ?? attrs.filename ?? attrs.file ?? attrs.q ?? attrs.term ?? attrs.arg ?? '';
+                if (!arg && tb[2]) {
+                    arg = tb[2].replace(/<\/tool_call>/i, '').trim();
+                }
+                if (KNOWN_TOOLS.includes(name) && arg) {
+                    toolCalls.push({ name, arg });
+                }
             }
 
-            const finishMatch = finishRegex.exec(agentOutput);
+            // Tolerant finish parsing: flexible sources quoting.
+            let finishMatch = null;
+            const finishBlock = /<finish\b([^>]*)>([\s\S]*?)<\/finish>/i.exec(agentOutput);
+            if (finishBlock) {
+                const finishAttrs = parseAttrs(finishBlock[1] || '');
+                finishMatch = { sources: finishAttrs.sources || '', body: finishBlock[2] };
+            }
 
             if (finishMatch) {
-                const sourcesAttr = finishMatch[1];
-                finishResponse = finishMatch[2].trim();
+                const sourcesAttr = finishMatch.sources;
+                finishResponse = finishMatch.body.trim();
                 finished = true;
 
                 if (sourcesAttr) {
@@ -1089,8 +1123,24 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                 break;
             }
 
+            // Malformed turn: neither a valid tool call nor a finish block. Instead of treating raw
+            // THOUGHT text as the final answer (silent zero-retrieval failure), inject a correction
+            // and retry once for free (without consuming a research turn).
             if (toolCalls.length === 0) {
-                finishResponse = agentOutput.trim();
+                if (correctionRetries < maxCorrectionRetries) {
+                    correctionRetries++;
+                    console.warn(`[Agentic RAG] Malformed turn (no valid tool_call/finish). Correction retry ${correctionRetries}/${maxCorrectionRetries}.`);
+                    messages.push({ role: 'assistant', content: agentOutput });
+                    messages.push({
+                        role: 'user',
+                        content: `Your last response did not contain a valid <tool_call .../> or <finish>...</finish>. Respond using ONLY the exact tool syntax. Example: <tool_call name="search_kb" query="..." />. If you already have enough information, use <finish sources="...">brief note</finish>.`
+                    });
+                    continue; // does not increment currentTurn
+                }
+                // Correction budget exhausted: stop, but do NOT pass the raw text off as retrieved facts.
+                // Whatever was gathered in prior turns is preserved; the caller degrades gracefully (Item 5).
+                console.warn('[Agentic RAG] Correction budget exhausted; finishing with whatever context was gathered.');
+                finishResponse = '';
                 finished = true;
                 break;
             }
@@ -1241,7 +1291,17 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                             readFiles.set(call.arg, { text: fileText, source: fileSource });
                         }
 
-                        turnResults += `\nTool [read_file] for "${call.arg}" contents:\n${fileText}\n`;
+                        // Asymmetric guard: the agent only needs enough to judge relevance, so truncate
+                        // what enters its reasoning history. The FULL text stays in readFiles → final context
+                        // (the writing assistant wants the whole file). Pruning is by filename, so truncation
+                        // here never affects which files survive.
+                        let agentFileText = fileText;
+                        if (fileText.length > MAX_AGENT_FILE_CHARS) {
+                            agentFileText = fileText.slice(0, MAX_AGENT_FILE_CHARS) +
+                                `\n[...truncated at ${MAX_AGENT_FILE_CHARS} chars for agent reasoning; the full file is preserved for the final context...]`;
+                        }
+
+                        turnResults += `\nTool [read_file] for "${call.arg}" contents:\n${agentFileText}\n`;
                     }
                 }
             }
@@ -1253,7 +1313,14 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
 
         } catch (err) {
             console.error(`[Agentic RAG] Loop error at turn ${currentTurn}:`, err);
-            break;
+            loopDegraded = true;
+            if (webContents) {
+                webContents.send('workflow-progress', {
+                    profileName: profile.name,
+                    status: 'Agentic RAG: retrieval error, continuing with partial context'
+                });
+            }
+            break; // preserve whatever was gathered in prior turns
         }
     }
 
@@ -1314,7 +1381,8 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
         profileKbTokens: loopProfileKbTokens,
         chatKbTokens: loopChatKbTokens,
         agenticInputTokens: agenticRagInputTokens,
-        agenticOutputTokens: agenticRagOutputTokens
+        agenticOutputTokens: agenticRagOutputTokens,
+        degraded: loopDegraded
     };
 }
 

@@ -192,6 +192,7 @@ db.exec(`
     manualJson TEXT,
     isAgentic INTEGER,
     agenticPrompt TEXT,
+    agenticMaxTurns INTEGER DEFAULT 3,
     last_modified INTEGER DEFAULT 0,
     syncToCloud INTEGER DEFAULT 0
   );
@@ -454,6 +455,10 @@ try {
   if (!wpColumns.includes('syncToCloud')) {
     db.exec("ALTER TABLE writing_profiles ADD COLUMN syncToCloud INTEGER DEFAULT 0");
     console.log("Database Migration: Added syncToCloud column to writing_profiles table.");
+  }
+  if (!wpColumns.includes('agenticMaxTurns')) {
+    db.exec("ALTER TABLE writing_profiles ADD COLUMN agenticMaxTurns INTEGER DEFAULT 3");
+    console.log("Database Migration: Added agenticMaxTurns column to writing_profiles table.");
   }
 
   const apiProfTableInfo = db.pragma("table_info(api_profiles)");

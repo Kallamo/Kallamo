@@ -372,7 +372,7 @@ ipcMain.handle('save-writing-profile', async (event, profile) => {
         UPDATE writing_profiles SET
           name = ?, description = ?, color = ?, apiProfileId = ?, model = ?, temperature = ?, maxTokens = ?,
           systemPrompt = ?, knowledgeFiles = ?, manualMode = ?, manualJson = ?, isAgentic = ?, agenticPrompt = ?,
-          syncToCloud = ?
+          agenticMaxTurns = ?, syncToCloud = ?
         WHERE id = ?
       `);
       update.run(
@@ -389,6 +389,7 @@ ipcMain.handle('save-writing-profile', async (event, profile) => {
         profile.manualJson || '',
         profile.isAgentic ? 1 : 0,
         profile.agenticPrompt || '',
+        profile.agenticMaxTurns ?? 3,
         profile.syncToCloud ?? 0,
         profile.id
       );
@@ -396,8 +397,8 @@ ipcMain.handle('save-writing-profile', async (event, profile) => {
       const insert = db.prepare(`
         INSERT INTO writing_profiles (
           id, name, description, color, apiProfileId, model, temperature, maxTokens,
-          systemPrompt, knowledgeFiles, manualMode, manualJson, isAgentic, agenticPrompt, syncToCloud
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          systemPrompt, knowledgeFiles, manualMode, manualJson, isAgentic, agenticPrompt, agenticMaxTurns, syncToCloud
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       insert.run(
         profile.id,
@@ -414,6 +415,7 @@ ipcMain.handle('save-writing-profile', async (event, profile) => {
         profile.manualJson || '',
         profile.isAgentic ? 1 : 0,
         profile.agenticPrompt || '',
+        profile.agenticMaxTurns ?? 3,
         profile.syncToCloud ?? 0
       );
     }
@@ -1014,8 +1016,8 @@ ipcMain.handle('import-ai-profile', async (event) => {
     const insert = db.prepare(`
       INSERT INTO writing_profiles (
         id, name, description, color, apiProfileId, model, temperature, maxTokens,
-        systemPrompt, knowledgeFiles, manualMode, manualJson, isAgentic, agenticPrompt, syncToCloud
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        systemPrompt, knowledgeFiles, manualMode, manualJson, isAgentic, agenticPrompt, agenticMaxTurns, syncToCloud
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     insert.run(
@@ -1033,6 +1035,7 @@ ipcMain.handle('import-ai-profile', async (event) => {
       importedProfile.manualJson || '',
       importedProfile.isAgentic ? 1 : 0,
       importedProfile.agenticPrompt || '',
+      importedProfile.agenticMaxTurns ?? 3,
       importedProfile.syncToCloud ?? 0
     );
 
@@ -1061,6 +1064,7 @@ ipcMain.handle('import-ai-profile', async (event) => {
         manualJson: importedProfile.manualJson || '',
         isAgentic: importedProfile.isAgentic === 1 || importedProfile.isAgentic === true,
         agenticPrompt: importedProfile.agenticPrompt || '',
+        agenticMaxTurns: importedProfile.agenticMaxTurns ?? 3,
         syncToCloud: importedProfile.syncToCloud ?? 0
       }
     };
@@ -2727,8 +2731,8 @@ ipcMain.handle('import-workflow', async (event) => {
       const insertProfile = db.prepare(`
         INSERT INTO writing_profiles (
           id, name, description, color, apiProfileId, model, temperature, maxTokens,
-          systemPrompt, knowledgeFiles, manualMode, manualJson, isAgentic, agenticPrompt, syncToCloud
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          systemPrompt, knowledgeFiles, manualMode, manualJson, isAgentic, agenticPrompt, agenticMaxTurns, syncToCloud
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       insertProfile.run(
@@ -2746,6 +2750,7 @@ ipcMain.handle('import-workflow', async (event) => {
         profile.manualJson || '',
         profile.isAgentic ? 1 : 0,
         profile.agenticPrompt || '',
+        profile.agenticMaxTurns ?? 3,
         profile.syncToCloud ?? 0
       );
 
