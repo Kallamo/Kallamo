@@ -678,7 +678,15 @@ async function executeEngineDownload(sender, isBackground = false) {
     return { success: true };
   } catch (e) {
     console.error("Error downloading local engine:", e);
-    const errorMsg = e.message === 'Download cancelled' ? 'Download was cancelled.' : e.message;
+    const networkCodes = ['ENOTFOUND', 'ETIMEDOUT', 'ECONNREFUSED', 'ECONNRESET', 'EAI_AGAIN'];
+    let errorMsg;
+    if (e.message === 'Download cancelled') {
+      errorMsg = 'Download was cancelled.';
+    } else if (e.code && networkCodes.includes(e.code) || /ENOTFOUND|ETIMEDOUT|ECONNREFUSED|ECONNRESET|EAI_AGAIN|timed out/i.test(e.message)) {
+      errorMsg = "No internet connection. Check your network and try again.";
+    } else {
+      errorMsg = e.message;
+    }
     safeSend(sender, 'download-engine-progress', { status: 'error', error: errorMsg, isBackground });
     throw e;
   } finally {
