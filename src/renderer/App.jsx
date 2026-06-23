@@ -413,12 +413,25 @@ function MainLayout() {
             {toast.type === 'error' && <AlertCircle className="w-5.5 h-5.5 text-red-400" />}
             {toast.type === 'info' && <Info className="w-5.5 h-5.5 text-accent" />}
           </div>
-          <div className="flex-1 text-xs font-semibold text-gray-200 leading-relaxed pr-2">
-            {toast.message}
+          <div className="flex-1 pr-2">
+            <div className="text-xs font-semibold text-gray-200 leading-relaxed">
+              {toast.message}
+            </div>
+            {toast.action && (
+              <button
+                onClick={() => {
+                  toast.action.onClick();
+                  showToast(toast.message, toast.type, 0);
+                }}
+                className="mt-2 text-xs font-bold text-accent hover:text-white transition-colors cursor-pointer"
+              >
+                {toast.action.label}
+              </button>
+            )}
           </div>
           <button
             onClick={() => showToast(toast.message, toast.type, 0)}
-            className="text-gray-500 hover:text-white transition-colors cursor-pointer shrink-0"
+            className="text-gray-500 hover:text-white transition-colors cursor-pointer shrink-0 self-start"
           >
             <X className="w-4 h-4" />
           </button>
