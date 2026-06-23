@@ -11,8 +11,10 @@ All notable changes to Kallamo are documented in this file. This project follows
 - Kallamo's download and install size is roughly a third smaller. The local embedding engine is now downloaded automatically in the background on first launch instead of being bundled with the app, shown with a discreet progress indicator — the way you use Kallamo doesn't change.
 - The first launch is now seamless, without a separate setup step.
 - Renamed "Custom Snippets" to "Custom Memory" for clarity.
+- Update checks on macOS and Linux (.deb) now read the GitHub Releases API directly instead of a separately maintained file, so new-version notifications can no longer fall out of sync and automatically ignore drafts and pre-releases.
 
 ### Fixed
+- If the automatic background download of the local embedding engine fails (e.g. no connection on first launch), Kallamo now shows a clear, actionable notification with an "Open Settings" button that takes you straight to the engine controls to check and install it manually, instead of leaving you unsure whether anything was needed.
 - Profiles whose always-on (constant / full-context) knowledge alone exceeds the context window now show a clear, actionable message before sending, instead of dispatching a request that's guaranteed to fail. This prevents wasted tokens and the heavy slowdown or freeze that very large profiles could cause.
 - Adding a profile to a chat (or otherwise saving it) no longer needlessly re-indexes every knowledge file in that chat.
 - Adding a custom memory no longer switches the active filter tab away from your current view.
