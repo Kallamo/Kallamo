@@ -200,10 +200,16 @@ function MainLayout() {
         <div className="absolute inset-0 z-[9999] flex items-center justify-center bg-[#011419]/95 backdrop-blur-sm">
           <div className="flex flex-col items-center space-y-6 max-w-md text-center px-8 animate-in fade-in zoom-in-95 duration-300">
             <div className="relative">
-              <svg className="animate-spin text-accent w-12 h-12" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
+              {engineDownloadProgress.status === 'error' ? (
+                <AlertCircle className="w-12 h-12 text-red-400" />
+              ) : engineDownloadProgress.status === 'completed' ? (
+                <CheckCircle className="w-12 h-12 text-emerald-400" />
+              ) : (
+                <svg className="animate-spin text-accent w-12 h-12" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              )}
             </div>
 
             <h2 className="text-xl font-bold text-white capitalize">
@@ -413,12 +419,25 @@ function MainLayout() {
             {toast.type === 'error' && <AlertCircle className="w-5.5 h-5.5 text-red-400" />}
             {toast.type === 'info' && <Info className="w-5.5 h-5.5 text-accent" />}
           </div>
-          <div className="flex-1 text-xs font-semibold text-gray-200 leading-relaxed pr-2">
-            {toast.message}
+          <div className="flex-1 pr-2">
+            <div className="text-xs font-semibold text-gray-200 leading-relaxed">
+              {toast.message}
+            </div>
+            {toast.action && (
+              <button
+                onClick={() => {
+                  toast.action.onClick();
+                  showToast(toast.message, toast.type, 0);
+                }}
+                className="mt-2 text-xs font-bold text-accent hover:text-white transition-colors cursor-pointer"
+              >
+                {toast.action.label}
+              </button>
+            )}
           </div>
           <button
             onClick={() => showToast(toast.message, toast.type, 0)}
-            className="text-gray-500 hover:text-white transition-colors cursor-pointer shrink-0"
+            className="text-gray-500 hover:text-white transition-colors cursor-pointer shrink-0 self-start"
           >
             <X className="w-4 h-4" />
           </button>

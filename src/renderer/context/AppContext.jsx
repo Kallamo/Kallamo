@@ -70,14 +70,14 @@ export const AppProvider = ({ children }) => {
   const [engineDownloadProgress, setEngineDownloadProgress] = useState(null); // { status: 'idle'|'downloading'|'verifying'|'extracting'|'completed'|'error', loaded, total, percent, error }
 
   // --- TOAST NOTIFICATIONS ---
-  const [toast, setToast] = useState(null); // { message, type: 'success' | 'error' | 'info', show: boolean }
+  const [toast, setToast] = useState(null); // { message, type: 'success' | 'error' | 'info', show: boolean, action?: { label, onClick } }
   const toastTimeoutRef = useRef(null);
 
-  const showToast = (message, type = 'info', duration = 4000) => {
+  const showToast = (message, type = 'info', duration = 4000, action = null) => {
     if (toastTimeoutRef.current) {
       clearTimeout(toastTimeoutRef.current);
     }
-    setToast({ message, type, show: true });
+    setToast({ message, type, show: true, action });
     toastTimeoutRef.current = setTimeout(() => {
       setToast(prev => prev ? { ...prev, show: false } : null);
     }, duration);
@@ -186,9 +186,16 @@ export const AppProvider = ({ children }) => {
         showToast("Local AI Engine installed successfully!", "success");
         setTimeout(() => setEngineDownloadProgress(null), 3000);
       } else if (data.status === 'error') {
-        showToast(data.isBackground
-          ? "Local AI Engine setup failed. Will retry on next launch."
-          : `Engine installation failed: ${data.error}`, "error");
+        if (data.isBackground) {
+          showToast(
+            "Local AI Engine couldn't be downloaded automatically. Open Settings to check and install it manually.",
+            "error",
+            12000,
+            { label: "Open Settings", onClick: () => openSettings('advanced', 'embedding') }
+          );
+        } else {
+          showToast(`Engine installation failed: ${data.error}`, "error");
+        }
         setTimeout(() => setEngineDownloadProgress(null), 5000);
       }
     }) : () => { };

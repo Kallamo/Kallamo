@@ -2,6 +2,14 @@ const db = require('./database');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { fetch: undiciFetch, Agent } = require('undici');
+
+// undici's default 300s headersTimeout aborts slow local generations
+// (stream:false sends headers only when generation finishes). 30 min ceiling.
+const generationDispatcher = new Agent({
+    headersTimeout: 1_800_000,
+    bodyTimeout: 1_800_000
+});
 
 function getMimeType(filePath) {
     const ext = path.extname(filePath).toLowerCase();
@@ -494,11 +502,12 @@ async function sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory, 
     }
 
     try {
-        const response = await fetch(endpoint, {
+        const response = await undiciFetch(endpoint, {
             method: "POST",
             headers: requestHeaders,
             body: requestBodyPayload,
-            signal: abortSignal
+            signal: abortSignal,
+            dispatcher: generationDispatcher
         });
 
         if (!response.ok) {

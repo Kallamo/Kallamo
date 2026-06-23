@@ -274,34 +274,47 @@ function setupAutoUpdater(mainWindow) {
       log.error('Auto-updater: Error detected during lifecycle checks:', err);
     });
   } else {
-    // macOS / Linux .deb — check latest.json for newer version
-    log.info('Auto-updater: Platform does not support auto-update. Checking latest.json...');
+    // macOS / Linux .deb — query the GitHub Releases API for the latest version
+    log.info('Auto-updater: Platform does not support auto-update. Checking GitHub releases...');
 
     const https = require('https');
-    const latestUrl = 'https://kallamo.github.io/latest.json';
+    const latestUrl = 'https://api.github.com/repos/Kallamo/Kallamo/releases/latest';
+    const options = {
+      headers: {
+        'User-Agent': 'Kallamo-Updater',
+        'Accept': 'application/vnd.github+json'
+      }
+    };
 
-    https.get(latestUrl, (res) => {
+    https.get(latestUrl, options, (res) => {
+      if (res.statusCode !== 200) {
+        log.error(`Auto-updater: GitHub releases API returned HTTP ${res.statusCode}.`);
+        res.resume();
+        return;
+      }
+
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
         try {
-          const latest = JSON.parse(data);
+          const release = JSON.parse(data);
+          const latestVersion = release.tag_name;
           const currentVersion = app.getVersion();
-          if (latest.version && compareSemver(latest.version, currentVersion) > 0) {
-            log.info(`Auto-updater: Newer version available: ${latest.version} (current: ${currentVersion})`);
+          if (latestVersion && compareSemver(latestVersion, currentVersion) > 0) {
+            log.info(`Auto-updater: Newer version available: ${latestVersion} (current: ${currentVersion})`);
             mainWindow.webContents.send('update-outdated', {
-              version: latest.version,
-              url: latest.url || 'https://github.com/Kallamo/Kallamo/releases/latest'
+              version: latestVersion.replace(/^v/, ''),
+              url: release.html_url || 'https://github.com/Kallamo/Kallamo/releases/latest'
             });
           } else {
             log.info('Auto-updater: App is up to date.');
           }
         } catch (e) {
-          log.error('Auto-updater: Failed to parse latest.json:', e);
+          log.error('Auto-updater: Failed to parse GitHub releases response:', e);
         }
       });
     }).on('error', (err) => {
-      log.error('Auto-updater: Failed to fetch latest.json:', err);
+      log.error('Auto-updater: Failed to fetch GitHub releases:', err);
     });
   }
 }
