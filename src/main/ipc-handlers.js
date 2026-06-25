@@ -2074,37 +2074,14 @@ function deleteDocumentChunks(documentId) {
 
 ipcMain.handle('get-writing-tree', async (event, { workspaceId }) => {
   try {
-    const folders = db.prepare('SELECT * FROM folders WHERE workspaceId = ? ORDER BY name COLLATE NOCASE').all(workspaceId);
+    const folders = db.prepare('SELECT * FROM folders WHERE workspaceId = ? ORDER BY position ASC, name COLLATE NOCASE').all(workspaceId);
     const documents = db.prepare(
-      'SELECT id, workspaceId, folderId, title, sheetColor, defaultFont, sheetWidth, updatedAt FROM documents WHERE workspaceId = ? ORDER BY title COLLATE NOCASE'
+      'SELECT id, workspaceId, folderId, title, position, updatedAt FROM documents WHERE workspaceId = ? ORDER BY position ASC, title COLLATE NOCASE'
     ).all(workspaceId);
     return { folders, documents };
   } catch (e) {
     console.error('[Writing Desk] Error loading tree:', e);
     return { folders: [], documents: [] };
-  }
-});
-
-// Per-workspace Writing Desk defaults (new chapters inherit these). Stored as JSON
-// on the chats row; null when the workspace has never customized them.
-ipcMain.handle('get-writing-desk-config', async (event, { workspaceId }) => {
-  try {
-    const row = db.prepare('SELECT writingDeskDefaults FROM chats WHERE id = ?').get(workspaceId);
-    return row && row.writingDeskDefaults ? JSON.parse(row.writingDeskDefaults) : null;
-  } catch (e) {
-    console.error('[Writing Desk] Error loading workspace config:', e);
-    return null;
-  }
-});
-
-ipcMain.handle('save-writing-desk-config', async (event, { workspaceId, config }) => {
-  try {
-    db.prepare('UPDATE chats SET writingDeskDefaults = ?, last_modified = ? WHERE id = ?')
-      .run(JSON.stringify(config || {}), Date.now(), workspaceId);
-    return { success: true };
-  } catch (e) {
-    console.error('[Writing Desk] Error saving workspace config:', e);
-    return { success: false, error: e.message };
   }
 });
 
@@ -2117,12 +2094,41 @@ ipcMain.handle('get-document', async (event, { id }) => {
   }
 });
 
+// Next position (append to end) within a sibling group of a given type.
+function nextPosition(workspaceId, type, parentId) {
+  const col = type === 'folder' ? 'parentId' : 'folderId';
+  const table = type === 'folder' ? 'folders' : 'documents';
+  const row = db.prepare(`SELECT MAX(position) AS m FROM ${table} WHERE workspaceId = ? AND ${col} IS ?`).get(workspaceId, parentId || null);
+  return (row && row.m != null ? row.m : -1) + 1;
+}
+
 ipcMain.handle('create-folder', async (event, { workspaceId, name, parentId }) => {
   const id = crypto.randomUUID();
   const now = Date.now();
-  db.prepare('INSERT INTO folders (id, workspaceId, name, parentId, createdAt, last_modified) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(id, workspaceId, name || 'New folder', parentId || null, now, now);
-  return { id, workspaceId, name: name || 'New folder', parentId: parentId || null, createdAt: now };
+  const position = nextPosition(workspaceId, 'folder', parentId);
+  db.prepare('INSERT INTO folders (id, workspaceId, name, parentId, position, createdAt, last_modified) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(id, workspaceId, name || 'New folder', parentId || null, position, now, now);
+  return { id, workspaceId, name: name || 'New folder', parentId: parentId || null, position, createdAt: now };
+});
+
+// Bulk reorder/move: each update sets an item's parent + position. Used by drag-and-drop.
+ipcMain.handle('reorder-writing-items', async (event, { updates }) => {
+  try {
+    const upDoc = db.prepare('UPDATE documents SET folderId = ?, position = ?, last_modified = ? WHERE id = ?');
+    const upFolder = db.prepare('UPDATE folders SET parentId = ?, position = ?, last_modified = ? WHERE id = ?');
+    const now = Date.now();
+    const tx = db.transaction((items) => {
+      for (const u of items) {
+        if (u.type === 'folder') upFolder.run(u.parentId || null, u.position, now, u.id);
+        else upDoc.run(u.parentId || null, u.position, now, u.id);
+      }
+    });
+    tx(updates || []);
+    return { success: true };
+  } catch (e) {
+    console.error('[Writing Desk] Reorder failed:', e);
+    return { success: false, error: e.message };
+  }
 });
 
 ipcMain.handle('rename-folder', async (event, { id, name }) => {
@@ -2131,7 +2137,9 @@ ipcMain.handle('rename-folder', async (event, { id, name }) => {
 });
 
 ipcMain.handle('move-folder', async (event, { id, parentId }) => {
-  db.prepare('UPDATE folders SET parentId = ?, last_modified = ? WHERE id = ?').run(parentId || null, Date.now(), id);
+  const row = db.prepare('SELECT workspaceId FROM folders WHERE id = ?').get(id);
+  const position = row ? nextPosition(row.workspaceId, 'folder', parentId) : 0;
+  db.prepare('UPDATE folders SET parentId = ?, position = ?, last_modified = ? WHERE id = ?').run(parentId || null, position, Date.now(), id);
   return { success: true };
 });
 
@@ -2168,7 +2176,7 @@ ipcMain.handle('delete-folder', async (event, { id }) => {
 // Page geometry + typography columns a new document can inherit from its workspace
 // defaults. Anything omitted falls back to the column DEFAULT in the schema.
 const PAGE_COLUMNS = [
-  'sheetColor', 'defaultFont', 'pageSize', 'pageWidth', 'pageHeight',
+  'sheetColor', 'defaultFont', 'pageSize', 'orientation', 'pageWidth', 'pageHeight',
   'marginTop', 'marginRight', 'marginBottom', 'marginLeft',
   'defaultFontSize', 'lineHeight', 'paragraphSpacing', 'textAlign', 'firstLineIndent', 'wordGoal'
 ];
@@ -2176,8 +2184,8 @@ const PAGE_COLUMNS = [
 function insertDocumentWithDefaults({ workspaceId, folderId, title, content, defaults }) {
   const id = crypto.randomUUID();
   const now = Date.now();
-  const cols = ['id', 'workspaceId', 'folderId', 'title', 'content', 'createdAt', 'updatedAt', 'last_modified'];
-  const vals = [id, workspaceId, folderId || null, title, content, now, now, now];
+  const cols = ['id', 'workspaceId', 'folderId', 'title', 'content', 'position', 'createdAt', 'updatedAt', 'last_modified'];
+  const vals = [id, workspaceId, folderId || null, title, content, nextPosition(workspaceId, 'document', folderId), now, now, now];
   if (defaults && typeof defaults === 'object') {
     for (const c of PAGE_COLUMNS) {
       if (defaults[c] !== undefined && defaults[c] !== null) {
@@ -2202,7 +2210,9 @@ ipcMain.handle('rename-document', async (event, { id, title }) => {
 });
 
 ipcMain.handle('move-document', async (event, { id, folderId }) => {
-  db.prepare('UPDATE documents SET folderId = ?, last_modified = ? WHERE id = ?').run(folderId || null, Date.now(), id);
+  const row = db.prepare('SELECT workspaceId FROM documents WHERE id = ?').get(id);
+  const position = row ? nextPosition(row.workspaceId, 'document', folderId) : 0;
+  db.prepare('UPDATE documents SET folderId = ?, position = ?, last_modified = ? WHERE id = ?').run(folderId || null, position, Date.now(), id);
   return { success: true };
 });
 

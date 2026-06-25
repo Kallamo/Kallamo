@@ -277,6 +277,7 @@ db.exec(`
     workspaceId TEXT NOT NULL,
     name TEXT NOT NULL,
     parentId TEXT,
+    position INTEGER DEFAULT 0,
     createdAt INTEGER,
     last_modified INTEGER DEFAULT 0
   );
@@ -293,6 +294,7 @@ db.exec(`
     defaultFont TEXT,
     sheetWidth INTEGER DEFAULT 720,
     pageSize TEXT DEFAULT 'A4',
+    orientation TEXT DEFAULT 'portrait',
     pageWidth INTEGER DEFAULT 794,
     pageHeight INTEGER DEFAULT 1123,
     marginTop INTEGER DEFAULT 96,
@@ -305,6 +307,7 @@ db.exec(`
     textAlign TEXT DEFAULT 'left',
     firstLineIndent INTEGER DEFAULT 0,
     wordGoal INTEGER DEFAULT 0,
+    position INTEGER DEFAULT 0,
     vectorized INTEGER DEFAULT 0,
     createdAt INTEGER,
     updatedAt INTEGER,
@@ -471,10 +474,6 @@ try {
     db.exec("ALTER TABLE chats ADD COLUMN syncToCloud INTEGER DEFAULT 0");
     console.log("Database Migration: Added syncToCloud column to chats table.");
   }
-  if (!columns.includes('writingDeskDefaults')) {
-    db.exec("ALTER TABLE chats ADD COLUMN writingDeskDefaults TEXT");
-    console.log("Database Migration: Added writingDeskDefaults column to chats table.");
-  }
 
   const msgTableInfo = db.pragma("table_info(messages)");
   const msgColumns = msgTableInfo.map(col => col.name);
@@ -541,6 +540,7 @@ try {
   const docColumns = docTableInfo.map(col => col.name);
   const docColumnDefs = [
     ["pageSize", "TEXT DEFAULT 'A4'"],
+    ["orientation", "TEXT DEFAULT 'portrait'"],
     ["pageWidth", "INTEGER DEFAULT 794"],
     ["pageHeight", "INTEGER DEFAULT 1123"],
     ["marginTop", "INTEGER DEFAULT 96"],
@@ -553,12 +553,19 @@ try {
     ["textAlign", "TEXT DEFAULT 'left'"],
     ["firstLineIndent", "INTEGER DEFAULT 0"],
     ["wordGoal", "INTEGER DEFAULT 0"],
+    ["position", "INTEGER DEFAULT 0"],
   ];
   for (const [name, def] of docColumnDefs) {
     if (!docColumns.includes(name)) {
       db.exec(`ALTER TABLE documents ADD COLUMN ${name} ${def}`);
       console.log(`Database Migration: Added ${name} column to documents table.`);
     }
+  }
+
+  const folderTableInfo = db.pragma("table_info(folders)");
+  if (!folderTableInfo.map(c => c.name).includes('position')) {
+    db.exec("ALTER TABLE folders ADD COLUMN position INTEGER DEFAULT 0");
+    console.log("Database Migration: Added position column to folders table.");
   }
 } catch (e) {
   console.error("Migration error adding columns to database tables:", e);
