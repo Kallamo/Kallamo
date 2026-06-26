@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import WritingEditor, { DEFAULT_WRITING_DESK } from './WritingEditor';
+import { importedContentToJson } from './writingExtensions';
 import ConfirmDialog from './ui/ConfirmDialog';
 import {
   Folder, FolderPlus, FilePlus, Upload, ChevronRight, ChevronDown,
@@ -12,6 +13,7 @@ export default function WritingDeskView({ chat, electronAPI }) {
   const { settings, showToast } = useApp();
   const workspaceId = chat.id;
   const toolbarMode = settings?.interface?.writingToolbar === 'bubble' ? 'bubble' : 'fixed';
+  const smartTypography = settings?.interface?.smartTypography ?? true;
 
   const [tree, setTree] = useState({ folders: [], documents: [] });
   const [expanded, setExpanded] = useState({});
@@ -64,11 +66,19 @@ export default function WritingDeskView({ chat, electronAPI }) {
   };
 
   const importDocument = async () => {
-    const res = await electronAPI.importDocument(workspaceId, null, DEFAULT_WRITING_DESK);
+    const res = await electronAPI.importDocument();
     if (res?.canceled) return;
     if (res?.error) { showToast(`Import failed: ${res.error}`, 'error'); return; }
+    let content;
+    try {
+      content = JSON.stringify(importedContentToJson(res));
+    } catch (e) {
+      showToast(`Import failed: ${e.message}`, 'error');
+      return;
+    }
+    const doc = await electronAPI.createDocument(workspaceId, null, res.baseName || 'Imported', content, DEFAULT_WRITING_DESK);
     await loadTree();
-    if (res?.document) setSelectedDocId(res.document.id);
+    if (doc?.id) setSelectedDocId(doc.id);
   };
 
   const commitRename = async (item) => {
@@ -325,20 +335,17 @@ export default function WritingDeskView({ chat, electronAPI }) {
       {/* Editor */}
       {currentDoc ? (
         <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="px-5 py-3 border-b border-gray-800/80 bg-[#011419]/35 shrink-0">
-            <input
-              value={currentDoc.title}
-              onChange={(e) => setCurrentDoc({ ...currentDoc, title: e.target.value })}
-              onBlur={() => electronAPI.renameDocument(currentDoc.id, currentDoc.title).then(loadTree)}
-              className="bg-transparent text-white font-semibold text-sm focus:outline-none w-full"
-            />
-          </div>
           <WritingEditor
             key={currentDoc.id}
             doc={currentDoc}
             electronAPI={electronAPI}
             toolbarMode={toolbarMode}
+            smartTypography={smartTypography}
             onDocPatch={onDocPatch}
+            onRename={(title) => {
+              setCurrentDoc({ ...currentDoc, title });
+              electronAPI.renameDocument(currentDoc.id, title).then(loadTree);
+            }}
           />
         </div>
       ) : (

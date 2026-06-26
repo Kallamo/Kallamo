@@ -6,7 +6,7 @@ const os = require('os');
 const https = require('https');
 const crypto = require('crypto');
 const db = require('./database');
-const { chunkText, extractTextFromFile, vectorizeChunks, insertChunksToDb, deleteChunksFromDb, searchKnowledgeBase, searchChatKnowledgeBase, searchChatMemories, RAG_MODEL_ID, RAG_MODEL_DIM, generateEmbeddingVector, countTokens } = require('./rag-service');
+const { chunkText, extractTextFromFile, extractDocxHtml, vectorizeChunks, insertChunksToDb, deleteChunksFromDb, searchKnowledgeBase, searchChatKnowledgeBase, searchChatMemories, RAG_MODEL_ID, RAG_MODEL_DIM, generateEmbeddingVector, countTokens } = require('./rag-service');
 
 // Resolve the APPDATA data path
 const appDataPath = process.env.APPDATA || (process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support') : path.join(os.homedir(), '.local', 'share'));
@@ -2050,16 +2050,6 @@ ipcMain.handle('add-profile-searchable-file', async (event, { profileId, name, p
 // ==========================================
 // --- WRITING DESK: DOCUMENTS & FOLDERS ---
 
-// Wrap plain text (e.g. from a .docx/.pdf import) into a minimal ProseMirror doc
-// so imported chapters share the same content format the editor produces.
-function plainTextToProseMirror(text) {
-  const paragraphs = String(text || '').split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
-  const content = paragraphs.length > 0
-    ? paragraphs.map(p => ({ type: 'paragraph', content: [{ type: 'text', text: p }] }))
-    : [{ type: 'paragraph' }];
-  return JSON.stringify({ type: 'doc', content });
-}
-
 // Remove a document's searchable chunks (owner = document) and their FTS rows.
 function deleteDocumentChunks(documentId) {
   try {
@@ -2254,7 +2244,7 @@ ipcMain.handle('save-document-page', async (event, { id, page }) => {
 
 // Export a chapter to PDF. The renderer composes a self-contained HTML document; here we
 // load it in a hidden window and print it paginated via webContents.printToPDF.
-ipcMain.handle('export-document-pdf', async (event, { html, title, pageSize, pageWidth, pageHeight, margins }) => {
+ipcMain.handle('export-document-pdf', async (event, { html, title, pageSize, pageWidth, pageHeight, margins, paginate, contentHeight, pageNumbers }) => {
   let pdfWin = null;
   try {
     const parent = BrowserWindow.getFocusedWindow();
@@ -2268,18 +2258,36 @@ ipcMain.handle('export-document-pdf', async (event, { html, title, pageSize, pag
     pdfWin = new BrowserWindow({ show: false, webPreferences: { sandbox: true, javascript: false } });
     await pdfWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
 
-    const px2micron = (px) => Math.round((px / 96) * 25400);
+    const MAX_MICRON = Math.round(200 * 25400); // PDF max page dimension ~200in
+    const px2micron = (px) => Math.min(Math.round((px / 96) * 25400), MAX_MICRON);
+    // Margins are set identically in the HTML @page rule AND here (marginType
+    // 'custom', inches). Whichever Chromium gives precedence, the value is the
+    // same, so content margins stay correct (no doubling) and printToPDF still
+    // reserves the bottom band the page-number footer needs.
+    const inch = (v) => (v || 0) / 96;
     const opts = {
       printBackground: true,
-      margins: margins ? {
-        top: (margins.top || 0) / 96,
-        right: (margins.right || 0) / 96,
-        bottom: (margins.bottom || 0) / 96,
-        left: (margins.left || 0) / 96,
-      } : undefined,
+      margins: margins
+        ? { marginType: 'custom', top: inch(margins.top), right: inch(margins.right), bottom: inch(margins.bottom), left: inch(margins.left) }
+        : { marginType: 'none' },
     };
-    if (pageSize === 'A4' || pageSize === 'Letter') opts.pageSize = pageSize;
-    else if (pageWidth && pageHeight) opts.pageSize = { width: px2micron(pageWidth), height: px2micron(pageHeight) };
+    if (paginate === false && pageWidth && contentHeight) {
+      // Single continuous page sized to the measured content (clamped to PDF max).
+      opts.pageSize = { width: px2micron(pageWidth), height: px2micron(contentHeight) };
+    } else if (pageSize === 'A4' || pageSize === 'Letter') {
+      opts.pageSize = pageSize;
+    } else if (pageWidth && pageHeight) {
+      opts.pageSize = { width: px2micron(pageWidth), height: px2micron(pageHeight) };
+    }
+
+    if (pageNumbers && pageNumbers.enabled && paginate !== false) {
+      const justify = pageNumbers.position === 'left' ? 'flex-start' : pageNumbers.position === 'right' ? 'flex-end' : 'center';
+      const pad = pageNumbers.position === 'left' ? `padding-left:${(margins?.left || 0) / 96}in;`
+        : pageNumbers.position === 'right' ? `padding-right:${(margins?.right || 0) / 96}in;` : '';
+      opts.displayHeaderFooter = true;
+      opts.headerTemplate = '<span></span>';
+      opts.footerTemplate = `<div style="width:100%;font-size:10px;display:flex;justify-content:${justify};${pad}"><span class="pageNumber"></span></div>`;
+    }
 
     const data = await pdfWin.webContents.printToPDF(opts);
     fs.writeFileSync(saveResult.filePath, data);
@@ -2292,8 +2300,10 @@ ipcMain.handle('export-document-pdf', async (event, { html, title, pageSize, pag
   }
 });
 
-// Export a chapter to .docx from its HTML using html-to-docx.
-ipcMain.handle('export-document-docx', async (event, { html, title, margins }) => {
+// Export a chapter to .docx. Built from the editor's ProseMirror JSON via the
+// `docx` library (schema-valid OOXML), not html-to-docx (which produced files
+// Word refused to open, especially with tables).
+ipcMain.handle('export-document-docx', async (event, { docJson, title, page, margins, pageNumbers }) => {
   try {
     const parent = BrowserWindow.getFocusedWindow();
     const saveResult = await dialog.showSaveDialog(parent, {
@@ -2303,16 +2313,8 @@ ipcMain.handle('export-document-docx', async (event, { html, title, margins }) =
     });
     if (saveResult.canceled || !saveResult.filePath) return { canceled: true };
 
-    const htmlToDocx = require('html-to-docx');
-    const px2twip = (px) => Math.round((px / 96) * 1440);
-    const buffer = await htmlToDocx(html, null, {
-      margins: margins ? {
-        top: px2twip(margins.top || 0),
-        right: px2twip(margins.right || 0),
-        bottom: px2twip(margins.bottom || 0),
-        left: px2twip(margins.left || 0),
-      } : undefined,
-    });
+    const { buildDocxBuffer } = require('./docx-export');
+    const buffer = await buildDocxBuffer(docJson, page || {}, { margins, pageNumbers });
     fs.writeFileSync(saveResult.filePath, buffer);
     return { success: true, filePath: saveResult.filePath };
   } catch (e) {
@@ -2321,7 +2323,10 @@ ipcMain.handle('export-document-docx', async (event, { html, title, margins }) =
   }
 });
 
-ipcMain.handle('import-document', async (event, { workspaceId, folderId, defaults }) => {
+// Step 1 of import: pick a file and extract its content. DOCX returns rich HTML
+// (formatting preserved); pdf/txt/md return plain text. The renderer converts the
+// HTML into ProseMirror JSON against the editor schema, then calls create-document.
+ipcMain.handle('import-document', async (event, { } = {}) => {
   try {
     const win = BrowserWindow.getFocusedWindow();
     const openResult = await dialog.showOpenDialog(win, {
@@ -2333,13 +2338,14 @@ ipcMain.handle('import-document', async (event, { workspaceId, folderId, default
       return { canceled: true };
     }
     const filePath = openResult.filePaths[0];
+    const ext = path.extname(filePath).toLowerCase();
+    const baseName = path.basename(filePath, ext) || 'Imported';
+    if (ext === '.docx') {
+      const html = await extractDocxHtml(filePath);
+      return { kind: 'html', html, baseName };
+    }
     const text = await extractTextFromFile(filePath);
-    const baseName = path.basename(filePath, path.extname(filePath));
-    const document = insertDocumentWithDefaults({
-      workspaceId, folderId, title: baseName || 'Imported',
-      content: plainTextToProseMirror(text), defaults
-    });
-    return { document };
+    return { kind: 'text', text, baseName };
   } catch (e) {
     console.error('[Writing Desk] Import failed:', e);
     return { error: e.message };

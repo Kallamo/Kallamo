@@ -183,6 +183,16 @@ async function extractTextFromFile(filePath) {
     return fs.readFileSync(filePath, 'utf-8');
 }
 
+// Rich DOCX extraction: convert to HTML so structural formatting (headings,
+// bold/italic, lists, blockquotes, tables) survives, instead of the flat plain
+// text extractTextFromFile produces. Used by the Writing Desk import so imported
+// chapters keep their formatting; the RAG path still uses plain text.
+async function extractDocxHtml(filePath) {
+    const dataBuffer = fs.readFileSync(filePath);
+    const result = await mammoth.convertToHtml({ buffer: dataBuffer });
+    return result.value;
+}
+
 // --- VECTORIZATION ENGINE ---
 
 async function getEmbeddingPipeline() {
@@ -511,6 +521,7 @@ module.exports = {
     countTokens,
     chunkText,
     extractTextFromFile,
+    extractDocxHtml,
     generateEmbeddingVector,
     getEmbeddingPipeline,
     vectorizeChunks,

@@ -149,6 +149,16 @@ body {
 .writing-prose code { background: color-mix(in srgb, currentColor 10%, transparent); padding: 0.1em 0.3em; border-radius: 4px; font-family: monospace; font-size: 0.9em; }
 .writing-prose pre { background: color-mix(in srgb, currentColor 8%, transparent); padding: 0.8em; border-radius: 8px; overflow-x: auto; margin: 0 0 0.85em; }
 .writing-prose pre code { background: none; padding: 0; }
+.writing-prose table { border-collapse: collapse; width: 100%; margin: 0 0 0.85em; table-layout: fixed; overflow: hidden; }
+.writing-prose th, .writing-prose td { border: 1px solid color-mix(in srgb, currentColor 30%, transparent); padding: 6px 8px; vertical-align: top; text-align: left; position: relative; min-width: 2em; }
+.writing-prose th { background: color-mix(in srgb, currentColor 8%, transparent); font-weight: 700; }
+.writing-prose table p { margin: 0; text-indent: 0; }
+.writing-prose .selectedCell:after { background: color-mix(in srgb, var(--app-accent) 20%, transparent); content: ""; position: absolute; inset: 0; pointer-events: none; }
+.writing-prose .column-resize-handle { background: var(--app-accent); width: 3px; position: absolute; right: -2px; top: 0; bottom: 0; cursor: col-resize; }
+
+/* Page-guides pagination: transparent structural spacer between stacked pages.
+   The white sheets + gaps are painted by a React layer behind the content. */
+.wd-page-break { display: block; user-select: none; pointer-events: none; }
 
 /* Hide native number-input spinner arrows */
 .no-spinner::-webkit-outer-spin-button,

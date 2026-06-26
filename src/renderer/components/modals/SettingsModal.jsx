@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
-import { X, Plus, Key, Link2, Eye, EyeOff, Monitor, Settings, Layout, Layers, HardDrive, Trash2, FolderOpen, RefreshCw, Cpu, Database, Palette, Type } from 'lucide-react';
+import { X, Plus, Key, Link2, Eye, EyeOff, Monitor, Settings, Layout, Layers, HardDrive, Trash2, FolderOpen, RefreshCw, Cpu, Database, Palette, Type, PenLine } from 'lucide-react';
 import Logo, { Logotype } from '../../logo';
 
 export default function SettingsModal({ onClose, initialTab, initialSection }) {
@@ -67,6 +67,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [lineNumbers, setLineNumbers] = useState(settings.interface.lineNumbers || false);
   const [blurEnabled, setBlurEnabled] = useState(settings.interface.blur ?? true);
   const [writingToolbar, setWritingToolbar] = useState(settings.interface.writingToolbar || 'fixed');
+  const [smartTypography, setSmartTypography] = useState(settings.interface.smartTypography ?? true);
 
   const [chunkSize, setChunkSize] = useState(settings.advanced.chunkSize || 500);
   const [similarity, setSimilarity] = useState(settings.advanced.similarity || 0.3);
@@ -96,7 +97,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
 
   // Keep ref of settings to prevent stale closures in debounce timeout
   const settingsRef = useRef({
-    accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled, writingToolbar,
+    accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled, writingToolbar, smartTypography,
     chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug,
     embeddingEngine, embeddingApiProfileId, embeddingModelName
   });
@@ -107,7 +108,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug,
       embeddingEngine, embeddingApiProfileId, embeddingModelName
     };
-  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName]);
+  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, smartTypography, chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName]);
 
   // Handle immediate save for selects and color choices
   const updateSetting = async (category, key, value) => {
@@ -121,6 +122,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       if (key === 'lineNumbers') setLineNumbers(value);
       if (key === 'blur') setBlurEnabled(value);
       if (key === 'writingToolbar') setWritingToolbar(value);
+      if (key === 'smartTypography') setSmartTypography(value);
     } else if (category === 'advanced') {
       if (key === 'executionDevice') setExecutionDevice(value);
       if (key === 'ragDebug') setRagDebug(value);
@@ -140,7 +142,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         codeTheme: key === 'codeTheme' ? value : current.codeTheme,
         lineNumbers: key === 'lineNumbers' ? value : current.lineNumbers,
         blur: key === 'blur' ? value : current.blur,
-        writingToolbar: key === 'writingToolbar' ? value : current.writingToolbar
+        writingToolbar: key === 'writingToolbar' ? value : current.writingToolbar,
+        smartTypography: key === 'smartTypography' ? value : current.smartTypography
       },
       advanced: {
         chunkSize: Number(current.chunkSize),
@@ -187,7 +190,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
           codeTheme: current.codeTheme,
           lineNumbers: current.lineNumbers,
           blur: current.blur,
-          writingToolbar: current.writingToolbar
+          writingToolbar: current.writingToolbar,
+          smartTypography: current.smartTypography
         },
         advanced: {
           chunkSize: key === 'chunkSize' ? Number(value) : Number(current.chunkSize),
@@ -846,11 +850,21 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                         </div>
                       </div>
 
-                      {/* Writing Desk toolbar placement */}
+                    </div>
+                  </div>
+
+                  {/* SECTION: WRITING DESK */}
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
+                      <PenLine className="w-3.5 h-3.5" />
+                      <span>Writing Desk</span>
+                    </h4>
+                    <div className="bg-[#051116] rounded-xl border border-gray-800/80 divide-y divide-gray-800/80 overflow-hidden">
+                      {/* Toolbar placement */}
                       <div className="p-4 flex items-center justify-between">
                         <div>
-                          <span className="block text-sm text-gray-200 font-bold">Writing Desk Toolbar</span>
-                          <span className="caption">Show the formatting toolbar fixed at the top, or as a bubble over the selection.</span>
+                          <span className="block text-sm text-gray-200 font-bold">Formatting Toolbar</span>
+                          <span className="caption">Fixed at the top, or as a bubble over the selection.</span>
                         </div>
                         <div className="flex bg-[#011419] border border-gray-700 rounded-lg p-1 space-x-1">
                           {['fixed', 'bubble'].map(mode => (
@@ -866,6 +880,20 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                             </button>
                           ))}
                         </div>
+                      </div>
+
+                      {/* Smart typography */}
+                      <div className="p-4 flex items-center justify-between">
+                        <div>
+                          <span className="block text-sm text-gray-200 font-bold">Smart Typography</span>
+                          <span className="caption">Auto-convert as you type: curly quotes, dashes (-- → –, --- → —), ellipsis, ©™. Document only — never your chat.</span>
+                        </div>
+                        <button
+                          onClick={() => updateSetting('interface', 'smartTypography', !smartTypography)}
+                          className={`relative w-10 h-5.5 rounded-full transition-colors shrink-0 cursor-pointer ${smartTypography ? 'bg-accent' : 'bg-gray-700'}`}
+                        >
+                          <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${smartTypography ? 'translate-x-[18px]' : ''}`} />
+                        </button>
                       </div>
                     </div>
                   </div>

@@ -1,18 +1,19 @@
-import React, { useEffect, useRef, useState, useReducer } from 'react';
+import React, { useEffect, useRef, useState, useReducer, useCallback } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
-import { Extension } from '@tiptap/core';
-import StarterKit from '@tiptap/starter-kit';
-import { TextStyle, Color, FontFamily, FontSize } from '@tiptap/extension-text-style';
-import TextAlign from '@tiptap/extension-text-align';
 import {
-  Bold, Italic, Strikethrough, Heading1, Heading2, Heading3, List, ListOrdered,
-  Quote, Palette, FileDown, FileText, ChevronDown, Search, Check,
+  Bold, Italic, Underline, Strikethrough, Heading1, Heading2, Heading3, List, ListOrdered,
+  Quote, Palette, FileOutput, ChevronDown, Search, Check, Table as TableIcon,
+  Rows, Columns, Trash2, Combine,
+  ArrowUpToLine, ArrowDownToLine, ArrowLeftToLine, ArrowRightToLine,
   AlignLeft, AlignCenter, AlignRight, AlignJustify, ALargeSmall, AlignVerticalSpaceAround, Pilcrow, Plus, FileCog
 } from 'lucide-react';
 import ColorPicker from './ui/ColorPicker';
 import Button from './ui/Button';
 import WritingPageModal from './WritingPageModal';
+import ExportModal from './ExportModal';
+import { getEditorExtensions } from './writingExtensions';
+import { computePageLayout } from './writingPagination';
 
 export const PAPER_THEMES = [
   { label: 'Light', color: '#ffffff' },
@@ -27,13 +28,12 @@ const TEXT_SWATCHES = [
   '#3b82f6', '#6366f1', '#8b5cf6', '#ec4899',
 ];
 
-const DEFAULT_FONT = 'Georgia, serif';
+const DEFAULT_FONT = 'Arial';
 
-const FONT_OPTIONS = [
-  { label: 'Serif', value: 'Georgia, serif' },
-  { label: 'Sans', value: 'Inter, system-ui, sans-serif' },
-  { label: 'Mono', value: 'monospace' },
-];
+// The font picker is driven entirely by the user's installed system fonts
+// (queryLocalFonts). Arial is the fallback when system fonts are unavailable.
+const FONT_OPTIONS = [];
+const FONT_FALLBACK = [{ label: 'Arial', value: 'Arial' }];
 
 const LINE_HEIGHTS = ['1', '1.15', '1.5', '1.6', '2', '2.5'];
 const FONT_SIZES = ['10', '11', '12', '14', '16', '18', '20', '24', '28', '32', '36', '48', '72'];
@@ -54,38 +54,6 @@ function useRecentColors() {
   });
   return [colors, add];
 }
-
-// Line height and paragraph spacing as block-level attributes on paragraphs/headings.
-// (The text-style LineHeight applies to inline spans, which doesn't space whole lines.)
-const BLOCK_TYPES = ['paragraph', 'heading'];
-const BlockStyle = Extension.create({
-  name: 'blockStyle',
-  addGlobalAttributes() {
-    return [{
-      types: BLOCK_TYPES,
-      attributes: {
-        lineHeight: {
-          default: null,
-          parseHTML: el => el.style.lineHeight || null,
-          renderHTML: attrs => (attrs.lineHeight ? { style: `line-height: ${attrs.lineHeight}` } : {}),
-        },
-        paragraphSpacing: {
-          default: null,
-          parseHTML: el => el.style.marginBottom || null,
-          renderHTML: attrs => (attrs.paragraphSpacing ? { style: `margin-bottom: ${attrs.paragraphSpacing}` } : {}),
-        },
-      },
-    }];
-  },
-  addCommands() {
-    const setAttr = (key) => (value) => ({ chain }) => {
-      let c = chain().focus();
-      BLOCK_TYPES.forEach(t => { c = c.updateAttributes(t, { [key]: value }); });
-      return c.run();
-    };
-    return { setLineHeight: setAttr('lineHeight'), setParagraphSpacing: setAttr('paragraphSpacing') };
-  },
-});
 
 // Cached so the multiple font pickers share a single queryLocalFonts call.
 let systemFontsPromise = null;
@@ -111,7 +79,7 @@ function useFontOptions() {
     loadSystemFonts().then(f => { if (active) setSystem(f); });
     return () => { active = false; };
   }, []);
-  return system.length ? [...FONT_OPTIONS, ...system] : FONT_OPTIONS;
+  return system.length ? [...FONT_OPTIONS, ...system] : FONT_FALLBACK;
 }
 
 // Page dimensions in CSS px at 96dpi.
@@ -150,6 +118,19 @@ function pageConfigFromDoc(doc) {
     if (doc[k] !== undefined && doc[k] !== null) cfg[k] = doc[k];
   }
   return cfg;
+}
+
+// Geometry the pagination plugin needs: usable content height per page + margins.
+function pageGeometry(cfg) {
+  const mTop = cfg.marginTop ?? 96;
+  const mBottom = cfg.marginBottom ?? 96;
+  return {
+    pageContentHeight: (cfg.pageHeight || 1123) - mTop - mBottom,
+    marginTop: mTop,
+    marginBottom: mBottom,
+    marginLeft: cfg.marginLeft ?? 96,
+    marginRight: cfg.marginRight ?? 96,
+  };
 }
 
 // Relative luminance check so prose text contrasts the paper color.
@@ -461,22 +442,13 @@ function ColorPopover({ editor }) {
 
           <div className="flex items-center justify-between gap-2 mt-3 pt-2.5 border-t border-gray-800">
             <span className="text-[11px] font-bold text-gray-300">Custom</span>
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onMouseDown={(e) => { e.preventDefault(); openPicker(); }}
-                className="text-[11px] font-semibold text-accent hover:brightness-110 flex items-center gap-0.5"
-              >
-                <Plus className="w-3.5 h-3.5" /> Add
-              </button>
-              <button
-                type="button"
-                onMouseDown={(e) => { e.preventDefault(); editor.chain().focus().unsetColor().run(); }}
-                className="text-[11px] text-gray-500 hover:text-white"
-              >
-                Reset
-              </button>
-            </div>
+            <button
+              type="button"
+              onMouseDown={(e) => { e.preventDefault(); openPicker(); }}
+              className="text-[11px] font-semibold text-accent hover:brightness-110 flex items-center gap-0.5"
+            >
+              <Plus className="w-3.5 h-3.5" /> Add
+            </button>
           </div>
 
           {recent.length > 0 && (
@@ -515,6 +487,7 @@ function Toolbar({ editor, pageConfig }) {
     <div className="flex items-center gap-0.5 flex-wrap">
       <ToolbarButton active={editor.isActive('bold')} onClick={() => editor.chain().focus().toggleBold().run()} title="Bold"><Bold className="w-4 h-4" /></ToolbarButton>
       <ToolbarButton active={editor.isActive('italic')} onClick={() => editor.chain().focus().toggleItalic().run()} title="Italic"><Italic className="w-4 h-4" /></ToolbarButton>
+      <ToolbarButton active={editor.isActive('underline')} onClick={() => editor.chain().focus().toggleUnderline().run()} title="Underline"><Underline className="w-4 h-4" /></ToolbarButton>
       <ToolbarButton active={editor.isActive('strike')} onClick={() => editor.chain().focus().toggleStrike().run()} title="Strikethrough"><Strikethrough className="w-4 h-4" /></ToolbarButton>
       <ColorPopover editor={editor} />
       <Divider />
@@ -547,38 +520,77 @@ function Toolbar({ editor, pageConfig }) {
       <ToolbarButton active={editor.isActive('bulletList')} onClick={() => editor.chain().focus().toggleBulletList().run()} title="Bullet list"><List className="w-4 h-4" /></ToolbarButton>
       <ToolbarButton active={editor.isActive('orderedList')} onClick={() => editor.chain().focus().toggleOrderedList().run()} title="Numbered list"><ListOrdered className="w-4 h-4" /></ToolbarButton>
       <ToolbarButton active={editor.isActive('blockquote')} onClick={() => editor.chain().focus().toggleBlockquote().run()} title="Quote"><Quote className="w-4 h-4" /></ToolbarButton>
+      <Divider />
+      <ToolbarButton active={editor.isActive('table')} onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()} title="Insert table"><TableIcon className="w-4 h-4" /></ToolbarButton>
     </div>
   );
 }
 
-// Margins are applied by the exporter (printToPDF / html-to-docx), not baked into the
-// CSS here, to avoid doubling them. Inline formatting (font, size, color, alignment)
-// travels with the editor HTML; this only sets the document baseline.
-function buildExportHtml(editor, page) {
-  const body = editor.getHTML();
-  const fontFamily = page.defaultFont || 'Georgia, serif';
-  const fontSize = page.defaultFontSize || 18;
-  const lineHeight = page.lineHeight || 1.6;
-  const para = page.paragraphSpacing ?? 12;
-  const indent = page.firstLineIndent ?? 0;
-  let sizeCss = 'A4';
-  if (page.pageSize === 'Letter') sizeCss = 'Letter';
-  else if (page.pageSize === 'Custom' && page.pageWidth && page.pageHeight) sizeCss = `${page.pageWidth}px ${page.pageHeight}px`;
-  if (page.orientation === 'landscape' && (page.pageSize === 'A4' || page.pageSize === 'Letter')) sizeCss += ' landscape';
-  const css = `
-    @page { size: ${sizeCss}; margin: 0; }
-    body { font-family: ${fontFamily}; font-size: ${fontSize}px; line-height: ${lineHeight}; color: #111; margin: 0; }
-    p { margin: 0 0 ${para}px; text-indent: ${indent}px; }
-    h1 { font-size: 28px; font-weight: 700; margin: 0.6em 0 0.4em; }
-    h2 { font-size: 20px; font-weight: 700; margin: 0.6em 0 0.4em; }
-    h3 { font-size: 16px; font-weight: 700; margin: 0.6em 0 0.3em; }
-    ul { padding-left: 1.5em; margin: 0 0 ${para}px; }
-    ol { padding-left: 1.5em; margin: 0 0 ${para}px; }
-    blockquote { border-left: 3px solid rgba(0,0,0,0.25); padding-left: 1em; margin: 0 0 ${para}px; font-style: italic; }
-    hr { border: none; border-top: 1px solid rgba(0,0,0,0.25); margin: 1.2em 0; }
-    code { font-family: monospace; font-size: 0.9em; }
-  `;
-  return `<!doctype html><html><head><meta charset="utf-8"><style>${css}</style></head><body>${body}</body></html>`;
+const CELL_SWATCHES = ['#fde68a', '#fca5a5', '#86efac', '#93c5fd', '#d8b4fe', '#f9a8d4', '#e5e7eb', '#9ca3af'];
+
+// Cell background color: swatches + custom picker + clear. Font color stays on
+// the main toolbar; this only fills the selected cell(s).
+function CellColorControl({ editor }) {
+  const [showPicker, setShowPicker] = useState(false);
+  const [draft, setDraft] = useState('#fde68a');
+  const apply = (color) => editor.chain().focus().setCellBackground(color).run();
+  return (
+    <div className="flex items-center gap-1 px-0.5 relative">
+      <span className="text-[10px] text-gray-500 uppercase tracking-wider mr-1">Cell</span>
+      {CELL_SWATCHES.map(c => (
+        <button key={c} type="button" title={c}
+          onMouseDown={(e) => { e.preventDefault(); apply(c); }}
+          className="w-4 h-4 rounded-sm border border-black/20 cursor-pointer hover:scale-110 transition-transform"
+          style={{ backgroundColor: c }} />
+      ))}
+      <button type="button" title="Custom color"
+        onMouseDown={(e) => { e.preventDefault(); setShowPicker(s => !s); }}
+        className={`w-4 h-4 rounded-sm border cursor-pointer ${showPicker ? 'border-accent' : 'border-gray-600'}`}
+        style={{ background: 'conic-gradient(red, yellow, lime, aqua, blue, magenta, red)' }} />
+      <button type="button" title="Clear fill"
+        onMouseDown={(e) => { e.preventDefault(); apply(null); }}
+        className="text-[10px] text-gray-500 hover:text-white ml-0.5">Clear</button>
+      {showPicker && (
+        <div className="absolute top-full left-0 mt-2 z-50 w-52 p-3 bg-[#0a161d] border border-gray-800 rounded-lg shadow-2xl">
+          <ColorPicker value={draft} onChange={setDraft} />
+          <div className="flex justify-end gap-2 mt-3">
+            <Button variant="ghost" size="sm" onMouseDown={(e) => { e.preventDefault(); setShowPicker(false); }}>Cancel</Button>
+            <Button variant="primary" size="sm" onMouseDown={(e) => { e.preventDefault(); apply(draft); setShowPicker(false); }}>Apply</Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Floating panel shown when the cursor is inside a table — structure ops + cell fill.
+function TableBubble({ editor }) {
+  useToolbarTick(editor);
+  if (!editor) return null;
+  return (
+    <BubbleMenu
+      editor={editor}
+      pluginKey="tableBubble"
+      shouldShow={({ editor }) => editor.isActive('table')}
+      updateDelay={0}
+      className="flex flex-col gap-2 bg-[#0a161d] border border-gray-800 rounded-lg p-2 shadow-2xl"
+    >
+      <div className="flex items-center gap-0.5">
+        <ToolbarButton onClick={() => editor.chain().focus().addRowBefore().run()} title="Row above"><ArrowUpToLine className="w-4 h-4" /></ToolbarButton>
+        <ToolbarButton onClick={() => editor.chain().focus().addRowAfter().run()} title="Row below"><ArrowDownToLine className="w-4 h-4" /></ToolbarButton>
+        <ToolbarButton onClick={() => editor.chain().focus().addColumnBefore().run()} title="Column left"><ArrowLeftToLine className="w-4 h-4" /></ToolbarButton>
+        <ToolbarButton onClick={() => editor.chain().focus().addColumnAfter().run()} title="Column right"><ArrowRightToLine className="w-4 h-4" /></ToolbarButton>
+        <Divider />
+        <ToolbarButton onClick={() => editor.chain().focus().toggleHeaderRow().run()} title="Toggle header row"><Rows className="w-4 h-4" /></ToolbarButton>
+        <ToolbarButton onClick={() => editor.chain().focus().mergeOrSplit().run()} title="Merge / split cells"><Combine className="w-4 h-4" /></ToolbarButton>
+        <Divider />
+        <ToolbarButton onClick={() => editor.chain().focus().deleteRow().run()} title="Delete row"><Rows className="w-4 h-4 text-red-400" /></ToolbarButton>
+        <ToolbarButton onClick={() => editor.chain().focus().deleteColumn().run()} title="Delete column"><Columns className="w-4 h-4 text-red-400" /></ToolbarButton>
+        <ToolbarButton onClick={() => editor.chain().focus().deleteTable().run()} title="Delete table"><Trash2 className="w-4 h-4 text-red-400" /></ToolbarButton>
+      </div>
+      <CellColorControl editor={editor} />
+    </BubbleMenu>
+  );
 }
 
 function countWords(text) {
@@ -586,12 +598,21 @@ function countWords(text) {
   return t ? t.split(/\s+/).length : 0;
 }
 
-export default function WritingEditor({ doc, electronAPI, toolbarMode = 'fixed', onDocPatch }) {
+export default function WritingEditor({ doc, electronAPI, toolbarMode = 'fixed', smartTypography = true, onDocPatch, onRename }) {
   const saveTimer = useRef(null);
   const [counts, setCounts] = useState({ words: 0, chars: 0 });
-  const [exporting, setExporting] = useState(false);
+  const [showExport, setShowExport] = useState(false);
   const [showPageSetup, setShowPageSetup] = useState(false);
+  const [title, setTitle] = useState(doc.title);
+  const [pageLayout, setPageLayout] = useState({ pages: 1, lines: [] });
   const pageConfig = pageConfigFromDoc(doc);
+
+  // Latest geometry for pagination measurement (ref avoids stale closures).
+  const geomRef = useRef(pageGeometry(pageConfig));
+  geomRef.current = pageGeometry(pageConfig);
+  const measureRafRef = useRef(null);
+
+  useEffect(() => { setTitle(doc.title); }, [doc.id]);
 
   let initialContent;
   try {
@@ -601,26 +622,35 @@ export default function WritingEditor({ doc, electronAPI, toolbarMode = 'fixed',
   }
 
   const editor = useEditor({
-    extensions: [
-      StarterKit,
-      TextStyle, Color, FontFamily, FontSize, BlockStyle,
-      TextAlign.configure({ types: ['heading', 'paragraph'] }),
-    ],
+    extensions: getEditorExtensions({ smartTypography }),
     content: initialContent,
     editorProps: {
       attributes: {
-        class: 'writing-prose focus:outline-none min-h-[60vh]',
+        class: 'writing-prose focus:outline-none',
       },
     },
     onUpdate: ({ editor }) => {
       const text = editor.getText();
       setCounts({ words: countWords(text), chars: text.length });
+      scheduleMeasure();
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => {
         electronAPI.saveDocumentContent(doc.id, JSON.stringify(editor.getJSON()));
       }, 800);
     },
-  }, [doc.id]);
+  }, [doc.id, smartTypography]);
+
+  // rAF-debounced pagination measurement. Pure measurement → React state; never
+  // touches the document or decorations (that approach crashed PM + tables).
+  const scheduleMeasure = useCallback(() => {
+    if (measureRafRef.current != null) return;
+    measureRafRef.current = requestAnimationFrame(() => {
+      measureRafRef.current = null;
+      if (!editor || editor.isDestroyed) return;
+      const h = editor.view.dom.scrollHeight;
+      setPageLayout(computePageLayout(h, geomRef.current));
+    });
+  }, [editor]);
 
   useEffect(() => {
     if (!editor) return;
@@ -628,22 +658,22 @@ export default function WritingEditor({ doc, electronAPI, toolbarMode = 'fixed',
     setCounts({ words: countWords(text), chars: text.length });
   }, [editor, doc.id]);
 
-  const exportAs = async (kind) => {
-    if (!editor || exporting) return;
-    setExporting(true);
-    try {
-      const html = buildExportHtml(editor, pageConfig);
-      const margins = {
-        top: pageConfig.marginTop ?? 96, right: pageConfig.marginRight ?? 96,
-        bottom: pageConfig.marginBottom ?? 96, left: pageConfig.marginLeft ?? 96,
-      };
-      const payload = { html, title: doc.title, pageSize: pageConfig.pageSize, pageWidth: pageConfig.pageWidth, pageHeight: pageConfig.pageHeight, margins };
-      if (kind === 'pdf') await electronAPI.exportDocumentPdf(payload);
-      else await electronAPI.exportDocumentDocx(payload);
-    } finally {
-      setExporting(false);
-    }
-  };
+  // Measure when ready and whenever the page geometry changes; also re-measure on
+  // content resize, web-font load, and window resize (layout settling).
+  useEffect(() => {
+    if (!editor) return;
+    scheduleMeasure();
+    const dom = editor.view.dom;
+    const ro = new ResizeObserver(() => scheduleMeasure());
+    ro.observe(dom);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(scheduleMeasure);
+    window.addEventListener('resize', scheduleMeasure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', scheduleMeasure);
+      if (measureRafRef.current != null) cancelAnimationFrame(measureRafRef.current);
+    };
+  }, [editor, scheduleMeasure, pageConfig.pageHeight, pageConfig.marginTop, pageConfig.marginBottom, pageConfig.pageWidth]);
 
   // Flush a pending save when switching documents or unmounting.
   useEffect(() => {
@@ -657,21 +687,29 @@ export default function WritingEditor({ doc, electronAPI, toolbarMode = 'fixed',
     };
   }, [doc.id, editor]);
 
-  // Text color adapts to the paper so it stays readable on any sheet color. Paragraph
-  // spacing and indent ride on CSS variables consumed by .writing-prose.
+  // Text color adapts to the paper so it stays readable on any sheet color.
   const effectiveBg = pageConfig.sheetColor || '#ffffff';
+  const pageW = pageConfig.pageWidth || 794;
+  const pageH = pageConfig.pageHeight || 1123;
+  const mT = pageConfig.marginTop ?? 96;
+  const mB = pageConfig.marginBottom ?? 96;
+  const mL = pageConfig.marginLeft ?? 96;
+  const mR = pageConfig.marginRight ?? 96;
+
+  // The content sits transparently on top of a stack of white "page" rectangles
+  // One continuous white sheet; page boundaries are drawn as overlay markers.
   const sheetStyle = {
     backgroundColor: effectiveBg,
     color: isLightColor(effectiveBg) ? '#1f2328' : '#e5e7eb',
     fontFamily: pageConfig.defaultFont || undefined,
     fontSize: `${pageConfig.defaultFontSize || 18}px`,
     lineHeight: pageConfig.lineHeight || 1.6,
-    width: `${pageConfig.pageWidth || 794}px`,
-    minHeight: `${pageConfig.pageHeight || 1123}px`,
-    paddingTop: `${pageConfig.marginTop ?? 96}px`,
-    paddingRight: `${pageConfig.marginRight ?? 96}px`,
-    paddingBottom: `${pageConfig.marginBottom ?? 96}px`,
-    paddingLeft: `${pageConfig.marginLeft ?? 96}px`,
+    width: `${pageW}px`,
+    minHeight: `${pageH}px`,
+    paddingTop: `${mT}px`,
+    paddingRight: `${mR}px`,
+    paddingBottom: `${mB}px`,
+    paddingLeft: `${mL}px`,
     '--wd-para-spacing': `${pageConfig.paragraphSpacing ?? 12}px`,
     '--wd-indent': `${pageConfig.firstLineIndent ?? 0}px`,
   };
@@ -680,20 +718,27 @@ export default function WritingEditor({ doc, electronAPI, toolbarMode = 'fixed',
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Title bar — always visible (incl. bubble mode) so Export/Page Setup never disappear. */}
+      <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-gray-800/80 bg-[#011419]/35 shrink-0">
+        <input
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          onBlur={() => onRename?.(title)}
+          className="bg-transparent text-white font-semibold text-sm focus:outline-none flex-1 min-w-0"
+          placeholder="Untitled"
+        />
+        <div className="flex items-center gap-0.5 shrink-0">
+          <button type="button" onClick={() => setShowExport(true)} title="Export…" className="p-1.5 rounded-md text-gray-500 hover:text-white hover:bg-white/5 transition-colors cursor-pointer">
+            <FileOutput className="w-4 h-4" />
+          </button>
+          <button type="button" onClick={() => setShowPageSetup(true)} title="Page setup" className={`p-1.5 rounded-md transition-colors cursor-pointer ${showPageSetup ? 'text-accent bg-white/5' : 'text-gray-500 hover:text-white hover:bg-white/5'}`}>
+            <FileCog className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
       {toolbarMode === 'fixed' && (
-        <div className="flex items-center justify-between gap-3 px-5 py-2.5 border-b border-gray-800/80 bg-[#011419]/35 shrink-0">
+        <div className="flex items-center gap-3 px-5 py-2.5 border-b border-gray-800/80 bg-[#011419]/35 shrink-0">
           <Toolbar editor={editor} pageConfig={pageConfig} />
-          <div className="flex items-center gap-0.5 shrink-0">
-            <button type="button" disabled={exporting} onClick={() => exportAs('pdf')} title="Export PDF" className="p-1.5 rounded-md text-gray-500 hover:text-white hover:bg-white/5 transition-colors cursor-pointer disabled:opacity-40">
-              <FileDown className="w-4 h-4" />
-            </button>
-            <button type="button" disabled={exporting} onClick={() => exportAs('docx')} title="Export Word (.docx)" className="p-1.5 rounded-md text-gray-500 hover:text-white hover:bg-white/5 transition-colors cursor-pointer disabled:opacity-40">
-              <FileText className="w-4 h-4" />
-            </button>
-            <button type="button" onClick={() => setShowPageSetup(true)} title="Page setup" className={`p-1.5 rounded-md transition-colors cursor-pointer ${showPageSetup ? 'text-accent bg-white/5' : 'text-gray-500 hover:text-white hover:bg-white/5'}`}>
-              <FileCog className="w-4 h-4" />
-            </button>
-          </div>
         </div>
       )}
 
@@ -701,15 +746,36 @@ export default function WritingEditor({ doc, electronAPI, toolbarMode = 'fixed',
         <WritingPageModal config={pageConfig} onChange={onDocPatch} onClose={() => setShowPageSetup(false)} />
       )}
 
+      {showExport && editor && (
+        <ExportModal
+          editor={editor}
+          pageConfig={pageConfig}
+          title={doc.title}
+          electronAPI={electronAPI}
+          onClose={() => setShowExport(false)}
+        />
+      )}
+
       {toolbarMode === 'bubble' && editor && (
-        <BubbleMenu editor={editor} className="flex items-center gap-0.5 bg-[#0a161d] border border-gray-800 rounded-lg px-1.5 py-1 shadow-xl">
+        <BubbleMenu editor={editor} shouldShow={({ editor, state }) => !state.selection.empty && !editor.isActive('table')} className="flex items-center gap-0.5 bg-[#0a161d] border border-gray-800 rounded-lg px-1.5 py-1 shadow-xl">
           <Toolbar editor={editor} pageConfig={pageConfig} />
         </BubbleMenu>
       )}
 
+      {editor && <TableBubble editor={editor} />}
+
       <div className="flex-1 overflow-y-auto custom-scrollbar py-8 px-4">
-        <div className="mx-auto rounded-xl shadow-xl ring-1 ring-black/10" style={sheetStyle}>
+        <div className="mx-auto relative rounded-xl shadow-xl ring-1 ring-black/10" style={sheetStyle}>
           <EditorContent editor={editor} />
+          {/* Page-boundary markers overlaid on the continuous sheet (visual only). */}
+          <div className="absolute inset-0 pointer-events-none" aria-hidden>
+            {pageLayout.lines.map((y, k) => (
+              <div key={k} className="absolute left-0 right-0 flex items-center" style={{ top: `${y}px` }}>
+                <div className="flex-1 border-t border-dashed border-black/15" />
+                <span className="px-2 text-[10px] text-black/30 select-none">{k + 2}</span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -717,6 +783,7 @@ export default function WritingEditor({ doc, electronAPI, toolbarMode = 'fixed',
       <div className="flex items-center gap-4 px-5 py-1.5 border-t border-gray-800/80 bg-[#011419]/35 text-[11px] text-gray-500 shrink-0">
         <span>{counts.words.toLocaleString()} words</span>
         <span>{counts.chars.toLocaleString()} chars</span>
+        <span>{pageLayout.pages} {pageLayout.pages === 1 ? 'page' : 'pages'}</span>
         <label className="flex items-center gap-1.5 ml-auto" title="Word goal for this chapter (0 = none)">
           Goal
           <input
