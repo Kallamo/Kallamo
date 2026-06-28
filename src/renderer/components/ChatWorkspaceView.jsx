@@ -280,7 +280,7 @@ export default function ChatWorkspaceView() {
       const estimateTokens = (str) => Math.ceil((str || '').length / 4);
       activeMsgs.forEach(m => { tokensUsed += estimateTokens(m.content); });
 
-      // If active tokens exceed threshold, and we have enough messages to archive (at least 2)
+      // Trigger when active tokens exceed the threshold and there are enough messages to archive
       if (tokensUsed >= archiveThreshold && activeMsgs.length > 2) {
         setSummarizeModalOpen(true);
       }

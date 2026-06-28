@@ -50,7 +50,7 @@ export default function ColorPicker({ value, onChange, onChangeEnd }) {
   const hueRef = useRef(null);
 
   // Resync from an external value change (e.g. a swatch picked elsewhere), but ignore
-  // the echo of our own emits.
+  // the echo of this component's own emits.
   useEffect(() => {
     if (!value || value.toLowerCase() === (lastEmitted.current || '').toLowerCase()) return;
     const { r, g, b } = hexToRgb(value);

@@ -1,11 +1,10 @@
-// ProseMirror JSON -> .docx, using the `docx` library so the output is always
-// schema-valid OOXML (html-to-docx produced well-formed-but-invalid files that
-// Word refused to open, especially with tables). We control the editor schema,
-// so we map its nodes/marks directly.
+// ProseMirror JSON -> .docx via the `docx` library, which emits schema-valid
+// OOXML. The editor schema is known, so its nodes/marks are mapped directly.
 const {
   Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType,
   Table, TableRow, TableCell, WidthType, BorderStyle, PageNumber,
-  Header, Footer, ShadingType,
+  Footer, ShadingType, Bookmark, InternalHyperlink,
+  SimpleField, Tab, TabStopType, LeaderType,
 } = require('docx');
 
 const PX_TO_TWIP = 15;        // 1px @96dpi = 15 twips
@@ -18,6 +17,9 @@ const ALIGN = {
   right: AlignmentType.RIGHT, justify: AlignmentType.JUSTIFIED,
 };
 const HEADING = { 1: HeadingLevel.HEADING_1, 2: HeadingLevel.HEADING_2, 3: HeadingLevel.HEADING_3 };
+// Editor heading sizes in px (mirrors HEADING_SIZES in writingExport.js); set
+// explicitly on the run since Word's heading styles render levels near-uniformly.
+const HEADING_PX = { 1: 28, 2: 20, 3: 16 };
 
 function markLookup(marks) {
   const out = {};
@@ -61,8 +63,10 @@ function blockBase(attrs, page) {
   return o;
 }
 
-// One context per document so list numbering references accumulate.
-function createConverter(page) {
+// One context per document (or per chapter, in the book export) so list
+// numbering references accumulate. refPrefix keeps numbering refs globally
+// unique across chapters when several converters feed one Document.
+function createConverter(page, refPrefix = '') {
   const numbering = [];
   const baseRun = {
     font: String(page.defaultFont || 'Arial').replace(/["']/g, ''),
@@ -71,7 +75,13 @@ function createConverter(page) {
 
   function paragraph(node, extra = {}, runOverride = null) {
     const attrs = node.attrs || {};
-    const base = runOverride ? { ...baseRun, ...runOverride } : baseRun;
+    // Explicit heading size + bold on the run; an inline fontSize mark still wins.
+    let ro = runOverride;
+    if (node.type === 'heading') {
+      const hpx = HEADING_PX[attrs.level] || HEADING_PX[3];
+      ro = { bold: true, size: pxToHalfPt(hpx), ...(runOverride || {}) };
+    }
+    const base = ro ? { ...baseRun, ...ro } : baseRun;
     const opts = { ...blockBase(attrs, page), children: runsFromInline(node.content, base), ...extra };
     if (node.type === 'heading') opts.heading = HEADING[attrs.level] || HeadingLevel.HEADING_3;
     return new Paragraph(opts);
@@ -98,7 +108,7 @@ function createConverter(page) {
     const ordered = node.type === 'orderedList';
     let ref;
     if (ordered) {
-      ref = `ord-${numbering.length}`;
+      ref = `${refPrefix}ord-${numbering.length}`;
       numbering.push({
         reference: ref,
         levels: Array.from({ length: 9 }, (_, l) => ({
@@ -194,6 +204,9 @@ async function buildDocxBuffer(docJson, page, opts = {}) {
       },
     },
   };
+  if (opts.pageNumberStart && opts.pageNumberStart !== 1) {
+    sectionProps.page.pageNumbers = { start: opts.pageNumberStart };
+  }
 
   const wantNumbers = !!(opts.pageNumbers && opts.pageNumbers.enabled);
   let footers;
@@ -213,4 +226,121 @@ async function buildDocxBuffer(docJson, page, opts = {}) {
   return Packer.toBuffer(doc);
 }
 
-module.exports = { buildDocxBuffer };
+// Whole-folder ("book") export: one Document, one section per chapter (docx
+// sections always start on a new page) plus an optional leading TOC section.
+// chapters = [{ title, docJson }], position-ordered. `page` is the shared page geometry.
+async function buildBookDocxBuffer(chapters, page, opts = {}) {
+  const margins = opts.margins || {};
+  const basePage = {
+    size: {
+      width: Math.round(px(page.pageWidth, 794) * PX_TO_TWIP),
+      height: Math.round(px(page.pageHeight, 1123) * PX_TO_TWIP),
+      orientation: page.orientation === 'landscape' ? 'landscape' : 'portrait',
+    },
+    margin: {
+      top: Math.round(px(margins.top, 96) * PX_TO_TWIP),
+      right: Math.round(px(margins.right, 96) * PX_TO_TWIP),
+      bottom: Math.round(px(margins.bottom, 96) * PX_TO_TWIP),
+      left: Math.round(px(margins.left, 96) * PX_TO_TWIP),
+    },
+  };
+
+  const baseRun = {
+    font: String(page.defaultFont || 'Arial').replace(/["']/g, ''),
+    size: pxToHalfPt(px(page.defaultFontSize, 14)),
+  };
+  // Shared Footer reused by every section so page numbers read as continuous.
+  const wantNumbers = !!(opts.pageNumbers && opts.pageNumbers.enabled);
+  let footers;
+  if (wantNumbers) {
+    const align = ALIGN[opts.pageNumbers.position] || AlignmentType.CENTER;
+    footers = {
+      default: new Footer({
+        children: [new Paragraph({ alignment: align, children: [new TextRun({ children: [PageNumber.CURRENT], ...baseRun })] })],
+      }),
+    };
+  }
+
+  const sections = [];
+  const allNumbering = [];
+  const bookmarkId = (i) => `chapter_${i}`;
+  const tocAlign = ALIGN[opts.tocAlign] || AlignmentType.LEFT;
+  const h1Size = pxToHalfPt(HEADING_PX[1]);
+  const contentWidthTwip = basePage.size.width - basePage.margin.left - basePage.margin.right;
+  // "Start at page N" hides numbering before N: with a TOC, leave it unnumbered and
+  // begin body numbering at N; without one, blank the first page's footer.
+  const hideEarly = wantNumbers && opts.pageNumberStart && opts.pageNumberStart > 1;
+  const emptyFooter = { default: new Footer({ children: [new Paragraph({ children: [] })] }) };
+
+  // Static TOC mirroring the PDF look: title hyperlink, dotted leader, PAGEREF page
+  // number. Avoids docx's TableOfContents field, which prompts about external files
+  // and stays empty until Update Field; PAGEREF is internal and fills on open.
+  if (opts.toc) {
+    const tocChildren = [
+      new Paragraph({
+        heading: HeadingLevel.HEADING_1, alignment: tocAlign,
+        children: [new TextRun({ text: opts.tocTitle || 'Table of Contents', ...baseRun, bold: true, size: h1Size })],
+      }),
+    ];
+    chapters.forEach((ch, i) => {
+      const id = bookmarkId(i);
+      tocChildren.push(new Paragraph({
+        spacing: { after: 120 },
+        tabStops: [{ type: TabStopType.RIGHT, position: contentWidthTwip, leader: LeaderType.DOT }],
+        children: [
+          // Clickable but styled as normal body text (no blue underline).
+          new InternalHyperlink({ anchor: id, children: [new TextRun({ text: ch.title || `Chapter ${i + 1}`, ...baseRun })] }),
+          new TextRun({ children: [new Tab()], ...baseRun }),
+          new SimpleField(`PAGEREF ${id} \\h`),
+        ],
+      }));
+    });
+    sections.push({ properties: { page: { ...basePage } }, footers: hideEarly ? emptyFooter : footers, children: tocChildren });
+  }
+
+  const wantTitles = opts.chapterTitles !== false;
+  chapters.forEach((ch, i) => {
+    const conv = createConverter(page, `ch${i}-`);
+    // Bookmarked Heading 1 title (the bookmark is the TOC link target). When titles
+    // are off, keep an empty bookmarked paragraph so TOC links still resolve.
+    const lead = [];
+    if (wantTitles) {
+      lead.push(new Paragraph({
+        heading: HeadingLevel.HEADING_1,
+        children: [new Bookmark({ id: bookmarkId(i), children: [new TextRun({ text: ch.title || `Chapter ${i + 1}`, ...baseRun, bold: true, size: h1Size })] })],
+      }));
+    } else if (opts.toc) {
+      lead.push(new Paragraph({
+        spacing: { after: 0, before: 0 },
+        children: [new Bookmark({ id: bookmarkId(i), children: [new TextRun({ text: '', ...baseRun })] })],
+      }));
+    }
+    const children = [...lead, ...conv.blocks(ch.docJson?.content || [])];
+    allNumbering.push(...conv.numbering);
+
+    const sectionProps = { page: { ...basePage } };
+    let sectionFooters = footers;
+    if (hideEarly && i === 0) {
+      if (opts.toc) {
+        // TOC carried the front matter; body numbering begins at N here.
+        sectionProps.page.pageNumbers = { start: opts.pageNumberStart };
+      } else {
+        // No TOC: blank the first physical page's number, count so page 2 shows N.
+        sectionProps.titlePage = true;
+        sectionProps.page.pageNumbers = { start: Math.max(1, opts.pageNumberStart - 1) };
+        sectionFooters = { ...footers, first: emptyFooter.default };
+      }
+    }
+    sections.push({ properties: sectionProps, footers: sectionFooters, children });
+  });
+
+  const doc = new Document({
+    // Recompute fields (TOC PAGEREF numbers) on open, so no manual Update Field.
+    features: opts.toc ? { updateFields: true } : undefined,
+    numbering: { config: allNumbering },
+    sections,
+  });
+  return Packer.toBuffer(doc);
+}
+
+module.exports = { buildDocxBuffer, buildBookDocxBuffer };

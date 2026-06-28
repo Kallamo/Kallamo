@@ -48,6 +48,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveDocumentPage: (id, page) => ipcRenderer.invoke('save-document-page', { id, page }),
   exportDocumentPdf: (payload) => ipcRenderer.invoke('export-document-pdf', payload),
   exportDocumentDocx: (payload) => ipcRenderer.invoke('export-document-docx', payload),
+  exportBookDocx: (payload) => ipcRenderer.invoke('export-book-docx', payload),
   importDocument: () => ipcRenderer.invoke('import-document', {}),
   getChatMessages: (chatId) => ipcRenderer.invoke('get-chat-messages', chatId),
   saveMessage: (message) => ipcRenderer.invoke('save-message', message),

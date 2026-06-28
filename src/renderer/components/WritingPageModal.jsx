@@ -3,7 +3,7 @@ import Modal from './ui/Modal';
 import Button from './ui/Button';
 import ColorPicker from './ui/ColorPicker';
 import { FileCog } from 'lucide-react';
-import { PAGE_PRESETS, PAPER_THEMES } from './WritingEditor';
+import { PAGE_PRESETS, PAPER_THEMES, pxToPt, ptToPx } from './WritingEditor';
 
 function Segmented({ value, options, onChange }) {
   return (
@@ -92,7 +92,7 @@ export default function WritingPageModal({ config, onChange, onClose }) {
         <div>
           <span className="text-sm font-bold text-gray-200 block mb-2">Paragraph</span>
           <div className="grid grid-cols-2 gap-4">
-            <NumberField label="First-line indent (px)" value={config.firstLineIndent ?? 0} onChange={(v) => onChange({ firstLineIndent: v })} />
+            <NumberField label="First-line indent (pt)" value={pxToPt(config.firstLineIndent ?? 0)} onChange={(v) => onChange({ firstLineIndent: ptToPx(v) })} />
           </div>
         </div>
 

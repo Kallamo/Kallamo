@@ -160,7 +160,7 @@ async function extractTextFromFile(filePath) {
         return '';
     }
 
-    // For PDFs, we can extract using unpdf library directly
+    // PDFs are extracted directly via the unpdf library
     if (ext === '.pdf') {
         const { extractText } = require('unpdf');
         const nodeBuffer = fs.readFileSync(filePath);
@@ -330,8 +330,8 @@ const ALPHA_DENSE = 0.7;
 
 // Real similarity scores live in a narrow high band (normalized e5 cosines rarely
 // drop below ~0.70 even for unrelated text), so a raw 0-1 threshold is meaningless.
-// The Retrieval Strictness slider sends a 0-1 dial which we map onto this band: the
-// low end only trims obvious off-topic noise, the high end keeps near-exact matches.
+// The Retrieval Strictness slider sends a 0-1 dial mapped onto this band: the low
+// end only trims obvious off-topic noise, the high end keeps near-exact matches.
 const SIMILARITY_FLOOR_MIN = 0.70;
 const SIMILARITY_FLOOR_MAX = 0.88;
 

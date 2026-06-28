@@ -41,8 +41,9 @@ function Toggle({ checked, onChange, label, disabled }) {
 }
 
 // Greedy block-level pagination: walk the rendered top-level blocks and break to
-// a new page when a whole block would overflow the page content box. Keeps blocks
-// intact (matches the design's block-level break MVP).
+// a new page when a whole block would overflow the page content box, keeping
+// blocks intact. A `.wd-chapter-start` block always forces a new page, mirroring
+// the `page-break-before:always` that the PDF export honors natively.
 function paginateBlocks(container, pageContentHeight) {
   const children = Array.from(container.children);
   if (!children.length) return [''];
@@ -50,8 +51,9 @@ function paginateBlocks(container, pageContentHeight) {
   let current = [];
   let pageStartY = children[0].offsetTop;
   for (const child of children) {
+    const forceBreak = child.classList.contains('wd-chapter-start') && current.length;
     const bottom = child.offsetTop + child.offsetHeight;
-    if (bottom - pageStartY > pageContentHeight && current.length) {
+    if ((forceBreak || (bottom - pageStartY > pageContentHeight)) && current.length) {
       pages.push(current.join(''));
       current = [];
       pageStartY = child.offsetTop;
@@ -67,6 +69,7 @@ export default function ExportModal({ editor, pageConfig, title, electronAPI, on
   const paginate = true; // Kallamo always exports paginated (faithful to the paged editor).
   const [pageNumbers, setPageNumbers] = useState(false);
   const [numberPos, setNumberPos] = useState('center');
+  const [pageNumberStart, setPageNumberStart] = useState(1);
   const [pageIndex, setPageIndex] = useState(0);
   const [pages, setPages] = useState([]);
   const [contentHeight, setContentHeight] = useState(0);
@@ -144,6 +147,7 @@ export default function ExportModal({ editor, pageConfig, title, electronAPI, on
         res = await electronAPI.exportDocumentDocx({
           docJson: editor.getJSON(), title,
           page: pageConfig, margins, pageNumbers: nums,
+          pageNumberStart,
         });
       }
       if (res && !res.canceled) onClose();
@@ -216,6 +220,17 @@ export default function ExportModal({ editor, pageConfig, title, electronAPI, on
                   { value: 'center', label: 'Center' },
                   { value: 'right', label: 'Right' },
                 ]} />
+                {format === 'docx' && (
+                  <div className="space-y-1 pt-1">
+                    <span className="caption">Start at page</span>
+                    <input
+                      type="number" min="1"
+                      value={pageNumberStart}
+                      onChange={(e) => setPageNumberStart(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                      className="w-20 bg-[#00080B] border border-gray-800 text-gray-200 text-sm rounded-md px-2.5 py-1.5 focus:outline-none focus:border-accent"
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>

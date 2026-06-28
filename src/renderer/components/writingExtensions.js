@@ -1,9 +1,47 @@
-import { Extension, generateJSON, textInputRule } from '@tiptap/core';
+import { Extension, generateJSON, generateHTML, textInputRule } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { TextStyle, Color, FontFamily, FontSize } from '@tiptap/extension-text-style';
 import TextAlign from '@tiptap/extension-text-align';
 import { TableKit } from '@tiptap/extension-table';
 import Typography from '@tiptap/extension-typography';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
+
+// Keep the selection visible when focus leaves the editor for a toolbar input.
+// The native highlight moves away, so the range is painted with a decoration
+// while blurred and dropped on refocus.
+const persistSelectionKey = new PluginKey('persistSelection');
+export const PersistSelection = Extension.create({
+  name: 'persistSelection',
+  addProseMirrorPlugins() {
+    return [new Plugin({
+      key: persistSelectionKey,
+      state: {
+        init: () => ({ focused: true }),
+        apply(tr, value) {
+          const meta = tr.getMeta(persistSelectionKey);
+          return meta && typeof meta.focused === 'boolean' ? { focused: meta.focused } : value;
+        },
+      },
+      props: {
+        decorations(state) {
+          if (persistSelectionKey.getState(state)?.focused) return null;
+          const { from, to } = state.selection;
+          if (from === to) return null;
+          return DecorationSet.create(state.doc, [Decoration.inline(from, to, { class: 'wd-blur-selection' })]);
+        },
+      },
+      view(view) {
+        const set = (focused) => view.dispatch(view.state.tr.setMeta(persistSelectionKey, { focused }));
+        const onBlur = () => set(false);
+        const onFocus = () => set(true);
+        view.dom.addEventListener('blur', onBlur);
+        view.dom.addEventListener('focus', onFocus);
+        return { destroy() { view.dom.removeEventListener('blur', onBlur); view.dom.removeEventListener('focus', onFocus); } };
+      },
+    })];
+  },
+});
 
 // Line height and paragraph spacing as block-level attributes on paragraphs/headings.
 // (The text-style LineHeight applies to inline spans, which doesn't space whole lines.)
@@ -85,15 +123,16 @@ const SmartDashes = Extension.create({
   },
 });
 
-// The live editor adds Smart Typography (curly quotes, ellipsis, ©™…) plus our
+// The live editor adds Smart Typography (curly quotes, ellipsis, ©™…) plus the
 // space-triggered dashes, when enabled in Settings → Interface → Writing Desk.
 // Input-rule-only, so omitted from the import schema (generateJSON never types).
 // Document-only — never touches chat. Typography's own immediate `--`→— rule is
 // disabled in favor of SmartDashes.
 export function getEditorExtensions({ smartTypography = true } = {}) {
+  const base = [...writingExtensions, PersistSelection];
   return smartTypography
-    ? [...writingExtensions, Typography.configure({ emDash: false }), SmartDashes]
-    : writingExtensions;
+    ? [...base, Typography.configure({ emDash: false }), SmartDashes]
+    : base;
 }
 
 function escapeHtml(s) {
@@ -120,4 +159,32 @@ function textToHtml(text) {
 export function importedContentToJson(res) {
   const html = res?.kind === 'html' ? (res.html || '') : textToHtml(res?.text || '');
   return generateJSON(html, writingExtensions);
+}
+
+// Stored ProseMirror JSON -> HTML without a live editor, for combining chapters on export.
+export function chapterJsonToHtml(json) {
+  if (!json) return '';
+  return generateHTML(json, writingExtensions);
+}
+
+// Rough "~N pages" estimate from word count + page geometry (no real layout pass).
+export function estimatePagesFromWords(words, pageConfig = {}) {
+  if (!words) return 0;
+  const pageWidth = pageConfig.pageWidth || 794;
+  const pageHeight = pageConfig.pageHeight || 1123;
+  const marginTop = pageConfig.marginTop ?? 96;
+  const marginBottom = pageConfig.marginBottom ?? 96;
+  const marginLeft = pageConfig.marginLeft ?? 96;
+  const marginRight = pageConfig.marginRight ?? 96;
+  const fontSize = pageConfig.defaultFontSize || 18;
+  const lineHeight = pageConfig.lineHeight || 1.6;
+  const contentHeight = Math.max(pageHeight - marginTop - marginBottom, 1);
+  const contentWidth = Math.max(pageWidth - marginLeft - marginRight, 1);
+  const lineHeightPx = fontSize * lineHeight;
+  const linesPerPage = Math.max(Math.floor(contentHeight / lineHeightPx), 1);
+  const avgCharWidth = fontSize * 0.5;            // rough average glyph advance
+  const charsPerLine = Math.max(contentWidth / avgCharWidth, 1);
+  const wordsPerLine = Math.max(charsPerLine / 6, 1); // ~5 chars/word + a space
+  const wordsPerPage = linesPerPage * wordsPerLine;
+  return Math.max(1, Math.round(words / wordsPerPage));
 }

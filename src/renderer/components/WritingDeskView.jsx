@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import WritingEditor, { DEFAULT_WRITING_DESK } from './WritingEditor';
+import ExportBookModal from './ExportBookModal';
 import { importedContentToJson } from './writingExtensions';
 import ConfirmDialog from './ui/ConfirmDialog';
 import {
   Folder, FolderPlus, FilePlus, Upload, ChevronRight, ChevronDown,
-  FileText, Trash2, FolderInput, PenLine,
+  FileText, Trash2, FolderInput, PenLine, Download,
   PanelLeftClose, PanelLeftOpen
 } from 'lucide-react';
 
@@ -22,6 +23,7 @@ export default function WritingDeskView({ chat, electronAPI }) {
   const [editingId, setEditingId] = useState(null);
   const [editValue, setEditValue] = useState('');
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [exportFolderTarget, setExportFolderTarget] = useState(null);
   const [moveMenuId, setMoveMenuId] = useState(null);
   const [dragItem, setDragItem] = useState(null);
   const [dropInfo, setDropInfo] = useState(null); // { id, zone: 'before'|'after'|'inside' }
@@ -216,6 +218,14 @@ export default function WritingDeskView({ chat, electronAPI }) {
 
   const ItemActions = ({ item }) => (
     <span className="ml-auto items-center gap-0.5 hidden group-hover:flex shrink-0">
+      {item.type === 'folder' && (
+        <button
+          title={childDocs(item.id).length ? 'Export folder…' : 'No chapters to export'}
+          disabled={!childDocs(item.id).length}
+          onClick={(e) => { e.stopPropagation(); setExportFolderTarget(item); }}
+          className="p-1 text-gray-500 hover:text-white disabled:opacity-30 disabled:hover:text-gray-500"
+        ><Download className="w-3.5 h-3.5" /></button>
+      )}
       <button title="Rename" onClick={(e) => { e.stopPropagation(); setEditingId(item.id); setEditValue(item.name || item.title); }} className="p-1 text-gray-500 hover:text-white"><PenLine className="w-3.5 h-3.5" /></button>
       <button title="Move to" onClick={(e) => { e.stopPropagation(); setMoveMenuId(moveMenuId === item.id ? null : item.id); }} className="p-1 text-gray-500 hover:text-white"><FolderInput className="w-3.5 h-3.5" /></button>
       <button title="Delete" onClick={(e) => { e.stopPropagation(); setDeleteTarget(item); }} className="p-1 text-gray-500 hover:text-red-400"><Trash2 className="w-3.5 h-3.5" /></button>
@@ -366,6 +376,15 @@ export default function WritingDeskView({ chat, electronAPI }) {
             { label: 'Delete', variant: 'danger', autoFocus: true, onClick: () => doDelete(deleteTarget) },
           ]}
           onClose={() => setDeleteTarget(null)}
+        />
+      )}
+
+      {exportFolderTarget && (
+        <ExportBookModal
+          folderTitle={exportFolderTarget.name}
+          documents={childDocs(exportFolderTarget.id)}
+          electronAPI={electronAPI}
+          onClose={() => setExportFolderTarget(null)}
         />
       )}
     </div>

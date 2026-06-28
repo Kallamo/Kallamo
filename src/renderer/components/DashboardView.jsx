@@ -132,9 +132,6 @@ export default function DashboardView() {
             // Background image resolution
             const hasBg = chat.backgroundImage && chat.backgroundImage.trim() !== '';
 
-            // Estimate message count (if loaded, otherwise we can assume empty list or retrieve)
-            // Note: chat.messageCount could be passed or we check activeMessages length if cached.
-            // Since messages are lazy loaded, we will expose messageCount property from SQLite chats query.
             const messagesCount = chat.messageCount || 0;
 
             return (

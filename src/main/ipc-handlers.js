@@ -722,7 +722,7 @@ ipcMain.handle('delete-engine', async (event) => {
 });
 
 // Collect searchable file chunks for any source that has at least one manually-edited
-// chunk. We carry the WHOLE source (not just the edited chunks) so the importer can
+// chunk. The WHOLE source travels (not just edited chunks) so the importer can
 // restore a consistent chunk set and skip re-chunking that file from disk. Manual
 // snippets (manual_/mem_) travel in manual_blocks.json, so they're excluded here.
 function collectEditedSearchableChunks(ownerId, ownerType) {
@@ -784,7 +784,7 @@ async function restoreSearchableChunks(ownerId, ownerType, sidecarChunks, rename
   `);
 
   for (const [importedName, chunks] of bySource.entries()) {
-    // Drop anything previously indexed for this source so we don't duplicate chunks.
+    // Drop anything previously indexed for this source to avoid duplicate chunks.
     deleteChunksFromDb(ownerId, ownerType, importedName);
 
     for (let i = 0; i < chunks.length; i++) {
@@ -2242,8 +2242,8 @@ ipcMain.handle('save-document-page', async (event, { id, page }) => {
   return { success: true };
 });
 
-// Export a chapter to PDF. The renderer composes a self-contained HTML document; here we
-// load it in a hidden window and print it paginated via webContents.printToPDF.
+// Export a chapter to PDF. The renderer composes a self-contained HTML document;
+// it loads in a hidden window and prints paginated via webContents.printToPDF.
 ipcMain.handle('export-document-pdf', async (event, { html, title, pageSize, pageWidth, pageHeight, margins, paginate, contentHeight, pageNumbers }) => {
   let pdfWin = null;
   try {
@@ -2280,12 +2280,13 @@ ipcMain.handle('export-document-pdf', async (event, { html, title, pageSize, pag
       opts.pageSize = { width: px2micron(pageWidth), height: px2micron(pageHeight) };
     }
 
-    if (pageNumbers && pageNumbers.enabled && paginate !== false) {
+    const wantNumbers = pageNumbers && pageNumbers.enabled && paginate !== false;
+    if (wantNumbers) {
+      opts.displayHeaderFooter = true;
+      opts.headerTemplate = '<span></span>';
       const justify = pageNumbers.position === 'left' ? 'flex-start' : pageNumbers.position === 'right' ? 'flex-end' : 'center';
       const pad = pageNumbers.position === 'left' ? `padding-left:${(margins?.left || 0) / 96}in;`
         : pageNumbers.position === 'right' ? `padding-right:${(margins?.right || 0) / 96}in;` : '';
-      opts.displayHeaderFooter = true;
-      opts.headerTemplate = '<span></span>';
       opts.footerTemplate = `<div style="width:100%;font-size:10px;display:flex;justify-content:${justify};${pad}"><span class="pageNumber"></span></div>`;
     }
 
@@ -2303,7 +2304,7 @@ ipcMain.handle('export-document-pdf', async (event, { html, title, pageSize, pag
 // Export a chapter to .docx. Built from the editor's ProseMirror JSON via the
 // `docx` library (schema-valid OOXML), not html-to-docx (which produced files
 // Word refused to open, especially with tables).
-ipcMain.handle('export-document-docx', async (event, { docJson, title, page, margins, pageNumbers }) => {
+ipcMain.handle('export-document-docx', async (event, { docJson, title, page, margins, pageNumbers, pageNumberStart }) => {
   try {
     const parent = BrowserWindow.getFocusedWindow();
     const saveResult = await dialog.showSaveDialog(parent, {
@@ -2314,11 +2315,32 @@ ipcMain.handle('export-document-docx', async (event, { docJson, title, page, mar
     if (saveResult.canceled || !saveResult.filePath) return { canceled: true };
 
     const { buildDocxBuffer } = require('./docx-export');
-    const buffer = await buildDocxBuffer(docJson, page || {}, { margins, pageNumbers });
+    const buffer = await buildDocxBuffer(docJson, page || {}, { margins, pageNumbers, pageNumberStart });
     fs.writeFileSync(saveResult.filePath, buffer);
     return { success: true, filePath: saveResult.filePath };
   } catch (e) {
     console.error('[Writing Desk] DOCX export failed:', e);
+    return { error: e.message };
+  }
+});
+
+// Export an entire folder ("book") as one combined .docx, with an optional TOC.
+ipcMain.handle('export-book-docx', async (event, { chapters, title, page, margins, pageNumbers, pageNumberStart, toc, tocTitle, tocAlign, chapterTitles }) => {
+  try {
+    const parent = BrowserWindow.getFocusedWindow();
+    const saveResult = await dialog.showSaveDialog(parent, {
+      title: 'Export book to Word',
+      defaultPath: `${(title || 'book').replace(/[\\/:*?"<>|]/g, '_')}.docx`,
+      filters: [{ name: 'Word document', extensions: ['docx'] }]
+    });
+    if (saveResult.canceled || !saveResult.filePath) return { canceled: true };
+
+    const { buildBookDocxBuffer } = require('./docx-export');
+    const buffer = await buildBookDocxBuffer(chapters || [], page || {}, { margins, pageNumbers, pageNumberStart, toc, tocTitle, tocAlign, chapterTitles });
+    fs.writeFileSync(saveResult.filePath, buffer);
+    return { success: true, filePath: saveResult.filePath };
+  } catch (e) {
+    console.error('[Writing Desk] Book DOCX export failed:', e);
     return { error: e.message };
   }
 });

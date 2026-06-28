@@ -137,6 +137,8 @@ body {
 .writing-prose p { margin: 0 0 var(--wd-para-spacing, 0.85em); text-indent: var(--wd-indent, 0); }
 .writing-prose ::selection { background-color: color-mix(in srgb, var(--app-accent) 45%, transparent); }
 .writing-prose ::-moz-selection { background-color: color-mix(in srgb, var(--app-accent) 45%, transparent); }
+/* Selection painted while the editor is blurred (e.g. typing in a toolbar field). */
+.writing-prose .wd-blur-selection { background-color: color-mix(in srgb, var(--app-accent) 45%, transparent); }
 .writing-prose h1 { font-size: 28px; font-weight: 700; margin: 0.6em 0 0.4em; }
 .writing-prose h2 { font-size: 20px; font-weight: 700; margin: 0.6em 0 0.4em; }
 .writing-prose h3 { font-size: 16px; font-weight: 700; margin: 0.6em 0 0.3em; }
@@ -155,10 +157,6 @@ body {
 .writing-prose table p { margin: 0; text-indent: 0; }
 .writing-prose .selectedCell:after { background: color-mix(in srgb, var(--app-accent) 20%, transparent); content: ""; position: absolute; inset: 0; pointer-events: none; }
 .writing-prose .column-resize-handle { background: var(--app-accent); width: 3px; position: absolute; right: -2px; top: 0; bottom: 0; cursor: col-resize; }
-
-/* Page-guides pagination: transparent structural spacer between stacked pages.
-   The white sheets + gaps are painted by a React layer behind the content. */
-.wd-page-break { display: block; user-select: none; pointer-events: none; }
 
 /* Hide native number-input spinner arrows */
 .no-spinner::-webkit-outer-spin-button,

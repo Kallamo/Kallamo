@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useReducer, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useReducer } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
 import {
@@ -6,14 +6,13 @@ import {
   Quote, Palette, FileOutput, ChevronDown, Search, Check, Table as TableIcon,
   Rows, Columns, Trash2, Combine,
   ArrowUpToLine, ArrowDownToLine, ArrowLeftToLine, ArrowRightToLine,
-  AlignLeft, AlignCenter, AlignRight, AlignJustify, ALargeSmall, AlignVerticalSpaceAround, Pilcrow, Plus, FileCog
+  AlignLeft, AlignCenter, AlignRight, AlignJustify, ALargeSmall, AlignVerticalSpaceAround, Pilcrow, Plus, FileCog, Asterisk
 } from 'lucide-react';
 import ColorPicker from './ui/ColorPicker';
 import Button from './ui/Button';
 import WritingPageModal from './WritingPageModal';
 import ExportModal from './ExportModal';
-import { getEditorExtensions } from './writingExtensions';
-import { computePageLayout } from './writingPagination';
+import { getEditorExtensions, estimatePagesFromWords } from './writingExtensions';
 
 export const PAPER_THEMES = [
   { label: 'Light', color: '#ffffff' },
@@ -36,10 +35,16 @@ const FONT_OPTIONS = [];
 const FONT_FALLBACK = [{ label: 'Arial', value: 'Arial' }];
 
 const LINE_HEIGHTS = ['1', '1.15', '1.5', '1.6', '2', '2.5'];
-const FONT_SIZES = ['10', '11', '12', '14', '16', '18', '20', '24', '28', '32', '36', '48', '72'];
-const PARAGRAPH_SPACINGS = ['0', '4', '8', '12', '16', '24', '32'];
+// Presets shown to the writer in points; storage stays in px (the editor's CSS unit).
+const FONT_SIZES = ['8', '9', '10', '11', '12', '14', '18', '24', '30', '36', '48', '60'];
+const PARAGRAPH_SPACINGS = ['0', '3', '6', '9', '12', '18', '24'];
 // Standardized heading sizes (px); kept in sync with the .writing-prose h1/h2/h3 CSS.
 const HEADING_SIZES = { 1: 28, 2: 20, 3: 16 };
+
+// px <-> pt at 96dpi (pt = px * 0.75); display in pt, keep storing px.
+const PT_PER_PX = 0.75;
+export const pxToPt = (v) => Math.round((parseFloat(v) || 0) * PT_PER_PX);
+export const ptToPx = (v) => Math.round((parseFloat(v) || 0) / PT_PER_PX);
 
 const RECENT_COLORS_KEY = 'wd-recent-colors';
 function readRecentColors() {
@@ -118,19 +123,6 @@ function pageConfigFromDoc(doc) {
     if (doc[k] !== undefined && doc[k] !== null) cfg[k] = doc[k];
   }
   return cfg;
-}
-
-// Geometry the pagination plugin needs: usable content height per page + margins.
-function pageGeometry(cfg) {
-  const mTop = cfg.marginTop ?? 96;
-  const mBottom = cfg.marginBottom ?? 96;
-  return {
-    pageContentHeight: (cfg.pageHeight || 1123) - mTop - mBottom,
-    marginTop: mTop,
-    marginBottom: mBottom,
-    marginLeft: cfg.marginLeft ?? 96,
-    marginRight: cfg.marginRight ?? 96,
-  };
 }
 
 // Relative luminance check so prose text contrasts the paper color.
@@ -271,34 +263,37 @@ function FontSizeControl({ editor, baseSize }) {
   useDismiss(ref, () => { setOpen(false); setText(''); }, open);
   const inline = editor.getAttributes('textStyle').fontSize;
   const headingLevel = editor.getAttributes('heading')?.level;
-  const value = inline ? parseInt(inline, 10) : (HEADING_SIZES[headingLevel] || baseSize || 14);
-  // Setting an explicit size leaves a heading preset, so demote it to a paragraph first.
-  const apply = (n) => {
-    const size = Math.max(8, Math.min(200, n || 0));
-    if (!size) return;
+  const valuePx = inline ? parseInt(inline, 10) : (HEADING_SIZES[headingLevel] || baseSize || 14);
+  const value = pxToPt(valuePx);
+  // Setting an explicit size demotes a heading to a paragraph first; pt in, px stored.
+  const apply = (pt) => {
+    const sizePt = Math.max(6, Math.min(150, pt || 0));
+    if (!sizePt) return;
     const chain = editor.chain().focus();
     if (editor.isActive('heading')) chain.setParagraph();
-    chain.setFontSize(`${size}px`).run();
+    chain.setFontSize(`${ptToPx(sizePt)}px`).run();
     setOpen(false); setText('');
   };
   return (
     <div className="relative" ref={ref}>
       <button
         type="button"
-        onMouseDown={(e) => { e.preventDefault(); setOpen(o => !o); }}
+        onMouseDown={(e) => { e.preventDefault(); setOpen(o => { const n = !o; setText(n ? String(value) : ''); return n; }); }}
         title="Font size"
         className="flex items-center gap-1 text-gray-300 text-xs rounded-md pl-1.5 pr-1 py-1.5 border border-gray-800 hover:border-gray-700 cursor-pointer"
       >
         <ALargeSmall className="w-4 h-4 text-gray-500 shrink-0" />
-        {value}<span className="text-[10px] text-gray-500">px</span>
+        {value}<span className="text-[10px] text-gray-500">pt</span>
         <ChevronDown className="w-3.5 h-3.5 text-gray-500" />
       </button>
       {open && (
         <div className="absolute z-40 mt-1 w-20 bg-[#0a161d] border border-gray-800 rounded-lg shadow-2xl py-1">
+          {/* Pre-filled + selected on focus, so typing replaces the current value cleanly. */}
           <input
             value={text}
+            autoFocus
+            onFocus={(e) => e.target.select()}
             inputMode="numeric"
-            placeholder={String(value)}
             onChange={(e) => setText(e.target.value.replace(/[^0-9]/g, ''))}
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); apply(parseInt(text, 10)); } }}
             className="w-full bg-[#00080B] border border-gray-800 text-gray-200 text-xs rounded-md px-2 py-1 mb-1 focus:outline-none focus:border-accent text-center"
@@ -367,8 +362,9 @@ function ParagraphSpacingControl({ editor, baseSpacing }) {
   const [open, setOpen] = useState(false);
   useDismiss(ref, () => setOpen(false), open);
   const current = blockAttr(editor, 'paragraphSpacing');
-  const value = current ? parseInt(current, 10) : (baseSpacing ?? 12);
-  const choose = (v) => { editor.chain().focus().setParagraphSpacing(`${v}px`).run(); setOpen(false); };
+  const valuePx = current ? parseInt(current, 10) : (baseSpacing ?? 12);
+  const value = pxToPt(valuePx);
+  const choose = (pt) => { editor.chain().focus().setParagraphSpacing(`${ptToPx(pt)}px`).run(); setOpen(false); };
   return (
     <div className="relative" ref={ref}>
       <button
@@ -378,7 +374,7 @@ function ParagraphSpacingControl({ editor, baseSpacing }) {
         className="flex items-center gap-1 text-gray-300 text-xs rounded-md pl-1.5 pr-1 py-1.5 border border-gray-800 hover:border-gray-700 cursor-pointer"
       >
         <Pilcrow className="w-4 h-4 text-gray-500" />
-        {value}<span className="text-[10px] text-gray-500">px</span>
+        {value}<span className="text-[10px] text-gray-500">pt</span>
         <ChevronDown className="w-3.5 h-3.5 text-gray-500" />
       </button>
       {open && (
@@ -479,6 +475,15 @@ const ALIGNMENTS = [
   { value: 'justify', icon: AlignJustify, title: 'Justify' },
 ];
 
+// Conventional in-manuscript scene break: a centered "* * *" paragraph.
+function insertSceneBreak(editor) {
+  editor.chain().focus().insertContent({
+    type: 'paragraph',
+    attrs: { textAlign: 'center' },
+    content: [{ type: 'text', text: '* * *' }],
+  }).run();
+}
+
 function Toolbar({ editor, pageConfig }) {
   useToolbarTick(editor);
   if (!editor) return null;
@@ -520,6 +525,7 @@ function Toolbar({ editor, pageConfig }) {
       <ToolbarButton active={editor.isActive('bulletList')} onClick={() => editor.chain().focus().toggleBulletList().run()} title="Bullet list"><List className="w-4 h-4" /></ToolbarButton>
       <ToolbarButton active={editor.isActive('orderedList')} onClick={() => editor.chain().focus().toggleOrderedList().run()} title="Numbered list"><ListOrdered className="w-4 h-4" /></ToolbarButton>
       <ToolbarButton active={editor.isActive('blockquote')} onClick={() => editor.chain().focus().toggleBlockquote().run()} title="Quote"><Quote className="w-4 h-4" /></ToolbarButton>
+      <ToolbarButton onClick={() => insertSceneBreak(editor)} title="Scene break"><Asterisk className="w-4 h-4" /></ToolbarButton>
       <Divider />
       <ToolbarButton active={editor.isActive('table')} onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()} title="Insert table"><TableIcon className="w-4 h-4" /></ToolbarButton>
     </div>
@@ -604,13 +610,7 @@ export default function WritingEditor({ doc, electronAPI, toolbarMode = 'fixed',
   const [showExport, setShowExport] = useState(false);
   const [showPageSetup, setShowPageSetup] = useState(false);
   const [title, setTitle] = useState(doc.title);
-  const [pageLayout, setPageLayout] = useState({ pages: 1, lines: [] });
   const pageConfig = pageConfigFromDoc(doc);
-
-  // Latest geometry for pagination measurement (ref avoids stale closures).
-  const geomRef = useRef(pageGeometry(pageConfig));
-  geomRef.current = pageGeometry(pageConfig);
-  const measureRafRef = useRef(null);
 
   useEffect(() => { setTitle(doc.title); }, [doc.id]);
 
@@ -632,7 +632,6 @@ export default function WritingEditor({ doc, electronAPI, toolbarMode = 'fixed',
     onUpdate: ({ editor }) => {
       const text = editor.getText();
       setCounts({ words: countWords(text), chars: text.length });
-      scheduleMeasure();
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => {
         electronAPI.saveDocumentContent(doc.id, JSON.stringify(editor.getJSON()));
@@ -640,40 +639,11 @@ export default function WritingEditor({ doc, electronAPI, toolbarMode = 'fixed',
     },
   }, [doc.id, smartTypography]);
 
-  // rAF-debounced pagination measurement. Pure measurement → React state; never
-  // touches the document or decorations (that approach crashed PM + tables).
-  const scheduleMeasure = useCallback(() => {
-    if (measureRafRef.current != null) return;
-    measureRafRef.current = requestAnimationFrame(() => {
-      measureRafRef.current = null;
-      if (!editor || editor.isDestroyed) return;
-      const h = editor.view.dom.scrollHeight;
-      setPageLayout(computePageLayout(h, geomRef.current));
-    });
-  }, [editor]);
-
   useEffect(() => {
     if (!editor) return;
     const text = editor.getText();
     setCounts({ words: countWords(text), chars: text.length });
   }, [editor, doc.id]);
-
-  // Measure when ready and whenever the page geometry changes; also re-measure on
-  // content resize, web-font load, and window resize (layout settling).
-  useEffect(() => {
-    if (!editor) return;
-    scheduleMeasure();
-    const dom = editor.view.dom;
-    const ro = new ResizeObserver(() => scheduleMeasure());
-    ro.observe(dom);
-    if (document.fonts && document.fonts.ready) document.fonts.ready.then(scheduleMeasure);
-    window.addEventListener('resize', scheduleMeasure);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener('resize', scheduleMeasure);
-      if (measureRafRef.current != null) cancelAnimationFrame(measureRafRef.current);
-    };
-  }, [editor, scheduleMeasure, pageConfig.pageHeight, pageConfig.marginTop, pageConfig.marginBottom, pageConfig.pageWidth]);
 
   // Flush a pending save when switching documents or unmounting.
   useEffect(() => {
@@ -724,9 +694,14 @@ export default function WritingEditor({ doc, electronAPI, toolbarMode = 'fixed',
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           onBlur={() => onRename?.(title)}
-          className="bg-transparent text-white font-semibold text-sm focus:outline-none flex-1 min-w-0"
+          className="bg-transparent text-white font-semibold text-sm focus:outline-none min-w-0 flex-1"
           placeholder="Untitled"
         />
+        {counts.words > 0 && (
+          <span title="Estimated pages" className="text-[11px] text-gray-500 shrink-0 tabular-nums">
+            ~{estimatePagesFromWords(counts.words, pageConfig)} pages
+          </span>
+        )}
         <div className="flex items-center gap-0.5 shrink-0">
           <button type="button" onClick={() => setShowExport(true)} title="Export…" className="p-1.5 rounded-md text-gray-500 hover:text-white hover:bg-white/5 transition-colors cursor-pointer">
             <FileOutput className="w-4 h-4" />
@@ -767,15 +742,6 @@ export default function WritingEditor({ doc, electronAPI, toolbarMode = 'fixed',
       <div className="flex-1 overflow-y-auto custom-scrollbar py-8 px-4">
         <div className="mx-auto relative rounded-xl shadow-xl ring-1 ring-black/10" style={sheetStyle}>
           <EditorContent editor={editor} />
-          {/* Page-boundary markers overlaid on the continuous sheet (visual only). */}
-          <div className="absolute inset-0 pointer-events-none" aria-hidden>
-            {pageLayout.lines.map((y, k) => (
-              <div key={k} className="absolute left-0 right-0 flex items-center" style={{ top: `${y}px` }}>
-                <div className="flex-1 border-t border-dashed border-black/15" />
-                <span className="px-2 text-[10px] text-black/30 select-none">{k + 2}</span>
-              </div>
-            ))}
-          </div>
         </div>
       </div>
 
@@ -783,7 +749,6 @@ export default function WritingEditor({ doc, electronAPI, toolbarMode = 'fixed',
       <div className="flex items-center gap-4 px-5 py-1.5 border-t border-gray-800/80 bg-[#011419]/35 text-[11px] text-gray-500 shrink-0">
         <span>{counts.words.toLocaleString()} words</span>
         <span>{counts.chars.toLocaleString()} chars</span>
-        <span>{pageLayout.pages} {pageLayout.pages === 1 ? 'page' : 'pages'}</span>
         <label className="flex items-center gap-1.5 ml-auto" title="Word goal for this chapter (0 = none)">
           Goal
           <input
