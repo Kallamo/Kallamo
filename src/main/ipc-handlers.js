@@ -1,4 +1,12 @@
-const { ipcMain, shell, dialog, BrowserWindow } = require('electron');
+const { ipcMain, shell, dialog, BrowserWindow, clipboard } = require('electron');
+
+// Copy via the main-process clipboard: navigator.clipboard.writeText is gated on
+// focus/permission in Electron and fails for programmatic copies (e.g. the RAG
+// debug copy). The native clipboard has no such gate.
+ipcMain.handle('copy-to-clipboard', (event, text) => {
+  clipboard.writeText(String(text == null ? '' : text));
+  return true;
+});
 const path = require('path');
 const fs = require('fs');
 const AdmZip = require('adm-zip');
@@ -2348,6 +2356,20 @@ ipcMain.handle('add-directive', async (event, { workspaceId, type, text, sourceM
 ipcMain.handle('update-directive', async (event, { id, text }) => {
   db.prepare('UPDATE pinned_directives SET text = ?, last_modified = ? WHERE id = ?').run(text, Date.now(), id);
   return { success: true };
+});
+
+// TEMP/debug: re-run summarization + structured extraction for an existing memory
+// block (no new block, no index change), so Phase-0 extraction can be tested on
+// already-archived segments.
+ipcMain.handle('debug-regenerate-memory-block', async (event, { chatId, blockId, profileId }) => {
+  try {
+    const { regenerateStructuredMemoryForBlock } = require('./workflow-runner');
+    const res = await regenerateStructuredMemoryForBlock({ chatId, blockId, profileId });
+    return { success: true, ...res };
+  } catch (e) {
+    console.error('[debug-regenerate-memory-block] failed:', e);
+    return { success: false, error: e.message };
+  }
 });
 
 ipcMain.handle('update-directive-enabled', async (event, { id, enabled }) => {

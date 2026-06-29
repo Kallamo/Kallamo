@@ -73,14 +73,16 @@ export const AppProvider = ({ children }) => {
   const [toast, setToast] = useState(null); // { message, type: 'success' | 'error' | 'info', show: boolean, action?: { label, onClick } }
   const toastTimeoutRef = useRef(null);
 
-  const showToast = (message, type = 'info', duration = 4000, action = null) => {
+  const showToast = (message, type = 'info', duration = null, action = null) => {
+    // Errors linger much longer by default so they can actually be read.
+    const ms = duration != null ? duration : (type === 'error' ? 14000 : 4000);
     if (toastTimeoutRef.current) {
       clearTimeout(toastTimeoutRef.current);
     }
     setToast({ message, type, show: true, action });
     toastTimeoutRef.current = setTimeout(() => {
       setToast(prev => prev ? { ...prev, show: false } : null);
-    }, duration);
+    }, ms);
   };
 
   useEffect(() => {
@@ -191,7 +193,7 @@ export const AppProvider = ({ children }) => {
             "Local AI Engine couldn't be downloaded automatically. Open Settings to check and install it manually.",
             "error",
             12000,
-            { label: "Open Settings", onClick: () => openSettings('advanced', 'embedding') }
+            { label: "Open Settings", onClick: () => openSettings('engine', 'embedding') }
           );
         } else {
           showToast(`Engine installation failed: ${data.error}`, "error");

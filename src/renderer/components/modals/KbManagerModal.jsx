@@ -25,7 +25,7 @@ export default function KbManagerModal({ profile, onClose }) {
   const [uploadingAction, setUploadingAction] = useState(null);
   const [renamePrompt, setRenamePrompt] = useState(null); // { fresh, conflicts, type }
 
-  const openSettingsToEmbedding = () => openSettings('advanced', 'embedding');
+  const openSettingsToEmbedding = () => openSettings('engine', 'embedding');
 
   const getUniqueName = (originalName, existingSources, extraNames = new Set()) => {
     const lastDot = originalName.lastIndexOf('.');

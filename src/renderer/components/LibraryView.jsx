@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
+import { copyText } from '../utils/clipboard';
 import { ArrowLeft, Plus, Cpu, Trash2, Edit3, Database, Workflow, Play, Code, Copy, AlertTriangle, Download, UploadCloud } from 'lucide-react';
 import ProfileModal from './modals/ProfileModal';
 import WorkflowModal from './modals/WorkflowModal';
@@ -576,7 +577,7 @@ export default function LibraryView() {
                       <span className="font-mono text-accent text-[11px] font-bold select-all">&#123;&#123;{v.key}&#125;&#125;</span>
                       <button 
                         onClick={() => {
-                          navigator.clipboard.writeText(`{{${v.key}}}`);
+                          copyText(`{{${v.key}}}`);
                           showToast("Variable tag copied to clipboard!", "success");
                         }}
                         className="text-gray-500 hover:text-white p-1 transition-colors cursor-pointer"

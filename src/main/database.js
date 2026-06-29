@@ -371,6 +371,38 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_constant_memory_owner ON constant_memory(ownerId, ownerType);
 
+  -- Structured memory: the tag vocabulary. A tag's description IS the classifier
+  -- criterion. isEntity marks tags whose items carry a specific entity instance.
+  CREATE TABLE IF NOT EXISTS tags (
+    name TEXT PRIMARY KEY,
+    description TEXT NOT NULL DEFAULT '',
+    isEntity INTEGER DEFAULT 0,
+    createdAt INTEGER,
+    last_modified INTEGER DEFAULT 0
+  );
+
+  -- Multi-label association beside each chunk's vector. entity holds the instance
+  -- for entity-type tags (NULL otherwise) and later becomes an FK to an entities
+  -- table without a re-migration. Tags are retrieval-only (never sent to generation).
+  CREATE TABLE IF NOT EXISTS chunk_tags (
+    chunkId TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    entity TEXT,
+    PRIMARY KEY (chunkId, tag, entity)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_chunk_tags_tag ON chunk_tags(tag, entity);
+  CREATE INDEX IF NOT EXISTS idx_chunk_tags_chunk ON chunk_tags(chunkId);
+
+  -- Garbage-collect tag associations whenever their chunk is deleted, covering
+  -- every knowledge_chunks deletion path in one place.
+  CREATE TRIGGER IF NOT EXISTS trg_chunk_tags_gc
+  AFTER DELETE ON knowledge_chunks
+  FOR EACH ROW
+  BEGIN
+      DELETE FROM chunk_tags WHERE chunkId = OLD.id;
+  END;
+
   CREATE TRIGGER IF NOT EXISTS chats_last_modified_trigger
   AFTER UPDATE ON chats
   FOR EACH ROW
@@ -608,6 +640,19 @@ try {
   if (!pdTableInfo.map(c => c.name).includes('enabled')) {
     db.exec("ALTER TABLE pinned_directives ADD COLUMN enabled INTEGER DEFAULT 1");
     console.log("Database Migration: Added enabled column to pinned_directives table.");
+  }
+
+  // Seed the default structured-memory tag vocabulary (idempotent). Descriptions
+  // are the classifier criteria, kept short and domain-neutral.
+  const seedTag = db.prepare("INSERT OR IGNORE INTO tags (name, description, isEntity, createdAt, last_modified) VALUES (?, ?, ?, ?, ?)");
+  const now = Date.now();
+  const defaultTags = [
+    ["Characters", "People, beings, or named agents and what is true about them.", 1],
+    ["Planning", "Decisions, goals, deadlines, tasks, and who is responsible for them.", 0],
+    ["Chat", "General context: what a conversation segment is broadly about.", 0],
+  ];
+  for (const [name, description, isEntity] of defaultTags) {
+    seedTag.run(name, description, isEntity, now, now);
   }
 
   const folderTableInfo = db.pragma("table_info(folders)");

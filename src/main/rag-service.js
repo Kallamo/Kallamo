@@ -538,6 +538,76 @@ async function saveChatMemory(title, summary, chatId) {
     };
 }
 
+// Attach retrieval-only tags to already-stored chunk ids. tags = [{tag, entity}].
+function tagChunks(chunkIds, tags) {
+    if (!chunkIds || !chunkIds.length || !tags || !tags.length) return;
+    const insertTag = db.prepare('INSERT OR IGNORE INTO chunk_tags (chunkId, tag, entity) VALUES (?, ?, ?)');
+    db.transaction(() => {
+        for (const id of chunkIds) {
+            for (const t of tags) insertTag.run(id, t.tag, t.entity || null);
+        }
+    })();
+}
+
+// Phase-0 structured memory: store the segment's overview (the summary, broad recall)
+// plus the AI-extracted atomic items (precise recall), each as its own vectorized
+// chunk. The stored `text` stays clean so generation never sees tags; only the
+// embedding input is tag-enriched to nudge the vector. Tags live in chunk_tags.
+async function saveStructuredMemory({ ownerId, ownerType, title, summary, items = [] }) {
+    const insertChunk = db.prepare(`
+        INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, tokenCount)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const deleteFts = db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId = ?');
+    const insertFts = db.prepare('INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text) VALUES (?, ?)');
+    const insertTag = db.prepare('INSERT OR IGNORE INTO chunk_tags (chunkId, tag, entity) VALUES (?, ?, ?)');
+
+    const stamp = Date.now();
+    const rand = () => Math.random().toString(36).slice(2, 7);
+    const rows = [];
+
+    // Overview chunk = the summary, tagged Chat.
+    if (summary && summary.trim()) {
+        const text = `Memory Context [${title}]: ${summary.trim()}`;
+        rows.push({ id: `mem_${stamp}_ov_${rand()}`, text, embedInput: text, tags: [{ tag: 'Chat', entity: null }] });
+    }
+
+    // Item chunks = one per atomic item. The tag prefix shapes the vector only.
+    for (let i = 0; i < (items || []).length; i++) {
+        const it = items[i];
+        const itemText = (it && it.text ? String(it.text) : '').trim();
+        if (!itemText) continue;
+        const seen = new Set();
+        const tags = (Array.isArray(it.tags) ? it.tags : [])
+            .filter(t => t && t.tag)
+            .map(t => ({ tag: String(t.tag), entity: t.entity ? String(t.entity) : null }))
+            .filter(t => { const k = `${t.tag}|${t.entity || ''}`; if (seen.has(k)) return false; seen.add(k); return true; });
+        const prefix = tags.map(t => `[${t.tag}${t.entity ? ':' + t.entity : ''}]`).join('');
+        rows.push({
+            id: `mem_${stamp}_it${i}_${rand()}`,
+            text: itemText,
+            embedInput: prefix ? `${prefix} ${itemText}` : itemText,
+            tags,
+        });
+    }
+
+    for (const r of rows) {
+        r.vector = await generateEmbeddingVector(r.embedInput);
+        r.tokenCount = countTokens(r.text);
+    }
+
+    db.transaction(() => {
+        for (const r of rows) {
+            insertChunk.run(r.id, ownerId, ownerType, title, r.text, JSON.stringify(r.vector), Date.now(), r.tokenCount);
+            deleteFts.run(r.id);
+            insertFts.run(r.id, r.text);
+            for (const t of r.tags) insertTag.run(r.id, t.tag, t.entity || null);
+        }
+    })();
+
+    return rows.map(r => ({ id: r.id, text: r.text, tags: r.tags }));
+}
+
 // --- EXPORTS ---
 
 module.exports = {
@@ -559,6 +629,8 @@ module.exports = {
     executeMultiOwnerSearch,
     fuseAndRank,
     saveChatMemory,
+    saveStructuredMemory,
+    tagChunks,
     isLocalEngineInstalled,
     findNodeBinary,
     ensureLocalEngine,

@@ -4,6 +4,7 @@ const { encode } = require('gpt-tokenizer/encoding/o200k_base');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 
 const appDataPath = process.env.APPDATA || (process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support') : path.join(os.homedir(), '.local', 'share'));
 const dataDir = path.join(appDataPath, 'Kallamo');
@@ -17,7 +18,9 @@ const {
     extractTextFromFile,
     chunkText,
     vectorizeChunks,
-    insertChunksToDb
+    insertChunksToDb,
+    saveStructuredMemory,
+    tagChunks
 } = require('./rag-service');
 
 let activeRun = null;
@@ -783,6 +786,193 @@ function resolveOverflowDeferred(decision, editedText) {
 
 // --- HYBRID SEARCH Fallback / Helpers ---
 
+// A per-call fenced marker for the structured-items block, so the model can't
+// collide with content. Random suffix, ASCII so it survives any provider.
+function buildItemsFence() {
+    const s = crypto.randomBytes(3).toString('hex');
+    return { open: `<<ITEMS_${s}>>`, close: `<</ITEMS_${s}>>` };
+}
+
+// Tolerant: grab the first [...] block and JSON.parse it. Any failure -> [].
+function safeParseArray(body) {
+    if (!body) return [];
+    try {
+        const start = body.indexOf('[');
+        const end = body.lastIndexOf(']');
+        if (start === -1 || end === -1 || end < start) return [];
+        const parsed = JSON.parse(body.slice(start, end + 1));
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (e) { return []; }
+}
+
+// Keep only items with text and tags that exist in the vocabulary (create-off:
+// unknown tags are dropped). entity is kept only for tags marked isEntity.
+function validateItems(arr, vocab) {
+    const byName = new Map(vocab.map(t => [t.name.toLowerCase(), t]));
+    const out = [];
+    for (const it of arr) {
+        const text = it && it.text ? String(it.text).trim() : '';
+        if (!text) continue;
+        const tags = [];
+        const rawTags = Array.isArray(it.tags) ? it.tags : [];
+        for (const rt of rawTags) {
+            const name = typeof rt === 'string' ? rt : (rt && rt.tag);
+            if (!name) continue;
+            const known = byName.get(String(name).toLowerCase());
+            if (!known) continue;
+            const entity = known.isEntity && rt && rt.entity && String(rt.entity).toLowerCase() !== 'null'
+                ? String(rt.entity).trim() : null;
+            tags.push({ tag: known.name, entity: entity || null });
+        }
+        out.push({ text, tags });
+    }
+    return out;
+}
+
+// Split the model reply into title + summary (the pre-fence head) and the
+// validated items (the fenced JSON). Tolerant to a missing/garbled fence.
+function parseMemoryResponse(response, fence, vocab) {
+    const raw = String(response || '');
+    const openIdx = raw.indexOf(fence.open);
+
+    // Body = inside the fence when present; otherwise fall back to any JSON array in
+    // the reply, so a model that ignores the exact markers still gets parsed.
+    let body = '';
+    let headEnd;
+    if (openIdx !== -1) {
+        const afterOpen = openIdx + fence.open.length;
+        const closeIdx = raw.indexOf(fence.close, afterOpen);
+        body = raw.slice(afterOpen, closeIdx === -1 ? undefined : closeIdx);
+        headEnd = openIdx;
+    } else {
+        const firstBracket = raw.indexOf('[');
+        body = firstBracket === -1 ? '' : raw.slice(firstBracket);
+        headEnd = firstBracket === -1 ? raw.length : firstBracket;
+    }
+
+    const head = raw.slice(0, headEnd);
+    const lines = head.split('\n');
+    let title = 'Archived Memory';
+    let summary = head.trim();
+    if (lines[0] && lines[0].toUpperCase().startsWith('TITLE:')) {
+        title = lines[0].substring(6).trim() || title;
+        summary = lines.slice(1).join('\n').trim();
+    }
+
+    const items = validateItems(safeParseArray(body), vocab);
+    return { title, summary, items };
+}
+
+// Run the ride-along classifier on a raw segment: returns the title, summary, and
+// validated atomic items. Shared by live archiving and the debug regenerate button.
+// The designated System AI (api profile + model) for background tasks, read from
+// global settings. Null when unset → callers fall back to the active profile.
+function getSystemAi() {
+    try {
+        const row = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
+        if (row) {
+            const adv = JSON.parse(row.value);
+            if (adv.systemApiProfileId) return { apiProfileId: adv.systemApiProfileId, model: adv.systemModelName || '' };
+        }
+    } catch (e) { }
+    return null;
+}
+
+async function classifyArchiveSegment(rawTextToArchive, profile) {
+    let title = 'Archived Memory';
+    let summary = '';
+    let items = [];
+
+    // System AI overrides the writing profile for this background task; fall back to
+    // the active profile when none is configured.
+    const systemAi = getSystemAi();
+    if (!profile && !systemAi) return { title, summary, items };
+    const apiProfileId = systemAi ? systemAi.apiProfileId : profile.apiProfileId;
+    const model = systemAi ? systemAi.model : profile.model;
+    const manualMode = systemAi ? false : (profile && profile.manualMode === 1);
+    const manualJson = systemAi ? null : (profile && profile.manualJson);
+    const debug = { usedSystemAi: !!systemAi, apiProfileId, model, fenceFound: false, parsedItems: 0, rawSnippet: '', error: null };
+
+    // The vocabulary's descriptions ARE the classifier criteria. Empty (no tags
+    // seeded) degrades gracefully to a plain summary.
+    let tagVocab = [];
+    try { tagVocab = db.prepare('SELECT name, description, isEntity FROM tags').all(); } catch (e) { tagVocab = []; }
+
+    const fence = buildItemsFence();
+    const vocabLines = tagVocab.length
+        ? tagVocab.map(t => `- ${t.name}${t.isEntity ? ' (entity)' : ''}: ${t.description}`).join('\n')
+        : '- Chat: General context.';
+    const systemPrompt =
+        "You are an assistant that summarizes and indexes a conversation segment.\n" +
+        "First line MUST be 'TITLE: [3-word title]'. Then write a 2-sentence summary of what the segment is about.\n" +
+        "After the summary, extract the salient atomic memory items: one fact or entity per item, each a short standalone statement. " +
+        "Classify each item with one or more tags chosen ONLY from this fixed vocabulary:\n" +
+        vocabLines + "\n" +
+        "For a tag marked (entity), set \"entity\" to the specific instance; otherwise set \"entity\" to null. " +
+        "Output the items as a JSON array wrapped exactly once in " + fence.open + " and " + fence.close + ", " +
+        "each element {\"text\": \"...\", \"tags\": [{\"tag\": \"<TagName>\", \"entity\": \"<instance or null>\"}]}. " +
+        "If there are no salient items, output an empty array. Write nothing after the closing marker.";
+    try {
+        const response = await sendApiRequest({
+            apiProfileId: apiProfileId,
+            model: model,
+            systemPrompt: systemPrompt,
+            chatHistory: [],
+            newPrompt: rawTextToArchive,
+            temperature: 0.5,
+            maxTokens: 900,
+            manualMode: manualMode,
+            manualJson: manualJson
+        });
+        debug.rawSnippet = String(response || '').slice(0, 1200);
+        debug.fenceFound = String(response || '').includes(fence.open);
+        // TEMP debug: see exactly what the model returned and how the parse went.
+        console.log('[Structured Memory][raw response]\n' + debug.rawSnippet);
+        console.log(`[Structured Memory] fence open ${debug.fenceFound ? 'FOUND' : 'MISSING'} (${fence.open})`);
+        const parsed = parseMemoryResponse(response, fence, tagVocab);
+        debug.parsedItems = parsed.items.length;
+        console.log(`[Structured Memory] parsed ${parsed.items.length} item(s)`);
+        title = parsed.title || title;
+        summary = parsed.summary || response.trim();
+        items = parsed.items;
+    } catch (e) {
+        debug.error = e.message;
+        console.error("Summary card generation failed:", e);
+    }
+    return { title, summary, items, debug };
+}
+
+// TEMP/debug: re-run the classifier + structured storage for an existing summarized
+// block, without creating a new block or moving summarizedIndex. Idempotent: clears
+// this block's prior structured chunks (source = title) before re-storing.
+async function regenerateStructuredMemoryForBlock({ chatId, blockId, profileId }) {
+    const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+    if (!chat) throw new Error('Chat not found');
+    let memoryBlocks = [];
+    if (chat.memoryBlocks) memoryBlocks = typeof chat.memoryBlocks === 'string' ? JSON.parse(chat.memoryBlocks) : chat.memoryBlocks;
+    const block = (memoryBlocks || []).find(b => b.id === blockId);
+    if (!block) throw new Error('Memory block not found');
+    const selectedMessages = block.messages || [];
+    if (!selectedMessages.length) throw new Error('This block has no stored messages to re-summarize');
+
+    const rawTextToArchive = selectedMessages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
+    const profile = (profileId && db.prepare('SELECT * FROM writing_profiles WHERE id = ?').get(profileId))
+        || db.prepare('SELECT * FROM writing_profiles LIMIT 1').get();
+
+    const cls = await classifyArchiveSegment(rawTextToArchive, profile);
+    const title = block.title || cls.title || 'Archived Memory';
+    const summary = cls.summary || block.summary || '';
+
+    // Clear this block's prior structured chunks so repeated clicks don't pile up.
+    // The AFTER DELETE trigger drops their chunk_tags; sweep orphaned FTS rows too.
+    db.prepare("DELETE FROM knowledge_chunks WHERE ownerId = ? AND ownerType = 'chat_memory' AND source = ?").run(chatId, title);
+    db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId NOT IN (SELECT id FROM knowledge_chunks)').run();
+
+    const stored = await saveStructuredMemory({ ownerId: chatId, ownerType: 'chat_memory', title, summary, items: cls.items });
+    console.log(`[Structured Memory][regen] block "${title}": ${cls.items.length} item(s), ${stored.length} chunk(s) stored.`);
+    return { title, items: cls.items.length, chunks: stored.length, debug: cls.debug };
+}
+
 async function executeSummarizationInternal({ chatId, selectedMessages, newSummarizedIndex, customTitle, profileId }) {
     const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
     if (!chat) throw new Error("Chat not found");
@@ -797,46 +987,27 @@ async function executeSummarizationInternal({ chatId, selectedMessages, newSumma
     const profile = db.prepare('SELECT * FROM writing_profiles WHERE id = ?').get(profileId) || db.prepare('SELECT * FROM writing_profiles LIMIT 1').get();
     let title = customTitle || "Archived Memory";
     let summary = "Archived conversation context.";
+    let items = [];
 
-    if (profile) {
-        const systemPrompt = "You are an assistant. Briefly summarize the following conversation segment in 2 sentences max, just so the user knows what this block is about. First line MUST be 'TITLE: [3-word title]'.";
-        try {
-            const response = await sendApiRequest({
-                apiProfileId: profile.apiProfileId,
-                model: profile.model,
-                systemPrompt: systemPrompt,
-                chatHistory: [],
-                newPrompt: rawTextToArchive,
-                temperature: 0.5,
-                maxTokens: 500,
-                manualMode: profile.manualMode === 1,
-                manualJson: profile.manualJson
-            });
-            const lines = response.split('\n');
-            let generatedTitle = "Archived Memory";
-            let generatedSummary = response.trim();
+    const cls = await classifyArchiveSegment(rawTextToArchive, profile);
+    if (!customTitle && cls.title) title = cls.title;
+    if (cls.summary) summary = cls.summary;
+    items = cls.items;
 
-            if (lines[0] && lines[0].toUpperCase().startsWith('TITLE:')) {
-                generatedTitle = lines[0].substring(6).trim();
-                generatedSummary = lines.slice(1).join('\n').trim();
-            } else {
-                generatedSummary = response.trim();
-            }
-
-            if (!customTitle) {
-                title = generatedTitle;
-            }
-            summary = generatedSummary;
-        } catch (e) {
-            console.error("Summary card generation failed:", e);
-        }
-    }
-
-    // Persist summarized vectors to SQLite so they're searchable
+    // Persist summarized vectors to SQLite so they're searchable (verbatim tier)
     try {
         insertChunksToDb(chatId, 'chat_memory', vectors);
     } catch (dbErr) {
         console.error("Failed to insert summarized vectors to SQLite:", dbErr);
+    }
+
+    // Structured memory (overview + atomic items). Never blocks archiving: a bad
+    // classification just means no item chunks for this segment.
+    try {
+        const stored = await saveStructuredMemory({ ownerId: chatId, ownerType: 'chat_memory', title, summary, items });
+        console.log(`[Structured Memory] segment "${title}": ${items.length} item(s) extracted, ${stored.length} chunk(s) stored.`);
+    } catch (smErr) {
+        console.error("[Structured Memory] storage failed (archiving continues):", smErr);
     }
 
     let memoryBlocks = [];
@@ -1395,5 +1566,6 @@ module.exports = {
     resolveErrorDeferred,
     resolveOverflowDeferred,
     executeSummarizationInternal,
+    regenerateStructuredMemoryForBlock,
     checkAndAutoSummarize
 };

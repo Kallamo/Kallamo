@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
-import { X, Plus, Key, Link2, Eye, EyeOff, Monitor, Settings, Layout, Layers, HardDrive, Trash2, FolderOpen, RefreshCw, Cpu, Database, Palette, Type, PenLine } from 'lucide-react';
+import { X, Plus, Key, Link2, Eye, EyeOff, Monitor, Settings, Layout, Layers, HardDrive, Trash2, FolderOpen, RefreshCw, Cpu, Database, Palette, Type, PenLine, AlertTriangle } from 'lucide-react';
 import Logo, { Logotype } from '../../logo';
 
 export default function SettingsModal({ onClose, initialTab, initialSection }) {
@@ -23,7 +23,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [activeTab, setActiveTab] = useState(initialTab || 'api'); // 'api' | 'interface' | 'advanced'
 
   useEffect(() => {
-    if (initialSection === 'embedding' && activeTab === 'advanced') {
+    if (initialSection === 'embedding' && activeTab === 'engine') {
       const timer = setTimeout(() => {
         const el = document.getElementById('embedding-config');
         if (el) {
@@ -80,6 +80,15 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [embeddingEngine, setEmbeddingEngine] = useState(settings.advanced.embeddingEngine || 'local');
   const [embeddingApiProfileId, setEmbeddingApiProfileId] = useState(settings.advanced.embeddingApiProfileId || '');
   const [embeddingModelName, setEmbeddingModelName] = useState(settings.advanced.embeddingModelName || '');
+  const [systemApiProfileId, setSystemApiProfileId] = useState(settings.advanced.systemApiProfileId || '');
+  const [systemModelName, setSystemModelName] = useState(settings.advanced.systemModelName || '');
+
+  // Models pre-defined on the selected System AI connection (drives the Model dropdown).
+  const systemProfileModels = (() => {
+    const p = apiProfiles.find(ap => ap.id === systemApiProfileId);
+    if (!p) return [];
+    try { return typeof p.models === 'string' ? JSON.parse(p.models) : (p.models || []); } catch (e) { return []; }
+  })();
 
   const [confirmAction, setConfirmAction] = useState(null); // null | 'purge' | 'clearCache' | 'wipe'
   const [backupStatus, setBackupStatus] = useState(null); // null | { success: boolean, path?: string, error?: string }
@@ -99,16 +108,16 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const settingsRef = useRef({
     accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled, writingToolbar, smartTypography,
     chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug,
-    embeddingEngine, embeddingApiProfileId, embeddingModelName
+    embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName
   });
 
   useEffect(() => {
     settingsRef.current = {
       accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled, writingToolbar,
       chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug,
-      embeddingEngine, embeddingApiProfileId, embeddingModelName
+      embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName
     };
-  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, smartTypography, chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName]);
+  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, smartTypography, chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName]);
 
   // Handle immediate save for selects and color choices
   const updateSetting = async (category, key, value) => {
@@ -130,6 +139,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       if (key === 'tokenDebug') setTokenDebug(value);
       if (key === 'embeddingEngine') setEmbeddingEngine(value);
       if (key === 'embeddingApiProfileId') setEmbeddingApiProfileId(value);
+      if (key === 'systemApiProfileId') { setSystemApiProfileId(value); setSystemModelName(''); }
+      if (key === 'systemModelName') setSystemModelName(value);
     }
 
     const current = settingsRef.current;
@@ -156,7 +167,9 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         tokenDebug: key === 'tokenDebug' ? value : current.tokenDebug,
         embeddingEngine: key === 'embeddingEngine' ? value : current.embeddingEngine,
         embeddingApiProfileId: key === 'embeddingApiProfileId' ? value : current.embeddingApiProfileId,
-        embeddingModelName: current.embeddingModelName
+        embeddingModelName: current.embeddingModelName,
+        systemApiProfileId: key === 'systemApiProfileId' ? value : current.systemApiProfileId,
+        systemModelName: key === 'systemModelName' ? value : (key === 'systemApiProfileId' ? '' : current.systemModelName)
       }
     };
 
@@ -173,6 +186,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     if (key === 'topKKB') setTopKKB(value);
     if (key === 'topKMemory') setTopKMemory(value);
     if (key === 'embeddingModelName') setEmbeddingModelName(value);
+    if (key === 'systemModelName') setSystemModelName(value);
 
     // 2. Debounce database save
     if (saveTimeoutRef.current) {
@@ -204,7 +218,9 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
           tokenDebug: current.tokenDebug,
           embeddingEngine: current.embeddingEngine,
           embeddingApiProfileId: current.embeddingApiProfileId,
-          embeddingModelName: key === 'embeddingModelName' ? value : current.embeddingModelName
+          embeddingModelName: key === 'embeddingModelName' ? value : current.embeddingModelName,
+          systemApiProfileId: current.systemApiProfileId,
+          systemModelName: key === 'systemModelName' ? value : current.systemModelName
         }
       };
       await handleSaveSettings(newSettings);
@@ -413,6 +429,14 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
               API Connections
             </button>
             <button
+              onClick={() => { setActiveTab('engine'); setShowAddApiForm(false); }}
+              className={`text-left px-4 py-2.5 rounded-md text-sm font-medium transition-colors cursor-pointer flex items-center justify-between gap-2 ${activeTab === 'engine' ? 'bg-[#1a2d32] text-white' : 'text-gray-400 hover:bg-[#1a2d32]/50 hover:text-gray-200'
+                }`}
+            >
+              <span>Engine &amp; Memory</span>
+              {!systemApiProfileId && <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />}
+            </button>
+            <button
               onClick={() => { setActiveTab('interface'); setShowAddApiForm(false); }}
               className={`text-left px-4 py-2.5 rounded-md text-sm font-medium transition-colors cursor-pointer ${activeTab === 'interface' ? 'bg-[#1a2d32] text-white' : 'text-gray-400 hover:bg-[#1a2d32]/50 hover:text-gray-200'
                 }`}
@@ -476,7 +500,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                             >
                               <div className="flex flex-col space-y-1 overflow-hidden">
                                 <span className="text-sm font-bold text-white truncate">{ap.name}</span>
-                                <span className="caption">{ap.provider} — {mList.length} models</span>
+                                <span className="caption">{ap.provider} · {mList.length} models</span>
                               </div>
                               <div className="flex space-x-2 shrink-0">
                                 <button
@@ -985,17 +1009,59 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
               </div>
             )}
 
-            {activeTab === 'advanced' && (
+            {activeTab === 'engine' && (
               <div className="space-y-6">
                 <div className="shrink-0 mb-4 border-b border-gray-800 pb-3">
                   <h3 className="text-xl font-bold text-white flex items-center space-x-2">
-                    <Monitor className="w-5 h-5 text-accent" />
-                    <span>Advanced Options</span>
+                    <Cpu className="w-5 h-5 text-accent" />
+                    <span>Engine &amp; Memory</span>
                   </h3>
-                  <p className="caption mt-1">Configure advanced settings for the local search engine, data management, and diagnostics.</p>
+                  <p className="caption mt-1">The machinery behind memory and retrieval: chunking and RAG, the vector embedding engine, and the System AI that summarizes and classifies your history.</p>
                 </div>
 
                 <div className="space-y-6">
+
+                  {/* SYSTEM AI (the most important setting here) */}
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
+                      <Cpu className="w-3.5 h-3.5" />
+                      <span>System AI</span>
+                      {!systemApiProfileId && <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />}
+                    </h4>
+                    <div className="bg-[#051116] p-5 rounded-xl border border-gray-800/80 space-y-4">
+                      <p className="caption">Powers summaries and structured memory. Pick a model that handles JSON well. Unset uses the active profile.</p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-gray-400 mb-1.5">API Connection</label>
+                          <select
+                            value={systemApiProfileId}
+                            onChange={(e) => updateSetting('advanced', 'systemApiProfileId', e.target.value)}
+                            className="w-full bg-[#011419] border border-gray-700 text-gray-200 text-xs rounded-md px-3 py-2 focus:outline-none focus:border-accent cursor-pointer"
+                          >
+                            <option value="">Active profile</option>
+                            {apiProfiles.map(apiProf => (
+                              <option key={apiProf.id} value={apiProf.id}>{apiProf.name} ({apiProf.provider})</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-gray-400 mb-1.5">Model</label>
+                          <select
+                            value={systemModelName}
+                            disabled={!systemApiProfileId}
+                            onChange={(e) => updateSetting('advanced', 'systemModelName', e.target.value)}
+                            className="w-full bg-[#011419] border border-gray-700 text-gray-200 text-xs rounded-md px-3 py-2 focus:outline-none focus:border-accent cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <option value="">{systemApiProfileId ? 'Select model' : 'Pick a connection first'}</option>
+                            {systemProfileModels.map(m => (
+                              <option key={m} value={m}>{m}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
                   {/* SECTION 1: CHUNKS & RAG */}
                   <div className="space-y-3">
                     <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
@@ -1254,6 +1320,22 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       </div>
                     </div>
                   </div>
+
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'advanced' && (
+              <div className="space-y-6">
+                <div className="shrink-0 mb-4 border-b border-gray-800 pb-3">
+                  <h3 className="text-xl font-bold text-white flex items-center space-x-2">
+                    <Monitor className="w-5 h-5 text-accent" />
+                    <span>Advanced Options</span>
+                  </h3>
+                  <p className="caption mt-1">Diagnostics, logging, and data storage management.</p>
+                </div>
+
+                <div className="space-y-6">
 
                   {/* SECTION 3: DIAGNOSTICS & DEBUGGING */}
                   <div className="space-y-3">

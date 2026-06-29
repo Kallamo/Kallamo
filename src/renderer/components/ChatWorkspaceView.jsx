@@ -193,21 +193,37 @@ export default function ChatWorkspaceView() {
     return text.split('\n').length > 3 || text.length > 220;
   };
 
+  // Electron-first copy: navigator.clipboard.writeText is permission/focus-gated in
+  // Electron and throws on programmatic copies (the RAG debug copy hit this). The
+  // main-process clipboard is ungated; DOM execCommand is the last-resort fallback.
+  const copyText = async (text) => {
+    try { if (electronAPI?.copyToClipboard) return await electronAPI.copyToClipboard(text); } catch (e) {}
+    try { return await navigator.clipboard.writeText(text); } catch (e) {}
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text == null ? '' : String(text);
+      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch (e) {}
+  };
+
   const handleCopy = (id, text) => {
-    navigator.clipboard.writeText(text);
+    copyText(text);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
   };
 
   const handleCopyRagContext = (id, debugObj) => {
     const textToCopy = `### Agentic RAG Response\n${debugObj.agenticRagResponse || ''}\n\n### Context Gathered\n${debugObj.agenticRagContextGathered || ''}`;
-    navigator.clipboard.writeText(textToCopy);
+    copyText(textToCopy);
     setCopiedRagId(id);
     setTimeout(() => setCopiedRagId(null), 2000);
   };
 
   const handleCopyStandardRag = (id, debugObj) => {
-    navigator.clipboard.writeText(debugObj.standardRagContextGathered || '');
+    copyText(debugObj.standardRagContextGathered || '');
     setCopiedStandardRagId(id);
     setTimeout(() => setCopiedStandardRagId(null), 2000);
   };
@@ -505,7 +521,7 @@ export default function ChatWorkspaceView() {
       const codeId = btn.getAttribute('data-code-id');
       const codeElement = document.getElementById(codeId);
       if (codeElement) {
-        navigator.clipboard.writeText(codeElement.innerText).then(() => {
+        copyText(codeElement.innerText).then(() => {
           const textSpan = btn.querySelector('.copy-text');
           const oldText = textSpan.innerText;
           textSpan.innerText = 'Copied!';
@@ -827,7 +843,7 @@ export default function ChatWorkspaceView() {
                             <div className="flex items-center space-x-2 px-2 py-1 backdrop-blur-[2px] rounded-lg text-[9px] font-bold uppercase tracking-wider select-none shrink-0 group">
                               <button
                                 onClick={() => {
-                                  navigator.clipboard.writeText(msg.content);
+                                  copyText(msg.content);
                                   setCopiedId(msg.id);
                                   setTimeout(() => setCopiedId(null), 2000);
                                 }}
@@ -1099,7 +1115,7 @@ export default function ChatWorkspaceView() {
                                 <div className="flex items-center space-x-2 px-2 py-1 backdrop-blur-[2px] rounded-lg text-[9px] font-bold uppercase tracking-wider select-none shrink-0 group">
                                   <button
                                     onClick={() => {
-                                      navigator.clipboard.writeText(response);
+                                      copyText(response);
                                       setCopiedId(msg.id);
                                       setTimeout(() => setCopiedId(null), 2000);
                                     }}
