@@ -14,6 +14,7 @@ import Button from './ui/Button';
 import WritingPageModal from './WritingPageModal';
 import ExportModal from './ExportModal';
 import { InvokeModal } from './WritingInvocation';
+import WritingFindReplace from './WritingFindReplace';
 import { Sparkles, X, Loader2 } from 'lucide-react';
 import { DecorationSet } from '@tiptap/pm/view';
 import {
@@ -617,6 +618,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
   const [counts, setCounts] = useState({ words: 0, chars: 0 });
   const [showExport, setShowExport] = useState(false);
   const [showPageSetup, setShowPageSetup] = useState(false);
+  const [showFind, setShowFind] = useState(false);
   const [title, setTitle] = useState(doc.title);
   // AI select->invoke. inFlight + pending are owned by the parent view (they must
   // survive this editor remounting on chapter switch); the editor only renders them.
@@ -627,6 +629,18 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
   const pageConfig = pageConfigFromDoc(doc);
 
   useEffect(() => { setTitle(doc.title); }, [doc.id]);
+
+  // Ctrl/Cmd+F opens Find & Replace and pre-empts the browser's own find bar.
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
+        e.preventDefault();
+        setShowFind(true);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -800,7 +814,10 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
   const goalPct = doc.wordGoal > 0 ? Math.min(100, Math.round((counts.words / doc.wordGoal) * 100)) : 0;
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="flex-1 flex flex-col overflow-hidden relative">
+      {showFind && editor && (
+        <WritingFindReplace editor={editor} locked={locked} onClose={() => setShowFind(false)} />
+      )}
       {/* Title bar — always visible (incl. bubble mode) so Export/Page Setup never disappear. */}
       <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-gray-800/80 bg-[#011419]/35 shrink-0">
         <input
@@ -816,6 +833,9 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
           </span>
         )}
         <div className="flex items-center gap-0.5 shrink-0">
+          <button type="button" onClick={() => setShowFind(v => !v)} title="Find & Replace (Ctrl+F)" className={`p-1.5 rounded-md transition-colors cursor-pointer ${showFind ? 'text-accent bg-white/5' : 'text-gray-500 hover:text-white hover:bg-white/5'}`}>
+            <Search className="w-4 h-4" />
+          </button>
           <button type="button" onClick={() => setShowExport(true)} title="Export…" className="p-1.5 rounded-md text-gray-500 hover:text-white hover:bg-white/5 transition-colors cursor-pointer">
             <FileOutput className="w-4 h-4" />
           </button>

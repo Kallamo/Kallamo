@@ -16,6 +16,10 @@
   --font-mono: "JetBrains Mono Variable", "JetBrains Mono", monospace;
 }
 
+/* Placeholders should read as hints, not as already-written text: one muted gray,
+   low opacity, uniformly everywhere (overrides per-input placeholder-* utilities). */
+::placeholder { color: #6b7280 !important; opacity: 0.45 !important; }
+
 body {
   background-color: #011419;
   color: #f3f4f6;
@@ -150,6 +154,9 @@ body {
 /* The chapter is locked while a suggestion is in flight or under review. */
 .wd-sheet-locked { cursor: default; }
 .wd-sheet-locked .writing-prose { caret-color: transparent; }
+/* Find & Replace highlights: all matches subtle amber, the current one stronger. */
+.writing-prose .wd-search-match { background-color: rgba(234, 179, 8, 0.28); border-radius: 2px; }
+.writing-prose .wd-search-current { background-color: rgba(245, 158, 11, 0.75); color: #1f2328; border-radius: 2px; }
 .writing-prose h1 { font-size: 28px; font-weight: 700; margin: 0.6em 0 0.4em; }
 .writing-prose h2 { font-size: 20px; font-weight: 700; margin: 0.6em 0 0.4em; }
 .writing-prose h3 { font-size: 16px; font-weight: 700; margin: 0.6em 0 0.3em; }

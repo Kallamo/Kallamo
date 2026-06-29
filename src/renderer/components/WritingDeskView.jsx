@@ -4,10 +4,11 @@ import WritingEditor, { DEFAULT_WRITING_DESK } from './WritingEditor';
 import ExportBookModal from './ExportBookModal';
 import { importedContentToJson } from './writingExtensions';
 import ConfirmDialog from './ui/ConfirmDialog';
+import WritingDirectivesPanel from './WritingDirectivesPanel';
 import {
   Folder, FolderPlus, FilePlus, Upload, ChevronRight, ChevronDown,
   FileText, Trash2, FolderInput, PenLine, Download,
-  PanelLeftClose, PanelLeftOpen, Loader2, Sparkles
+  PanelLeftClose, PanelLeftOpen, Loader2, Sparkles, Pin
 } from 'lucide-react';
 
 export default function WritingDeskView({ chat, electronAPI }) {
@@ -29,10 +30,24 @@ export default function WritingDeskView({ chat, electronAPI }) {
   const [dropInfo, setDropInfo] = useState(null); // { id, zone: 'before'|'after'|'inside' }
   const sidebarKey = `wd-sidebar-collapsed-${workspaceId}`;
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem(sidebarKey) === '1');
+  const directivesKey = `wd-directives-open-${workspaceId}`;
+  const [showDirectives, setShowDirectives] = useState(() => localStorage.getItem(directivesKey) === '1');
+
+  const toggleDirectives = () => {
+    setShowDirectives(prev => {
+      const next = !prev;
+      localStorage.setItem(directivesKey, next ? '1' : '0');
+      return next;
+    });
+  };
 
   useEffect(() => {
     setSidebarCollapsed(localStorage.getItem(sidebarKey) === '1');
   }, [sidebarKey]);
+
+  useEffect(() => {
+    setShowDirectives(localStorage.getItem(directivesKey) === '1');
+  }, [directivesKey]);
 
   const toggleSidebar = () => {
     setSidebarCollapsed(prev => {
@@ -421,6 +436,17 @@ export default function WritingDeskView({ chat, electronAPI }) {
       ) : (
         <div className="flex-1 flex items-center justify-center text-gray-600 text-sm">
           Select or create a chapter to start writing.
+        </div>
+      )}
+
+      {/* Right rail: per-workspace pinned directives (always-on AI instructions). */}
+      {showDirectives ? (
+        <WritingDirectivesPanel workspaceId={workspaceId} electronAPI={electronAPI} onClose={toggleDirectives} />
+      ) : (
+        <div className="w-10 shrink-0 border-l border-gray-800/40 flex flex-col items-center py-3 bg-[#011419]/25">
+          <button title="Directives" onClick={toggleDirectives} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md">
+            <Pin className="w-4 h-4" />
+          </button>
         </div>
       )}
 

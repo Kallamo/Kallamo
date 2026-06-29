@@ -118,7 +118,7 @@ async function buildChapterContext({ before, markedSpan, after, selOpen, selClos
 function loadDirectives(workspaceId) {
     try {
         const rows = db.prepare(
-            'SELECT text FROM pinned_directives WHERE workspaceId = ? ORDER BY position, createdAt'
+            'SELECT text FROM pinned_directives WHERE workspaceId = ? AND enabled != 0 ORDER BY position, createdAt'
         ).all(workspaceId);
         return rows.map(r => r.text).filter(Boolean);
     } catch (e) {

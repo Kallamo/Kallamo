@@ -2350,6 +2350,11 @@ ipcMain.handle('update-directive', async (event, { id, text }) => {
   return { success: true };
 });
 
+ipcMain.handle('update-directive-enabled', async (event, { id, enabled }) => {
+  db.prepare('UPDATE pinned_directives SET enabled = ?, last_modified = ? WHERE id = ?').run(enabled ? 1 : 0, Date.now(), id);
+  return { success: true };
+});
+
 ipcMain.handle('delete-directive', async (event, { id }) => {
   db.prepare('DELETE FROM pinned_directives WHERE id = ?').run(id);
   return { success: true };

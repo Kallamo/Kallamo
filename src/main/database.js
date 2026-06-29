@@ -324,6 +324,7 @@ db.exec(`
     type TEXT NOT NULL DEFAULT 'typed',
     text TEXT NOT NULL,
     sourceMessageId TEXT,
+    enabled INTEGER DEFAULT 1,
     position INTEGER DEFAULT 0,
     createdAt INTEGER,
     last_modified INTEGER DEFAULT 0
@@ -601,6 +602,12 @@ try {
       db.exec(`ALTER TABLE documents ADD COLUMN ${name} ${def}`);
       console.log(`Database Migration: Added ${name} column to documents table.`);
     }
+  }
+
+  const pdTableInfo = db.pragma("table_info(pinned_directives)");
+  if (!pdTableInfo.map(c => c.name).includes('enabled')) {
+    db.exec("ALTER TABLE pinned_directives ADD COLUMN enabled INTEGER DEFAULT 1");
+    console.log("Database Migration: Added enabled column to pinned_directives table.");
   }
 
   const folderTableInfo = db.pragma("table_info(folders)");

@@ -63,6 +63,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getDirectives: (workspaceId) => ipcRenderer.invoke('get-directives', { workspaceId }),
   addDirective: (workspaceId, type, text, sourceMessageId) => ipcRenderer.invoke('add-directive', { workspaceId, type, text, sourceMessageId }),
   updateDirective: (id, text) => ipcRenderer.invoke('update-directive', { id, text }),
+  updateDirectiveEnabled: (id, enabled) => ipcRenderer.invoke('update-directive-enabled', { id, enabled }),
   deleteDirective: (id) => ipcRenderer.invoke('delete-directive', { id }),
   getChatMessages: (chatId) => ipcRenderer.invoke('get-chat-messages', chatId),
   saveMessage: (message) => ipcRenderer.invoke('save-message', message),

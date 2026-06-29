@@ -125,6 +125,67 @@ export const SuggestionDecorations = Extension.create({
   },
 });
 
+// --- FIND & REPLACE: match highlighting ---
+// Collect every occurrence of `query` in the doc, accumulating inline text per
+// textblock so a match can span mark boundaries (e.g. a partially-bold word).
+// Returns ProseMirror {from,to} ranges in document coordinates.
+export function collectSearchMatches(doc, query, caseSensitive) {
+  const matches = [];
+  if (!query) return matches;
+  const needle = caseSensitive ? query : query.toLowerCase();
+  doc.descendants((node, pos) => {
+    if (!node.isTextblock) return;
+    let text = '';
+    const offsets = []; // doc position of each character accumulated in `text`
+    node.forEach((child, off) => {
+      if (child.isText) {
+        for (let i = 0; i < child.text.length; i++) offsets.push(pos + 1 + off + i);
+        text += child.text;
+      } else {
+        offsets.push(pos + 1 + off); // a non-text inline (e.g. hard break) counts as one char
+        text += '\n';
+      }
+    });
+    const hay = caseSensitive ? text : text.toLowerCase();
+    let idx = 0;
+    while ((idx = hay.indexOf(needle, idx)) !== -1) {
+      const from = offsets[idx];
+      const to = offsets[idx + needle.length - 1] + 1;
+      if (from != null && to != null) matches.push({ from, to });
+      idx += needle.length;
+    }
+  });
+  return matches;
+}
+
+// Paints search matches as inline decorations. The plugin is dumb: the React panel
+// computes matches and pushes {matches, current} via meta; between pushes the set is
+// mapped through edits so highlights survive a replace.
+export const searchKey = new PluginKey('wdSearch');
+export const SearchHighlight = Extension.create({
+  name: 'wdSearch',
+  addProseMirrorPlugins() {
+    return [new Plugin({
+      key: searchKey,
+      state: {
+        init: () => DecorationSet.empty,
+        apply(tr, old) {
+          const meta = tr.getMeta(searchKey);
+          if (meta !== undefined) {
+            if (!meta || !meta.matches || !meta.matches.length) return DecorationSet.empty;
+            const decos = meta.matches.map((m, i) =>
+              Decoration.inline(m.from, m.to, { class: i === meta.current ? 'wd-search-current' : 'wd-search-match' })
+            );
+            return DecorationSet.create(tr.doc, decos);
+          }
+          return old.map(tr.mapping, tr.doc);
+        },
+      },
+      props: { decorations(state) { return searchKey.getState(state); } },
+    })];
+  },
+});
+
 // Strip anything executable from model-produced HTML before rendering it.
 function sanitizeHtml(html) {
   const tmp = document.createElement('div');
@@ -224,7 +285,7 @@ const SmartDashes = Extension.create({
 // disabled in favor of SmartDashes.
 export function getEditorExtensions({ smartTypography = true } = {}) {
   const base = [
-    ...writingExtensions, PersistSelection, SuggestionDecorations,
+    ...writingExtensions, PersistSelection, SuggestionDecorations, SearchHighlight,
     // Markdown is the interchange format for AI invocations: the model reads + writes
     // Markdown (which it does far more reliably than HTML). html:true lets the table
     // fallback pass raw HTML through. Copy/paste behavior is left untouched.
