@@ -394,6 +394,11 @@ async function sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory, 
 
         case 'aws bedrock': {
             const awsRegion = customConfig.awsRegion || 'us-east-1';
+            // Send the raw model id in the URL (colon and all). AWS canonicalizes the
+            // received path by URI-encoding it once, so the SigV4 canonical URI below
+            // must be encoded ONCE (':' -> '%3A') while the request URL stays raw.
+            // Encoding both would make AWS double-encode ('%253A') and the signature
+            // would not match.
             endpoint = `https://bedrock-runtime.${awsRegion}.amazonaws.com/model/${model}/invoke`;
             requestHeaders = {
                 "Content-Type": "application/json",
@@ -495,7 +500,7 @@ async function sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory, 
             region: awsRegion,
             service: "bedrock",
             method: "POST",
-            path: `/model/${model}/invoke`,
+            path: `/model/${encodeURIComponent(model)}/invoke`,
             headers: requestHeaders,
             body: requestBodyPayload
         });
