@@ -139,6 +139,17 @@ body {
 .writing-prose ::-moz-selection { background-color: color-mix(in srgb, var(--app-accent) 45%, transparent); }
 /* Selection painted while the editor is blurred (e.g. typing in a toolbar field). */
 .writing-prose .wd-blur-selection { background-color: color-mix(in srgb, var(--app-accent) 45%, transparent); }
+/* AI suggestion track-changes. The whole original span is struck through red in
+   place; the full proposal is shown in a green block right below it (block-level,
+   so paragraph breaks can't desync a per-word overlay). */
+.writing-prose .wd-diff-removed { background-color: rgba(239, 68, 68, 0.16); color: #b91c1c; text-decoration: line-through; border-radius: 2px; }
+.writing-prose .wd-diff-block-added { background-color: rgba(16, 185, 129, 0.14); border-left: 3px solid #10b981; border-radius: 4px; padding: 0.5em 0.75em; margin: 0.4em 0 0.85em; }
+.writing-prose .wd-diff-block-added p { margin: 0 0 0.5em; color: #047857; }
+.writing-prose .wd-diff-block-added p:last-child { margin-bottom: 0; }
+.writing-prose .wd-diff-block-tag { font-size: 0.7em; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #059669; opacity: 0.8; margin-bottom: 0.35em; }
+/* The chapter is locked while a suggestion is in flight or under review. */
+.wd-sheet-locked { cursor: default; }
+.wd-sheet-locked .writing-prose { caret-color: transparent; }
 .writing-prose h1 { font-size: 28px; font-weight: 700; margin: 0.6em 0 0.4em; }
 .writing-prose h2 { font-size: 20px; font-weight: 700; margin: 0.6em 0 0.4em; }
 .writing-prose h3 { font-size: 16px; font-weight: 700; margin: 0.6em 0 0.3em; }

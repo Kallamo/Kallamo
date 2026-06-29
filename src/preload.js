@@ -50,6 +50,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
   exportDocumentDocx: (payload) => ipcRenderer.invoke('export-document-docx', payload),
   exportBookDocx: (payload) => ipcRenderer.invoke('export-book-docx', payload),
   importDocument: () => ipcRenderer.invoke('import-document', {}),
+  invokeWritingDesk: (payload) => ipcRenderer.invoke('invoke-writing-desk', payload),
+  wdInvocationStatus: () => ipcRenderer.invoke('wd-invocation-status'),
+  onWdInvocationComplete: (callback) => {
+    const listener = (event, data) => callback(data);
+    ipcRenderer.on('wd-invocation-complete', listener);
+    return () => ipcRenderer.off('wd-invocation-complete', listener);
+  },
+  getPendingSuggestion: (documentId) => ipcRenderer.invoke('get-pending-suggestion', { documentId }),
+  getPendingSuggestionIds: (workspaceId) => ipcRenderer.invoke('get-pending-suggestion-ids', { workspaceId }),
+  resolvePendingSuggestion: (id) => ipcRenderer.invoke('resolve-pending-suggestion', { id }),
+  getDirectives: (workspaceId) => ipcRenderer.invoke('get-directives', { workspaceId }),
+  addDirective: (workspaceId, type, text, sourceMessageId) => ipcRenderer.invoke('add-directive', { workspaceId, type, text, sourceMessageId }),
+  updateDirective: (id, text) => ipcRenderer.invoke('update-directive', { id, text }),
+  deleteDirective: (id) => ipcRenderer.invoke('delete-directive', { id }),
   getChatMessages: (chatId) => ipcRenderer.invoke('get-chat-messages', chatId),
   saveMessage: (message) => ipcRenderer.invoke('save-message', message),
   deleteMessage: (messageId, shouldDeleteFiles) => ipcRenderer.invoke('delete-message', messageId, shouldDeleteFiles),

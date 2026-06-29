@@ -193,6 +193,8 @@ db.exec(`
     isAgentic INTEGER,
     agenticPrompt TEXT,
     agenticMaxTurns INTEGER DEFAULT 3,
+    resultChannel TEXT DEFAULT 'replacement',
+    contextWindow INTEGER DEFAULT 8192,
     last_modified INTEGER DEFAULT 0,
     syncToCloud INTEGER DEFAULT 0
   );
@@ -315,6 +317,37 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_documents_workspace ON documents(workspaceId);
+
+  CREATE TABLE IF NOT EXISTS pinned_directives (
+    id TEXT PRIMARY KEY,
+    workspaceId TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'typed',
+    text TEXT NOT NULL,
+    sourceMessageId TEXT,
+    position INTEGER DEFAULT 0,
+    createdAt INTEGER,
+    last_modified INTEGER DEFAULT 0
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_pinned_directives_workspace ON pinned_directives(workspaceId);
+
+  CREATE TABLE IF NOT EXISTS pending_suggestions (
+    id TEXT PRIMARY KEY,
+    documentId TEXT NOT NULL,
+    workspaceId TEXT NOT NULL,
+    channel TEXT NOT NULL DEFAULT 'replacement',
+    fromPos INTEGER NOT NULL,
+    toPos INTEGER NOT NULL,
+    originalText TEXT,
+    proposedText TEXT,
+    profileId TEXT,
+    intermediatePrompt TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    createdAt INTEGER,
+    last_modified INTEGER DEFAULT 0
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_pending_suggestions_document ON pending_suggestions(documentId);
 
   CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_owner ON knowledge_chunks(ownerId, ownerType);
 
@@ -503,6 +536,14 @@ try {
   if (!wpColumns.includes('agenticMaxTurns')) {
     db.exec("ALTER TABLE writing_profiles ADD COLUMN agenticMaxTurns INTEGER DEFAULT 3");
     console.log("Database Migration: Added agenticMaxTurns column to writing_profiles table.");
+  }
+  if (!wpColumns.includes('resultChannel')) {
+    db.exec("ALTER TABLE writing_profiles ADD COLUMN resultChannel TEXT DEFAULT 'replacement'");
+    console.log("Database Migration: Added resultChannel column to writing_profiles table.");
+  }
+  if (!wpColumns.includes('contextWindow')) {
+    db.exec("ALTER TABLE writing_profiles ADD COLUMN contextWindow INTEGER DEFAULT 8192");
+    console.log("Database Migration: Added contextWindow column to writing_profiles table.");
   }
 
   const apiProfTableInfo = db.pragma("table_info(api_profiles)");

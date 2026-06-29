@@ -335,100 +335,125 @@ const ALPHA_DENSE = 0.7;
 const SIMILARITY_FLOOR_MIN = 0.70;
 const SIMILARITY_FLOOR_MAX = 0.88;
 
-async function executeHybridSearch(queryText, ownerId, ownerType, threshold = 0.3, k = 5) {
-    try {
-        // Map the 0-1 strictness dial onto the cosine band where real matches live.
-        const cosineFloor = SIMILARITY_FLOOR_MIN + threshold * (SIMILARITY_FLOOR_MAX - SIMILARITY_FLOOR_MIN);
-
-        const candidateRows = db.prepare('SELECT * FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ? AND enabled = 1').all(ownerId, ownerType);
-        if (candidateRows.length === 0) return [];
-
-        const queryVector = await generateEmbeddingVector(queryText, true);
-
-        // Dense pass: real cosine similarity (0-1, vectors are normalized) for EVERY
-        // candidate. No pre-filtering here — the threshold is now a single final
-        // cutoff applied after fusion (Item 2), so sparse-only chunks can't bypass it.
-        const denseMap = new Map();
-        for (const row of candidateRows) {
-            let parsedVector = [];
-            try {
-                parsedVector = JSON.parse(row.vector);
-            } catch (e) { }
-            const cosine = parsedVector.length === queryVector.length
-                ? calculateSimilarity(queryVector, parsedVector)
-                : 0;
-            denseMap.set(row.id, {
-                id: row.id,
-                source: row.source,
-                text: row.text,
-                createdAt: row.createdAt,
-                denseScore: cosine
-            });
-        }
-
-        // Sparse pass: BM25 keyword relevance.
-        let sparseResults = [];
-        const ftsQuery = queryText.replace(/"/g, '""').trim();
-        if (ftsQuery.length > 0) {
-            try {
-                sparseResults = db.prepare(`
-                    SELECT chunkId, bm25(knowledge_chunks_fts) as rank
-                    FROM knowledge_chunks_fts
-                    WHERE knowledge_chunks_fts MATCH ?
-                `).all(ftsQuery);
-            } catch (e) {
-                const simpleQuery = ftsQuery.replace(/[^a-zA-Z0-9\s]/g, ' ').trim();
-                if (simpleQuery.length > 0) {
-                    try {
-                        sparseResults = db.prepare(`
-                            SELECT chunkId, bm25(knowledge_chunks_fts) as rank
-                            FROM knowledge_chunks_fts
-                            WHERE knowledge_chunks_fts MATCH ?
-                        `).all(simpleQuery);
-                    } catch (err) { }
-                }
+// Run the BM25 sparse pass against the FTS table and return a chunkId -> [0,1]
+// normalized relevance map. The FTS table is not owner-filtered, so callers fuse
+// this against an owner-scoped dense set (the dense map drives membership; a
+// sparse-only hit for some other owner never enters the result).
+function computeSparseNormMap(queryText) {
+    let sparseResults = [];
+    const ftsQuery = queryText.replace(/"/g, '""').trim();
+    if (ftsQuery.length > 0) {
+        try {
+            sparseResults = db.prepare(`
+                SELECT chunkId, bm25(knowledge_chunks_fts) as rank
+                FROM knowledge_chunks_fts
+                WHERE knowledge_chunks_fts MATCH ?
+            `).all(ftsQuery);
+        } catch (e) {
+            const simpleQuery = ftsQuery.replace(/[^a-zA-Z0-9\s]/g, ' ').trim();
+            if (simpleQuery.length > 0) {
+                try {
+                    sparseResults = db.prepare(`
+                        SELECT chunkId, bm25(knowledge_chunks_fts) as rank
+                        FROM knowledge_chunks_fts
+                        WHERE knowledge_chunks_fts MATCH ?
+                    `).all(simpleQuery);
+                } catch (err) { }
             }
         }
+    }
 
-        // SQLite bm25() returns negative scores (more negative = more relevant).
-        // Convert to positive relevance and min-max normalize to [0,1] within the
-        // result set so it's comparable to the dense cosine (Item 1: magnitude-aware).
-        const sparseNormMap = new Map();
-        if (sparseResults.length > 0) {
-            const relevances = sparseResults.map(r => -r.rank);
-            const minRel = Math.min(...relevances);
-            const maxRel = Math.max(...relevances);
-            const span = maxRel - minRel;
-            sparseResults.forEach((r, i) => {
-                const norm = span > 0 ? (relevances[i] - minRel) / span : 1;
-                sparseNormMap.set(r.chunkId, norm);
-            });
-        }
+    // SQLite bm25() returns negative scores (more negative = more relevant).
+    // Convert to positive relevance and min-max normalize to [0,1] within the
+    // result set so it's comparable to the dense cosine (magnitude-aware fusion).
+    const sparseNormMap = new Map();
+    if (sparseResults.length > 0) {
+        const relevances = sparseResults.map(r => -r.rank);
+        const minRel = Math.min(...relevances);
+        const maxRel = Math.max(...relevances);
+        const span = maxRel - minRel;
+        sparseResults.forEach((r, i) => {
+            const norm = span > 0 ? (relevances[i] - minRel) / span : 1;
+            sparseNormMap.set(r.chunkId, norm);
+        });
+    }
+    return sparseNormMap;
+}
 
-        // Fusion: magnitude-aware weighted blend instead of pure RRF. This preserves
-        // the real spread so noise scores low instead of compressing to ~0.016.
-        const fusedResults = [];
-        for (const chunkData of denseMap.values()) {
-            const sparseNorm = sparseNormMap.get(chunkData.id) || 0;
-            const fusionScore = ALPHA_DENSE * chunkData.denseScore + (1 - ALPHA_DENSE) * sparseNorm;
-            fusedResults.push({
-                ...chunkData,
-                score: chunkData.denseScore,
-                fusionScore
-            });
-        }
+// Pure ranking core, decoupled from any DB fetch. Given an already-embedded query
+// vector and a list of candidate chunks (each carrying its own vector, either from
+// the DB or freshly embedded in memory), score by cosine, fuse with the optional
+// sparse map, prune by the strictness floor, and return the top k. This is the
+// single fusion path shared by single-owner, multi-owner (cross-chapter), and the
+// in-memory volatile-chapter searches.
+function fuseAndRank(queryVector, candidates, sparseNormMap, threshold = 0.3, k = 5) {
+    const cosineFloor = SIMILARITY_FLOOR_MIN + threshold * (SIMILARITY_FLOOR_MAX - SIMILARITY_FLOOR_MIN);
 
-        // Item 2: a single honest cutoff. The Similarity Threshold now prunes by real
-        // cosine similarity across ALL results — dense and sparse-only alike — closing
-        // the BM25 noise leak (keyword-only matches with low similarity no longer enter).
-        const pruned = fusedResults
-            .filter(r => r.denseScore >= cosineFloor)
-            .sort((a, b) => b.fusionScore - a.fusionScore);
+    const fusedResults = [];
+    for (const cand of candidates) {
+        const vector = cand.vector || [];
+        const cosine = vector.length === queryVector.length
+            ? calculateSimilarity(queryVector, vector)
+            : 0;
+        const sparseNorm = (sparseNormMap && sparseNormMap.get(cand.id)) || 0;
+        const fusionScore = ALPHA_DENSE * cosine + (1 - ALPHA_DENSE) * sparseNorm;
+        fusedResults.push({
+            id: cand.id,
+            source: cand.source,
+            text: cand.text,
+            createdAt: cand.createdAt,
+            denseScore: cosine,
+            score: cosine,
+            fusionScore
+        });
+    }
 
-        return pruned.slice(0, k);
+    return fusedResults
+        .filter(r => r.denseScore >= cosineFloor)
+        .sort((a, b) => b.fusionScore - a.fusionScore)
+        .slice(0, k);
+}
 
+// Load enabled candidate chunks for the given owners and parse their vectors once.
+function loadOwnerCandidates(ownerIds, ownerType) {
+    if (!ownerIds || ownerIds.length === 0) return [];
+    const placeholders = ownerIds.map(() => '?').join(', ');
+    const rows = db.prepare(
+        `SELECT * FROM knowledge_chunks WHERE ownerType = ? AND enabled = 1 AND ownerId IN (${placeholders})`
+    ).all(ownerType, ...ownerIds);
+    return rows.map(row => {
+        let vector = [];
+        try { vector = JSON.parse(row.vector); } catch (e) { }
+        return { id: row.id, source: row.source, text: row.text, createdAt: row.createdAt, vector };
+    });
+}
+
+async function executeHybridSearch(queryText, ownerId, ownerType, threshold = 0.3, k = 5) {
+    try {
+        const candidates = loadOwnerCandidates([ownerId], ownerType);
+        if (candidates.length === 0) return [];
+        const queryVector = await generateEmbeddingVector(queryText, true);
+        const sparseNormMap = computeSparseNormMap(queryText);
+        return fuseAndRank(queryVector, candidates, sparseNormMap, threshold, k);
     } catch (error) {
         console.error(`Error in executeHybridSearch for owner ${ownerId}:`, error);
+        return [];
+    }
+}
+
+// Cross-owner retrieval: pool the chunks of several owners (e.g. the neighbor
+// chapters of a Writing Desk document), embed the query once, and fuse over the
+// whole pool. Used by the Writing Desk so a select->invoke can reach other
+// chapters without re-embedding the query per owner.
+async function executeMultiOwnerSearch(queryText, ownerIds, ownerType, threshold = 0.3, k = 5) {
+    try {
+        const candidates = loadOwnerCandidates(ownerIds, ownerType);
+        if (candidates.length === 0) return [];
+        const queryVector = await generateEmbeddingVector(queryText, true);
+        const sparseNormMap = computeSparseNormMap(queryText);
+        return fuseAndRank(queryVector, candidates, sparseNormMap, threshold, k);
+    } catch (error) {
+        console.error(`Error in executeMultiOwnerSearch for owners [${(ownerIds || []).join(',')}]:`, error);
         return [];
     }
 }
@@ -530,6 +555,9 @@ module.exports = {
     searchKnowledgeBase,
     searchChatKnowledgeBase,
     searchChatMemories,
+    executeHybridSearch,
+    executeMultiOwnerSearch,
+    fuseAndRank,
     saveChatMemory,
     isLocalEngineInstalled,
     findNodeBinary,

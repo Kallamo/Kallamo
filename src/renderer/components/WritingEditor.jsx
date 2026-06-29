@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useReducer } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
+import { getHTMLFromFragment } from '@tiptap/core';
 import {
   Bold, Italic, Underline, Strikethrough, Heading1, Heading2, Heading3, List, ListOrdered,
   Quote, Palette, FileOutput, ChevronDown, Search, Check, Table as TableIcon,
@@ -12,7 +13,14 @@ import ColorPicker from './ui/ColorPicker';
 import Button from './ui/Button';
 import WritingPageModal from './WritingPageModal';
 import ExportModal from './ExportModal';
-import { getEditorExtensions, estimatePagesFromWords } from './writingExtensions';
+import { InvokeModal } from './WritingInvocation';
+import { Sparkles, X, Loader2 } from 'lucide-react';
+import { DecorationSet } from '@tiptap/pm/view';
+import {
+  getEditorExtensions, estimatePagesFromWords,
+  suggestionKey, buildSuggestionDecorations, suggestionCharDelta,
+  selectionHasTable, sliceToMarkdown, proposalToHtml,
+} from './writingExtensions';
 
 export const PAPER_THEMES = [
   { label: 'Light', color: '#ffffff' },
@@ -604,15 +612,27 @@ function countWords(text) {
   return t ? t.split(/\s+/).length : 0;
 }
 
-export default function WritingEditor({ doc, electronAPI, toolbarMode = 'fixed', smartTypography = true, onDocPatch, onRename }) {
+export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight = false, pending = null, onDispatch, onResolved, toolbarMode = 'fixed', smartTypography = true, onDocPatch, onRename }) {
   const saveTimer = useRef(null);
   const [counts, setCounts] = useState({ words: 0, chars: 0 });
   const [showExport, setShowExport] = useState(false);
   const [showPageSetup, setShowPageSetup] = useState(false);
   const [title, setTitle] = useState(doc.title);
+  // AI select->invoke. inFlight + pending are owned by the parent view (they must
+  // survive this editor remounting on chapter switch); the editor only renders them.
+  const [profiles, setProfiles] = useState([]);
+  const [invokeData, setInvokeData] = useState(null); // captured selection for the modal
+  const [stale, setStale] = useState(false);
+  const locked = inFlight || !!pending;
   const pageConfig = pageConfigFromDoc(doc);
 
   useEffect(() => { setTitle(doc.title); }, [doc.id]);
+
+  useEffect(() => {
+    let active = true;
+    electronAPI.getWritingProfiles?.().then(list => { if (active) setProfiles(list || []); });
+    return () => { active = false; };
+  }, [electronAPI]);
 
   let initialContent;
   try {
@@ -656,6 +676,99 @@ export default function WritingEditor({ doc, electronAPI, toolbarMode = 'fixed',
       }
     };
   }, [doc.id, editor]);
+
+  // Lock the chapter while a request is in flight or a suggestion awaits a decision,
+  // so the user can't edit text the suggestion is anchored to.
+  useEffect(() => {
+    if (editor) editor.setEditable(!locked);
+  }, [editor, locked]);
+
+  // Paint (or clear) the inline red/green track-changes for the pending suggestion.
+  // Also validate the suggestion still anchors to unchanged text before allowing Accept.
+  useEffect(() => {
+    if (!editor) return;
+    let decos = DecorationSet.empty;
+    let isStale = false;
+    if (pending && pending.channel !== 'analysis') {
+      const current = editor.state.doc.textBetween(pending.fromPos, pending.toPos, '\n');
+      isStale = current !== (pending.originalText || '');
+      if (!isStale) {
+        const proposedHtml = proposalToHtml(editor, pending.proposedText || '');
+        decos = buildSuggestionDecorations(editor.state.doc, { ...pending, proposedHtml });
+      }
+    }
+    setStale(isStale);
+    editor.view.dispatch(editor.state.tr.setMeta(suggestionKey, decos));
+  }, [editor, pending]);
+
+  const openInvoke = () => {
+    if (!editor || locked) return;
+    const { from, to } = editor.state.selection;
+    if (from === to) return;
+    const selection = editor.state.doc.textBetween(from, to, '\n');
+    // Markdown is the interchange so the AI reliably preserves bold/italic/headings/
+    // lists. Tables mangle in Markdown, so a table selection falls back to HTML.
+    const useHtml = selectionHasTable(editor, from, to);
+    const format = useHtml ? 'html' : 'markdown';
+    const spanContent = useHtml
+      ? getHTMLFromFragment(editor.state.doc.slice(from, to).content, editor.schema)
+      : sliceToMarkdown(editor, from, to);
+    const before = editor.state.doc.textBetween(0, from, '\n');
+    const after = editor.state.doc.textBetween(to, editor.state.doc.content.size, '\n');
+    setInvokeData({ from, to, selection, spanContent, format, before, after });
+  };
+
+  const submitInvoke = async (profileId, intermediatePrompt) => {
+    if (!invokeData) return;
+    const payload = {
+      documentId: doc.id,
+      workspaceId,
+      before: invokeData.before,
+      selection: invokeData.selection,
+      spanContent: invokeData.spanContent,
+      format: invokeData.format,
+      after: invokeData.after,
+      fromPos: invokeData.from,
+      toPos: invokeData.to,
+      profileId,
+      intermediatePrompt,
+    };
+    setInvokeData(null);
+    onDispatch?.(doc.id);
+    const res = await electronAPI.invokeWritingDesk(payload);
+    if (res && res.error) {
+      onResolved?.(doc.id); // clear the in-flight marker the dispatch set
+      alert(res.error);
+    }
+  };
+
+  const acceptSuggestion = async () => {
+    if (!editor || !pending || stale) return;
+    // setEditable is NOT a chain command, so it must run before the chain (calling it
+    // inside .chain() silently aborts the whole chain — the accept-does-nothing bug).
+    editor.setEditable(true);
+    editor.view.dispatch(editor.state.tr.setMeta(suggestionKey, DecorationSet.empty));
+    // proposedText is Markdown (or HTML for the table fallback); insertContentAt parses
+    // it, so the proposal lands with its formatting (bold/italic/headings/lists) intact.
+    const content = pending.proposedText || '';
+    if (pending.channel === 'insertion') {
+      editor.chain().focus().insertContentAt(pending.toPos, content).run();
+    } else {
+      editor.chain().focus().insertContentAt({ from: pending.fromPos, to: pending.toPos }, content).run();
+    }
+    electronAPI.saveDocumentContent(doc.id, JSON.stringify(editor.getJSON()));
+    await electronAPI.resolvePendingSuggestion(pending.id);
+    onResolved?.(doc.id);
+  };
+
+  const rejectSuggestion = async () => {
+    if (!pending) return;
+    if (editor) editor.view.dispatch(editor.state.tr.setMeta(suggestionKey, DecorationSet.empty));
+    await electronAPI.resolvePendingSuggestion(pending.id);
+    onResolved?.(doc.id);
+  };
+
+  const delta = pending ? suggestionCharDelta(pending) : { added: 0, removed: 0 };
 
   // Text color adapts to the paper so it stays readable on any sheet color.
   const effectiveBg = pageConfig.sheetColor || '#ffffff';
@@ -739,10 +852,88 @@ export default function WritingEditor({ doc, electronAPI, toolbarMode = 'fixed',
 
       {editor && <TableBubble editor={editor} />}
 
-      <div className="flex-1 overflow-y-auto custom-scrollbar py-8 px-4">
-        <div className="mx-auto relative rounded-xl shadow-xl ring-1 ring-black/10" style={sheetStyle}>
-          <EditorContent editor={editor} />
+      {editor && (
+        <BubbleMenu
+          editor={editor}
+          pluginKey="invokeBubble"
+          shouldShow={({ state }) => !state.selection.empty && !locked}
+          options={{ placement: 'bottom' }}
+          className="flex items-center"
+        >
+          <button
+            type="button"
+            onClick={openInvoke}
+            className="flex items-center gap-1.5 bg-accent text-white text-xs font-medium rounded-lg px-2.5 py-1.5 shadow-xl hover:brightness-110 cursor-pointer"
+          >
+            <Sparkles className="w-3.5 h-3.5" /> Invoke AI
+          </button>
+        </BubbleMenu>
+      )}
+
+      {invokeData && (
+        <InvokeModal
+          selection={invokeData.selection}
+          profiles={profiles}
+          onSubmit={submitInvoke}
+          onClose={() => setInvokeData(null)}
+        />
+      )}
+
+      {/* Persistent loading notice — driven by the parent so it survives leaving and
+          returning to this chapter while the AI is still running. */}
+      {inFlight && (
+        <div className="flex items-center gap-2 px-5 py-2 border-b border-gray-800/80 bg-accent/10 text-xs text-accent shrink-0">
+          <Loader2 className="w-3.5 h-3.5 animate-spin" /> AI is working on this chapter… you can keep writing in other chapters.
         </div>
+      )}
+
+      <div className="flex-1 overflow-y-auto custom-scrollbar py-8 px-4">
+        <div className={`mx-auto relative rounded-xl shadow-xl ring-1 ring-black/10 ${locked ? 'wd-sheet-locked' : ''}`} style={sheetStyle}>
+          <EditorContent editor={editor} />
+
+          {/* While in flight: gray the page out and block clicks, so it reads as locked. */}
+          {inFlight && (
+            <div className="absolute inset-0 rounded-xl bg-gray-600/40 flex items-center justify-center cursor-not-allowed" style={{ backdropFilter: 'grayscale(0.85)' }}>
+              <div className="flex items-center gap-2 bg-[#0a161d] text-accent text-xs font-medium px-3 py-2 rounded-lg shadow-2xl">
+                <Loader2 className="w-4 h-4 animate-spin" /> AI is rewriting your selection…
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Floating review controls — counter + Accept/Reject pinned over the page. */}
+        {pending && pending.channel !== 'analysis' && (
+          <div className="sticky bottom-4 z-20 flex justify-center pointer-events-none">
+            <div className="pointer-events-auto flex items-center gap-2 bg-[#0a161d]/95 border border-gray-800 rounded-full shadow-2xl px-3 py-1.5">
+              <span className="flex items-center gap-1.5 text-[11px] tabular-nums pr-1 border-r border-gray-800">
+                <Sparkles className="w-3.5 h-3.5 text-accent" />
+                {stale
+                  ? <span className="text-red-400">text changed — reject</span>
+                  : <span><span className="text-emerald-400">+{delta.added}</span> / <span className="text-red-400">−{delta.removed}</span></span>}
+              </span>
+              <button onClick={rejectSuggestion} className="flex items-center gap-1 text-xs text-gray-300 hover:text-white px-2 py-1 rounded-full hover:bg-white/5 cursor-pointer">
+                <X className="w-3.5 h-3.5" /> Reject
+              </button>
+              <button onClick={acceptSuggestion} disabled={stale} className="flex items-center gap-1 text-xs font-medium bg-accent text-[#011419] px-2.5 py-1 rounded-full hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer">
+                <Check className="w-3.5 h-3.5" /> Accept
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Analysis channel: a read-only side note (no inline diff). */}
+        {pending && pending.channel === 'analysis' && (
+          <div className="sticky bottom-4 z-20 mx-auto max-w-2xl pointer-events-none">
+            <div className="pointer-events-auto bg-[#0a161d]/97 border border-gray-800 rounded-xl shadow-2xl p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Sparkles className="w-4 h-4 text-accent" />
+                <span className="text-xs font-semibold text-gray-300">AI note</span>
+                <button onClick={rejectSuggestion} className="ml-auto p-1 text-gray-500 hover:text-white cursor-pointer"><X className="w-4 h-4" /></button>
+              </div>
+              <div className="text-sm text-gray-300 whitespace-pre-wrap max-h-48 overflow-y-auto custom-scrollbar">{pending.proposedText}</div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Status bar: live word/char count + per-chapter word goal */}

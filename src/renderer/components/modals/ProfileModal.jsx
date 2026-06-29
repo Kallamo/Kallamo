@@ -34,6 +34,8 @@ export default function ProfileModal({ profile, initialStep = 1, onClose, onSave
   const [isAgentic, setIsAgentic] = useState(false);
   const [agenticPrompt, setAgenticPrompt] = useState('');
   const [agenticMaxTurns, setAgenticMaxTurns] = useState(3);
+  const [resultChannel, setResultChannel] = useState('replacement');
+  const [contextWindow, setContextWindow] = useState(8192);
 
   const [isProcessingKb, setIsProcessingKb] = useState(false);
   const [kbProgress, setKbProgress] = useState('');
@@ -85,6 +87,8 @@ export default function ProfileModal({ profile, initialStep = 1, onClose, onSave
           ? Math.min(5, Math.max(1, profile.agenticMaxTurns))
           : 3
       );
+      setResultChannel(profile.resultChannel || 'replacement');
+      setContextWindow(Number.isInteger(profile.contextWindow) ? profile.contextWindow : 8192);
     }
   }, [profile]);
 
@@ -381,6 +385,8 @@ export default function ProfileModal({ profile, initialStep = 1, onClose, onSave
       isAgentic: isAgentic ? 1 : 0,
       agenticPrompt: agenticPrompt.trim(),
       agenticMaxTurns: agenticMaxTurns,
+      resultChannel: resultChannel,
+      contextWindow: Number(contextWindow) || 8192,
       syncToCloud: profile?.syncToCloud ?? 0
     };
 
@@ -877,6 +883,47 @@ export default function ProfileModal({ profile, initialStep = 1, onClose, onSave
                       ? `${Math.round(totalSize / 1024)} KB`
                       : `${(totalSize / (1024 * 1024)).toFixed(1)} MB`
                     }
+                  </div>
+                </div>
+
+                {/* Writing Desk Section */}
+                <div className="flex flex-col">
+                  <div className="flex justify-between items-end mb-3 border-b border-gray-800 pb-2">
+                    <h3 className="text-sm font-bold text-accent uppercase tracking-wider">Writing Desk</h3>
+                  </div>
+                  <div className="bg-[#051116] border border-gray-800/80 rounded-lg p-5 flex flex-col gap-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <span className="text-sm font-bold text-gray-200">Result channel</span>
+                        <p className="caption leading-tight mt-0.5">How a select→invoke result is applied: Replacement rewrites the span (green/red diff), Insertion adds new prose (green only), Analysis returns a read-only side note.</p>
+                      </div>
+                      <div className="flex bg-[#011419] p-0.5 rounded-lg border border-gray-800 text-xs shrink-0">
+                        {['replacement', 'insertion', 'analysis'].map((ch) => (
+                          <button
+                            key={ch}
+                            type="button"
+                            onClick={() => setResultChannel(ch)}
+                            className={`px-2.5 py-1 rounded-md capitalize transition-colors cursor-pointer ${resultChannel === ch ? 'bg-accent text-[#011419] font-medium' : 'text-gray-400 hover:text-gray-200'}`}
+                          >
+                            {ch}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="min-w-0">
+                        <span className="text-sm font-bold text-gray-200">Context window</span>
+                        <p className="caption leading-tight mt-0.5">Token budget used to decide whole-chapter vs window+RAG. Err low; default 8192.</p>
+                      </div>
+                      <input
+                        type="number"
+                        min="1024"
+                        step="1024"
+                        value={contextWindow}
+                        onChange={(e) => setContextWindow(parseInt(e.target.value, 10) || 8192)}
+                        className="w-28 bg-[#011419] text-gray-200 rounded-md px-2 py-1.5 border border-gray-800 focus:outline-none focus:border-accent text-right shrink-0"
+                      />
+                    </div>
                   </div>
                 </div>
 

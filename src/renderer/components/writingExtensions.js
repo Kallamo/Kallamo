@@ -6,6 +6,9 @@ import { TableKit } from '@tiptap/extension-table';
 import Typography from '@tiptap/extension-typography';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
+import { Fragment } from '@tiptap/pm/model';
+import { Markdown } from 'tiptap-markdown';
+import { diffWords } from 'diff';
 
 // Keep the selection visible when focus leaves the editor for a toolbar input.
 // The native highlight moves away, so the range is painted with a decoration
@@ -99,6 +102,97 @@ export const CellBackground = Extension.create({
   },
 });
 
+// --- AI SELECT->INVOKE: inline suggestion overlay ---
+// Non-destructive track-changes painted with ProseMirror decorations: the original
+// text stays in the doc, removed parts get a red strikethrough inline decoration,
+// and added parts are green widget spans. Accept/Reject mutate the doc afterwards.
+export const suggestionKey = new PluginKey('wdSuggestion');
+export const SuggestionDecorations = Extension.create({
+  name: 'wdSuggestion',
+  addProseMirrorPlugins() {
+    return [new Plugin({
+      key: suggestionKey,
+      state: {
+        init: () => DecorationSet.empty,
+        apply(tr, old) {
+          const meta = tr.getMeta(suggestionKey);
+          if (meta !== undefined) return meta || DecorationSet.empty;
+          return old.map(tr.mapping, tr.doc);
+        },
+      },
+      props: { decorations(state) { return suggestionKey.getState(state); } },
+    })];
+  },
+});
+
+// Strip anything executable from model-produced HTML before rendering it.
+function sanitizeHtml(html) {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = String(html || '');
+  tmp.querySelectorAll('script, style').forEach(n => n.remove());
+  tmp.querySelectorAll('*').forEach(el => {
+    [...el.attributes].forEach(a => { if (/^on/i.test(a.name) || a.name === 'srcdoc') el.removeAttribute(a.name); });
+  });
+  return tmp.innerHTML;
+}
+
+// Green block holding the full proposal as HTML (so bold/italic/headings/lists in
+// the AI output are previewed faithfully), rendered right after the original span.
+// Block-level, not interleaved per word, so paragraph breaks can't desync it.
+function addedBlock(pos, html, channel) {
+  return Decoration.widget(pos, () => {
+    const wrap = document.createElement('div');
+    wrap.className = 'wd-diff-block-added';
+    wrap.setAttribute('contenteditable', 'false');
+    if (channel !== 'insertion') {
+      const tag = document.createElement('div');
+      tag.className = 'wd-diff-block-tag';
+      tag.textContent = 'Suggested replacement';
+      wrap.appendChild(tag);
+    }
+    const body = document.createElement('div');
+    body.innerHTML = sanitizeHtml(html);
+    wrap.appendChild(body);
+    return wrap;
+  }, { side: 1, key: `addblk-${pos}-${String(html).length}` });
+}
+
+// Build the decoration set for a pending suggestion (replacement/insertion):
+// the whole original span struck through in red, the full proposal in a green
+// block below it. No per-word mapping, so paragraph breaks can't desync it.
+export function buildSuggestionDecorations(doc, suggestion) {
+  if (!suggestion || suggestion.channel === 'analysis') return DecorationSet.empty;
+  const { fromPos, toPos } = suggestion;
+  const decos = [];
+  if (suggestion.channel !== 'insertion' && toPos > fromPos) {
+    decos.push(Decoration.inline(fromPos, toPos, { class: 'wd-diff-removed' }));
+  }
+  // proposedHtml is pre-rendered by the editor (proposalToHtml); fall back to raw text.
+  decos.push(addedBlock(toPos, suggestion.proposedHtml || suggestion.proposedText || '', suggestion.channel));
+  return DecorationSet.create(doc, decos);
+}
+
+// Plain text of HTML, for char counting (the proposal is HTML, the original plain).
+function htmlToPlain(html) {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = String(html || '');
+  return tmp.textContent || '';
+}
+
+// Character +added / -removed counts for the floating counter (metric in chars).
+export function suggestionCharDelta(suggestion) {
+  if (!suggestion) return { added: 0, removed: 0 };
+  const proposedPlain = htmlToPlain(suggestion.proposedText || '');
+  if (suggestion.channel === 'insertion') return { added: proposedPlain.length, removed: 0 };
+  const parts = diffWords(suggestion.originalText || '', proposedPlain);
+  let added = 0, removed = 0;
+  for (const p of parts) {
+    if (p.added) added += p.value.length;
+    else if (p.removed) removed += p.value.length;
+  }
+  return { added, removed };
+}
+
 // Single source of truth for the editor schema. Shared between the live editor
 // (useEditor) and offline conversions like generateJSON() for rich imports, so
 // imported content is parsed against exactly the marks/nodes the editor renders.
@@ -129,10 +223,48 @@ const SmartDashes = Extension.create({
 // Document-only — never touches chat. Typography's own immediate `--`→— rule is
 // disabled in favor of SmartDashes.
 export function getEditorExtensions({ smartTypography = true } = {}) {
-  const base = [...writingExtensions, PersistSelection];
+  const base = [
+    ...writingExtensions, PersistSelection, SuggestionDecorations,
+    // Markdown is the interchange format for AI invocations: the model reads + writes
+    // Markdown (which it does far more reliably than HTML). html:true lets the table
+    // fallback pass raw HTML through. Copy/paste behavior is left untouched.
+    Markdown.configure({ html: true, tightLists: true, transformPastedText: false, transformCopiedText: false }),
+  ];
   return smartTypography
     ? [...base, Typography.configure({ emDash: false }), SmartDashes]
     : base;
+}
+
+// True if the selection [from,to] contains a table — markdown serialization mangles
+// rich tables, so those invocations fall back to the HTML round-trip.
+export function selectionHasTable(editor, from, to) {
+  let found = false;
+  editor.state.doc.nodesBetween(from, to, (node) => {
+    if (node.type.name === 'table') found = true;
+  });
+  return found;
+}
+
+// Serialize the selection to Markdown. Inline-only slices are wrapped in a paragraph
+// so they form a valid doc for the serializer.
+export function sliceToMarkdown(editor, from, to) {
+  let fragment = editor.state.doc.slice(from, to).content;
+  const first = fragment.firstChild;
+  if (first && !first.isBlock) {
+    fragment = Fragment.from(editor.schema.nodes.paragraph.create(null, fragment));
+  }
+  const docNode = editor.schema.topNodeType.create(null, fragment);
+  return editor.storage.markdown.serializer.serialize(docNode).trim();
+}
+
+// Render an AI proposal (Markdown, or HTML for the table fallback) to HTML for the
+// green preview block. The markdown parser passes HTML through when html:true.
+export function proposalToHtml(editor, text) {
+  try {
+    return editor.storage.markdown.parser.parse(text || '');
+  } catch (e) {
+    return '';
+  }
 }
 
 function escapeHtml(s) {

@@ -372,7 +372,7 @@ ipcMain.handle('save-writing-profile', async (event, profile) => {
         UPDATE writing_profiles SET
           name = ?, description = ?, color = ?, apiProfileId = ?, model = ?, temperature = ?, maxTokens = ?,
           systemPrompt = ?, knowledgeFiles = ?, manualMode = ?, manualJson = ?, isAgentic = ?, agenticPrompt = ?,
-          agenticMaxTurns = ?, syncToCloud = ?
+          agenticMaxTurns = ?, resultChannel = ?, contextWindow = ?, syncToCloud = ?
         WHERE id = ?
       `);
       update.run(
@@ -390,6 +390,8 @@ ipcMain.handle('save-writing-profile', async (event, profile) => {
         profile.isAgentic ? 1 : 0,
         profile.agenticPrompt || '',
         profile.agenticMaxTurns ?? 3,
+        profile.resultChannel || 'replacement',
+        profile.contextWindow ?? 8192,
         profile.syncToCloud ?? 0,
         profile.id
       );
@@ -397,8 +399,9 @@ ipcMain.handle('save-writing-profile', async (event, profile) => {
       const insert = db.prepare(`
         INSERT INTO writing_profiles (
           id, name, description, color, apiProfileId, model, temperature, maxTokens,
-          systemPrompt, knowledgeFiles, manualMode, manualJson, isAgentic, agenticPrompt, agenticMaxTurns, syncToCloud
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          systemPrompt, knowledgeFiles, manualMode, manualJson, isAgentic, agenticPrompt, agenticMaxTurns,
+          resultChannel, contextWindow, syncToCloud
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       insert.run(
         profile.id,
@@ -416,6 +419,8 @@ ipcMain.handle('save-writing-profile', async (event, profile) => {
         profile.isAgentic ? 1 : 0,
         profile.agenticPrompt || '',
         profile.agenticMaxTurns ?? 3,
+        profile.resultChannel || 'replacement',
+        profile.contextWindow ?? 8192,
         profile.syncToCloud ?? 0
       );
     }
@@ -2239,6 +2244,114 @@ ipcMain.handle('save-document-page', async (event, { id, page }) => {
   const setClause = keys.map(k => `${k} = ?`).join(', ');
   const vals = keys.map(k => page[k]);
   db.prepare(`UPDATE documents SET ${setClause}, last_modified = ? WHERE id = ?`).run(...vals, Date.now(), id);
+  return { success: true };
+});
+
+// --- WRITING DESK: AI select->invoke ---
+
+// A single invocation may be in flight at a time (one-at-a-time lock). Main owns the
+// authoritative flag so the renderer can't double-dispatch across sub-tab switches.
+let wdInFlight = null;
+
+function broadcast(channel, payload) {
+  const wins = BrowserWindow.getAllWindows();
+  if (wins.length > 0) wins[0].webContents.send(channel, payload);
+}
+
+// Run a select->invoke detached: returns immediately with an invocationId, then
+// emits 'wd-invocation-complete' when the model returns. The result is persisted to
+// pending_suggestions so it survives leaving/reopening the workspace.
+ipcMain.handle('invoke-writing-desk', async (event, payload) => {
+  if (wdInFlight) {
+    return { error: 'An AI suggestion is already in progress. Resolve it before starting another.' };
+  }
+  const invocationId = `wdi_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  wdInFlight = invocationId;
+
+  const { runWritingDeskInvocation } = require('./writing-desk-invocation');
+
+  (async () => {
+    try {
+      const result = await runWritingDeskInvocation(payload);
+      const id = `psug_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      db.prepare(`
+        INSERT INTO pending_suggestions
+          (id, documentId, workspaceId, channel, fromPos, toPos, originalText, proposedText, profileId, intermediatePrompt, status, createdAt, last_modified)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        id, payload.documentId, payload.workspaceId, result.channel,
+        result.fromPos, result.toPos, payload.selection || '', result.proposedText || '',
+        payload.profileId, payload.intermediatePrompt || '', result.status || 'ok',
+        Date.now(), Date.now()
+      );
+      broadcast('wd-invocation-complete', {
+        invocationId, suggestionId: id, documentId: payload.documentId,
+        workspaceId: payload.workspaceId, channel: result.channel, status: result.status
+      });
+    } catch (e) {
+      console.error('[Writing Desk] invocation failed:', e);
+      broadcast('wd-invocation-complete', {
+        invocationId, documentId: payload.documentId,
+        workspaceId: payload.workspaceId, error: e.message
+      });
+    } finally {
+      wdInFlight = null;
+    }
+  })();
+
+  return { invocationId };
+});
+
+ipcMain.handle('wd-invocation-status', async () => ({ inFlight: wdInFlight }));
+
+ipcMain.handle('get-pending-suggestion', async (event, { documentId }) => {
+  const row = db.prepare(
+    "SELECT * FROM pending_suggestions WHERE documentId = ? AND status != 'resolved' ORDER BY createdAt DESC LIMIT 1"
+  ).get(documentId);
+  return { suggestion: row || null };
+});
+
+ipcMain.handle('resolve-pending-suggestion', async (event, { id }) => {
+  db.prepare('DELETE FROM pending_suggestions WHERE id = ?').run(id);
+  return { success: true };
+});
+
+// Document ids in this workspace that currently hold an unresolved suggestion,
+// used to mark the sidebar chapter rows.
+ipcMain.handle('get-pending-suggestion-ids', async (event, { workspaceId }) => {
+  const rows = db.prepare(
+    "SELECT DISTINCT documentId FROM pending_suggestions WHERE workspaceId = ? AND status != 'resolved'"
+  ).all(workspaceId);
+  return { ids: rows.map(r => r.documentId) };
+});
+
+// --- WRITING DESK: pinned directives (always-on instructions per workspace) ---
+
+ipcMain.handle('get-directives', async (event, { workspaceId }) => {
+  const rows = db.prepare(
+    'SELECT * FROM pinned_directives WHERE workspaceId = ? ORDER BY position, createdAt'
+  ).all(workspaceId);
+  return { directives: rows };
+});
+
+ipcMain.handle('add-directive', async (event, { workspaceId, type, text, sourceMessageId }) => {
+  const id = `dir_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const max = db.prepare('SELECT MAX(position) AS m FROM pinned_directives WHERE workspaceId = ?').get(workspaceId);
+  const position = (max && max.m != null ? max.m : -1) + 1;
+  db.prepare(`
+    INSERT INTO pinned_directives (id, workspaceId, type, text, sourceMessageId, position, createdAt, last_modified)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, workspaceId, type || 'typed', text, sourceMessageId || null, position, Date.now(), Date.now());
+  return { id };
+});
+
+ipcMain.handle('update-directive', async (event, { id, text }) => {
+  db.prepare('UPDATE pinned_directives SET text = ?, last_modified = ? WHERE id = ?').run(text, Date.now(), id);
+  return { success: true };
+});
+
+ipcMain.handle('delete-directive', async (event, { id }) => {
+  db.prepare('DELETE FROM pinned_directives WHERE id = ?').run(id);
   return { success: true };
 });
 

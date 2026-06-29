@@ -7,7 +7,7 @@ import ConfirmDialog from './ui/ConfirmDialog';
 import {
   Folder, FolderPlus, FilePlus, Upload, ChevronRight, ChevronDown,
   FileText, Trash2, FolderInput, PenLine, Download,
-  PanelLeftClose, PanelLeftOpen
+  PanelLeftClose, PanelLeftOpen, Loader2, Sparkles
 } from 'lucide-react';
 
 export default function WritingDeskView({ chat, electronAPI }) {
@@ -55,6 +55,55 @@ export default function WritingDeskView({ chat, electronAPI }) {
     electronAPI.getDocument(selectedDocId).then(d => { if (active) setCurrentDoc(d); });
     return () => { active = false; };
   }, [selectedDocId, electronAPI]);
+
+  // AI select->invoke state lives HERE (above the editor, which remounts per chapter)
+  // so the loading notice, lock, and sidebar markers survive switching chapters.
+  const [inFlight, setInFlight] = useState({});       // { [docId]: true } while running
+  const [pendingIds, setPendingIds] = useState(new Set()); // docs with a ready suggestion
+  const [currentPending, setCurrentPending] = useState(null); // full suggestion for open doc
+
+  // Which chapters hold an unresolved suggestion (drives the sidebar "ready" dot).
+  useEffect(() => {
+    let active = true;
+    electronAPI.getPendingSuggestionIds?.(workspaceId).then(res => {
+      if (active && res) setPendingIds(new Set(res.ids || []));
+    });
+    return () => { active = false; };
+  }, [electronAPI, workspaceId]);
+
+  // Load the full pending suggestion for the chapter currently open.
+  useEffect(() => {
+    if (!selectedDocId) { setCurrentPending(null); return; }
+    let active = true;
+    electronAPI.getPendingSuggestion?.(selectedDocId).then(res => {
+      if (active) setCurrentPending(res && res.suggestion ? res.suggestion : null);
+    });
+    return () => { active = false; };
+  }, [selectedDocId, electronAPI]);
+
+  // Single subscription to invocation completion (survives chapter switches).
+  useEffect(() => {
+    if (!electronAPI.onWdInvocationComplete) return;
+    const off = electronAPI.onWdInvocationComplete((data) => {
+      if (data.workspaceId && data.workspaceId !== workspaceId) return;
+      setInFlight(prev => { const n = { ...prev }; delete n[data.documentId]; return n; });
+      if (data.error) { showToast?.(`AI invocation failed: ${data.error}`, 'error'); return; }
+      setPendingIds(prev => new Set(prev).add(data.documentId));
+      if (data.documentId === selectedDocId) {
+        electronAPI.getPendingSuggestion(data.documentId).then(res => {
+          setCurrentPending(res && res.suggestion ? res.suggestion : null);
+        });
+      }
+    });
+    return off;
+  }, [electronAPI, workspaceId, selectedDocId, showToast]);
+
+  const handleDispatch = (docId) => setInFlight(prev => ({ ...prev, [docId]: true }));
+  const handleResolved = (docId) => {
+    setInFlight(prev => { const n = { ...prev }; delete n[docId]; return n; });
+    setPendingIds(prev => { const n = new Set(prev); n.delete(docId); return n; });
+    if (docId === selectedDocId) setCurrentPending(null);
+  };
 
   const newDocument = async (folderId = null) => {
     const doc = await electronAPI.createDocument(workspaceId, folderId, 'Untitled', null, DEFAULT_WRITING_DESK);
@@ -293,6 +342,12 @@ export default function WritingDeskView({ chat, electronAPI }) {
       {dropLine(doc, 'after')}
       <FileText className="w-3.5 h-3.5 shrink-0" />
       {editingId === doc.id ? renderEditable({ ...doc, type: 'document' }) : <span className="truncate">{doc.title}</span>}
+      {inFlight[doc.id] && (
+        <Loader2 title="AI is working on this chapter" className="w-3.5 h-3.5 shrink-0 text-accent animate-spin" />
+      )}
+      {!inFlight[doc.id] && pendingIds.has(doc.id) && (
+        <Sparkles title="AI suggestion ready" className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
+      )}
       <ItemActions item={{ ...doc, type: 'document', name: doc.title }} />
       {moveMenuId === doc.id && <MoveMenu item={{ ...doc, type: 'document' }} />}
     </div>
@@ -349,6 +404,11 @@ export default function WritingDeskView({ chat, electronAPI }) {
             key={currentDoc.id}
             doc={currentDoc}
             electronAPI={electronAPI}
+            workspaceId={workspaceId}
+            inFlight={!!inFlight[currentDoc.id]}
+            pending={currentPending && currentPending.documentId === currentDoc.id ? currentPending : null}
+            onDispatch={handleDispatch}
+            onResolved={handleResolved}
             toolbarMode={toolbarMode}
             smartTypography={smartTypography}
             onDocPatch={onDocPatch}
