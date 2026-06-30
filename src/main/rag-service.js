@@ -386,7 +386,7 @@ function computeSparseNormMap(queryText) {
 // sparse map, prune by the strictness floor, and return the top k. This is the
 // single fusion path shared by single-owner, multi-owner (cross-chapter), and the
 // in-memory volatile-chapter searches.
-function fuseAndRank(queryVector, candidates, sparseNormMap, threshold = 0.3, k = 5) {
+function fuseAndRank(queryVector, candidates, sparseNormMap, threshold = 0.3, k = 5, boostMap = null) {
     const cosineFloor = SIMILARITY_FLOOR_MIN + threshold * (SIMILARITY_FLOOR_MAX - SIMILARITY_FLOOR_MIN);
 
     const fusedResults = [];
@@ -396,7 +396,10 @@ function fuseAndRank(queryVector, candidates, sparseNormMap, threshold = 0.3, k 
             ? calculateSimilarity(queryVector, vector)
             : 0;
         const sparseNorm = (sparseNormMap && sparseNormMap.get(cand.id)) || 0;
-        const fusionScore = ALPHA_DENSE * cosine + (1 - ALPHA_DENSE) * sparseNorm;
+        // Dynamic-tag boost: a fixed bonus when the chunk carries a tag the query
+        // mentions. Added on top of fusion — never rescues a chunk below the floor.
+        const boost = (boostMap && boostMap.get(cand.id)) || 0;
+        const fusionScore = ALPHA_DENSE * cosine + (1 - ALPHA_DENSE) * sparseNorm + boost;
         fusedResults.push({
             id: cand.id,
             source: cand.source,
@@ -404,7 +407,8 @@ function fuseAndRank(queryVector, candidates, sparseNormMap, threshold = 0.3, k 
             createdAt: cand.createdAt,
             denseScore: cosine,
             score: cosine,
-            fusionScore
+            fusionScore,
+            tagBoosted: boost > 0
         });
     }
 
@@ -412,6 +416,65 @@ function fuseAndRank(queryVector, candidates, sparseNormMap, threshold = 0.3, k 
         .filter(r => r.denseScore >= cosineFloor)
         .sort((a, b) => b.fusionScore - a.fusionScore)
         .slice(0, k);
+}
+
+// Fixed bonus added to a chunk's fusion score when the query mentions one of its
+// dynamic tags. Small relative to the cosine band (~0.70–0.90) so it reorders within
+// the surviving set without swamping semantic similarity. Tuned at runtime.
+const TAG_BOOST = 0.05;
+
+// Whole-word containment of `term` in `queryLower`, delimited by non-letter/digit on
+// both sides (Unicode-aware, so accented names work). Avoids a short term like "Ana"
+// matching inside "banana".
+function containsWord(queryLower, term) {
+    if (!term || term.length < 2) return false;
+    const isWord = (ch) => ch !== undefined && /[\p{L}\p{N}]/u.test(ch);
+    let from = 0;
+    while (true) {
+        const i = queryLower.indexOf(term, from);
+        if (i === -1) return false;
+        const before = i > 0 ? queryLower[i - 1] : undefined;
+        const after = i + term.length < queryLower.length ? queryLower[i + term.length] : undefined;
+        if (!isWord(before) && !isWord(after)) return true;
+        from = i + 1;
+    }
+}
+
+// A tag value "mentions" the query when the query contains the whole value OR any of
+// its distinctive tokens (>=4 letters, so honorifics/particles like "de"/"o"/"da"
+// are skipped). This tolerates name variants until the canonical entity registry
+// (Worldbuild tab) makes tag values consistent: tag "Capitã Seraphina Valois" still
+// matches a query that only says "Seraphina Valois".
+function queryMentions(queryLower, needleLower) {
+    if (!needleLower || needleLower.length < 2) return false;
+    if (containsWord(queryLower, needleLower)) return true;
+    const tokens = needleLower.split(/[^\p{L}\p{N}]+/u).filter(t => t.length >= 4);
+    for (const t of tokens) {
+        if (containsWord(queryLower, t)) return true;
+    }
+    return false;
+}
+
+// Build chunkId -> boost map for an owner: load the owner's tag vocabulary (entity
+// values, falling back to tag names) and flag every chunk whose tag the query
+// mentions. Fixed boost per chunk (decision: not scaled by match count).
+function computeTagBoostMap(queryText, ownerId, ownerType) {
+    const q = String(queryText || '').toLowerCase();
+    const boost = new Map();
+    if (!q.trim()) return boost;
+    let rows = [];
+    try {
+        rows = db.prepare(
+            `SELECT ct.chunkId AS chunkId, ct.tag AS tag, ct.entity AS entity
+             FROM chunk_tags ct JOIN knowledge_chunks kc ON ct.chunkId = kc.id
+             WHERE kc.ownerId = ? AND kc.ownerType = ?`
+        ).all(ownerId, ownerType);
+    } catch (e) { return boost; }
+    for (const r of rows) {
+        const needle = String(r.entity || r.tag || '').toLowerCase().trim();
+        if (queryMentions(q, needle)) boost.set(r.chunkId, TAG_BOOST);
+    }
+    return boost;
 }
 
 // Load enabled candidate chunks for the given owners and parse their vectors once.
@@ -428,13 +491,14 @@ function loadOwnerCandidates(ownerIds, ownerType) {
     });
 }
 
-async function executeHybridSearch(queryText, ownerId, ownerType, threshold = 0.3, k = 5) {
+async function executeHybridSearch(queryText, ownerId, ownerType, threshold = 0.3, k = 5, applyTagBoost = false) {
     try {
         const candidates = loadOwnerCandidates([ownerId], ownerType);
         if (candidates.length === 0) return [];
         const queryVector = await generateEmbeddingVector(queryText, true);
         const sparseNormMap = computeSparseNormMap(queryText);
-        return fuseAndRank(queryVector, candidates, sparseNormMap, threshold, k);
+        const boostMap = applyTagBoost ? computeTagBoostMap(queryText, ownerId, ownerType) : null;
+        return fuseAndRank(queryVector, candidates, sparseNormMap, threshold, k, boostMap);
     } catch (error) {
         console.error(`Error in executeHybridSearch for owner ${ownerId}:`, error);
         return [];
@@ -500,7 +564,14 @@ async function searchChatMemories(queryText, chatId) {
         }
     } catch (e) { }
 
-    return await executeHybridSearch(queryText, chatId, 'chat_memory', threshold, k);
+    // Chat memory is the world-indexed tier: enable the dynamic-tag boost.
+    const results = await executeHybridSearch(queryText, chatId, 'chat_memory', threshold, k, true);
+    // Attach each surviving chunk's tags for debug visibility (which tags it carries).
+    try {
+        const tagStmt = db.prepare('SELECT tag, entity FROM chunk_tags WHERE chunkId = ?');
+        for (const r of results) r.tags = tagStmt.all(r.id);
+    } catch (e) { }
+    return results;
 }
 
 async function saveChatMemory(title, summary, chatId) {
@@ -549,64 +620,6 @@ function tagChunks(chunkIds, tags) {
     })();
 }
 
-// Phase-0 structured memory: store the segment's overview (the summary, broad recall)
-// plus the AI-extracted atomic items (precise recall), each as its own vectorized
-// chunk. The stored `text` stays clean so generation never sees tags; only the
-// embedding input is tag-enriched to nudge the vector. Tags live in chunk_tags.
-async function saveStructuredMemory({ ownerId, ownerType, title, summary, items = [] }) {
-    const insertChunk = db.prepare(`
-        INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, tokenCount)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    const deleteFts = db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId = ?');
-    const insertFts = db.prepare('INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text) VALUES (?, ?)');
-    const insertTag = db.prepare('INSERT OR IGNORE INTO chunk_tags (chunkId, tag, entity) VALUES (?, ?, ?)');
-
-    const stamp = Date.now();
-    const rand = () => Math.random().toString(36).slice(2, 7);
-    const rows = [];
-
-    // Overview chunk = the summary, tagged Chat.
-    if (summary && summary.trim()) {
-        const text = `Memory Context [${title}]: ${summary.trim()}`;
-        rows.push({ id: `mem_${stamp}_ov_${rand()}`, text, embedInput: text, tags: [{ tag: 'Chat', entity: null }] });
-    }
-
-    // Item chunks = one per atomic item. The tag prefix shapes the vector only.
-    for (let i = 0; i < (items || []).length; i++) {
-        const it = items[i];
-        const itemText = (it && it.text ? String(it.text) : '').trim();
-        if (!itemText) continue;
-        const seen = new Set();
-        const tags = (Array.isArray(it.tags) ? it.tags : [])
-            .filter(t => t && t.tag)
-            .map(t => ({ tag: String(t.tag), entity: t.entity ? String(t.entity) : null }))
-            .filter(t => { const k = `${t.tag}|${t.entity || ''}`; if (seen.has(k)) return false; seen.add(k); return true; });
-        const prefix = tags.map(t => `[${t.tag}${t.entity ? ':' + t.entity : ''}]`).join('');
-        rows.push({
-            id: `mem_${stamp}_it${i}_${rand()}`,
-            text: itemText,
-            embedInput: prefix ? `${prefix} ${itemText}` : itemText,
-            tags,
-        });
-    }
-
-    for (const r of rows) {
-        r.vector = await generateEmbeddingVector(r.embedInput);
-        r.tokenCount = countTokens(r.text);
-    }
-
-    db.transaction(() => {
-        for (const r of rows) {
-            insertChunk.run(r.id, ownerId, ownerType, title, r.text, JSON.stringify(r.vector), Date.now(), r.tokenCount);
-            deleteFts.run(r.id);
-            insertFts.run(r.id, r.text);
-            for (const t of r.tags) insertTag.run(r.id, t.tag, t.entity || null);
-        }
-    })();
-
-    return rows.map(r => ({ id: r.id, text: r.text, tags: r.tags }));
-}
 
 // --- EXPORTS ---
 
@@ -629,7 +642,6 @@ module.exports = {
     executeMultiOwnerSearch,
     fuseAndRank,
     saveChatMemory,
-    saveStructuredMemory,
     tagChunks,
     isLocalEngineInstalled,
     findNodeBinary,

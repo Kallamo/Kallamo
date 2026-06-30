@@ -18,9 +18,7 @@ const {
     extractTextFromFile,
     chunkText,
     vectorizeChunks,
-    insertChunksToDb,
-    saveStructuredMemory,
-    tagChunks
+    insertChunksToDb
 } = require('./rag-service');
 
 let activeRun = null;
@@ -36,7 +34,11 @@ function formatRagDebugSection(label, resultObjs) {
         const cosine = typeof r.score === 'number' ? r.score : fusion;
         const scoreLabel = `fusion ${fusion.toFixed(4)} | cos ${cosine.toFixed(4)}`;
         const fullText = (r.text || '').trim();
-        return `${idx + 1}. [${r.source}] (${scoreLabel})\n${fullText}`;
+        const tagStr = Array.isArray(r.tags) && r.tags.length
+            ? ` {${r.tags.map(t => t.entity ? `${t.tag}=${t.entity}` : t.tag).join(', ')}}`
+            : '';
+        const boostMark = r.tagBoosted ? ' ⤴boost' : '';
+        return `${idx + 1}. [${r.source}]${tagStr}${boostMark} (${scoreLabel})\n${fullText}`;
     });
     return `${label} (${resultObjs.length}):\n${lines.join('\n\n')}\n`;
 }
@@ -805,38 +807,37 @@ function safeParseArray(body) {
     } catch (e) { return []; }
 }
 
-// Keep only items with text and tags that exist in the vocabulary (create-off:
-// unknown tags are dropped). entity is kept only for tags marked isEntity.
-function validateItems(arr, vocab) {
-    const byName = new Map(vocab.map(t => [t.name.toLowerCase(), t]));
+// Validate the per-chunk tag array from the classifier. Keep only known categories
+// and in-range chunk indices; explode each category's value list into {tag, value}
+// pairs (create-off: unknown categories dropped). Returns [{chunkIndex, tags:[{tag,value}]}].
+function validateChunkTags(arr, categories, chunkCount) {
+    const byName = new Map(categories.map(c => [c.name.toLowerCase(), c.name]));
     const out = [];
-    for (const it of arr) {
-        const text = it && it.text ? String(it.text).trim() : '';
-        if (!text) continue;
+    for (const entry of (Array.isArray(arr) ? arr : [])) {
+        if (!entry || typeof entry !== 'object') continue;
+        const idx = Number(entry.chunk);
+        if (!Number.isInteger(idx) || idx < 0 || idx >= chunkCount) continue;
         const tags = [];
-        const rawTags = Array.isArray(it.tags) ? it.tags : [];
-        for (const rt of rawTags) {
-            const name = typeof rt === 'string' ? rt : (rt && rt.tag);
+        for (const rt of (Array.isArray(entry.tags) ? entry.tags : [])) {
+            const name = byName.get(String(rt && rt.tag || '').toLowerCase());
             if (!name) continue;
-            const known = byName.get(String(name).toLowerCase());
-            if (!known) continue;
-            const entity = known.isEntity && rt && rt.entity && String(rt.entity).toLowerCase() !== 'null'
-                ? String(rt.entity).trim() : null;
-            tags.push({ tag: known.name, entity: entity || null });
+            const values = Array.isArray(rt.values) ? rt.values : (rt.value ? [rt.value] : []);
+            for (const v of values) {
+                const val = String(v == null ? '' : v).trim();
+                if (val && val.toLowerCase() !== 'null') tags.push({ tag: name, value: val });
+            }
         }
-        out.push({ text, tags });
+        if (tags.length) out.push({ chunkIndex: idx, tags });
     }
     return out;
 }
 
-// Split the model reply into title + summary (the pre-fence head) and the
-// validated items (the fenced JSON). Tolerant to a missing/garbled fence.
-function parseMemoryResponse(response, fence, vocab) {
+// Split the model reply into title + summary (the pre-fence head) and the raw body
+// (the fenced JSON, or any trailing array if the fence is missing). Tolerant.
+function splitHeadAndBody(response, fence) {
     const raw = String(response || '');
     const openIdx = raw.indexOf(fence.open);
 
-    // Body = inside the fence when present; otherwise fall back to any JSON array in
-    // the reply, so a model that ignores the exact markers still gets parsed.
     let body = '';
     let headEnd;
     if (openIdx !== -1) {
@@ -858,13 +859,9 @@ function parseMemoryResponse(response, fence, vocab) {
         title = lines[0].substring(6).trim() || title;
         summary = lines.slice(1).join('\n').trim();
     }
-
-    const items = validateItems(safeParseArray(body), vocab);
-    return { title, summary, items };
+    return { title, summary, body };
 }
 
-// Run the ride-along classifier on a raw segment: returns the title, summary, and
-// validated atomic items. Shared by live archiving and the debug regenerate button.
 // The designated System AI (api profile + model) for background tasks, read from
 // global settings. Null when unset → callers fall back to the active profile.
 function getSystemAi() {
@@ -878,99 +875,146 @@ function getSystemAi() {
     return null;
 }
 
-async function classifyArchiveSegment(rawTextToArchive, profile) {
+// World-index pass: ONE System-AI call over a segment's numbered raw chunks. Returns
+// the block's title + summary AND the per-chunk dynamic tags (which named entities,
+// under which variable category, appear in each chunk). Variable categories = the
+// entity-bearing vocabulary; their descriptions are the classifier criteria.
+async function classifyAndTagSegment(chunkRecords, profile) {
     let title = 'Archived Memory';
     let summary = '';
-    let items = [];
+    let chunkTags = [];
 
-    // System AI overrides the writing profile for this background task; fall back to
-    // the active profile when none is configured.
     const systemAi = getSystemAi();
-    if (!profile && !systemAi) return { title, summary, items };
+    if (!profile && !systemAi) return { title, summary, chunkTags };
     const apiProfileId = systemAi ? systemAi.apiProfileId : profile.apiProfileId;
     const model = systemAi ? systemAi.model : profile.model;
     const manualMode = systemAi ? false : (profile && profile.manualMode === 1);
     const manualJson = systemAi ? null : (profile && profile.manualJson);
-    const debug = { usedSystemAi: !!systemAi, apiProfileId, model, fenceFound: false, parsedItems: 0, rawSnippet: '', error: null };
 
-    // The vocabulary's descriptions ARE the classifier criteria. Empty (no tags
-    // seeded) degrades gracefully to a plain summary.
-    let tagVocab = [];
-    try { tagVocab = db.prepare('SELECT name, description, isEntity FROM tags').all(); } catch (e) { tagVocab = []; }
+    let categories = [];
+    try { categories = db.prepare('SELECT name, description FROM tags WHERE isEntity = 1').all(); } catch (e) { categories = []; }
 
+    const numbered = chunkRecords.map((c, i) => `[CHUNK ${i}]\n${c.text}`).join('\n\n');
+    const catLines = categories.length
+        ? categories.map(c => `- ${c.name}: ${c.description}`).join('\n')
+        : '- Characters: People, beings, or named agents present in the scene.';
     const fence = buildItemsFence();
-    const vocabLines = tagVocab.length
-        ? tagVocab.map(t => `- ${t.name}${t.isEntity ? ' (entity)' : ''}: ${t.description}`).join('\n')
-        : '- Chat: General context.';
     const systemPrompt =
-        "You are an assistant that summarizes and indexes a conversation segment.\n" +
-        "First line MUST be 'TITLE: [3-word title]'. Then write a 2-sentence summary of what the segment is about.\n" +
-        "After the summary, extract the salient atomic memory items: one fact or entity per item, each a short standalone statement. " +
-        "Classify each item with one or more tags chosen ONLY from this fixed vocabulary:\n" +
-        vocabLines + "\n" +
-        "For a tag marked (entity), set \"entity\" to the specific instance; otherwise set \"entity\" to null. " +
-        "Output the items as a JSON array wrapped exactly once in " + fence.open + " and " + fence.close + ", " +
-        "each element {\"text\": \"...\", \"tags\": [{\"tag\": \"<TagName>\", \"entity\": \"<instance or null>\"}]}. " +
-        "If there are no salient items, output an empty array. Write nothing after the closing marker.";
+        "You index a conversation segment that is split into numbered chunks.\n" +
+        "First line MUST be 'TITLE: [3-word title]'. Then write a 2-sentence summary of the whole segment.\n" +
+        "Then, for EACH chunk, list the specific NAMED entities that actually appear in it, grouped under these categories:\n" +
+        catLines + "\n" +
+        "Use ONLY these category names; skip a category when it has no named instance in that chunk. " +
+        "Output a JSON array wrapped exactly once in " + fence.open + " and " + fence.close + ", " +
+        "one element per chunk that has any entity: {\"chunk\": <number>, \"tags\": [{\"tag\": \"<Category>\", \"values\": [\"<name>\", ...]}]}. " +
+        "Write nothing after the closing marker.";
     try {
         const response = await sendApiRequest({
-            apiProfileId: apiProfileId,
-            model: model,
-            systemPrompt: systemPrompt,
+            apiProfileId, model, systemPrompt,
             chatHistory: [],
-            newPrompt: rawTextToArchive,
-            temperature: 0.5,
-            maxTokens: 900,
-            manualMode: manualMode,
-            manualJson: manualJson
+            newPrompt: numbered,
+            temperature: 0.3,
+            maxTokens: 1200,
+            manualMode, manualJson
         });
-        debug.rawSnippet = String(response || '').slice(0, 1200);
-        debug.fenceFound = String(response || '').includes(fence.open);
-        // TEMP debug: see exactly what the model returned and how the parse went.
-        console.log('[Structured Memory][raw response]\n' + debug.rawSnippet);
-        console.log(`[Structured Memory] fence open ${debug.fenceFound ? 'FOUND' : 'MISSING'} (${fence.open})`);
-        const parsed = parseMemoryResponse(response, fence, tagVocab);
-        debug.parsedItems = parsed.items.length;
-        console.log(`[Structured Memory] parsed ${parsed.items.length} item(s)`);
-        title = parsed.title || title;
-        summary = parsed.summary || response.trim();
-        items = parsed.items;
+        const head = splitHeadAndBody(response, fence);
+        title = head.title || title;
+        summary = head.summary || String(response || '').trim();
+        chunkTags = validateChunkTags(safeParseArray(head.body), categories, chunkRecords.length);
     } catch (e) {
-        debug.error = e.message;
-        console.error("Summary card generation failed:", e);
+        console.error("[World Index] classify+tag failed:", e);
     }
-    return { title, summary, items, debug };
+    return { title, summary, chunkTags };
 }
 
-// TEMP/debug: re-run the classifier + structured storage for an existing summarized
-// block, without creating a new block or moving summarizedIndex. Idempotent: clears
-// this block's prior structured chunks (source = title) before re-storing.
-async function regenerateStructuredMemoryForBlock({ chatId, blockId, profileId }) {
-    const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
-    if (!chat) throw new Error('Chat not found');
-    let memoryBlocks = [];
-    if (chat.memoryBlocks) memoryBlocks = typeof chat.memoryBlocks === 'string' ? JSON.parse(chat.memoryBlocks) : chat.memoryBlocks;
-    const block = (memoryBlocks || []).find(b => b.id === blockId);
-    if (!block) throw new Error('Memory block not found');
-    const selectedMessages = block.messages || [];
-    if (!selectedMessages.length) throw new Error('This block has no stored messages to re-summarize');
+// Persist the validated per-chunk tags into chunk_tags, mapping the classifier's
+// chunk index back to the real stored chunk id. Variable tags: tag=category,
+// entity=value. Runs in one transaction; never throws on a bad index.
+function applyChunkTags(chunkTags, chunkRecords) {
+    if (!Array.isArray(chunkTags) || !chunkTags.length) return 0;
+    const insert = db.prepare('INSERT OR IGNORE INTO chunk_tags (chunkId, tag, entity) VALUES (?, ?, ?)');
+    let rows = 0;
+    db.transaction(() => {
+        for (const entry of chunkTags) {
+            const rec = chunkRecords[entry.chunkIndex];
+            if (!rec || !rec.id) continue;
+            for (const t of entry.tags) { insert.run(rec.id, t.tag, t.value); rows++; }
+        }
+    })();
+    return rows;
+}
 
-    const rawTextToArchive = selectedMessages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
-    const profile = (profileId && db.prepare('SELECT * FROM writing_profiles WHERE id = ?').get(profileId))
-        || db.prepare('SELECT * FROM writing_profiles LIMIT 1').get();
+// Backfill the world index over a chat's already-archived raw chunks (or all chats
+// when chatId is null). These predate the per-chunk tagger, so they carry no tags.
+// Batches the chunks through ONE System-AI call each (tagging only — no title/
+// summary) and writes chunk_tags. INSERT OR IGNORE keeps re-runs from duplicating.
+async function backfillWorldIndex(chatId = null, { batchSize = 12 } = {}) {
+    const profile = db.prepare('SELECT * FROM writing_profiles LIMIT 1').get();
+    const systemAi = getSystemAi();
+    if (!profile && !systemAi) throw new Error('No System AI or writing profile configured');
+    const apiProfileId = systemAi ? systemAi.apiProfileId : profile.apiProfileId;
+    const model = systemAi ? systemAi.model : profile.model;
+    const manualMode = systemAi ? false : (profile && profile.manualMode === 1);
+    const manualJson = systemAi ? null : (profile && profile.manualJson);
 
-    const cls = await classifyArchiveSegment(rawTextToArchive, profile);
-    const title = block.title || cls.title || 'Archived Memory';
-    const summary = cls.summary || block.summary || '';
+    let categories = [];
+    try { categories = db.prepare('SELECT name, description FROM tags WHERE isEntity = 1').all(); } catch (e) { categories = []; }
+    if (!categories.length) throw new Error('No entity tag categories seeded');
+    const catLines = categories.map(c => `- ${c.name}: ${c.description}`).join('\n');
 
-    // Clear this block's prior structured chunks so repeated clicks don't pile up.
-    // The AFTER DELETE trigger drops their chunk_tags; sweep orphaned FTS rows too.
-    db.prepare("DELETE FROM knowledge_chunks WHERE ownerId = ? AND ownerType = 'chat_memory' AND source = ?").run(chatId, title);
-    db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId NOT IN (SELECT id FROM knowledge_chunks)').run();
+    // Skip chunks that already have tags so re-runs only fill the gaps (e.g. a tail
+    // dropped by a rate-limit) instead of re-calling the model for everything.
+    const where = chatId
+        ? "kc.ownerId = ? AND kc.ownerType = 'chat_memory' AND kc.source = 'Chat Archive'"
+        : "kc.ownerType = 'chat_memory' AND kc.source = 'Chat Archive'";
+    const sql = `SELECT kc.id, kc.text FROM knowledge_chunks kc WHERE ${where}
+                 AND NOT EXISTS (SELECT 1 FROM chunk_tags ct WHERE ct.chunkId = kc.id)
+                 ORDER BY kc.createdAt ASC`;
+    const chunks = chatId ? db.prepare(sql).all(chatId) : db.prepare(sql).all();
+    if (!chunks.length) return { chunks: 0, batches: 0, tagged: 0 };
 
-    const stored = await saveStructuredMemory({ ownerId: chatId, ownerType: 'chat_memory', title, summary, items: cls.items });
-    console.log(`[Structured Memory][regen] block "${title}": ${cls.items.length} item(s), ${stored.length} chunk(s) stored.`);
-    return { title, items: cls.items.length, chunks: stored.length, debug: cls.debug };
+    // Retry on provider rate-limits (Bedrock "Too many requests") with exponential
+    // backoff so the run completes instead of dropping batches.
+    const callWithRetry = async (payload, tries = 5) => {
+        let delay = 2000;
+        for (let attempt = 1; attempt <= tries; attempt++) {
+            try {
+                return await sendApiRequest(payload);
+            } catch (e) {
+                const msg = String((e && e.message) || e);
+                const rateLimited = /too many requests|rate.?limit|429|throttl/i.test(msg);
+                if (attempt === tries || !rateLimited) throw e;
+                await new Promise(r => setTimeout(r, delay));
+                delay = Math.min(delay * 2, 30000);
+            }
+        }
+    };
+
+    let tagged = 0, batches = 0;
+    for (let i = 0; i < chunks.length; i += batchSize) {
+        if (i > 0) await new Promise(r => setTimeout(r, 600)); // gentle pacing between batches
+        const batch = chunks.slice(i, i + batchSize);
+        const numbered = batch.map((c, idx) => `[CHUNK ${idx}]\n${c.text}`).join('\n\n');
+        const fence = buildItemsFence();
+        const systemPrompt =
+            "You index conversation chunks. For EACH numbered chunk, list the specific NAMED entities present, grouped under these categories:\n" +
+            catLines + "\n" +
+            "Use ONLY these category names; skip a category with no named instance in that chunk. " +
+            "Output ONLY a JSON array wrapped exactly once in " + fence.open + " and " + fence.close + ", " +
+            "one element per chunk that has any entity: {\"chunk\": <number>, \"tags\": [{\"tag\": \"<Category>\", \"values\": [\"<name>\", ...]}]}. " +
+            "Write nothing else.";
+        try {
+            const response = await callWithRetry({ apiProfileId, model, systemPrompt, chatHistory: [], newPrompt: numbered, temperature: 0.3, maxTokens: 1500, manualMode, manualJson });
+            const head = splitHeadAndBody(response, fence);
+            const chunkTags = validateChunkTags(safeParseArray(head.body), categories, batch.length);
+            tagged += applyChunkTags(chunkTags, batch);
+        } catch (e) {
+            console.error(`[World Index][backfill] batch ${batches} failed:`, e.message);
+        }
+        batches++;
+        console.log(`[World Index][backfill] batch ${batches}: ${Math.min(i + batchSize, chunks.length)}/${chunks.length} chunks, ${tagged} tag row(s) so far.`);
+    }
+    return { chunks: chunks.length, batches, tagged };
 }
 
 async function executeSummarizationInternal({ chatId, selectedMessages, newSummarizedIndex, customTitle, profileId }) {
@@ -987,27 +1031,26 @@ async function executeSummarizationInternal({ chatId, selectedMessages, newSumma
     const profile = db.prepare('SELECT * FROM writing_profiles WHERE id = ?').get(profileId) || db.prepare('SELECT * FROM writing_profiles LIMIT 1').get();
     let title = customTitle || "Archived Memory";
     let summary = "Archived conversation context.";
-    let items = [];
 
-    const cls = await classifyArchiveSegment(rawTextToArchive, profile);
-    if (!customTitle && cls.title) title = cls.title;
-    if (cls.summary) summary = cls.summary;
-    items = cls.items;
-
-    // Persist summarized vectors to SQLite so they're searchable (verbatim tier)
+    // Persist the raw chunks first so they have ids to tag (verbatim tier).
     try {
         insertChunksToDb(chatId, 'chat_memory', vectors);
     } catch (dbErr) {
         console.error("Failed to insert summarized vectors to SQLite:", dbErr);
     }
 
-    // Structured memory (overview + atomic items). Never blocks archiving: a bad
-    // classification just means no item chunks for this segment.
+    // World index: one System-AI pass tags each raw chunk (who/what) and gives the
+    // block its title + summary. Never blocks archiving — a failed pass just leaves
+    // the chunks untagged.
     try {
-        const stored = await saveStructuredMemory({ ownerId: chatId, ownerType: 'chat_memory', title, summary, items });
-        console.log(`[Structured Memory] segment "${title}": ${items.length} item(s) extracted, ${stored.length} chunk(s) stored.`);
+        const chunkRecords = vectors.map(v => ({ id: v.id, text: v.text }));
+        const cls = await classifyAndTagSegment(chunkRecords, profile);
+        if (!customTitle && cls.title) title = cls.title;
+        if (cls.summary) summary = cls.summary;
+        const tagged = applyChunkTags(cls.chunkTags, chunkRecords);
+        console.log(`[World Index] segment "${title}": ${cls.chunkTags.length}/${chunkRecords.length} chunk(s) tagged, ${tagged} tag row(s).`);
     } catch (smErr) {
-        console.error("[Structured Memory] storage failed (archiving continues):", smErr);
+        console.error("[World Index] tagging failed (archiving continues):", smErr);
     }
 
     let memoryBlocks = [];
@@ -1566,6 +1609,6 @@ module.exports = {
     resolveErrorDeferred,
     resolveOverflowDeferred,
     executeSummarizationInternal,
-    regenerateStructuredMemoryForBlock,
+    backfillWorldIndex,
     checkAndAutoSummarize
 };

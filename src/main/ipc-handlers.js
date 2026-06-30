@@ -2358,16 +2358,15 @@ ipcMain.handle('update-directive', async (event, { id, text }) => {
   return { success: true };
 });
 
-// TEMP/debug: re-run summarization + structured extraction for an existing memory
-// block (no new block, no index change), so Phase-0 extraction can be tested on
-// already-archived segments.
-ipcMain.handle('debug-regenerate-memory-block', async (event, { chatId, blockId, profileId }) => {
+// World-index backfill: tag a chat's (or all chats') already-archived raw chunks
+// that predate the per-chunk tagger. Returns counts.
+ipcMain.handle('backfill-world-index', async (event, { chatId }) => {
   try {
-    const { regenerateStructuredMemoryForBlock } = require('./workflow-runner');
-    const res = await regenerateStructuredMemoryForBlock({ chatId, blockId, profileId });
+    const { backfillWorldIndex } = require('./workflow-runner');
+    const res = await backfillWorldIndex(chatId || null);
     return { success: true, ...res };
   } catch (e) {
-    console.error('[debug-regenerate-memory-block] failed:', e);
+    console.error('[backfill-world-index] failed:', e);
     return { success: false, error: e.message };
   }
 });

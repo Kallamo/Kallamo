@@ -647,7 +647,9 @@ try {
   const seedTag = db.prepare("INSERT OR IGNORE INTO tags (name, description, isEntity, createdAt, last_modified) VALUES (?, ?, ?, ?, ?)");
   const now = Date.now();
   const defaultTags = [
-    ["Characters", "People, beings, or named agents and what is true about them.", 1],
+    ["Characters", "People, beings, or named agents present in the scene.", 1],
+    ["Factions", "Organized groups present or referenced: guilds, houses, orders, nations, companies, teams.", 1],
+    ["Items", "Notable objects in play: weapons, artifacts, tools, documents, substances.", 1],
     ["Planning", "Decisions, goals, deadlines, tasks, and who is responsible for them.", 0],
     ["Chat", "General context: what a conversation segment is broadly about.", 0],
   ];

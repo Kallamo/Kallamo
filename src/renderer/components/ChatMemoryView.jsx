@@ -53,41 +53,30 @@ export default function ChatMemoryView({
   const [editorTitle, setEditorTitle] = useState('');
   const [editorText, setEditorText] = useState('');
   const [savingSnippet, setSavingSnippet] = useState(false);
-  const [regeneratingId, setRegeneratingId] = useState(null);
+  const [indexing, setIndexing] = useState(false);
 
-  // TEMP/debug: re-run summarization + structured extraction for an archived block.
-  // Renderer-side logs so progress shows in DevTools (the main-process
-  // [Structured Memory] log only shows in the Electron terminal/stdout).
-  const handleRegenerateBlock = async (block) => {
-    console.log('[Regenerate] clicked for block', block.id, block.title);
-    if (typeof electronAPI?.debugRegenerateMemoryBlock !== 'function') {
-      console.error('[Regenerate] electronAPI.debugRegenerateMemoryBlock is missing — restart the Electron app fully (not just the renderer).');
-      showToast('Regenerate unavailable — fully restart the app (close + reopen Electron).', 'error');
+  // World-index backfill: tag this chat's already-archived raw chunks so the dynamic-
+  // tag boost has something to match. One-shot; safe to re-run (INSERT OR IGNORE).
+  const handleIndexMemories = async () => {
+    if (typeof electronAPI?.backfillWorldIndex !== 'function') {
+      showToast('Indexing unavailable — fully restart the app (close + reopen Electron).', 'error');
       return;
     }
-    setRegeneratingId(block.id);
+    setIndexing(true);
     try {
-      let active = chat?.activeProfiles;
-      if (typeof active === 'string') { try { active = JSON.parse(active); } catch (e) { active = []; } }
-      const profileId = (Array.isArray(active) && active[0]) || writingProfiles?.[0]?.id || null;
-      console.log('[Regenerate] invoking with profileId', profileId);
-      const res = await electronAPI.debugRegenerateMemoryBlock(chat.id, block.id, profileId);
-      console.log('[Regenerate] result', res);
+      const res = await electronAPI.backfillWorldIndex(chat.id);
       if (res?.success) {
-        const d = res.debug || {};
-        if (res.items === 0) {
-          showToast(`0 items. model=${d.model || '?'} · fence=${d.fenceFound ? 'found' : 'MISSING'}${d.error ? ' · err=' + d.error : ''}`, 'error');
-        } else {
-          showToast(`Regenerated "${res.title}": ${res.items} item(s), ${res.chunks} chunk(s).`, 'success');
-        }
-      } else showToast(`Regenerate failed: ${res?.error || 'unknown'}`, 'error');
+        showToast(`Indexed ${res.chunks} chunk(s) in ${res.batches} batch(es) → ${res.tagged} tag(s).`, 'success');
+      } else {
+        showToast(`Indexing failed: ${res?.error || 'unknown'}`, 'error');
+      }
     } catch (e) {
-      console.error('[Regenerate] threw', e);
-      showToast(`Regenerate failed: ${e.message}`, 'error');
+      showToast(`Indexing failed: ${e.message}`, 'error');
     } finally {
-      setRegeneratingId(null);
+      setIndexing(false);
     }
   };
+
   const [editorError, setEditorError] = useState('');
 
   const [editorKeywords, setEditorKeywords] = useState([]);
@@ -1157,19 +1146,6 @@ export default function ChatMemoryView({
                   {/* Actions overlay panel right side */}
                   <div className="absolute top-4 right-4 flex items-center space-x-2 select-none" onClick={(e) => e.stopPropagation()}>
 
-                    {/* TEMP: regenerate summary + structured memory for this archived block */}
-                    {block.type === 'summarized' && (
-                      <button
-                        onClick={() => handleRegenerateBlock(block)}
-                        disabled={regeneratingId === block.id}
-                        title="TEMP: regenerate summary + structured memory for this block"
-                        className="text-[9px] font-bold tracking-wider px-2 py-1 border border-amber-500/40 text-amber-400 rounded-lg hover:bg-amber-500/10 transition-colors cursor-pointer disabled:opacity-50 flex items-center gap-1"
-                      >
-                        {regeneratingId === block.id ? <Loader className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
-                        Regenerate
-                      </button>
-                    )}
-
                     {/* Enable/disable switch (everything except history summaries) */}
                     {block.type !== 'summarized' && (
                       <Toggle
@@ -1326,6 +1302,16 @@ export default function ChatMemoryView({
           <p className="caption">
             Test how the AI retrieves memories. Type a phrase or prompt below to run a local vector similarity match.
           </p>
+
+          <button
+            onClick={handleIndexMemories}
+            disabled={indexing}
+            title="Tag this chat's archived memories so the AI can recall them by character, faction, and item."
+            className="text-[10px] font-bold tracking-wider px-2.5 py-1.5 border border-accent/40 text-accent rounded-lg hover:bg-accent/10 transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
+          >
+            {indexing ? <Loader className="w-3 h-3 animate-spin" /> : <Brain className="w-3 h-3" />}
+            {indexing ? 'Indexing memories…' : "Index this chat's memories"}
+          </button>
 
           <div className="flex flex-col space-y-2.5">
             {/* AI Profile Selector */}
