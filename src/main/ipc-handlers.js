@@ -2233,8 +2233,19 @@ ipcMain.handle('delete-document', async (event, { id }) => {
 
 ipcMain.handle('save-document-content', async (event, { id, content }) => {
   const now = Date.now();
-  db.prepare('UPDATE documents SET content = ?, updatedAt = ?, vectorized = 0, last_modified = ? WHERE id = ?')
-    .run(content, now, now, id);
+  // Only a genuine content change invalidates the chapter's vector index. An
+  // idempotent save (identical content — e.g. a spurious onUpdate on load, or a
+  // flush on page switch with no edits) must keep vectorized intact, so the indexed
+  // state survives navigating between chapters.
+  const row = db.prepare('SELECT content FROM documents WHERE id = ?').get(id);
+  const changed = !row || row.content !== content;
+  if (changed) {
+    db.prepare('UPDATE documents SET content = ?, updatedAt = ?, vectorized = 0, last_modified = ? WHERE id = ?')
+      .run(content, now, now, id);
+  } else {
+    db.prepare('UPDATE documents SET updatedAt = ?, last_modified = ? WHERE id = ?')
+      .run(now, now, id);
+  }
   return { success: true, updatedAt: now };
 });
 
@@ -2361,6 +2372,34 @@ ipcMain.handle('update-directive', async (event, { id, text }) => {
 
 // World-index backfill: tag a chat's (or all chats') already-archived raw chunks
 // that predate the per-chunk tagger. Returns counts.
+// User-triggered chapter vectorization. Incremental by content hash (see
+// vectorizeDocument): only new/changed blocks are embedded + tagged, so re-running
+// after a small edit is cheap. Emits progress to the caller's window.
+ipcMain.handle('vectorize-document', async (event, { documentId }) => {
+  try {
+    const { vectorizeDocument } = require('./workflow-runner');
+    const res = await vectorizeDocument(documentId, (p) => {
+      try { event.sender.send('vectorize-document-progress', { documentId, ...p }); } catch (e) {}
+    });
+    return { success: true, ...res };
+  } catch (e) {
+    console.error('[vectorize-document] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+// Truth-based index status for the editor's indicator: compares current chapter text
+// against its stored chunk hashes (not the mutable vectorized flag).
+ipcMain.handle('get-document-vector-status', (event, { documentId }) => {
+  try {
+    const { computeDocumentVectorStatus } = require('./workflow-runner');
+    return { success: true, status: computeDocumentVectorStatus(documentId) };
+  } catch (e) {
+    console.error('[get-document-vector-status] failed:', e);
+    return { success: false, error: e.message, status: 'stale' };
+  }
+});
+
 ipcMain.handle('backfill-world-index', async (event, { chatId }) => {
   try {
     const { backfillWorldIndex } = require('./workflow-runner');

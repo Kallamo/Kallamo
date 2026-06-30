@@ -650,6 +650,17 @@ try {
     db.exec("ALTER TABLE knowledge_chunks ADD COLUMN manuallyEdited INTEGER DEFAULT 0");
     console.log("Database Migration: Added manuallyEdited column to knowledge_chunks table.");
   }
+  // content_hash identifies a chunk by its text so document re-vectorization can diff
+  // by content (not position): an unchanged chunk keeps its vector + tags untouched.
+  // ordinal preserves the chunk's order within its owner for context reconstruction.
+  if (!kcColumns.includes('content_hash')) {
+    db.exec("ALTER TABLE knowledge_chunks ADD COLUMN content_hash TEXT");
+    console.log("Database Migration: Added content_hash column to knowledge_chunks table.");
+  }
+  if (!kcColumns.includes('ordinal')) {
+    db.exec("ALTER TABLE knowledge_chunks ADD COLUMN ordinal INTEGER");
+    console.log("Database Migration: Added ordinal column to knowledge_chunks table.");
+  }
 
   const cmTableInfo = db.pragma("table_info(constant_memory)");
   const cmColumns = cmTableInfo.map(col => col.name);

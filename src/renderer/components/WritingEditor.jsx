@@ -7,7 +7,8 @@ import {
   Quote, Palette, FileOutput, ChevronDown, Search, Check, Table as TableIcon,
   Rows, Columns, Trash2, Combine,
   ArrowUpToLine, ArrowDownToLine, ArrowLeftToLine, ArrowRightToLine,
-  AlignLeft, AlignCenter, AlignRight, AlignJustify, ALargeSmall, AlignVerticalSpaceAround, Pilcrow, Plus, FileCog, Asterisk
+  AlignLeft, AlignCenter, AlignRight, AlignJustify, ALargeSmall, AlignVerticalSpaceAround, Pilcrow, Plus, FileCog, Asterisk,
+  DatabaseZap
 } from 'lucide-react';
 import ColorPicker from './ui/ColorPicker';
 import Button from './ui/Button';
@@ -148,10 +149,19 @@ function useToolbarTick(editor) {
   const [, force] = useReducer(x => x + 1, 0);
   useEffect(() => {
     if (!editor) return;
-    const onChange = () => force();
+    // Coalesce bursts of editor events into one update per frame. A synchronous
+    // force() here lets a transaction → re-render → (re-mounted BubbleMenu dispatches
+    // a transaction) cycle spin into "Maximum update depth", especially under
+    // StrictMode; deferring to rAF breaks that loop and batches rapid changes.
+    let raf = 0;
+    const onChange = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => { raf = 0; force(); });
+    };
     editor.on('selectionUpdate', onChange);
     editor.on('transaction', onChange);
     return () => {
+      if (raf) cancelAnimationFrame(raf);
       editor.off('selectionUpdate', onChange);
       editor.off('transaction', onChange);
     };
@@ -615,6 +625,9 @@ function countWords(text) {
 
 export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight = false, pending = null, onDispatch, onResolved, toolbarMode = 'fixed', smartTypography = true, onDocPatch, onRename }) {
   const saveTimer = useRef(null);
+  // Tracks genuine unsaved edits, so leaving the chapter never re-saves unchanged
+  // content (which would reset the document's vectorized flag every page switch).
+  const dirty = useRef(false);
   const [counts, setCounts] = useState({ words: 0, chars: 0 });
   const [showExport, setShowExport] = useState(false);
   const [showPageSetup, setShowPageSetup] = useState(false);
@@ -625,10 +638,60 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
   const [profiles, setProfiles] = useState([]);
   const [invokeData, setInvokeData] = useState(null); // captured selection for the modal
   const [stale, setStale] = useState(false);
+  // Chapter index status: 'done' = vectorized & current, 'stale' = edited since last
+  // index (or never indexed). Editing flips it to 'stale'; vectorizing flips it back.
+  const [vecStatus, setVecStatus] = useState(doc.vectorized ? 'done' : 'stale');
+  const [vecBusy, setVecBusy] = useState(false);
+  const [vecProgress, setVecProgress] = useState(null);
   const locked = inFlight || !!pending;
   const pageConfig = pageConfigFromDoc(doc);
 
   useEffect(() => { setTitle(doc.title); }, [doc.id]);
+  // Resolve the indexed indicator from the actual content-vs-index comparison (not the
+  // mutable vectorized flag), so it survives page switches with no edits.
+  useEffect(() => {
+    let active = true;
+    setVecProgress(null);
+    electronAPI.getDocumentVectorStatus?.(doc.id).then(res => {
+      if (active && res?.success) setVecStatus(res.status === 'done' ? 'done' : 'stale');
+    });
+    return () => { active = false; };
+  }, [doc.id, electronAPI]);
+
+  // Live progress from the main-process vectorization pass (embedding → tagging).
+  useEffect(() => {
+    if (!electronAPI.onVectorizeDocumentProgress) return;
+    const off = electronAPI.onVectorizeDocumentProgress((d) => {
+      if (d.documentId === doc.id) setVecProgress(d);
+    });
+    return off;
+  }, [electronAPI, doc.id]);
+
+  // Clicking the paper's empty margins (outside the ProseMirror content box) doesn't
+  // focus the editor on its own. Treat such a click as "start writing": place the
+  // cursor at the end of the text. Clicks landing on actual content fall through so
+  // ProseMirror positions the cursor where the user clicked.
+  const onPaperMouseDown = (e) => {
+    if (locked || !editor) return;
+    const pm = editor.view?.dom;
+    if (pm && pm.contains(e.target)) return;
+    e.preventDefault();
+    editor.commands.focus('end');
+  };
+
+  const runVectorize = async () => {
+    if (vecBusy) return;
+    setVecBusy(true);
+    setVecProgress(null);
+    try {
+      const res = await electronAPI.vectorizeDocument?.(doc.id);
+      console.log('[vectorize-document]', res);
+      if (res?.success) setVecStatus('done');
+    } finally {
+      setVecBusy(false);
+      setVecProgress(null);
+    }
+  };
 
   // Ctrl/Cmd+F opens Find & Replace and pre-empts the browser's own find bar.
   useEffect(() => {
@@ -666,9 +729,14 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     onUpdate: ({ editor }) => {
       const text = editor.getText();
       setCounts({ words: countWords(text), chars: text.length });
+      // Edits desync the persistent index; save-document-content also resets the DB flag.
+      dirty.current = true;
+      setVecStatus(s => (s === 'done' ? 'stale' : s));
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => {
         electronAPI.saveDocumentContent(doc.id, JSON.stringify(editor.getJSON()));
+        saveTimer.current = null;
+        dirty.current = false;
       }, 800);
     },
   }, [doc.id, smartTypography]);
@@ -679,15 +747,16 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     setCounts({ words: countWords(text), chars: text.length });
   }, [editor, doc.id]);
 
-  // Flush a pending save when switching documents or unmounting.
+  // Flush a pending save when switching documents or unmounting — only when there are
+  // genuine unsaved edits, so an unchanged chapter keeps its vectorized flag intact.
   useEffect(() => {
     return () => {
-      if (saveTimer.current) {
-        clearTimeout(saveTimer.current);
-        if (editor) {
-          electronAPI.saveDocumentContent(doc.id, JSON.stringify(editor.getJSON()));
-        }
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      if (dirty.current && editor) {
+        electronAPI.saveDocumentContent(doc.id, JSON.stringify(editor.getJSON()));
       }
+      saveTimer.current = null;
+      dirty.current = false;
     };
   }, [doc.id, editor]);
 
@@ -833,6 +902,26 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
           </span>
         )}
         <div className="flex items-center gap-0.5 shrink-0">
+          <button
+            type="button"
+            onClick={runVectorize}
+            disabled={vecBusy}
+            title={
+              vecBusy
+                ? (vecProgress ? `Indexing chapter… (${vecProgress.phase} ${vecProgress.done}/${vecProgress.total})` : 'Indexing chapter…')
+                : vecStatus === 'done'
+                  ? 'Chapter indexed — AI can see it from other chapters'
+                  : 'Index this chapter for cross-chapter AI context'
+            }
+            className={`relative p-1.5 rounded-md transition-colors cursor-pointer disabled:cursor-default ${
+              vecStatus === 'done' ? 'text-accent hover:bg-white/5' : 'text-gray-500 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            {vecBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <DatabaseZap className="w-4 h-4" />}
+            {!vecBusy && vecStatus === 'stale' && (
+              <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-400" />
+            )}
+          </button>
           <button type="button" onClick={() => setShowFind(v => !v)} title="Find & Replace (Ctrl+F)" className={`p-1.5 rounded-md transition-colors cursor-pointer ${showFind ? 'text-accent bg-white/5' : 'text-gray-500 hover:text-white hover:bg-white/5'}`}>
             <Search className="w-4 h-4" />
           </button>
@@ -908,7 +997,11 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
       )}
 
       <div className="flex-1 overflow-y-auto custom-scrollbar py-8 px-4">
-        <div className={`mx-auto relative rounded-xl shadow-xl ring-1 ring-black/10 ${locked ? 'wd-sheet-locked' : ''}`} style={sheetStyle}>
+        <div
+          className={`mx-auto relative rounded-xl shadow-xl ring-1 ring-black/10 ${locked ? 'wd-sheet-locked' : ''}`}
+          style={sheetStyle}
+          onMouseDown={onPaperMouseDown}
+        >
           <EditorContent editor={editor} />
 
           {/* While in flight: gray the page out and block clicks, so it reads as locked. */}

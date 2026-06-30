@@ -285,8 +285,8 @@ async function vectorizeChunks(chunks, sourceFileName, progressCallback, keyword
 
 function insertChunksToDb(ownerId, ownerType, vectors) {
     const insertChunk = db.prepare(`
-        INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, tokenCount)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, tokenCount, content_hash, ordinal)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const deleteFts = db.prepare(`
         DELETE FROM knowledge_chunks_fts WHERE chunkId = ?
@@ -298,7 +298,7 @@ function insertChunksToDb(ownerId, ownerType, vectors) {
 
     db.transaction(() => {
         for (const v of vectors) {
-            insertChunk.run(v.id, ownerId, ownerType, v.source, v.text, JSON.stringify(v.vector), Date.now(), v.tokenCount || countTokens(v.text));
+            insertChunk.run(v.id, ownerId, ownerType, v.source, v.text, JSON.stringify(v.vector), Date.now(), v.tokenCount || countTokens(v.text), v.content_hash ?? null, v.ordinal ?? null);
             deleteFts.run(v.id);
             insertFts.run(v.id, v.text);
         }

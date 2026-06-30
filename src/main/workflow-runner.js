@@ -1079,6 +1079,139 @@ async function backfillWorldIndex(chatId = null, { batchSize = 12 } = {}) {
     return { chunks: chunks.length, batches, tagged };
 }
 
+// --- WRITING DESK: per-chapter vectorization ---
+
+// Minimum trimmed length for a block to enter the index; drops blank lines and
+// stray label fragments so they never poison retrieval.
+const DOC_CHUNK_MIN_CHARS = 15;
+
+// One top-level ProseMirror block = one chunk. Splitting on paragraph / scene-break
+// boundaries (instead of a fixed-size window) keeps each chunk's text stable: editing
+// one paragraph only changes that paragraph's hash, so re-vectorization re-embeds just
+// the touched chunk. Presentation (marks, page styling) never enters the text.
+function blockToText(node) {
+    if (!node) return '';
+    if (node.type === 'text') return node.text || '';
+    if (node.type === 'hardBreak') return '\n';
+    if (!node.content) return '';
+    const sep = (node.type === 'paragraph' || node.type === 'heading') ? '' : '\n';
+    return node.content.map(blockToText).join(sep);
+}
+
+function pmDocToChunkUnits(content) {
+    let json;
+    try { json = typeof content === 'string' ? JSON.parse(content) : content; }
+    catch (e) { return []; }
+    const blocks = (json && json.content) || [];
+    const units = [];
+    let ordinal = 0;
+    for (const block of blocks) {
+        const text = blockToText(block).replace(/ /g, ' ').trim();
+        if (text.length < DOC_CHUNK_MIN_CHARS) continue;
+        const hash = crypto.createHash('sha256').update(text).digest('hex');
+        units.push({ text, ordinal: ordinal++, hash });
+    }
+    return units;
+}
+
+// Whether a chapter's current text matches its stored index, by comparing the block
+// hash sets — the source of truth for the editor's "indexed" indicator. Immune to the
+// mutable vectorized flag (which any save can reset). Returns 'done' | 'stale'.
+function computeDocumentVectorStatus(documentId) {
+    const doc = db.prepare('SELECT content FROM documents WHERE id = ?').get(documentId);
+    if (!doc) return 'stale';
+    const units = pmDocToChunkUnits(doc.content);
+    const rows = db.prepare(
+        "SELECT content_hash, manuallyEdited FROM knowledge_chunks WHERE ownerId = ? AND ownerType = 'document'"
+    ).all(documentId);
+    // Never indexed: stale unless the chapter is also empty (nothing to index).
+    if (!rows.length) return units.length ? 'stale' : 'done';
+    // Manually-edited chunks are preserved across re-index, so they don't count toward
+    // the match; compare current blocks against the automated index only.
+    const stored = new Set(rows.filter(r => !r.manuallyEdited && r.content_hash).map(r => r.content_hash));
+    const current = new Set(units.map(u => u.hash));
+    if (stored.size !== current.size) return 'stale';
+    for (const h of current) if (!stored.has(h)) return 'stale';
+    return 'done';
+}
+
+// Vectorize (or re-vectorize) a single chapter into ownerType='document' chunks.
+// Incremental by content hash: unchanged blocks keep their vector + tags untouched,
+// only new/changed blocks are embedded and tagged, removed blocks are deleted. This
+// is what feeds gatherRag's "OTHER CHAPTERS" cross-chapter retrieval. User-triggered.
+async function vectorizeDocument(documentId, progressCallback = null) {
+    const doc = db.prepare('SELECT id, workspaceId, title, content FROM documents WHERE id = ?').get(documentId);
+    if (!doc) throw new Error('Document not found');
+
+    const units = pmDocToChunkUnits(doc.content);
+    const source = doc.title || 'Chapter';
+
+    // Existing chunks keyed by content hash. Legacy rows without a hash are treated as
+    // unmatchable, so they fall into the delete/refresh path.
+    const existing = db.prepare(
+        "SELECT id, content_hash, manuallyEdited FROM knowledge_chunks WHERE ownerId = ? AND ownerType = 'document'"
+    ).all(documentId);
+    const existingByHash = new Map();
+    for (const row of existing) { if (row.content_hash) existingByHash.set(row.content_hash, row); }
+
+    const newHashes = new Set(units.map(u => u.hash));
+    const toEmbed = [];
+    const keepOrdinal = [];
+    for (const u of units) {
+        const match = existingByHash.get(u.hash);
+        if (match) keepOrdinal.push({ id: match.id, ordinal: u.ordinal });
+        else toEmbed.push(u);
+    }
+
+    // Delete stored chunks whose text is gone, except manually-edited ones (protected
+    // from automated re-index, same rule as the KB path).
+    const toDelete = existing
+        .filter(row => !row.manuallyEdited && (!row.content_hash || !newHashes.has(row.content_hash)))
+        .map(r => r.id);
+
+    if (keepOrdinal.length) {
+        const upd = db.prepare('UPDATE knowledge_chunks SET ordinal = ? WHERE id = ?');
+        db.transaction(() => { for (const k of keepOrdinal) upd.run(k.ordinal, k.id); })();
+    }
+
+    if (toDelete.length) {
+        const delChunk = db.prepare('DELETE FROM knowledge_chunks WHERE id = ?');
+        const delFts = db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId = ?');
+        db.transaction(() => { for (const id of toDelete) { delChunk.run(id); delFts.run(id); } })();
+    }
+
+    let added = 0;
+    if (toEmbed.length) {
+        const texts = toEmbed.map(u => u.text);
+        const vectors = await vectorizeChunks(texts, source, (done, total) => {
+            if (progressCallback) progressCallback({ phase: 'embedding', done, total });
+        });
+        vectors.forEach((v, i) => { v.content_hash = toEmbed[i].hash; v.ordinal = toEmbed[i].ordinal; });
+        insertChunksToDb(documentId, 'document', vectors);
+        added = vectors.length;
+
+        // Tag only the freshly embedded chunks (World index). Best-effort: a failed
+        // pass just leaves the new chunks untagged, vectorization still succeeds.
+        try {
+            const profile = db.prepare('SELECT * FROM writing_profiles LIMIT 1').get();
+            const records = vectors.map(v => ({ id: v.id, text: v.text, ownerId: doc.workspaceId }));
+            const BATCH = 12;
+            for (let i = 0; i < records.length; i += BATCH) {
+                if (progressCallback) progressCallback({ phase: 'tagging', done: Math.min(i + BATCH, records.length), total: records.length });
+                const batch = records.slice(i, i + BATCH);
+                const cls = await classifyAndTagSegment(batch, profile, doc.workspaceId);
+                applyChunkTags(cls.chunkTags, batch, doc.workspaceId);
+            }
+        } catch (e) {
+            console.error('[Vectorize Document] tagging failed (vectorization continues):', e.message);
+        }
+    }
+
+    db.prepare('UPDATE documents SET vectorized = 1 WHERE id = ?').run(documentId);
+
+    return { added, kept: keepOrdinal.length, deleted: toDelete.length, total: units.length };
+}
+
 async function executeSummarizationInternal({ chatId, selectedMessages, newSummarizedIndex, customTitle, profileId }) {
     const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
     if (!chat) throw new Error("Chat not found");
@@ -1672,5 +1805,7 @@ module.exports = {
     resolveOverflowDeferred,
     executeSummarizationInternal,
     backfillWorldIndex,
+    vectorizeDocument,
+    computeDocumentVectorStatus,
     checkAndAutoSummarize
 };

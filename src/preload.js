@@ -67,6 +67,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteDirective: (id) => ipcRenderer.invoke('delete-directive', { id }),
   copyToClipboard: (text) => ipcRenderer.invoke('copy-to-clipboard', text),
   backfillWorldIndex: (chatId) => ipcRenderer.invoke('backfill-world-index', { chatId }),
+  vectorizeDocument: (documentId) => ipcRenderer.invoke('vectorize-document', { documentId }),
+  getDocumentVectorStatus: (documentId) => ipcRenderer.invoke('get-document-vector-status', { documentId }),
+  onVectorizeDocumentProgress: (callback) => {
+    const listener = (event, data) => callback(data);
+    ipcRenderer.on('vectorize-document-progress', listener);
+    return () => ipcRenderer.off('vectorize-document-progress', listener);
+  },
   listEntities: (workspaceId, type) => ipcRenderer.invoke('list-entities', { workspaceId, type }),
   getEntity: (id) => ipcRenderer.invoke('get-entity', { id }),
   createEntity: (payload) => ipcRenderer.invoke('create-entity', payload),
