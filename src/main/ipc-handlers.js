@@ -14,6 +14,7 @@ const os = require('os');
 const https = require('https');
 const crypto = require('crypto');
 const db = require('./database');
+const entitiesStore = require('./entities');
 const { chunkText, extractTextFromFile, extractDocxHtml, vectorizeChunks, insertChunksToDb, deleteChunksFromDb, searchKnowledgeBase, searchChatKnowledgeBase, searchChatMemories, RAG_MODEL_ID, RAG_MODEL_DIM, generateEmbeddingVector, countTokens } = require('./rag-service');
 
 // Resolve the APPDATA data path
@@ -2367,6 +2368,83 @@ ipcMain.handle('backfill-world-index', async (event, { chatId }) => {
     return { success: true, ...res };
   } catch (e) {
     console.error('[backfill-world-index] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+// --- WORLDBUILD: per-workspace entity registry + relations ---
+
+ipcMain.handle('list-entities', async (event, { workspaceId, type } = {}) => {
+  try {
+    return { success: true, entities: entitiesStore.listEntities({ workspaceId, type: type || null }) };
+  } catch (e) {
+    console.error('[list-entities] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('get-entity', async (event, { id }) => {
+  try {
+    return { success: true, entity: entitiesStore.getEntity(id) };
+  } catch (e) {
+    console.error('[get-entity] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('create-entity', async (event, payload) => {
+  try {
+    return { success: true, entity: entitiesStore.createEntity(payload || {}) };
+  } catch (e) {
+    console.error('[create-entity] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('update-entity', async (event, { id, fields }) => {
+  try {
+    return { success: true, entity: entitiesStore.updateEntity(id, fields || {}) };
+  } catch (e) {
+    console.error('[update-entity] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('delete-entity', async (event, { id }) => {
+  try {
+    return { success: true, ...entitiesStore.deleteEntity(id) };
+  } catch (e) {
+    console.error('[delete-entity] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('get-entity-links', async (event, { id, direction, relType } = {}) => {
+  try {
+    const links = direction === 'to'
+      ? entitiesStore.getLinksTo(id, relType || null)
+      : entitiesStore.getLinksFrom(id, relType || null);
+    return { success: true, links };
+  } catch (e) {
+    console.error('[get-entity-links] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('set-entity-link', async (event, payload) => {
+  try {
+    return { success: true, ...entitiesStore.setLink(payload || {}) };
+  } catch (e) {
+    console.error('[set-entity-link] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('remove-entity-link', async (event, { linkId }) => {
+  try {
+    return { success: true, ...entitiesStore.removeLink(linkId) };
+  } catch (e) {
+    console.error('[remove-entity-link] failed:', e);
     return { success: false, error: e.message };
   }
 });

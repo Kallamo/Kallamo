@@ -1,4 +1,5 @@
 const db = require('./database');
+const entitiesStore = require('./entities');
 const { sendApiRequest } = require('./api-engine');
 const { encode } = require('gpt-tokenizer/encoding/o200k_base');
 const fs = require('fs');
@@ -875,11 +876,56 @@ function getSystemAi() {
     return null;
 }
 
+// User setting (Engine & Memory) that blocks the tagger from proposing new world
+// entities during summarization/backfill. Off by default.
+function aiSuggestionsBlocked() {
+    try {
+        const row = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
+        if (row) return !!JSON.parse(row.value).worldbuildBlockAiSuggestions;
+    } catch (e) { }
+    return false;
+}
+
+// Render a workspace's entity registry as a prompt block so the classifier reuses
+// existing canonical names (and maps titles/variants to them) instead of coining
+// inconsistent values. Empty string when the registry has no entities yet.
+function buildEntityVocab(workspaceId) {
+    if (!workspaceId) return '';
+    let rows = [];
+    try { rows = db.prepare('SELECT type, canonicalName, aliases FROM entities WHERE workspaceId IS ?').all(workspaceId); } catch (e) { return ''; }
+    if (!rows.length) return '';
+    const byType = new Map();
+    for (const r of rows) {
+        let aliases = [];
+        try { const a = JSON.parse(r.aliases); if (Array.isArray(a)) aliases = a; } catch (e) { }
+        const label = aliases.length ? `${r.canonicalName} [aka ${aliases.join(', ')}]` : r.canonicalName;
+        if (!byType.has(r.type)) byType.set(r.type, []);
+        byType.get(r.type).push(label);
+    }
+    const lines = [];
+    for (const [type, names] of byType) lines.push(`${type}: ${names.join('; ')}`);
+    return "Known entities (prefer these canonical names; map any variant or title to the canonical form):\n" + lines.join('\n');
+}
+
+// Map a classifier's surface mention to a canonical entity id within a workspace. On a
+// miss, propose a new entity (status='proposed', pending user accept) unless suggestions
+// are blocked, in which case the caller falls back to storing the literal text.
+function resolveOrProposeEntity(workspaceId, type, value, allowPropose) {
+    const id = entitiesStore.resolveMention(value, type, workspaceId);
+    if (id) return id;
+    if (!allowPropose) return null;
+    try {
+        return entitiesStore.createEntity({ workspaceId, type, canonicalName: value, status: 'proposed' }).id;
+    } catch (e) {
+        return null;
+    }
+}
+
 // World-index pass: ONE System-AI call over a segment's numbered raw chunks. Returns
 // the block's title + summary AND the per-chunk dynamic tags (which named entities,
 // under which variable category, appear in each chunk). Variable categories = the
 // entity-bearing vocabulary; their descriptions are the classifier criteria.
-async function classifyAndTagSegment(chunkRecords, profile) {
+async function classifyAndTagSegment(chunkRecords, profile, workspaceId = null) {
     let title = 'Archived Memory';
     let summary = '';
     let chunkTags = [];
@@ -899,11 +945,13 @@ async function classifyAndTagSegment(chunkRecords, profile) {
         ? categories.map(c => `- ${c.name}: ${c.description}`).join('\n')
         : '- Characters: People, beings, or named agents present in the scene.';
     const fence = buildItemsFence();
+    const vocab = buildEntityVocab(workspaceId);
     const systemPrompt =
         "You index a conversation segment that is split into numbered chunks.\n" +
         "First line MUST be 'TITLE: [3-word title]'. Then write a 2-sentence summary of the whole segment.\n" +
         "Then, for EACH chunk, list the specific NAMED entities that actually appear in it, grouped under these categories:\n" +
         catLines + "\n" +
+        (vocab ? vocab + "\n" : "") +
         "Use ONLY these category names; skip a category when it has no named instance in that chunk. " +
         "Output a JSON array wrapped exactly once in " + fence.open + " and " + fence.close + ", " +
         "one element per chunk that has any entity: {\"chunk\": <number>, \"tags\": [{\"tag\": \"<Category>\", \"values\": [\"<name>\", ...]}]}. " +
@@ -930,15 +978,25 @@ async function classifyAndTagSegment(chunkRecords, profile) {
 // Persist the validated per-chunk tags into chunk_tags, mapping the classifier's
 // chunk index back to the real stored chunk id. Variable tags: tag=category,
 // entity=value. Runs in one transaction; never throws on a bad index.
-function applyChunkTags(chunkTags, chunkRecords) {
+function applyChunkTags(chunkTags, chunkRecords, workspaceId = null) {
     if (!Array.isArray(chunkTags) || !chunkTags.length) return 0;
+    const allowPropose = !aiSuggestionsBlocked();
     const insert = db.prepare('INSERT OR IGNORE INTO chunk_tags (chunkId, tag, entity) VALUES (?, ?, ?)');
     let rows = 0;
     db.transaction(() => {
         for (const entry of chunkTags) {
             const rec = chunkRecords[entry.chunkIndex];
             if (!rec || !rec.id) continue;
-            for (const t of entry.tags) { insert.run(rec.id, t.tag, t.value); rows++; }
+            const ws = rec.ownerId || workspaceId;
+            for (const t of entry.tags) {
+                // Map the surface mention to a canonical entity id (scoped to the
+                // workspace) so chunk_tags values stay consistent; on a miss either
+                // propose a new (pending) entity or, when suggestions are blocked,
+                // fall back to the literal text.
+                const entityRef = resolveOrProposeEntity(ws, t.tag, t.value, allowPropose) || t.value;
+                insert.run(rec.id, t.tag, entityRef);
+                rows++;
+            }
         }
     })();
     return rows;
@@ -961,13 +1019,16 @@ async function backfillWorldIndex(chatId = null, { batchSize = 12 } = {}) {
     try { categories = db.prepare('SELECT name, description FROM tags WHERE isEntity = 1').all(); } catch (e) { categories = []; }
     if (!categories.length) throw new Error('No entity tag categories seeded');
     const catLines = categories.map(c => `- ${c.name}: ${c.description}`).join('\n');
+    // Scoped vocab only when backfilling a single chat; the all-chats path leaves it
+    // empty to avoid bleeding one workspace's names into another's prompt.
+    const vocab = buildEntityVocab(chatId);
 
     // Skip chunks that already have tags so re-runs only fill the gaps (e.g. a tail
     // dropped by a rate-limit) instead of re-calling the model for everything.
     const where = chatId
         ? "kc.ownerId = ? AND kc.ownerType = 'chat_memory' AND kc.source = 'Chat Archive'"
         : "kc.ownerType = 'chat_memory' AND kc.source = 'Chat Archive'";
-    const sql = `SELECT kc.id, kc.text FROM knowledge_chunks kc WHERE ${where}
+    const sql = `SELECT kc.id, kc.text, kc.ownerId FROM knowledge_chunks kc WHERE ${where}
                  AND NOT EXISTS (SELECT 1 FROM chunk_tags ct WHERE ct.chunkId = kc.id)
                  ORDER BY kc.createdAt ASC`;
     const chunks = chatId ? db.prepare(sql).all(chatId) : db.prepare(sql).all();
@@ -999,6 +1060,7 @@ async function backfillWorldIndex(chatId = null, { batchSize = 12 } = {}) {
         const systemPrompt =
             "You index conversation chunks. For EACH numbered chunk, list the specific NAMED entities present, grouped under these categories:\n" +
             catLines + "\n" +
+            (vocab ? vocab + "\n" : "") +
             "Use ONLY these category names; skip a category with no named instance in that chunk. " +
             "Output ONLY a JSON array wrapped exactly once in " + fence.open + " and " + fence.close + ", " +
             "one element per chunk that has any entity: {\"chunk\": <number>, \"tags\": [{\"tag\": \"<Category>\", \"values\": [\"<name>\", ...]}]}. " +
@@ -1007,7 +1069,7 @@ async function backfillWorldIndex(chatId = null, { batchSize = 12 } = {}) {
             const response = await callWithRetry({ apiProfileId, model, systemPrompt, chatHistory: [], newPrompt: numbered, temperature: 0.3, maxTokens: 1500, manualMode, manualJson });
             const head = splitHeadAndBody(response, fence);
             const chunkTags = validateChunkTags(safeParseArray(head.body), categories, batch.length);
-            tagged += applyChunkTags(chunkTags, batch);
+            tagged += applyChunkTags(chunkTags, batch, chatId);
         } catch (e) {
             console.error(`[World Index][backfill] batch ${batches} failed:`, e.message);
         }
@@ -1044,10 +1106,10 @@ async function executeSummarizationInternal({ chatId, selectedMessages, newSumma
     // the chunks untagged.
     try {
         const chunkRecords = vectors.map(v => ({ id: v.id, text: v.text }));
-        const cls = await classifyAndTagSegment(chunkRecords, profile);
+        const cls = await classifyAndTagSegment(chunkRecords, profile, chatId);
         if (!customTitle && cls.title) title = cls.title;
         if (cls.summary) summary = cls.summary;
-        const tagged = applyChunkTags(cls.chunkTags, chunkRecords);
+        const tagged = applyChunkTags(cls.chunkTags, chunkRecords, chatId);
         console.log(`[World Index] segment "${title}": ${cls.chunkTags.length}/${chunkRecords.length} chunk(s) tagged, ${tagged} tag row(s).`);
     } catch (smErr) {
         console.error("[World Index] tagging failed (archiving continues):", smErr);

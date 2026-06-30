@@ -403,6 +403,56 @@ db.exec(`
       DELETE FROM chunk_tags WHERE chunkId = OLD.id;
   END;
 
+  -- Per-workspace world registry (Worldbuild). Every authored element (System,
+  -- Location, Item, Race, Faction, Character) lives here with a canonicalName + an
+  -- aliases list (JSON) the tagger uses to map surface mentions to an entity id, so
+  -- chunk_tags values stay consistent (chunk_tags.entity references entities.id).
+  -- The type column aligns with the tag categories (Characters/Locations/Factions/
+  -- Items/Races) plus 'System'. data is a JSON blob of type-specific scalars; lore links to a
+  -- Writing Desk document (loreDocumentId). status='proposed' = AI suggestion pending.
+  CREATE TABLE IF NOT EXISTS entities (
+    id             TEXT PRIMARY KEY,
+    workspaceId    TEXT,
+    type           TEXT NOT NULL,
+    canonicalName  TEXT NOT NULL,
+    aliases        TEXT,
+    lore           TEXT,
+    loreDocumentId TEXT,
+    data           TEXT,
+    status         TEXT NOT NULL DEFAULT 'confirmed',
+    createdAt      INTEGER,
+    last_modified  INTEGER DEFAULT 0
+  );
+
+  -- NOTE: idx_entities_workspace is created in the migration block below, AFTER the
+  -- ALTERs that add workspaceId/type, so an existing old-shape entities table doesn't
+  -- fail the index here before its columns exist.
+
+  -- Relations between world nodes, one row per directed edge. relType examples:
+  -- inside (Location->Location), created_by / owned_by (Item->Character),
+  -- found_in (Item->Location), is_race (Character->Race), member_of
+  -- (Character->Faction), operates_in (Faction->Location), connected_to
+  -- (Character->Location). Derived lists (inventory, members…) are reverse queries.
+  CREATE TABLE IF NOT EXISTS entity_links (
+    id          TEXT PRIMARY KEY,
+    workspaceId TEXT,
+    fromId      TEXT NOT NULL,
+    relType     TEXT NOT NULL,
+    toId        TEXT NOT NULL,
+    createdAt   INTEGER
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_entity_links_from ON entity_links(fromId, relType);
+  CREATE INDEX IF NOT EXISTS idx_entity_links_to ON entity_links(toId, relType);
+
+  -- Drop an entity's edges (both directions) when it is deleted.
+  CREATE TRIGGER IF NOT EXISTS trg_entity_links_gc
+  AFTER DELETE ON entities
+  FOR EACH ROW
+  BEGIN
+      DELETE FROM entity_links WHERE fromId = OLD.id OR toId = OLD.id;
+  END;
+
   CREATE TRIGGER IF NOT EXISTS chats_last_modified_trigger
   AFTER UPDATE ON chats
   FOR EACH ROW
@@ -650,6 +700,8 @@ try {
     ["Characters", "People, beings, or named agents present in the scene.", 1],
     ["Factions", "Organized groups present or referenced: guilds, houses, orders, nations, companies, teams.", 1],
     ["Items", "Notable objects in play: weapons, artifacts, tools, documents, substances.", 1],
+    ["Locations", "Places where scenes happen: rooms, buildings, settlements, regions, landmarks.", 1],
+    ["Races", "Species, lineages, or peoples a character can belong to.", 1],
     ["Planning", "Decisions, goals, deadlines, tasks, and who is responsible for them.", 0],
     ["Chat", "General context: what a conversation segment is broadly about.", 0],
   ];
@@ -662,6 +714,49 @@ try {
     db.exec("ALTER TABLE folders ADD COLUMN position INTEGER DEFAULT 0");
     console.log("Database Migration: Added position column to folders table.");
   }
+
+  // Migrate the early-shape entities table (category NOT NULL / description /
+  // editableByAI) to the per-workspace Worldbuild shape. Its `category NOT NULL`
+  // column can't be dropped by ALTER and would block every new insert (which only
+  // supplies `type`), so the table is rebuilt, preserving any rows.
+  const entityCols = db.pragma("table_info(entities)").map(c => c.name);
+  if (entityCols.includes('category')) {
+    db.exec(`
+      ALTER TABLE entities RENAME TO entities_legacy;
+      CREATE TABLE entities (
+        id             TEXT PRIMARY KEY,
+        workspaceId    TEXT,
+        type           TEXT NOT NULL,
+        canonicalName  TEXT NOT NULL,
+        aliases        TEXT,
+        lore           TEXT,
+        loreDocumentId TEXT,
+        data           TEXT,
+        status         TEXT NOT NULL DEFAULT 'confirmed',
+        createdAt      INTEGER,
+        last_modified  INTEGER DEFAULT 0
+      );
+      INSERT INTO entities (id, workspaceId, type, canonicalName, aliases, status, createdAt, last_modified)
+        SELECT id, NULL, category, canonicalName, aliases, status, createdAt, last_modified FROM entities_legacy;
+      DROP TABLE entities_legacy;
+    `);
+    console.log("Database Migration: Rebuilt entities table to the per-workspace Worldbuild shape.");
+  } else if (entityCols.length) {
+    // Already new (or fresh) shape: backfill any columns added after first release.
+    const addEntityCol = (name, ddl) => {
+      if (!entityCols.includes(name)) {
+        db.exec(`ALTER TABLE entities ADD COLUMN ${ddl}`);
+        console.log(`Database Migration: Added ${name} column to entities table.`);
+      }
+    };
+    addEntityCol('workspaceId', 'workspaceId TEXT');
+    addEntityCol('type', 'type TEXT');
+    addEntityCol('lore', 'lore TEXT');
+    addEntityCol('loreDocumentId', 'loreDocumentId TEXT');
+    addEntityCol('data', 'data TEXT');
+  }
+  // Safe to index now that workspaceId/type are guaranteed to exist (fresh or migrated).
+  db.exec("CREATE INDEX IF NOT EXISTS idx_entities_workspace ON entities(workspaceId, type)");
 } catch (e) {
   console.error("Migration error adding columns to database tables:", e);
 }

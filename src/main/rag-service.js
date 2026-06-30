@@ -465,14 +465,27 @@ function computeTagBoostMap(queryText, ownerId, ownerType) {
     let rows = [];
     try {
         rows = db.prepare(
-            `SELECT ct.chunkId AS chunkId, ct.tag AS tag, ct.entity AS entity
-             FROM chunk_tags ct JOIN knowledge_chunks kc ON ct.chunkId = kc.id
+            `SELECT ct.chunkId AS chunkId, ct.tag AS tag, ct.entity AS entity,
+                    e.canonicalName AS canonicalName, e.aliases AS aliases
+             FROM chunk_tags ct
+             JOIN knowledge_chunks kc ON ct.chunkId = kc.id
+             LEFT JOIN entities e ON ct.entity = e.id
              WHERE kc.ownerId = ? AND kc.ownerType = ?`
         ).all(ownerId, ownerType);
     } catch (e) { return boost; }
     for (const r of rows) {
-        const needle = String(r.entity || r.tag || '').toLowerCase().trim();
-        if (queryMentions(q, needle)) boost.set(r.chunkId, TAG_BOOST);
+        // When entity is a canonical id, match against its name + aliases; otherwise
+        // fall back to the literal text (legacy/bootstrap rows that predate the registry).
+        let needles;
+        if (r.canonicalName) {
+            needles = [r.canonicalName];
+            try { const a = JSON.parse(r.aliases); if (Array.isArray(a)) needles.push(...a); } catch (e) { }
+        } else {
+            needles = [r.entity || r.tag || ''];
+        }
+        for (const n of needles) {
+            if (queryMentions(q, String(n).toLowerCase().trim())) { boost.set(r.chunkId, TAG_BOOST); break; }
+        }
     }
     return boost;
 }
@@ -568,7 +581,11 @@ async function searchChatMemories(queryText, chatId) {
     const results = await executeHybridSearch(queryText, chatId, 'chat_memory', threshold, k, true);
     // Attach each surviving chunk's tags for debug visibility (which tags it carries).
     try {
-        const tagStmt = db.prepare('SELECT tag, entity FROM chunk_tags WHERE chunkId = ?');
+        const tagStmt = db.prepare(
+            `SELECT ct.tag AS tag, COALESCE(e.canonicalName, ct.entity) AS entity
+             FROM chunk_tags ct LEFT JOIN entities e ON ct.entity = e.id
+             WHERE ct.chunkId = ?`
+        );
         for (const r of results) r.tags = tagStmt.all(r.id);
     } catch (e) { }
     return results;

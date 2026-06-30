@@ -88,6 +88,13 @@ body {
   background: #011419;
 }
 
+/* Worldbuild form controls: render the native <select> dropdown options in the
+   app's dark theme instead of the OS default white. */
+select.wb-input option {
+  background-color: #0a1721;
+  color: #e5e7eb;
+}
+
 /* Custom ambient wave animation for Logo flutes */
 @keyframes logo-ambient-wave {
   0%, 100%, 60% {

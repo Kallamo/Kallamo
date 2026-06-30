@@ -98,7 +98,7 @@ export default function DashboardView() {
           </div>
 
           {/* Library Link */}
-          <button 
+          <button
             onClick={() => setCurrentView('library')}
             className="flex items-center space-x-2 px-4 py-2 bg-[#0a161d] hover:bg-[#1a2d32] border border-gray-800 rounded-lg text-gray-300 hover:text-white transition-colors text-sm font-medium cursor-pointer"
           >
