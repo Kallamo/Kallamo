@@ -300,6 +300,27 @@ async function indexChatKnowledgeBase(sender, chatId, knowledgeFilesInput) {
 // ==========================================
 // --- API CONNECTIONS IPC HANDLERS ---
 // ==========================================
+// Whether an API profile carries usable credentials, accounting for each
+// provider's credential shape (key vs. customConfig vs. none for local). Used to
+// flag writing profiles that point to a keyless connection — they look configured
+// but fail raw on invocation. Accepts a raw row (encrypted fields).
+function apiProfileHasCredentials(row) {
+  if (!row) return false;
+  const provider = (row.provider || '').toLowerCase();
+  let cfg = {};
+  try { cfg = JSON.parse(db.decryptApiKey(row.customConfig) || '{}'); } catch (e) {}
+  switch (provider) {
+    case 'local':
+      return true; // local endpoint needs no key
+    case 'aws bedrock':
+      return !!(cfg.awsAccessKeyId && cfg.awsSecretAccessKey);
+    case 'vertex ai':
+      return !!(cfg.gcpServiceAccount && cfg.gcpProjectId);
+    default:
+      return !!db.decryptApiKey(row.apiKey);
+  }
+}
+
 ipcMain.handle('get-api-profiles', async () => {
   try {
     const rows = db.prepare('SELECT * FROM api_profiles').all();
@@ -307,7 +328,8 @@ ipcMain.handle('get-api-profiles', async () => {
       ...r,
       apiKey: db.decryptApiKey(r.apiKey),
       customConfig: db.decryptApiKey(r.customConfig),
-      models: JSON.parse(r.models || '[]')
+      models: JSON.parse(r.models || '[]'),
+      hasCredentials: apiProfileHasCredentials(r)
     }));
   } catch (e) {
     console.error("Error fetching API profiles:", e);
@@ -355,12 +377,22 @@ ipcMain.handle('delete-api-profile', async (event, id) => {
 ipcMain.handle('get-writing-profiles', async () => {
   try {
     const rows = db.prepare('SELECT * FROM writing_profiles').all();
-    return rows.map(r => ({
-      ...r,
-      knowledgeFiles: JSON.parse(r.knowledgeFiles || '[]'),
-      manualMode: r.manualMode === 1,
-      isAgentic: r.isAgentic === 1
-    }));
+    const apiRows = db.prepare('SELECT * FROM api_profiles').all();
+    const apiById = new Map(apiRows.map(a => [a.id, a]));
+    return rows.map(r => {
+      const linkedApi = r.apiProfileId ? apiById.get(r.apiProfileId) : null;
+      // A profile is unusable until it has a linked connection, a model, and that
+      // connection actually carries credentials. Single source of truth consumed by
+      // every active-profile picker and the invocation guard.
+      const needsSetup = !r.apiProfileId || !r.model || !apiProfileHasCredentials(linkedApi);
+      return {
+        ...r,
+        knowledgeFiles: JSON.parse(r.knowledgeFiles || '[]'),
+        manualMode: r.manualMode === 1,
+        isAgentic: r.isAgentic === 1,
+        needsSetup
+      };
+    });
   } catch (e) {
     console.error("Error fetching writing profiles:", e);
     return [];

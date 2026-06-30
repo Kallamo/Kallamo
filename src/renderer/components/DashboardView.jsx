@@ -156,7 +156,7 @@ export default function DashboardView() {
                 )}
 
                 {/* Card options area */}
-                <div className="absolute top-4 right-4 flex items-center space-x-1.5 z-10" onClick={(e) => e.stopPropagation()}>
+                <div className="absolute top-4 right-4 flex items-center space-x-1.5 z-30" onClick={(e) => e.stopPropagation()}>
 
                   <div ref={activeDropdownId === chat.id ? dropdownRef : null} className="relative">
                     <button 

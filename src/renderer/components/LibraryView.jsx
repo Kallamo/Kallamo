@@ -341,13 +341,13 @@ export default function LibraryView() {
                       <div className="flex justify-between items-start mb-2 mt-1 w-full">
                         <div className="flex items-center space-x-2 flex-1 min-w-0 pr-2">
                           <h3 className="text-white font-bold text-lg truncate" title={profile.name}>{profile.name}</h3>
-                          {(!profile.apiProfileId || !profile.model) && (
+                          {profile.needsSetup && (
                             <div className="relative group/warning flex items-center shrink-0">
-                              <AlertTriangle 
-                                className="w-4 h-4 text-amber-500 cursor-help" 
+                              <AlertTriangle
+                                className="w-4 h-4 text-amber-500 cursor-help"
                               />
                               <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2.5 w-52 p-3 text-[10px] leading-relaxed text-amber-200 bg-[#1a0f02] border border-amber-900/50 rounded-lg shadow-xl invisible opacity-0 pointer-events-none group-hover/warning:visible group-hover/warning:opacity-100 transition-all duration-200 z-30 select-none font-semibold text-center">
-                                No API profile or model linked. This profile will not be able to generate responses until configured.
+                                No API connection, model, or credentials linked. This profile will not be able to generate responses until configured.
                                 <div className="absolute bottom-full left-1/2 -translate-x-1/2 border-4 border-transparent border-b-[#1a0f02] w-0 h-0 -mb-[1px]" />
                                 <div className="absolute bottom-full left-1/2 -translate-x-1/2 border-4 border-transparent border-b-amber-900/50 w-0 h-0 -mb-[2px] -z-10" />
                               </div>

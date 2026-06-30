@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
-import { X, Image as ImageIcon, Search, HelpCircle, UploadCloud, FileText, Check } from 'lucide-react';
+import { X, Image as ImageIcon, Search, HelpCircle, UploadCloud, FileText, Check, AlertTriangle } from 'lucide-react';
 
 export default function ChatModal({ chat, onClose }) {
   const { 
@@ -338,9 +338,28 @@ export default function ChatModal({ chat, onClose }) {
                   ) : (
                     filteredProfiles.map(p => {
                       const isSelected = activeProfiles.includes(p.id);
+                      // Incomplete profiles can't be pre-activated — show a warning
+                      // badge in place of the checkbox.
+                      if (p.needsSetup) {
+                        return (
+                          <div
+                            key={p.id}
+                            className="relative flex items-center space-x-2.5 p-1.5 rounded hover:z-20"
+                          >
+                            <div className="relative group/warning flex items-center shrink-0">
+                              <AlertTriangle className="w-3.5 h-3.5 text-amber-500 cursor-help" />
+                              <div className="absolute top-full left-0 mt-2.5 w-56 p-3 text-[10px] leading-relaxed text-amber-200 bg-[#1a0f02] border border-amber-900/50 rounded-lg shadow-xl invisible opacity-0 pointer-events-none group-hover/warning:visible group-hover/warning:opacity-100 transition-all duration-200 z-50 select-none font-semibold text-center">
+                                To activate: create an API profile in Settings, then link it to this profile in the Library.
+                              </div>
+                            </div>
+                            <span className="w-2 h-2 rounded-full shrink-0 opacity-40" style={{ backgroundColor: p.color }} />
+                            <span className="text-xs text-gray-500 truncate font-sans">{p.name}</span>
+                          </div>
+                        );
+                      }
                       return (
-                        <label 
-                          key={p.id} 
+                        <label
+                          key={p.id}
                           className="flex items-center space-x-2.5 p-1.5 hover:bg-[#0a161d] rounded cursor-pointer transition-colors"
                         >
                           <div className={`w-3.5 h-3.5 rounded-sm border flex items-center justify-center transition-all duration-200 hover:scale-105 active:scale-95 shrink-0 ${
@@ -348,9 +367,9 @@ export default function ChatModal({ chat, onClose }) {
                           }`}>
                             {isSelected && <Check className="w-2.5 h-2.5 text-[#011419] stroke-[3.5]" />}
                           </div>
-                          <input 
-                            type="checkbox" 
-                            checked={isSelected} 
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
                             onChange={() => handleToggleProfile(p.id)}
                             className="hidden"
                           />

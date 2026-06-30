@@ -705,11 +705,27 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     return () => document.removeEventListener('keydown', onKey);
   }, []);
 
+  // Invocation only offers the profiles ACTIVE in this workspace (the chat's
+  // activeProfiles), not every profile in the app — the Writing Desk inherits the
+  // workspace's director's-table just like the chat does.
   useEffect(() => {
     let active = true;
-    electronAPI.getWritingProfiles?.().then(list => { if (active) setProfiles(list || []); });
+    Promise.all([
+      electronAPI.getWritingProfiles?.() ?? [],
+      electronAPI.getChats?.() ?? []
+    ]).then(([list, chats]) => {
+      if (!active) return;
+      const chat = (chats || []).find(c => c.id === workspaceId);
+      let activeIds = [];
+      try {
+        const raw = chat?.activeProfiles;
+        activeIds = Array.isArray(raw) ? raw : JSON.parse(raw || '[]');
+      } catch (e) { activeIds = []; }
+      const activeSet = new Set(activeIds);
+      setProfiles((list || []).filter(p => activeSet.has(p.id)));
+    });
     return () => { active = false; };
-  }, [electronAPI]);
+  }, [electronAPI, workspaceId]);
 
   let initialContent;
   try {

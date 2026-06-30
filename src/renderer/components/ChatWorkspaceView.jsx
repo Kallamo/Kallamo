@@ -593,14 +593,14 @@ export default function ChatWorkspaceView() {
 
         {/* Workspace Chat Header */}
         <div className={`flex items-center justify-between h-14 border-b border-gray-800/80 px-6 shrink-0 bg-[#011419]/80 z-10 relative ${(settings?.interface?.blur ?? true) ? 'backdrop-blur-md' : ''}`}>
-          <div className="flex items-center space-x-3 min-w-0 mr-4">
+          <div className="flex items-center space-x-3 min-w-0 mr-4 flex-1">
             <button
               onClick={() => setCurrentView('dashboard')}
               className="p-1.5 text-gray-400 hover:text-white hover:bg-white/10 rounded-md transition-colors mr-2 cursor-pointer shrink-0"
             >
               <ArrowLeft className="w-4.5 h-4.5" />
             </button>
-            <h2 className="text-white font-semibold text-sm truncate max-w-[120px] sm:max-w-sm">
+            <h2 className="text-white font-semibold text-sm truncate">
               {activeChat.title}
             </h2>
 
@@ -684,16 +684,18 @@ export default function ChatWorkspaceView() {
             </button>
           </div>
 
-          <button
-            onClick={() => setRightSidebarOpen(!rightSidebarOpen)}
-            className={`p-1.5 rounded-md transition-colors cursor-pointer shrink-0 ml-4 ${rightSidebarOpen
-              ? 'text-accent bg-white/5'
-              : 'text-gray-500 hover:text-white hover:bg-white/5'
-              }`}
-            title="Chat Settings"
-          >
-            <Sliders className="w-4.5 h-4.5" />
-          </button>
+          <div className="flex-1 flex justify-end ml-4">
+            <button
+              onClick={() => setRightSidebarOpen(!rightSidebarOpen)}
+              className={`p-1.5 rounded-md transition-colors cursor-pointer shrink-0 ${rightSidebarOpen
+                ? 'text-accent bg-white/5'
+                : 'text-gray-500 hover:text-white hover:bg-white/5'
+                }`}
+              title="Chat Settings"
+            >
+              <Sliders className="w-4.5 h-4.5" />
+            </button>
+          </div>
         </div>
 
         {activeSubView === 'chat' ? (

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
-import { Settings, Folder, Shield, Cpu, Sliders, ChevronDown, Archive, Trash2, ShieldAlert, Sparkles, Plus, HelpCircle, X, Edit, Image as ImageIcon, Check } from 'lucide-react';
+import { Settings, Folder, Shield, Cpu, Sliders, ChevronDown, Archive, Trash2, ShieldAlert, Sparkles, Plus, HelpCircle, X, Edit, Image as ImageIcon, Check, AlertTriangle } from 'lucide-react';
 import ProfileModal from './modals/ProfileModal';
 import WorkflowModal from './modals/WorkflowModal';
 
@@ -445,8 +445,30 @@ export default function RightSidebar({ isOpen, onClose, onTriggerSummarize }) {
       ) : (
         filteredProfiles.map(p => {
           const isActive = activeProfilesList.includes(p.id);
+          // Incomplete profiles (no connection / model / credentials) can't be
+          // activated — the checkbox is replaced by a warning badge that points the
+          // user to Settings. This is the most critical onboarding moment.
+          if (p.needsSetup) {
+            return (
+              <div
+                key={p.id}
+                className="relative flex items-center justify-between p-2 rounded bg-[#011419] border border-gray-800 hover:z-20"
+              >
+                <div className="flex items-center space-x-2 overflow-hidden mr-2">
+                  <span className="w-2.5 h-2.5 rounded-full shrink-0 opacity-40" style={{ backgroundColor: p.color }} />
+                  <span className="text-xs text-gray-500 truncate">{p.name}</span>
+                </div>
+                <div className="relative group/warning flex items-center shrink-0">
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-500 cursor-help" />
+                  <div className="absolute top-full right-0 mt-2.5 w-56 p-3 text-[10px] leading-relaxed text-amber-200 bg-[#1a0f02] border border-amber-900/50 rounded-lg shadow-xl invisible opacity-0 pointer-events-none group-hover/warning:visible group-hover/warning:opacity-100 transition-all duration-200 z-50 select-none font-semibold text-center">
+                    To activate: create an API profile in Settings, then link it to this profile in the Library.
+                  </div>
+                </div>
+              </div>
+            );
+          }
           return (
-            <label 
+            <label
               key={p.id}
               className="flex items-center justify-between p-2 rounded bg-[#011419] border border-gray-800 hover:border-gray-700 cursor-pointer"
             >
@@ -459,11 +481,11 @@ export default function RightSidebar({ isOpen, onClose, onTriggerSummarize }) {
               }`}>
                 {isActive && <Check className="w-2.5 h-2.5 text-[#011419] stroke-[3.5]" />}
               </div>
-              <input 
-                type="checkbox" 
+              <input
+                type="checkbox"
                 checked={isActive}
                 onChange={() => toggleProfile(p.id)}
-                className="hidden" 
+                className="hidden"
               />
             </label>
           );

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Sparkles, ChevronDown, X } from 'lucide-react';
+import { Sparkles, ChevronDown, X, AlertTriangle } from 'lucide-react';
 import Button from './ui/Button';
 
 // The invocation modal: highlighted span + Profile dropdown (swap on the spot) +
@@ -11,7 +11,7 @@ export function InvokeModal({ selection, profiles, onSubmit, onClose }) {
   const [open, setOpen] = useState(false);
   const selected = profiles.find(p => p.id === profileId);
 
-  const canSubmit = profileId && profiles.length > 0;
+  const canSubmit = profileId && profiles.length > 0 && !selected?.needsSetup;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onMouseDown={onClose}>
@@ -27,7 +27,7 @@ export function InvokeModal({ selection, profiles, onSubmit, onClose }) {
         </div>
 
         {profiles.length === 0 ? (
-          <p className="text-sm text-amber-400/90 mb-4">No writing profiles found. Create one first to invoke the AI.</p>
+          <p className="text-sm text-amber-400/90 mb-4">No active writing profiles in this workspace. Activate one in the Chat tab to invoke the AI here.</p>
         ) : (
           <div className="relative mb-3">
             <label className="block text-[11px] uppercase tracking-wide text-gray-500 mb-1">Profile</label>
@@ -50,6 +50,13 @@ export function InvokeModal({ selection, profiles, onSubmit, onClose }) {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {selected?.needsSetup && (
+          <div className="flex items-start gap-2 mb-3 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-900/50 text-[11px] leading-relaxed text-amber-200">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-500" />
+            <span>To activate: create an API profile in Settings, then link it to this profile in the Library.</span>
           </div>
         )}
 
