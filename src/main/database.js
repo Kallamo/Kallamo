@@ -217,6 +217,7 @@ db.exec(`
     memoryBlocks TEXT,
     knowledgeFiles TEXT,
     autoSummarize INTEGER DEFAULT 0,
+    showContextBar INTEGER DEFAULT 0,
     wdContextWindow INTEGER DEFAULT 8192,
     wdLastChannel TEXT DEFAULT 'replacement',
     last_modified INTEGER DEFAULT 0,
@@ -583,6 +584,10 @@ try {
   if (!columns.includes('autoSummarize')) {
     db.exec("ALTER TABLE chats ADD COLUMN autoSummarize INTEGER DEFAULT 0");
     console.log("Database Migration: Added autoSummarize column to chats table.");
+  }
+  if (!columns.includes('showContextBar')) {
+    db.exec("ALTER TABLE chats ADD COLUMN showContextBar INTEGER DEFAULT 0");
+    console.log("Database Migration: Added showContextBar column to chats table.");
   }
   if (!columns.includes('last_modified')) {
     db.exec("ALTER TABLE chats ADD COLUMN last_modified INTEGER DEFAULT 0");

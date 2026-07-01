@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
-import { X, Image as ImageIcon, Search, HelpCircle, UploadCloud, FileText, Check, AlertTriangle } from 'lucide-react';
+import { X, Image as ImageIcon, Search, Brain, Check, AlertTriangle } from 'lucide-react';
 
 export default function ChatModal({ chat, onClose }) {
   const { 
@@ -26,19 +26,15 @@ export default function ChatModal({ chat, onClose }) {
   const [userBubbleOpacity, setUserBubbleOpacity] = useState(100);
   const [aiBubbleOpacity, setAiBubbleOpacity] = useState(0);
 
-  const [ingestionStrategy, setIngestionStrategy] = useState('full_context'); // 'full_context' | 'rag_search'
-
   const [activeProfiles, setActiveProfiles] = useState([]);
   const [activeWorkflows, setActiveWorkflows] = useState([]);
-  
+
   const [searchProfiles, setSearchProfiles] = useState('');
   const [searchWorkflows, setSearchWorkflows] = useState('');
-  
+
+  // Preserved so editing an older workspace doesn't wipe legacy knowledge files.
   const [knowledgeFiles, setKnowledgeFiles] = useState([]);
-  
-  const [isDragging, setIsDragging] = useState(false);
-  
-  const fileInputRef = useRef(null);
+
   const bgInputRef = useRef(null);
 
   // Load chat details if editing
@@ -115,89 +111,6 @@ export default function ChatModal({ chat, onClose }) {
     );
   };
 
-  const handleFileUpload = async (e) => {
-    const files = Array.from(e.target.files);
-    if (files.length === 0) return;
-
-    const updatedFiles = [...knowledgeFiles];
-    for (const f of files) {
-      if (updatedFiles.some(existing => existing.name === f.name)) continue;
-
-      try {
-        const savedFile = await electronAPI.uploadChatKbFile(chatId, {
-          name: f.name,
-          path: f.path || '',
-          size: f.size
-        });
-
-        if (savedFile) {
-          updatedFiles.push({
-            name: savedFile.name,
-            originalPath: savedFile.originalPath,
-            internalPath: savedFile.internalPath,
-            size: savedFile.size,
-            strategy: ingestionStrategy
-          });
-        }
-      } catch (err) {
-        console.error("Error uploading chat kb file:", err);
-      }
-    }
-    setKnowledgeFiles(updatedFiles);
-  };
-
-  // Handle drag/drop events
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = () => {
-    setIsDragging(false);
-  };
-
-  const handleDrop = async (e) => {
-    e.preventDefault();
-    setIsDragging(false);
-    const files = Array.from(e.dataTransfer.files);
-    if (files.length === 0) return;
-
-    const updatedFiles = [...knowledgeFiles];
-    for (const f of files) {
-      if (updatedFiles.some(existing => existing.name === f.name)) continue;
-
-      try {
-        const savedFile = await electronAPI.uploadChatKbFile(chatId, {
-          name: f.name,
-          path: f.path || '',
-          size: f.size
-        });
-
-        if (savedFile) {
-          updatedFiles.push({
-            name: savedFile.name,
-            originalPath: savedFile.originalPath,
-            internalPath: savedFile.internalPath,
-            size: savedFile.size,
-            strategy: ingestionStrategy
-          });
-        }
-      } catch (err) {
-        console.error("Error uploading dropped chat kb file:", err);
-      }
-    }
-    setKnowledgeFiles(updatedFiles);
-  };
-
-  const removeFile = async (fileName) => {
-    try {
-      await electronAPI.deleteChatKbFile(chatId, fileName);
-      setKnowledgeFiles(prev => prev.filter(f => f.name !== fileName));
-    } catch (e) {
-      console.error("Error deleting chat kb file:", e);
-    }
-  };
-
   const handleSave = async () => {
     if (!title.trim()) return;
 
@@ -216,6 +129,7 @@ export default function ChatModal({ chat, onClose }) {
       backdropOpacity: Number(backdropOpacity),
       userBubbleOpacity: Number(userBubbleOpacity),
       aiBubbleOpacity: Number(aiBubbleOpacity),
+      showContextBar: chat?.showContextBar ?? 0,
       memoryBlocks: JSON.stringify(chat?.memoryBlocks || []),
       knowledgeFiles: JSON.stringify(knowledgeFiles)
     };
@@ -247,7 +161,7 @@ export default function ChatModal({ chat, onClose }) {
         <div className="flex justify-between items-start">
           <div>
             <h2 className="text-xl font-bold text-white tracking-wide font-sans">Workspace Settings</h2>
-            <p className="text-xs text-gray-400 mt-1 font-sans">Configure your workspace environment, initial profiles, and global knowledge base.</p>
+            <p className="text-xs text-gray-400 mt-1 font-sans">Configure your workspace environment and the profiles it starts with.</p>
           </div>
           <button 
             onClick={onClose}
@@ -431,98 +345,12 @@ export default function ChatModal({ chat, onClose }) {
             </div>
           </div>
 
-          {/* RAG Knowledge Base Dropzone */}
-          <div>
-            <div className="flex items-center space-x-1.5 mb-1.5 mt-2">
-              <label className="block text-xs font-bold text-gray-200 font-sans">Global Chat Knowledge Base (Shared RAG)</label>
-              <HelpCircle 
-                data-tooltip="Documents added here act as the global memory for this workspace. All AI profiles will automatically pull relevant context from these files when answering questions." 
-                className="w-3.5 h-3.5 text-gray-500 cursor-help hover:text-accent transition-colors"
-              />
-            </div>
-
-            {/* Strategy Radio Options */}
-            <div className="bg-[#051116] border border-gray-800/80 rounded-lg p-3 mb-3 flex gap-4">
-              <label className="flex-1 flex items-start space-x-3 cursor-pointer group">
-                <input 
-                  type="radio" 
-                  name="ingestionStrategy" 
-                  value="full_context" 
-                  checked={ingestionStrategy === 'full_context'}
-                  onChange={() => setIngestionStrategy('full_context')}
-                  className="mt-1 accent-accent cursor-pointer" 
-                />
-                <div>
-                  <span className="text-xs font-bold text-gray-200 group-hover:text-accent transition-colors font-sans">Constant Memory</span>
-                  <p className="caption mt-0.5">Inject full file directly into every prompt (Always loaded).</p>
-                </div>
-              </label>
-              <div className="w-px bg-gray-800/80"></div>
-              <label className="flex-1 flex items-start space-x-3 cursor-pointer group">
-                <input 
-                  type="radio" 
-                  name="ingestionStrategy" 
-                  value="rag_search" 
-                  checked={ingestionStrategy === 'rag_search'}
-                  onChange={() => setIngestionStrategy('rag_search')}
-                  className="mt-1 accent-accent cursor-pointer" 
-                />
-                <div>
-                  <span className="text-xs font-bold text-gray-200 group-hover:text-accent transition-colors font-sans">Searchable (RAG)</span>
-                  <p className="caption mt-0.5">Chunk the document and load relevant snippets dynamically using vector search.</p>
-                </div>
-              </label>
-            </div>
-            
-            <div 
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
-              onClick={() => fileInputRef.current?.click()}
-              className="border-2 border-dashed border-gray-800 hover:border-accent bg-[#011419]/50 rounded-xl p-4 text-center cursor-pointer transition-colors group"
-            >
-              <UploadCloud className="mx-auto mb-1 text-gray-600 group-hover:text-accent transition-colors w-6 h-6" />
-              <p className="caption font-medium">Drag and drop document files here, or <span className="text-accent font-sans">browse files</span></p>
-              <input 
-                type="file" 
-                ref={fileInputRef}
-                multiple 
-                accept=".pdf,.docx,.txt,.md" 
-                onChange={handleFileUpload}
-                className="hidden" 
-              />
-            </div>
-
-            {/* List of uploaded RAG files */}
-            <div className="flex flex-wrap gap-2 mt-2">
-              {knowledgeFiles.map((file, idx) => {
-                const isConstant = !file.strategy || file.strategy === 'constant' || file.strategy === 'full_context';
-                return (
-                  <div 
-                    key={idx} 
-                    className="flex items-center space-x-1.5 bg-[#0a161d] border border-gray-800 text-gray-300 text-[10px] font-medium px-2.5 py-1.5 rounded-md shadow-sm"
-                  >
-                    <FileText className="w-3.5 h-3.5 text-accent" />
-                    <span className="truncate max-w-[150px] font-sans" title={file.name}>{file.name}</span>
-                    <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded border uppercase tracking-wider font-sans ${
-                      isConstant 
-                        ? 'bg-accent/25 text-accent border-accent/40' 
-                        : 'bg-[#3b82f6]/20 text-[#3b82f6] border-[#3b82f6]/30'
-                    }`}>
-                      {isConstant ? 'Constant' : 'RAG'}
-                    </span>
-                    <span className="text-[8px] text-gray-500 font-mono">({Math.round(file.size / 1024)} KB)</span>
-                    <button 
-                      type="button" 
-                      onClick={() => removeFile(file.name)} 
-                      className="text-gray-500 hover:text-red-500 transition-colors p-0.5 rounded cursor-pointer"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
+          {/* Memory pointer */}
+          <div className="flex items-center space-x-2.5 bg-[#011419] border border-gray-800/80 rounded-lg px-3.5 py-3">
+            <Brain className="w-4 h-4 text-accent shrink-0" />
+            <p className="caption">
+              Want the AI to know facts, documents or lore? Add them anytime from the <span className="text-accent font-semibold">Memory</span> tab inside the workspace.
+            </p>
           </div>
         </div>
 

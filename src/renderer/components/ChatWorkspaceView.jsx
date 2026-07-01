@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { ArrowLeft, Sliders, Paperclip, Send, Cpu, Workflow, X, MoreVertical, Copy, Edit, RotateCw, Play, Square, ChevronDown, Plus, ChevronLeft, ChevronRight, Brain, Folder, MessageSquare, Trash2, RotateCcw, PenTool, Globe } from 'lucide-react';
-import RightSidebar from './RightSidebar';
+import ConfigurationView from './ConfigurationView';
 import SummarizeModal from './modals/SummarizeModal';
 import ChatFilesView from './ChatFilesView';
 import ChatMemoryView from './ChatMemoryView';
@@ -134,7 +134,6 @@ export default function ChatWorkspaceView() {
   const [isHoveringSend, setIsHoveringSend] = useState(false);
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const [selectedTargetId, setSelectedTargetId] = useState(''); // Selected profile or workflow ID
-  const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
 
   const [expandedUserMessages, setExpandedUserMessages] = useState({});
   const [expandedThinking, setExpandedThinking] = useState({});
@@ -544,6 +543,13 @@ export default function ChatWorkspaceView() {
 
   const isDocumentMode = settings?.interface?.layout === 'document';
 
+  // Active context usage bar (optional, shown at the top of the chat)
+  const ctxThreshold = activeChat.archiveThreshold || 60000;
+  const ctxStartIndex = activeChat.summarizedIndex || 0;
+  let ctxTokens = 0;
+  activeMessages.slice(ctxStartIndex).forEach(m => { ctxTokens += Math.ceil((m.content || '').length / 4); });
+  const ctxPercentage = Math.min((ctxTokens / ctxThreshold) * 100, 100);
+
   const generatingBubbleStyle = isDocumentMode ? {
     backgroundColor: `rgba(10, 22, 29, ${(activeChat.aiBubbleOpacity ?? 0) / 100})`,
     border: '1px solid rgba(251, 203, 45, 0.15)',
@@ -677,17 +683,27 @@ export default function ChatWorkspaceView() {
 
           <div className="flex-1 flex justify-end ml-4">
             <button
-              onClick={() => setRightSidebarOpen(!rightSidebarOpen)}
-              className={`p-1.5 rounded-md transition-colors cursor-pointer shrink-0 ${rightSidebarOpen
+              onClick={() => setActiveSubView('configuration')}
+              className={`p-1.5 rounded-md transition-colors cursor-pointer shrink-0 ${activeSubView === 'configuration'
                 ? 'text-accent bg-white/5'
                 : 'text-gray-500 hover:text-white hover:bg-white/5'
                 }`}
-              title="Chat Settings"
+              title="Configuration"
             >
               <Sliders className="w-4.5 h-4.5" />
             </button>
           </div>
         </div>
+
+        {/* Active context usage bar under the header (chat only, when enabled) */}
+        {activeSubView === 'chat' && activeChat.showContextBar === 1 && (
+          <div className="h-1 w-full bg-gray-800/50 shrink-0 relative z-10" title={`Active context: ~${ctxTokens} / ${ctxThreshold} tokens`}>
+            <div
+              style={{ width: `${ctxPercentage}%` }}
+              className={`h-full transition-all duration-500 ease-out ${ctxPercentage >= 95 ? 'bg-red-500' : ctxPercentage >= 75 ? 'bg-orange-500' : 'bg-accent'}`}
+            />
+          </div>
+        )}
 
         {activeSubView === 'chat' ? (
           <>
@@ -1372,7 +1388,7 @@ export default function ChatWorkspaceView() {
                                   type="button"
                                   onClick={() => {
                                     setProfileDropdownOpen(false);
-                                    setRightSidebarOpen(true);
+                                    setActiveSubView('configuration');
                                   }}
                                   className="mt-1 flex items-center space-x-1 text-[9px] font-bold text-accent hover:underline uppercase cursor-pointer"
                                 >
@@ -1416,7 +1432,7 @@ export default function ChatWorkspaceView() {
                                   type="button"
                                   onClick={() => {
                                     setProfileDropdownOpen(false);
-                                    setRightSidebarOpen(true);
+                                    setActiveSubView('configuration');
                                   }}
                                   className="mt-1 flex items-center space-x-1 text-[9px] font-bold text-accent hover:underline uppercase cursor-pointer"
                                 >
@@ -1475,6 +1491,10 @@ export default function ChatWorkspaceView() {
             chat={activeChat}
             electronAPI={electronAPI}
           />
+        ) : activeSubView === 'configuration' ? (
+          <ConfigurationView
+            onTriggerSummarize={() => setSummarizeModalOpen(true)}
+          />
         ) : (
           <ChatFilesView
             chat={activeChat}
@@ -1530,13 +1550,6 @@ export default function ChatWorkspaceView() {
           </div>
         </div>
       )}
-
-      {/* Right Drawer Config sidebar panel */}
-      <RightSidebar
-        isOpen={rightSidebarOpen}
-        onClose={() => setRightSidebarOpen(false)}
-        onTriggerSummarize={() => setSummarizeModalOpen(true)}
-      />
 
       <SummarizeModal
         isOpen={summarizeModalOpen}
