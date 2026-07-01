@@ -6,7 +6,7 @@
 
 ### Craft the mind. Chain the thought.
 
-A **bring-your-own-key** desktop platform that puts you in full control of AI — build custom personas, feed them your own knowledge, chain them into multi-step workflows, and let them remember everything. No cloud lock-in, no subscriptions, no limits.
+A **bring-your-own-key** desktop platform that puts you in full control of AI — build custom personas, feed them your own knowledge, chain them into multi-step workflows, write long-form work beside them, and let them remember everything. No cloud lock-in, no subscriptions, no limits.
 
 **Built with Electron · React · Vite · SQLite · Hugging Face Transformers**
 
@@ -32,6 +32,8 @@ Most AI tools are thin wrappers around a single API call. Kallamo is different �
 While developer-focused tools like Claude Code and Cursor serve the coding world, **Kallamo is built for everyone else** — writers, game masters, project managers, content creators, researchers, students, and anyone who wants to get more out of AI without writing a single line of code.
 
 - **Build any AI persona** — A creative writing assistant. An RPG narrator. A project planner. A documentation specialist. A daily task organizer. The same platform, infinite use cases.
+- **Write with AI at your side** — a dedicated Writing Desk lets you draft long-form documents and books, then select any passage and have a persona rewrite, expand, or critique it as a non-destructive suggestion you can accept or discard.
+- **Build living worlds** — a per-workspace registry of your characters, places, and their relationships gives your story a structured "bible," and knowledge is automatically tagged with the entities it mentions so the AI keeps track of who and what it is actually about.
 - **Chain multiple personas** into sequential workflows where each step feeds the next.
 - **Ground every response** in your own documents and reference material through a local hybrid RAG engine.
 - **Never lose context** — an automatic memory system archives and vectorizes old conversations so they remain searchable forever.
@@ -57,17 +59,25 @@ Looking to build from source instead? See [Developer Setup](#developer-setup) be
 
 ## Key Features
 
+### ✍️ Writing Desk
+
+A dedicated document-writing workspace for long-form work — novels, scripts, reports, study material. It offers a full writing surface (headings, fonts and sizes, colors, page setup, find & replace) and faithful import/export, including whole-book folder export. Its heart is AI-assisted editing: select any passage, invoke an AI profile on it, and the result arrives as a **non-destructive, inline block-level diff** you review and accept or discard — the editor never blocks while it runs. Each chapter is indexed on its own, so a persona can draw on context from anywhere in the book.
+
+### 🌍 Worldbuild & the Living-World Index
+
+Give your project a structured "bible": a per-workspace registry of the **entities** in your world (characters, places, factions, items) and the **relations** between them. Under the hood, your knowledge is automatically tagged with the entities and world variables it mentions, and retrieval can follow those tags — looking an entity up, hopping to related entities, and pulling in linked lore — so the AI keeps track of *who* and *what* your knowledge is really about, not just which words match.
+
 ### 🔗 Multi-Step AI Workflows
 
 Define linear chains of AI profiles where the output of one step becomes the input of the next. A "Research → Analyze → Draft → Review" pipeline runs as a single action, with each step using its own system prompt, model, temperature, and knowledge base. Use it for creative writing, business analysis, study notes, or anything that benefits from structured multi-pass AI processing.
 
 ### 🧠 Hybrid RAG Engine (Retrieval-Augmented Generation)
 
-Every AI profile can be backed by a local knowledge base. Feed it your RPG lorebooks, company SOPs, research papers, project briefs, or personal notes — files (`.pdf`, `.docx`, `.txt`) are chunked, vectorized using `Xenova/all-MiniLM-L6-v2`, and stored in SQLite. At query time, a **Reciprocal Rank Fusion** algorithm merges dense vector search (cosine similarity) with sparse keyword search (FTS5 BM25) to surface the most relevant context.
+Every AI profile can be backed by a local knowledge base. Feed it your RPG lorebooks, company SOPs, research papers, project briefs, or personal notes — files (`.pdf`, `.docx`, `.txt`) are chunked, vectorized using the multilingual `Xenova/multilingual-e5-small` model, and stored in SQLite. At query time, Kallamo fuses dense vector search (cosine similarity) with sparse keyword search (FTS5 BM25) and ranks results by how semantically close they actually are to your query, with a tunable **Retrieval Strictness** cutoff that keeps weak or unrelated matches out of the context.
 
 ### 🤖 Agentic RAG Mode
 
-For profiles that need deeper research, Kallamo can run an autonomous **Thought → Action** retrieval loop. The agent decides which knowledge bases to search, which files to read in full, and which memories to recall — then synthesizes a research brief before the main generation step. Capped at 2 turns for cost efficiency.
+For profiles that need deeper research, Kallamo can run an autonomous **Thought → Action** retrieval loop. The agent decides which knowledge bases to search, which files to read in full, which entities to look up, and which memories to recall — then synthesizes a research brief before the main generation step. The turn budget is configurable per profile (default 3) to balance depth against cost.
 
 ### 💾 Smart Chat Memory & Auto-Archiving
 
@@ -75,7 +85,7 @@ When a conversation grows beyond a configurable token threshold, Kallamo automat
 
 ### 📦 Portable AI Profiles & Workflows
 
-Export any AI profile (system prompt, knowledge base files, manual snippets) as a `.klp` package, any workflow chain as a `.klw` package, or any knowledge base independently as a `.klkb` package. Import them on another machine or share them with your community. A game master can share their RPG narrator profile; a team lead can distribute a project planning assistant — complete with all their knowledge and configuration.
+Export any AI profile (system prompt, knowledge base files, custom memory) as a `.klp` package, any workflow chain as a `.klw` package, or any knowledge base independently as a `.klkb` package. Import them on another machine or share them with your community. A game master can share their RPG narrator profile; a team lead can distribute a project planning assistant — complete with all their knowledge and configuration.
 
 ### 🔌 Bring Your Own Key — Multi-Provider API Engine
 
@@ -113,7 +123,7 @@ graph TD
         IPC --> WF["Workflow Runner"]
         WF --> API["API Engine (Multi-Provider)"]
         WF --> RAG["RAG Service (Hybrid Search + Agentic)"]
-        RAG -->|"Xenova/all-MiniLM-L6-v2"| DB
+        RAG -->|"Xenova/multilingual-e5-small"| DB
     end
 
     PL <--> IPC
@@ -199,6 +209,8 @@ Kallamo/
 │   │   ├── api-engine.js        # Multi-provider API client
 │   │   ├── workflow-runner.js   # Linear chain executor
 │   │   ├── rag-service.js       # Vector engine & hybrid search
+│   │   ├── entities.js          # Worldbuild entity/relation registry & tagging
+│   │   ├── writing-desk-invocation.js # AI select→invoke for the Writing Desk
 │   │   └── ipc-handlers.js      # All IPC endpoint definitions
 │   ├── renderer/
 │   │   ├── App.jsx              # Root layout, global effects
@@ -227,7 +239,7 @@ Kallamo/
 | **Frontend** | React 19, Vite 8 | UI rendering, hot module replacement |
 | **Styling** | Tailwind CSS v4 | Utility-first CSS framework |
 | **Database** | better-sqlite3 (WAL mode) | Synchronous SQLite with FTS5 support |
-| **Embeddings** | `@huggingface/transformers` | Local vector embeddings (MiniLM-L6-v2) |
+| **Embeddings** | `@huggingface/transformers` | Local multilingual vector embeddings (multilingual-e5-small) |
 | **Document Parsing** | mammoth, unpdf | DOCX and PDF text extraction |
 | **Packaging** | adm-zip | `.klp` / `.klw` / `.klkb` profile and workflow export/import |
 | **Installer** | electron-builder (NSIS) | Windows installer generation |

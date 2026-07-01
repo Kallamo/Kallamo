@@ -2,15 +2,21 @@
 
 All notable changes to Kallamo are documented in this file. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.0] - Unreleased
+## [1.1.0-beta.1] - 30/06/2026
 
 ### Added
+- **Writing Desk**: a dedicated document-writing workspace with a full-featured writing surface — headings, fonts and font sizes, colors, page setup, and find & replace. You can import and export your work with faithful formatting, including whole-book folder export. An AI-assisted editing layer lets you select text and invoke a profile on it: the suggestion arrives as a non-destructive, inline block-level diff you can review and accept or discard, and it runs without blocking the editor. Chapters are indexed individually, so the AI can draw on context from across the whole book.
+- **Worldbuild**: a per-workspace registry of the entities in your world (characters, places, and more) and the relations between them, giving your story a structured "bible" the AI can consult.
+- **Living-world index**: knowledge is now automatically tagged with the entities and world variables it mentions, and retrieval can follow those tags — looking an entity up, hopping to related entities, and pulling in linked lore — so the AI keeps track of who and what your knowledge is actually about. An **Index** button lets you build or refresh this on demand.
+- **Guided first run**: new installs now start with three ready-to-use, fully editable AI Profiles so you have something working out of the box, and clear empty states point you to where an API key is needed.
 - **Memory switches**: every item in the Knowledge Base Manager and Workspace Memory now has an on/off toggle. Turning one off keeps the content but excludes it from the AI. It is no longer injected or retrieved, and it drops out of the **Always-on** and **Searchable** token totals, so you can park a document or custom memory without deleting it. Works for searchable files, constant files, and custom memories, in both AI Profiles and chat workspaces.
 - **Retrieval Strictness** (Settings → Advanced): a single control over how strictly retrieved knowledge must match your query, with guidance text that adapts to the selected level and recommended ranges highlighted. It replaces the previous "Similarity Threshold," which only affected part of the results.
 - **Durable chunk edits**: when you edit an individual searchable chunk of a file (in the Knowledge Base Manager or Workspace Memory), the edit is now marked with an **"edited"** badge and is preserved when knowledge is re-indexed — for example after an embedding-model upgrade — instead of being silently overwritten by a fresh split of the original file. Edited chunks also travel with the knowledge base when you export and import it, so a shared KB keeps your corrections and the receiver can see which chunks were hand-edited.
 
 ### Changed
 - Knowledge base and memory retrieval is noticeably more accurate. Results are now ranked by how semantically close they actually are to your query instead of by rank position alone, so strong matches clearly rise to the top and weak or unrelated content scores low. To take full effect on existing knowledge, re-upload the affected documents so they are re-indexed.
+- Agentic retrieval is more robust and can research across turns: it tolerates imperfect model output, can be tuned per profile, and now understands the entities and world variables behind your knowledge, so it finds the right context more reliably.
+- Dropdowns and menus throughout the app (font pickers, profile menus, and more) no longer get clipped or hidden behind neighboring panels, and switching between adjacent menus now takes a single click.
 - Helper and description text throughout the app is now more legible and visually consistent. It is also sized relative to your **Interface → Font Size** setting, so it scales together with the rest of the interface instead of staying fixed at a tiny size.
 - In the AI Profile creation flow, the knowledge step is now labeled simply **"Knowledge Base"** (the separate post-creation tool remains the "Knowledge Base Manager").
 

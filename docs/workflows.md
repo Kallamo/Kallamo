@@ -254,7 +254,7 @@ profile_kb.klkb (ZIP)
 
 ## Workflow Packaging (.klw)
 
-A `.klw` (Kallamo Workflow Package) exports a complete workflow chain — including all referenced profiles, their knowledge bases, and manual snippets — as a single distributable file.
+A `.klw` (Kallamo Workflow Package) exports a complete workflow chain — including all referenced profiles, their knowledge bases, and custom memory — as a single distributable file.
 
 ### Package Structure
 

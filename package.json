@@ -1,6 +1,6 @@
 {
   "name": "kallamo",
-  "version": "1.0.6",
+  "version": "1.1.0-beta.1",
   "description": "A bring-your-own-key AI orchestration platform — build personas, feed them knowledge, chain them into workflows, and let them remember everything.",
   "desktopName": "Kallamo",
   "main": "src/main.js",

@@ -174,7 +174,7 @@ Vectorized text chunks for both profile and chat knowledge bases.
 | `ownerType` | TEXT | `profile_kb`, `chat_kb`, or `chat_memory` |
 | `source` | TEXT | Original filename or memory block title |
 | `text` | TEXT | Enriched text (`Document: <name>\nContent: <text>`) |
-| `vector` | TEXT | JSON-serialized float array (384 dimensions for MiniLM) |
+| `vector` | TEXT | JSON-serialized float array (384 dimensions for multilingual-e5-small) |
 | `createdAt` | INTEGER | Unix timestamp in milliseconds |
 
 **Index:** `idx_knowledge_chunks_owner` on `(ownerId, ownerType)`.
@@ -221,7 +221,7 @@ The database self-migrates on startup:
 
 ## Hybrid RAG Engine
 
-The RAG pipeline uses a **Reciprocal Rank Fusion (RRF)** algorithm to merge two independent retrieval signals.
+The RAG pipeline uses a **magnitude-aware weighted fusion** to merge two independent retrieval signals — dense semantic similarity and sparse BM25 keyword relevance — ranking by how close each chunk actually is to the query rather than by its rank position alone.
 
 ### Ingestion Pipeline
 
@@ -233,7 +233,7 @@ Raw Text
 Text Chunks (paragraph-aware splitting, min 50 chars)
     ↓ vectorizeChunks()
     ↓ Enrich: "Document: <filename>\nTags: <keywords>\nContent: <chunk>"
-    ↓ generateEmbeddingVector() → Xenova/all-MiniLM-L6-v2 (384-dim, quantized)
+    ↓ generateEmbeddingVector() → Xenova/multilingual-e5-small (384-dim, quantized, query:/passage: prefixed)
 Vectors + Text
     ↓ insertChunksToDb()
     ↓ INSERT INTO knowledge_chunks (vector as JSON text)
@@ -251,17 +251,23 @@ At query time, `executeHybridSearch()` runs both retrieval strategies in paralle
 Query text → generateEmbeddingVector(query) → 384-dim vector
     ↓
 For each chunk in knowledge_chunks WHERE ownerId = ? AND ownerType = ?:
-    score = cosine_similarity(query_vector, chunk_vector)
-    ↓
-Filter: score >= threshold (default: 0.3)
-Sort: descending by score
+    cosine = cosine_similarity(query_vector, chunk_vector)
 ```
 
-The cosine similarity is computed as a raw dot product since `all-MiniLM-L6-v2` produces L2-normalized vectors:
+The dense set defines membership: the owner-scoped chunks are the only candidates, so a sparse-only hit belonging to another owner never enters the results. The cosine similarity is computed as a raw dot product since `multilingual-e5-small` produces L2-normalized vectors:
 
 ```
 similarity(A, B) = Σ(Aᵢ × Bᵢ)
 ```
+
+**Strictness floor.** Normalized e5 cosines live in a narrow high band — even unrelated text rarely scores below ~0.70 — so a raw 0–1 threshold is meaningless. The **Retrieval Strictness** dial (`0–1`, default `0.3`) is instead mapped onto that real band and used as a hard cutoff applied during fusion:
+
+```
+cosineFloor = 0.70 + strictness × (0.88 − 0.70)
+keep chunk only if denseScore >= cosineFloor
+```
+
+The low end of the dial trims only obvious off-topic noise; the high end keeps near-exact matches.
 
 #### 2. Sparse Search (Keyword)
 
@@ -272,26 +278,34 @@ SELECT chunkId, bm25(knowledge_chunks_fts) as rank
 FROM knowledge_chunks_fts
 WHERE knowledge_chunks_fts MATCH ?
     ↓
-Sort: ascending by BM25 rank (lower = more relevant)
+relevance = −bm25(rank)          (SQLite bm25() is negative; more negative = more relevant)
+    ↓
+min-max normalize relevance into [0,1] within the result set
 ```
 
-If the FTS5 query fails (special characters), the engine falls back to an alphanumeric-only sanitized query.
+If the FTS5 query fails (special characters), the engine falls back to an alphanumeric-only sanitized query. Normalizing the BM25 relevance into `[0,1]` makes it directly comparable in magnitude to the dense cosine, which is what enables weighted fusion instead of rank-only fusion.
 
-#### 3. Reciprocal Rank Fusion
+#### 3. Magnitude-Aware Weighted Fusion
 
-Both result lists are merged using RRF with a constant `k = 60`:
+The dense candidates and the normalized sparse map are merged in a single scoring pass (`fuseAndRank`). Dense is the trustworthy signal and carries most of the weight (`ALPHA_DENSE = 0.7`); sparse mainly breaks ties and rescues exact keyword matches:
 
 ```
-For each unique chunk_id across both result sets:
-    dense_rank  = position in dense results (0-indexed), or absent
-    sparse_rank = position in sparse results (0-indexed), or absent
+For each dense candidate chunk:
+    cosine     = dense cosine similarity              (drives membership)
+    sparseNorm = normalized BM25 relevance, or 0 if absent
+    boost      = tag boost, or 0                       (see below)
 
-    score = 1/(60 + dense_rank + 1)  +  1/(60 + sparse_rank + 1)
-              ↑ if present                  ↑ if present
-              (0 if absent)                 (0 if absent)
+    fusionScore = 0.7 × cosine + 0.3 × sparseNorm + boost
+
+Discard any chunk whose cosine < cosineFloor (the strictness cutoff above).
+Sort by descending fusionScore, truncate to top-K (default: 5).
 ```
 
-Final results are sorted by descending fusion score and truncated to top-K (default: 5).
+The strictness floor is checked against the raw `cosine`, not the fused score, so a strong keyword or tag match can reorder results but can never rescue a semantically off-topic chunk.
+
+**Dynamic-tag boost (living-world index).** For the world-indexed tier (chat memory), chunks carry tags for the Worldbuild entities and world variables they mention. When the query mentions one of a chunk's tags (whole-word, Unicode-aware match, so "Ana" doesn't match inside "banana"), a small fixed bonus (`TAG_BOOST = 0.05`) is added to its fusion score. It is deliberately small relative to the cosine band, so it reorders within the surviving set without swamping semantic similarity — and, being applied after the floor filter, it never rescues a chunk that failed the strictness cutoff.
+
+This single `fuseAndRank` path is shared by single-owner search, multi-owner cross-chapter search, and the in-memory volatile-chapter search in the Writing Desk.
 
 ### Knowledge File Strategies
 
@@ -306,7 +320,7 @@ Each file in a profile's knowledge base has a `strategy` field:
 
 | Mode | Provider | Model | Dimensions |
 |------|----------|-------|------------|
-| **Local** (default) | `@huggingface/transformers` | `Xenova/all-MiniLM-L6-v2` (quantized) | 384 |
+| **Local** (default) | `@huggingface/transformers` | `Xenova/multilingual-e5-small` (quantized) | 384 |
 | **External (OpenAI)** | OpenAI API | `text-embedding-3-small` (configurable) | 1536 |
 | **External (Google AI)** | Google AI API | `text-embedding-004` (configurable) | 768 |
 
@@ -327,7 +341,7 @@ sequenceDiagram
 
     WR->>Agent: "Here is the user prompt + available tools"
     
-    loop Turn 1..2 (max 2 turns)
+    loop Turn 1..N (per-profile budget, default 3)
         Agent->>Agent: THOUGHT: analyze what's needed
         
         alt Tool Call: search_kb
@@ -355,7 +369,9 @@ The agent communicates via structured XML tags embedded in its text output:
 |------|--------|---------|
 | `search_kb` | `<tool_call name="search_kb" query="..." />` | Hybrid search across profile + chat knowledge bases |
 | `read_file` | `<tool_call name="read_file" filename="..." />` | Read the full text of a specific knowledge base file |
-| `search_memories` | `<tool_call name="search_memories" query="..." />` | Search chat's archived memory blocks and manual snippets |
+| `search_memories` | `<tool_call name="search_memories" query="..." />` | Search chat's archived memory blocks, custom memory, and manual tags |
+| `lookup_entity` | `<tool_call name="lookup_entity" query="..." />` | Return every chunk tagged with a known Worldbuild entity (by name/alias) plus its related entities, so the agent can traverse the relation graph instead of guessing from prose |
+| `read_lore` | `<tool_call name="read_lore" query="..." />` | Return the most relevant passages of an entity's linked lore document (Writing Desk), if it has one |
 | `finish` | `<finish sources="file1, file2">findings</finish>` | Conclude research; `sources` attribute filters context to only relevant documents |
 
 ### Source Filtering
@@ -371,7 +387,7 @@ This filtering prevents irrelevant context from inflating the final prompt and c
 
 ### Cost Controls
 
-- **Maximum 2 turns** — The loop exits after 2 LLM calls regardless of tool state.
+- **Bounded turns** — The loop exits after a configurable per-profile turn budget (default 3, clamped 1–5) regardless of tool state.
 - **Early exit** — The agent is instructed to call `<finish>` immediately when sufficient context is found.
 - **No duplicate queries** — The agent is instructed to avoid repeating similar search queries.
 - **Deduplication maps** — Retrieved chunks are deduplicated by ID across all turns using JavaScript `Map` objects.
