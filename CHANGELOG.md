@@ -2,7 +2,7 @@
 
 All notable changes to Kallamo are documented in this file. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.0-beta.1] - 30/06/2026
+## [1.1.0-beta.1] - 2026-06-30
 
 ### Added
 - **Writing Desk**: a dedicated document-writing workspace with a full-featured writing surface — headings, fonts and font sizes, colors, page setup, and find & replace. You can import and export your work with faithful formatting, including whole-book folder export. An AI-assisted editing layer lets you select text and invoke a profile on it: the suggestion arrives as a non-destructive, inline block-level diff you can review and accept or discard, and it runs without blocking the editor. Chapters are indexed individually, so the AI can draw on context from across the whole book.
