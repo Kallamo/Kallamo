@@ -11,6 +11,7 @@ import EmptyState from './ui/EmptyState';
 import Checkbox from './ui/Checkbox';
 import Toggle from './ui/Toggle';
 import RenameFilesModal from './ui/RenameFilesModal';
+import Popover from './ui/Popover';
 
 export default function ChatMemoryView({
   chat,
@@ -55,8 +56,9 @@ export default function ChatMemoryView({
   const [savingSnippet, setSavingSnippet] = useState(false);
   const [indexing, setIndexing] = useState(false);
 
-  // World-index backfill: tag this chat's already-archived raw chunks so the dynamic-
-  // tag boost has something to match. One-shot; safe to re-run (INSERT OR IGNORE).
+  // World-index re-index: drop this chat's existing chunk tags and re-tag every
+  // archived raw chunk from scratch, so a re-run reflects the current tagger and
+  // entity registry rather than accumulating stale tags.
   const handleIndexMemories = async () => {
     if (typeof electronAPI?.backfillWorldIndex !== 'function') {
       showToast('Indexing unavailable — fully restart the app (close + reopen Electron).', 'error');
@@ -82,6 +84,9 @@ export default function ChatMemoryView({
   const [editorKeywords, setEditorKeywords] = useState([]);
   const [tagInput, setTagInput] = useState('');
   const [tagSuggestionsOpen, setTagSuggestionsOpen] = useState(false);
+  const tagAnchorRef = useRef(null);
+  const addDropdownAnchorRef = useRef(null);
+  const scopeAnchorRef = useRef(null);
   const [editorStrategy, setEditorStrategy] = useState('rag_search');
   const [viewingFileBlock, setViewingFileBlock] = useState(null);
 
@@ -913,7 +918,7 @@ export default function ChatMemoryView({
             </button>
 
             {/* Unified +Add Dropdown */}
-            <div className="relative">
+            <div className="relative" ref={addDropdownAnchorRef}>
               <button
                 onClick={() => setAddDropdownOpen(!addDropdownOpen)}
                 className="px-3.5 py-1.5 bg-accent hover:brightness-110 active:scale-98 text-[#011419] text-[10px] font-bold uppercase tracking-wider rounded-lg shadow-md transition-all cursor-pointer flex items-center space-x-1.5"
@@ -923,10 +928,7 @@ export default function ChatMemoryView({
                 <ChevronDown className={`w-3 h-3 transition-transform ${addDropdownOpen ? 'rotate-180' : ''}`} />
               </button>
 
-              {addDropdownOpen && (
-                <>
-                  <div className="fixed inset-0 z-30" onClick={() => setAddDropdownOpen(false)} />
-                  <div className="absolute right-0 mt-1.5 w-48 bg-[#0a161d] border border-gray-800 rounded-xl shadow-xl p-2 z-40 animate-in fade-in duration-200">
+              <Popover anchorRef={addDropdownAnchorRef} open={addDropdownOpen} onClose={() => setAddDropdownOpen(false)} matchAnchorWidth={false} align="right" className="w-48 !p-2">
                     <button
                       onClick={() => {
                         setAddDropdownOpen(false);
@@ -976,9 +978,7 @@ export default function ChatMemoryView({
                       <Upload className="w-3.5 h-3.5 text-accent" />
                       <span>Import KB Package</span>
                     </button>
-                  </div>
-                </>
-              )}
+              </Popover>
             </div>
 
             <input
@@ -1171,7 +1171,7 @@ export default function ChatMemoryView({
 
                     {/* Writing Profiles Scoping dropdown */}
                     {block.type !== 'summarized' && (
-                      <div className="relative">
+                      <div className="relative" ref={activeScopingBlockId === block.id ? scopeAnchorRef : null}>
                         <button
                           onClick={() => setActiveScopingBlockId(activeScopingBlockId === block.id ? null : block.id)}
                           className={`flex items-center space-x-1 px-2.5 py-1 border rounded-lg text-[9px] font-bold uppercase transition-colors cursor-pointer ${block.profiles.length > 0
@@ -1185,9 +1185,7 @@ export default function ChatMemoryView({
                         </button>
 
                         {activeScopingBlockId === block.id && (
-                          <>
-                            <div className="fixed inset-0 z-30" onClick={() => setActiveScopingBlockId(null)} />
-                            <div className="absolute right-0 mt-1.5 w-48 bg-[#0a161d] border border-gray-800 rounded-xl shadow-xl p-2 z-40 animate-in fade-in duration-200">
+                          <Popover anchorRef={scopeAnchorRef} open onClose={() => setActiveScopingBlockId(null)} matchAnchorWidth={false} align="right" scroll={false} className="w-48 !p-2">
                               <span className="block text-[8px] font-bold text-gray-500 uppercase tracking-widest px-2 py-1">Scope Settings</span>
 
                               <div className="max-h-40 overflow-y-auto custom-scrollbar space-y-0.5 mt-1 select-none">
@@ -1236,8 +1234,7 @@ export default function ChatMemoryView({
                               <span className="text-[8px] text-gray-500 italic px-2 block leading-snug">
                                 If no profiles are selected, this block is shared globally.
                               </span>
-                            </div>
-                          </>
+                          </Popover>
                         )}
                       </div>
                     )}
@@ -1568,7 +1565,7 @@ export default function ChatMemoryView({
 
                   {/* Add Tag Row */}
                   <div className="flex space-x-2">
-                    <div className="relative flex-1">
+                    <div className="relative flex-1" ref={tagAnchorRef}>
                       <TextInput
                         type="text"
                         value={tagInput}
@@ -1588,41 +1585,39 @@ export default function ChatMemoryView({
                       />
 
                       {/* Suggestions Dropdown */}
-                      {tagSuggestionsOpen && (
-                        (() => {
-                          const allTags = Array.from(new Set(
-                            combinedBlocks.filter(b => b.type === 'snippet').flatMap(b => b.keywords || [])
-                          )).filter(t => t && !editorKeywords.includes(t));
+                      {(() => {
+                        const allTags = Array.from(new Set(
+                          combinedBlocks.filter(b => b.type === 'snippet').flatMap(b => b.keywords || [])
+                        )).filter(t => t && !editorKeywords.includes(t));
 
-                          const filteredSuggestions = allTags.filter(t =>
-                            t.toLowerCase().includes(tagInput.toLowerCase())
-                          );
+                        const filteredSuggestions = allTags.filter(t =>
+                          t.toLowerCase().includes(tagInput.toLowerCase())
+                        );
 
-                          if (filteredSuggestions.length === 0) return null;
-
-                          return (
-                            <>
-                              <div className="fixed inset-0 z-10" onClick={() => setTagSuggestionsOpen(false)} />
-                              <div className="absolute left-0 right-0 mt-1.5 bg-[#0a161d] border border-gray-800 rounded-xl shadow-xl max-h-32 overflow-y-auto custom-scrollbar p-1 z-20 animate-in fade-in duration-150">
-                                {filteredSuggestions.map((tag) => (
-                                  <button
-                                    key={tag}
-                                    type="button"
-                                    onClick={() => {
-                                      setEditorKeywords(prev => [...prev, tag]);
-                                      setTagInput('');
-                                      setTagSuggestionsOpen(false);
-                                    }}
-                                    className="w-full text-left px-3 py-1.5 text-[10px] uppercase font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
-                                  >
-                                    {tag}
-                                  </button>
-                                ))}
-                              </div>
-                            </>
-                          );
-                        })()
-                      )}
+                        return (
+                          <Popover
+                            anchorRef={tagAnchorRef}
+                            open={tagSuggestionsOpen && filteredSuggestions.length > 0}
+                            onClose={() => setTagSuggestionsOpen(false)}
+                            maxHeight={160}
+                          >
+                            {filteredSuggestions.map((tag) => (
+                              <button
+                                key={tag}
+                                type="button"
+                                onClick={() => {
+                                  setEditorKeywords(prev => [...prev, tag]);
+                                  setTagInput('');
+                                  setTagSuggestionsOpen(false);
+                                }}
+                                className="w-full text-left px-3 py-1.5 text-[10px] uppercase font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
+                              >
+                                {tag}
+                              </button>
+                            ))}
+                          </Popover>
+                        );
+                      })()}
                     </div>
 
                     <button

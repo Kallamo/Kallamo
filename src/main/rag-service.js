@@ -490,6 +490,96 @@ function computeTagBoostMap(queryText, ownerId, ownerType) {
     return boost;
 }
 
+// Build the world's known-entity vocabulary for an owner: derived from the chunk
+// tags actually present on this owner's chunks (not the whole workspace registry),
+// so the map stays faithful to what is indexed here. Each entry carries the
+// canonical name, its aliases, and how many chunks it appears on (for ranking).
+// Injected into the agentic loop so the agent queries by real names instead of
+// guessing. `limit` caps the block size for large worlds.
+function getWorldVocabulary(ownerId, ownerType, limit = 40) {
+    let rows = [];
+    try {
+        rows = db.prepare(
+            `SELECT ct.tag AS tag, ct.entity AS entity,
+                    e.canonicalName AS canonicalName, e.aliases AS aliases,
+                    COUNT(DISTINCT ct.chunkId) AS chunkCount
+             FROM chunk_tags ct
+             JOIN knowledge_chunks kc ON ct.chunkId = kc.id
+             LEFT JOIN entities e ON ct.entity = e.id
+             WHERE kc.ownerId = ? AND kc.ownerType = ?
+             GROUP BY ct.entity, ct.tag`
+        ).all(ownerId, ownerType);
+    } catch (e) { return []; }
+
+    // Collapse to one entry per canonical name (an entity may surface through several
+    // literal tag rows), keeping the highest chunk count.
+    const byName = new Map();
+    for (const r of rows) {
+        let name, aliases = [];
+        if (r.canonicalName) {
+            name = r.canonicalName;
+            try { const a = JSON.parse(r.aliases); if (Array.isArray(a)) aliases = a; } catch (e) { }
+        } else {
+            name = r.entity || r.tag;
+        }
+        if (!name) continue;
+        const key = name.toLowerCase();
+        const existing = byName.get(key);
+        if (!existing || r.chunkCount > existing.chunkCount) {
+            byName.set(key, { name, aliases, chunkCount: r.chunkCount });
+        }
+    }
+    return Array.from(byName.values())
+        .sort((a, b) => b.chunkCount - a.chunkCount)
+        .slice(0, limit);
+}
+
+// Deterministic entity retrieval: resolve a surface name/alias to its tagged chunks
+// WITHOUT embedding or the similarity floor. This is the agentic "ceiling" — given a
+// known entity, return every chunk that carries it, so the agent can pull a full
+// dossier in one exact call instead of tentative semantic searches. Also returns the
+// distinct registry entity ids that matched, so the caller can hop the relation graph
+// and reach the entity's linked lore without re-resolving.
+function lookupEntityChunks(nameOrAlias, ownerId, ownerType) {
+    const needle = String(nameOrAlias || '').toLowerCase().trim();
+    if (!needle) return { chunks: [], entityIds: [] };
+    let rows = [];
+    try {
+        rows = db.prepare(
+            `SELECT DISTINCT kc.id AS id, kc.source AS source, kc.text AS text,
+                    ct.tag AS tag, ct.entity AS entity,
+                    e.canonicalName AS canonicalName, e.aliases AS aliases
+             FROM chunk_tags ct
+             JOIN knowledge_chunks kc ON ct.chunkId = kc.id
+             LEFT JOIN entities e ON ct.entity = e.id
+             WHERE kc.ownerId = ? AND kc.ownerType = ? AND kc.enabled = 1`
+        ).all(ownerId, ownerType);
+    } catch (e) { return { chunks: [], entityIds: [] }; }
+
+    const out = new Map();
+    const entityIds = new Set();
+    for (const r of rows) {
+        let names;
+        if (r.canonicalName) {
+            names = [r.canonicalName];
+            try { const a = JSON.parse(r.aliases); if (Array.isArray(a)) names.push(...a); } catch (e) { }
+        } else {
+            names = [r.entity || r.tag || ''];
+        }
+        const hit = names.some(n => {
+            const nl = String(n).toLowerCase().trim();
+            if (!nl) return false;
+            return nl === needle || queryMentions(needle, nl) || queryMentions(nl, needle);
+        });
+        if (hit) {
+            if (!out.has(r.id)) out.set(r.id, { id: r.id, source: r.source, text: r.text });
+            // canonicalName present => ct.entity is a real registry id worth hopping from.
+            if (r.canonicalName && r.entity) entityIds.add(r.entity);
+        }
+    }
+    return { chunks: Array.from(out.values()), entityIds: Array.from(entityIds) };
+}
+
 // Load enabled candidate chunks for the given owners and parse their vectors once.
 function loadOwnerCandidates(ownerIds, ownerType) {
     if (!ownerIds || ownerIds.length === 0) return [];
@@ -658,6 +748,8 @@ module.exports = {
     executeHybridSearch,
     executeMultiOwnerSearch,
     fuseAndRank,
+    getWorldVocabulary,
+    lookupEntityChunks,
     saveChatMemory,
     tagChunks,
     isLocalEngineInstalled,

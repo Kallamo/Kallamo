@@ -2435,7 +2435,8 @@ ipcMain.handle('get-document-vector-status', (event, { documentId }) => {
 ipcMain.handle('backfill-world-index', async (event, { chatId }) => {
   try {
     const { backfillWorldIndex } = require('./workflow-runner');
-    const res = await backfillWorldIndex(chatId || null);
+    // The button is a full re-index: drop this chat's existing tags and re-tag from scratch.
+    const res = await backfillWorldIndex(chatId || null, { full: true });
     return { success: true, ...res };
   } catch (e) {
     console.error('[backfill-world-index] failed:', e);

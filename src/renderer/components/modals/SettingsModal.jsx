@@ -82,7 +82,6 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [embeddingModelName, setEmbeddingModelName] = useState(settings.advanced.embeddingModelName || '');
   const [systemApiProfileId, setSystemApiProfileId] = useState(settings.advanced.systemApiProfileId || '');
   const [systemModelName, setSystemModelName] = useState(settings.advanced.systemModelName || '');
-  const [worldbuildBlockAiSuggestions, setWorldbuildBlockAiSuggestions] = useState(settings.advanced.worldbuildBlockAiSuggestions || false);
 
   // Models pre-defined on the selected System AI connection (drives the Model dropdown).
   const systemProfileModels = (() => {
@@ -109,16 +108,16 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const settingsRef = useRef({
     accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled, writingToolbar, smartTypography,
     chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug,
-    embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, worldbuildBlockAiSuggestions
+    embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName
   });
 
   useEffect(() => {
     settingsRef.current = {
       accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled, writingToolbar,
       chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug,
-      embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, worldbuildBlockAiSuggestions
+      embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName
     };
-  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, smartTypography, chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, worldbuildBlockAiSuggestions]);
+  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, smartTypography, chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName]);
 
   // Handle immediate save for selects and color choices
   const updateSetting = async (category, key, value) => {
@@ -142,7 +141,6 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       if (key === 'embeddingApiProfileId') setEmbeddingApiProfileId(value);
       if (key === 'systemApiProfileId') { setSystemApiProfileId(value); setSystemModelName(''); }
       if (key === 'systemModelName') setSystemModelName(value);
-      if (key === 'worldbuildBlockAiSuggestions') setWorldbuildBlockAiSuggestions(value);
     }
 
     const current = settingsRef.current;
@@ -171,8 +169,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         embeddingApiProfileId: key === 'embeddingApiProfileId' ? value : current.embeddingApiProfileId,
         embeddingModelName: current.embeddingModelName,
         systemApiProfileId: key === 'systemApiProfileId' ? value : current.systemApiProfileId,
-        systemModelName: key === 'systemModelName' ? value : (key === 'systemApiProfileId' ? '' : current.systemModelName),
-        worldbuildBlockAiSuggestions: key === 'worldbuildBlockAiSuggestions' ? value : current.worldbuildBlockAiSuggestions
+        systemModelName: key === 'systemModelName' ? value : (key === 'systemApiProfileId' ? '' : current.systemModelName)
       }
     };
 
@@ -223,8 +220,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
           embeddingApiProfileId: current.embeddingApiProfileId,
           embeddingModelName: key === 'embeddingModelName' ? value : current.embeddingModelName,
           systemApiProfileId: current.systemApiProfileId,
-          systemModelName: key === 'systemModelName' ? value : current.systemModelName,
-          worldbuildBlockAiSuggestions: current.worldbuildBlockAiSuggestions
+          systemModelName: key === 'systemModelName' ? value : current.systemModelName
         }
       };
       await handleSaveSettings(newSettings);
@@ -1062,23 +1058,6 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                             ))}
                           </select>
                         </div>
-                      </div>
-                      <div className="h-px bg-gray-800/50 w-full"></div>
-                      {/* Worldbuild: block AI entity suggestions */}
-                      <div className="flex items-center justify-between">
-                        <div className="pr-4">
-                          <span className="block text-sm text-gray-200 font-bold">Block AI worldbuild suggestions</span>
-                          <span className="caption">When on, summarization and indexing never propose new characters, locations, factions or items. You author the world registry yourself.</span>
-                        </div>
-                        <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                          <input
-                            type="checkbox"
-                            checked={worldbuildBlockAiSuggestions}
-                            onChange={(e) => updateSetting('advanced', 'worldbuildBlockAiSuggestions', e.target.checked)}
-                            className="sr-only peer"
-                          />
-                          <div className="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
-                        </label>
                       </div>
                     </div>
                   </div>
