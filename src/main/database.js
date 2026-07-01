@@ -217,6 +217,8 @@ db.exec(`
     memoryBlocks TEXT,
     knowledgeFiles TEXT,
     autoSummarize INTEGER DEFAULT 0,
+    wdContextWindow INTEGER DEFAULT 8192,
+    wdLastChannel TEXT DEFAULT 'replacement',
     last_modified INTEGER DEFAULT 0,
     syncToCloud INTEGER DEFAULT 0
   );
@@ -589,6 +591,14 @@ try {
   if (!columns.includes('syncToCloud')) {
     db.exec("ALTER TABLE chats ADD COLUMN syncToCloud INTEGER DEFAULT 0");
     console.log("Database Migration: Added syncToCloud column to chats table.");
+  }
+  if (!columns.includes('wdContextWindow')) {
+    db.exec("ALTER TABLE chats ADD COLUMN wdContextWindow INTEGER DEFAULT 8192");
+    console.log("Database Migration: Added wdContextWindow column to chats table.");
+  }
+  if (!columns.includes('wdLastChannel')) {
+    db.exec("ALTER TABLE chats ADD COLUMN wdLastChannel TEXT DEFAULT 'replacement'");
+    console.log("Database Migration: Added wdLastChannel column to chats table.");
   }
 
   const msgTableInfo = db.pragma("table_info(messages)");

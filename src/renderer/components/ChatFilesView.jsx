@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Folder, Pin, Trash2, Eye, Paperclip, FileText, Image as ImageIcon, Video, Music, Code } from 'lucide-react';
+import { useApp } from '../context/AppContext';
 
 export default function ChatFilesView({
   chat,
@@ -9,6 +10,7 @@ export default function ChatFilesView({
   onPreviewFile,
   electronAPI
 }) {
+  const { showToast } = useApp();
   const [files, setFiles] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState('all'); // 'all' | 'images' | 'videos' | 'documents' | 'code'
@@ -151,7 +153,7 @@ export default function ChatFilesView({
       loadFiles();
     } catch (e) {
       console.error("Error deleting file:", e);
-      alert("Failed to delete file.");
+      showToast("Failed to delete file.", 'error');
     }
   };
 

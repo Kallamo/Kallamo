@@ -60,6 +60,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getPendingSuggestion: (documentId) => ipcRenderer.invoke('get-pending-suggestion', { documentId }),
   getPendingSuggestionIds: (workspaceId) => ipcRenderer.invoke('get-pending-suggestion-ids', { workspaceId }),
   resolvePendingSuggestion: (id) => ipcRenderer.invoke('resolve-pending-suggestion', { id }),
+  getWdLastChannel: (workspaceId) => ipcRenderer.invoke('get-wd-last-channel', { workspaceId }),
+  setWdLastChannel: (workspaceId, channel) => ipcRenderer.invoke('set-wd-last-channel', { workspaceId, channel }),
   getDirectives: (workspaceId) => ipcRenderer.invoke('get-directives', { workspaceId }),
   addDirective: (workspaceId, type, text, sourceMessageId) => ipcRenderer.invoke('add-directive', { workspaceId, type, text, sourceMessageId }),
   updateDirective: (id, text) => ipcRenderer.invoke('update-directive', { id, text }),

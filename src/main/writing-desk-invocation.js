@@ -182,13 +182,17 @@ async function runWritingDeskInvocation({
     toPos,
     profileId,
     intermediatePrompt,
+    resultChannel,
     abortSignal
 }) {
     const profile = db.prepare('SELECT * FROM writing_profiles WHERE id = ?').get(profileId);
     if (!profile) throw new Error(`Writing profile not found: ${profileId}`);
 
-    const channel = profile.resultChannel || 'replacement';
-    const contextWindow = profile.contextWindow || DEFAULT_CONTEXT_WINDOW;
+    // Channel is chosen per-invocation (Invoke modal). Context window is a workspace
+    // setting living on the chat row, alongside maxContext. Both fall back sanely.
+    const channel = resultChannel || 'replacement';
+    const chatRow = db.prepare('SELECT wdContextWindow FROM chats WHERE id = ?').get(workspaceId);
+    const contextWindow = (chatRow && chatRow.wdContextWindow) || DEFAULT_CONTEXT_WINDOW;
     const { selOpen, selClose, outOpen, outClose } = makeFence();
 
     // The model sees + echoes the formatted span, so size the output budget on it.
@@ -235,7 +239,7 @@ async function runWritingDeskInvocation({
     // Fail fast if the always-on context alone overflows the window.
     const fixedTokens = countTokens(systemPrompt) + countTokens(contextText);
     if (fixedTokens >= contextWindow) {
-        throw new Error(`Writing Desk: the assembled context (~${fixedTokens} tokens) exceeds the profile's context window of ${contextWindow}. Reduce directives/knowledge or raise the window.`);
+        throw new Error(`Writing Desk: the assembled context (~${fixedTokens} tokens) exceeds the workspace context window of ${contextWindow}. Reduce directives/knowledge or raise the window.`);
     }
 
     const newPrompt =

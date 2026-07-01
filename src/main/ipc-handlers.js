@@ -2368,6 +2368,18 @@ ipcMain.handle('resolve-pending-suggestion', async (event, { id }) => {
   return { success: true };
 });
 
+// The Result channel is chosen per-invocation, but the Invoke modal defaults to the
+// last channel used in this workspace. Persisted on the chat row (the workspace).
+ipcMain.handle('get-wd-last-channel', async (event, { workspaceId }) => {
+  const row = db.prepare('SELECT wdLastChannel FROM chats WHERE id = ?').get(workspaceId);
+  return { channel: (row && row.wdLastChannel) || 'replacement' };
+});
+
+ipcMain.handle('set-wd-last-channel', async (event, { workspaceId, channel }) => {
+  db.prepare('UPDATE chats SET wdLastChannel = ? WHERE id = ?').run(channel || 'replacement', workspaceId);
+  return { success: true };
+});
+
 // Document ids in this workspace that currently hold an unresolved suggestion,
 // used to mark the sidebar chapter rows.
 ipcMain.handle('get-pending-suggestion-ids', async (event, { workspaceId }) => {
@@ -2722,7 +2734,8 @@ ipcMain.handle('save-chat', async (event, chat) => {
           title = ?, description = ?, updatedAt = ?, isPinned = ?, maxContext = ?,
           archiveThreshold = ?, summarizedIndex = ?, activeProfiles = ?, activeWorkflows = ?,
           backgroundImage = ?, backdropOpacity = ?, userBubbleOpacity = ?, aiBubbleOpacity = ?,
-          memoryBlocks = ?, knowledgeFiles = ?, autoSummarize = ?, syncToCloud = ?
+          memoryBlocks = ?, knowledgeFiles = ?, autoSummarize = ?,
+          wdContextWindow = ?, wdLastChannel = ?, syncToCloud = ?
         WHERE id = ?
       `);
 
@@ -2743,6 +2756,8 @@ ipcMain.handle('save-chat', async (event, chat) => {
         typeof chat.memoryBlocks === 'string' ? chat.memoryBlocks : JSON.stringify(chat.memoryBlocks || []),
         newKbStr,
         chat.autoSummarize ?? 0,
+        chat.wdContextWindow ?? 8192,
+        chat.wdLastChannel || 'replacement',
         newSyncToCloud,
         chat.id
       );
@@ -2755,8 +2770,8 @@ ipcMain.handle('save-chat', async (event, chat) => {
       const insert = db.prepare(`
         INSERT INTO chats (
           id, title, description, updatedAt, isPinned, maxContext, archiveThreshold, summarizedIndex,
-          activeProfiles, activeWorkflows, backgroundImage, backdropOpacity, userBubbleOpacity, aiBubbleOpacity, memoryBlocks, knowledgeFiles, autoSummarize, syncToCloud
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          activeProfiles, activeWorkflows, backgroundImage, backdropOpacity, userBubbleOpacity, aiBubbleOpacity, memoryBlocks, knowledgeFiles, autoSummarize, wdContextWindow, wdLastChannel, syncToCloud
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       insert.run(
@@ -2777,6 +2792,8 @@ ipcMain.handle('save-chat', async (event, chat) => {
         typeof chat.memoryBlocks === 'string' ? chat.memoryBlocks : JSON.stringify(chat.memoryBlocks || []),
         newKbStr,
         chat.autoSummarize ?? 0,
+        chat.wdContextWindow ?? 8192,
+        chat.wdLastChannel || 'replacement',
         chat.syncToCloud ?? 0
       );
     }

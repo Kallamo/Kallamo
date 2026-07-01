@@ -126,7 +126,8 @@ export default function ChatWorkspaceView() {
     refreshChats,
     lastGeneratedMessageId,
     setLastGeneratedMessageId,
-    setActiveMessages
+    setActiveMessages,
+    showToast
   } = useApp();
 
   const [inputValue, setInputValue] = useState('');
@@ -296,7 +297,7 @@ export default function ChatWorkspaceView() {
 
   const handleExecuteSummarization = async ({ selectedMessages, newSummarizedIndex, customTitle }) => {
     if (selectedMessages.length === 0) {
-      alert("Please select at least one message to archive.");
+      showToast("Please select at least one message to archive.", 'info');
       return;
     }
 
@@ -322,11 +323,11 @@ export default function ChatWorkspaceView() {
         await refreshChats(activeChat.id);
         setSummarizeModalOpen(false);
       } else {
-        alert(result?.message || "Failed to execute summarization.");
+        showToast(result?.message || "Failed to execute summarization.", 'error');
       }
     } catch (err) {
       console.error("Execute summarization error:", err);
-      alert("An error occurred during summarization.");
+      showToast("An error occurred during summarization.", 'error');
     } finally {
       setIsVectorizing(false);
     }

@@ -24,7 +24,8 @@ export default function RightSidebar({ isOpen, onClose, onTriggerSummarize }) {
     workflows, 
     activeMessages,
     electronAPI,
-    refreshChats
+    refreshChats,
+    showToast
   } = useApp();
 
   const [accordionOpen, setAccordionOpen] = useState(() => {
@@ -52,6 +53,7 @@ export default function RightSidebar({ isOpen, onClose, onTriggerSummarize }) {
   const [editingBlockTitle, setEditingBlockTitle] = useState('');
 
   const [maxContext, setMaxContext] = useState(128000);
+  const [wdContextWindow, setWdContextWindow] = useState(8192);
   const [archiveThreshold, setArchiveThreshold] = useState(60000);
   const [autoSummarize, setAutoSummarize] = useState(false);
   const [memoryBlocks, setMemoryBlocks] = useState([]);
@@ -64,6 +66,7 @@ export default function RightSidebar({ isOpen, onClose, onTriggerSummarize }) {
   useEffect(() => {
     if (activeChat) {
       setMaxContext(activeChat.maxContext ?? 128000);
+      setWdContextWindow(activeChat.wdContextWindow ?? 8192);
       setArchiveThreshold(activeChat.archiveThreshold ?? 60000);
       setAutoSummarize(activeChat.autoSummarize === 1);
       setMemoryBlocks(activeChat.memoryBlocks ? (typeof activeChat.memoryBlocks === 'string' ? JSON.parse(activeChat.memoryBlocks) : activeChat.memoryBlocks) : []);
@@ -122,7 +125,7 @@ export default function RightSidebar({ isOpen, onClose, onTriggerSummarize }) {
     const startIndex = activeChat.summarizedIndex || 0;
     const activeMsgs = activeMessages.slice(startIndex);
     if (activeMsgs.length === 0) {
-      alert("All messages are already archived!");
+      showToast("All messages are already archived!", 'info');
       return;
     }
     if (onTriggerSummarize) {
@@ -235,11 +238,28 @@ export default function RightSidebar({ isOpen, onClose, onTriggerSummarize }) {
           <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Max API Payload (Tokens)</label>
           <HelpCircle className="w-3.5 h-3.5 text-gray-500 cursor-help shrink-0" data-tooltip="The absolute maximum number of tokens sent to the API. If the context (Lore + Chat + Current Message) exceeds this, older chat messages are silently truncated to prevent API rejection." />
         </div>
-        <input 
-          type="number" 
+        <input
+          type="number"
           value={maxContext}
           onChange={(e) => setMaxContext(e.target.value)}
           onBlur={() => handleUpdateNumberField('maxContext', maxContext)}
+          onKeyDown={(e) => e.key === 'Enter' && e.target.blur()}
+          className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded px-3 py-1.5 focus:outline-none focus:border-accent"
+        />
+      </div>
+
+      <div>
+        <div className="flex items-center space-x-1.5 mb-1">
+          <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Writing Desk Context Window</label>
+          <HelpCircle className="w-3.5 h-3.5 text-gray-500 cursor-help shrink-0" data-tooltip="Token budget the Writing Desk uses to decide whole-chapter vs window+RAG when you invoke the AI on a selection. Err low; default 8192." />
+        </div>
+        <input
+          type="number"
+          min="1024"
+          step="1024"
+          value={wdContextWindow}
+          onChange={(e) => setWdContextWindow(e.target.value)}
+          onBlur={() => handleUpdateNumberField('wdContextWindow', wdContextWindow)}
           onKeyDown={(e) => e.key === 'Enter' && e.target.blur()}
           className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded px-3 py-1.5 focus:outline-none focus:border-accent"
         />

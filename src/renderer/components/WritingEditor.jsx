@@ -17,6 +17,7 @@ import WritingPageModal from './WritingPageModal';
 import ExportModal from './ExportModal';
 import { InvokeModal } from './WritingInvocation';
 import WritingFindReplace from './WritingFindReplace';
+import { useApp } from '../context/AppContext';
 import { Sparkles, X, Loader2 } from 'lucide-react';
 import { DecorationSet } from '@tiptap/pm/view';
 import {
@@ -597,6 +598,7 @@ function countWords(text) {
 }
 
 export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight = false, pending = null, onDispatch, onResolved, toolbarMode = 'fixed', smartTypography = true, onDocPatch, onRename }) {
+  const { showToast } = useApp();
   const saveTimer = useRef(null);
   // Tracks genuine unsaved edits, so leaving the chapter never re-saves unchanged
   // content (which would reset the document's vectorized flag every page switch).
@@ -609,6 +611,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
   // AI select->invoke. inFlight + pending are owned by the parent view (they must
   // survive this editor remounting on chapter switch); the editor only renders them.
   const [profiles, setProfiles] = useState([]);
+  const [lastChannel, setLastChannel] = useState('replacement'); // sticky default for the Invoke modal
   const [invokeData, setInvokeData] = useState(null); // captured selection for the modal
   const [stale, setStale] = useState(false);
   // Chapter index status: 'done' = vectorized & current, 'stale' = edited since last
@@ -696,6 +699,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
       } catch (e) { activeIds = []; }
       const activeSet = new Set(activeIds);
       setProfiles((list || []).filter(p => activeSet.has(p.id)));
+      if (chat?.wdLastChannel) setLastChannel(chat.wdLastChannel);
     });
     return () => { active = false; };
   }, [electronAPI, workspaceId]);
@@ -790,8 +794,9 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     setInvokeData({ from, to, selection, spanContent, format, before, after });
   };
 
-  const submitInvoke = async (profileId, intermediatePrompt) => {
+  const submitInvoke = async (profileId, intermediatePrompt, resultChannel) => {
     if (!invokeData) return;
+    const channel = resultChannel || 'replacement';
     const payload = {
       documentId: doc.id,
       workspaceId,
@@ -804,13 +809,17 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
       toPos: invokeData.to,
       profileId,
       intermediatePrompt,
+      resultChannel: channel,
     };
     setInvokeData(null);
+    // Remember the choice as the workspace's new default for the next invocation.
+    setLastChannel(channel);
+    electronAPI.setWdLastChannel?.(workspaceId, channel);
     onDispatch?.(doc.id);
     const res = await electronAPI.invokeWritingDesk(payload);
     if (res && res.error) {
       onResolved?.(doc.id); // clear the in-flight marker the dispatch set
-      alert(res.error);
+      showToast(res.error, 'error');
     }
   };
 
@@ -972,6 +981,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
         <InvokeModal
           selection={invokeData.selection}
           profiles={profiles}
+          initialChannel={lastChannel}
           onSubmit={submitInvoke}
           onClose={() => setInvokeData(null)}
         />

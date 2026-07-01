@@ -5,10 +5,13 @@ import Button from './ui/Button';
 // The invocation modal: highlighted span + Profile dropdown (swap on the spot) +
 // intermediate prompt (the per-invocation instruction). The result review happens
 // inline in the document (green/red track-changes), not here.
-export function InvokeModal({ selection, profiles, onSubmit, onClose }) {
+const CHANNELS = ['replacement', 'insertion', 'analysis'];
+
+export function InvokeModal({ selection, profiles, initialChannel, onSubmit, onClose }) {
   const [profileId, setProfileId] = useState(profiles[0]?.id || '');
   const [prompt, setPrompt] = useState('');
   const [open, setOpen] = useState(false);
+  const [channel, setChannel] = useState(CHANNELS.includes(initialChannel) ? initialChannel : 'replacement');
   const selected = profiles.find(p => p.id === profileId);
 
   const canSubmit = profileId && profiles.length > 0 && !selected?.needsSetup;
@@ -35,7 +38,6 @@ export function InvokeModal({ selection, profiles, onSubmit, onClose }) {
               <span className="flex items-center gap-2 min-w-0">
                 {selected?.color && <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: selected.color }} />}
                 <span className="truncate">{selected?.name || 'Select profile'}</span>
-                {selected && <span className="text-[10px] text-gray-500 shrink-0">({selected.resultChannel || 'replacement'})</span>}
               </span>
               <ChevronDown className="w-4 h-4 text-gray-500 shrink-0" />
             </button>
@@ -45,7 +47,6 @@ export function InvokeModal({ selection, profiles, onSubmit, onClose }) {
                   <button key={p.id} onClick={() => { setProfileId(p.id); setOpen(false); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-300 hover:bg-white/5 text-left">
                     {p.color && <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: p.color }} />}
                     <span className="truncate">{p.name}</span>
-                    <span className="ml-auto text-[10px] text-gray-500">{p.resultChannel || 'replacement'}</span>
                   </button>
                 ))}
               </div>
@@ -60,6 +61,25 @@ export function InvokeModal({ selection, profiles, onSubmit, onClose }) {
           </div>
         )}
 
+        <div className="mb-3">
+          <label className="block text-[11px] uppercase tracking-wide text-gray-500 mb-1">Result channel</label>
+          <div className="flex bg-[#011419] p-0.5 rounded-lg border border-gray-800 text-xs">
+            {CHANNELS.map(ch => (
+              <button
+                key={ch}
+                type="button"
+                onClick={() => setChannel(ch)}
+                className={`flex-1 px-2.5 py-1.5 rounded-md capitalize transition-colors cursor-pointer ${channel === ch ? 'bg-accent text-[#011419] font-medium' : 'text-gray-400 hover:text-gray-200'}`}
+              >
+                {ch}
+              </button>
+            ))}
+          </div>
+          <p className="text-[10px] leading-tight text-gray-500 mt-1">
+            Replacement rewrites the span (green/red diff), Insertion adds new prose (green only), Analysis returns a read-only side note.
+          </p>
+        </div>
+
         <div className="mb-4">
           <label className="block text-[11px] uppercase tracking-wide text-gray-500 mb-1">Instruction (optional)</label>
           <textarea
@@ -73,7 +93,7 @@ export function InvokeModal({ selection, profiles, onSubmit, onClose }) {
 
         <div className="flex justify-end gap-2">
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={!canSubmit} onClick={() => onSubmit(profileId, prompt)}>Invoke</Button>
+          <Button variant="primary" disabled={!canSubmit} onClick={() => onSubmit(profileId, prompt, channel)}>Invoke</Button>
         </div>
       </div>
     </div>
