@@ -59,11 +59,11 @@ Looking to build from source instead? See [Developer Setup](#developer-setup) be
 
 ## Key Features
 
-### ✍️ Writing Desk
+### ✍️ Writing Desk &nbsp;![Beta](https://img.shields.io/badge/status-beta-F5A623)
 
-A dedicated document-writing workspace for long-form work — novels, scripts, reports, study material. It offers a full writing surface (headings, fonts and sizes, colors, page setup, find & replace) and faithful import/export, including whole-book folder export. Its heart is AI-assisted editing: select any passage, invoke an AI profile on it, and the result arrives as a **non-destructive, inline block-level diff** you review and accept or discard — the editor never blocks while it runs. Each chapter is indexed on its own, so a persona can draw on context from anywhere in the book.
+A dedicated document-writing workspace for long-form work — novels, scripts, reports, study material. It offers a full writing surface (headings, fonts and sizes, colors, page setup, find & replace) and faithful import/export, including whole-book folder export. Its heart is AI-assisted editing: select any passage, invoke an AI profile on it, and the result arrives as a **non-destructive, inline block-level diff** you review and accept or discard — the editor never blocks while it runs. Chapters can be indexed on demand, so a persona can draw on context from anywhere in the book.
 
-### 🌍 Worldbuild & the Living-World Index
+### 🌍 Worldbuild & the Living-World Index &nbsp;![Beta](https://img.shields.io/badge/status-beta-F5A623)
 
 Give your project a structured "bible": a per-workspace registry of the **entities** in your world (characters, places, factions, items) and the **relations** between them. Under the hood, your knowledge is automatically tagged with the entities and world variables it mentions, and retrieval can follow those tags — looking an entity up, hopping to related entities, and pulling in linked lore — so the AI keeps track of *who* and *what* your knowledge is really about, not just which words match.
 

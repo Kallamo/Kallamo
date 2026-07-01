@@ -613,36 +613,6 @@ export default function ChatWorkspaceView() {
               </span>
             </button>
 
-            {/* Memory Tab */}
-            <button
-              onClick={() => setActiveSubView('memory')}
-              className={`group flex items-center h-8 rounded-md transition-all duration-300 ease-out cursor-pointer overflow-hidden ${activeSubView === 'memory'
-                ? 'bg-accent text-[#011419] font-extrabold shadow-sm max-w-[130px] px-3'
-                : 'text-gray-400 hover:text-white hover:bg-white/5 max-w-[32px] px-1.5 hover:max-w-[130px] hover:px-3'
-                }`}
-            >
-              <Brain className="w-4.5 h-4.5 shrink-0" />
-              <span className={`text-[10px] font-bold uppercase tracking-wider transition-all duration-300 ml-0 opacity-0 group-hover:opacity-100 ${activeSubView === 'memory' ? 'opacity-100 ml-1.5 max-w-[80px]' : 'max-w-0 group-hover:ml-1.5 group-hover:max-w-[80px]'
-                } overflow-hidden whitespace-nowrap`}>
-                Memory
-              </span>
-            </button>
-
-            {/* Files Tab */}
-            <button
-              onClick={() => setActiveSubView('files')}
-              className={`group flex items-center h-8 rounded-md transition-all duration-300 ease-out cursor-pointer overflow-hidden ${activeSubView === 'files'
-                ? 'bg-accent text-[#011419] font-extrabold shadow-sm max-w-[130px] px-3'
-                : 'text-gray-400 hover:text-white hover:bg-white/5 max-w-[32px] px-1.5 hover:max-w-[130px] hover:px-3'
-                }`}
-            >
-              <Folder className="w-4.5 h-4.5 shrink-0" />
-              <span className={`text-[10px] font-bold uppercase tracking-wider transition-all duration-300 ml-0 opacity-0 group-hover:opacity-100 ${activeSubView === 'files' ? 'opacity-100 ml-1.5 max-w-[80px]' : 'max-w-0 group-hover:ml-1.5 group-hover:max-w-[80px]'
-                } overflow-hidden whitespace-nowrap`}>
-                Files
-              </span>
-            </button>
-
             {/* Writing Desk Tab */}
             <button
               onClick={() => setActiveSubView('writing')}
@@ -670,6 +640,36 @@ export default function ChatWorkspaceView() {
               <span className={`text-[10px] font-bold uppercase tracking-wider transition-all duration-300 ml-0 opacity-0 group-hover:opacity-100 ${activeSubView === 'worldbuild' ? 'opacity-100 ml-1.5 max-w-[80px]' : 'max-w-0 group-hover:ml-1.5 group-hover:max-w-[80px]'
                 } overflow-hidden whitespace-nowrap`}>
                 Worldbuild
+              </span>
+            </button>
+
+            {/* Memory Tab */}
+            <button
+              onClick={() => setActiveSubView('memory')}
+              className={`group flex items-center h-8 rounded-md transition-all duration-300 ease-out cursor-pointer overflow-hidden ${activeSubView === 'memory'
+                ? 'bg-accent text-[#011419] font-extrabold shadow-sm max-w-[130px] px-3'
+                : 'text-gray-400 hover:text-white hover:bg-white/5 max-w-[32px] px-1.5 hover:max-w-[130px] hover:px-3'
+                }`}
+            >
+              <Brain className="w-4.5 h-4.5 shrink-0" />
+              <span className={`text-[10px] font-bold uppercase tracking-wider transition-all duration-300 ml-0 opacity-0 group-hover:opacity-100 ${activeSubView === 'memory' ? 'opacity-100 ml-1.5 max-w-[80px]' : 'max-w-0 group-hover:ml-1.5 group-hover:max-w-[80px]'
+                } overflow-hidden whitespace-nowrap`}>
+                Memory
+              </span>
+            </button>
+
+            {/* Files Tab */}
+            <button
+              onClick={() => setActiveSubView('files')}
+              className={`group flex items-center h-8 rounded-md transition-all duration-300 ease-out cursor-pointer overflow-hidden ${activeSubView === 'files'
+                ? 'bg-accent text-[#011419] font-extrabold shadow-sm max-w-[130px] px-3'
+                : 'text-gray-400 hover:text-white hover:bg-white/5 max-w-[32px] px-1.5 hover:max-w-[130px] hover:px-3'
+                }`}
+            >
+              <Folder className="w-4.5 h-4.5 shrink-0" />
+              <span className={`text-[10px] font-bold uppercase tracking-wider transition-all duration-300 ml-0 opacity-0 group-hover:opacity-100 ${activeSubView === 'files' ? 'opacity-100 ml-1.5 max-w-[80px]' : 'max-w-0 group-hover:ml-1.5 group-hover:max-w-[80px]'
+                } overflow-hidden whitespace-nowrap`}>
+                Files
               </span>
             </button>
           </div>
