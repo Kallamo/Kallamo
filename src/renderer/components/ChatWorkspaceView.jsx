@@ -9,6 +9,7 @@ import WritingDeskView from './WritingDeskView';
 import WorldbuildView from './WorldbuildView';
 import FilePreviewModal from './modals/FilePreviewModal';
 import DeleteModal from './modals/DeleteModal';
+import Popover from './ui/Popover';
 import { parseMarkdown } from '../utils/markdown';
 
 const safeParseJson = (str, fallback = []) => {
@@ -246,17 +247,6 @@ export default function ChatWorkspaceView() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [activeMessages, generationProgress, isGenerating]);
-
-  // Click outside to close custom selector dropdown
-  useEffect(() => {
-    function handleClickOutside(event) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
-        setProfileDropdownOpen(false);
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
 
   // Prevent default window drag/drop behavior to stop Electron from navigating/opening files
   useEffect(() => {
@@ -1347,8 +1337,7 @@ export default function ChatWorkspaceView() {
                       <ChevronDown className="w-3 h-3 text-gray-500" />
                     </button>
 
-                    {profileDropdownOpen && (
-                      <div className="absolute right-0 bottom-full mb-2 w-64 bg-[#0a161d] border border-gray-800 rounded-xl shadow-2xl p-2.5 z-30 animate-in fade-in duration-200 font-sans">
+                    <Popover anchorRef={dropdownRef} open={profileDropdownOpen} onClose={() => setProfileDropdownOpen(false)} matchAnchorWidth={false} align="right" scroll={false} className="w-64 !p-2.5 font-sans">
                         <span className="block text-[8px] font-bold text-gray-500 uppercase tracking-widest px-2 pb-1.5 select-none">AI Profile / Workflow</span>
 
                         <div className="max-h-60 overflow-y-auto custom-scrollbar space-y-2.5">
@@ -1437,8 +1426,7 @@ export default function ChatWorkspaceView() {
                             )}
                           </div>
                         </div>
-                      </div>
-                    )}
+                    </Popover>
                   </div>
 
                   {/* Execution submit button */}

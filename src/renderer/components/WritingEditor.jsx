@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import ColorPicker from './ui/ColorPicker';
 import Button from './ui/Button';
+import Popover from './ui/Popover';
 import WritingPageModal from './WritingPageModal';
 import ExportModal from './ExportModal';
 import { InvokeModal } from './WritingInvocation';
@@ -168,21 +169,6 @@ function useToolbarTick(editor) {
   }, [editor]);
 }
 
-// Dismiss a popover when clicking outside its container or pressing Escape.
-function useDismiss(ref, onDismiss, active) {
-  useEffect(() => {
-    if (!active) return;
-    const onDown = (e) => { if (ref.current && !ref.current.contains(e.target)) onDismiss(); };
-    const onKey = (e) => { if (e.key === 'Escape') onDismiss(); };
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [ref, onDismiss, active]);
-}
-
 function ToolbarButton({ active, onClick, title, children }) {
   return (
     <button
@@ -208,7 +194,7 @@ function FontPicker({ editor, baseFont }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const ref = useRef(null);
-  useDismiss(ref, () => { setOpen(false); setQuery(''); }, open);
+  const close = () => { setOpen(false); setQuery(''); };
 
   // No inline font on the selection falls back to the document's baseline font.
   const inline = editor.getAttributes('textStyle').fontFamily || '';
@@ -238,37 +224,35 @@ function FontPicker({ editor, baseFont }) {
         <span className="truncate" style={{ fontFamily: current || undefined }}>{currentLabel}</span>
         <ChevronDown className="w-3.5 h-3.5 ml-auto shrink-0 text-gray-500" />
       </button>
-      {open && (
-        <div className="absolute z-40 mt-1 w-56 bg-[#0a161d] border border-gray-800 rounded-lg shadow-2xl overflow-hidden">
-          <div className="flex items-center gap-1.5 px-2.5 py-2 border-b border-gray-800/80">
-            <Search className="w-3.5 h-3.5 text-gray-500 shrink-0" />
-            <input
-              autoFocus
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search fonts"
-              className="bg-transparent text-xs text-gray-200 w-full focus:outline-none placeholder-gray-600"
-            />
-          </div>
-          <div className="max-h-64 overflow-y-auto custom-scrollbar py-1">
-            {filtered.length === 0 && (
-              <p className="px-3 py-2 text-xs text-gray-600">No matching fonts</p>
-            )}
-            {filtered.map((f, i) => (
-              <button
-                key={`${f.label}-${i}`}
-                type="button"
-                onMouseDown={(e) => { e.preventDefault(); choose(f.value); }}
-                className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-white/5 ${f.value === current ? 'text-accent' : 'text-gray-300'}`}
-                style={{ fontFamily: f.value || undefined }}
-              >
-                <span className="truncate flex-1">{f.label}</span>
-                {f.value === current && <Check className="w-3.5 h-3.5 shrink-0" />}
-              </button>
-            ))}
-          </div>
+      <Popover anchorRef={ref} open={open} onClose={close} matchAnchorWidth={false} scroll={false} className="w-56 !p-0 !rounded-lg overflow-hidden">
+        <div className="flex items-center gap-1.5 px-2.5 py-2 border-b border-gray-800/80">
+          <Search className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+          <input
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search fonts"
+            className="bg-transparent text-xs text-gray-200 w-full focus:outline-none placeholder-gray-600"
+          />
         </div>
-      )}
+        <div className="max-h-64 overflow-y-auto custom-scrollbar py-1">
+          {filtered.length === 0 && (
+            <p className="px-3 py-2 text-xs text-gray-600">No matching fonts</p>
+          )}
+          {filtered.map((f, i) => (
+            <button
+              key={`${f.label}-${i}`}
+              type="button"
+              onMouseDown={(e) => { e.preventDefault(); choose(f.value); }}
+              className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-white/5 ${f.value === current ? 'text-accent' : 'text-gray-300'}`}
+              style={{ fontFamily: f.value || undefined }}
+            >
+              <span className="truncate flex-1">{f.label}</span>
+              {f.value === current && <Check className="w-3.5 h-3.5 shrink-0" />}
+            </button>
+          ))}
+        </div>
+      </Popover>
     </div>
   );
 }
@@ -279,7 +263,7 @@ function FontSizeControl({ editor, baseSize }) {
   const ref = useRef(null);
   const [open, setOpen] = useState(false);
   const [text, setText] = useState('');
-  useDismiss(ref, () => { setOpen(false); setText(''); }, open);
+  const close = () => { setOpen(false); setText(''); };
   const inline = editor.getAttributes('textStyle').fontSize;
   const headingLevel = editor.getAttributes('heading')?.level;
   const valuePx = inline ? parseInt(inline, 10) : (HEADING_SIZES[headingLevel] || baseSize || 14);
@@ -305,32 +289,30 @@ function FontSizeControl({ editor, baseSize }) {
         {value}<span className="text-[10px] text-gray-500">pt</span>
         <ChevronDown className="w-3.5 h-3.5 text-gray-500" />
       </button>
-      {open && (
-        <div className="absolute z-40 mt-1 w-20 bg-[#0a161d] border border-gray-800 rounded-lg shadow-2xl py-1">
-          {/* Pre-filled + selected on focus, so typing replaces the current value cleanly. */}
-          <input
-            value={text}
-            autoFocus
-            onFocus={(e) => e.target.select()}
-            inputMode="numeric"
-            onChange={(e) => setText(e.target.value.replace(/[^0-9]/g, ''))}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); apply(parseInt(text, 10)); } }}
-            className="w-full bg-[#00080B] border border-gray-800 text-gray-200 text-xs rounded-md px-2 py-1 mb-1 focus:outline-none focus:border-accent text-center"
-          />
-          <div className="max-h-52 overflow-y-auto custom-scrollbar">
-            {FONT_SIZES.map(s => (
-              <button
-                key={s}
-                type="button"
-                onMouseDown={(e) => { e.preventDefault(); apply(parseInt(s, 10)); }}
-                className={`w-full text-center px-3 py-1.5 text-xs hover:bg-white/5 ${value === parseInt(s, 10) ? 'text-accent' : 'text-gray-300'}`}
-              >
-                {s}
-              </button>
-            ))}
-          </div>
+      <Popover anchorRef={ref} open={open} onClose={close} matchAnchorWidth={false} scroll={false} className="w-20 !rounded-lg">
+        {/* Pre-filled + selected on focus, so typing replaces the current value cleanly. */}
+        <input
+          value={text}
+          autoFocus
+          onFocus={(e) => e.target.select()}
+          inputMode="numeric"
+          onChange={(e) => setText(e.target.value.replace(/[^0-9]/g, ''))}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); apply(parseInt(text, 10)); } }}
+          className="w-full bg-[#00080B] border border-gray-800 text-gray-200 text-xs rounded-md px-2 py-1 mb-1 focus:outline-none focus:border-accent text-center"
+        />
+        <div className="max-h-52 overflow-y-auto custom-scrollbar">
+          {FONT_SIZES.map(s => (
+            <button
+              key={s}
+              type="button"
+              onMouseDown={(e) => { e.preventDefault(); apply(parseInt(s, 10)); }}
+              className={`w-full text-center px-3 py-1.5 text-xs hover:bg-white/5 ${value === parseInt(s, 10) ? 'text-accent' : 'text-gray-300'}`}
+            >
+              {s}
+            </button>
+          ))}
         </div>
-      )}
+      </Popover>
     </div>
   );
 }
@@ -343,7 +325,6 @@ function blockAttr(editor, key) {
 function LineHeightControl({ editor, baseLineHeight }) {
   const ref = useRef(null);
   const [open, setOpen] = useState(false);
-  useDismiss(ref, () => setOpen(false), open);
   const current = blockAttr(editor, 'lineHeight') || String(baseLineHeight || 1.6);
   const choose = (v) => { editor.chain().focus().setLineHeight(v).run(); setOpen(false); };
   return (
@@ -358,20 +339,18 @@ function LineHeightControl({ editor, baseLineHeight }) {
         {parseFloat(current)}
         <ChevronDown className="w-3.5 h-3.5 text-gray-500" />
       </button>
-      {open && (
-        <div className="absolute z-40 mt-1 w-24 bg-[#0a161d] border border-gray-800 rounded-lg shadow-2xl py-1">
-          {LINE_HEIGHTS.map(v => (
-            <button
-              key={v}
-              type="button"
-              onMouseDown={(e) => { e.preventDefault(); choose(v); }}
-              className={`w-full text-left px-3 py-1.5 text-xs hover:bg-white/5 ${parseFloat(current) === parseFloat(v) ? 'text-accent' : 'text-gray-300'}`}
-            >
-              {v}
-            </button>
-          ))}
-        </div>
-      )}
+      <Popover anchorRef={ref} open={open} onClose={() => setOpen(false)} matchAnchorWidth={false} className="w-24 !rounded-lg">
+        {LINE_HEIGHTS.map(v => (
+          <button
+            key={v}
+            type="button"
+            onMouseDown={(e) => { e.preventDefault(); choose(v); }}
+            className={`w-full text-left px-3 py-1.5 text-xs hover:bg-white/5 rounded-md ${parseFloat(current) === parseFloat(v) ? 'text-accent' : 'text-gray-300'}`}
+          >
+            {v}
+          </button>
+        ))}
+      </Popover>
     </div>
   );
 }
@@ -379,7 +358,6 @@ function LineHeightControl({ editor, baseLineHeight }) {
 function ParagraphSpacingControl({ editor, baseSpacing }) {
   const ref = useRef(null);
   const [open, setOpen] = useState(false);
-  useDismiss(ref, () => setOpen(false), open);
   const current = blockAttr(editor, 'paragraphSpacing');
   const valuePx = current ? parseInt(current, 10) : (baseSpacing ?? 12);
   const value = pxToPt(valuePx);
@@ -396,20 +374,18 @@ function ParagraphSpacingControl({ editor, baseSpacing }) {
         {value}<span className="text-[10px] text-gray-500">pt</span>
         <ChevronDown className="w-3.5 h-3.5 text-gray-500" />
       </button>
-      {open && (
-        <div className="absolute z-40 mt-1 w-20 bg-[#0a161d] border border-gray-800 rounded-lg shadow-2xl py-1">
-          {PARAGRAPH_SPACINGS.map(v => (
-            <button
-              key={v}
-              type="button"
-              onMouseDown={(e) => { e.preventDefault(); choose(parseInt(v, 10)); }}
-              className={`w-full text-center px-3 py-1.5 text-xs hover:bg-white/5 ${value === parseInt(v, 10) ? 'text-accent' : 'text-gray-300'}`}
-            >
-              {v}
-            </button>
-          ))}
-        </div>
-      )}
+      <Popover anchorRef={ref} open={open} onClose={() => setOpen(false)} matchAnchorWidth={false} className="w-20 !rounded-lg">
+        {PARAGRAPH_SPACINGS.map(v => (
+          <button
+            key={v}
+            type="button"
+            onMouseDown={(e) => { e.preventDefault(); choose(parseInt(v, 10)); }}
+            className={`w-full text-center px-3 py-1.5 text-xs hover:bg-white/5 rounded-md ${value === parseInt(v, 10) ? 'text-accent' : 'text-gray-300'}`}
+          >
+            {v}
+          </button>
+        ))}
+      </Popover>
     </div>
   );
 }
@@ -420,7 +396,7 @@ function ColorPopover({ editor }) {
   const [showPicker, setShowPicker] = useState(false);
   const [draft, setDraft] = useState('#cccccc');
   const [recent, addRecent] = useRecentColors();
-  useDismiss(ref, () => { setOpen(false); setShowPicker(false); }, open);
+  const close = () => { setOpen(false); setShowPicker(false); };
   const current = editor.getAttributes('textStyle').color || '';
   const apply = (c) => editor.chain().focus().setColor(c).run();
 
@@ -449,40 +425,38 @@ function ColorPopover({ editor }) {
         <Palette className="w-4 h-4" />
         <span className="block w-4 h-1 rounded-sm mt-0.5" style={{ backgroundColor: current || '#9ca3af' }} />
       </button>
-      {open && (
-        <div className="absolute z-40 mt-1 w-52 p-3 bg-[#0a161d] border border-gray-800 rounded-lg shadow-2xl">
-          <div className="grid grid-cols-6 gap-1.5">
-            {TEXT_SWATCHES.map(c => <Swatch key={c} c={c} />)}
-          </div>
-
-          <div className="flex items-center justify-between gap-2 mt-3 pt-2.5 border-t border-gray-800">
-            <span className="text-[11px] font-bold text-gray-300">Custom</span>
-            <button
-              type="button"
-              onMouseDown={(e) => { e.preventDefault(); openPicker(); }}
-              className="text-[11px] font-semibold text-accent hover:brightness-110 flex items-center gap-0.5"
-            >
-              <Plus className="w-3.5 h-3.5" /> Add
-            </button>
-          </div>
-
-          {recent.length > 0 && (
-            <div className="flex items-center gap-1.5 mt-2.5">
-              {recent.map(c => <Swatch key={c} c={c} />)}
-            </div>
-          )}
-
-          {showPicker && (
-            <div className="absolute left-full top-0 ml-2 w-52 p-3 bg-[#0a161d] border border-gray-800 rounded-lg shadow-2xl">
-              <ColorPicker value={draft} onChange={setDraft} />
-              <div className="flex justify-end gap-2 mt-3">
-                <Button variant="ghost" size="sm" onMouseDown={(e) => { e.preventDefault(); setShowPicker(false); }}>Cancel</Button>
-                <Button variant="primary" size="sm" onMouseDown={(e) => { e.preventDefault(); confirmPicker(); }}>Confirm</Button>
-              </div>
-            </div>
-          )}
+      <Popover anchorRef={ref} open={open} onClose={close} matchAnchorWidth={false} scroll={false} className="w-52 !p-3 !rounded-lg">
+        <div className="grid grid-cols-6 gap-1.5">
+          {TEXT_SWATCHES.map(c => <Swatch key={c} c={c} />)}
         </div>
-      )}
+
+        <div className="flex items-center justify-between gap-2 mt-3 pt-2.5 border-t border-gray-800">
+          <span className="text-[11px] font-bold text-gray-300">Custom</span>
+          <button
+            type="button"
+            onMouseDown={(e) => { e.preventDefault(); openPicker(); }}
+            className="text-[11px] font-semibold text-accent hover:brightness-110 flex items-center gap-0.5"
+          >
+            <Plus className="w-3.5 h-3.5" /> Add
+          </button>
+        </div>
+
+        {recent.length > 0 && (
+          <div className="flex items-center gap-1.5 mt-2.5">
+            {recent.map(c => <Swatch key={c} c={c} />)}
+          </div>
+        )}
+
+        {showPicker && (
+          <div className="absolute left-full top-0 ml-2 w-52 p-3 bg-[#0a161d] border border-gray-800 rounded-lg shadow-2xl">
+            <ColorPicker value={draft} onChange={setDraft} />
+            <div className="flex justify-end gap-2 mt-3">
+              <Button variant="ghost" size="sm" onMouseDown={(e) => { e.preventDefault(); setShowPicker(false); }}>Cancel</Button>
+              <Button variant="primary" size="sm" onMouseDown={(e) => { e.preventDefault(); confirmPicker(); }}>Confirm</Button>
+            </div>
+          </div>
+        )}
+      </Popover>
     </div>
   );
 }
@@ -558,9 +532,10 @@ const CELL_SWATCHES = ['#fde68a', '#fca5a5', '#86efac', '#93c5fd', '#d8b4fe', '#
 function CellColorControl({ editor }) {
   const [showPicker, setShowPicker] = useState(false);
   const [draft, setDraft] = useState('#fde68a');
+  const ref = useRef(null);
   const apply = (color) => editor.chain().focus().setCellBackground(color).run();
   return (
-    <div className="flex items-center gap-1 px-0.5 relative">
+    <div className="flex items-center gap-1 px-0.5 relative" ref={ref}>
       <span className="text-[10px] text-gray-500 uppercase tracking-wider mr-1">Cell</span>
       {CELL_SWATCHES.map(c => (
         <button key={c} type="button" title={c}
@@ -575,15 +550,13 @@ function CellColorControl({ editor }) {
       <button type="button" title="Clear fill"
         onMouseDown={(e) => { e.preventDefault(); apply(null); }}
         className="text-[10px] text-gray-500 hover:text-white ml-0.5">Clear</button>
-      {showPicker && (
-        <div className="absolute top-full left-0 mt-2 z-50 w-52 p-3 bg-[#0a161d] border border-gray-800 rounded-lg shadow-2xl">
-          <ColorPicker value={draft} onChange={setDraft} />
-          <div className="flex justify-end gap-2 mt-3">
-            <Button variant="ghost" size="sm" onMouseDown={(e) => { e.preventDefault(); setShowPicker(false); }}>Cancel</Button>
-            <Button variant="primary" size="sm" onMouseDown={(e) => { e.preventDefault(); apply(draft); setShowPicker(false); }}>Apply</Button>
-          </div>
+      <Popover anchorRef={ref} open={showPicker} onClose={() => setShowPicker(false)} matchAnchorWidth={false} scroll={false} className="w-52 !p-3 !rounded-lg">
+        <ColorPicker value={draft} onChange={setDraft} />
+        <div className="flex justify-end gap-2 mt-3">
+          <Button variant="ghost" size="sm" onMouseDown={(e) => { e.preventDefault(); setShowPicker(false); }}>Cancel</Button>
+          <Button variant="primary" size="sm" onMouseDown={(e) => { e.preventDefault(); apply(draft); setShowPicker(false); }}>Apply</Button>
         </div>
-      )}
+      </Popover>
     </div>
   );
 }

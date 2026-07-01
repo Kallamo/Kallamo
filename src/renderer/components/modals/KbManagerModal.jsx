@@ -12,6 +12,7 @@ import EmptyState from '../ui/EmptyState';
 import Checkbox from '../ui/Checkbox';
 import Toggle from '../ui/Toggle';
 import RenameFilesModal from '../ui/RenameFilesModal';
+import Popover from '../ui/Popover';
 
 export default function KbManagerModal({ profile, onClose }) {
   const { electronAPI, settings, handleSaveProfile, variables, showToast, openSettings } = useApp();
@@ -59,6 +60,7 @@ export default function KbManagerModal({ profile, onClose }) {
   const [editorKeywords, setEditorKeywords] = useState([]);
   const [tagInput, setTagInput] = useState('');
   const [tagSuggestionsOpen, setTagSuggestionsOpen] = useState(false);
+  const editorTagAnchorRef = useRef(null);
   const [editorStrategy, setEditorStrategy] = useState('rag_search');
   const [viewingFileBlock, setViewingFileBlock] = useState(null);
   const [tokenMap, setTokenMap] = useState({}); // blockId -> count, fallback for blocks lacking a stored tokenCount
@@ -96,6 +98,7 @@ export default function KbManagerModal({ profile, onClose }) {
   const [saveSuccess, setSaveSuccess] = useState(false);
 
   const [isAddMenuOpen, setIsAddMenuOpen] = useState(false);
+  const addMenuAnchorRef = useRef(null);
   const [exportingKb, setExportingKb] = useState(false);
   const [importingKb, setImportingKb] = useState(false);
   const [kbProgress, setKbProgress] = useState(0);
@@ -912,7 +915,7 @@ export default function KbManagerModal({ profile, onClose }) {
           <div className="flex items-center space-x-3">
             {/* Action buttons */}
             {activeFilter !== 'agentic-rag' && (
-              <div className="relative">
+              <div className="relative" ref={addMenuAnchorRef}>
                 <button
                   onClick={() => setIsAddMenuOpen(!isAddMenuOpen)}
                   disabled={isProcessing}
@@ -922,10 +925,7 @@ export default function KbManagerModal({ profile, onClose }) {
                   <span>Add</span>
                 </button>
 
-                {isAddMenuOpen && (
-                  <>
-                    <div className="fixed inset-0 z-30" onClick={() => setIsAddMenuOpen(false)} />
-                    <div className="absolute right-0 mt-2 w-48 bg-[#0a161d] border border-gray-800 rounded-xl shadow-2xl p-1.5 z-40 animate-in slide-in-from-top-2 duration-150 flex flex-col space-y-0.5">
+                <Popover anchorRef={addMenuAnchorRef} open={isAddMenuOpen} onClose={() => setIsAddMenuOpen(false)} matchAnchorWidth={false} align="right" className="w-48 !p-1.5 flex flex-col space-y-0.5">
                       <button
                         onClick={() => {
                           setIsAddMenuOpen(false);
@@ -967,9 +967,7 @@ export default function KbManagerModal({ profile, onClose }) {
                         <UploadCloud className="w-3.5 h-3.5 text-emerald-400" />
                         <span>Import Knowledge Base</span>
                       </button>
-                    </div>
-                  </>
-                )}
+                </Popover>
               </div>
             )}
 
@@ -1593,7 +1591,7 @@ export default function KbManagerModal({ profile, onClose }) {
 
                     {/* Add Tag Row */}
                     <div className="flex space-x-2">
-                      <div className="relative flex-1">
+                      <div className="relative flex-1" ref={editorTagAnchorRef}>
                         <TextInput
                           type="text"
                           value={tagInput}
@@ -1613,41 +1611,39 @@ export default function KbManagerModal({ profile, onClose }) {
                         />
 
                         {/* Suggestions Dropdown */}
-                        {tagSuggestionsOpen && (
-                          (() => {
-                            const allTags = Array.from(new Set(
-                              blocks.filter(b => b.type === 'manual').flatMap(b => b.keywords || b.rawItem?.keywords || [])
-                            )).filter(t => t && !editorKeywords.includes(t));
+                        {(() => {
+                          const allTags = Array.from(new Set(
+                            blocks.filter(b => b.type === 'manual').flatMap(b => b.keywords || b.rawItem?.keywords || [])
+                          )).filter(t => t && !editorKeywords.includes(t));
 
-                            const filteredSuggestions = allTags.filter(t =>
-                              t.toLowerCase().includes(tagInput.toLowerCase())
-                            );
+                          const filteredSuggestions = allTags.filter(t =>
+                            t.toLowerCase().includes(tagInput.toLowerCase())
+                          );
 
-                            if (filteredSuggestions.length === 0) return null;
-
-                            return (
-                              <>
-                                <div className="fixed inset-0 z-10" onClick={() => setTagSuggestionsOpen(false)} />
-                                <div className="absolute left-0 right-0 mt-1.5 bg-[#0a161d] border border-gray-800 rounded-xl shadow-xl max-h-32 overflow-y-auto custom-scrollbar p-1 z-20 animate-in fade-in duration-150">
-                                  {filteredSuggestions.map((tag) => (
-                                    <button
-                                      key={tag}
-                                      type="button"
-                                      onClick={() => {
-                                        setEditorKeywords(prev => [...prev, tag]);
-                                        setTagInput('');
-                                        setTagSuggestionsOpen(false);
-                                      }}
-                                      className="w-full text-left px-3 py-1.5 text-[10px] uppercase font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
-                                    >
-                                      {tag}
-                                    </button>
-                                  ))}
-                                </div>
-                              </>
-                            );
-                          })()
-                        )}
+                          return (
+                            <Popover
+                              anchorRef={editorTagAnchorRef}
+                              open={tagSuggestionsOpen && filteredSuggestions.length > 0}
+                              onClose={() => setTagSuggestionsOpen(false)}
+                              maxHeight={160}
+                            >
+                              {filteredSuggestions.map((tag) => (
+                                <button
+                                  key={tag}
+                                  type="button"
+                                  onClick={() => {
+                                    setEditorKeywords(prev => [...prev, tag]);
+                                    setTagInput('');
+                                    setTagSuggestionsOpen(false);
+                                  }}
+                                  className="w-full text-left px-3 py-1.5 text-[10px] uppercase font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
+                                >
+                                  {tag}
+                                </button>
+                              ))}
+                            </Popover>
+                          );
+                        })()}
                       </div>
 
                       <button

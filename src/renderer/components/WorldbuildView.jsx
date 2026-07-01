@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import Button from './ui/Button';
+import Popover from './ui/Popover';
 
 // Each entity type carries its own personality: a friendly label, an icon, and a
 // tonal palette (static classes so Tailwind keeps them) used for its medallion and
@@ -144,11 +145,6 @@ export default function WorldbuildView({ chat, electronAPI }) {
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { electronAPI.getWritingTree(workspaceId).then(t => setDocuments(t?.documents || [])).catch(() => setDocuments([])); }, [workspaceId, electronAPI]);
-  useEffect(() => {
-    const onClick = (e) => { if (createRef.current && !createRef.current.contains(e.target)) setShowCreate(false); };
-    document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, []);
 
   const loadRelations = useCallback(async (ent) => {
     if (!ent?.id) { setRel({}); return; }
@@ -339,16 +335,14 @@ export default function WorldbuildView({ chat, electronAPI }) {
         <div className="p-3 space-y-3">
           <div className="relative" ref={createRef}>
             <Button fullWidth icon={Plus} onClick={() => setShowCreate(v => !v)}>Create</Button>
-            {showCreate && (
-              <div className="absolute z-30 mt-1 w-full bg-[#021a20] border border-white/10 rounded-lg shadow-2xl overflow-hidden py-1 backdrop-blur-sm">
-                {TYPE_ORDER.map(key => { const t = meta(key); const Icon = t.icon; return (
-                  <button key={key} onClick={() => startNew(key)} className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-white/5 hover:text-white transition-colors flex items-center gap-2.5 cursor-pointer font-medium">
-                    <span className={`w-6 h-6 rounded-md border flex items-center justify-center ${t.medallion}`}><Icon className="w-3.5 h-3.5" /></span>
-                    {t.label}
-                  </button>
-                ); })}
-              </div>
-            )}
+            <Popover anchorRef={createRef} open={showCreate} onClose={() => setShowCreate(false)} className="!bg-[#021a20] backdrop-blur-sm">
+              {TYPE_ORDER.map(key => { const t = meta(key); const Icon = t.icon; return (
+                <button key={key} onClick={() => startNew(key)} className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-white/5 hover:text-white transition-colors flex items-center gap-2.5 cursor-pointer font-medium rounded-lg">
+                  <span className={`w-6 h-6 rounded-md border flex items-center justify-center ${t.medallion}`}><Icon className="w-3.5 h-3.5" /></span>
+                  {t.label}
+                </button>
+              ); })}
+            </Popover>
           </div>
 
           <div className="relative">
