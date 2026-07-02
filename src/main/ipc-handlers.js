@@ -2444,15 +2444,53 @@ ipcMain.handle('get-document-vector-status', (event, { documentId }) => {
   }
 });
 
-ipcMain.handle('backfill-world-index', async (event, { chatId }) => {
+ipcMain.handle('backfill-world-index', async (event, { chatId, tier = 'archive', full = true }) => {
   try {
     const { backfillWorldIndex } = require('./workflow-runner');
-    // The button is a full re-index: drop this chat's existing tags and re-tag from scratch.
-    const res = await backfillWorldIndex(chatId || null, { full: true });
+    // tier = which memory slice (archive | custom | searchable); full = re-tag every
+    // chunk from scratch, otherwise only chunks that carry no tags yet ("index new").
+    const res = await backfillWorldIndex(chatId || null, { full, tier });
     return { success: true, ...res };
   } catch (e) {
     console.error('[backfill-world-index] failed:', e);
     return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('retag-document', async (event, { documentId }) => {
+  try {
+    const { retagDocumentChunks } = require('./workflow-runner');
+    const res = await retagDocumentChunks(documentId, (p) => {
+      try { event.sender.send('vectorize-document-progress', { documentId, ...p }); } catch (e) {}
+    });
+    return { success: true, ...res };
+  } catch (e) {
+    console.error('[retag-document] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+// Dynamic world-index tags per chat_memory chunk, for the Custom Memory tag markers.
+// Returns { [chunkId]: ["Canonical Name", ...] } resolving entity ids to canonical
+// names (falling back to the raw literal for legacy rows).
+ipcMain.handle('get-chat-memory-tags', async (event, { chatId }) => {
+  try {
+    const rows = db.prepare(
+      `SELECT ct.chunkId AS chunkId, ct.tag AS tag, COALESCE(e.canonicalName, ct.entity) AS value
+       FROM chunk_tags ct
+       JOIN knowledge_chunks kc ON ct.chunkId = kc.id
+       LEFT JOIN entities e ON ct.entity = e.id
+       WHERE kc.ownerId = ? AND kc.ownerType = 'chat_memory'`
+    ).all(chatId);
+    const map = {};
+    for (const r of rows) {
+      if (!r.value) continue;
+      (map[r.chunkId] = map[r.chunkId] || []).push(r.value);
+    }
+    return { success: true, tags: map };
+  } catch (e) {
+    console.error('[get-chat-memory-tags] failed:', e);
+    return { success: false, error: e.message, tags: {} };
   }
 });
 
@@ -3927,6 +3965,20 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
             );
             insertFts.run(snippetId, chunk.text);
           })();
+
+          // World-index the snippet on creation/edit (mirrors what summarization does
+          // for Chat Archive). Best-effort: a failed tag pass never blocks the save.
+          // INSERT OR REPLACE may have changed the text, so drop stale tags first.
+          try {
+            const { classifyAndTagSegment, applyChunkTags } = require('./workflow-runner');
+            db.prepare('DELETE FROM chunk_tags WHERE chunkId = ?').run(snippetId);
+            const taggerProfile = db.prepare('SELECT * FROM writing_profiles LIMIT 1').get();
+            const rec = { id: snippetId, text: chunk.text, ownerId: chatId };
+            const cls = await classifyAndTagSegment([rec], taggerProfile, chatId);
+            applyChunkTags(cls.chunkTags, [rec], chatId);
+          } catch (e) {
+            console.error('[Custom Memory] world-index tagging failed (save continues):', e.message);
+          }
         }
       }
 

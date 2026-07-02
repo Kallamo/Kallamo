@@ -991,7 +991,7 @@ function applyChunkTags(chunkTags, chunkRecords, workspaceId = null) {
 // when chatId is null). These predate the per-chunk tagger, so they carry no tags.
 // Batches the chunks through ONE System-AI call each (tagging only — no title/
 // summary) and writes chunk_tags. INSERT OR IGNORE keeps re-runs from duplicating.
-async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false } = {}) {
+async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false, tier = 'archive' } = {}) {
     const profile = db.prepare('SELECT * FROM writing_profiles LIMIT 1').get();
     const systemAi = getSystemAi();
     if (!profile && !systemAi) throw new Error('No System AI or writing profile configured');
@@ -1008,9 +1008,19 @@ async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false 
     // empty to avoid bleeding one workspace's names into another's prompt.
     const vocab = buildEntityVocab(chatId);
 
-    const where = chatId
-        ? "kc.ownerId = ? AND kc.ownerType = 'chat_memory' AND kc.source = 'Chat Archive'"
-        : "kc.ownerType = 'chat_memory' AND kc.source = 'Chat Archive'";
+    // Which slice of a chat's memory this run tags. Each tier maps to its own button:
+    // archive = summarized Chat Archive (also tagged live at summarization); custom =
+    // searchable Custom Memory snippets (manual_/mem_); searchable = uploaded RAG files
+    // (chat_kb, a distinct ownerType).
+    let ownerType = 'chat_memory';
+    let sourceClause = "AND kc.source = 'Chat Archive'";
+    if (tier === 'custom') {
+        sourceClause = "AND (kc.id LIKE 'manual_%' OR kc.id LIKE 'mem_%')";
+    } else if (tier === 'searchable') {
+        ownerType = 'chat_kb';
+        sourceClause = '';
+    }
+    const where = (chatId ? 'kc.ownerId = ? AND ' : '') + `kc.ownerType = '${ownerType}' ${sourceClause}`;
 
     // full: wipe this scope's existing tags and re-tag every chunk from scratch (the
     // "Index this Chat's memories" button), so a re-run reflects the current tagger and
@@ -1206,6 +1216,40 @@ async function vectorizeDocument(documentId, progressCallback = null) {
     return { added, kept: keepOrdinal.length, deleted: toDelete.length, total: units.length };
 }
 
+// Re-tag every already-embedded chunk of a chapter WITHOUT re-embedding (the "Reindex
+// all" variant of the chapter index button). Wipes this document's existing chunk_tags
+// and reclassifies from scratch, so a re-run reflects the current tagger and entity
+// registry. Vectors are left untouched — new/changed blocks are still embedded by
+// vectorizeDocument ("Index new").
+async function retagDocumentChunks(documentId, progressCallback = null) {
+    const doc = db.prepare('SELECT id, workspaceId FROM documents WHERE id = ?').get(documentId);
+    if (!doc) throw new Error('Document not found');
+
+    const rows = db.prepare(
+        "SELECT id, text FROM knowledge_chunks WHERE ownerId = ? AND ownerType = 'document' ORDER BY ordinal ASC"
+    ).all(documentId);
+    if (!rows.length) return { tagged: 0, chunks: 0 };
+
+    const del = db.prepare('DELETE FROM chunk_tags WHERE chunkId = ?');
+    db.transaction(() => { for (const r of rows) del.run(r.id); })();
+
+    const profile = db.prepare('SELECT * FROM writing_profiles LIMIT 1').get();
+    const records = rows.map(r => ({ id: r.id, text: r.text, ownerId: doc.workspaceId }));
+    let tagged = 0;
+    const BATCH = 12;
+    for (let i = 0; i < records.length; i += BATCH) {
+        if (progressCallback) progressCallback({ phase: 'tagging', done: Math.min(i + BATCH, records.length), total: records.length });
+        const batch = records.slice(i, i + BATCH);
+        try {
+            const cls = await classifyAndTagSegment(batch, profile, doc.workspaceId);
+            tagged += applyChunkTags(cls.chunkTags, batch, doc.workspaceId);
+        } catch (e) {
+            console.error('[Retag Document] batch failed (continues):', e.message);
+        }
+    }
+    return { tagged, chunks: rows.length };
+}
+
 async function executeSummarizationInternal({ chatId, selectedMessages, newSummarizedIndex, customTitle, profileId }) {
     const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
     if (!chat) throw new Error("Chat not found");
@@ -1321,6 +1365,7 @@ async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory 
     const retrievedChatChunks = new Map();
     const retrievedMemories = new Map();
     const retrievedLore = new Map();
+    const retrievedWorldFacts = new Map(); // Deterministic Worldbuild registry facts (lore + relations); exempt from finish-sources pruning.
     const readFiles = new Map();
 
     let historyText = '';
@@ -1342,11 +1387,15 @@ async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory 
     // entirely when the world has no tagged entities yet, so no empty section leaks.
     let worldMapBlock = '';
     try {
-        const vocab = includeChatContext ? getWorldVocabulary(chatId, 'chat_memory') : [];
-        if (vocab.length > 0) {
-            const lines = vocab.map(v => {
-                const aka = v.aliases && v.aliases.length ? ` (aka: ${v.aliases.join(', ')})` : '';
-                return `- ${v.name}${aka}`;
+        // List the curated Worldbuild entities for this workspace straight from the
+        // registry (not only entities that happen to be tagged in chat memory), so the
+        // agent knows the full canonical vocabulary of the world even before anything
+        // has been summarized/tagged.
+        const known = includeChatContext ? entitiesStore.listEntities({ workspaceId: chatId }) : [];
+        if (known.length > 0) {
+            const lines = known.slice(0, 60).map(e => {
+                const aka = (e.aliases && e.aliases.length) ? ` (aka ${e.aliases.join(', ')})` : '';
+                return `- ${e.canonicalName} [${e.type}]${aka}`;
             }).join('\n');
             worldMapBlock = `\nKNOWN ENTITIES IN THIS WORLD (use these EXACT names in your queries; prefer lookup_entity to gather everything known about one of them):\n${lines}\n`;
         }
@@ -1547,6 +1596,23 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                             retrievedMemories.delete(id);
                         }
                     }
+
+                    // Worldbuild facts prune by ENTITY IDENTITY, not fuzzy chunk matching:
+                    // keep a fact if a listed source resolves to its own name/alias, or names
+                    // a related entity that appears in the fact text (so "Aldous Finn" keeps
+                    // the logbook fact that cites him). Drops facts for entities the agent
+                    // looked up but did not deem relevant, so many-entity queries stay lean.
+                    const norm = entitiesStore.normalizeName;
+                    const normalizedSources = allowedSources.map(s => norm(s)).filter(Boolean);
+                    for (const [id, fact] of retrievedWorldFacts.entries()) {
+                        const factText = norm(fact.text || '');
+                        const keep = normalizedSources.some(s =>
+                            norm(fact.canonicalName || '') === s ||
+                            (fact.aliases || []).some(a => norm(a) === s) ||
+                            factText.includes(s)
+                        );
+                        if (!keep) retrievedWorldFacts.delete(id);
+                    }
                 }
                 break;
             }
@@ -1662,27 +1728,38 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                         turnResults += `\nTool [search_memories] for "${call.arg}" results:\n` + memResults.map((r, idx) => `[Memory match ${idx + 1}]: ${r.text}`).join('\n\n') + '\n';
                     }
                 } else if (call.name === 'lookup_entity') {
-                    // Deterministic dossier retrieval by known entity (chat_memory tier only).
-                    // Feeds the same retrievedMemories map so pruning/dedup with search_memories
-                    // is shared; respects includeChatContext like the memory path.
-                    const { chunks: entityChunks, entityIds } = includeChatContext
-                        ? lookupEntityChunks(call.arg, chatId, 'chat_memory')
-                        : { chunks: [], entityIds: [] };
+                    // Dossier retrieval by known entity. Two sources, fused: (1) the curated
+                    // Worldbuild registry (authored lore + relations), resolved directly so an
+                    // entity that was never tagged in chat memory is still found; (2) the
+                    // entity's tagged chat_memory chunks (scene mentions). Feeds retrievedMemories
+                    // so pruning/dedup with search_memories is shared; respects includeChatContext.
+                    let entityChunks = [], entityIds = [];
+                    if (includeChatContext) {
+                        const looked = lookupEntityChunks(call.arg, chatId, 'chat_memory');
+                        entityChunks = looked.chunks || [];
+                        entityIds = Array.isArray(looked.entityIds) ? [...looked.entityIds] : [];
+                    }
+                    let registryEntity = null;
+                    try {
+                        const rid = entitiesStore.resolveMention(call.arg, null, chatId);
+                        if (rid) {
+                            registryEntity = entitiesStore.getEntity(rid);
+                            if (!entityIds.includes(rid)) entityIds.push(rid);
+                        }
+                    } catch (e) { }
+
                     if (includeChatContext) {
                         entityChunks.forEach(r => {
                             retrievedMemories.set(r.id, { text: r.text, source: r.source });
                         });
                     }
-                    if (entityChunks.length === 0) {
-                        turnResults += `\nTool [lookup_entity] for "${call.arg}": No known entity matched, or it has no tagged memory chunks.\n`;
-                    } else {
-                        turnResults += `\nTool [lookup_entity] for "${call.arg}" results:\n` + entityChunks.map((r, idx) => `[Entity chunk ${idx + 1} from ${r.source}]: ${r.text}`).join('\n\n') + '\n';
-                    }
-                    // Relation hop: surface the matched entities' outgoing edges + whether they
-                    // carry linked lore, so the agent traverses the graph by structure.
+                    // Outgoing relations for every resolved entity (registry + tagged), by
+                    // structure. edgesByEntity keeps each entity's own edges so we can attach
+                    // them to that entity's worldbuild fact.
+                    const relLines = [];
+                    const edgesByEntity = new Map();
+                    let anyLore = false;
                     try {
-                        const relLines = [];
-                        let anyLore = false;
                         for (const eid of entityIds) {
                             const ent = entitiesStore.getEntity(eid);
                             if (!ent) continue;
@@ -1690,16 +1767,48 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                             if (links.length) {
                                 const edges = links.map(l => `${l.relType} → ${l.entity ? l.entity.canonicalName : '?'}`).join('; ');
                                 relLines.push(`${ent.canonicalName}: ${edges}`);
+                                edgesByEntity.set(eid, edges);
                             }
                             if (ent.loreDocumentId) anyLore = true;
                         }
-                        if (relLines.length) {
-                            turnResults += `RELATED ENTITIES (follow with lookup_entity): ${relLines.join(' | ')}\n`;
-                        }
-                        if (anyLore) {
-                            turnResults += `NOTE: this entity has linked lore — call read_lore query="${call.arg}" for its authored background.\n`;
-                        }
                     } catch (e) { }
+
+                    // Persist the resolved entity's lore + relations as a deterministic
+                    // worldbuild fact — shown in the final context and exempt from pruning.
+                    if (registryEntity) {
+                        const factParts = [];
+                        if (registryEntity.lore && String(registryEntity.lore).trim()) factParts.push(`Lore: ${registryEntity.lore}`);
+                        const ownEdges = edgesByEntity.get(registryEntity.id);
+                        if (ownEdges) factParts.push(`Relations: ${ownEdges}`);
+                        if (factParts.length) {
+                            retrievedWorldFacts.set(registryEntity.id, {
+                                text: `${registryEntity.canonicalName} (${registryEntity.type}) — ${factParts.join(' | ')}`,
+                                source: `Worldbuild — ${registryEntity.canonicalName}`,
+                                canonicalName: registryEntity.canonicalName,
+                                aliases: Array.isArray(registryEntity.aliases) ? registryEntity.aliases : []
+                            });
+                        }
+                    }
+
+                    // Agent-facing turn output (transient reasoning aid).
+                    const dossierParts = [];
+                    if (registryEntity) {
+                        let head = `Worldbuild entity ${registryEntity.canonicalName} (${registryEntity.type})`;
+                        if (registryEntity.lore && String(registryEntity.lore).trim()) head += `: ${registryEntity.lore}`;
+                        dossierParts.push(head);
+                    }
+                    entityChunks.forEach((r, idx) => dossierParts.push(`[Entity chunk ${idx + 1} from ${r.source}]: ${r.text}`));
+                    if (dossierParts.length === 0 && relLines.length === 0) {
+                        turnResults += `\nTool [lookup_entity] for "${call.arg}": No known entity matched.\n`;
+                    } else if (dossierParts.length) {
+                        turnResults += `\nTool [lookup_entity] for "${call.arg}" results:\n` + dossierParts.join('\n\n') + '\n';
+                    }
+                    if (relLines.length) {
+                        turnResults += `RELATED ENTITIES (follow with lookup_entity): ${relLines.join(' | ')}\n`;
+                    }
+                    if (anyLore) {
+                        turnResults += `NOTE: this entity has linked lore — call read_lore query="${call.arg}" for its authored background.\n`;
+                    }
                 } else if (call.name === 'read_lore') {
                     // Semantic top-k over the entity's linked Writing Desk document, scored
                     // against the user prompt (not a dump). Opt-in + truncated → same cost as
@@ -1708,9 +1817,14 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                     let docTitle = '';
                     if (includeChatContext) {
                         try {
-                            const { entityIds } = lookupEntityChunks(call.arg, chatId, 'chat_memory');
+                            const looked = lookupEntityChunks(call.arg, chatId, 'chat_memory');
+                            const ids = Array.isArray(looked.entityIds) ? [...looked.entityIds] : [];
+                            try {
+                                const rid = entitiesStore.resolveMention(call.arg, null, chatId);
+                                if (rid && !ids.includes(rid)) ids.push(rid);
+                            } catch (e) { }
                             let loreDocId = null;
-                            for (const eid of entityIds) {
+                            for (const eid of ids) {
                                 const ent = entitiesStore.getEntity(eid);
                                 if (ent && ent.loreDocumentId) { loreDocId = ent.loreDocumentId; docTitle = ent.canonicalName; break; }
                             }
@@ -1847,6 +1961,11 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
         gatheredContextParts.push(`--- LINKED LORE (WRITING DESK) ---\n${loreParts.join('\n\n')}`);
     }
 
+    if (retrievedWorldFacts.size > 0) {
+        const factParts = Array.from(retrievedWorldFacts.values()).map(r => `[${r.source}]: ${r.text}`);
+        gatheredContextParts.push(`--- WORLDBUILD FACTS ---\n${factParts.join('\n\n')}`);
+    }
+
     const finalContextGathered = gatheredContextParts.join('\n\n');
 
     let loopProfileKbTokens = 0;
@@ -1871,6 +1990,11 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
         loopChatKbTokens += estimateTokens(texts);
     }
 
+    if (retrievedWorldFacts.size > 0) {
+        const texts = Array.from(retrievedWorldFacts.values()).map(r => r.text).join('\n\n');
+        loopChatKbTokens += estimateTokens(texts);
+    }
+
     if (retrievedChatChunks.size > 0) {
         const texts = Array.from(retrievedChatChunks.values()).map(r => r.text).join('\n\n');
         loopChatKbTokens += estimateTokens(texts);
@@ -1882,7 +2006,7 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
     }
 
     return {
-        agenticResponse: finishResponse || '[No summary generated]',
+        agenticResponse: finishResponse || '[Agent passed context directly — no summary needed]',
         contextGathered: finalContextGathered.trim(),
         profileKbTokens: loopProfileKbTokens,
         chatKbTokens: loopChatKbTokens,
@@ -1902,6 +2026,9 @@ module.exports = {
     executeSummarizationInternal,
     backfillWorldIndex,
     vectorizeDocument,
+    retagDocumentChunks,
+    classifyAndTagSegment,
+    applyChunkTags,
     computeDocumentVectorStatus,
     checkAndAutoSummarize
 };

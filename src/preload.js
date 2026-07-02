@@ -68,8 +68,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateDirectiveEnabled: (id, enabled) => ipcRenderer.invoke('update-directive-enabled', { id, enabled }),
   deleteDirective: (id) => ipcRenderer.invoke('delete-directive', { id }),
   copyToClipboard: (text) => ipcRenderer.invoke('copy-to-clipboard', text),
-  backfillWorldIndex: (chatId) => ipcRenderer.invoke('backfill-world-index', { chatId }),
+  backfillWorldIndex: (chatId, opts = {}) => ipcRenderer.invoke('backfill-world-index', { chatId, ...opts }),
+  getChatMemoryTags: (chatId) => ipcRenderer.invoke('get-chat-memory-tags', { chatId }),
   vectorizeDocument: (documentId) => ipcRenderer.invoke('vectorize-document', { documentId }),
+  retagDocument: (documentId) => ipcRenderer.invoke('retag-document', { documentId }),
   getDocumentVectorStatus: (documentId) => ipcRenderer.invoke('get-document-vector-status', { documentId }),
   onVectorizeDocumentProgress: (callback) => {
     const listener = (event, data) => callback(data);

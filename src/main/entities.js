@@ -10,6 +10,18 @@ function parseJsonArray(raw) {
   try { const a = JSON.parse(raw); return Array.isArray(a) ? a : []; } catch { return []; }
 }
 
+// Fold typographic punctuation to ASCII before matching, so a curly apostrophe in a
+// canonical name (e.g. seed data: "The Keeper's Logbook") still matches the straight
+// apostrophe a user or the model types. Also trims + lowercases + collapses whitespace.
+function normalizeName(s) {
+  return String(s || '')
+    .replace(/[‘’‛ʼ]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
 function parseJsonObject(raw) {
   if (!raw) return {};
   try { const o = JSON.parse(raw); return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {}; } catch { return {}; }
@@ -90,7 +102,7 @@ function deleteEntity(id) {
 // exact match against canonicalName or any alias. Optional type narrows the search.
 function resolveMention(mention, type = null, workspaceId = null) {
   if (!mention) return null;
-  const needle = String(mention).trim().toLowerCase();
+  const needle = normalizeName(mention);
   if (!needle) return null;
   let rows;
   if (type) {
@@ -99,8 +111,8 @@ function resolveMention(mention, type = null, workspaceId = null) {
     rows = db.prepare('SELECT id, canonicalName, aliases FROM entities WHERE workspaceId IS ?').all(workspaceId || null);
   }
   for (const r of rows) {
-    if (r.canonicalName && r.canonicalName.toLowerCase() === needle) return r.id;
-    if (parseJsonArray(r.aliases).some(a => a.toLowerCase() === needle)) return r.id;
+    if (r.canonicalName && normalizeName(r.canonicalName) === needle) return r.id;
+    if (parseJsonArray(r.aliases).some(a => normalizeName(a) === needle)) return r.id;
   }
   return null;
 }
@@ -162,6 +174,7 @@ module.exports = {
   updateEntity,
   deleteEntity,
   resolveMention,
+  normalizeName,
   getLinksFrom,
   getLinksTo,
   setLink,

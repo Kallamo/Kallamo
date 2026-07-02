@@ -54,28 +54,48 @@ export default function ChatMemoryView({
   const [editorTitle, setEditorTitle] = useState('');
   const [editorText, setEditorText] = useState('');
   const [savingSnippet, setSavingSnippet] = useState(false);
-  const [indexing, setIndexing] = useState(false);
+  const [indexingTier, setIndexingTier] = useState(null); // 'custom' | 'archive' | 'searchable' | null
+  const [indexMenu, setIndexMenu] = useState(null); // which tier's variant menu is open
+  const [memoryTags, setMemoryTags] = useState({}); // { [chunkId]: ["Canonical Name", ...] }
+  const customIdxRef = useRef(null);
+  const archiveIdxRef = useRef(null);
+  const searchableIdxRef = useRef(null);
+  const indexTiers = [
+    { key: 'custom', label: 'Custom Memory', ref: customIdxRef },
+    { key: 'archive', label: 'Chat Archive', ref: archiveIdxRef },
+    { key: 'searchable', label: 'Searchable', ref: searchableIdxRef },
+  ];
 
-  // World-index re-index: drop this chat's existing chunk tags and re-tag every
-  // archived raw chunk from scratch, so a re-run reflects the current tagger and
-  // entity registry rather than accumulating stale tags.
-  const handleIndexMemories = async () => {
+  const loadMemoryTags = async () => {
+    if (!chat?.id || typeof electronAPI?.getChatMemoryTags !== 'function') return;
+    try {
+      const res = await electronAPI.getChatMemoryTags(chat.id);
+      if (res?.success) setMemoryTags(res.tags || {});
+    } catch (e) { /* markers stay empty on failure */ }
+  };
+
+  // World-index a memory tier. full=false tags only chunks that carry no tags yet
+  // ("index new"); full=true drops the tier's tags and re-tags from scratch ("reindex
+  // all"), so a re-run reflects the current tagger and entity registry.
+  const handleIndexMemories = async (tier, full) => {
     if (typeof electronAPI?.backfillWorldIndex !== 'function') {
       showToast('Indexing unavailable — fully restart the app (close + reopen Electron).', 'error');
       return;
     }
-    setIndexing(true);
+    setIndexMenu(null);
+    setIndexingTier(tier);
     try {
-      const res = await electronAPI.backfillWorldIndex(chat.id);
+      const res = await electronAPI.backfillWorldIndex(chat.id, { tier, full });
       if (res?.success) {
-        showToast(`Indexed ${res.chunks} chunk(s) in ${res.batches} batch(es) → ${res.tagged} tag(s).`, 'success');
+        showToast(`${full ? 'Reindexed' : 'Indexed'} ${res.chunks} chunk(s) → ${res.tagged} tag(s).`, 'success');
+        loadMemoryTags();
       } else {
         showToast(`Indexing failed: ${res?.error || 'unknown'}`, 'error');
       }
     } catch (e) {
       showToast(`Indexing failed: ${e.message}`, 'error');
     } finally {
-      setIndexing(false);
+      setIndexingTier(null);
     }
   };
 
@@ -239,6 +259,7 @@ export default function ChatMemoryView({
   useEffect(() => {
     setSelectedBlockIds([]);
     loadBlocks();
+    loadMemoryTags();
   }, [chat?.id]);
 
   useEffect(() => {
@@ -1139,6 +1160,20 @@ export default function ChatMemoryView({
                             ))}
                           </div>
                         )}
+
+                        {/* World-index dynamic tags assigned to this Custom Memory */}
+                        {block.type === 'snippet' && memoryTags[block.id] && memoryTags[block.id].length > 0 && (
+                          <div className="flex flex-wrap items-center gap-1.5 mt-2 select-none" title="World-index entities detected in this memory">
+                            {memoryTags[block.id].map((t, i) => (
+                              <span
+                                key={i}
+                                className="px-1.5 py-0.5 bg-sky-500/10 border border-sky-500/25 text-sky-300 text-[9px] font-bold rounded flex items-center gap-1"
+                              >
+                                <Sparkles className="w-2.5 h-2.5" />{t}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1300,15 +1335,45 @@ export default function ChatMemoryView({
             Test how the AI retrieves memories. Type a phrase or prompt below to run a local vector similarity match.
           </p>
 
-          <button
-            onClick={handleIndexMemories}
-            disabled={indexing}
-            title="Tag this chat's archived memories so the AI can recall them by character, faction, and item."
-            className="text-[10px] font-bold tracking-wider px-2.5 py-1.5 border border-accent/40 text-accent rounded-lg hover:bg-accent/10 transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
-          >
-            {indexing ? <Loader className="w-3 h-3 animate-spin" /> : <Brain className="w-3 h-3" />}
-            {indexing ? 'Indexing memories…' : "Index this chat's memories"}
-          </button>
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[8px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-1">
+              <Brain className="w-3 h-3" /> World Index
+            </span>
+            <div className="grid grid-cols-1 gap-1.5">
+              {indexTiers.map(t => (
+                <div key={t.key} className="relative" ref={t.ref}>
+                  <button
+                    onClick={() => setIndexMenu(indexMenu === t.key ? null : t.key)}
+                    disabled={indexingTier !== null}
+                    title={`Tag this chat's ${t.label} so the AI can recall it by character, faction, and item.`}
+                    className="w-full text-[10px] font-bold tracking-wider px-2.5 py-1.5 border border-accent/40 text-accent rounded-lg hover:bg-accent/10 transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-between gap-1.5"
+                  >
+                    <span className="flex items-center gap-1.5">
+                      {indexingTier === t.key ? <Loader className="w-3 h-3 animate-spin" /> : <Brain className="w-3 h-3" />}
+                      {indexingTier === t.key ? 'Indexing…' : t.label}
+                    </span>
+                    <ChevronDown className={`w-3 h-3 transition-transform ${indexMenu === t.key ? 'rotate-180' : ''}`} />
+                  </button>
+                  <Popover anchorRef={t.ref} open={indexMenu === t.key} onClose={() => setIndexMenu(null)} matchAnchorWidth={true} align="left" className="!p-2">
+                    <button
+                      onClick={() => handleIndexMemories(t.key, false)}
+                      className="w-full text-left px-3 py-2 text-[10px] font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
+                    >
+                      Index new chunks
+                      <span className="block text-[8px] font-normal text-gray-500 normal-case tracking-normal mt-0.5">Only chunks not tagged yet — fast top-up.</span>
+                    </button>
+                    <button
+                      onClick={() => handleIndexMemories(t.key, true)}
+                      className="w-full text-left px-3 py-2 text-[10px] font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
+                    >
+                      Reindex all chunks
+                      <span className="block text-[8px] font-normal text-gray-500 normal-case tracking-normal mt-0.5">Drop and rebuild every tag from scratch.</span>
+                    </button>
+                  </Popover>
+                </div>
+              ))}
+            </div>
+          </div>
 
           <div className="flex flex-col space-y-2.5">
             {/* AI Profile Selector */}

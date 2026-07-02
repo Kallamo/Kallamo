@@ -619,6 +619,8 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
   const [vecStatus, setVecStatus] = useState(doc.vectorized ? 'done' : 'stale');
   const [vecBusy, setVecBusy] = useState(false);
   const [vecProgress, setVecProgress] = useState(null);
+  const [vecMenuOpen, setVecMenuOpen] = useState(false);
+  const vecBtnRef = useRef(null);
   const locked = inFlight || !!pending;
   const pageConfig = pageConfigFromDoc(doc);
 
@@ -655,14 +657,32 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     editor.commands.focus('end');
   };
 
+  // Index new: embed + tag only new/changed blocks (incremental by content hash).
   const runVectorize = async () => {
     if (vecBusy) return;
+    setVecMenuOpen(false);
     setVecBusy(true);
     setVecProgress(null);
     try {
       const res = await electronAPI.vectorizeDocument?.(doc.id);
       console.log('[vectorize-document]', res);
       if (res?.success) setVecStatus('done');
+    } finally {
+      setVecBusy(false);
+      setVecProgress(null);
+    }
+  };
+
+  // Reindex all: re-tag every already-embedded chunk from scratch (no re-embedding),
+  // to reflect the current tagger and entity registry.
+  const runRetag = async () => {
+    if (vecBusy) return;
+    setVecMenuOpen(false);
+    setVecBusy(true);
+    setVecProgress(null);
+    try {
+      const res = await electronAPI.retagDocument?.(doc.id);
+      console.log('[retag-document]', res);
     } finally {
       setVecBusy(false);
       setVecProgress(null);
@@ -902,7 +922,8 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
         <div className="flex items-center gap-0.5 shrink-0">
           <button
             type="button"
-            onClick={runVectorize}
+            ref={vecBtnRef}
+            onClick={() => !vecBusy && setVecMenuOpen(v => !v)}
             disabled={vecBusy}
             title={
               vecBusy
@@ -920,6 +941,24 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
               <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-400" />
             )}
           </button>
+          <Popover anchorRef={vecBtnRef} open={vecMenuOpen} onClose={() => setVecMenuOpen(false)} matchAnchorWidth={false} align="right" className="w-56 !p-2">
+            <button
+              type="button"
+              onClick={runVectorize}
+              className="w-full text-left px-3 py-2 text-[11px] font-semibold text-gray-200 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
+            >
+              Index new blocks
+              <span className="block text-[9px] font-normal text-gray-500 mt-0.5">Embed + tag only new or edited blocks.</span>
+            </button>
+            <button
+              type="button"
+              onClick={runRetag}
+              className="w-full text-left px-3 py-2 text-[11px] font-semibold text-gray-200 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
+            >
+              Reindex all tags
+              <span className="block text-[9px] font-normal text-gray-500 mt-0.5">Re-tag every block from scratch (keeps embeddings).</span>
+            </button>
+          </Popover>
           <button type="button" onClick={() => setShowFind(v => !v)} title="Find & Replace (Ctrl+F)" className={`p-1.5 rounded-md transition-colors cursor-pointer ${showFind ? 'text-accent bg-white/5' : 'text-gray-500 hover:text-white hover:bg-white/5'}`}>
             <Search className="w-4 h-4" />
           </button>
