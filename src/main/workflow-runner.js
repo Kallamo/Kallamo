@@ -1424,7 +1424,9 @@ AVAILABLE TOOLS:
    Returns EVERY memory chunk tagged with a known world entity (see KNOWN ENTITIES), by exact name or alias — no semantic guessing. Also lists that entity's RELATED ENTITIES (its graph edges, e.g. "owns → Star Paradox; ally_of → Port Brea"). Prefer this over search_kb/search_memories when the user prompt refers to a known entity and you want its full dossier (traits, relationships, history). Follow a listed relation with another lookup_entity to traverse the world by structure instead of guessing from prose. Use search_kb/search_memories for concepts, scenes, or things not in the entity list.
 5. <tool_call name="read_lore" query="entity name or alias" />
    For an entity that has a linked lore document (Writing Desk), returns the passages of that document most relevant to the user prompt. Use it when lookup_entity shows an entity has authored lore and you need its canonical background, not just scene mentions. Does nothing if the entity has no linked lore.
-6. <finish sources="source1, source2, ...">summary of retrieved facts</finish>
+6. <tool_call name="expand" query="R3 or a source name" />
+   Re-reads the FULL text of a previously retrieved item that was summarized in an earlier turn (results are shown by a handle like [R3 · source]). Use it only when a summarized item's snippet is not enough to decide. Everything you retrieve is already sent to the writing assistant in full — expand is just for YOUR reasoning.
+7. <finish sources="source1, source2, ...">summary of retrieved facts</finish>
    Concludes your research. Inside the 'sources' attribute, you MUST list the exact filenames, character names, or document names of the retrieved contexts that were ACTUALLY relevant and helpful to answer the user prompt. Only these sources will be kept in the final context.
    If no sources are listed or if you omit the attribute, all searched contexts will be included by default.
    
@@ -1453,6 +1455,23 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
     let messages = [
         { role: 'user', content: toolsPrompt }
     ];
+
+    // The final answer is assembled from the retrieved* Maps below, so mid-loop the agent
+    // only needs a coverage view, not the full text of every prior turn. Older turns are
+    // compacted to a digest once the accumulated results exceed a token budget.
+    const LEAN_AGENT_HISTORY = true;
+    const LEAN_HISTORY_BUDGET_TOKENS = 1200;
+    const LEAN_HISTORY_KEEP_TURNS = 1; // newest N turns are always kept in full
+    const SNIPPET_CHARS = 160;
+    const turnLog = [];               // { msgIndex, digestContent, fullTokens, digestTokens, downgraded }
+    const itemRegistry = new Map();   // handle -> { source, full }, backs the expand tool
+    const coveredSources = new Set();
+    const coveredEntities = new Set();
+    let handleSeq = 0;
+    const makeSnippet = (t) => {
+        const s = String(t || '').replace(/\s+/g, ' ').trim();
+        return s.length > SNIPPET_CHARS ? s.slice(0, SNIPPET_CHARS) + '…' : s;
+    };
 
     let finishResponse = '';
     let agenticRagInputTokens = 0;
@@ -1500,7 +1519,7 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                 return attrs;
             };
 
-            const KNOWN_TOOLS = ['search_kb', 'read_file', 'search_memories', 'lookup_entity', 'read_lore'];
+            const KNOWN_TOOLS = ['search_kb', 'read_file', 'search_memories', 'lookup_entity', 'read_lore', 'expand'];
 
             // Tolerant tool_call parsing: self-closing or not, any quote style, any attribute order,
             // arg under several aliases, or as the element's inner text.
@@ -1639,7 +1658,15 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                 break;
             }
 
-            let turnResults = "";
+            const turnItems = []; // { kind:'result', handle, source, full, meta } | { kind:'note', text }
+            const pushResult = ({ source, full, meta }) => {
+                const handle = `R${++handleSeq}`;
+                itemRegistry.set(handle, { source, full });
+                if (source) coveredSources.add(source);
+                turnItems.push({ kind: 'result', handle, source: source || '?', full: full || '', meta: meta || '' });
+                return handle;
+            };
+            const pushNote = (text) => turnItems.push({ kind: 'note', text });
             for (const call of toolCalls) {
                 console.log(`[Agentic RAG] Executing tool: ${call.name} with: "${call.arg}"`);
 
@@ -1693,9 +1720,13 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                     const combined = [...profileResults, ...chatKbResults];
 
                     if (combined.length === 0) {
-                        turnResults += `\nTool [search_kb] for "${call.arg}": No matches found.\n`;
+                        pushNote(`Tool [search_kb] for "${call.arg}": No matches found.`);
                     } else {
-                        turnResults += `\nTool [search_kb] for "${call.arg}" results:\n` + combined.map((r, idx) => `[Result ${idx + 1} from ${r.source}]: ${r.text}`).join('\n\n') + '\n';
+                        pushNote(`Tool [search_kb] for "${call.arg}": ${combined.length} result(s).`);
+                        combined.forEach(r => pushResult({
+                            source: r.source, full: r.text,
+                            meta: `search_kb "${call.arg}"${typeof r.score === 'number' ? ` sim=${r.score.toFixed(2)}` : ''}`
+                        }));
                     }
                 } else if (call.name === 'search_memories') {
                     const rawMemResults = includeChatContext ? await searchChatMemories(call.arg, chatId) : [];
@@ -1723,9 +1754,13 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                     }
 
                     if (memResults.length === 0) {
-                        turnResults += `\nTool [search_memories] for "${call.arg}": No matches found.\n`;
+                        pushNote(`Tool [search_memories] for "${call.arg}": No matches found.`);
                     } else {
-                        turnResults += `\nTool [search_memories] for "${call.arg}" results:\n` + memResults.map((r, idx) => `[Memory match ${idx + 1}]: ${r.text}`).join('\n\n') + '\n';
+                        pushNote(`Tool [search_memories] for "${call.arg}": ${memResults.length} match(es).`);
+                        memResults.forEach(r => pushResult({
+                            source: r.source, full: r.text,
+                            meta: `search_memories "${call.arg}"${typeof r.score === 'number' ? ` sim=${r.score.toFixed(2)}` : ''}`
+                        }));
                     }
                 } else if (call.name === 'lookup_entity') {
                     // Dossier retrieval by known entity. Two sources, fused: (1) the curated
@@ -1790,24 +1825,21 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                         }
                     }
 
-                    // Agent-facing turn output (transient reasoning aid).
-                    const dossierParts = [];
+                    if (registryEntity) coveredEntities.add(registryEntity.canonicalName);
                     if (registryEntity) {
                         let head = `Worldbuild entity ${registryEntity.canonicalName} (${registryEntity.type})`;
                         if (registryEntity.lore && String(registryEntity.lore).trim()) head += `: ${registryEntity.lore}`;
-                        dossierParts.push(head);
+                        pushResult({ source: registryEntity.canonicalName, full: head, meta: `lookup_entity "${call.arg}"` });
                     }
-                    entityChunks.forEach((r, idx) => dossierParts.push(`[Entity chunk ${idx + 1} from ${r.source}]: ${r.text}`));
-                    if (dossierParts.length === 0 && relLines.length === 0) {
-                        turnResults += `\nTool [lookup_entity] for "${call.arg}": No known entity matched.\n`;
-                    } else if (dossierParts.length) {
-                        turnResults += `\nTool [lookup_entity] for "${call.arg}" results:\n` + dossierParts.join('\n\n') + '\n';
+                    entityChunks.forEach(r => pushResult({ source: r.source, full: r.text, meta: `lookup_entity "${call.arg}"` }));
+                    if (!registryEntity && entityChunks.length === 0 && relLines.length === 0) {
+                        pushNote(`Tool [lookup_entity] for "${call.arg}": No known entity matched.`);
                     }
                     if (relLines.length) {
-                        turnResults += `RELATED ENTITIES (follow with lookup_entity): ${relLines.join(' | ')}\n`;
+                        pushNote(`RELATED ENTITIES (follow with lookup_entity): ${relLines.join(' | ')}`);
                     }
                     if (anyLore) {
-                        turnResults += `NOTE: this entity has linked lore — call read_lore query="${call.arg}" for its authored background.\n`;
+                        pushNote(`NOTE: this entity has linked lore — call read_lore query="${call.arg}" for its authored background.`);
                     }
                 } else if (call.name === 'read_lore') {
                     // Semantic top-k over the entity's linked Writing Desk document, scored
@@ -1834,14 +1866,15 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                         } catch (e) { }
                     }
                     if (loreResults.length === 0) {
-                        turnResults += `\nTool [read_lore] for "${call.arg}": No linked lore document, or no relevant passages found.\n`;
+                        pushNote(`Tool [read_lore] for "${call.arg}": No linked lore document, or no relevant passages found.`);
                     } else {
+                        pushNote(`Tool [read_lore] for "${call.arg}": ${loreResults.length} passage(s) from linked lore of ${docTitle}.`);
                         loreResults.forEach(r => {
                             let text = r.text || '';
                             if (text.length > MAX_AGENT_FILE_CHARS) text = text.slice(0, MAX_AGENT_FILE_CHARS) + '\n[...truncated...]';
                             retrievedLore.set(r.id, { text, source: r.source || docTitle });
+                            pushResult({ source: r.source || docTitle, full: text, meta: `read_lore "${call.arg}"` });
                         });
-                        turnResults += `\nTool [read_lore] for "${call.arg}" (linked lore of ${docTitle}):\n` + loreResults.map((r, idx) => `[Lore passage ${idx + 1}]: ${r.text}`).join('\n\n') + '\n';
                     }
                 } else if (call.name === 'read_file') {
                     let isConstant = false;
@@ -1888,7 +1921,7 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                     }
 
                     if (isConstant) {
-                        turnResults += `\nTool [read_file] for "${call.arg}" contents:\n[System: Access Denied. "${call.arg}" is a Constant context block and cannot be accessed via RAG tools since it is already permanently included in the main prompt context.]\n`;
+                        pushNote(`Tool [read_file] for "${call.arg}": Access Denied — "${call.arg}" is a Constant context block already permanently included in the main prompt.`);
                     } else {
                         let fileText = readEntireKbFile(profile.id, call.arg);
                         let fileSource = 'profile';
@@ -1911,13 +1944,52 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                                 `\n[...truncated at ${MAX_AGENT_FILE_CHARS} chars for agent reasoning; the full file is preserved for the final context...]`;
                         }
 
-                        turnResults += `\nTool [read_file] for "${call.arg}" contents:\n${agentFileText}\n`;
+                        pushResult({ source: call.arg, full: agentFileText, meta: `read_file (${fileSource})` });
                     }
+                } else if (call.name === 'expand') {
+                    // Re-read one previously summarized item's full text into THIS turn only.
+                    const hit = itemRegistry.get(call.arg) ||
+                        [...itemRegistry.values()].find(v => entitiesStore.normalizeName(v.source) === entitiesStore.normalizeName(call.arg));
+                    if (hit) pushNote(`Tool [expand] "${call.arg}":\n[${hit.source}] ${hit.full}`);
+                    else pushNote(`Tool [expand] "${call.arg}": no such retrieved item.`);
                 }
             }
 
+            // This turn is added in full; the digest is what it collapses to once it ages out.
+            const coverageLine = () => {
+                const ents = coveredEntities.size ? [...coveredEntities].join(', ') : '—';
+                const srcs = coveredSources.size ? [...coveredSources].slice(0, 12).join(', ') : '—';
+                return `COVERED SO FAR — entities: ${ents} | sources: ${srcs} | ${itemRegistry.size} items`;
+            };
+            const renderItem = (it, full) => it.kind === 'note'
+                ? it.text
+                : (full
+                    ? `[${it.handle} · ${it.source}] ${it.full}`
+                    : `[${it.handle} · ${it.source}]${it.meta ? ` (${it.meta})` : ''} ${makeSnippet(it.full)}`);
+            const fullContent = `${coverageLine()}\n\n${turnItems.map(it => renderItem(it, true)).join('\n\n')}`;
+            const digestContent = `${coverageLine()}\n${turnItems.map(it => renderItem(it, false)).join('\n')}`;
+
             messages.push({ role: 'assistant', content: agentOutput });
-            messages.push({ role: 'user', content: `TOOL RESULTS:\n${turnResults}\n\nWhat is your next step?` });
+            const msgIndex = messages.push({ role: 'user', content: `TOOL RESULTS:\n${fullContent}\n\nWhat is your next step?` }) - 1;
+            turnLog.push({
+                msgIndex, digestContent,
+                fullTokens: estimateTokens(fullContent),
+                digestTokens: estimateTokens(digestContent),
+                downgraded: false
+            });
+
+            if (LEAN_AGENT_HISTORY) {
+                // Downgrade oldest→newest until the live results history fits the budget, always
+                // preserving the newest KEEP_TURNS in full. Small loops never trip this.
+                const liveTokens = () => turnLog.reduce((s, e) => s + (e.downgraded ? e.digestTokens : e.fullTokens), 0);
+                const protectedFrom = turnLog.length - LEAN_HISTORY_KEEP_TURNS;
+                for (let i = 0; i < protectedFrom && liveTokens() > LEAN_HISTORY_BUDGET_TOKENS; i++) {
+                    const e = turnLog[i];
+                    if (e.downgraded) continue;
+                    messages[e.msgIndex].content = `TOOL RESULTS (earlier, summarized):\n${e.digestContent}`;
+                    e.downgraded = true;
+                }
+            }
 
             currentTurn++;
 
