@@ -882,6 +882,28 @@ function getSystemAi() {
 // Render a workspace's entity registry as a prompt block so the classifier reuses
 // existing canonical names (and maps titles/variants to them) instead of coining
 // inconsistent values. Empty string when the registry has no entities yet.
+// Serialize an entity's structured `data` fields into a short human-readable clause
+// for the retrieval dossier. Nothing curated into the registry may be lost from
+// retrieval, so every scalar attribute the user set surfaces to the model. Long-form
+// prose (description/content) is skipped here — it rides on the entity's Lore instead.
+const DOSSIER_DATA_FIELDS = [
+    ['status', 'status'], ['itemType', 'type'], ['locationType', 'type'],
+    ['nature', 'nature'], ['scope', 'kind'], ['disposition', 'disposition'],
+    ['rarity', 'abundance'], ['abundance', 'abundance'], ['threat', 'threat'],
+    ['age', 'age'], ['role', 'role'], ['abilities', 'abilities'], ['ownership', 'ownership'],
+];
+function entityDataFacts(data) {
+    if (!data || typeof data !== 'object') return '';
+    const parts = [];
+    for (const [key, label] of DOSSIER_DATA_FIELDS) {
+        const v = data[key];
+        if (v == null) continue;
+        const s = String(v).trim();
+        if (s) parts.push(`${label}: ${s}`);
+    }
+    return parts.join('; ');
+}
+
 function buildEntityVocab(workspaceId) {
     if (!workspaceId) return '';
     let rows = [];
@@ -1800,11 +1822,11 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                             if (!ent) continue;
                             const links = entitiesStore.getLinksFrom(eid) || [];
                             if (links.length) {
-                                const edges = links.map(l => `${l.relType} → ${l.entity ? l.entity.canonicalName : '?'}`).join('; ');
+                                const edges = links.map(l => `${l.label || l.relType} → ${l.entity ? l.entity.canonicalName : '?'}`).join('; ');
                                 relLines.push(`${ent.canonicalName}: ${edges}`);
                                 edgesByEntity.set(eid, edges);
                             }
-                            if (ent.loreDocumentId) anyLore = true;
+                            if (entitiesStore.linkedLoreDocIds(ent).length) anyLore = true;
                         }
                     } catch (e) { }
 
@@ -1812,6 +1834,10 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                     // worldbuild fact — shown in the final context and exempt from pruning.
                     if (registryEntity) {
                         const factParts = [];
+                        const details = entityDataFacts(registryEntity.data);
+                        if (details) factParts.push(`Details: ${details}`);
+                        const desc = registryEntity.data && (registryEntity.data.description || registryEntity.data.content);
+                        if (desc && String(desc).trim()) factParts.push(`Description: ${String(desc).trim()}`);
                         if (registryEntity.lore && String(registryEntity.lore).trim()) factParts.push(`Lore: ${registryEntity.lore}`);
                         const ownEdges = edgesByEntity.get(registryEntity.id);
                         if (ownEdges) factParts.push(`Relations: ${ownEdges}`);
@@ -1828,6 +1854,10 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                     if (registryEntity) coveredEntities.add(registryEntity.canonicalName);
                     if (registryEntity) {
                         let head = `Worldbuild entity ${registryEntity.canonicalName} (${registryEntity.type})`;
+                        const headDetails = entityDataFacts(registryEntity.data);
+                        if (headDetails) head += ` [${headDetails}]`;
+                        const headDesc = registryEntity.data && (registryEntity.data.description || registryEntity.data.content);
+                        if (headDesc && String(headDesc).trim()) head += ` — ${String(headDesc).trim()}`;
                         if (registryEntity.lore && String(registryEntity.lore).trim()) head += `: ${registryEntity.lore}`;
                         pushResult({ source: registryEntity.canonicalName, full: head, meta: `lookup_entity "${call.arg}"` });
                     }
@@ -1855,13 +1885,14 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                                 const rid = entitiesStore.resolveMention(call.arg, null, chatId);
                                 if (rid && !ids.includes(rid)) ids.push(rid);
                             } catch (e) { }
-                            let loreDocId = null;
+                            let loreDocIds = [];
                             for (const eid of ids) {
                                 const ent = entitiesStore.getEntity(eid);
-                                if (ent && ent.loreDocumentId) { loreDocId = ent.loreDocumentId; docTitle = ent.canonicalName; break; }
+                                const docs = ent ? entitiesStore.linkedLoreDocIds(ent) : [];
+                                if (docs.length) { loreDocIds = docs; docTitle = ent.canonicalName; break; }
                             }
-                            if (loreDocId) {
-                                loreResults = await executeMultiOwnerSearch(currentInput, [loreDocId], 'document', 0.3, 4);
+                            if (loreDocIds.length) {
+                                loreResults = await executeMultiOwnerSearch(currentInput, loreDocIds, 'document', 0.3, 4);
                             }
                         } catch (e) { }
                     }

@@ -89,10 +89,19 @@ body {
 }
 
 /* Worldbuild form controls: render the native <select> dropdown options in the
-   app's dark theme instead of the OS default white. */
+   app's dark theme instead of the OS default white, and tint selection with the
+   app accent instead of the OS blue. */
+select.wb-input {
+  accent-color: var(--app-accent);
+}
 select.wb-input option {
   background-color: #0a1721;
   color: #e5e7eb;
+}
+select.wb-input option:checked,
+select.wb-input option:hover {
+  background: color-mix(in srgb, var(--app-accent) 30%, #0a1721);
+  color: #fff;
 }
 
 /* Custom ambient wave animation for Logo flutes */

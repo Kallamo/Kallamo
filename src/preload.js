@@ -86,6 +86,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getEntityLinks: (id, direction, relType) => ipcRenderer.invoke('get-entity-links', { id, direction, relType }),
   setEntityLink: (payload) => ipcRenderer.invoke('set-entity-link', payload),
   removeEntityLink: (linkId) => ipcRenderer.invoke('remove-entity-link', { linkId }),
+  updateEntityLinkLabel: (linkId, label) => ipcRenderer.invoke('update-entity-link-label', { linkId, label }),
   getChatMessages: (chatId) => ipcRenderer.invoke('get-chat-messages', chatId),
   saveMessage: (message) => ipcRenderer.invoke('save-message', message),
   deleteMessage: (messageId, shouldDeleteFiles) => ipcRenderer.invoke('delete-message', messageId, shouldDeleteFiles),

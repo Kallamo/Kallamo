@@ -2578,6 +2578,15 @@ ipcMain.handle('remove-entity-link', async (event, { linkId }) => {
   }
 });
 
+ipcMain.handle('update-entity-link-label', async (event, { linkId, label } = {}) => {
+  try {
+    return { success: true, ...entitiesStore.updateLinkLabel(linkId, label) };
+  } catch (e) {
+    console.error('[update-entity-link-label] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
 ipcMain.handle('update-directive-enabled', async (event, { id, enabled }) => {
   db.prepare('UPDATE pinned_directives SET enabled = ?, last_modified = ? WHERE id = ?').run(enabled ? 1 : 0, Date.now(), id);
   return { success: true };

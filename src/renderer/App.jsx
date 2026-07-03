@@ -173,12 +173,21 @@ function MainLayout() {
       }, 200);
     };
 
+    // A clicked trigger often unmounts (e.g. a pencil that swaps to edit mode), so its
+    // mouseout never fires and the tooltip would linger. Force-hide on any pointer down.
+    const handleMouseDown = () => {
+      globalTooltip.classList.add('opacity-0');
+      globalTooltip.classList.add('hidden');
+    };
+
     document.addEventListener('mouseover', handleMouseOver);
     document.addEventListener('mouseout', handleMouseOut);
+    document.addEventListener('mousedown', handleMouseDown);
 
     return () => {
       document.removeEventListener('mouseover', handleMouseOver);
       document.removeEventListener('mouseout', handleMouseOut);
+      document.removeEventListener('mousedown', handleMouseDown);
       if (document.body.contains(globalTooltip)) {
         document.body.removeChild(globalTooltip);
       }

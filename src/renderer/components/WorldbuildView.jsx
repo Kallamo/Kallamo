@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Plus, Search, BookOpen, MapPin, Package, Users, Flag, User,
-  Sparkles, Trash2, Save, X, Pencil, Check, Link2, Globe, Tag, ScrollText,
+  Sparkles, Trash2, Save, X, Pencil, Check, Link2, Globe, Tag, ScrollText, Ghost, Info, Replace,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import Button from './ui/Button';
@@ -17,10 +18,41 @@ const TYPES = {
   Races:      { label: 'Race',             icon: Users,    medallion: 'bg-sky-400/15 text-sky-200 border-sky-400/30', ring: 'border-sky-400/25', soft: 'text-sky-300' },
   Factions:   { label: 'Faction',          icon: Flag,     medallion: 'bg-rose-400/15 text-rose-200 border-rose-400/30', ring: 'border-rose-400/25', soft: 'text-rose-300' },
   Characters: { label: 'Character',        icon: User,     medallion: 'bg-accent/15 text-accent border-accent/30', ring: 'border-accent/25', soft: 'text-accent' },
+  Creatures:  { label: 'Creature / Entity', icon: Ghost,    medallion: 'bg-violet-400/15 text-violet-200 border-violet-400/30', ring: 'border-violet-400/25', soft: 'text-violet-300' },
 };
-const TYPE_ORDER = ['Characters', 'Locations', 'Factions', 'Items', 'Races', 'System'];
+const TYPE_ORDER = ['Characters', 'Locations', 'Factions', 'Items', 'Races', 'Creatures', 'System'];
 const meta = (t) => TYPES[t] || { label: t, icon: Globe, medallion: 'bg-white/10 text-gray-300 border-white/20', ring: 'border-white/15', soft: 'text-gray-300' };
 const ITEM_TYPES = ['Weapon', 'Armor', 'Artifact', 'Resource'];
+
+// A living-world scale for how much of a thing exists. Shared by Resources and Creatures.
+const RARITY = ['Unique', 'Rare', 'Uncommon', 'Common', 'Abundant'];
+// How dangerous a creature is, for the AI to calibrate encounters.
+const THREAT = ['Harmless', 'Minor', 'Dangerous', 'Deadly', 'Legendary'];
+// Life state for people and creatures, shown as a colored tag and fed to retrieval.
+const STATUS = {
+  alive:    { label: 'Alive',    cls: 'bg-emerald-400/15 text-emerald-200 border-emerald-400/30' },
+  deceased: { label: 'Deceased', cls: 'bg-rose-400/15 text-rose-200 border-rose-400/30' },
+  missing:  { label: 'Missing',  cls: 'bg-amber-400/15 text-amber-200 border-amber-400/30' },
+  unknown:  { label: 'Unknown',  cls: 'bg-slate-400/15 text-slate-300 border-slate-400/30' },
+};
+// How a creature reacts to the party.
+const DISPOSITION = {
+  hostile:  { label: 'Hostile',  cls: 'bg-rose-400/15 text-rose-200 border-rose-400/30' },
+  neutral:  { label: 'Neutral',  cls: 'bg-slate-400/15 text-slate-300 border-slate-400/30' },
+  friendly: { label: 'Friendly', cls: 'bg-emerald-400/15 text-emerald-200 border-emerald-400/30' },
+  unknown:  { label: 'Unknown',  cls: 'bg-slate-400/15 text-slate-300 border-slate-400/30' },
+};
+// Seed vocabularies for the free-text datalists (users' own entries are merged in).
+const CREATURE_NATURES = ['Beast', 'Monster', 'Spirit', 'Undead', 'Construct', 'Elemental', 'Deity', 'Aberration'];
+// What each abundance level means, shown in the info popover next to the field.
+const ABUNDANCE_HELP = [
+  ['Unique', 'Only one exists in the whole world.'],
+  ['Rare', 'Very few, hard to come by.'],
+  ['Uncommon', 'Exists, but not everywhere.'],
+  ['Common', 'Found in most places.'],
+  ['Abundant', 'Everywhere, effectively unlimited.'],
+];
+const RELATIONSHIP_LABELS = ['Father', 'Mother', 'Sibling', 'Child', 'Friend', 'Rival', 'Enemy', 'Mentor', 'Ally', 'Lover'];
 
 // Frosted dark inputs: their own dark backing guarantees legible text over BOTH
 // light and dark workspace backgrounds, while the blur keeps the background alive.
@@ -28,6 +60,104 @@ const FIELD = 'wb-input w-full bg-[#06121a]/75 backdrop-blur-md border border-wh
 const LInput = (p) => <input {...p} className={`${FIELD} ${p.className || ''}`} />;
 const LTextarea = (p) => <textarea {...p} className={`${FIELD} resize-none leading-relaxed custom-scrollbar ${p.className || ''}`} />;
 const LSelect = ({ children, ...p }) => <select {...p} className={`${FIELD} cursor-pointer ${p.className || ''}`}>{children}</select>;
+
+// A colored state pill (life status, disposition…). `map` is one of STATUS/DISPOSITION.
+const StateTag = ({ map, value }) => {
+  const s = map[value]; if (!s) return null;
+  return <span className={`inline-flex items-center text-[10px] font-bold uppercase tracking-wider border rounded-full px-2 py-0.5 ${s.cls}`}>{s.label}</span>;
+};
+
+// A select whose options come from a keyed state map (STATUS/DISPOSITION).
+const StateSelect = ({ map, value, onChange }) => (
+  <LSelect value={value || ''} onChange={onChange}>
+    {Object.entries(map).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+  </LSelect>
+);
+
+// Free-text field with a themed suggestion dropdown: seed values plus anything the
+// user has typed before. Open-ended yet self-completing, and styled to match. No
+// native datalist (whose popup we cannot theme). onChange receives an event-like
+// object so callers read e.target.value uniformly.
+const FreeDatalist = ({ value, onChange, options, placeholder }) => {
+  const [open, setOpen] = useState(false);
+  const [rect, setRect] = useState(null);
+  const wrapRef = useRef(null);
+  const opts = [...new Set(options.filter(Boolean))];
+  const q = (value || '').toLowerCase();
+  const filtered = opts.filter(o => o.toLowerCase().includes(q));
+  const openMenu = () => { if (wrapRef.current) setRect(wrapRef.current.getBoundingClientRect()); setOpen(true); };
+  useEffect(() => {
+    if (!open) return;
+    const close = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    const drop = () => setOpen(false);
+    document.addEventListener('mousedown', close);
+    window.addEventListener('scroll', drop, true);
+    window.addEventListener('resize', drop);
+    return () => { document.removeEventListener('mousedown', close); window.removeEventListener('scroll', drop, true); window.removeEventListener('resize', drop); };
+  }, [open]);
+  return (
+    <div className="relative" ref={wrapRef}>
+      <LInput placeholder={placeholder} value={value || ''} onFocus={openMenu} onChange={(e) => { onChange(e); openMenu(); }} />
+      {open && filtered.length > 0 && rect && createPortal(
+        <div style={{ position: 'fixed', top: rect.bottom + 4, left: rect.left, width: rect.width, zIndex: 60 }}
+          className="max-h-44 overflow-y-auto custom-scrollbar rounded-lg border border-white/15 bg-[#021a20] shadow-xl py-1">
+          {filtered.map(o => (
+            <button key={o} type="button" onMouseDown={(e) => { e.preventDefault(); onChange({ target: { value: o } }); setOpen(false); }}
+              className="w-full text-left px-3 py-1.5 text-sm text-gray-200 hover:bg-accent/15 hover:text-white cursor-pointer transition-colors">{o}</button>
+          ))}
+        </div>, document.body)}
+    </div>
+  );
+};
+
+// A small "?" that reveals a themed legend on hover, matching the app's tooltips.
+const InfoPopover = ({ items }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="relative inline-flex align-middle" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+      <Info className="w-3 h-3 text-gray-500 hover:text-accent cursor-help" />
+      {open && (
+        <div className="absolute z-30 top-6 left-0 w-60 rounded-lg border border-white/15 bg-[#021a20] shadow-xl p-3 space-y-1.5 normal-case tracking-normal">
+          {items.map(([k, v]) => <div key={k} className="text-xs leading-snug"><span className="font-semibold text-gray-100">{k}</span> <span className="text-gray-400">{v}</span></div>)}
+        </div>
+      )}
+    </span>
+  );
+};
+
+// A "+ Add" button that opens a searchable modal of options and calls onPick(id).
+// Replaces native <select> pickers (unreliable inside Electron) and is always visible,
+// even with nothing to add. `options` are entities ({ id, canonicalName }).
+function PickerButton({ label = 'Add', title, options, onPick, icon = Plus }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const filtered = options.filter(o => o.canonicalName.toLowerCase().includes(q.toLowerCase()));
+  return (
+    <>
+      <Button size="sm" variant="ghost" icon={icon} onClick={() => { setQ(''); setOpen(true); }}>{label}</Button>
+      {open && createPortal(
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4" onMouseDown={() => setOpen(false)}>
+          <div className="w-full max-w-sm rounded-xl border border-white/15 bg-[#08161d] shadow-2xl overflow-hidden" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
+              <span className="text-sm font-bold text-white">{title || 'Choose'}</span>
+              <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-white cursor-pointer"><X className="w-4 h-4" /></button>
+            </div>
+            <div className="p-3">
+              <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…"
+                className="wb-input w-full bg-[#06121a]/75 border border-white/15 text-gray-100 text-sm rounded-lg px-3 py-2 mb-2 placeholder-gray-500 focus:outline-none focus:border-accent/70" />
+              <div className="max-h-64 overflow-y-auto custom-scrollbar space-y-0.5">
+                {filtered.length === 0 && <p className="caption text-center py-4">Nothing to add. Create one first.</p>}
+                {filtered.map(o => (
+                  <button key={o.id} onClick={() => { onPick(o.id); setOpen(false); }}
+                    className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-200 hover:bg-accent/15 hover:text-white cursor-pointer transition-colors">{o.canonicalName}</button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>, document.body)}
+    </>
+  );
+}
 
 const FieldLabel = ({ children }) => <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">{children}</label>;
 const Hint = ({ children }) => <span className="caption mt-1 block">{children}</span>;
@@ -76,36 +206,112 @@ function Section({ icon: Icon, title, editing, onEdit, showPencil, children }) {
 const draftFor = (type) => ({ id: null, type, canonicalName: '', aliases: '', lore: '', loreDocumentId: '', status: 'confirmed', data: {} });
 
 // Relation pickers (single-value and many-to-many), styled to match the light inputs.
+// Links need a saved entity id, so these render nothing until the entity exists —
+// the create form shows only fields that can be filled before the first save.
 function SingleRelation({ label, hint, current, options, onSet, disabled }) {
+  if (disabled) return null;
+  const currentName = options.find(o => o.id === current)?.canonicalName;
   return (
     <Edit label={label} hint={hint}>
-      <LSelect value={current || ''} disabled={disabled} onChange={(e) => onSet(e.target.value || null)}>
-        <option value="">{disabled ? 'Save first to link' : 'None'}</option>
-        {options.map(o => <option key={o.id} value={o.id}>{o.canonicalName}</option>)}
-      </LSelect>
+      <div className="flex items-center gap-2 flex-wrap">
+        {currentName
+          ? <span className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-100 bg-white/[0.08] border border-white/15 rounded-full pl-2.5 pr-1 py-0.5">
+              {currentName}
+              <button onClick={() => onSet(null)} className="text-gray-400 hover:text-rose-300 cursor-pointer p-0.5"><X className="w-3 h-3" /></button>
+            </span>
+          : <span className="caption">None set.</span>}
+        <PickerButton icon={currentName ? Replace : Plus} label={currentName ? 'Change' : 'Set'} title={label} options={options} onPick={(id) => onSet(id)} />
+      </div>
     </Edit>
   );
 }
 function MultiRelation({ label, hint, links, options, onAdd, onRemove, disabled }) {
+  if (disabled) return null;
   const linked = new Set(links.map(l => l.entity.id));
   const remaining = options.filter(o => !linked.has(o.id));
   return (
     <Edit label={label} hint={hint}>
-      <div className="flex flex-wrap gap-1.5 mb-2">
-        {links.length === 0 && <span className="caption">{disabled ? 'Save first to link.' : 'None yet.'}</span>}
+      <div className="flex flex-wrap items-center gap-1.5">
         {links.map(l => (
           <span key={l.linkId} className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-100 bg-white/[0.08] border border-white/15 rounded-full pl-2.5 pr-1 py-0.5">
             {l.entity.canonicalName}
             <button onClick={() => onRemove(l.linkId)} className="text-gray-400 hover:text-rose-300 cursor-pointer p-0.5"><X className="w-3 h-3" /></button>
           </span>
         ))}
+        <PickerButton title={label} options={remaining} onPick={onAdd} />
       </div>
-      {!disabled && remaining.length > 0 && (
-        <LSelect value="" onChange={(e) => { if (e.target.value) onAdd(e.target.value); }}>
-          <option value="">+ Add…</option>
-          {remaining.map(o => <option key={o.id} value={o.id}>{o.canonicalName}</option>)}
-        </LSelect>
-      )}
+    </Edit>
+  );
+}
+
+// Character↔character relationships: a labeled edge from the open sheet's point of
+// view. You pick another character and name how they relate to this one (e.g. their
+// father, their rival). The role is free text and self-completing; it is optional so
+// Add never silently blocks. Reads naturally: "{role} · {name}".
+function LabeledRelation({ subjectName, links, options, priorLabels, onAdd, onRemove, disabled }) {
+  const [toId, setToId] = useState('');
+  const [role, setRole] = useState('');
+  if (disabled) return null;
+  const who = subjectName?.trim() ? subjectName.trim() : 'this character';
+  const linked = new Set((links || []).map(l => l.entity.id));
+  const remaining = options.filter(o => !linked.has(o.id));
+  const suggestions = [...new Set([...RELATIONSHIP_LABELS, ...priorLabels])];
+  const pickedName = options.find(o => o.id === toId)?.canonicalName;
+  const submit = () => { if (!toId) return; onAdd(toId, role.trim()); setToId(''); setRole(''); };
+  return (
+    <Edit label="Relationships">
+      <Hint>Pick a character and say what they are to {who}. For example, choose "John" and type "father" to record that John is {who}'s father.</Hint>
+      <div className="flex flex-wrap gap-1.5 my-2">
+        {(!links || links.length === 0) && <span className="caption">None yet.</span>}
+        {(links || []).map(l => (
+          <span key={l.linkId} className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-100 bg-white/[0.08] border border-white/15 rounded-full pl-2.5 pr-1 py-0.5">
+            <span className="text-accent/90 font-semibold">{l.label || 'related'}</span> · {l.entity.canonicalName}
+            <button onClick={() => onRemove(l.linkId)} className="text-gray-400 hover:text-rose-300 cursor-pointer p-0.5"><X className="w-3 h-3" /></button>
+          </span>
+        ))}
+      </div>
+      {remaining.length === 0
+        ? <span className="caption">Everyone is already linked.</span>
+        : toId
+          ? <div className="flex items-center gap-1.5">
+              <span className="caption shrink-0"><span className="text-gray-200 font-medium">{pickedName}</span> is {who}'s</span>
+              <div className="flex-1"><FreeDatalist value={role} onChange={(e) => setRole(e.target.value)} options={suggestions} placeholder="e.g. father, rival, mentor (optional)" /></div>
+              <Button size="sm" icon={Check} onClick={submit}>Add</Button>
+              <Button size="sm" variant="ghost" onClick={() => { setToId(''); setRole(''); }}>Cancel</Button>
+            </div>
+          : <PickerButton label="Add relationship" title="Choose a character" options={remaining} onPick={(id) => setToId(id)} />}
+    </Edit>
+  );
+}
+
+// One member row with an inline, optional role that saves on blur / Enter.
+function MemberRole({ link, onSetRole, onRemove }) {
+  const [role, setRole] = useState(link.label || '');
+  useEffect(() => { setRole(link.label || ''); }, [link.label]);
+  const commit = () => { if ((role.trim() || '') !== (link.label || '')) onSetRole(link.linkId, role.trim()); };
+  return (
+    <div className="flex items-center gap-2 py-1">
+      <span className="text-sm text-gray-100 flex-1 min-w-0 truncate">{link.entity.canonicalName}</span>
+      <input value={role} onChange={(e) => setRole(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+        placeholder="role (optional)"
+        className="wb-input w-36 bg-[#06121a]/75 border border-white/15 text-gray-100 text-xs rounded-md px-2 py-1 placeholder-gray-500 focus:outline-none focus:border-accent/70" />
+      <button onClick={() => onRemove(link.linkId)} className="text-gray-400 hover:text-rose-300 cursor-pointer p-1"><X className="w-3.5 h-3.5" /></button>
+    </div>
+  );
+}
+
+// Faction membership with per-member roles: an editable list plus an add picker.
+function MemberRoles({ links, options, onAdd, onSetRole, onRemove, disabled }) {
+  if (disabled) return null;
+  const linked = new Set((links || []).map(l => l.entity.id));
+  const remaining = options.filter(o => !linked.has(o.id));
+  return (
+    <Edit label="Members" hint="Add characters, then give each an optional role (captain, spy, initiate).">
+      <div className="divide-y divide-white/[0.06] mb-2">
+        {(!links || links.length === 0) && <span className="caption">No members yet.</span>}
+        {(links || []).map(l => <MemberRole key={l.linkId} link={l} onSetRole={onSetRole} onRemove={onRemove} />)}
+      </div>
+      <PickerButton label="Add member" title="Add member" options={remaining} onPick={onAdd} />
     </Edit>
   );
 }
@@ -151,11 +357,12 @@ export default function WorldbuildView({ chat, electronAPI }) {
     const from = (r) => electronAPI.getEntityLinks(ent.id, 'from', r).then(x => x?.links || []);
     const to = (r) => electronAPI.getEntityLinks(ent.id, 'to', r).then(x => x?.links || []);
     const n = {};
-    if (ent.type === 'Locations') n.inside = (await from('inside'))[0] || null;
-    if (ent.type === 'Items') { n.createdBy = (await from('created_by'))[0] || null; n.ownedBy = (await from('owned_by'))[0] || null; n.foundIn = (await from('found_in'))[0] || null; }
+    if (ent.type === 'Locations') { n.inside = (await from('inside'))[0] || null; n.leader = (await from('led_by'))[0] || null; }
+    if (ent.type === 'Items') { n.createdBy = (await from('created_by'))[0] || null; n.ownedBy = (await from('owned_by'))[0] || null; n.foundIn = await from('found_in'); }
     if (ent.type === 'Races') n.members = await to('is_race');
-    if (ent.type === 'Factions') { n.operatesIn = await from('operates_in'); n.members = await to('member_of'); }
-    if (ent.type === 'Characters') { n.isRace = (await from('is_race'))[0] || null; n.inventory = await to('owned_by'); n.memberOf = await from('member_of'); n.connectedTo = await from('connected_to'); }
+    if (ent.type === 'Creatures') n.foundIn = await from('found_in');
+    if (ent.type === 'Factions') { n.operatesIn = await from('operates_in'); n.members = await to('member_of'); n.leader = (await from('led_by'))[0] || null; }
+    if (ent.type === 'Characters') { n.isRace = (await from('is_race'))[0] || null; n.inventory = await to('owned_by'); n.memberOf = await from('member_of'); n.connectedTo = await from('connected_to'); n.relationships = await from('related_to'); }
     setRel(n);
   }, [electronAPI]);
 
@@ -167,6 +374,16 @@ export default function WorldbuildView({ chat, electronAPI }) {
   const startNew = (type) => { setShowCreate(false); setEditingSection(null); setCharTab('data'); setSelected(draftFor(type)); setRel({}); };
   const patch = (f) => setSelected(p => ({ ...p, ...f }));
   const patchData = (f) => setSelected(p => ({ ...p, data: { ...p.data, ...f } }));
+
+  // Linked chapters: many-valued, stored in data.loreDocumentIds. Legacy entities that
+  // only have the single loreDocumentId column read through the fallback below.
+  const loreDocIds = () => {
+    const arr = selected?.data?.loreDocumentIds;
+    if (Array.isArray(arr)) return arr.filter(Boolean);
+    return selected?.loreDocumentId ? [selected.loreDocumentId] : [];
+  };
+  const addLoreDoc = (id) => { if (!id) return; const cur = loreDocIds(); if (cur.includes(id)) return; patchData({ loreDocumentIds: [...cur, id] }); };
+  const removeLoreDoc = (id) => patchData({ loreDocumentIds: loreDocIds().filter(x => x !== id) });
   const aliasesArr = (raw) => raw.split(',').map(s => s.trim()).filter(Boolean);
 
   const persist = async ({ accept = false } = {}) => {
@@ -174,7 +391,9 @@ export default function WorldbuildView({ chat, electronAPI }) {
     if (!selected.canonicalName.trim()) { showToast('A name is required.', 'error'); return null; }
     setSaving(true);
     try {
-      const payload = { workspaceId, type: selected.type, canonicalName: selected.canonicalName.trim(), aliases: aliasesArr(selected.aliases), lore: selected.lore, loreDocumentId: selected.loreDocumentId || null, data: selected.data || {}, status: accept ? 'confirmed' : selected.status };
+      const ids = loreDocIds();
+      const data = { ...(selected.data || {}), loreDocumentIds: ids };
+      const payload = { workspaceId, type: selected.type, canonicalName: selected.canonicalName.trim(), aliases: aliasesArr(selected.aliases), lore: selected.lore, loreDocumentId: ids[0] || null, data, status: accept ? 'confirmed' : selected.status };
       let id = selected.id;
       if (selected.id) { const r = await electronAPI.updateEntity(selected.id, payload); if (!r?.success) throw new Error(r?.error || 'update failed'); patch({ status: payload.status }); }
       else { const r = await electronAPI.createEntity(payload); if (!r?.success) throw new Error(r?.error || 'create failed'); id = r.entity.id; setSelected(s => ({ ...s, id, status: r.entity.status })); }
@@ -189,10 +408,18 @@ export default function WorldbuildView({ chat, electronAPI }) {
   const remove = async () => { if (!selected?.id) { setSelected(null); return; } setSaving(true); try { await electronAPI.deleteEntity(selected.id); setSelected(null); await load(); } finally { setSaving(false); } };
 
   const reloadRel = async () => { await loadRelations({ id: selected.id, type: selected.type }); await load(); };
-  const setSingle = async (relType, toId) => { if (!selected?.id) return; await electronAPI.setEntityLink({ workspaceId, fromId: selected.id, relType, toId, single: true }); await reloadRel(); };
-  const addMulti = async (relType, toId, fromSelected = true) => { if (!selected?.id) return; await electronAPI.setEntityLink({ workspaceId, fromId: fromSelected ? selected.id : toId, relType, toId: fromSelected ? toId : selected.id, single: false }); await reloadRel(); };
-  const addInventory = async (itemId) => { await electronAPI.setEntityLink({ workspaceId, fromId: itemId, relType: 'owned_by', toId: selected.id, single: true }); await reloadRel(); };
-  const removeLink = async (linkId) => { await electronAPI.removeEntityLink(linkId); await reloadRel(); };
+  // Every link op reports failure loudly — a silent SQL error once made every add
+  // look like a no-op. Any { success:false } surfaces as a toast instead of vanishing.
+  const linkOp = async (fn) => {
+    try { const r = await fn(); if (r && r.success === false) { showToast(`Link failed: ${r.error || 'unknown error'}`, 'error'); return false; } await reloadRel(); return true; }
+    catch (e) { showToast(`Link failed: ${e.message}`, 'error'); return false; }
+  };
+  const setSingle = async (relType, toId) => { if (!selected?.id) return; await linkOp(() => electronAPI.setEntityLink({ workspaceId, fromId: selected.id, relType, toId, single: true })); };
+  const addMulti = async (relType, toId, fromSelected = true) => { if (!selected?.id) return; await linkOp(() => electronAPI.setEntityLink({ workspaceId, fromId: fromSelected ? selected.id : toId, relType, toId: fromSelected ? toId : selected.id, single: false })); };
+  const addInventory = async (itemId) => { await linkOp(() => electronAPI.setEntityLink({ workspaceId, fromId: itemId, relType: 'owned_by', toId: selected.id, single: true })); };
+  const addRelationship = async (toId, label) => { if (!selected?.id) return; await linkOp(() => electronAPI.setEntityLink({ workspaceId, fromId: selected.id, relType: 'related_to', toId, single: false, label })); };
+  const setRole = async (linkId, role) => { await linkOp(() => electronAPI.updateEntityLinkLabel(linkId, role)); };
+  const removeLink = async (linkId) => { await linkOp(() => electronAPI.removeEntityLink(linkId)); };
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -201,26 +428,51 @@ export default function WorldbuildView({ chat, electronAPI }) {
   }, [entities, search, filterType]);
   const proposedCount = useMemo(() => entities.filter(e => e.status === 'proposed').length, [entities]);
 
-  const isGear = selected?.type === 'Items' && (selected?.data?.itemType || '') !== 'Resource';
+  const isResource = selected?.type === 'Items' && (selected?.data?.itemType || '') === 'Resource';
+  const isGear = selected?.type === 'Items' && !isResource;
   const unsaved = isNew;
 
+  // Owner as a single 3-mode choice: the AI decides, it is deliberately lost, or a
+  // character holds it. A character owner is an owned_by edge; the two ownerless modes
+  // live in data.ownership. Picking a character also clears the ownerless flag.
+  const ownerVal = rel.ownedBy ? rel.ownedBy.entity.id : (selected?.data?.ownership === 'lost' ? 'lost' : 'ai');
+  const setOwner = async (val) => {
+    if (val === 'ai' || val === 'lost') { patchData({ ownership: val }); await setSingle('owned_by', null); }
+    else { patchData({ ownership: 'character' }); await setSingle('owned_by', val); }
+  };
+  // Where-found is hidden once a character owns the item (it lives in their inventory).
+  const showWhereFound = isResource || !rel.ownedBy;
+  const ownerLabel = rel.ownedBy ? rel.ownedBy.entity.canonicalName : (selected?.data?.ownership === 'lost' ? 'Unknown / Lost' : 'AI decides');
+
   // Lore editor (prose + Writing Desk file link), reused by several types.
+  const linkedDocs = loreDocIds();
+  const remainingDocs = documents.filter(d => !linkedDocs.includes(d.id));
   const loreEdit = (
     <>
-      <Edit label="Lore"><LTextarea rows={5} placeholder="History, secrets, texture. Or link a Writing Desk file below." value={selected?.lore || ''} onChange={(e) => patch({ lore: e.target.value })} /></Edit>
-      <Edit label="Linked Writing Desk file" hint="Once chapter vectorization ships, RAG will auto-correlate the two.">
-        <LSelect value={selected?.loreDocumentId || ''} onChange={(e) => patch({ loreDocumentId: e.target.value })}>
-          <option value="">None</option>
-          {documents.map(d => <option key={d.id} value={d.id}>{d.title}</option>)}
-        </LSelect>
+      <Edit label="Lore"><LTextarea rows={5} placeholder="History, secrets, texture. Or link Writing Desk chapters below." value={selected?.lore || ''} onChange={(e) => patch({ lore: e.target.value })} /></Edit>
+      <Edit label="Linked Writing Desk chapters" hint="RAG auto-correlates these chapters with this entity. Link as many as apply.">
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {linkedDocs.length === 0 && <span className="caption">None linked.</span>}
+          {linkedDocs.map(id => (
+            <span key={id} className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-100 bg-white/[0.08] border border-white/15 rounded-full pl-2.5 pr-1 py-0.5">
+              <ScrollText className="w-3 h-3 text-accent/80" />{docTitle(id) || 'Untitled'}
+              <button onClick={() => removeLoreDoc(id)} className="text-gray-400 hover:text-rose-300 cursor-pointer p-0.5"><X className="w-3 h-3" /></button>
+            </span>
+          ))}
+        </div>
+        <PickerButton label="Add chapter" title="Link a chapter" options={remainingDocs.map(d => ({ id: d.id, canonicalName: d.title }))} onPick={addLoreDoc} />
       </Edit>
     </>
   );
   const loreView = (
     <>
       <Prose text={selected?.lore} />
-      {selected?.loreDocumentId && docTitle(selected.loreDocumentId) && (
-        <div className="flex items-center gap-1.5 text-xs text-accent/90"><ScrollText className="w-3.5 h-3.5" /> {docTitle(selected.loreDocumentId)}</div>
+      {linkedDocs.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {linkedDocs.map(id => docTitle(id) && (
+            <span key={id} className="inline-flex items-center gap-1.5 text-xs text-accent/90"><ScrollText className="w-3.5 h-3.5" />{docTitle(id)}</span>
+          ))}
+        </div>
       )}
     </>
   );
@@ -235,10 +487,11 @@ export default function WorldbuildView({ chat, electronAPI }) {
     }
     if (type === 'Locations') {
       S.push({ key: 'overview', title: 'Overview', icon: MapPin, scalar: true,
-        view: <div className="grid grid-cols-2 gap-4"><ViewField label="Type" value={selected.data.locationType} empty="—" /><ViewField label="Inside" value={rel.inside?.entity?.canonicalName} empty="—" /></div>,
+        view: <div className="grid grid-cols-2 gap-4"><ViewField label="Type" value={selected.data.locationType} empty="Not set" /><ViewField label="Inside" value={rel.inside?.entity?.canonicalName} empty="Not set" /><ViewField label="Owner / leader" value={rel.leader?.entity?.canonicalName} empty="Not set" /></div>,
         edit: <>
           <Edit label="Type"><LInput placeholder="e.g. continent / kingdom / city / tavern" value={selected.data.locationType || ''} onChange={(e) => patchData({ locationType: e.target.value })} /></Edit>
           <SingleRelation label="Inside another place" hint="Nest this within a larger location." disabled={unsaved} current={rel.inside?.entity?.id} options={byType.Locations.filter(o => o.id !== selected.id)} onSet={(id) => setSingle('inside', id)} />
+          <SingleRelation label="Owner / leader (optional)" hint="Who holds or rules this place, if anyone." disabled={unsaved} current={rel.leader?.entity?.id} options={byType.Characters} onSet={(id) => setSingle('led_by', id)} />
         </> });
       S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, view: loreView, edit: loreEdit });
     }
@@ -246,18 +499,26 @@ export default function WorldbuildView({ chat, electronAPI }) {
       S.push({ key: 'details', title: 'Details', icon: Package, scalar: true,
         view: <>
           <div className="grid grid-cols-2 gap-4">
-            <ViewField label="Type" value={selected.data.itemType} empty="—" />
-            {isGear && <ViewField label="Owner" value={rel.ownedBy?.entity?.canonicalName} empty="Unowned" />}
+            <ViewField label="Type" value={selected.data.itemType} empty="Not set" />
+            {isGear && <ViewField label="Owner" value={ownerLabel} empty="Not set" />}
             {isGear && <ViewField label="Creator" value={rel.createdBy?.entity?.canonicalName} empty="Unknown" />}
-            <ViewField label="Where found" value={rel.foundIn?.entity?.canonicalName} empty="—" />
+            {isResource && <ViewField label="Abundance" value={selected.data.abundance} empty="Not set" />}
+            {showWhereFound && <div className="col-span-2"><div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-0.5">Where found</div><ChipList links={rel.foundIn} empty="Not set" /></div>}
           </div>
           <div className="pt-1"><Prose text={selected.data.description} empty="No description." /></div>
         </>,
         edit: <>
           <Edit label="Item type"><LSelect value={selected.data.itemType || ''} onChange={(e) => patchData({ itemType: e.target.value })}><option value="">Choose…</option>{ITEM_TYPES.map(t => <option key={t} value={t}>{t}{t === 'Resource' ? ' (natural / drops)' : ''}</option>)}</LSelect></Edit>
           {isGear && <SingleRelation label="Creator" hint="Leave blank if unknown." disabled={unsaved} current={rel.createdBy?.entity?.id} options={byType.Characters} onSet={(id) => setSingle('created_by', id)} />}
-          {isGear && <SingleRelation label="Owner" hint="Blank = the AI decides." disabled={unsaved} current={rel.ownedBy?.entity?.id} options={byType.Characters} onSet={(id) => setSingle('owned_by', id)} />}
-          <SingleRelation label={selected.data.itemType === 'Resource' ? 'Where found (required)' : 'Where found'} hint={selected.data.itemType === 'Resource' ? 'Where this resource is gathered.' : 'Only needed when it has no owner.'} disabled={unsaved} current={rel.foundIn?.entity?.id} options={byType.Locations} onSet={(id) => setSingle('found_in', id)} />
+          {isGear && <Edit label="Owner" hint={unsaved ? 'Save first to assign an owner.' : 'Who holds it. Or let the AI decide, or leave it lost.'}>
+            <LSelect value={ownerVal} disabled={unsaved} onChange={(e) => setOwner(e.target.value)}>
+              <option value="ai">AI decides</option>
+              <option value="lost">Unknown / Lost</option>
+              {byType.Characters.map(o => <option key={o.id} value={o.id}>{o.canonicalName}</option>)}
+            </LSelect>
+          </Edit>}
+          {isResource && <Edit label={<>Abundance <InfoPopover items={ABUNDANCE_HELP} /></>} hint="How much of it exists in the world."><LSelect value={selected.data.abundance || ''} onChange={(e) => patchData({ abundance: e.target.value })}><option value="">Choose…</option>{RARITY.map(r => <option key={r} value={r}>{r}</option>)}</LSelect></Edit>}
+          {showWhereFound && <MultiRelation label="Where found" hint={isResource ? 'Every place this resource can be gathered.' : 'Where it turns up when no one owns it.'} disabled={unsaved} links={rel.foundIn || []} options={byType.Locations} onAdd={(id) => addMulti('found_in', id)} onRemove={removeLink} />}
           <Edit label="Description"><LTextarea rows={4} placeholder="What it looks like and does." value={selected.data.description || ''} onChange={(e) => patchData({ description: e.target.value })} /></Edit>
         </> });
       S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, view: loreView, edit: loreEdit });
@@ -265,13 +526,64 @@ export default function WorldbuildView({ chat, electronAPI }) {
     if (type === 'Races') {
       S.push({ key: 'desc', title: 'Description', icon: Users, scalar: true, view: <Prose text={selected.data.description} />, edit: <Edit label="Description"><LTextarea rows={5} placeholder="Traits, appearance, culture." value={selected.data.description || ''} onChange={(e) => patchData({ description: e.target.value })} /></Edit> });
       S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, view: loreView, edit: loreEdit });
-      S.push({ key: 'members', title: 'Known members', icon: User, scalar: false, derived: true, view: <ChipList links={rel.members} empty="Auto-filled as you assign this race to characters." />, edit: <ChipList links={rel.members} empty="Auto-filled as you assign this race to characters." /> });
+      S.push({ key: 'members', title: 'Known members', icon: User, scalar: false, derived: true, relational: true, view: <ChipList links={rel.members} empty="Auto-filled as you assign this race to characters." />, edit: <ChipList links={rel.members} empty="Auto-filled as you assign this race to characters." /> });
+    }
+    if (type === 'Creatures') {
+      const natureOpts = [...CREATURE_NATURES, ...byType.Creatures.map(c => c.data?.nature).filter(Boolean)];
+      const isIndividual = (selected.data.scope || 'individual') !== 'group';
+      S.push({ key: 'details', title: 'Details', icon: Ghost, scalar: true,
+        view: <>
+          <div className="flex flex-wrap gap-2 mb-3">
+            <StateTag map={DISPOSITION} value={selected.data.disposition || 'unknown'} />
+            {isIndividual && <StateTag map={STATUS} value={selected.data.status || 'unknown'} />}
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <ViewField label="Kind" value={isIndividual ? 'A specific being' : 'A group / species'} />
+            <ViewField label="Nature" value={selected.data.nature} empty="Not set" />
+            {!isIndividual && <ViewField label="Abundance" value={selected.data.abundance} empty="Not set" />}
+            <ViewField label="Threat" value={selected.data.threat} empty="Not set" />
+          </div>
+          <div className="pt-1"><ViewField label="Abilities & traits" value={selected.data.abilities} empty="Not set" /></div>
+          <div className="pt-1"><div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-0.5">Habitat</div><ChipList links={rel.foundIn} empty="Not set" /></div>
+        </>,
+        edit: <>
+          <Edit label="This entity is">
+            <div className="flex bg-white/[0.04] p-0.5 rounded-lg border border-white/10 w-fit">
+              {[['individual', 'A specific being'], ['group', 'A group / species']].map(([k, l]) => (
+                <button key={k} type="button" onClick={() => patchData({ scope: k })} className={`px-3 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-colors cursor-pointer ${(selected.data.scope || 'individual') === k ? 'bg-accent text-[#011419]' : 'text-gray-400 hover:text-white'}`}>{l}</button>
+              ))}
+            </div>
+            <Hint>A group (goblins, a wolf pack) has no single life state. A specific being (one tamed wolf) does.</Hint>
+          </Edit>
+          <Edit label="Nature / category" hint="What kind of thing it is. Type your own or reuse one."><FreeDatalist value={selected.data.nature} onChange={(e) => patchData({ nature: e.target.value })} options={natureOpts} placeholder="e.g. Beast, Spirit, Deity" /></Edit>
+          <div className="grid grid-cols-2 gap-3">
+            <Edit label="Disposition"><StateSelect map={DISPOSITION} value={selected.data.disposition || 'unknown'} onChange={(e) => patchData({ disposition: e.target.value })} /></Edit>
+            {isIndividual && <Edit label="Status"><StateSelect map={STATUS} value={selected.data.status || 'unknown'} onChange={(e) => patchData({ status: e.target.value })} /></Edit>}
+            {!isIndividual && <Edit label={<>Abundance <InfoPopover items={ABUNDANCE_HELP} /></>}><LSelect value={selected.data.abundance || ''} onChange={(e) => patchData({ abundance: e.target.value })}><option value="">Choose…</option>{RARITY.map(r => <option key={r} value={r}>{r}</option>)}</LSelect></Edit>}
+            <Edit label="Threat"><LSelect value={selected.data.threat || ''} onChange={(e) => patchData({ threat: e.target.value })}><option value="">Choose…</option>{THREAT.map(t => <option key={t} value={t}>{t}</option>)}</LSelect></Edit>
+          </div>
+          <Edit label="Abilities & traits" hint="Short, concrete powers the AI can use in a scene."><LTextarea rows={3} placeholder="e.g. flies, breathes fire, immune to steel." value={selected.data.abilities || ''} onChange={(e) => patchData({ abilities: e.target.value })} /></Edit>
+          <MultiRelation label="Habitat" hint="Where it is found or dwells." disabled={unsaved} links={rel.foundIn || []} options={byType.Locations} onAdd={(id) => addMulti('found_in', id)} onRemove={removeLink} />
+        </> });
+      S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, view: loreView, edit: loreEdit });
     }
     if (type === 'Factions') {
-      S.push({ key: 'overview', title: 'Area of operation', icon: MapPin, scalar: false, view: <ChipList links={rel.operatesIn} empty="No territory set." />, edit: <MultiRelation label="Origin / area of operation" hint="Locations this faction works out of." disabled={unsaved} links={rel.operatesIn || []} options={byType.Locations} onAdd={(id) => addMulti('operates_in', id)} onRemove={removeLink} /> });
+      S.push({ key: 'overview', title: 'Overview', icon: MapPin, scalar: false, relational: true,
+        view: <>
+          <ViewField label="Leader" value={rel.leader?.entity?.canonicalName} empty="Not set" />
+          <div className="pt-2"><div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-0.5">Area of operation</div><ChipList links={rel.operatesIn} empty="No territory set." /></div>
+        </>,
+        edit: <>
+          <SingleRelation label="Leader (optional)" hint="Who heads this faction." disabled={unsaved} current={rel.leader?.entity?.id} options={byType.Characters} onSet={(id) => setSingle('led_by', id)} />
+          <MultiRelation label="Origin / area of operation" hint="Locations this faction works out of." disabled={unsaved} links={rel.operatesIn || []} options={byType.Locations} onAdd={(id) => addMulti('operates_in', id)} onRemove={removeLink} />
+        </> });
       S.push({ key: 'desc', title: 'Description', icon: Flag, scalar: true, view: <Prose text={selected.data.description} />, edit: <Edit label="Description"><LTextarea rows={5} placeholder="Goals, structure, reputation." value={selected.data.description || ''} onChange={(e) => patchData({ description: e.target.value })} /></Edit> });
       S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, view: loreView, edit: loreEdit });
-      S.push({ key: 'members', title: 'Members', icon: Users, scalar: false, view: <ChipList links={rel.members} empty="No members yet." />, edit: <MultiRelation label="Members" hint="Characters who belong to this faction." disabled={unsaved} links={rel.members || []} options={byType.Characters} onAdd={(id) => addMulti('member_of', id, false)} onRemove={removeLink} /> });
+      S.push({ key: 'members', title: 'Members', icon: Users, scalar: false, relational: true,
+        view: (!rel.members || rel.members.length === 0)
+          ? <p className="text-sm text-gray-600 italic">No members yet.</p>
+          : <div className="flex flex-wrap gap-1.5">{rel.members.map(l => <Chip key={l.linkId}>{l.entity.canonicalName}{l.label && <span className="text-accent/90"> · {l.label}</span>}</Chip>)}</div>,
+        edit: <MemberRoles disabled={unsaved} links={rel.members || []} options={byType.Characters} onAdd={(id) => addMulti('member_of', id, false)} onSetRole={setRole} onRemove={removeLink} /> });
     }
     return S;
   };
@@ -280,8 +592,17 @@ export default function WorldbuildView({ chat, electronAPI }) {
   const characterSections = () => {
     if (charTab === 'data') return [
       { key: 'identity', title: 'Identity', icon: User, scalar: true,
-        view: <div className="grid grid-cols-2 gap-4"><ViewField label="Age" value={selected.data.age} empty="—" /><ViewField label="Race" value={rel.isRace?.entity?.canonicalName} empty="—" /></div>,
-        edit: <><Edit label="Age"><LInput placeholder="e.g. 34" value={selected.data.age || ''} onChange={(e) => patchData({ age: e.target.value })} /></Edit><SingleRelation label="Race" disabled={unsaved} current={rel.isRace?.entity?.id} options={byType.Races} onSet={(id) => setSingle('is_race', id)} /></> },
+        view: <>
+          <div className="mb-3 flex items-center gap-2"><span className="text-[10px] font-bold uppercase tracking-wider text-gray-500">Status</span><StateTag map={STATUS} value={selected.data.status || 'unknown'} /></div>
+          <div className="grid grid-cols-2 gap-4"><ViewField label="Age" value={selected.data.age} empty="Not set" /><ViewField label="Race" value={rel.isRace?.entity?.canonicalName} empty="Not set" /></div>
+        </>,
+        edit: <>
+          <div className="grid grid-cols-2 gap-3">
+            <Edit label="Age"><LInput placeholder="e.g. 34" value={selected.data.age || ''} onChange={(e) => patchData({ age: e.target.value })} /></Edit>
+            <Edit label="Status"><StateSelect map={STATUS} value={selected.data.status || 'unknown'} onChange={(e) => patchData({ status: e.target.value })} /></Edit>
+          </div>
+          <SingleRelation label="Race" disabled={unsaved} current={rel.isRace?.entity?.id} options={byType.Races} onSet={(id) => setSingle('is_race', id)} />
+        </> },
       { key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, view: loreView, edit: loreEdit },
     ];
     if (charTab === 'inventory') return [
@@ -292,6 +613,11 @@ export default function WorldbuildView({ chat, electronAPI }) {
     return [
       { key: 'fac', title: 'Factions', icon: Flag, scalar: false, view: <ChipList links={rel.memberOf} empty="Belongs to no faction." />, edit: <MultiRelation label="Factions" hint="Groups this character belongs to." disabled={unsaved} links={rel.memberOf || []} options={byType.Factions} onAdd={(id) => addMulti('member_of', id)} onRemove={removeLink} /> },
       { key: 'loc', title: 'Locations', icon: MapPin, scalar: false, view: <ChipList links={rel.connectedTo} empty="Tied to no place." />, edit: <MultiRelation label="Locations" hint="Places this character is tied to." disabled={unsaved} links={rel.connectedTo || []} options={byType.Locations} onAdd={(id) => addMulti('connected_to', id)} onRemove={removeLink} /> },
+      { key: 'rels', title: 'Relationships', icon: Users, scalar: false,
+        view: (!rel.relationships || rel.relationships.length === 0)
+          ? <p className="text-sm text-gray-600 italic">No relationships yet.</p>
+          : <div className="flex flex-wrap gap-1.5">{rel.relationships.map(l => <Chip key={l.linkId}><span className="text-accent/90">{l.label || 'related'}</span> · {l.entity.canonicalName}</Chip>)}</div>,
+        edit: <LabeledRelation subjectName={selected.canonicalName} disabled={unsaved} links={rel.relationships || []} options={byType.Characters.filter(o => o.id !== selected.id)} priorLabels={(rel.relationships || []).map(l => l.label).filter(Boolean)} onAdd={addRelationship} onRemove={removeLink} /> },
     ];
   };
 
@@ -363,7 +689,7 @@ export default function WorldbuildView({ chat, electronAPI }) {
               <button key={en.id} onClick={() => openEntity(en)} className={`w-full text-left px-2.5 py-2 rounded-lg flex items-center gap-2.5 transition-colors cursor-pointer group ${active ? 'bg-accent/15' : 'hover:bg-white/5'}`}>
                 <span className={`w-7 h-7 rounded-md border flex items-center justify-center shrink-0 ${t.medallion}`}><Icon className="w-3.5 h-3.5" /></span>
                 <span className={`flex-1 min-w-0 truncate text-sm font-medium ${active ? 'text-accent' : 'text-gray-200'}`}>{en.canonicalName}</span>
-                {en.status === 'proposed' && <Sparkles className="w-3.5 h-3.5 text-amber-300 shrink-0" data-tooltip="AI proposal — needs accept" />}
+                {en.status === 'proposed' && <Sparkles className="w-3.5 h-3.5 text-amber-300 shrink-0" data-tooltip="AI proposal, needs accept" />}
               </button>
             ); })}
         </div>
@@ -385,7 +711,7 @@ export default function WorldbuildView({ chat, electronAPI }) {
             <div className={`rounded-2xl border ${m.ring} bg-[#0a1721]/60 backdrop-blur-md p-5`}>
               {selected.status === 'proposed' && (
                 <div className="flex items-center justify-between gap-3 mb-4 bg-amber-400/10 border border-amber-400/30 rounded-xl px-3 py-2">
-                  <span className="flex items-center gap-2 text-xs font-semibold text-amber-200 min-w-0"><Sparkles className="w-4 h-4 shrink-0" /> AI proposal — accept to keep it.</span>
+                  <span className="flex items-center gap-2 text-xs font-semibold text-amber-200 min-w-0"><Sparkles className="w-4 h-4 shrink-0" /> AI proposal. Accept to keep it.</span>
                   <Button size="sm" loading={saving} onClick={() => persist({ accept: true })}>Accept</Button>
                 </div>
               )}
@@ -408,7 +734,10 @@ export default function WorldbuildView({ chat, electronAPI }) {
                       <h1 className="text-2xl font-bold text-white truncate">{selected.canonicalName}</h1>
                       <button onClick={() => setEditingSection('__header__')} data-tooltip="Edit name & aliases" className="p-1.5 text-gray-500 hover:text-accent hover:bg-white/5 rounded-md transition-colors cursor-pointer shrink-0"><Pencil className="w-3.5 h-3.5" /></button>
                     </div>
-                    <div className={`text-[11px] font-bold uppercase tracking-widest mt-0.5 ${m.soft}`}>{m.label}</div>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className={`text-[11px] font-bold uppercase tracking-widest ${m.soft}`}>{m.label}</span>
+                      {(selected.type === 'Characters' || (selected.type === 'Creatures' && (selected.data.scope || 'individual') !== 'group')) && <StateTag map={STATUS} value={selected.data.status || 'unknown'} />}
+                    </div>
                     {showAliases && aliasesArr(selected.aliases).length > 0 && (
                       <div className="flex flex-wrap gap-1.5 mt-2.5">{aliasesArr(selected.aliases).map((a, i) => <Chip key={i}><Tag className="w-2.5 h-2.5" />{a}</Chip>)}</div>
                     )}
@@ -429,12 +758,15 @@ export default function WorldbuildView({ chat, electronAPI }) {
             {/* Body: create form (all sections in edit) or rendered sheet */}
             {isNew ? (
               <>
-                {selected.type !== 'Characters' && sections.map(s => (
+                {selected.type !== 'Characters' && sections.filter(s => !s.relational).map(s => (
                   <Section key={s.key} icon={s.icon} title={s.title}>{s.edit}</Section>
                 ))}
                 {selected.type === 'Characters' && (
                   <Section icon={User} title="Identity">
-                    <Edit label="Age"><LInput placeholder="e.g. 34" value={selected.data.age || ''} onChange={(e) => patchData({ age: e.target.value })} /></Edit>
+                    <div className="grid grid-cols-2 gap-3">
+                      <Edit label="Age"><LInput placeholder="e.g. 34" value={selected.data.age || ''} onChange={(e) => patchData({ age: e.target.value })} /></Edit>
+                      <Edit label="Status"><StateSelect map={STATUS} value={selected.data.status || 'unknown'} onChange={(e) => patchData({ status: e.target.value })} /></Edit>
+                    </div>
                     <Hint>Race, inventory and connections unlock once you create the character.</Hint>
                     {loreEdit}
                   </Section>
@@ -468,8 +800,8 @@ function ChipList({ links, empty }) {
 
 // Invented (non-user) example names, English.
 function placeholderName(type) {
-  return { System: 'e.g. The Three Laws of Aether', Locations: 'e.g. Thornhall', Items: 'e.g. Stormglass Lantern', Races: 'e.g. Tidewalkers', Factions: 'e.g. The Ember Concord', Characters: 'e.g. Captain Aldric Venn' }[type] || 'Name';
+  return { System: 'e.g. The Three Laws of Aether', Locations: 'e.g. Thornhall', Items: 'e.g. Stormglass Lantern', Races: 'e.g. Tidewalkers', Factions: 'e.g. The Ember Concord', Characters: 'e.g. Captain Aldric Venn', Creatures: 'e.g. The Gloamwyrm' }[type] || 'Name';
 }
 function placeholderAlias(type) {
-  return { Locations: 'e.g. The Bramble Keep', Items: 'e.g. The Tempest Lamp', Races: 'e.g. Brinekin', Factions: 'e.g. The Concord', Characters: 'e.g. Captain, The Grey Wolf' }[type] || '';
+  return { Locations: 'e.g. The Bramble Keep', Items: 'e.g. The Tempest Lamp', Races: 'e.g. Brinekin', Factions: 'e.g. The Concord', Characters: 'e.g. Captain, The Grey Wolf', Creatures: 'e.g. The Bog Serpent' }[type] || '';
 }

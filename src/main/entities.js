@@ -117,6 +117,18 @@ function resolveMention(mention, type = null, workspaceId = null) {
   return null;
 }
 
+// The chapters (Writing Desk documents) linked to an entity's lore. Reads the
+// multi-value data.loreDocumentIds when present, else falls back to the legacy
+// single loreDocumentId column. Always returns a de-duped array of ids.
+function linkedLoreDocIds(ent) {
+  if (!ent) return [];
+  const ids = [];
+  const arr = ent.data && Array.isArray(ent.data.loreDocumentIds) ? ent.data.loreDocumentIds : null;
+  if (arr) for (const id of arr) { if (id) ids.push(id); }
+  else if (ent.loreDocumentId) ids.push(ent.loreDocumentId);
+  return [...new Set(ids)];
+}
+
 // ---- Relations (entity_links) ----
 
 function summary(row) {
@@ -126,45 +138,55 @@ function summary(row) {
 // Outgoing edges from an entity: returns the linked target entities. relType optional.
 function getLinksFrom(fromId, relType = null) {
   const sql = `
-    SELECT l.id AS linkId, l.relType AS relType, e.id AS id, e.canonicalName AS canonicalName, e.type AS type
+    SELECT l.id AS linkId, l.relType AS relType, l.label AS label, e.id AS id, e.canonicalName AS canonicalName, e.type AS type
     FROM entity_links l JOIN entities e ON l.toId = e.id
     WHERE l.fromId = ?${relType ? ' AND l.relType = ?' : ''}
     ORDER BY e.canonicalName`;
   const rows = relType ? db.prepare(sql).all(fromId, relType) : db.prepare(sql).all(fromId);
-  return rows.map(r => ({ linkId: r.linkId, relType: r.relType, entity: summary(r) }));
+  return rows.map(r => ({ linkId: r.linkId, relType: r.relType, label: r.label || null, entity: summary(r) }));
 }
 
 // Incoming edges to an entity: returns the source entities. relType optional.
 function getLinksTo(toId, relType = null) {
   const sql = `
-    SELECT l.id AS linkId, l.relType AS relType, e.id AS id, e.canonicalName AS canonicalName, e.type AS type
+    SELECT l.id AS linkId, l.relType AS relType, l.label AS label, e.id AS id, e.canonicalName AS canonicalName, e.type AS type
     FROM entity_links l JOIN entities e ON l.fromId = e.id
     WHERE l.toId = ?${relType ? ' AND l.relType = ?' : ''}
     ORDER BY e.canonicalName`;
   const rows = relType ? db.prepare(sql).all(toId, relType) : db.prepare(sql).all(toId);
-  return rows.map(r => ({ linkId: r.linkId, relType: r.relType, entity: summary(r) }));
+  return rows.map(r => ({ linkId: r.linkId, relType: r.relType, label: r.label || null, entity: summary(r) }));
 }
 
 // Add a directed edge. `single` first clears any existing edge of (fromId, relType),
 // enforcing one-to-one relations (owner, race, parent location…). A null toId just
 // clears (used to unset a single-value relation).
-function setLink({ workspaceId, fromId, relType, toId, single = false }) {
+function setLink({ workspaceId, fromId, relType, toId, single = false, label = null }) {
   if (!fromId || !relType) throw new Error('fromId and relType are required');
+  const cleanLabel = label != null && String(label).trim() ? String(label).trim() : null;
   if (single) db.prepare('DELETE FROM entity_links WHERE fromId = ? AND relType = ?').run(fromId, relType);
   if (!toId) return { cleared: true };
   if (!single) {
-    const exists = db.prepare('SELECT id FROM entity_links WHERE fromId = ? AND relType = ? AND toId = ?').get(fromId, relType, toId);
+    // For labeled relations, the same pair can hold distinct labels — dedup on (pair, label).
+    const exists = db.prepare("SELECT id FROM entity_links WHERE fromId = ? AND relType = ? AND toId = ? AND IFNULL(label, '') = ?")
+      .get(fromId, relType, toId, cleanLabel || '');
     if (exists) return { id: exists.id };
   }
   const id = crypto.randomUUID();
-  db.prepare('INSERT INTO entity_links (id, workspaceId, fromId, relType, toId, createdAt) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(id, workspaceId || null, fromId, relType, toId, Date.now());
+  db.prepare('INSERT INTO entity_links (id, workspaceId, fromId, relType, toId, label, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(id, workspaceId || null, fromId, relType, toId, cleanLabel, Date.now());
   return { id };
 }
 
 function removeLink(linkId) {
   db.prepare('DELETE FROM entity_links WHERE id = ?').run(linkId);
   return { id: linkId };
+}
+
+// Set (or clear) the free-text label on an existing edge, e.g. a member's role.
+function updateLinkLabel(linkId, label) {
+  const clean = label != null && String(label).trim() ? String(label).trim() : null;
+  db.prepare('UPDATE entity_links SET label = ? WHERE id = ?').run(clean, linkId);
+  return { id: linkId, label: clean };
 }
 
 module.exports = {
@@ -175,8 +197,10 @@ module.exports = {
   deleteEntity,
   resolveMention,
   normalizeName,
+  linkedLoreDocIds,
   getLinksFrom,
   getLinksTo,
   setLink,
   removeLink,
+  updateLinkLabel,
 };

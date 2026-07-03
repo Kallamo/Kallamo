@@ -442,6 +442,7 @@ db.exec(`
     fromId      TEXT NOT NULL,
     relType     TEXT NOT NULL,
     toId        TEXT NOT NULL,
+    label       TEXT,
     createdAt   INTEGER
   );
 
@@ -718,6 +719,14 @@ try {
     console.log("Database Migration: Added enabled column to pinned_directives table.");
   }
 
+  // A relation edge can carry a free-text human label (e.g. "father", "rival") on top
+  // of its structural relType, so character↔character relationships read naturally.
+  const elTableInfo = db.pragma("table_info(entity_links)");
+  if (elTableInfo.length && !elTableInfo.map(c => c.name).includes('label')) {
+    db.exec("ALTER TABLE entity_links ADD COLUMN label TEXT");
+    console.log("Database Migration: Added label column to entity_links table.");
+  }
+
   // Seed the default structured-memory tag vocabulary (idempotent). Descriptions
   // are the classifier criteria, kept short and domain-neutral.
   const seedTag = db.prepare("INSERT OR IGNORE INTO tags (name, description, isEntity, createdAt, last_modified) VALUES (?, ?, ?, ?, ?)");
@@ -728,6 +737,7 @@ try {
     ["Items", "Notable objects in play: weapons, artifacts, tools, documents, substances.", 1],
     ["Locations", "Places where scenes happen: rooms, buildings, settlements, regions, landmarks.", 1],
     ["Races", "Species, lineages, or peoples a character can belong to.", 1],
+    ["Creatures", "Monsters, beasts, spirits, or non-personified entities present or referenced.", 1],
     ["Planning", "Decisions, goals, deadlines, tasks, and who is responsible for them.", 0],
     ["Chat", "General context: what a conversation segment is broadly about.", 0],
   ];
