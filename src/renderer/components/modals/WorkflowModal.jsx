@@ -124,14 +124,19 @@ export default function WorkflowModal({ workflow, onClose, onSave }) {
 
           {/* Steps Section */}
           <div className="flex flex-col space-y-4">
-            <div className="flex justify-between items-center border-b border-gray-800 pb-2">
-              <h3 className="text-sm font-bold text-accent uppercase tracking-wider flex items-center space-x-2">
-                <ListOrdered className="w-4 h-4" />
-                <span>Execution Steps Chain</span>
-              </h3>
+            <div className="flex justify-between items-center">
+              <div className="flex items-center gap-2.5">
+                <span className="w-8 h-8 rounded-lg bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
+                  <ListOrdered className="w-4 h-4 text-accent" />
+                </span>
+                <div>
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider">Execution Steps Chain</h3>
+                  <p className="caption mt-0.5">Each step runs in order; its output feeds the next.</p>
+                </div>
+              </div>
               <button
                 onClick={addStep}
-                className="flex items-center space-x-1 px-3 py-1 bg-accent/15 hover:bg-accent/25 border border-accent/30 text-accent rounded-md text-xs font-semibold transition-colors cursor-pointer"
+                className="flex items-center space-x-1 px-3 py-1.5 bg-accent/15 hover:bg-accent/25 border border-accent/30 text-accent rounded-lg text-xs font-semibold transition-colors cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Add Step</span>
@@ -141,7 +146,7 @@ export default function WorkflowModal({ workflow, onClose, onSave }) {
             {/* List of Steps */}
             <div className="space-y-4 max-h-[360px] overflow-y-auto custom-scrollbar pr-1">
               {steps.length === 0 ? (
-                <div className="flex flex-col items-center justify-center text-gray-500 py-16 bg-[#0a161d]/20 border border-dashed border-gray-800/80 rounded-xl">
+                <div className="flex flex-col items-center justify-center text-gray-500 py-20 bg-[#0a161d]/20 border border-dashed border-gray-800/80 rounded-2xl">
                   <Settings className="w-8 h-8 opacity-30 mb-2 animate-spin-slow" />
                   <p className="text-xs font-medium">No steps added to the workflow yet.</p>
                   <button
@@ -157,18 +162,25 @@ export default function WorkflowModal({ workflow, onClose, onSave }) {
                   const stepColor = selectedProfile ? selectedProfile.color : '#FBCB2D';
 
                   return (
-                    <div
-                      key={step.id}
-                      className="bg-[#051116] border border-gray-800 rounded-lg p-4 relative group flex flex-col space-y-3 shadow-md"
-                    >
-                      {/* Step index pill and move actions */}
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-2">
-                          <span className="w-5 h-5 rounded-full bg-accent/20 border border-accent/40 text-accent font-bold text-xs flex items-center justify-center">
-                            {index + 1}
-                          </span>
-                          <span className="text-xs font-bold text-gray-300 uppercase tracking-wide">Execution Step</span>
-                        </div>
+                    <div key={step.id} className="flex gap-3.5 group">
+                      {/* Timeline rail: the chain, tinted by the step's AI Profile color */}
+                      <div className="flex flex-col items-center shrink-0 pt-0.5">
+                        <span
+                          className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold shrink-0"
+                          style={{ backgroundColor: `${stepColor}22`, border: `1px solid ${stepColor}66`, color: stepColor }}
+                        >
+                          {index + 1}
+                        </span>
+                        {index < steps.length - 1 && (
+                          <span className="w-0.5 flex-1 rounded-full mt-2" style={{ backgroundColor: stepColor, opacity: 0.3 }} />
+                        )}
+                      </div>
+
+                      {/* Step card */}
+                      <div className="flex-1 min-w-0 bg-[#0a161d]/60 border border-gray-800/70 rounded-xl p-4 space-y-3 shadow-md hover:border-gray-700 transition-colors">
+                        {/* Header row */}
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-bold text-gray-300 uppercase tracking-wider">Execution Step</span>
 
                         <div className="flex items-center space-x-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
                           <button
@@ -283,6 +295,7 @@ export default function WorkflowModal({ workflow, onClose, onSave }) {
                         />
                       </div>
 
+                      </div>
                     </div>
                   );
                 })

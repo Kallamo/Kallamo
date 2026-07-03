@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
-import { X, Search, Database, UploadCloud, FileText, Trash2, Edit3, Save, Cpu, Plus, Loader, Info, Check, HelpCircle, Download } from 'lucide-react';
+import { X, Search, Database, UploadCloud, FileText, Trash2, Edit3, Save, Cpu, Plus, Loader, Info, Check, HelpCircle, Download, Pin } from 'lucide-react';
 import { parseMarkdown, escapeHTML } from '../../utils/markdown';
 import ImportProgressModal from './ImportProgressModal';
 import ConfirmDialog from '../ui/ConfirmDialog';
@@ -893,6 +893,26 @@ export default function KbManagerModal({ profile, onClose }) {
     return 'SEARCHABLE';
   };
 
+  // Per-type visual identity: an accent hex for the medallion, a matching Badge tone
+  // and a glyph. Always-on memories read amber, custom-searchable emerald, indexed
+  // files blue, so the grid is scannable by color, not just by label.
+  const blockVisual = (block) => {
+    const isConst = block.type === 'constant'
+      || (block.type === 'manual' && (block.strategy === 'constant' || block.rawItem?.strategy === 'constant'));
+    if (block.type === 'rag_file') return { tone: 'blue', hex: '#3b82f6', Icon: FileText };
+    if (block.type === 'manual') {
+      return isConst
+        ? { tone: 'amber', hex: '#FBCB2D', Icon: Pin }
+        : { tone: 'emerald', hex: '#10b981', Icon: Edit3 };
+    }
+    return { tone: 'amber', hex: '#FBCB2D', Icon: Pin };
+  };
+  const HOVER_BORDER = {
+    amber: 'hover:border-[#FBCB2D]/40',
+    emerald: 'hover:border-emerald-500/40',
+    blue: 'hover:border-[#3b82f6]/50',
+  };
+
   return (
     <div className={`fixed inset-0 z-50 flex items-center justify-center titlebar-nodrag select-none p-8 ${isBlurEnabled ? 'bg-black/60 backdrop-blur-sm' : 'bg-[#011419]'}`}>
       <div className="w-full max-w-6xl h-full max-h-[750px] bg-[#000D11] rounded-xl shadow-2xl border border-gray-800/60 flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
@@ -900,13 +920,23 @@ export default function KbManagerModal({ profile, onClose }) {
         {/* Header */}
         <div className="shrink-0 flex justify-between items-center h-16 w-full px-6 bg-[#011419] border-b border-gray-800/50">
           <div className="flex items-center space-x-3">
-            <div className="p-2 bg-accent/10 rounded-lg text-accent">
+            <div
+              className="p-2 rounded-lg shrink-0"
+              style={{
+                backgroundColor: `${profile?.color || '#FBCB2D'}1a`,
+                color: profile?.color || '#FBCB2D',
+                border: `1px solid ${profile?.color || '#FBCB2D'}33`,
+              }}
+            >
               <Database className="w-5 h-5" />
             </div>
             <div>
               <div className="flex items-center space-x-2">
                 <h2 className="text-base font-bold text-white tracking-wide">Knowledge Base Manager</h2>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-gray-800 text-gray-400 uppercase tracking-wider">{profile?.name}</span>
+                <span className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2 py-0.5 rounded bg-gray-800 text-gray-300 uppercase tracking-wider">
+                  <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: profile?.color || '#FBCB2D' }} />
+                  {profile?.name}
+                </span>
               </div>
               <p className="caption mt-0.5">Edit, delete or inject manual memories into the Vector Database.</p>
             </div>
@@ -1095,74 +1125,71 @@ export default function KbManagerModal({ profile, onClose }) {
           </div>
 
           {/* Right Main Grid */}
-          <div className="flex-1 flex flex-col p-6 overflow-hidden min-h-0 bg-[#00080B]">
+          <div
+            className="flex-1 flex flex-col p-6 overflow-hidden min-h-0 relative"
+            style={{ background: 'radial-gradient(130% 90% at 100% 0%, rgba(221,186,110,0.045), transparent 55%), #00080B' }}
+          >
             {activeFilter === 'agentic-rag' ? (
               <div className="flex-1 flex flex-col h-full overflow-hidden animate-in fade-in duration-200">
-                <div className="flex justify-between items-center mb-6 shrink-0 border-b border-gray-800 pb-3">
+                <div className="flex items-center gap-2.5 mb-5 shrink-0">
+                  <span className="w-9 h-9 rounded-lg bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
+                    <Cpu className="w-4.5 h-4.5 text-accent" />
+                  </span>
                   <div>
-                    <h3 className="text-base font-bold text-white tracking-wide">Smart Search Agent (Agentic RAG)</h3>
-                    <p className="caption mt-1">Configure autonomous context retrieval rules for this AI profile.</p>
+                    <h3 className="text-sm font-bold text-white uppercase tracking-wider">Smart Search Agent</h3>
+                    <p className="caption mt-0.5">Autonomous context retrieval for this profile.</p>
                   </div>
                 </div>
 
-                <div className="flex-1 overflow-y-auto custom-scrollbar pr-1 min-h-0 pb-6 space-y-6">
-                  {/* Enabling Card */}
-                  <div className="bg-[#0a161d] border border-gray-800/80 rounded-xl p-5">
-                    <div className="flex items-start justify-between">
-                      <div className="pr-4 flex-1">
-                        <div className="flex items-center space-x-1.5 mb-1.5">
-                          <span className="text-sm font-bold text-gray-200">Enable Agentic RAG Search</span>
-                        </div>
-                        <p className="caption max-w-xl">
-                          When active, the AI will evaluate the conversation context first and create dynamic search queries targeting the vector store instead of doing simple matches, leading to significantly better retrieval relevance.
-                        </p>
+                <div className="flex-1 overflow-y-auto custom-scrollbar pr-1 min-h-0 pb-4 space-y-4">
+                  {/* Settings: enable + research turns in one balanced card */}
+                  <div className="bg-[#0a161d]/50 border border-gray-800/60 rounded-2xl divide-y divide-gray-800/60">
+                    <div className="flex items-center justify-between gap-4 p-4">
+                      <div className="pr-2">
+                        <span className="text-sm font-semibold text-gray-200">Enable Agentic RAG</span>
+                        <p className="caption mt-0.5 max-w-md">The AI reads the conversation and writes its own vector queries instead of matching your raw text.</p>
                       </div>
-                      <label className="relative inline-flex items-center cursor-pointer shrink-0 mt-1">
+                      <label className="relative inline-flex items-center cursor-pointer shrink-0">
                         <input
                           type="checkbox"
                           checked={isAgentic}
-                          onChange={(e) => {
-                            setIsAgentic(e.target.checked);
-                          }}
+                          onChange={(e) => setIsAgentic(e.target.checked)}
                           className="sr-only peer"
                         />
                         <div className="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-accent"></div>
                       </label>
                     </div>
-                  </div>
 
-                  {/* Max research turns block */}
-                  {isAgentic && (
-                    <div className="bg-[#0a161d] border border-gray-800/80 rounded-xl p-5 flex items-center justify-between gap-4">
-                      <div>
-                        <span className="text-sm font-bold text-gray-200">Max research turns</span>
-                        <p className="caption leading-tight mt-0.5">
-                          THOUGHT/ACTION loops before answering.<br />1 = single search pass (cheapest); 3 = balanced; more = deeper multi-hop, higher cost.
-                        </p>
+                    {isAgentic && (
+                      <div className="flex items-center justify-between gap-4 p-4">
+                        <div className="pr-2">
+                          <span className="text-sm font-semibold text-gray-200">Max research turns</span>
+                          <p className="caption mt-0.5">THOUGHT/ACTION loops. 1 = cheapest, 3 = balanced, more = deeper multi-hop.</p>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          {[1, 2, 3, 4, 5].map((n) => (
+                            <button
+                              key={n}
+                              type="button"
+                              onClick={() => setAgenticMaxTurns(n)}
+                              className={`w-8 h-8 rounded-md text-sm font-medium transition-colors cursor-pointer ${agenticMaxTurns === n
+                                ? 'bg-accent text-[#011419]'
+                                : 'bg-[#011419] border border-gray-800 text-gray-400 hover:text-gray-200'
+                                }`}
+                            >
+                              {n}
+                            </button>
+                          ))}
+                        </div>
                       </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        {[1, 2, 3, 4, 5].map((n) => (
-                          <button
-                            key={n}
-                            type="button"
-                            onClick={() => setAgenticMaxTurns(n)}
-                            className={`w-8 h-8 rounded-md text-sm font-medium transition-colors cursor-pointer ${agenticMaxTurns === n
-                              ? 'bg-accent text-[#011419]'
-                              : 'bg-[#011419] border border-gray-800 text-gray-400 hover:text-gray-200'
-                              }`}
-                          >
-                            {n}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
 
                   {/* System Prompt block */}
                   {isAgentic && (
-                    <div className="bg-[#0a161d] border border-gray-800/80 rounded-xl p-5 flex flex-col min-h-[360px] relative">
-                      <div className="flex justify-between items-center mb-4 shrink-0 pb-1.5 border-b border-gray-800/60">
-                        <label className="block text-xs font-bold text-accent uppercase tracking-wider">Agentic System Prompt</label>
+                    <div className="bg-[#0a161d]/50 border border-gray-800/60 rounded-2xl p-4 flex flex-col min-h-[240px] relative">
+                      <div className="flex justify-between items-center mb-3 shrink-0">
+                        <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Agentic System Prompt</span>
 
                         {/* Editor / Preview Toggles */}
                         <div className="flex bg-[#011419] p-0.5 rounded border border-gray-800 text-[10px] font-bold uppercase tracking-wider select-none shrink-0 z-10 space-x-0.5">
@@ -1211,18 +1238,15 @@ export default function KbManagerModal({ profile, onClose }) {
                     </div>
                   )}
 
-                  {/* Non-agentic placeholder */}
+                  {/* Non-agentic hint */}
                   {!isAgentic && (
-                    <div className="border border-dashed border-gray-800 rounded-xl p-10 flex flex-col items-center justify-center text-gray-600 opacity-60">
-                      <Info className="w-8 h-8 mb-3" />
-                      <span className="text-xs text-center max-w-md leading-relaxed">
-                        When disabled, context injection will use a standard similarity search matching the user's raw message text directly against the vector database. Enable Agentic RAG above to customize query generation.
-                      </span>
-                    </div>
+                    <p className="caption px-1 leading-relaxed max-w-lg">
+                      When disabled, retrieval falls back to a plain similarity search against your raw message text. Turn it on above to let the AI craft its own queries.
+                    </p>
                   )}
 
-                  {/* Save button card */}
-                  <div className="flex items-center justify-between bg-[#0a161d] border border-gray-800/80 rounded-xl p-4 shrink-0">
+                  {/* Save row */}
+                  <div className="flex items-center justify-end gap-3 pt-2 shrink-0">
                     <div className="flex items-center space-x-2">
                       {saveSuccess && (
                         <span className="text-xs text-green-400 font-bold uppercase tracking-wider animate-pulse flex items-center space-x-1">
@@ -1292,10 +1316,15 @@ export default function KbManagerModal({ profile, onClose }) {
                       icon={Database}
                       title="No knowledge blocks found"
                       subtitle="Upload document files or add manual snippets to populate the brain."
+                      className="min-h-[360px] justify-center"
                     />
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pb-4">
-                      {filteredBlocks.map((block) => (
+                      {filteredBlocks.map((block) => {
+                        const vis = blockVisual(block);
+                        const selected = selectedBlockIds.includes(block.id);
+                        const dimmed = block.enabled === false;
+                        return (
                         <div
                           key={block.id}
                           onClick={() => {
@@ -1303,41 +1332,33 @@ export default function KbManagerModal({ profile, onClose }) {
                               setViewingFileBlock(block);
                             }
                           }}
-                          className={`bg-[#0a161d] border rounded-lg p-4 flex flex-col hover:shadow-lg transition-all group h-[180px] overflow-hidden ${block.type === 'rag_file' ? 'cursor-pointer hover:border-blue-500/50' : ''
-                            } ${selectedBlockIds.includes(block.id)
-                              ? 'border-accent/40 bg-accent/5'
-                              : 'border-gray-800/80 hover:border-gray-700'
-                            } ${block.enabled === false ? 'opacity-50' : ''}`}
+                          className={`relative bg-[#0a161d] border rounded-xl flex flex-col overflow-hidden transition-all group h-[184px] hover:shadow-xl hover:shadow-black/40 ${block.type === 'rag_file' ? 'cursor-pointer' : ''
+                            } ${selected
+                              ? 'border-accent/50 bg-accent/[0.04]'
+                              : `border-gray-800/80 ${HOVER_BORDER[vis.tone] || 'hover:border-gray-700'}`
+                            } ${dimmed ? 'opacity-45' : ''}`}
                         >
-                          {/* Card Header */}
-                          <div className="flex justify-between items-start mb-2 shrink-0">
-                            <div className="flex items-center space-x-2.5 overflow-hidden pr-2 flex-1">
+                          {/* Card Header band */}
+                          <div className="flex justify-between items-center gap-2 pl-4 pr-2.5 py-2.5 bg-white/[0.015] border-b border-gray-800/60 shrink-0">
+                            <div className="flex items-center space-x-2 overflow-hidden flex-1">
                               {/* Selection Checkbox */}
-                              {block.type !== 'rag_file' ? (
+                              {block.type !== 'rag_file' && (
                                 <div className="shrink-0 select-none" onClick={(e) => e.stopPropagation()}>
                                   <Checkbox
-                                    checked={selectedBlockIds.includes(block.id)}
+                                    checked={selected}
                                     onChange={() => handleToggleSelectBlock(block.id)}
                                     size="sm"
                                   />
                                 </div>
-                              ) : (
-                                <div className="shrink-0 text-blue-400">
-                                  <FileText className="w-4 h-4" />
-                                </div>
                               )}
-                              <Badge
-                                tone={
-                                  block.type === 'constant'
-                                    ? 'amber'
-                                    : block.type === 'manual'
-                                      ? (block.strategy === 'constant' ? 'amber' : 'emerald')
-                                      : block.type === 'rag_file'
-                                        ? 'blue'
-                                        : 'gray'
-                                }
-                                className="shrink-0"
+                              {/* Type medallion */}
+                              <span
+                                className="w-6 h-6 rounded-md flex items-center justify-center shrink-0"
+                                style={{ backgroundColor: `${vis.hex}1f`, border: `1px solid ${vis.hex}40`, color: vis.hex }}
                               >
+                                <vis.Icon className="w-3 h-3" />
+                              </span>
+                              <Badge tone={vis.tone} className="shrink-0">
                                 {getBadgeLabel(block)}
                               </Badge>
                               <span className="text-[11px] text-gray-400 font-semibold truncate" title={block.source}>
@@ -1383,13 +1404,13 @@ export default function KbManagerModal({ profile, onClose }) {
                           </div>
 
                           {/* Card Content */}
-                          <p className="text-[11px] text-gray-300 leading-relaxed font-mono mt-1 overflow-y-auto custom-scrollbar flex-1 whitespace-pre-wrap break-words select-text pr-1">
+                          <p className="text-[11px] text-gray-300 leading-relaxed font-mono px-4 py-3 overflow-y-auto custom-scrollbar flex-1 whitespace-pre-wrap break-words select-text">
                             {block.text}
                           </p>
 
                           {/* Display tag chips */}
                           {block.keywords && block.keywords.length > 0 && (
-                            <div className="flex flex-wrap gap-1 mt-2.5 select-none shrink-0">
+                            <div className="flex flex-wrap gap-1 px-4 pb-3 select-none shrink-0">
                               {block.keywords.map((tag, tagIdx) => (
                                 <Badge
                                   key={tagIdx}
@@ -1401,7 +1422,8 @@ export default function KbManagerModal({ profile, onClose }) {
                             </div>
                           )}
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -1411,7 +1433,7 @@ export default function KbManagerModal({ profile, onClose }) {
 
           {/* Slide-out File Chunks Viewer Panel / Drawer overlay */}
           {viewingFileBlock && (
-            <div className="absolute inset-y-0 right-0 w-[500px] bg-[#011419] border-l border-gray-800 shadow-2xl flex flex-col p-6 z-40 animate-in slide-in-from-right duration-200">
+            <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[560px] max-h-[calc(100%-3rem)] bg-[#0a161d] border border-gray-800/70 rounded-2xl shadow-[0_0_0_100vmax_rgba(0,0,0,0.55)] flex flex-col p-6 z-40 animate-in zoom-in-95 fade-in duration-200">
               <div className="flex justify-between items-center mb-4 shrink-0 pb-2 border-b border-gray-800">
                 <div>
                   <h3 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5">
@@ -1495,7 +1517,7 @@ export default function KbManagerModal({ profile, onClose }) {
 
           {/* Slide-out Editor Panel / Drawer overlay */}
           {editorOpen && (
-            <div className="absolute inset-y-0 right-0 w-[420px] bg-[#011419] border-l border-gray-800 shadow-2xl flex flex-col p-6 z-40 animate-in slide-in-from-right duration-200">
+            <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[460px] max-h-[calc(100%-3rem)] bg-[#0a161d] border border-gray-800/70 rounded-2xl shadow-[0_0_0_100vmax_rgba(0,0,0,0.55)] flex flex-col p-6 z-40 animate-in zoom-in-95 fade-in duration-200">
               <div className="flex justify-between items-center mb-4 shrink-0 pb-2 border-b border-gray-800">
                 <h3 className="text-xs font-bold text-accent uppercase tracking-widest">
                   {editingBlock ? 'Edit Memory Block' : 'Add Custom Memory'}
