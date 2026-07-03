@@ -413,7 +413,7 @@ function MainLayout() {
 
       {/* Global Toast Notification */}
       {toast && toast.show && (
-        <div className={`fixed top-16 right-6 z-[9999] flex items-start space-x-3 bg-[#0a161d]/90 backdrop-blur-md border border-gray-800 rounded-xl px-4 py-3.5 shadow-2xl animate-in slide-in-from-top-4 duration-300 max-w-md`}>
+        <div className={`fixed bottom-6 right-6 z-[9999] flex items-start space-x-3 bg-[#0a161d]/90 backdrop-blur-md border border-gray-800 rounded-xl px-4 py-3.5 shadow-2xl animate-in slide-in-from-bottom-4 duration-300 max-w-md`}>
           <div className="shrink-0 mt-0.5">
             {toast.type === 'success' && <CheckCircle className="w-5.5 h-5.5 text-emerald-400" />}
             {toast.type === 'error' && <AlertCircle className="w-5.5 h-5.5 text-red-400" />}

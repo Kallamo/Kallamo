@@ -33,7 +33,6 @@ export default function LibraryView() {
   
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [profileToEdit, setProfileToEdit] = useState(null);
-  const [profileInitialStep, setProfileInitialStep] = useState(1); // 1 or 2 (KB step)
   const [showKbManager, setShowKbManager] = useState(false);
   const [showWorkflowModal, setShowWorkflowModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
@@ -95,13 +94,11 @@ export default function LibraryView() {
 
   const openNewProfile = () => {
     setProfileToEdit(null);
-    setProfileInitialStep(1);
     setShowProfileModal(true);
   };
 
   const openEditProfile = (profile) => {
     setProfileToEdit(profile);
-    setProfileInitialStep(1);
     setShowProfileModal(true);
   };
 
@@ -603,12 +600,21 @@ export default function LibraryView() {
 
       {/* Modals wiring */}
       {showProfileModal && (
-        <ProfileModal 
+        <ProfileModal
           profile={profileToEdit}
-          initialStep={profileInitialStep}
           onClose={() => {
             setShowProfileModal(false);
             setProfileToEdit(null);
+          }}
+          onSave={(savedProfile, { isNew } = {}) => {
+            if (isNew) {
+              showToast(
+                `Profile "${savedProfile.name}" created. Give it documents and memory in the Knowledge Base Manager.`,
+                'success',
+                8000,
+                { label: 'Open Knowledge Base Manager', onClick: () => openManageKb(savedProfile) }
+              );
+            }
           }}
         />
       )}
