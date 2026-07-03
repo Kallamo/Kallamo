@@ -466,7 +466,14 @@ ipcMain.handle('save-writing-profile', async (event, profile) => {
       );
     }
 
-    if (kbChanged && profile.knowledgeFiles) {
+    // Only (re)index when there is real KB work: files to embed, or an existing
+    // profile whose chunks may need reconciling (e.g. files removed). A brand-new
+    // profile with an empty KB has nothing to vectorize, so we must not kick off
+    // indexing, otherwise it emits a spurious "Vectorization completed" event.
+    let parsedKb = [];
+    try { parsedKb = JSON.parse(newKbStr); } catch (e) { parsedKb = []; }
+
+    if (kbChanged && (parsedKb.length > 0 || exists)) {
       indexProfileKnowledgeBase(event.sender, profile.id, profile.knowledgeFiles).catch(e => {
         console.error("Background profile indexing error:", e);
       });
