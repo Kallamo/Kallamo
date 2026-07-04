@@ -277,3 +277,7 @@ The name **Kallamo**, the Kallamo logo, and all associated branding assets are t
 
 ### Contributor License Agreement (CLA)
 All contributors to this project must review and accept the [Kallamo Contributor License Agreement (CLA)](CLA.md) before their contributions can be merged.
+
+### Security & Signing
+- [Privacy Policy](PRIVACY.md) — what Kallamo does (and does not) do with your data.
+- [Code Signing Policy](docs/code-signing-policy.md) — how official release binaries are built, reviewed, and signed.
