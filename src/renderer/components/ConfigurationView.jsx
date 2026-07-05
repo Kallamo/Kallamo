@@ -46,6 +46,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
 
   const [maxContext, setMaxContext] = useState(128000);
   const [wdContextWindow, setWdContextWindow] = useState(8192);
+  const [wdUseChatHistory, setWdUseChatHistory] = useState(true);
   const [archiveThreshold, setArchiveThreshold] = useState(60000);
   const [autoSummarize, setAutoSummarize] = useState(false);
   const [showContextBar, setShowContextBar] = useState(false);
@@ -61,6 +62,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
     if (activeChat) {
       setMaxContext(activeChat.maxContext ?? 128000);
       setWdContextWindow(activeChat.wdContextWindow ?? 8192);
+      setWdUseChatHistory(activeChat.wdUseChatHistory !== 0);
       setArchiveThreshold(activeChat.archiveThreshold ?? 60000);
       setAutoSummarize(activeChat.autoSummarize === 1);
       setShowContextBar(activeChat.showContextBar === 1);
@@ -111,6 +113,12 @@ export default function ConfigurationView({ onTriggerSummarize }) {
   const handleToggleContextBar = async (checked) => {
     setShowContextBar(checked);
     const updated = { ...activeChat, showContextBar: checked ? 1 : 0 };
+    await handleSaveChat(updated);
+  };
+
+  const handleToggleWdChatHistory = async (checked) => {
+    setWdUseChatHistory(checked);
+    const updated = { ...activeChat, wdUseChatHistory: checked ? 1 : 0 };
     await handleSaveChat(updated);
   };
 
@@ -557,21 +565,39 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                 title="Writing Desk"
                 desc="How much of your chapter the AI reads when you ask it to help with a highlighted passage."
               />
-              <div className="max-w-xs">
-                <label className={`${fieldLabel} mb-1.5`}>Reading Size (Max Tokens)</label>
-                <input
-                  type="number"
-                  min="1024"
-                  step="1024"
-                  value={wdContextWindow}
-                  onChange={(e) => setWdContextWindow(e.target.value)}
-                  onBlur={() => handleUpdateNumberField('wdContextWindow', wdContextWindow)}
-                  onKeyDown={(e) => e.key === 'Enter' && e.target.blur()}
-                  className={inputClass}
-                />
-                <p className="caption mt-2">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2 items-start">
+                <div>
+                  <label className={`${fieldLabel} mb-1.5`}>Reading Size (Max Tokens)</label>
+                  <input
+                    type="number"
+                    min="1024"
+                    step="1024"
+                    value={wdContextWindow}
+                    onChange={(e) => setWdContextWindow(e.target.value)}
+                    onBlur={() => handleUpdateNumberField('wdContextWindow', wdContextWindow)}
+                    onKeyDown={(e) => e.key === 'Enter' && e.target.blur()}
+                    className={inputClass}
+                  />
+                </div>
+                <p className="caption">
                   Sets how much text the AI takes in at once. When a chapter fits within this limit, the AI reads it in full; when it's larger, the AI concentrates on the passage around your selection along with relevant notes, keeping responses fast and focused. Lower it if you want tighter, more predictable context.
                 </p>
+              </div>
+
+              <div className="flex items-center justify-between bg-[#011419] border border-gray-800 rounded-lg px-3.5 py-2.5 mt-4">
+                <div className="pr-4">
+                  <span className="text-xs text-gray-200 font-semibold">Include chat history</span>
+                  <p className="caption mt-0.5">Lets Writing Desk edits see this workspace's conversation for extra context. Turn it off if that chat is bleeding its tone or language into your prose and pulling the AI away from your directives.</p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={wdUseChatHistory}
+                    onChange={(e) => handleToggleWdChatHistory(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
+                </label>
               </div>
             </div>
           </section>

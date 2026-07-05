@@ -94,8 +94,147 @@ function updateEntity(id, fields = {}) {
 }
 
 function deleteEntity(id) {
-  db.prepare('DELETE FROM entities WHERE id = ?').run(id); // links GC via trigger
+  db.prepare('DELETE FROM entities WHERE id = ?').run(id); // links + chunk_tags GC via triggers
   return { id };
+}
+
+// Internal/transient data keys that must never survive a merge or ride along an export.
+function stripInternal(data) {
+  const d = { ...(data || {}) };
+  delete d._enrichPending;
+  delete d._imported;
+  delete d.loreDocumentIds;
+  return d;
+}
+
+// Fold one entity into an existing one: the source's name + aliases are absorbed as
+// aliases of the target, its chunk tags and relation edges are repointed to the target,
+// its data + lore are combined with the target's, then the source is deleted. `prefer`
+// decides who wins on conflicting fields — 'target' (the existing entity, default) or
+// 'source' (the folded-in one, e.g. a freshly imported entity). Used both for "this AI
+// proposal is really an alias of X" and for merging an imported duplicate into a real one.
+function mergeEntity(sourceId, targetId, { prefer = 'target' } = {}) {
+  if (!sourceId || !targetId || sourceId === targetId) throw new Error('distinct source and target are required');
+  const source = db.prepare('SELECT * FROM entities WHERE id = ?').get(sourceId);
+  const target = db.prepare('SELECT * FROM entities WHERE id = ?').get(targetId);
+  if (!source || !target) throw new Error('source or target entity not found');
+
+  const seen = new Set([normalizeName(target.canonicalName)]);
+  const mergedAliases = [];
+  for (const a of [...parseJsonArray(target.aliases), source.canonicalName, ...parseJsonArray(source.aliases)]) {
+    const clean = String(a || '').trim();
+    if (!clean) continue;
+    const key = normalizeName(clean);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    mergedAliases.push(clean);
+  }
+
+  // Combine data + lore, letting the preferred side win on conflicts; the survivor keeps
+  // its own AI policy regardless. Internal keys never travel.
+  const sData = stripInternal(parseJsonObject(source.data));
+  const tData = stripInternal(parseJsonObject(target.data));
+  const mergedData = prefer === 'source' ? { ...tData, ...sData } : { ...sData, ...tData };
+  const targetPolicy = parseJsonObject(target.data).aiPolicy;
+  if (targetPolicy) mergedData.aiPolicy = targetPolicy; else delete mergedData.aiPolicy;
+  const sLore = (source.lore || '').trim();
+  const tLore = (target.lore || '').trim();
+  const mergedLore = prefer === 'source' ? (sLore || target.lore || '') : (tLore || source.lore || '');
+
+  db.transaction(() => {
+    // Repoint everything the source owned onto the target. OR IGNORE drops chunk-tag rows
+    // that would collide with an existing (chunkId, tag, target) row.
+    db.prepare('UPDATE OR IGNORE chunk_tags SET entity = ? WHERE entity = ?').run(targetId, sourceId);
+    db.prepare('UPDATE entity_links SET fromId = ? WHERE fromId = ?').run(targetId, sourceId);
+    db.prepare('UPDATE entity_links SET toId = ? WHERE toId = ?').run(targetId, sourceId);
+    // A merge can create self-loops (source was linked to target) and duplicate edges.
+    db.prepare('DELETE FROM entity_links WHERE fromId = toId').run();
+    db.prepare(`DELETE FROM entity_links WHERE id NOT IN (
+        SELECT MIN(id) FROM entity_links GROUP BY fromId, relType, toId, IFNULL(label, ''))`).run();
+    db.prepare('UPDATE entities SET aliases = ?, lore = ?, data = ?, last_modified = ? WHERE id = ?')
+      .run(JSON.stringify(mergedAliases), mergedLore, JSON.stringify(mergedData), Date.now(), targetId);
+    db.prepare('DELETE FROM entities WHERE id = ?').run(sourceId);
+  })();
+  return getEntity(targetId);
+}
+
+// Stable identity for a staged link, so the UI can accept/reject one edge at a time.
+function enrichLinkKey(l) { return `${l.relKey}:${l.targetId}:${l.label || ''}`; }
+
+// Resolve part or all of a staged enrichment proposal (data._enrichPending, produced by
+// the 'review' enrichment path). Resolution is incremental: only the items named in
+// `accept`/`reject` leave the pending blob, so accepting one field doesn't discard the
+// rest still under review. Accepted scalars/lore are written to the live record, accepted
+// links become edges, accepted chapters are appended to loreDocumentIds; rejected items
+// are dropped. Once nothing remains staged the blob is removed. `accept`/`reject` each =
+// { fields: [...dataKeys], lore: bool, links: [...linkKeys], chapters: [...docIds] }.
+function resolveEnrichReview(id, { accept = {}, reject = {} } = {}) {
+  const cur = getEntity(id);
+  if (!cur) throw new Error('entity not found');
+  const pending = cur.data && cur.data._enrichPending;
+  if (!pending || typeof pending !== 'object') return cur;
+
+  const acceptFields = new Set(Array.isArray(accept.fields) ? accept.fields : []);
+  const rejectFields = new Set(Array.isArray(reject.fields) ? reject.fields : []);
+  const acceptLinks = new Set(Array.isArray(accept.links) ? accept.links : []);
+  const rejectLinks = new Set(Array.isArray(reject.links) ? reject.links : []);
+  const acceptChapters = new Set(Array.isArray(accept.chapters) ? accept.chapters : []);
+  const rejectChapters = new Set(Array.isArray(reject.chapters) ? reject.chapters : []);
+
+  const nextData = { ...cur.data };
+  const fields = { data: nextData };
+  const nextPending = {};
+
+  // Scalar data fields.
+  const pendingData = (pending.data && typeof pending.data === 'object') ? { ...pending.data } : {};
+  for (const f of acceptFields) { if (f in pendingData) { nextData[f] = pendingData[f]; delete pendingData[f]; } }
+  for (const f of rejectFields) delete pendingData[f];
+  if (Object.keys(pendingData).length) nextPending.data = pendingData;
+
+  // Lore is a single unit: accept applies it, reject drops it, otherwise it stays staged.
+  if (pending.lore != null) {
+    if (accept.lore) fields.lore = String(pending.lore);
+    else if (!reject.lore) nextPending.lore = pending.lore;
+  }
+
+  // Links → real edges. Accept creates the edge (swapping endpoints for 'target'-anchored
+  // relations, clearing prior single-valued ones); reject drops; the rest stays staged.
+  if (Array.isArray(pending.links) && pending.links.length) {
+    const keptLinks = [];
+    for (const l of pending.links) {
+      const key = enrichLinkKey(l);
+      if (acceptLinks.has(key)) {
+        const fromId = l.from === 'target' ? l.targetId : id;
+        const toId = l.from === 'target' ? id : l.targetId;
+        setLink({ workspaceId: cur.workspaceId, fromId, relType: l.relType, toId, single: !!l.single, label: l.label || null });
+      } else if (!rejectLinks.has(key)) {
+        keptLinks.push(l);
+      }
+    }
+    if (keptLinks.length) nextPending.links = keptLinks;
+  }
+
+  // Chapters → appended to loreDocumentIds (de-duped), with the legacy single column kept
+  // in sync. Accept adds, reject drops, the rest stays staged.
+  if (Array.isArray(pending.chapters) && pending.chapters.length) {
+    const keptChapters = [];
+    const toAdd = [];
+    for (const c of pending.chapters) {
+      if (acceptChapters.has(c.id)) toAdd.push(c.id);
+      else if (!rejectChapters.has(c.id)) keptChapters.push(c);
+    }
+    if (toAdd.length) {
+      const merged = [...new Set([...linkedLoreDocIds(cur), ...toAdd])];
+      nextData.loreDocumentIds = merged;
+      fields.loreDocumentId = merged[0] || null;
+    }
+    if (keptChapters.length) nextPending.chapters = keptChapters;
+  }
+
+  if (Object.keys(nextPending).length) { nextPending.at = pending.at || Date.now(); nextData._enrichPending = nextPending; }
+  else delete nextData._enrichPending;
+
+  return updateEntity(id, fields);
 }
 
 // Map a surface mention to a canonical entity id within a workspace via case-insensitive
@@ -189,12 +328,75 @@ function updateLinkLabel(linkId, label) {
   return { id: linkId, label: clean };
 }
 
+// Serialize a workspace's Worldbuild into a self-contained, portable package: entities
+// (minus transient/workspace-bound bits) and the edges between them. Chapter links
+// (loreDocumentIds) and staged AI proposals (_enrichPending) are intentionally dropped —
+// they point at this workspace's Writing Desk and mean nothing elsewhere.
+function exportWorldbuild(workspaceId) {
+  const rows = db.prepare('SELECT * FROM entities WHERE workspaceId IS ? AND status != ?').all(workspaceId || null, 'proposed');
+  const ids = new Set(rows.map(r => r.id));
+  const entities = rows.map(r => ({
+    ref: r.id,
+    type: r.type,
+    canonicalName: r.canonicalName,
+    aliases: parseJsonArray(r.aliases),
+    lore: r.lore || '',
+    data: stripInternal(parseJsonObject(r.data)),
+    status: r.status || 'confirmed',
+  }));
+  const linkRows = db.prepare('SELECT fromId, toId, relType, label FROM entity_links WHERE workspaceId IS ?').all(workspaceId || null);
+  const links = linkRows
+    .filter(l => ids.has(l.fromId) && ids.has(l.toId))
+    .map(l => ({ fromRef: l.fromId, toRef: l.toId, relType: l.relType, label: l.label || null }));
+  return { kallamoWorldbuild: 1, exportedAt: Date.now(), entities, links };
+}
+
+// Bring an exported package into a workspace WITHOUT de-duping by name — a same-named
+// entity is not assumed to be the same entity. Every imported entity lands as a `proposed`
+// row flagged _imported, and its edges are recreated among the imported set. The user then
+// reviews each in the sheet: accept as new, dismiss, or merge into an existing entity
+// (choosing which side's data wins). Returns how many entities/links were staged.
+function importWorldbuild(workspaceId, payload) {
+  if (!payload || payload.kallamoWorldbuild !== 1 || !Array.isArray(payload.entities)) {
+    throw new Error('Not a valid Kallamo Worldbuild file.');
+  }
+  const idMap = new Map();
+  let entitiesAdded = 0, linksAdded = 0;
+  db.transaction(() => {
+    for (const e of payload.entities) {
+      if (!e || !e.type || !e.canonicalName) continue;
+      const data = stripInternal((e.data && typeof e.data === 'object' && !Array.isArray(e.data)) ? e.data : {});
+      data._imported = true;
+      const created = createEntity({
+        workspaceId, type: e.type, canonicalName: e.canonicalName,
+        aliases: Array.isArray(e.aliases) ? e.aliases : [],
+        lore: e.lore || '', data, status: 'proposed',
+      });
+      idMap.set(e.ref, created.id);
+      entitiesAdded++;
+    }
+    for (const l of (Array.isArray(payload.links) ? payload.links : [])) {
+      if (!l || !l.relType) continue;
+      const fromId = idMap.get(l.fromRef);
+      const toId = idMap.get(l.toRef);
+      if (!fromId || !toId || fromId === toId) continue;
+      setLink({ workspaceId, fromId, relType: l.relType, toId, single: false, label: l.label || null });
+      linksAdded++;
+    }
+  })();
+  return { entitiesAdded, linksAdded };
+}
+
 module.exports = {
   listEntities,
   getEntity,
+  exportWorldbuild,
+  importWorldbuild,
   createEntity,
   updateEntity,
   deleteEntity,
+  mergeEntity,
+  resolveEnrichReview,
   resolveMention,
   normalizeName,
   linkedLoreDocIds,

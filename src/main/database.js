@@ -220,6 +220,7 @@ db.exec(`
     showContextBar INTEGER DEFAULT 0,
     wdContextWindow INTEGER DEFAULT 8192,
     wdLastChannel TEXT DEFAULT 'replacement',
+    wdUseChatHistory INTEGER DEFAULT 1,
     last_modified INTEGER DEFAULT 0,
     syncToCloud INTEGER DEFAULT 0
   );
@@ -457,6 +458,16 @@ db.exec(`
       DELETE FROM entity_links WHERE fromId = OLD.id OR toId = OLD.id;
   END;
 
+  -- Drop an entity's chunk tags when it is deleted, so dismissing an AI-proposed
+  -- entity also strips the tags that linked it to chunks (no orphan tag rows
+  -- pointing at a dead entity id).
+  CREATE TRIGGER IF NOT EXISTS trg_chunk_tags_entity_gc
+  AFTER DELETE ON entities
+  FOR EACH ROW
+  BEGIN
+      DELETE FROM chunk_tags WHERE entity = OLD.id;
+  END;
+
   CREATE TRIGGER IF NOT EXISTS chats_last_modified_trigger
   AFTER UPDATE ON chats
   FOR EACH ROW
@@ -605,6 +616,10 @@ try {
   if (!columns.includes('wdLastChannel')) {
     db.exec("ALTER TABLE chats ADD COLUMN wdLastChannel TEXT DEFAULT 'replacement'");
     console.log("Database Migration: Added wdLastChannel column to chats table.");
+  }
+  if (!columns.includes('wdUseChatHistory')) {
+    db.exec("ALTER TABLE chats ADD COLUMN wdUseChatHistory INTEGER DEFAULT 1");
+    console.log("Database Migration: Added wdUseChatHistory column to chats table.");
   }
 
   const msgTableInfo = db.pragma("table_info(messages)");
@@ -1040,13 +1055,13 @@ function seedOnboarding() {
         id: seedId('manual'),
         title: 'Canon — The Lighthouse',
         summary: 'The lighthouse on Mourne Cliff has stood abandoned for forty years. Its last keeper, Aldous Finn, vanished without a trace in 1983. The villagers avoid the cliff path after dark.',
-        type: 'manual', strategy: 'full_context', profiles: [], keywords: ['lighthouse', 'Aldous Finn', 'Mourne Cliff'], enabled: true,
+        type: 'manual', strategy: 'constant', profiles: [], keywords: ['lighthouse', 'Aldous Finn', 'Mourne Cliff'], enabled: true,
       },
       {
         id: seedId('manual'),
         title: 'Canon — Protagonist',
         summary: 'Mara Finn, 28, is Aldous’s granddaughter. She returns to the village to sell the family property, but the lighthouse and her grandfather’s disappearance pull her in.',
-        type: 'manual', strategy: 'full_context', profiles: [], keywords: ['Mara Finn', 'protagonist'], enabled: true,
+        type: 'manual', strategy: 'constant', profiles: [], keywords: ['Mara Finn', 'protagonist'], enabled: true,
       },
     ];
 
@@ -1099,13 +1114,13 @@ function seedOnboarding() {
     const eLighthouse = seedId('ent');
     const eLogbook = seedId('ent');
     const entities = [
-      { id: eMara, type: 'Characters', name: 'Mara Finn', aliases: ['Mara'], data: { role: 'Protagonist' },
+      { id: eMara, type: 'Characters', name: 'Mara Finn', aliases: ['Mara'], data: { status: 'alive', loreDocumentIds: [docId] },
         lore: 'Aldous Finn’s granddaughter, 28. She returns to Mourne Cliff to settle the family estate and sell the lighthouse, but the open door and the torn logbook page pull her into her grandfather’s disappearance.' },
-      { id: eAldous, type: 'Characters', name: 'Aldous Finn', aliases: ['Aldous', 'the keeper', 'the old keeper'], data: { role: 'Missing' },
+      { id: eAldous, type: 'Characters', name: 'Aldous Finn', aliases: ['Aldous', 'the keeper', 'the old keeper'], data: { status: 'missing', loreDocumentIds: [docId] },
         lore: 'The lighthouse’s last keeper. Vanished without a trace in 1983 and was never found. His handwriting survives on a logbook page Mara discovers on the bottom step.' },
-      { id: eLighthouse, type: 'Locations', name: 'Mourne Cliff Lighthouse', aliases: ['the lighthouse', 'Mourne Cliff'], data: {}, loreDocumentId: docId,
+      { id: eLighthouse, type: 'Locations', name: 'Mourne Cliff Lighthouse', aliases: ['the lighthouse', 'Mourne Cliff'], data: { loreDocumentIds: [docId] },
         lore: 'A tall, weatherbeaten lighthouse abandoned for forty years, its lantern long dark. The villagers avoid the cliff path after sundown. Setting of Chapter One.' },
-      { id: eLogbook, type: 'Items', name: 'The Keeper’s Logbook', aliases: ['the logbook', 'the journal', 'the torn page'], data: { itemType: 'Document' },
+      { id: eLogbook, type: 'Items', name: 'The Keeper’s Logbook', aliases: ['the logbook', 'the journal', 'the torn page'], data: { loreDocumentIds: [docId] },
         lore: 'Aldous’s keeper’s logbook. A single page, torn loose, is found at the foot of the stairs in his handwriting — dry, though no rain could have reached it.' },
     ];
 

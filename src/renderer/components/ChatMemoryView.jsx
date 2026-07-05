@@ -79,7 +79,7 @@ export default function ChatMemoryView({
   // all"), so a re-run reflects the current tagger and entity registry.
   const handleIndexMemories = async (tier, full) => {
     if (typeof electronAPI?.backfillWorldIndex !== 'function') {
-      showToast('Indexing unavailable — fully restart the app (close + reopen Electron).', 'error');
+      showToast('Indexing unavailable. Fully restart the app (close and reopen Electron).', 'error');
       return;
     }
     setIndexMenu(null);
@@ -1360,7 +1360,7 @@ export default function ChatMemoryView({
                       className="w-full text-left px-3 py-2 text-[10px] font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
                     >
                       Index new chunks
-                      <span className="block text-[8px] font-normal text-gray-500 normal-case tracking-normal mt-0.5">Only chunks not tagged yet — fast top-up.</span>
+                      <span className="block text-[8px] font-normal text-gray-500 normal-case tracking-normal mt-0.5">Only chunks not tagged yet. Fast top-up.</span>
                     </button>
                     <button
                       onClick={() => handleIndexMemories(t.key, true)}

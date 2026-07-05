@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
-import { ArrowLeft, Sliders, Paperclip, Send, Cpu, Workflow, X, MoreVertical, Copy, Edit, RotateCw, Play, Square, ChevronDown, Plus, ChevronLeft, ChevronRight, Brain, Folder, MessageSquare, Trash2, RotateCcw, PenTool, Globe } from 'lucide-react';
+import { ArrowLeft, Sliders, Paperclip, Send, Cpu, Workflow, X, MoreVertical, Copy, Edit, RotateCw, Play, Square, ChevronDown, Plus, ChevronLeft, ChevronRight, Brain, Folder, MessageSquare, Trash2, RotateCcw, PenTool, Globe, AlertTriangle } from 'lucide-react';
 import ConfigurationView from './ConfigurationView';
 import SummarizeModal from './modals/SummarizeModal';
 import ChatFilesView from './ChatFilesView';
@@ -430,6 +430,15 @@ export default function ChatWorkspaceView() {
   const selectedTarget = displayProfiles.find(p => p.id === selectedTargetId) ||
     displayWorkflows.find(w => w.id === selectedTargetId);
 
+  // Readiness uses the app's canonical, provider-aware `needsSetup` flag (linked API
+  // profile + model + credentials). The onboarding profiles ship needing setup.
+  const profileReady = (p) => !!p && !p.needsSetup;
+  // The target a send would actually use (mirrors handleSend's fallback), and whether it
+  // can run: workflows carry their own steps, profiles must be set up.
+  const effectiveTarget = selectedTarget || displayProfiles[0] || displayWorkflows[0] || null;
+  const isWorkflowTarget = !!effectiveTarget && displayWorkflows.some(w => w.id === effectiveTarget.id);
+  const canSend = !!effectiveTarget && (isWorkflowTarget || profileReady(effectiveTarget));
+
   const handleSend = () => {
     const text = inputValue.trim();
     if (!text && pendingFiles.length === 0) return;
@@ -456,6 +465,14 @@ export default function ChatWorkspaceView() {
         // No active targets! Prevent sending.
         return;
       }
+    }
+
+    // Block a profile that still needs setup (e.g. the onboarding profiles before the user
+    // adds a key). Workflows run their own steps, so they pass through.
+    const targetProfile = writingProfiles.find(p => p.id === finalTargetId);
+    if (targetProfile && !profileReady(targetProfile)) {
+      showToast('This AI Profile is not set up yet. Create an API profile in Settings, then link it to this profile in the Library.', 'error');
+      return;
     }
 
     handleSendMessage(finalContent, finalTargetId, pendingFiles);
@@ -1376,8 +1393,11 @@ export default function ChatWorkspaceView() {
                                       : 'text-gray-300 hover:bg-white/5 border border-transparent'
                                       }`}
                                   >
-                                    <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: p.color }} />
-                                    <span className="truncate font-sans">{p.name}</span>
+                                    <span className={`w-2 h-2 rounded-full shrink-0 ${p.needsSetup ? 'opacity-40' : ''}`} style={{ backgroundColor: p.color }} />
+                                    <span className={`flex-1 min-w-0 truncate font-sans ${p.needsSetup && selectedTargetId !== p.id ? 'text-gray-500' : ''}`}>{p.name}</span>
+                                    {p.needsSetup && (
+                                      <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0 cursor-help" data-tooltip="To activate: create an API profile in Settings, then link it to this profile in the Library." />
+                                    )}
                                   </button>
                                 ))}
                               </div>
@@ -1446,11 +1466,13 @@ export default function ChatWorkspaceView() {
                     </Popover>
                   </div>
 
-                  {/* Execution submit button */}
+                  {/* Execution submit button. Wrapper carries the tooltip so it still shows
+                      when the button is disabled for lack of a configured AI Profile. */}
+                  <span data-tooltip={(!isGenerating && !canSend) ? 'This AI Profile needs setup: create an API profile in Settings, then link it in the Library.' : undefined} className="shrink-0">
                   <button
                     type="button"
                     onClick={isGenerating ? handleCancelGeneration : handleSend}
-                    disabled={(!isGenerating && !inputValue.trim() && pendingFiles.length === 0) || (displayProfiles.length === 0 && displayWorkflows.length === 0)}
+                    disabled={(!isGenerating && !inputValue.trim() && pendingFiles.length === 0) || (displayProfiles.length === 0 && displayWorkflows.length === 0) || (!isGenerating && !canSend)}
                     onMouseEnter={() => setIsHoveringSend(true)}
                     onMouseLeave={() => setIsHoveringSend(false)}
                     className={`shrink-0 w-9 h-9 mb-0.5 rounded-full flex items-center justify-center shadow-md transition-all active:scale-95 cursor-pointer border ${isGenerating
@@ -1470,6 +1492,7 @@ export default function ChatWorkspaceView() {
                       <Send className="w-4 h-4" />
                     )}
                   </button>
+                  </span>
                 </div>
 
               </div>

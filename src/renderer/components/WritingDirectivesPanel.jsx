@@ -63,7 +63,7 @@ export default function WritingDirectivesPanel({ workspaceId, electronAPI, onClo
 
       <div className="flex-1 overflow-y-auto custom-scrollbar px-3 py-3 flex flex-col gap-2">
         {directives.length === 0 && (
-          <p className="text-xs text-gray-600 leading-relaxed">No directives yet. Add one below — e.g. “Keep a formal, third-person tone” or “British spelling”.</p>
+          <p className="text-xs text-gray-600 leading-relaxed">No directives yet. Add one below, e.g. “Keep a formal, third-person tone” or “British spelling”.</p>
         )}
         {directives.map(d => (
           <div key={d.id} className="group rounded-lg border border-gray-800 bg-[#0a161d]/60 p-2 text-xs text-gray-300">

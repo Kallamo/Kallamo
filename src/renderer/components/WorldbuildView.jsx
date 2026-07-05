@@ -3,10 +3,13 @@ import { createPortal } from 'react-dom';
 import {
   Plus, Search, BookOpen, MapPin, Package, Users, Flag, User,
   Sparkles, Trash2, Save, X, Pencil, Check, Link2, Globe, Tag, ScrollText, Ghost, Info, Replace,
+  Lock, ShieldCheck, RefreshCw, Upload, Download,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import Button from './ui/Button';
 import Popover from './ui/Popover';
+import ConfirmDialog from './ui/ConfirmDialog';
+import ExportWorldbuildModal from './modals/ExportWorldbuildModal';
 
 // Each entity type carries its own personality: a friendly label, an icon, and a
 // tonal palette (static classes so Tailwind keeps them) used for its medallion and
@@ -54,6 +57,15 @@ const ABUNDANCE_HELP = [
 ];
 const RELATIONSHIP_LABELS = ['Father', 'Mother', 'Sibling', 'Child', 'Friend', 'Rival', 'Enemy', 'Mentor', 'Ally', 'Lover'];
 
+// Friendly labels for the data fields the AI enrichment can touch, used by the review
+// panel that stages 'review'-policy proposals.
+const FIELD_LABELS = {
+  status: 'Status', age: 'Age', role: 'Role', abilities: 'Abilities',
+  disposition: 'Disposition', nature: 'Nature', abundance: 'Abundance', threat: 'Threat',
+  description: 'Description', locationType: 'Type', itemType: 'Type', content: 'Content',
+};
+const fieldLabel = (f) => FIELD_LABELS[f] || f;
+
 // Frosted dark inputs: their own dark backing guarantees legible text over BOTH
 // light and dark workspace backgrounds, while the blur keeps the background alive.
 const FIELD = 'wb-input w-full bg-[#06121a]/75 backdrop-blur-md border border-white/15 text-gray-100 text-sm rounded-lg px-3 py-2 placeholder-gray-400/70 focus:outline-none focus:border-accent/70 focus:bg-[#06121a]/90 transition-colors';
@@ -65,6 +77,35 @@ const LSelect = ({ children, ...p }) => <select {...p} className={`${FIELD} curs
 const StateTag = ({ map, value }) => {
   const s = map[value]; if (!s) return null;
   return <span className={`inline-flex items-center text-[10px] font-bold uppercase tracking-wider border rounded-full px-2 py-0.5 ${s.cls}`}>{s.label}</span>;
+};
+
+// Per-entity AI write permission, used by the "Update entities" enrichment pass:
+// open = AI writes directly, review = AI stages changes for approval, locked = the
+// enrichment skips it entirely (still readable by search/tagging). Stored in
+// data.aiPolicy; default 'review'.
+const AI_POLICY = {
+  open:   { label: 'Open',   icon: Pencil,      tip: 'AI can edit this entity freely',        active: 'bg-accent/20 text-accent border-accent/40' },
+  review: { label: 'Review', icon: ShieldCheck, tip: 'AI edits are staged for your approval', active: 'bg-amber-400/15 text-amber-200 border-amber-400/40' },
+  locked: { label: 'Locked', icon: Lock,        tip: 'AI can read but never edit this entity', active: 'bg-slate-400/15 text-slate-200 border-slate-400/40' },
+};
+const AiPolicyControl = ({ value, onChange }) => {
+  const cur = AI_POLICY[value] ? value : 'review';
+  return (
+    <div className="flex flex-col items-end gap-1 shrink-0">
+      <div className="inline-flex rounded-lg border border-white/10 bg-black/20 p-0.5">
+        {Object.entries(AI_POLICY).map(([k, v]) => {
+          const Icon = v.icon; const on = k === cur;
+          return (
+            <button key={k} type="button" onClick={() => onChange(k)} data-tooltip={v.tip}
+              className={`p-1.5 rounded-md transition-colors cursor-pointer ${on ? v.active + ' border' : 'text-gray-500 hover:text-gray-300 border border-transparent'}`}>
+              <Icon className="w-3.5 h-3.5" />
+            </button>
+          );
+        })}
+      </div>
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">AI: {AI_POLICY[cur].label}</span>
+    </div>
+  );
 };
 
 // A select whose options come from a keyed state map (STATUS/DISPOSITION).
@@ -317,7 +358,10 @@ function MemberRoles({ links, options, onAdd, onSetRole, onRemove, disabled }) {
 }
 
 export default function WorldbuildView({ chat, electronAPI }) {
-  const { showToast } = useApp();
+  const { showToast, settings } = useApp();
+  // Entity enrichment (and world tagging) run on the dedicated System AI only. Without one
+  // the "Update entities" button stays visible but disabled, with a tooltip pointing here.
+  const hasSystemAi = !!settings?.advanced?.systemApiProfileId;
   const workspaceId = chat?.id;
 
   const [entities, setEntities] = useState([]);
@@ -332,6 +376,11 @@ export default function WorldbuildView({ chat, electronAPI }) {
   const [saving, setSaving] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const createRef = useRef(null);
+  const [enriching, setEnriching] = useState(false);
+  const [enrichProgress, setEnrichProgress] = useState(null);
+  const [mergePrompt, setMergePrompt] = useState(null); // { id, name } while choosing merge priority
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const isNew = !selected?.id;
   const docTitle = (id) => documents.find(d => d.id === id)?.title;
@@ -367,7 +416,7 @@ export default function WorldbuildView({ chat, electronAPI }) {
   }, [electronAPI]);
 
   const openEntity = async (en) => {
-    setEditingSection(null); setCharTab('data');
+    setEditingSection(null); setCharTab('data'); setMergePrompt(null);
     setSelected({ id: en.id, type: en.type, canonicalName: en.canonicalName || '', aliases: (en.aliases || []).join(', '), lore: en.lore || '', loreDocumentId: en.loreDocumentId || '', status: en.status || 'confirmed', data: en.data || {} });
     await loadRelations(en);
   };
@@ -393,6 +442,7 @@ export default function WorldbuildView({ chat, electronAPI }) {
     try {
       const ids = loreDocIds();
       const data = { ...(selected.data || {}), loreDocumentIds: ids };
+      if (accept) delete data._imported; // accepting an imported proposal makes it a real entity
       const payload = { workspaceId, type: selected.type, canonicalName: selected.canonicalName.trim(), aliases: aliasesArr(selected.aliases), lore: selected.lore, loreDocumentId: ids[0] || null, data, status: accept ? 'confirmed' : selected.status };
       let id = selected.id;
       if (selected.id) { const r = await electronAPI.updateEntity(selected.id, payload); if (!r?.success) throw new Error(r?.error || 'update failed'); patch({ status: payload.status }); }
@@ -406,6 +456,137 @@ export default function WorldbuildView({ chat, electronAPI }) {
   const saveSection = async () => { const id = await persist(); if (id) setEditingSection(null); };
   const cancelSection = async () => { const cur = entities.find(e => e.id === selected.id); if (cur) await openEntity(cur); setEditingSection(null); };
   const remove = async () => { if (!selected?.id) { setSelected(null); return; } setSaving(true); try { await electronAPI.deleteEntity(selected.id); setSelected(null); await load(); } finally { setSaving(false); } };
+
+  // Folding a proposal into an existing entity: absorbs the name as an alias, repoints its
+  // tags + relation edges, combines data/lore (with `prefer` deciding conflicts), deletes
+  // the source. Used for AI proposals ("this is really X") and imported duplicates.
+  const mergeInto = async (targetId, prefer = 'target') => {
+    if (!selected?.id || !targetId) return;
+    setSaving(true);
+    try {
+      const r = await electronAPI.mergeEntity(selected.id, targetId, prefer);
+      if (!r?.success) { showToast(`Merge failed: ${r?.error || 'unknown error'}`, 'error'); return; }
+      setMergePrompt(null);
+      await load();
+      if (r.entity) await openEntity(r.entity); else setSelected(null);
+    } catch (e) { showToast(`Merge failed: ${e.message}`, 'error'); }
+    finally { setSaving(false); }
+  };
+  // Picking a merge target: an imported entity carries its own data, so ask which side wins
+  // on conflicts; a bare AI proposal has nothing to weigh, so merge straight into the target.
+  const startMerge = (targetId) => {
+    const t = entities.find(e => e.id === targetId);
+    if (selected?.data?._imported) setMergePrompt({ id: targetId, name: t?.canonicalName || 'that entity' });
+    else mergeInto(targetId, 'target');
+  };
+  // Candidates a proposal can fold into: every other real (non-proposed) entity.
+  const mergeTargets = useMemo(() => entities.filter(e => e.id !== selected?.id && e.status !== 'proposed'), [entities, selected]);
+
+  // Per-entity AI write permission. Persists immediately for saved entities; for an
+  // unsaved draft it just rides along in data until the first save.
+  const setAiPolicy = async (policy) => {
+    patchData({ aiPolicy: policy });
+    if (!selected?.id) return;
+    try {
+      const data = { ...(selected.data || {}), aiPolicy: policy };
+      const r = await electronAPI.updateEntity(selected.id, { data });
+      if (!r?.success) { showToast(`Could not change AI permission: ${r?.error || 'unknown error'}`, 'error'); return; }
+      await load();
+    } catch (e) { showToast(`Could not change AI permission: ${e.message}`, 'error'); }
+  };
+
+  // Update entities: read each non-locked entity's related chunks and let the AI refresh it.
+  // The run lives in the main process, so it outlives this view. On mount we restore the
+  // lock from the main-process status, and a broadcast completion event clears it — so
+  // switching away and back keeps the overlay while the update is still running.
+  useEffect(() => {
+    if (!electronAPI.onEnrichEntitiesProgress) return;
+    return electronAPI.onEnrichEntitiesProgress((p) => setEnrichProgress(p));
+  }, [electronAPI]);
+
+  // Restore the overlay if an update is already in flight when this view (re)mounts.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!electronAPI.getEnrichStatus) return;
+      const s = await electronAPI.getEnrichStatus();
+      if (cancelled || !s?.running || (s.workspaceId && s.workspaceId !== workspaceId)) return;
+      setEnriching(true);
+      if (s.progress) setEnrichProgress(s.progress);
+    })();
+    return () => { cancelled = true; };
+  }, [electronAPI, workspaceId]);
+
+  // Completion is broadcast, so it clears the lock and refreshes even if a different mount
+  // of this view started the run. A ref keeps the handler's closure current without
+  // re-subscribing on every render.
+  const onEnrichComplete = async (res) => {
+    setEnriching(false); setEnrichProgress(null);
+    if (res && res.workspaceId && res.workspaceId !== workspaceId) return;
+    if (res && res.success) {
+      await load();
+      if (selected?.id) { const cur = (await electronAPI.getEntity(selected.id))?.entity; if (cur) await openEntity(cur); }
+      const bits = [`${res.updated} updated`];
+      if (res.staged) bits.push(`${res.staged} staged for review`);
+      if (res.skippedNoChunks) bits.push(`${res.skippedNoChunks} had no linked passages`);
+      if (res.failed) bits.push(`${res.failed} failed`);
+      showToast(`Update complete: ${bits.join(', ')}.`, res.failed ? 'error' : 'success');
+    } else if (res) {
+      showToast(`Update failed: ${res.error || 'unknown error'}`, 'error');
+    }
+  };
+  const onEnrichCompleteRef = useRef(onEnrichComplete);
+  onEnrichCompleteRef.current = onEnrichComplete;
+  useEffect(() => {
+    if (!electronAPI.onEnrichEntitiesComplete) return;
+    return electronAPI.onEnrichEntitiesComplete((res) => onEnrichCompleteRef.current(res));
+  }, [electronAPI]);
+
+  const runEnrichment = async () => {
+    if (enriching || !workspaceId) return;
+    if (!hasSystemAi) { showToast('Set a System AI in Settings → Engine & Memory to update entities.', 'error'); return; }
+    setEnriching(true); setEnrichProgress(null);
+    // The completion event drives the toast, reload and clearing of the overlay. Here we
+    // only surface a failure to even start the run (e.g. one is already in flight).
+    try {
+      const r = await electronAPI.enrichEntities(workspaceId);
+      if (r && r.success === false) { setEnriching(false); showToast(`Update failed: ${r.error || 'unknown error'}`, 'error'); }
+    } catch (e) { setEnriching(false); showToast(`Update failed: ${e.message}`, 'error'); }
+  };
+
+  // Export this workspace's Worldbuild to a portable file; import merges one back in
+  // (de-duped by name+type, non-destructive).
+  const exportWorld = async () => {
+    const r = await electronAPI.exportWorldbuild(workspaceId);
+    if (r?.cancelled) return;
+    if (!r?.success) { showToast(`Export failed: ${r?.error || 'unknown error'}`, 'error'); return; }
+    const ent = `${r.entities} ${r.entities === 1 ? 'entity' : 'entities'}`;
+    const con = r.links ? ` and ${r.links} ${r.links === 1 ? 'connection' : 'connections'}` : '';
+    showToast(`Exported ${ent}${con}.`, 'success');
+  };
+  const importWorld = async () => {
+    const r = await electronAPI.importWorldbuild(workspaceId);
+    if (r?.cancelled) return;
+    if (!r?.success) { showToast(`Import failed: ${r?.error || 'unknown error'}`, 'error'); return; }
+    await load();
+    const linkBit = r.linksAdded ? ` and ${r.linksAdded} link${r.linksAdded === 1 ? '' : 's'}` : '';
+    showToast(`Imported ${r.entitiesAdded} entit${r.entitiesAdded === 1 ? 'y' : 'ies'}${linkBit} for review. Accept, merge, or dismiss each in the sidebar.`, 'success');
+  };
+
+  // Resolve a staged 'review' enrichment proposal (data._enrichPending). Accept applies
+  // the named fields/lore to the live record, reject drops them; the sheet reloads so the
+  // remaining staged bits (if any) stay visible.
+  const resolveReview = async (accept = {}, reject = {}) => {
+    if (!selected?.id) return;
+    setSaving(true);
+    try {
+      const r = await electronAPI.resolveEnrichReview(selected.id, accept, reject);
+      if (!r?.success) { showToast(`Review failed: ${r?.error || 'unknown error'}`, 'error'); return; }
+      await load();
+      if (r.entity) await openEntity(r.entity);
+    } catch (e) { showToast(`Review failed: ${e.message}`, 'error'); }
+    finally { setSaving(false); }
+  };
 
   const reloadRel = async () => { await loadRelations({ id: selected.id, type: selected.type }); await load(); };
   // Every link op reports failure loudly — a silent SQL error once made every add
@@ -427,6 +608,7 @@ export default function WorldbuildView({ chat, electronAPI }) {
     return list.sort((a, b) => (TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type)) || a.canonicalName.localeCompare(b.canonicalName));
   }, [entities, search, filterType]);
   const proposedCount = useMemo(() => entities.filter(e => e.status === 'proposed').length, [entities]);
+  const exportableCount = useMemo(() => entities.filter(e => e.status !== 'proposed').length, [entities]);
 
   const isResource = selected?.type === 'Items' && (selected?.data?.itemType || '') === 'Resource';
   const isGear = selected?.type === 'Items' && !isResource;
@@ -650,7 +832,38 @@ export default function WorldbuildView({ chat, electronAPI }) {
   };
 
   return (
-    <div className="flex-1 flex flex-col md:flex-row h-full overflow-hidden bg-[#000508]/40 select-none">
+    <div className="flex-1 flex flex-col md:flex-row h-full overflow-hidden bg-[#000508]/40 select-none relative">
+      {showExportModal && createPortal(
+        <ExportWorldbuildModal
+          entityCount={exportableCount}
+          onClose={() => setShowExportModal(false)}
+          onConfirm={() => { setShowExportModal(false); exportWorld(); }}
+        />, document.body)}
+      {confirmDelete && selected && (
+        <ConfirmDialog
+          tone="danger"
+          title="Delete entity"
+          message={<>The {meta(selected.type).label.toLowerCase()} <strong className="text-gray-200">“{selected.canonicalName}”</strong> will be permanently deleted, along with its connections and story tags. This cannot be undone.</>}
+          actions={[
+            { label: 'Cancel', variant: 'ghost', onClick: () => setConfirmDelete(false) },
+            { label: 'Delete', variant: 'danger', autoFocus: true, loading: saving, onClick: async () => { await remove(); setConfirmDelete(false); } },
+          ]}
+          onClose={() => setConfirmDelete(false)}
+        />
+      )}
+      {enriching && (
+        <div className="absolute inset-0 z-[70] flex flex-col items-center justify-center gap-3 bg-[#000508]/80 backdrop-blur-sm">
+          <RefreshCw className="w-7 h-7 text-accent animate-spin" />
+          <div className="text-center">
+            <p className="text-sm font-bold text-white">Updating your world…</p>
+            <p className="caption mt-1">
+              {enrichProgress?.total
+                ? `Reading passages for ${enrichProgress.name || 'your entities'} (${Math.min(enrichProgress.done + 1, enrichProgress.total)}/${enrichProgress.total})`
+                : 'Reading your story and refreshing each entity.'}
+            </p>
+          </div>
+        </div>
+      )}
       {/* Sidebar */}
       <div className="w-full md:w-72 shrink-0 flex flex-col h-full overflow-hidden border-r border-gray-800/40 bg-[#011419]/25 backdrop-blur-md">
         <div className="px-3 py-3 border-b border-gray-800/80 bg-[#011419]/35 flex items-center justify-between">
@@ -659,6 +872,27 @@ export default function WorldbuildView({ chat, electronAPI }) {
         </div>
 
         <div className="p-3 space-y-3">
+          {/* Secondary actions: Update entities (left) + Import / Export (right). Sits
+              above Create so the primary action stays the most prominent. */}
+          <div className="flex items-center gap-2">
+            {/* Wrapper carries the tooltip so it still shows while the button is disabled
+                (a disabled button has pointer-events: none). */}
+            <div className="flex-1 min-w-0" data-tooltip={hasSystemAi
+              ? "Read your story and refresh each entity's details (skips locked ones)"
+              : 'Set a System AI in Settings → Engine & Memory to update entities.'}>
+              <Button fullWidth size="sm" variant="ghost" icon={RefreshCw} loading={enriching}
+                disabled={enriching || entities.length === 0 || !hasSystemAi}
+                onClick={runEnrichment}>
+                Update entities
+              </Button>
+            </div>
+            <Button size="sm" variant="ghost" icon={Upload} onClick={importWorld}
+              data-tooltip="Import a Worldbuild from a file (merges in)" />
+            <div data-tooltip={exportableCount === 0 ? 'Nothing to export yet' : 'Export this Worldbuild to a file'}>
+              <Button size="sm" variant="ghost" icon={Download} onClick={() => setShowExportModal(true)} disabled={exportableCount === 0} />
+            </div>
+          </div>
+
           <div className="relative" ref={createRef}>
             <Button fullWidth icon={Plus} onClick={() => setShowCreate(v => !v)}>Create</Button>
             <Popover anchorRef={createRef} open={showCreate} onClose={() => setShowCreate(false)} className="!bg-[#021a20] backdrop-blur-sm">
@@ -690,6 +924,7 @@ export default function WorldbuildView({ chat, electronAPI }) {
                 <span className={`w-7 h-7 rounded-md border flex items-center justify-center shrink-0 ${t.medallion}`}><Icon className="w-3.5 h-3.5" /></span>
                 <span className={`flex-1 min-w-0 truncate text-sm font-medium ${active ? 'text-accent' : 'text-gray-200'}`}>{en.canonicalName}</span>
                 {en.status === 'proposed' && <Sparkles className="w-3.5 h-3.5 text-amber-300 shrink-0" data-tooltip="AI proposal, needs accept" />}
+                {en.status !== 'proposed' && en.data?._enrichPending && <ShieldCheck className="w-3.5 h-3.5 text-sky-300 shrink-0" data-tooltip="AI updates awaiting review" />}
               </button>
             ); })}
         </div>
@@ -710,9 +945,27 @@ export default function WorldbuildView({ chat, electronAPI }) {
             {/* Header band */}
             <div className={`rounded-2xl border ${m.ring} bg-[#0a1721]/60 backdrop-blur-md p-5`}>
               {selected.status === 'proposed' && (
-                <div className="flex items-center justify-between gap-3 mb-4 bg-amber-400/10 border border-amber-400/30 rounded-xl px-3 py-2">
-                  <span className="flex items-center gap-2 text-xs font-semibold text-amber-200 min-w-0"><Sparkles className="w-4 h-4 shrink-0" /> AI proposal. Accept to keep it.</span>
-                  <Button size="sm" loading={saving} onClick={() => persist({ accept: true })}>Accept</Button>
+                <div className="flex flex-col gap-2 mb-4 bg-amber-400/10 border border-amber-400/30 rounded-xl px-3 py-2.5">
+                  <span className="flex items-center gap-2 text-xs font-semibold text-amber-200 min-w-0">
+                    <Sparkles className="w-4 h-4 shrink-0" />
+                    {selected.data?._imported
+                      ? 'Imported from a Worldbuild package. Keep it as a new entity, merge it into an existing one, or dismiss it.'
+                      : 'The AI proposed this entity. Keep it, fold it into an existing one, or dismiss it.'}
+                  </span>
+                  {mergePrompt ? (
+                    <div className="flex items-center flex-wrap gap-2">
+                      <span className="text-xs text-amber-100/90 min-w-0">Merge into “{mergePrompt.name}”. On conflicting details, keep:</span>
+                      <Button size="sm" loading={saving} onClick={() => mergeInto(mergePrompt.id, 'source')}>Imported</Button>
+                      <Button size="sm" loading={saving} onClick={() => mergeInto(mergePrompt.id, 'target')}>Existing</Button>
+                      <Button size="sm" variant="ghost" loading={saving} onClick={() => setMergePrompt(null)}>Cancel</Button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center flex-wrap gap-2">
+                      <Button size="sm" loading={saving} onClick={() => persist({ accept: true })}>Accept as new</Button>
+                      <PickerButton icon={Link2} label="Merge into…" title="Fold this into" options={mergeTargets} onPick={startMerge} />
+                      <Button size="sm" variant="ghost" loading={saving} onClick={remove}>Dismiss</Button>
+                    </div>
+                  )}
                 </div>
               )}
               {(isNew || editingSection === '__header__') ? (
@@ -729,6 +982,7 @@ export default function WorldbuildView({ chat, electronAPI }) {
               ) : (
                 <div className="flex items-start gap-4">
                   <span className={`w-14 h-14 rounded-xl border flex items-center justify-center shrink-0 ${m.medallion}`}>{React.createElement(m.icon, { className: 'w-7 h-7' })}</span>
+                  {!isNew && selected.status !== 'proposed' && <div className="order-last"><AiPolicyControl value={selected.data?.aiPolicy} onChange={setAiPolicy} /></div>}
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <h1 className="text-2xl font-bold text-white truncate">{selected.canonicalName}</h1>
@@ -745,6 +999,93 @@ export default function WorldbuildView({ chat, electronAPI }) {
                 </div>
               )}
             </div>
+
+            {/* Staged AI enrichment (review policy): per-field accept/reject */}
+            {!isNew && selected.status !== 'proposed' && selected.data?._enrichPending && (() => {
+              const pending = selected.data._enrichPending;
+              const pData = (pending.data && typeof pending.data === 'object') ? pending.data : {};
+              const fields = Object.keys(pData);
+              const hasLore = pending.lore != null && String(pending.lore).trim() !== '';
+              const links = Array.isArray(pending.links) ? pending.links : [];
+              const chapters = Array.isArray(pending.chapters) ? pending.chapters : [];
+              const linkKey = (l) => `${l.relKey}:${l.targetId}:${l.label || ''}`;
+              const allFields = fields.slice();
+              const allLinks = links.map(linkKey);
+              const allChapters = chapters.map(c => c.id);
+              return (
+                <div className="rounded-2xl border border-sky-400/30 bg-sky-400/[0.06] backdrop-blur-md p-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-sky-300 shrink-0" />
+                    <span className="text-xs font-semibold text-sky-100">The AI suggested updates from your story. Accept or reject each change.</span>
+                  </div>
+                  <div className="space-y-2">
+                    {fields.map(f => {
+                      const cur = selected.data?.[f];
+                      const curStr = cur == null || String(cur).trim() === '' ? '(empty)' : String(cur);
+                      return (
+                        <div key={f} className="flex items-start gap-3 bg-black/20 border border-white/10 rounded-lg px-3 py-2">
+                          <div className="min-w-0 flex-1">
+                            <span className="block text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">{fieldLabel(f)}</span>
+                            <div className="flex items-center flex-wrap gap-2 text-sm">
+                              <span className="text-gray-500 line-through">{curStr}</span>
+                              <span className="text-gray-500">→</span>
+                              <span className="text-sky-100 font-medium">{String(pData[f])}</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button onClick={() => resolveReview({ fields: [f] }, {})} disabled={saving} data-tooltip="Accept" className="p-1.5 rounded-md text-emerald-300 hover:bg-emerald-400/15 transition-colors cursor-pointer"><Check className="w-3.5 h-3.5" /></button>
+                            <button onClick={() => resolveReview({}, { fields: [f] })} disabled={saving} data-tooltip="Reject" className="p-1.5 rounded-md text-gray-400 hover:bg-white/10 transition-colors cursor-pointer"><X className="w-3.5 h-3.5" /></button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {hasLore && (
+                      <div className="bg-black/20 border border-white/10 rounded-lg px-3 py-2">
+                        <div className="flex items-center justify-between gap-3 mb-1">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Lore</span>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button onClick={() => resolveReview({ lore: true }, {})} disabled={saving} data-tooltip="Accept" className="p-1.5 rounded-md text-emerald-300 hover:bg-emerald-400/15 transition-colors cursor-pointer"><Check className="w-3.5 h-3.5" /></button>
+                            <button onClick={() => resolveReview({}, { lore: true })} disabled={saving} data-tooltip="Reject" className="p-1.5 rounded-md text-gray-400 hover:bg-white/10 transition-colors cursor-pointer"><X className="w-3.5 h-3.5" /></button>
+                          </div>
+                        </div>
+                        <p className="text-sm text-sky-100 leading-relaxed whitespace-pre-wrap">{String(pending.lore)}</p>
+                      </div>
+                    )}
+                    {links.map(l => { const k = linkKey(l); return (
+                      <div key={k} className="flex items-center gap-3 bg-black/20 border border-white/10 rounded-lg px-3 py-2">
+                        <Link2 className="w-3.5 h-3.5 text-sky-300 shrink-0" />
+                        <div className="min-w-0 flex-1 text-sm">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mr-2">{l.relLabel || l.relKey}</span>
+                          <span className="text-sky-100 font-medium">{l.targetName}</span>
+                          {l.label && <span className="text-accent/90"> · {l.label}</span>}
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button onClick={() => resolveReview({ links: [k] }, {})} disabled={saving} data-tooltip="Accept" className="p-1.5 rounded-md text-emerald-300 hover:bg-emerald-400/15 transition-colors cursor-pointer"><Check className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => resolveReview({}, { links: [k] })} disabled={saving} data-tooltip="Reject" className="p-1.5 rounded-md text-gray-400 hover:bg-white/10 transition-colors cursor-pointer"><X className="w-3.5 h-3.5" /></button>
+                        </div>
+                      </div>
+                    ); })}
+                    {chapters.map(c => (
+                      <div key={c.id} className="flex items-center gap-3 bg-black/20 border border-white/10 rounded-lg px-3 py-2">
+                        <ScrollText className="w-3.5 h-3.5 text-sky-300 shrink-0" />
+                        <div className="min-w-0 flex-1 text-sm">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mr-2">Chapter</span>
+                          <span className="text-sky-100 font-medium">{c.title || 'Untitled'}</span>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button onClick={() => resolveReview({ chapters: [c.id] }, {})} disabled={saving} data-tooltip="Accept" className="p-1.5 rounded-md text-emerald-300 hover:bg-emerald-400/15 transition-colors cursor-pointer"><Check className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => resolveReview({}, { chapters: [c.id] })} disabled={saving} data-tooltip="Reject" className="p-1.5 rounded-md text-gray-400 hover:bg-white/10 transition-colors cursor-pointer"><X className="w-3.5 h-3.5" /></button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex items-center justify-end gap-2 pt-1">
+                    <Button size="sm" variant="ghost" loading={saving} onClick={() => resolveReview({}, { fields: allFields, lore: true, links: allLinks, chapters: allChapters })}>Reject all</Button>
+                    <Button size="sm" loading={saving} onClick={() => resolveReview({ fields: allFields, lore: true, links: allLinks, chapters: allChapters }, {})}>Accept all</Button>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Character tab switcher */}
             {selected.type === 'Characters' && !isNew && (
@@ -780,7 +1121,7 @@ export default function WorldbuildView({ chat, electronAPI }) {
               <>
                 {sections.map(renderSection)}
                 <div className="flex items-center gap-2 pt-1">
-                  <Button variant="danger" size="sm" icon={Trash2} loading={saving} onClick={remove}>Delete</Button>
+                  <Button variant="danger" size="sm" icon={Trash2} loading={saving} onClick={() => setConfirmDelete(true)}>Delete</Button>
                   {unsaved && <span className="caption flex items-center gap-1"><Link2 className="w-3 h-3" /> Save to unlock relations</span>}
                 </div>
               </>

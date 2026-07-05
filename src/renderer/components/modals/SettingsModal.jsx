@@ -82,6 +82,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [embeddingModelName, setEmbeddingModelName] = useState(settings.advanced.embeddingModelName || '');
   const [systemApiProfileId, setSystemApiProfileId] = useState(settings.advanced.systemApiProfileId || '');
   const [systemModelName, setSystemModelName] = useState(settings.advanced.systemModelName || '');
+  const [allowAiEntityCreation, setAllowAiEntityCreation] = useState(settings.advanced.allowAiEntityCreation || false);
 
   // Models pre-defined on the selected System AI connection (drives the Model dropdown).
   const systemProfileModels = (() => {
@@ -108,16 +109,16 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const settingsRef = useRef({
     accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled, writingToolbar, smartTypography,
     chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug,
-    embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName
+    embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, allowAiEntityCreation
   });
 
   useEffect(() => {
     settingsRef.current = {
       accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled, writingToolbar,
       chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug,
-      embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName
+      embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, allowAiEntityCreation
     };
-  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, smartTypography, chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName]);
+  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, smartTypography, chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, allowAiEntityCreation]);
 
   // Handle immediate save for selects and color choices
   const updateSetting = async (category, key, value) => {
@@ -137,6 +138,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       if (key === 'ragDebug') setRagDebug(value);
       if (key === 'agenticDebug') setAgenticDebug(value);
       if (key === 'tokenDebug') setTokenDebug(value);
+      if (key === 'allowAiEntityCreation') setAllowAiEntityCreation(value);
       if (key === 'embeddingEngine') setEmbeddingEngine(value);
       if (key === 'embeddingApiProfileId') setEmbeddingApiProfileId(value);
       if (key === 'systemApiProfileId') { setSystemApiProfileId(value); setSystemModelName(''); }
@@ -165,6 +167,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         ragDebug: key === 'ragDebug' ? value : current.ragDebug,
         agenticDebug: key === 'agenticDebug' ? value : current.agenticDebug,
         tokenDebug: key === 'tokenDebug' ? value : current.tokenDebug,
+        allowAiEntityCreation: key === 'allowAiEntityCreation' ? value : current.allowAiEntityCreation,
         embeddingEngine: key === 'embeddingEngine' ? value : current.embeddingEngine,
         embeddingApiProfileId: key === 'embeddingApiProfileId' ? value : current.embeddingApiProfileId,
         embeddingModelName: current.embeddingModelName,
@@ -216,6 +219,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
           ragDebug: current.ragDebug,
           agenticDebug: current.agenticDebug,
           tokenDebug: current.tokenDebug,
+          allowAiEntityCreation: current.allowAiEntityCreation,
           embeddingEngine: current.embeddingEngine,
           embeddingApiProfileId: current.embeddingApiProfileId,
           embeddingModelName: key === 'embeddingModelName' ? value : current.embeddingModelName,
@@ -910,7 +914,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       <div className="p-4 flex items-center justify-between">
                         <div>
                           <span className="block text-sm text-gray-200 font-bold">Smart Typography</span>
-                          <span className="caption">Auto-convert as you type: curly quotes, dashes (-- → –, --- → —), ellipsis, ©™. Document only — never your chat.</span>
+                          <span className="caption">Auto-convert as you type: curly quotes, dashes (-- → –, --- → —), ellipsis, ©™. Document only, never your chat.</span>
                         </div>
                         <button
                           onClick={() => updateSetting('interface', 'smartTypography', !smartTypography)}
@@ -1059,6 +1063,27 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           </select>
                         </div>
                       </div>
+
+                      <div className="h-px bg-gray-800/50 w-full"></div>
+
+                      {/* World Index: let the AI create unregistered entities during tagging.
+                          Belongs with the System AI because tagging runs on it. */}
+                      <div className={`flex items-center justify-between ${!systemApiProfileId ? 'opacity-50' : ''}`}>
+                        <div className="pr-4">
+                          <span className="block text-sm text-gray-200 font-bold">Let the AI create new entities</span>
+                          <p className="caption">When indexing your chapters and chat, the System AI usually tags only entities that already exist in your Worldbuild. Turn this on to let it propose new ones for names it can't match, added to Worldbuild as pending suggestions you accept, merge, or dismiss. Off by default.{!systemApiProfileId && ' Requires a System AI above.'}</p>
+                        </div>
+                        <label className={`relative inline-flex items-center shrink-0 ${systemApiProfileId ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
+                          <input
+                            type="checkbox"
+                            checked={allowAiEntityCreation}
+                            disabled={!systemApiProfileId}
+                            onChange={(e) => updateSetting('advanced', 'allowAiEntityCreation', e.target.checked)}
+                            className="sr-only peer"
+                          />
+                          <div className="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
+                        </label>
+                      </div>
                     </div>
                   </div>
 
@@ -1108,13 +1133,13 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                         {(() => {
                           const pct = Math.round(similarity * 100);
                           let label, recommended = false;
-                          if (pct === 0) label = 'Everything is retrieved — no filtering applied.';
-                          else if (pct < 30) label = 'Very broad — maximum context, may include loosely related material.';
-                          else if (pct < 45) { label = 'Balanced — recommended for wide, exploratory questions.'; recommended = true; }
-                          else if (pct < 65) label = 'Moderate — a solid general-purpose setting.';
-                          else if (pct < 85) { label = 'Focused — recommended for specific, narrow lookups.'; recommended = true; }
-                          else if (pct < 100) label = 'Strict — only strongly matching content gets through.';
-                          else label = 'Exact only — keeps just the closest matches.';
+                          if (pct === 0) label = 'Everything is retrieved. No filtering applied.';
+                          else if (pct < 30) label = 'Very broad — Maximum context, may include loosely related material.';
+                          else if (pct < 45) { label = 'Balanced — Recommended for wide, exploratory questions.'; recommended = true; }
+                          else if (pct < 65) label = 'Moderate — A solid general-purpose setting.';
+                          else if (pct < 85) { label = 'Focused — Recommended for specific, narrow lookups.'; recommended = true; }
+                          else if (pct < 100) label = 'Strict — Only strongly matching content gets through.';
+                          else label = 'Exact only — Keeps just the closest matches.';
                           return (
                             <p className={`mt-1.5 font-medium ${recommended ? 'caption-accent' : 'caption'}`}>
                               {label}
@@ -1219,7 +1244,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                                 <span className="text-gray-200 font-bold">Local AI Engine Status</span>
                                 <span className="caption">
                                   {engineStatus.installed
-                                    ? `Installed (${engineStatus.platform}-${engineStatus.arch})` 
+                                    ? `Installed (${engineStatus.platform}-${engineStatus.arch})`
                                     : 'Not Installed (Will download on demand)'}
                                 </span>
                               </div>
@@ -1536,7 +1561,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                     <div className="space-y-1.5 pr-4">
                       <span className="text-[10px] text-accent font-bold uppercase tracking-widest block mb-1 select-none pointer-events-none">Creator</span>
                       <h4 className="text-base font-bold text-white leading-tight">Jonathan Ferreira da Conceição</h4>
-                      
+
                       <div className="flex flex-wrap gap-2 mt-2">
                         {/* GitHub tag */}
                         <div className="flex items-center space-x-1.5 bg-[#101c24]/85 border border-gray-800 text-gray-300 text-[10px] font-semibold px-2 py-0.5 rounded-full select-none">
@@ -1551,7 +1576,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           <div className="flex space-x-1.5 items-center mr-0.5">
                             {/* Discord icon */}
                             <svg viewBox="0 0 127.14 96.36" className="w-3 h-3 text-gray-400" fill="currentColor">
-                              <path d="M107.7,8.07A105.15,105.15,0,0,0,77.26,0a77.19,77.19,0,0,0-3.3,6.83A96.67,96.67,0,0,0,53.22,6.83,77.19,77.19,0,0,0,49.88,0,105.15,105.15,0,0,0,19.44,8.07C3.66,31.58-1.86,54.65,1,77.53A105.73,105.73,0,0,0,32,96.36a77.7,77.7,0,0,0,6.63-10.85,68.43,68.43,0,0,1-10.5-5c.9-.65,1.76-1.34,2.58-2.06a75.14,75.14,0,0,0,72.63,0c.82.72,1.68,1.4,2.58,2.06a68.43,68.43,0,0,1-10.5,5,77.7,77.7,0,0,0,6.63,10.85,105.73,105.73,0,0,0,31-18.83C129.87,49.86,123.75,26.9,107.7,8.07ZM42.45,65.69C36.18,65.69,31,60,31,53S36.18,40.36,42.45,40.36,53.83,46,53.83,53,48.72,65.69,42.45,65.69ZM84.69,65.69C78.41,65.69,73.24,60,73.24,53S78.41,40.36,84.69,40.36,96.07,46,96.07,53,91,65.69,84.69,65.69Z"/>
+                              <path d="M107.7,8.07A105.15,105.15,0,0,0,77.26,0a77.19,77.19,0,0,0-3.3,6.83A96.67,96.67,0,0,0,53.22,6.83,77.19,77.19,0,0,0,49.88,0,105.15,105.15,0,0,0,19.44,8.07C3.66,31.58-1.86,54.65,1,77.53A105.73,105.73,0,0,0,32,96.36a77.7,77.7,0,0,0,6.63-10.85,68.43,68.43,0,0,1-10.5-5c.9-.65,1.76-1.34,2.58-2.06a75.14,75.14,0,0,0,72.63,0c.82.72,1.68,1.4,2.58,2.06a68.43,68.43,0,0,1-10.5,5,77.7,77.7,0,0,0,6.63,10.85,105.73,105.73,0,0,0,31-18.83C129.87,49.86,123.75,26.9,107.7,8.07ZM42.45,65.69C36.18,65.69,31,60,31,53S36.18,40.36,42.45,40.36,53.83,46,53.83,53,48.72,65.69,42.45,65.69ZM84.69,65.69C78.41,65.69,73.24,60,73.24,53S78.41,40.36,84.69,40.36,96.07,46,96.07,53,91,65.69,84.69,65.69Z" />
                             </svg>
                             {/* Reddit icon */}
                             <svg viewBox="0 0 24 24" className="w-3 h-3 text-gray-400" fill="currentColor">

@@ -984,22 +984,55 @@ async function classifyAndTagSegment(chunkRecords, profile, workspaceId = null) 
     return { title, summary, chunkTags };
 }
 
+// Whether the "let the AI create unregistered entities" opt-in is on. Off by default,
+// so tagging stays confirmed-only unless the user turns it on in Engine & Memory.
+function allowAiEntityCreation() {
+    try {
+        const row = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
+        return !!(row && JSON.parse(row.value).allowAiEntityCreation);
+    } catch (e) { return false; }
+}
+
 // Persist the validated per-chunk tags into chunk_tags, mapping the classifier's
 // chunk index back to the real stored chunk id. Variable tags: tag=category,
 // entity=value. Runs in one transaction; never throws on a bad index.
 function applyChunkTags(chunkTags, chunkRecords, workspaceId = null) {
+    // World indexing (entity tagging) requires a dedicated System AI. Without one it is
+    // disabled everywhere — indexing only vectorizes, it does not tag. Central safety net
+    // for every tagging path (documents, chat, backfill).
+    if (!getSystemAi()) return 0;
     if (!Array.isArray(chunkTags) || !chunkTags.length) return 0;
     const insert = db.prepare('INSERT OR IGNORE INTO chunk_tags (chunkId, tag, entity) VALUES (?, ?, ?)');
+    // Opt-in: unresolved mentions become empty `proposed` entities instead of being
+    // dropped. Within one run a name is proposed once and reused across chunks (keyed
+    // by workspace|type|normalized-name); across runs resolveEntity finds the proposed
+    // row, so it is never re-proposed.
+    const allowCreate = allowAiEntityCreation();
+    const proposedCache = new Map();
     let rows = 0;
     db.transaction(() => {
         for (const entry of chunkTags) {
             const rec = chunkRecords[entry.chunkIndex];
             if (!rec || !rec.id) continue;
-            const ws = rec.ownerId || workspaceId;
+            // Prefer the caller's authoritative workspace; fall back to the chunk's
+            // ownerId only when it is absent (the all-chats backfill passes null).
+            // For Writing Desk documents ownerId is the documentId, so relying on it
+            // would scope the registry lookup to the wrong id.
+            const ws = workspaceId || rec.ownerId;
             for (const t of entry.tags) {
-                // Only tag mentions that resolve to an existing Worldbuild entity;
-                // unknown names are skipped (no proposal, no loose literal text).
-                const entityRef = resolveEntity(ws, t.tag, t.value);
+                let entityRef = resolveEntity(ws, t.tag, t.value);
+                if (!entityRef && allowCreate) {
+                    const key = `${ws || ''}|${t.tag}|${entitiesStore.normalizeName(t.value)}`;
+                    if (proposedCache.has(key)) {
+                        entityRef = proposedCache.get(key);
+                    } else {
+                        try {
+                            const ent = entitiesStore.createEntity({ workspaceId: ws, type: t.tag, canonicalName: t.value, status: 'proposed' });
+                            entityRef = ent && ent.id;
+                            if (entityRef) proposedCache.set(key, entityRef);
+                        } catch (e) { entityRef = null; }
+                    }
+                }
                 if (!entityRef) continue;
                 insert.run(rec.id, t.tag, entityRef);
                 rows++;
@@ -1216,20 +1249,22 @@ async function vectorizeDocument(documentId, progressCallback = null) {
         insertChunksToDb(documentId, 'document', vectors);
         added = vectors.length;
 
-        // Tag only the freshly embedded chunks (World index). Best-effort: a failed
-        // pass just leaves the new chunks untagged, vectorization still succeeds.
-        try {
-            const profile = db.prepare('SELECT * FROM writing_profiles LIMIT 1').get();
-            const records = vectors.map(v => ({ id: v.id, text: v.text, ownerId: doc.workspaceId }));
-            const BATCH = 12;
-            for (let i = 0; i < records.length; i += BATCH) {
-                if (progressCallback) progressCallback({ phase: 'tagging', done: Math.min(i + BATCH, records.length), total: records.length });
-                const batch = records.slice(i, i + BATCH);
-                const cls = await classifyAndTagSegment(batch, profile, doc.workspaceId);
-                applyChunkTags(cls.chunkTags, batch, doc.workspaceId);
+        // Tag only the freshly embedded chunks (World index). Requires a System AI —
+        // without one, indexing only vectorizes and this whole pass is skipped.
+        // Best-effort: a failed pass just leaves the new chunks untagged.
+        if (getSystemAi()) {
+            try {
+                const records = vectors.map(v => ({ id: v.id, text: v.text, ownerId: doc.workspaceId }));
+                const BATCH = 12;
+                for (let i = 0; i < records.length; i += BATCH) {
+                    if (progressCallback) progressCallback({ phase: 'tagging', done: Math.min(i + BATCH, records.length), total: records.length });
+                    const batch = records.slice(i, i + BATCH);
+                    const cls = await classifyAndTagSegment(batch, null, doc.workspaceId);
+                    applyChunkTags(cls.chunkTags, batch, doc.workspaceId);
+                }
+            } catch (e) {
+                console.error('[Vectorize Document] tagging failed (vectorization continues):', e.message);
             }
-        } catch (e) {
-            console.error('[Vectorize Document] tagging failed (vectorization continues):', e.message);
         }
     }
 
@@ -1252,6 +1287,9 @@ async function retagDocumentChunks(documentId, progressCallback = null) {
     ).all(documentId);
     if (!rows.length) return { tagged: 0, chunks: 0 };
 
+    // No System AI → tagging is disabled; don't wipe the existing tags for nothing.
+    if (!getSystemAi()) return { tagged: 0, chunks: rows.length, skipped: true };
+
     const del = db.prepare('DELETE FROM chunk_tags WHERE chunkId = ?');
     db.transaction(() => { for (const r of rows) del.run(r.id); })();
 
@@ -1270,6 +1308,312 @@ async function retagDocumentChunks(documentId, progressCallback = null) {
         }
     }
     return { tagged, chunks: rows.length };
+}
+
+// Tolerant object parse: grab the first {...} block and JSON.parse it. null on failure.
+function safeParseObject(body) {
+    if (!body) return null;
+    try {
+        const start = body.indexOf('{');
+        const end = body.lastIndexOf('}');
+        if (start === -1 || end === -1 || end < start) return null;
+        const o = JSON.parse(body.slice(start, end + 1));
+        return (o && typeof o === 'object' && !Array.isArray(o)) ? o : null;
+    } catch (e) { return null; }
+}
+
+// Which data fields the enrichment may set per type, and the closed vocabularies for
+// the ones that are enums. Anything outside the allowlist is ignored; enum values that
+// don't match are dropped. Mirrors the WorldbuildView editors.
+const ENRICH_ENUMS = {
+    status: ['alive', 'deceased', 'missing', 'unknown'],
+    disposition: ['hostile', 'neutral', 'friendly', 'unknown'],
+    abundance: ['Unique', 'Rare', 'Uncommon', 'Common', 'Abundant'],
+    threat: ['Harmless', 'Minor', 'Dangerous', 'Deadly', 'Legendary'],
+    itemType: ['Weapon', 'Armor', 'Artifact', 'Resource'],
+};
+// Each list mirrors the scalar `data` fields the WorldbuildView actually renders for
+// that type — nothing else. The AI may only fill what the user can see; it must never
+// invent fields (e.g. a Character has no "role"/"abilities", a Creature has no
+// "description"). Relational fields (owner, race, faction, habitat…) and chapter links
+// are edges, not data, and are handled separately.
+const ENRICH_FIELDS = {
+    Characters: ['status', 'age'],
+    Creatures: ['status', 'disposition', 'nature', 'abundance', 'threat', 'abilities'],
+    Locations: ['locationType'],
+    Items: ['itemType', 'abundance', 'description'],
+    Factions: ['description'],
+    Races: ['description'],
+    System: ['content'],
+};
+
+// The entity-to-entity edges the enrichment may propose per type, mirroring the relation
+// controls the WorldbuildView renders. `relType`/`single`/`labeled` match entities.setLink;
+// `from` says which end of the edge the entity sits on ('self' = fromId is this entity,
+// 'target' = fromId is the linked entity, e.g. an item owned_by a character). `targetType`
+// narrows name resolution. Only EXISTING entities are linked — enrichment never creates
+// new ones (only the tagger does that, when allowed). Derived-only relations (Race
+// members) are omitted.
+const ENRICH_RELATIONS = {
+    Characters: [
+        { key: 'race',          label: 'Race',         relType: 'is_race',      targetType: 'Races',      from: 'self',   single: true },
+        { key: 'factions',      label: 'Faction',      relType: 'member_of',    targetType: 'Factions',   from: 'self',   single: false },
+        { key: 'locations',     label: 'Location',     relType: 'connected_to', targetType: 'Locations',  from: 'self',   single: false },
+        { key: 'relationships', label: 'Relationship', relType: 'related_to',   targetType: 'Characters', from: 'self',   single: false, labeled: true },
+        { key: 'inventory',     label: 'Item held',    relType: 'owned_by',     targetType: 'Items',      from: 'target', single: true },
+    ],
+    Locations: [
+        { key: 'inside', label: 'Inside',         relType: 'inside', targetType: 'Locations',  from: 'self', single: true },
+        { key: 'leader', label: 'Owner / leader', relType: 'led_by', targetType: 'Characters', from: 'self', single: true },
+    ],
+    Items: [
+        { key: 'creator', label: 'Creator',     relType: 'created_by', targetType: 'Characters', from: 'self', single: true },
+        { key: 'owner',   label: 'Owner',       relType: 'owned_by',   targetType: 'Characters', from: 'self', single: true },
+        { key: 'foundIn', label: 'Where found', relType: 'found_in',   targetType: 'Locations',  from: 'self', single: false },
+    ],
+    Creatures: [
+        { key: 'habitat', label: 'Habitat', relType: 'found_in', targetType: 'Locations', from: 'self', single: false },
+    ],
+    Factions: [
+        { key: 'leader',     label: 'Leader',            relType: 'led_by',      targetType: 'Characters', from: 'self',   single: true },
+        { key: 'operatesIn', label: 'Area of operation', relType: 'operates_in', targetType: 'Locations',  from: 'self',   single: false },
+        { key: 'members',    label: 'Member',            relType: 'member_of',   targetType: 'Characters', from: 'target', single: false, labeled: true },
+    ],
+    Races: [],
+    System: [],
+};
+
+// The set of target ids this entity already links to for a given relation spec, so the
+// enrichment never re-proposes an edge that already exists.
+function existingLinkTargets(entityId, spec) {
+    const rows = spec.from === 'target'
+        ? entitiesStore.getLinksTo(entityId, spec.relType)
+        : entitiesStore.getLinksFrom(entityId, spec.relType);
+    return new Set(rows.map(r => r.entity && r.entity.id).filter(Boolean));
+}
+
+// Create one proposed edge. `from` decides which end the entity sits on: 'target' means
+// the edge runs from the linked entity into this one (e.g. an item owned_by a character),
+// so we swap the endpoints. `single` clears any prior edge of that (fromId, relType).
+function applyProposedLink(entityId, link, workspaceId) {
+    const fromId = link.from === 'target' ? link.targetId : entityId;
+    const toId = link.from === 'target' ? entityId : link.targetId;
+    entitiesStore.setLink({ workspaceId, fromId, relType: link.relType, toId, single: !!link.single, label: link.label || null });
+}
+
+// Chapters (Writing Desk documents) that mention this entity but are not yet linked to
+// its lore, derived deterministically from chunk_tags — no AI. `validDocs` maps id->title
+// for the workspace so we drop stale pointers and can label the proposal in the UI.
+function deriveChapterAdds(entityId, entity, validDocs) {
+    const rows = db.prepare(
+        `SELECT DISTINCT kc.ownerId AS id FROM chunk_tags ct JOIN knowledge_chunks kc ON ct.chunkId = kc.id
+         WHERE ct.entity = ? AND kc.ownerType = 'document'`
+    ).all(entityId);
+    const already = new Set(entitiesStore.linkedLoreDocIds(entity));
+    const adds = [];
+    for (const r of rows) {
+        if (!r.id || already.has(r.id) || !validDocs.has(r.id)) continue;
+        adds.push({ id: r.id, title: validDocs.get(r.id) });
+    }
+    return adds;
+}
+
+// Pick chunk texts in order within a char budget. When they overflow, keep a head + a
+// tail (recent state matters for status changes; the head preserves origin/lore) with
+// an elision marker, so the model still sees both ends in chronological order.
+function windowChunks(texts, budget = 16000) {
+    const joined = texts.join('\n\n');
+    if (joined.length <= budget) return joined;
+    const headBudget = Math.floor(budget * 0.4);
+    const head = [], tail = [];
+    let used = 0;
+    for (const t of texts) { if (used + t.length > headBudget) break; head.push(t); used += t.length + 2; }
+    let tailUsed = 0;
+    for (let i = texts.length - 1; i >= head.length; i--) {
+        if (tailUsed + texts[i].length > budget - used) break;
+        tail.unshift(texts[i]); tailUsed += texts[i].length + 2;
+    }
+    return head.join('\n\n') + '\n\n[…earlier passages omitted…]\n\n' + tail.join('\n\n');
+}
+
+// The "Update entities" enrichment pass. Reads each non-locked, confirmed
+// entity's related chunks in chronological order and lets the System AI refresh its lore,
+// a constrained set of data fields, AND its links to other existing entities (race, owner,
+// faction, habitat, relationships…). Chapter links are derived deterministically from the
+// tags, no AI. Per-entity aiPolicy governs writes: 'open' applies everything directly,
+// 'review' stages it all into data._enrichPending for per-item accept/reject in the sheet
+// (never touches live values), 'locked' is skipped. Best-effort; one failure never aborts.
+async function enrichEntities(workspaceId, progressCallback = null) {
+    if (!workspaceId) throw new Error('workspaceId is required');
+    // Entity enrichment is a precise-extraction task; it runs on the dedicated System AI
+    // only, never on a writing profile. No System AI → the feature is unavailable.
+    const systemAi = getSystemAi();
+    if (!systemAi) throw new Error('Set a System AI in Settings → Engine & Memory to update entities.');
+    const apiProfileId = systemAi.apiProfileId;
+    const model = systemAi.model;
+    const manualMode = false;
+    const manualJson = null;
+
+    const all = entitiesStore.listEntities({ workspaceId });
+    const targets = all.filter(e => e.status !== 'proposed' && (e.data?.aiPolicy || 'review') !== 'locked');
+    const chunkQuery = db.prepare(
+        `SELECT kc.text AS text FROM chunk_tags ct JOIN knowledge_chunks kc ON ct.chunkId = kc.id
+         WHERE ct.entity = ? ORDER BY kc.createdAt ASC`
+    );
+
+    // Names the AI may reference when proposing links (only existing, non-proposed
+    // entities), grouped by type, plus the workspace's real document ids for chapter links.
+    const namesByType = {};
+    for (const e of all) {
+        if (e.status === 'proposed') continue;
+        (namesByType[e.type] = namesByType[e.type] || []).push(e.canonicalName);
+    }
+    const validDocs = new Map(
+        db.prepare('SELECT id, title FROM documents WHERE workspaceId = ?').all(workspaceId).map(d => [d.id, d.title])
+    );
+
+    let updated = 0, staged = 0, skippedNoChunks = 0, failed = 0;
+    for (let i = 0; i < targets.length; i++) {
+        const ent = targets[i];
+        if (progressCallback) progressCallback({ phase: 'enriching', done: i, total: targets.length, name: ent.canonicalName });
+        const texts = chunkQuery.all(ent.id).map(r => r.text).filter(Boolean);
+        if (!texts.length) { skippedNoChunks++; continue; }
+
+        const allowed = ENRICH_FIELDS[ent.type] || [];
+        const fieldLines = allowed.map(f => ENRICH_ENUMS[f]
+            ? `- ${f}: one of [${ENRICH_ENUMS[f].join(', ')}]`
+            : `- ${f}: a short literal value, only if explicitly stated`).join('\n');
+        const relSpecs = ENRICH_RELATIONS[ent.type] || [];
+        const fence = buildItemsFence();
+        const currentData = {};
+        for (const f of allowed) if (ent.data && ent.data[f] != null) currentData[f] = ent.data[f];
+
+        // Chapters are deterministic — derive them regardless of the model's answer.
+        const chapterAdds = deriveChapterAdds(ent.id, ent, validDocs);
+
+        // Relation prompt: one line per relation, each with the candidate names the AI may
+        // pick from (drawn from the registry, self excluded). Relations with no candidate
+        // entities are omitted so we never ask for links that can't exist yet.
+        const relBlocks = [];
+        for (const spec of relSpecs) {
+            const names = (namesByType[spec.targetType] || []).filter(n => n !== ent.canonicalName);
+            if (!names.length) continue;
+            const shape = spec.labeled ? `[{"name": "<one of the names>", "label": "<short role/relation>"}]`
+                : spec.single ? `"<one name, or omit>"` : `["<names>"]`;
+            relBlocks.push({ spec, names, line: `- ${spec.key}: ${spec.label} — ${shape}. Candidates: ${names.join(', ')}` });
+        }
+
+        const systemPrompt =
+            `You maintain a story's world bible. Update the record for one ${ent.type.replace(/s$/, '')} named "${ent.canonicalName}" ` +
+            `using ONLY the story passages provided, in the order given (later passages reflect more recent events).\n` +
+            `Return a single JSON object wrapped exactly once in ${fence.open} and ${fence.close}:\n` +
+            `{"lore": "<a concise, up-to-date description of this entity synthesised from the passages>"` +
+            (fieldLines ? `, "data": { <only fields explicitly established by the passages, omit the rest> }` : ``) +
+            (relBlocks.length ? `, "links": { <only relations the passages explicitly establish, using ONLY the listed candidate names, omit the rest> }` : ``) +
+            `}\n` +
+            (fieldLines ? `Allowed data fields:\n${fieldLines}\n` : '') +
+            (relBlocks.length ? `Allowed links (use the exact candidate names, never invent a name):\n${relBlocks.map(b => b.line).join('\n')}\n` : '') +
+            `STRICT RULES:\n` +
+            `- Fill a field or propose a link ONLY when the passages state it explicitly and unambiguously. When unsure, omit it — returning few or no fields is correct and expected.\n` +
+            `- Never infer, estimate, or compute a value. Do not write reasoning, ranges, or hedged phrases ("about", "at least", "since ...") as a value; give the concrete literal value or omit the field entirely.\n` +
+            `- Only link two entities when the text directly establishes that exact relation. In particular, only nest a location inside another when the passages explicitly say one place is physically within the other — never by mere association or proximity.\n` +
+            `- The lore string may synthesise; field and link VALUES must be literal and drawn straight from the text.\n` +
+            `Do not invent facts, names, or fields absent from the passages. Write nothing outside the fence.`;
+        const userPrompt =
+            `CURRENT RECORD:\n${ent.lore ? ent.lore : '(no lore yet)'}\n` +
+            (Object.keys(currentData).length ? `Current fields: ${JSON.stringify(currentData)}\n` : '') +
+            `\nSTORY PASSAGES (chronological):\n${windowChunks(texts)}`;
+
+        try {
+            const response = await sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory: [], newPrompt: userPrompt, temperature: 0.15, maxTokens: 1200, manualMode, manualJson });
+            const head = splitHeadAndBody(response, fence);
+            const parsed = safeParseObject(head.body) || safeParseObject(response);
+            if (!parsed) { failed++; continue; }
+
+            const policy = ent.data?.aiPolicy || 'review';
+            const incoming = (parsed.data && typeof parsed.data === 'object') ? parsed.data : {};
+            // Validate the AI's proposal against the allowlist + enums first, keeping only
+            // fields whose value actually differs from what the entity holds now. `review`
+            // and `open` share this diff; they only differ in where it lands.
+            const proposedData = {};
+            for (const f of allowed) {
+                let v = incoming[f];
+                if (v == null) continue;
+                v = String(v).trim();
+                if (!v) continue;
+                if (ENRICH_ENUMS[f]) {
+                    const match = ENRICH_ENUMS[f].find(o => o.toLowerCase() === v.toLowerCase());
+                    if (!match) continue;
+                    v = match;
+                }
+                const cur = ent.data?.[f] == null ? '' : String(ent.data[f]).trim();
+                if (v !== cur) proposedData[f] = v;
+            }
+            const incomingLore = parsed.lore != null ? String(parsed.lore).trim() : '';
+            const loreChanged = !!incomingLore && incomingLore !== (ent.lore || '').trim();
+
+            // Resolve the AI's link proposals: only listed candidate names, resolved to real
+            // ids of the right type, excluding self and edges that already exist.
+            const proposedLinks = [];
+            const incomingLinks = (parsed.links && typeof parsed.links === 'object') ? parsed.links : {};
+            for (const { spec } of relBlocks) {
+                const raw = incomingLinks[spec.key];
+                if (raw == null) continue;
+                const items = Array.isArray(raw) ? raw : [raw];
+                const existing = existingLinkTargets(ent.id, spec);
+                const seen = new Set();
+                for (const item of items) {
+                    const name = String((item && typeof item === 'object') ? item.name : item || '').trim();
+                    if (!name) continue;
+                    const label = (spec.labeled && item && typeof item === 'object' && item.label != null) ? String(item.label).trim() : null;
+                    const targetId = entitiesStore.resolveMention(name, spec.targetType, workspaceId);
+                    if (!targetId || targetId === ent.id || existing.has(targetId)) continue;
+                    const dedupe = `${targetId}:${label || ''}`;
+                    if (seen.has(dedupe)) continue;
+                    seen.add(dedupe);
+                    proposedLinks.push({ relKey: spec.key, relLabel: spec.label, relType: spec.relType, from: spec.from, single: !!spec.single, label, targetId, targetName: name });
+                    if (spec.single) break; // one target for single-valued relations
+                }
+            }
+
+            const hasChange = Object.keys(proposedData).length || loreChanged || proposedLinks.length || chapterAdds.length;
+            if (!hasChange) continue;
+
+            if (policy === 'open') {
+                // Apply everything directly. Only touch what changed, and clear any staged
+                // review left over from when this entity was on the 'review' policy.
+                const nextData = { ...(ent.data || {}) };
+                delete nextData._enrichPending;
+                Object.assign(nextData, proposedData);
+                if (chapterAdds.length) {
+                    nextData.loreDocumentIds = [...entitiesStore.linkedLoreDocIds(ent), ...chapterAdds.map(c => c.id)];
+                }
+                const fields = { data: nextData };
+                if (loreChanged) fields.lore = incomingLore;
+                if (chapterAdds.length) fields.loreDocumentId = nextData.loreDocumentIds[0] || null;
+                entitiesStore.updateEntity(ent.id, fields);
+                for (const l of proposedLinks) applyProposedLink(ent.id, l, workspaceId);
+                updated++;
+            } else {
+                // review — stage everything for per-item accept/reject; never touch live values.
+                // A fresh run replaces any prior pending proposal for this entity.
+                const pending = {};
+                if (Object.keys(proposedData).length) pending.data = proposedData;
+                if (loreChanged) pending.lore = incomingLore;
+                if (proposedLinks.length) pending.links = proposedLinks;
+                if (chapterAdds.length) pending.chapters = chapterAdds;
+                pending.at = Date.now();
+                const nextData = { ...(ent.data || {}), _enrichPending: pending };
+                entitiesStore.updateEntity(ent.id, { data: nextData });
+                staged++;
+            }
+        } catch (e) {
+            console.error(`[Enrich] ${ent.canonicalName} failed (continues):`, e.message);
+            failed++;
+        }
+    }
+    if (progressCallback) progressCallback({ phase: 'enriching', done: targets.length, total: targets.length });
+    return { entities: targets.length, updated, staged, skippedNoChunks, failed };
 }
 
 async function executeSummarizationInternal({ chatId, selectedMessages, newSummarizedIndex, customTitle, profileId }) {
@@ -2130,6 +2474,7 @@ module.exports = {
     backfillWorldIndex,
     vectorizeDocument,
     retagDocumentChunks,
+    enrichEntities,
     classifyAndTagSegment,
     applyChunkTags,
     computeDocumentVectorStatus,

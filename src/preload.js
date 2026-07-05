@@ -83,6 +83,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createEntity: (payload) => ipcRenderer.invoke('create-entity', payload),
   updateEntity: (id, fields) => ipcRenderer.invoke('update-entity', { id, fields }),
   deleteEntity: (id) => ipcRenderer.invoke('delete-entity', { id }),
+  mergeEntity: (sourceId, targetId, prefer) => ipcRenderer.invoke('merge-entity', { sourceId, targetId, prefer }),
+  resolveEnrichReview: (id, accept, reject) => ipcRenderer.invoke('resolve-enrich-review', { id, accept, reject }),
+  exportWorldbuild: (workspaceId) => ipcRenderer.invoke('export-worldbuild', { workspaceId }),
+  importWorldbuild: (workspaceId) => ipcRenderer.invoke('import-worldbuild', { workspaceId }),
+  enrichEntities: (workspaceId) => ipcRenderer.invoke('enrich-entities', { workspaceId }),
+  getEnrichStatus: () => ipcRenderer.invoke('get-enrich-status'),
+  onEnrichEntitiesProgress: (callback) => {
+    const listener = (event, data) => callback(data);
+    ipcRenderer.on('enrich-entities-progress', listener);
+    return () => ipcRenderer.off('enrich-entities-progress', listener);
+  },
+  onEnrichEntitiesComplete: (callback) => {
+    const listener = (event, data) => callback(data);
+    ipcRenderer.on('enrich-entities-complete', listener);
+    return () => ipcRenderer.off('enrich-entities-complete', listener);
+  },
   getEntityLinks: (id, direction, relType) => ipcRenderer.invoke('get-entity-links', { id, direction, relType }),
   setEntityLink: (payload) => ipcRenderer.invoke('set-entity-link', payload),
   removeEntityLink: (linkId) => ipcRenderer.invoke('remove-entity-link', { linkId }),

@@ -155,7 +155,7 @@ async function extractTextFromFile(filePath) {
     const ext = path.extname(filePath).toLowerCase();
 
     // Skip binary media and archive formats to prevent garbage character generation
-    const mediaExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.mp4', '.webm', '.mov', '.mp3', '.wav', '.ogg', '.flac', '.zip', '.tar', '.gz', '.klp', '.klkb', '.db'];
+    const mediaExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.mp4', '.webm', '.mov', '.mp3', '.wav', '.ogg', '.flac', '.zip', '.tar', '.gz', '.klp', '.klkb', '.klw', '.klwb', '.db'];
     if (mediaExtensions.includes(ext)) {
         return '';
     }

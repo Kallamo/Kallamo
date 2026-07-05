@@ -40,7 +40,11 @@ const CHANNEL_INSTRUCTIONS = {
 // Factor applied to the selection's token count to size the output budget: a
 // replacement is roughly the same length as the source, an insertion can be longer.
 const MAXTOKENS_FACTOR = { replacement: 2, insertion: 3.5, analysis: 2 };
-const MAXTOKENS_MIN = 256;
+// Per-channel floor. Replacement/analysis scale with the selection, but an insertion's
+// length is independent of the (often tiny) marked span — a small selection must not
+// starve a full new passage, or it truncates on nearly every insert. maxTokens only
+// caps output, so a generous floor costs nothing when the model writes less.
+const MAXTOKENS_MIN = { replacement: 256, insertion: 1024, analysis: 256 };
 const MAXTOKENS_CAP = 4096;
 
 // Tokens kept in reserve beyond the output budget so the prompt + completion don't
@@ -62,10 +66,19 @@ function makeFence() {
     };
 }
 
+// Remove any stray fence sentinel (open/close, OUT/KSEL, any suffix) so a malformed
+// or truncated model reply can never carry one into the manuscript. Applied to every
+// proposedText return path as a last line of defense.
+const SENTINEL_RE = /⟦\/?(?:OUT|KSEL)_[0-9a-f]+⟧/g;
+function stripSentinels(text) {
+    return (text || '').replace(SENTINEL_RE, '').trim();
+}
+
 function computeMaxTokens(selectionText, channel) {
     const factor = MAXTOKENS_FACTOR[channel] || 1.5;
+    const floor = MAXTOKENS_MIN[channel] || 256;
     const selTokens = countTokens(selectionText);
-    return Math.min(MAXTOKENS_CAP, Math.max(MAXTOKENS_MIN, Math.ceil(selTokens * factor) + 64));
+    return Math.min(MAXTOKENS_CAP, Math.max(floor, Math.ceil(selTokens * factor) + 64));
 }
 
 // Tolerant fence parse: extract the content between the exact OUT tokens, ignoring
@@ -77,8 +90,10 @@ function extractFence(raw, outOpen, outClose) {
     const afterOpen = start + outOpen.length;
     const end = raw.indexOf(outClose, afterOpen);
     if (end === -1) {
-        // Open fence present but no close: a length-capped truncation.
-        return { content: null, truncated: true };
+        // Open fence present but no close: a length-capped truncation. Keep the partial
+        // body after the open token so the failure path can salvage it instead of the
+        // whole raw reply (which carries the echoed context and the open sentinel).
+        return { content: null, truncated: true, partial: raw.slice(afterOpen).trim() };
     }
     return { content: raw.slice(afterOpen, end).trim(), truncated: false };
 }
@@ -191,8 +206,11 @@ async function runWritingDeskInvocation({
     // Channel is chosen per-invocation (Invoke modal). Context window is a workspace
     // setting living on the chat row, alongside maxContext. Both fall back sanely.
     const channel = resultChannel || 'replacement';
-    const chatRow = db.prepare('SELECT wdContextWindow FROM chats WHERE id = ?').get(workspaceId);
+    const chatRow = db.prepare('SELECT wdContextWindow, wdUseChatHistory FROM chats WHERE id = ?').get(workspaceId);
     const contextWindow = (chatRow && chatRow.wdContextWindow) || DEFAULT_CONTEXT_WINDOW;
+    // Default on: the workspace chat rides as history. Off (per-workspace toggle) drops
+    // it, the biggest lever against the chat's language/topic bleeding into edits.
+    const useChatHistory = !chatRow || chatRow.wdUseChatHistory !== 0;
     const { selOpen, selClose, outOpen, outClose } = makeFence();
 
     // The model sees + echoes the formatted span, so size the output budget on it.
@@ -219,7 +237,7 @@ async function runWritingDeskInvocation({
     if (farChunks.length) ragBlocks.push(`--- CURRENT CHAPTER (DISTANT PARTS) ---\n${farChunks.join('\n\n')}`);
 
     const directives = loadDirectives(workspaceId);
-    const activeWindow = loadActiveChatWindow(workspaceId);
+    const activeWindow = useChatHistory ? loadActiveChatWindow(workspaceId) : [];
 
     // Assemble the system prompt: profile prompt + permanent directives + channel
     // instruction + RAG context. The active chat window rides as chatHistory.
@@ -227,9 +245,17 @@ async function runWritingDeskInvocation({
         ? CHANNEL_INSTRUCTIONS.analysis
         : CHANNEL_INSTRUCTIONS[channel](outOpen, outClose, formatRules);
 
+    // Built once, injected twice: in the system prompt and again just before the
+    // instruction. Directives are user-authored and treated equally (no per-directive
+    // special-casing); restating the whole block by recency is what makes the model
+    // actually honor them against the English scaffold and the chat history.
+    const directivesBlock = directives.length
+        ? `--- PERMANENT DIRECTIVES (always honor) ---\n${directives.map(d => `- ${d}`).join('\n')}`
+        : '';
+
     let systemPrompt = profile.systemPrompt || '';
-    if (directives.length) {
-        systemPrompt += `\n\n--- PERMANENT DIRECTIVES (always honor) ---\n${directives.map(d => `- ${d}`).join('\n')}`;
+    if (directivesBlock) {
+        systemPrompt += `\n\n${directivesBlock}`;
     }
     if (ragBlocks.length) {
         systemPrompt += `\n\n--- RETRIEVED CONTEXT ---\n${ragBlocks.join('\n\n')}`;
@@ -243,7 +269,9 @@ async function runWritingDeskInvocation({
     }
 
     const newPrompt =
-        `${contextText}\n\n--- INSTRUCTION ---\n${intermediatePrompt || 'Apply the profile\'s purpose to the marked span.'}`;
+        `${contextText}` +
+        (directivesBlock ? `\n\n${directivesBlock}` : '') +
+        `\n\n--- INSTRUCTION ---\n${intermediatePrompt || 'Apply the profile\'s purpose to the marked span.'}`;
 
     const callApi = (budget) => sendApiRequest({
         apiProfileId: profile.apiProfileId,
@@ -267,15 +295,18 @@ async function runWritingDeskInvocation({
 
     let parsed = extractFence(raw, outOpen, outClose);
 
-    // Truncation (open fence, no close) → one retry with a bigger budget.
-    if (parsed && parsed.truncated) {
-        const biggerBudget = Math.min(MAXTOKENS_CAP, maxTokens * 2);
-        raw = await callApi(biggerBudget);
+    // Truncation (open fence, no close) → one retry at the cap. Truncation means the
+    // model wanted more room than we gave, so jump straight to the ceiling rather than
+    // merely doubling and risking a second truncation.
+    if (parsed && parsed.truncated && maxTokens < MAXTOKENS_CAP) {
+        raw = await callApi(MAXTOKENS_CAP);
         parsed = extractFence(raw, outOpen, outClose);
     }
 
     // No valid fence → one free correction retry asking for the fence explicitly.
     if (!parsed || parsed.content == null) {
+        // Hold the truncated body from the earlier attempt in case the retry also fails.
+        const priorPartial = parsed && parsed.partial;
         const correction = await sendApiRequest({
             apiProfileId: profile.apiProfileId,
             model: profile.model,
@@ -290,16 +321,16 @@ async function runWritingDeskInvocation({
         });
         parsed = extractFence(correction, outOpen, outClose);
         if (!parsed || parsed.content == null) {
-            // Fallback: still apply ONLY to the selection (the span guarantee survives),
-            // flagged so the UI can warn the writer the output may carry chatter.
-            return {
-                channel, status: 'flagged', proposedText: (correction || raw || '').trim(), fromPos, toPos
-            };
+            // Everything failed. Salvage the cleanest partial we have (a truncated fence
+            // body beats the raw reply, which carries the echoed context), sentinel-
+            // stripped, and flag it so the UI warns the writer it may be incomplete.
+            const salvage = (parsed && parsed.partial) || priorPartial || correction || raw || '';
+            return { channel, status: 'flagged', proposedText: stripSentinels(salvage), fromPos, toPos };
         }
         raw = correction;
     }
 
-    return { channel, status: 'ok', proposedText: parsed.content, fromPos, toPos };
+    return { channel, status: 'ok', proposedText: stripSentinels(parsed.content), fromPos, toPos };
 }
 
 module.exports = { runWritingDeskInvocation };

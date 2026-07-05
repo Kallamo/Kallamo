@@ -46,6 +46,11 @@
         "ext": "klkb",
         "name": "Kallamo Knowledge Base",
         "description": "Kallamo Portable Knowledge Base Package"
+      },
+      {
+        "ext": "klwb",
+        "name": "Kallamo Worldbuild",
+        "description": "Kallamo Portable Worldbuild Package"
       }
     ],
     "win": {

@@ -18,7 +18,7 @@ import ExportModal from './ExportModal';
 import { InvokeModal } from './WritingInvocation';
 import WritingFindReplace from './WritingFindReplace';
 import { useApp } from '../context/AppContext';
-import { Sparkles, X, Loader2 } from 'lucide-react';
+import { Sparkles, X, Loader2, AlertTriangle } from 'lucide-react';
 import { DecorationSet } from '@tiptap/pm/view';
 import {
   getEditorExtensions, estimatePagesFromWords,
@@ -929,7 +929,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
               vecBusy
                 ? (vecProgress ? `Indexing chapter… (${vecProgress.phase} ${vecProgress.done}/${vecProgress.total})` : 'Indexing chapter…')
                 : vecStatus === 'done'
-                  ? 'Chapter indexed — AI can see it from other chapters'
+                  ? 'Chapter indexed. AI can see it from other chapters'
                   : 'Index this chapter for cross-chapter AI context'
             }
             className={`relative p-1.5 rounded-md transition-colors cursor-pointer disabled:cursor-default ${
@@ -1054,12 +1054,20 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
 
         {/* Floating review controls — counter + Accept/Reject pinned over the page. */}
         {pending && pending.channel !== 'analysis' && (
-          <div className="sticky bottom-4 z-20 flex justify-center pointer-events-none">
+          <div className="sticky bottom-4 z-20 flex flex-col items-center gap-2 pointer-events-none">
+            {pending.status === 'flagged' && (
+              <div className="pointer-events-auto flex items-start gap-2 max-w-md bg-amber-950/90 border border-amber-700/60 rounded-xl shadow-2xl px-3.5 py-2.5">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <span className="text-[11px] leading-relaxed text-amber-200">
+                  The AI's reply came back malformed or was cut off, so this suggestion may be incomplete or off. Read it carefully before accepting.
+                </span>
+              </div>
+            )}
             <div className="pointer-events-auto flex items-center gap-2 bg-[#0a161d]/95 border border-gray-800 rounded-full shadow-2xl px-3 py-1.5">
               <span className="flex items-center gap-1.5 text-[11px] tabular-nums pr-1 border-r border-gray-800">
                 <Sparkles className="w-3.5 h-3.5 text-accent" />
                 {stale
-                  ? <span className="text-red-400">text changed — reject</span>
+                  ? <span className="text-red-400">text changed, reject</span>
                   : <span><span className="text-emerald-400">+{delta.added}</span> / <span className="text-red-400">−{delta.removed}</span></span>}
               </span>
               <button onClick={rejectSuggestion} className="flex items-center gap-1 text-xs text-gray-300 hover:text-white px-2 py-1 rounded-full hover:bg-white/5 cursor-pointer">

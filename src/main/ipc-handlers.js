@@ -2548,6 +2548,103 @@ ipcMain.handle('delete-entity', async (event, { id }) => {
   }
 });
 
+ipcMain.handle('merge-entity', async (event, { sourceId, targetId, prefer } = {}) => {
+  try {
+    return { success: true, entity: entitiesStore.mergeEntity(sourceId, targetId, { prefer }) };
+  } catch (e) {
+    console.error('[merge-entity] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('resolve-enrich-review', async (event, { id, accept, reject } = {}) => {
+  try {
+    return { success: true, entity: entitiesStore.resolveEnrichReview(id, { accept, reject }) };
+  } catch (e) {
+    console.error('[resolve-enrich-review] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+// Enrichment runs in the main process; the WorldbuildView that started it can unmount
+// (view switch) while it keeps going. Track the run here so a remounted view can restore
+// the lock overlay via get-enrich-status, and broadcast completion so it clears even if
+// the original caller is gone.
+let enrichState = { running: false, workspaceId: null, progress: null };
+
+ipcMain.handle('get-enrich-status', async () => ({ ...enrichState }));
+
+ipcMain.handle('enrich-entities', async (event, { workspaceId } = {}) => {
+  if (enrichState.running) return { success: false, error: 'An entity update is already running.' };
+  enrichState = { running: true, workspaceId, progress: null };
+  const wc = event.sender;
+  try {
+    const { enrichEntities } = require('./workflow-runner');
+    const res = await enrichEntities(workspaceId, (p) => {
+      enrichState.progress = { workspaceId, ...p };
+      try { wc.send('enrich-entities-progress', { workspaceId, ...p }); } catch (e) {}
+    });
+    try { wc.send('enrich-entities-complete', { workspaceId, success: true, ...res }); } catch (e) {}
+    return { success: true, ...res };
+  } catch (e) {
+    console.error('[enrich-entities] failed:', e);
+    try { wc.send('enrich-entities-complete', { workspaceId, success: false, error: e.message }); } catch (e2) {}
+    return { success: false, error: e.message };
+  } finally {
+    enrichState = { running: false, workspaceId: null, progress: null };
+  }
+});
+
+// Export Worldbuild (.klwb — Kallamo Worldbuild Package: a zip holding worldbuild.json,
+// the self-contained entities + edges for this workspace).
+ipcMain.handle('export-worldbuild', async (event, { workspaceId } = {}) => {
+  try {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const data = entitiesStore.exportWorldbuild(workspaceId);
+    if (!data.entities.length) return { success: false, error: 'This Worldbuild is empty — nothing to export.' };
+    const { filePath, canceled } = await dialog.showSaveDialog(win, {
+      title: 'Export Worldbuild Package',
+      defaultPath: path.join(os.homedir(), 'Downloads', 'worldbuild.klwb'),
+      filters: [{ name: 'Kallamo Worldbuild Package', extensions: ['klwb'] }],
+    });
+    if (canceled || !filePath) return { cancelled: true };
+    const zip = new AdmZip();
+    zip.addFile('worldbuild.json', Buffer.from(JSON.stringify(data, null, 2), 'utf8'));
+    zip.writeZip(filePath);
+    return { success: true, filePath, entities: data.entities.length, links: data.links.length };
+  } catch (e) {
+    console.error('[export-worldbuild] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+// Import a .klwb package: unzip, read worldbuild.json, merge into the workspace.
+ipcMain.handle('import-worldbuild', async (event, { workspaceId } = {}) => {
+  try {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const { filePaths, canceled } = await dialog.showOpenDialog(win, {
+      title: 'Import Worldbuild Package',
+      filters: [{ name: 'Kallamo Worldbuild Package', extensions: ['klwb'] }],
+      properties: ['openFile'],
+    });
+    if (canceled || !filePaths || !filePaths.length) return { cancelled: true };
+    let payload;
+    try {
+      const zip = new AdmZip(filePaths[0]);
+      const entry = zip.getEntry('worldbuild.json');
+      if (!entry) return { success: false, error: 'Invalid package: worldbuild.json not found inside.' };
+      payload = JSON.parse(zip.readAsText(entry));
+    } catch (e) {
+      return { success: false, error: 'Could not read the package — it is not a valid Worldbuild file.' };
+    }
+    const res = entitiesStore.importWorldbuild(workspaceId, payload);
+    return { success: true, ...res };
+  } catch (e) {
+    console.error('[import-worldbuild] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
 ipcMain.handle('get-entity-links', async (event, { id, direction, relType } = {}) => {
   try {
     const links = direction === 'to'
@@ -2789,7 +2886,7 @@ ipcMain.handle('save-chat', async (event, chat) => {
           archiveThreshold = ?, summarizedIndex = ?, activeProfiles = ?, activeWorkflows = ?,
           backgroundImage = ?, backdropOpacity = ?, userBubbleOpacity = ?, aiBubbleOpacity = ?,
           memoryBlocks = ?, knowledgeFiles = ?, autoSummarize = ?, showContextBar = ?,
-          wdContextWindow = ?, wdLastChannel = ?, syncToCloud = ?
+          wdContextWindow = ?, wdLastChannel = ?, wdUseChatHistory = ?, syncToCloud = ?
         WHERE id = ?
       `);
 
@@ -2813,6 +2910,7 @@ ipcMain.handle('save-chat', async (event, chat) => {
         chat.showContextBar ?? 0,
         chat.wdContextWindow ?? 8192,
         chat.wdLastChannel || 'replacement',
+        chat.wdUseChatHistory ?? 1,
         newSyncToCloud,
         chat.id
       );
@@ -2825,8 +2923,8 @@ ipcMain.handle('save-chat', async (event, chat) => {
       const insert = db.prepare(`
         INSERT INTO chats (
           id, title, description, updatedAt, isPinned, maxContext, archiveThreshold, summarizedIndex,
-          activeProfiles, activeWorkflows, backgroundImage, backdropOpacity, userBubbleOpacity, aiBubbleOpacity, memoryBlocks, knowledgeFiles, autoSummarize, showContextBar, wdContextWindow, wdLastChannel, syncToCloud
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          activeProfiles, activeWorkflows, backgroundImage, backdropOpacity, userBubbleOpacity, aiBubbleOpacity, memoryBlocks, knowledgeFiles, autoSummarize, showContextBar, wdContextWindow, wdLastChannel, wdUseChatHistory, syncToCloud
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       insert.run(
@@ -2850,6 +2948,7 @@ ipcMain.handle('save-chat', async (event, chat) => {
         chat.showContextBar ?? 0,
         chat.wdContextWindow ?? 8192,
         chat.wdLastChannel || 'replacement',
+        chat.wdUseChatHistory ?? 1,
         chat.syncToCloud ?? 0
       );
     }

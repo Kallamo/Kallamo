@@ -276,7 +276,7 @@ export default function ExportBookModal({ folderTitle, documents, electronAPI, o
   }
 
   return (
-    <Modal onClose={onClose} size="xl" title={`Export Folder — ${folderTitle}`} icon={BookOpen} className="!max-w-5xl">
+    <Modal onClose={onClose} size="xl" title={`Export Folder: ${folderTitle}`} icon={BookOpen} className="!max-w-5xl">
       <div className="flex min-h-0" style={{ height: '78vh' }}>
         {/* Preview */}
         <div ref={previewColRef} className="flex-1 min-w-0 bg-[#00080B] overflow-y-auto custom-scrollbar flex flex-col items-center py-6 px-4">

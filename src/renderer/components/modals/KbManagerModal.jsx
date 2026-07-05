@@ -293,7 +293,7 @@ export default function KbManagerModal({ profile, onClose }) {
           kind: isConfig ? 'config' : 'generic',
           message: isConfig
             ? "Vectorization needs an embedding engine. You selected an external API but it isn't configured yet."
-            : `Could not vectorize "${targetName}". This is usually caused by the embedding provider, the network, or the file itself — not Kallamo.\n\nDetails: ${err?.message || 'Unknown error'}`
+            : `Could not vectorize "${targetName}". This is usually caused by the embedding provider, the network, or the file itself, not Kallamo.\n\nDetails: ${err?.message || 'Unknown error'}`
         });
         break; // stop processing the rest of the batch on a hard failure
       }

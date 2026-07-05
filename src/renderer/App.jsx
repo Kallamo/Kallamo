@@ -132,7 +132,7 @@ function MainLayout() {
   // Global Tooltip Engine
   useEffect(() => {
     const globalTooltip = document.createElement('div');
-    globalTooltip.className = 'fixed hidden bg-[#051116] border border-gray-800 text-gray-300 text-[10px] leading-relaxed rounded-md p-2.5 shadow-xl z-[9999] max-w-[220px] pointer-events-none transition-opacity duration-200 opacity-0';
+    globalTooltip.className = 'fixed hidden bg-[#051116] border border-gray-800 text-gray-300 text-[10px] leading-relaxed rounded-md p-2.5 shadow-xl z-[100000] max-w-[220px] pointer-events-none transition-opacity duration-200 opacity-0';
     document.body.appendChild(globalTooltip);
 
     const handleMouseOver = (e) => {
