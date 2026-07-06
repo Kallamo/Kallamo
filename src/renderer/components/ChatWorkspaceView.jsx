@@ -161,6 +161,12 @@ export default function ChatWorkspaceView() {
   const [isVectorizing, setIsVectorizing] = useState(false);
 
   const [activeSubView, setActiveSubView] = useState('chat'); // 'chat' | 'memory' | 'files'
+  const [worldbuildFocusId, setWorldbuildFocusId] = useState(null); // entity to focus when opening Worldbuild from the text
+
+  const openEntityInWorldbuild = (entityId) => {
+    setWorldbuildFocusId(entityId || null);
+    setActiveSubView('worldbuild');
+  };
   const [previewFile, setPreviewFile] = useState(null);
 
   const handleReinjectFile = (file) => {
@@ -1508,11 +1514,14 @@ export default function ChatWorkspaceView() {
           <WritingDeskView
             chat={activeChat}
             electronAPI={electronAPI}
+            onOpenEntity={openEntityInWorldbuild}
           />
         ) : activeSubView === 'worldbuild' ? (
           <WorldbuildView
             chat={activeChat}
             electronAPI={electronAPI}
+            focusEntityId={worldbuildFocusId}
+            onFocusHandled={() => setWorldbuildFocusId(null)}
           />
         ) : activeSubView === 'configuration' ? (
           <ConfigurationView

@@ -1176,21 +1176,24 @@ function pmDocToChunkUnits(content) {
 // Whether a chapter's current text matches its stored index, by comparing the block
 // hash sets — the source of truth for the editor's "indexed" indicator. Immune to the
 // mutable vectorized flag (which any save can reset). Returns 'done' | 'stale'.
+// Returns 'done' (index current), 'outdated' (indexed once but content changed
+// since), or 'never' (no index yet). The caller renders these as distinct states —
+// 'never' is neutral, 'outdated' is the alert (AI is reading the old version).
 function computeDocumentVectorStatus(documentId) {
     const doc = db.prepare('SELECT content FROM documents WHERE id = ?').get(documentId);
-    if (!doc) return 'stale';
+    if (!doc) return 'never';
     const units = pmDocToChunkUnits(doc.content);
     const rows = db.prepare(
         "SELECT content_hash, manuallyEdited FROM knowledge_chunks WHERE ownerId = ? AND ownerType = 'document'"
     ).all(documentId);
-    // Never indexed: stale unless the chapter is also empty (nothing to index).
-    if (!rows.length) return units.length ? 'stale' : 'done';
+    // No index yet: 'never' unless the chapter is also empty (nothing to index).
+    if (!rows.length) return units.length ? 'never' : 'done';
     // Manually-edited chunks are preserved across re-index, so they don't count toward
     // the match; compare current blocks against the automated index only.
     const stored = new Set(rows.filter(r => !r.manuallyEdited && r.content_hash).map(r => r.content_hash));
     const current = new Set(units.map(u => u.hash));
-    if (stored.size !== current.size) return 'stale';
-    for (const h of current) if (!stored.has(h)) return 'stale';
+    if (stored.size !== current.size) return 'outdated';
+    for (const h of current) if (!stored.has(h)) return 'outdated';
     return 'done';
 }
 
@@ -1344,6 +1347,7 @@ const ENRICH_FIELDS = {
     Items: ['itemType', 'abundance', 'description'],
     Factions: ['description'],
     Races: ['description'],
+    Events: ['kind', 'description'],
     System: ['content'],
 };
 
@@ -1380,6 +1384,10 @@ const ENRICH_RELATIONS = {
         { key: 'members',    label: 'Member',            relType: 'member_of',   targetType: 'Characters', from: 'target', single: false, labeled: true },
     ],
     Races: [],
+    Events: [
+        { key: 'happenedAt', label: 'Where it happened', relType: 'happened_at', targetType: 'Locations',  from: 'self', single: false },
+        { key: 'involved',   label: 'Who was involved',   relType: 'involved',    targetType: 'Characters', from: 'self', single: false },
+    ],
     System: [],
 };
 

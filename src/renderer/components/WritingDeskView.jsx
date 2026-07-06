@@ -1,17 +1,18 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import WritingEditor, { DEFAULT_WRITING_DESK } from './WritingEditor';
 import ExportBookModal from './ExportBookModal';
 import { importedContentToJson } from './writingExtensions';
 import ConfirmDialog from './ui/ConfirmDialog';
 import WritingDirectivesPanel from './WritingDirectivesPanel';
+import WritingNotesPanel from './WritingNotesPanel';
 import {
   Folder, FolderPlus, FilePlus, Upload, ChevronRight, ChevronDown,
   FileText, Trash2, FolderInput, PenLine, Download,
-  PanelLeftClose, PanelLeftOpen, Loader2, Sparkles, Pin
+  PanelLeftClose, PanelLeftOpen, Loader2, Sparkles, Pin, StickyNote
 } from 'lucide-react';
 
-export default function WritingDeskView({ chat, electronAPI }) {
+export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
   const { settings, showToast } = useApp();
   const workspaceId = chat.id;
   const toolbarMode = settings?.interface?.writingToolbar === 'bubble' ? 'bubble' : 'fixed';
@@ -30,13 +31,17 @@ export default function WritingDeskView({ chat, electronAPI }) {
   const [dropInfo, setDropInfo] = useState(null); // { id, zone: 'before'|'after'|'inside' }
   const sidebarKey = `wd-sidebar-collapsed-${workspaceId}`;
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem(sidebarKey) === '1');
-  const directivesKey = `wd-directives-open-${workspaceId}`;
-  const [showDirectives, setShowDirectives] = useState(() => localStorage.getItem(directivesKey) === '1');
+  const rightPanelKey = `wd-rightpanel-${workspaceId}`;
+  const [rightPanel, setRightPanel] = useState(() => localStorage.getItem(rightPanelKey) || ''); // '' | 'directives' | 'notes'
+  const editorJumpRef = useRef(null); // set by the editor; lets the Notes panel scroll to a passage
+  const [notesRefresh, setNotesRefresh] = useState(0);
+  const [justAddedNoteId, setJustAddedNoteId] = useState(null); // note to auto-expand once
 
-  const toggleDirectives = () => {
-    setShowDirectives(prev => {
-      const next = !prev;
-      localStorage.setItem(directivesKey, next ? '1' : '0');
+  const openPanel = (name) => {
+    setJustAddedNoteId(null); // a manual open shows every note minimized
+    setRightPanel(prev => {
+      const next = prev === name ? '' : name;
+      localStorage.setItem(rightPanelKey, next);
       return next;
     });
   };
@@ -46,8 +51,8 @@ export default function WritingDeskView({ chat, electronAPI }) {
   }, [sidebarKey]);
 
   useEffect(() => {
-    setShowDirectives(localStorage.getItem(directivesKey) === '1');
-  }, [directivesKey]);
+    setRightPanel(localStorage.getItem(rightPanelKey) || '');
+  }, [rightPanelKey]);
 
   const toggleSidebar = () => {
     setSidebarCollapsed(prev => {
@@ -103,12 +108,34 @@ export default function WritingDeskView({ chat, electronAPI }) {
       if (data.workspaceId && data.workspaceId !== workspaceId) return;
       setInFlight(prev => { const n = { ...prev }; delete n[data.documentId]; return n; });
       if (data.error) { showToast?.(`AI invocation failed: ${data.error}`, 'error'); return; }
-      setPendingIds(prev => new Set(prev).add(data.documentId));
-      if (data.documentId === selectedDocId) {
-        electronAPI.getPendingSuggestion(data.documentId).then(res => {
-          setCurrentPending(res && res.suggestion ? res.suggestion : null);
-        });
-      }
+      electronAPI.getPendingSuggestion(data.documentId).then(async (res) => {
+        const sug = res && res.suggestion ? res.suggestion : null;
+        // Analysis results are read-only notes, not diffs: persist them straight into the
+        // chapter's Notes and open the panel, instead of an ephemeral floating card.
+        if (sug && sug.channel === 'analysis') {
+          const created = await electronAPI.createDocumentNote({
+            documentId: sug.documentId,
+            workspaceId,
+            body: sug.proposedText || '',
+            excerpt: sug.originalText || null,
+            source: 'ai',
+            profileId: sug.profileId || null,
+            instruction: sug.intermediatePrompt || null,
+          });
+          await electronAPI.resolvePendingSuggestion(sug.id);
+          setPendingIds(prev => { const n = new Set(prev); n.delete(data.documentId); return n; });
+          if (data.documentId === selectedDocId) {
+            setCurrentPending(null);
+            setJustAddedNoteId(created?.id || null);
+            setNotesRefresh(x => x + 1);
+            setRightPanel('notes');
+            localStorage.setItem(rightPanelKey, 'notes');
+          }
+          return;
+        }
+        setPendingIds(prev => new Set(prev).add(data.documentId));
+        if (data.documentId === selectedDocId) setCurrentPending(sug);
+      });
     });
     return off;
   }, [electronAPI, workspaceId, selectedDocId, showToast]);
@@ -427,6 +454,8 @@ export default function WritingDeskView({ chat, electronAPI }) {
             toolbarMode={toolbarMode}
             smartTypography={smartTypography}
             onDocPatch={onDocPatch}
+            jumpRef={editorJumpRef}
+            onOpenEntity={onOpenEntity}
             onRename={(title) => {
               setCurrentDoc({ ...currentDoc, title });
               electronAPI.renameDocument(currentDoc.id, title).then(loadTree);
@@ -439,13 +468,26 @@ export default function WritingDeskView({ chat, electronAPI }) {
         </div>
       )}
 
-      {/* Right rail: per-workspace pinned directives (always-on AI instructions). */}
-      {showDirectives ? (
-        <WritingDirectivesPanel workspaceId={workspaceId} electronAPI={electronAPI} onClose={toggleDirectives} />
+      {/* Right rail: pinned directives (workspace) + review notes (per chapter). */}
+      {rightPanel === 'directives' ? (
+        <WritingDirectivesPanel workspaceId={workspaceId} electronAPI={electronAPI} onClose={() => openPanel('directives')} />
+      ) : rightPanel === 'notes' ? (
+        <WritingNotesPanel
+          documentId={currentDoc?.id}
+          workspaceId={workspaceId}
+          electronAPI={electronAPI}
+          refreshKey={notesRefresh}
+          expandId={justAddedNoteId}
+          onJump={(excerpt) => editorJumpRef.current?.(excerpt)}
+          onClose={() => openPanel('notes')}
+        />
       ) : (
-        <div className="w-10 shrink-0 border-l border-gray-800/40 flex flex-col items-center py-3 bg-[#011419]/25">
-          <button title="Directives" onClick={toggleDirectives} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md">
+        <div className="w-10 shrink-0 border-l border-gray-800/40 flex flex-col items-center gap-1 py-3 bg-[#011419]/25">
+          <button title="Directives" onClick={() => openPanel('directives')} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md">
             <Pin className="w-4 h-4" />
+          </button>
+          <button title="Notes" onClick={() => openPanel('notes')} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md">
+            <StickyNote className="w-4 h-4" />
           </button>
         </div>
       )}

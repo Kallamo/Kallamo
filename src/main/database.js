@@ -354,6 +354,25 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_pending_suggestions_document ON pending_suggestions(documentId);
 
+  -- Persistent per-chapter review notes. A note is either scoped to the whole chapter
+  -- (excerpt NULL) or to a passage (excerpt = the selected text, used for best-effort
+  -- jump-to). source='ai' notes keep the profile + instruction that produced them.
+  CREATE TABLE IF NOT EXISTS document_notes (
+    id TEXT PRIMARY KEY,
+    documentId TEXT NOT NULL,
+    workspaceId TEXT NOT NULL,
+    body TEXT NOT NULL,
+    excerpt TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    source TEXT NOT NULL DEFAULT 'manual',
+    profileId TEXT,
+    instruction TEXT,
+    createdAt INTEGER,
+    resolvedAt INTEGER
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_document_notes_document ON document_notes(documentId);
+
   CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_owner ON knowledge_chunks(ownerId, ownerType);
 
   CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_chunks_fts USING fts5(
@@ -753,6 +772,7 @@ try {
     ["Locations", "Places where scenes happen: rooms, buildings, settlements, regions, landmarks.", 1],
     ["Races", "Species, lineages, or peoples a character can belong to.", 1],
     ["Creatures", "Monsters, beasts, spirits, or non-personified entities present or referenced.", 1],
+    ["Events", "Notable happenings: battles, festivals, holidays, disasters, or milestones worth remembering.", 1],
     ["Planning", "Decisions, goals, deadlines, tasks, and who is responsible for them.", 0],
     ["Chat", "General context: what a conversation segment is broadly about.", 0],
   ];

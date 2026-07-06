@@ -1325,6 +1325,53 @@ export default function ChatMemoryView({
 
       {/* Right-Side Query Simulator Dashboard */}
       <div className="w-full md:w-80 p-5 bg-[#011419]/25 flex flex-col h-full overflow-y-auto custom-scrollbar select-none">
+        {/* World Index section */}
+        <div className="flex items-center space-x-1.5 mb-2.5">
+          <Brain className="w-4 h-4 text-accent" />
+          <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest font-sans">World Index</span>
+        </div>
+
+        <div className="bg-[#051116]/80 border border-gray-800 rounded-xl p-3.5 flex flex-col gap-2.5 shrink-0 mb-5">
+          <p className="caption">
+            Tag this chat's memories so the AI can recall them by character, faction, and item.
+          </p>
+          <div className="grid grid-cols-1 gap-1.5">
+            {indexTiers.map(t => (
+              <div key={t.key} className="relative" ref={t.ref}>
+                <button
+                  onClick={() => setIndexMenu(indexMenu === t.key ? null : t.key)}
+                  disabled={indexingTier !== null}
+                  title={`Tag this chat's ${t.label} so the AI can recall it by character, faction, and item.`}
+                  className="w-full text-xs font-bold tracking-wide px-3 py-2 border border-accent/40 text-accent rounded-lg hover:bg-accent/10 transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-between gap-1.5"
+                >
+                  <span className="flex items-center gap-2">
+                    {indexingTier === t.key ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Brain className="w-3.5 h-3.5" />}
+                    {indexingTier === t.key ? 'Indexing…' : t.label}
+                  </span>
+                  <ChevronDown className={`w-3.5 h-3.5 transition-transform ${indexMenu === t.key ? 'rotate-180' : ''}`} />
+                </button>
+                <Popover anchorRef={t.ref} open={indexMenu === t.key} onClose={() => setIndexMenu(null)} matchAnchorWidth={true} align="left" className="!p-2">
+                  <button
+                    onClick={() => handleIndexMemories(t.key, false)}
+                    className="w-full text-left px-3 py-2 text-sm font-semibold text-gray-100 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
+                  >
+                    Index new chunks
+                    <span className="block text-xs font-normal text-gray-400 normal-case tracking-normal mt-0.5">Only chunks not tagged yet. Fast top-up.</span>
+                  </button>
+                  <button
+                    onClick={() => handleIndexMemories(t.key, true)}
+                    className="w-full text-left px-3 py-2 text-sm font-semibold text-gray-100 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
+                  >
+                    Reindex all chunks
+                    <span className="block text-xs font-normal text-gray-400 normal-case tracking-normal mt-0.5">Drop and rebuild every tag from scratch.</span>
+                  </button>
+                </Popover>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* RAG Query Simulator section */}
         <div className="flex items-center space-x-1.5 mb-2.5">
           <Sparkles className="w-4 h-4 text-accent animate-pulse" />
           <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest font-sans">RAG Query Simulator</span>
@@ -1334,46 +1381,6 @@ export default function ChatMemoryView({
           <p className="caption">
             Test how the AI retrieves memories. Type a phrase or prompt below to run a local vector similarity match.
           </p>
-
-          <div className="flex flex-col gap-1.5">
-            <span className="text-[8px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-1">
-              <Brain className="w-3 h-3" /> World Index
-            </span>
-            <div className="grid grid-cols-1 gap-1.5">
-              {indexTiers.map(t => (
-                <div key={t.key} className="relative" ref={t.ref}>
-                  <button
-                    onClick={() => setIndexMenu(indexMenu === t.key ? null : t.key)}
-                    disabled={indexingTier !== null}
-                    title={`Tag this chat's ${t.label} so the AI can recall it by character, faction, and item.`}
-                    className="w-full text-[10px] font-bold tracking-wider px-2.5 py-1.5 border border-accent/40 text-accent rounded-lg hover:bg-accent/10 transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-between gap-1.5"
-                  >
-                    <span className="flex items-center gap-1.5">
-                      {indexingTier === t.key ? <Loader className="w-3 h-3 animate-spin" /> : <Brain className="w-3 h-3" />}
-                      {indexingTier === t.key ? 'Indexing…' : t.label}
-                    </span>
-                    <ChevronDown className={`w-3 h-3 transition-transform ${indexMenu === t.key ? 'rotate-180' : ''}`} />
-                  </button>
-                  <Popover anchorRef={t.ref} open={indexMenu === t.key} onClose={() => setIndexMenu(null)} matchAnchorWidth={true} align="left" className="!p-2">
-                    <button
-                      onClick={() => handleIndexMemories(t.key, false)}
-                      className="w-full text-left px-3 py-2 text-[10px] font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
-                    >
-                      Index new chunks
-                      <span className="block text-[8px] font-normal text-gray-500 normal-case tracking-normal mt-0.5">Only chunks not tagged yet. Fast top-up.</span>
-                    </button>
-                    <button
-                      onClick={() => handleIndexMemories(t.key, true)}
-                      className="w-full text-left px-3 py-2 text-[10px] font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
-                    >
-                      Reindex all chunks
-                      <span className="block text-[8px] font-normal text-gray-500 normal-case tracking-normal mt-0.5">Drop and rebuild every tag from scratch.</span>
-                    </button>
-                  </Popover>
-                </div>
-              ))}
-            </div>
-          </div>
 
           <div className="flex flex-col space-y-2.5">
             {/* AI Profile Selector */}

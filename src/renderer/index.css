@@ -88,6 +88,20 @@ body {
   background: #011419;
 }
 
+/* In-text Worldbuild entity reference: a soft accent highlight + underline so linked
+   words clearly stand out as tied to an entity (title shows which one on hover). */
+.wd-entity-ref {
+  background: color-mix(in srgb, var(--app-accent) 16%, transparent);
+  border-bottom: 1.5px solid color-mix(in srgb, var(--app-accent) 60%, transparent);
+  border-radius: 2px;
+  padding: 0 1px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.wd-entity-ref:hover {
+  background: color-mix(in srgb, var(--app-accent) 30%, transparent);
+}
+
 /* Worldbuild form controls: render the native <select> dropdown options in the
    app's dark theme instead of the OS default white, and tint selection with the
    app accent instead of the OS blue. */

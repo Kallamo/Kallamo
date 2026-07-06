@@ -1,4 +1,4 @@
-import { Extension, generateJSON, generateHTML, textInputRule } from '@tiptap/core';
+import { Extension, Mark, mergeAttributes, generateJSON, generateHTML, textInputRule } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { TextStyle, Color, FontFamily, FontSize } from '@tiptap/extension-text-style';
 import TextAlign from '@tiptap/extension-text-align';
@@ -254,6 +254,44 @@ export function suggestionCharDelta(suggestion) {
   return { added, removed };
 }
 
+// Inline reference to a Worldbuild entity. Presentational + navigational ONLY: it
+// tags a span with the entity id (and a display name for dangling-ref fallback) and
+// renders as a dotted-underline span. Retrieval still runs off chunk_tags — this mark
+// is never a source of truth for what the AI sees. Rides in the doc JSON, so it tracks
+// the text through edits and persists with saveDocumentContent.
+export const EntityRef = Mark.create({
+  name: 'entityRef',
+  inclusive: false,
+  addAttributes() {
+    return {
+      entityId: {
+        default: null,
+        parseHTML: el => el.getAttribute('data-entity-id'),
+        renderHTML: attrs => (attrs.entityId ? { 'data-entity-id': attrs.entityId } : {}),
+      },
+      name: {
+        default: null,
+        parseHTML: el => el.getAttribute('data-entity-name'),
+        renderHTML: attrs => (attrs.name ? { 'data-entity-name': attrs.name } : {}),
+      },
+      type: {
+        default: null,
+        parseHTML: el => el.getAttribute('data-entity-type'),
+        renderHTML: attrs => (attrs.type ? { 'data-entity-type': attrs.type } : {}),
+      },
+    };
+  },
+  parseHTML() { return [{ tag: 'span[data-entity-id]' }]; },
+  renderHTML({ HTMLAttributes }) {
+    return ['span', mergeAttributes(HTMLAttributes, { class: 'wd-entity-ref' }), 0];
+  },
+  // Serialize to Markdown as bare text (no delimiters), so invoking the AI on a linked
+  // span sends plain prose and the mark never swallows or mangles the text.
+  addStorage() {
+    return { markdown: { serialize: { open: '', close: '' }, parse: {} } };
+  },
+});
+
 // Single source of truth for the editor schema. Shared between the live editor
 // (useEditor) and offline conversions like generateJSON() for rich imports, so
 // imported content is parsed against exactly the marks/nodes the editor renders.
@@ -262,7 +300,7 @@ export const writingExtensions = [
   TextStyle, Color, FontFamily, FontSize, BlockStyle,
   TextAlign.configure({ types: ['heading', 'paragraph'] }),
   TableKit.configure({ table: { resizable: true } }),
-  CellBackground,
+  CellBackground, EntityRef,
 ];
 
 // Dashes convert only once a trailing space is typed, so `--`/`---` don't fire

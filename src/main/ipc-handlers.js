@@ -2421,6 +2421,34 @@ ipcMain.handle('update-directive', async (event, { id, text }) => {
   return { success: true };
 });
 
+// --- Per-chapter review notes (Writing Desk right rail) ---
+ipcMain.handle('get-document-notes', (event, { documentId }) => {
+  const notes = db.prepare(
+    "SELECT * FROM document_notes WHERE documentId = ? ORDER BY (status = 'resolved'), createdAt DESC"
+  ).all(documentId);
+  return { notes };
+});
+
+ipcMain.handle('create-document-note', (event, { documentId, workspaceId, body, excerpt, source, profileId, instruction }) => {
+  const id = `note_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  db.prepare(`
+    INSERT INTO document_notes (id, documentId, workspaceId, body, excerpt, status, source, profileId, instruction, createdAt, resolvedAt)
+    VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, NULL)
+  `).run(id, documentId, workspaceId, body, excerpt || null, source || 'manual', profileId || null, instruction || null, Date.now());
+  return { id };
+});
+
+ipcMain.handle('update-document-note', (event, { id, body, status }) => {
+  if (typeof body === 'string') db.prepare('UPDATE document_notes SET body = ? WHERE id = ?').run(body, id);
+  if (status) db.prepare('UPDATE document_notes SET status = ?, resolvedAt = ? WHERE id = ?').run(status, status === 'resolved' ? Date.now() : null, id);
+  return { success: true };
+});
+
+ipcMain.handle('delete-document-note', (event, { id }) => {
+  db.prepare('DELETE FROM document_notes WHERE id = ?').run(id);
+  return { success: true };
+});
+
 // World-index backfill: tag a chat's (or all chats') already-archived raw chunks
 // that predate the per-chunk tagger. Returns counts.
 // User-triggered chapter vectorization. Incremental by content hash (see
@@ -2447,7 +2475,7 @@ ipcMain.handle('get-document-vector-status', (event, { documentId }) => {
     return { success: true, status: computeDocumentVectorStatus(documentId) };
   } catch (e) {
     console.error('[get-document-vector-status] failed:', e);
-    return { success: false, error: e.message, status: 'stale' };
+    return { success: false, error: e.message, status: 'never' };
   }
 });
 
@@ -2526,6 +2554,38 @@ ipcMain.handle('create-entity', async (event, payload) => {
     return { success: true, entity: entitiesStore.createEntity(payload || {}) };
   } catch (e) {
     console.error('[create-entity] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+// Resolve a free-text selection to an existing entity (canonical name or alias match).
+// Used by the Writing Desk's in-text Worldbuild bridge.
+ipcMain.handle('resolve-entity-by-name', (event, { workspaceId, name }) => {
+  try {
+    const id = entitiesStore.resolveMention(name, null, workspaceId);
+    return { entity: id ? entitiesStore.getEntity(id) : null };
+  } catch (e) {
+    console.error('[resolve-entity-by-name] failed:', e);
+    return { entity: null };
+  }
+});
+
+// Append a selection as an alias of an entity (dedup vs canonical + existing aliases).
+// Every manual link teaches resolveMention, improving future auto-tagging.
+ipcMain.handle('add-entity-alias', (event, { id, alias }) => {
+  try {
+    const ent = entitiesStore.getEntity(id);
+    if (!ent) return { success: false };
+    const a = String(alias || '').trim();
+    const norm = s => String(s || '').trim().toLowerCase();
+    const existing = Array.isArray(ent.aliases) ? ent.aliases : [];
+    if (!a || norm(a) === norm(ent.canonicalName) || existing.some(x => norm(x) === norm(a))) {
+      return { success: true, added: false };
+    }
+    entitiesStore.updateEntity(id, { aliases: [...existing, a] });
+    return { success: true, added: true };
+  } catch (e) {
+    console.error('[add-entity-alias] failed:', e);
     return { success: false, error: e.message };
   }
 });

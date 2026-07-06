@@ -155,7 +155,10 @@ async function gatherRag({ profileId, workspaceId, currentDocId, retrievalQuery,
         if (chatKb.length) out.push(`--- WORKSPACE KNOWLEDGE ---\n${chatKb.map(r => r.text).join('\n\n')}`);
     } catch (e) { }
     try {
-        const mem = await executeHybridSearch(retrievalQuery, workspaceId, 'chat_memory', threshold, 5);
+        // Workspace memory is the world-indexed tier: enable the dynamic-tag boost, same
+        // as the chat path (searchChatMemories), so entity mentions in the query surface
+        // the tagged chunks.
+        const mem = await executeHybridSearch(retrievalQuery, workspaceId, 'chat_memory', threshold, 5, true);
         if (mem.length) out.push(`--- WORKSPACE MEMORY ---\n${mem.map(r => r.text).join('\n\n')}`);
     } catch (e) { }
     try {
@@ -163,7 +166,9 @@ async function gatherRag({ profileId, workspaceId, currentDocId, retrievalQuery,
             'SELECT id FROM documents WHERE workspaceId = ? AND id != ?'
         ).all(workspaceId, currentDocId).map(r => r.id);
         if (siblingIds.length) {
-            const cross = await executeMultiOwnerSearch(retrievalQuery, siblingIds, 'document', threshold, 5);
+            // Sibling chapters are world-indexed (WD chapter indexing tags their chunks),
+            // so ride the tag boost here too — this is the cross-chapter coherence lever.
+            const cross = await executeMultiOwnerSearch(retrievalQuery, siblingIds, 'document', threshold, 5, true);
             if (cross.length) out.push(`--- OTHER CHAPTERS ---\n${cross.map(r => r.text).join('\n\n')}`);
         }
     } catch (e) { }

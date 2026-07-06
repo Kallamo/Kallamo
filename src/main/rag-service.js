@@ -459,9 +459,16 @@ function queryMentions(queryLower, needleLower) {
 // values, falling back to tag names) and flag every chunk whose tag the query
 // mentions. Fixed boost per chunk (decision: not scaled by match count).
 function computeTagBoostMap(queryText, ownerId, ownerType) {
+    return computeTagBoostMapForOwners(queryText, [ownerId], ownerType);
+}
+
+// Same as computeTagBoostMap but across several owners (e.g. the sibling chapters of a
+// Writing Desk document), so cross-chapter retrieval also rides the world-index tags.
+function computeTagBoostMapForOwners(queryText, ownerIds, ownerType) {
     const q = String(queryText || '').toLowerCase();
     const boost = new Map();
-    if (!q.trim()) return boost;
+    if (!q.trim() || !ownerIds || !ownerIds.length) return boost;
+    const placeholders = ownerIds.map(() => '?').join(',');
     let rows = [];
     try {
         rows = db.prepare(
@@ -470,8 +477,8 @@ function computeTagBoostMap(queryText, ownerId, ownerType) {
              FROM chunk_tags ct
              JOIN knowledge_chunks kc ON ct.chunkId = kc.id
              LEFT JOIN entities e ON ct.entity = e.id
-             WHERE kc.ownerId = ? AND kc.ownerType = ?`
-        ).all(ownerId, ownerType);
+             WHERE kc.ownerId IN (${placeholders}) AND kc.ownerType = ?`
+        ).all(...ownerIds, ownerType);
     } catch (e) { return boost; }
     for (const r of rows) {
         // When entity is a canonical id, match against its name + aliases; otherwise
@@ -612,13 +619,14 @@ async function executeHybridSearch(queryText, ownerId, ownerType, threshold = 0.
 // chapters of a Writing Desk document), embed the query once, and fuse over the
 // whole pool. Used by the Writing Desk so a select->invoke can reach other
 // chapters without re-embedding the query per owner.
-async function executeMultiOwnerSearch(queryText, ownerIds, ownerType, threshold = 0.3, k = 5) {
+async function executeMultiOwnerSearch(queryText, ownerIds, ownerType, threshold = 0.3, k = 5, applyTagBoost = false) {
     try {
         const candidates = loadOwnerCandidates(ownerIds, ownerType);
         if (candidates.length === 0) return [];
         const queryVector = await generateEmbeddingVector(queryText, true);
         const sparseNormMap = computeSparseNormMap(queryText);
-        return fuseAndRank(queryVector, candidates, sparseNormMap, threshold, k);
+        const boostMap = applyTagBoost ? computeTagBoostMapForOwners(queryText, ownerIds, ownerType) : null;
+        return fuseAndRank(queryVector, candidates, sparseNormMap, threshold, k, boostMap);
     } catch (error) {
         console.error(`Error in executeMultiOwnerSearch for owners [${(ownerIds || []).join(',')}]:`, error);
         return [];

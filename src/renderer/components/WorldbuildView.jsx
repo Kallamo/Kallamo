@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import {
   Plus, Search, BookOpen, MapPin, Package, Users, Flag, User,
   Sparkles, Trash2, Save, X, Pencil, Check, Link2, Globe, Tag, ScrollText, Ghost, Info, Replace,
-  Lock, ShieldCheck, RefreshCw, Upload, Download,
+  Lock, ShieldCheck, RefreshCw, Upload, Download, CalendarClock,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import Button from './ui/Button';
@@ -22,8 +22,9 @@ const TYPES = {
   Factions:   { label: 'Faction',          icon: Flag,     medallion: 'bg-rose-400/15 text-rose-200 border-rose-400/30', ring: 'border-rose-400/25', soft: 'text-rose-300' },
   Characters: { label: 'Character',        icon: User,     medallion: 'bg-accent/15 text-accent border-accent/30', ring: 'border-accent/25', soft: 'text-accent' },
   Creatures:  { label: 'Creature / Entity', icon: Ghost,    medallion: 'bg-violet-400/15 text-violet-200 border-violet-400/30', ring: 'border-violet-400/25', soft: 'text-violet-300' },
+  Events:     { label: 'Event',            icon: CalendarClock, medallion: 'bg-orange-400/15 text-orange-200 border-orange-400/30', ring: 'border-orange-400/25', soft: 'text-orange-300' },
 };
-const TYPE_ORDER = ['Characters', 'Locations', 'Factions', 'Items', 'Races', 'Creatures', 'System'];
+const TYPE_ORDER = ['Characters', 'Locations', 'Factions', 'Items', 'Races', 'Creatures', 'Events', 'System'];
 const meta = (t) => TYPES[t] || { label: t, icon: Globe, medallion: 'bg-white/10 text-gray-300 border-white/20', ring: 'border-white/15', soft: 'text-gray-300' };
 const ITEM_TYPES = ['Weapon', 'Armor', 'Artifact', 'Resource'];
 
@@ -123,6 +124,7 @@ const FreeDatalist = ({ value, onChange, options, placeholder }) => {
   const [open, setOpen] = useState(false);
   const [rect, setRect] = useState(null);
   const wrapRef = useRef(null);
+  const menuRef = useRef(null);
   const opts = [...new Set(options.filter(Boolean))];
   const q = (value || '').toLowerCase();
   const filtered = opts.filter(o => o.toLowerCase().includes(q));
@@ -130,7 +132,9 @@ const FreeDatalist = ({ value, onChange, options, placeholder }) => {
   useEffect(() => {
     if (!open) return;
     const close = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
-    const drop = () => setOpen(false);
+    // Close when the panel scrolls (the fixed menu would detach), but not when the
+    // scroll happens inside the menu itself.
+    const drop = (e) => { if (menuRef.current && menuRef.current.contains(e.target)) return; setOpen(false); };
     document.addEventListener('mousedown', close);
     window.addEventListener('scroll', drop, true);
     window.addEventListener('resize', drop);
@@ -140,7 +144,7 @@ const FreeDatalist = ({ value, onChange, options, placeholder }) => {
     <div className="relative" ref={wrapRef}>
       <LInput placeholder={placeholder} value={value || ''} onFocus={openMenu} onChange={(e) => { onChange(e); openMenu(); }} />
       {open && filtered.length > 0 && rect && createPortal(
-        <div style={{ position: 'fixed', top: rect.bottom + 4, left: rect.left, width: rect.width, zIndex: 60 }}
+        <div ref={menuRef} style={{ position: 'fixed', top: rect.bottom + 4, left: rect.left, width: rect.width, zIndex: 60 }}
           className="max-h-44 overflow-y-auto custom-scrollbar rounded-lg border border-white/15 bg-[#021a20] shadow-xl py-1">
           {filtered.map(o => (
             <button key={o} type="button" onMouseDown={(e) => { e.preventDefault(); onChange({ target: { value: o } }); setOpen(false); }}
@@ -357,7 +361,7 @@ function MemberRoles({ links, options, onAdd, onSetRole, onRemove, disabled }) {
   );
 }
 
-export default function WorldbuildView({ chat, electronAPI }) {
+export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFocusHandled }) {
   const { showToast, settings } = useApp();
   // Entity enrichment (and world tagging) run on the dedicated System AI only. Without one
   // the "Update entities" button stays visible but disabled, with a tooltip pointing here.
@@ -410,6 +414,7 @@ export default function WorldbuildView({ chat, electronAPI }) {
     if (ent.type === 'Items') { n.createdBy = (await from('created_by'))[0] || null; n.ownedBy = (await from('owned_by'))[0] || null; n.foundIn = await from('found_in'); }
     if (ent.type === 'Races') n.members = await to('is_race');
     if (ent.type === 'Creatures') n.foundIn = await from('found_in');
+    if (ent.type === 'Events') { n.happenedAt = await from('happened_at'); n.involved = await from('involved'); }
     if (ent.type === 'Factions') { n.operatesIn = await from('operates_in'); n.members = await to('member_of'); n.leader = (await from('led_by'))[0] || null; }
     if (ent.type === 'Characters') { n.isRace = (await from('is_race'))[0] || null; n.inventory = await to('owned_by'); n.memberOf = await from('member_of'); n.connectedTo = await from('connected_to'); n.relationships = await from('related_to'); }
     setRel(n);
@@ -420,6 +425,15 @@ export default function WorldbuildView({ chat, electronAPI }) {
     setSelected({ id: en.id, type: en.type, canonicalName: en.canonicalName || '', aliases: (en.aliases || []).join(', '), lore: en.lore || '', loreDocumentId: en.loreDocumentId || '', status: en.status || 'confirmed', data: en.data || {} });
     await loadRelations(en);
   };
+
+  // Focus an entity requested from outside (the Writing Desk "Open in Worldbuild" action),
+  // once the registry has loaded. Clear the request so it fires only once.
+  useEffect(() => {
+    if (!focusEntityId || !entities.length) return;
+    const en = entities.find(e => e.id === focusEntityId);
+    if (en) openEntity(en);
+    onFocusHandled?.();
+  }, [focusEntityId, entities]); // eslint-disable-line react-hooks/exhaustive-deps
   const startNew = (type) => { setShowCreate(false); setEditingSection(null); setCharTab('data'); setSelected(draftFor(type)); setRel({}); };
   const patch = (f) => setSelected(p => ({ ...p, ...f }));
   const patchData = (f) => setSelected(p => ({ ...p, data: { ...p.data, ...f } }));
@@ -766,6 +780,22 @@ export default function WorldbuildView({ chat, electronAPI }) {
           ? <p className="text-sm text-gray-600 italic">No members yet.</p>
           : <div className="flex flex-wrap gap-1.5">{rel.members.map(l => <Chip key={l.linkId}>{l.entity.canonicalName}{l.label && <span className="text-accent/90"> · {l.label}</span>}</Chip>)}</div>,
         edit: <MemberRoles disabled={unsaved} links={rel.members || []} options={byType.Characters} onAdd={(id) => addMulti('member_of', id, false)} onSetRole={setRole} onRemove={removeLink} /> });
+    }
+    if (type === 'Events') {
+      const kindOpts = ['Battle', 'Festival', 'Holiday', 'Disaster', 'Ceremony', 'Discovery'];
+      S.push({ key: 'overview', title: 'Overview', icon: CalendarClock, scalar: false, relational: true,
+        view: <>
+          <ViewField label="Kind" value={selected.data.kind} empty="Not set" />
+          <div className="pt-2"><div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-0.5">Where it happened</div><ChipList links={rel.happenedAt} empty="No place set." /></div>
+          <div className="pt-2"><div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-0.5">Who was involved</div><ChipList links={rel.involved} empty="No one set." /></div>
+        </>,
+        edit: <>
+          <Edit label="Kind" hint="What sort of event. Type your own or reuse one."><FreeDatalist value={selected.data.kind} onChange={(e) => patchData({ kind: e.target.value })} options={kindOpts} placeholder="e.g. Battle, Festival, Holiday" /></Edit>
+          <MultiRelation label="Where it happened" hint="Places this event took place." disabled={unsaved} links={rel.happenedAt || []} options={byType.Locations} onAdd={(id) => addMulti('happened_at', id)} onRemove={removeLink} />
+          <MultiRelation label="Who was involved" hint="Characters who took part." disabled={unsaved} links={rel.involved || []} options={byType.Characters} onAdd={(id) => addMulti('involved', id)} onRemove={removeLink} />
+        </> });
+      S.push({ key: 'desc', title: 'Description', icon: CalendarClock, scalar: true, view: <Prose text={selected.data.description} />, edit: <Edit label="Description"><LTextarea rows={5} placeholder="What happened, and why it matters." value={selected.data.description || ''} onChange={(e) => patchData({ description: e.target.value })} /></Edit> });
+      S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, view: loreView, edit: loreEdit });
     }
     return S;
   };
@@ -1141,8 +1171,8 @@ function ChipList({ links, empty }) {
 
 // Invented (non-user) example names, English.
 function placeholderName(type) {
-  return { System: 'e.g. The Three Laws of Aether', Locations: 'e.g. Thornhall', Items: 'e.g. Stormglass Lantern', Races: 'e.g. Tidewalkers', Factions: 'e.g. The Ember Concord', Characters: 'e.g. Captain Aldric Venn', Creatures: 'e.g. The Gloamwyrm' }[type] || 'Name';
+  return { System: 'e.g. The Three Laws of Aether', Locations: 'e.g. Thornhall', Items: 'e.g. Stormglass Lantern', Races: 'e.g. Tidewalkers', Factions: 'e.g. The Ember Concord', Characters: 'e.g. Captain Aldric Venn', Creatures: 'e.g. The Gloamwyrm', Events: 'e.g. The Siege of Thornhall' }[type] || 'Name';
 }
 function placeholderAlias(type) {
-  return { Locations: 'e.g. The Bramble Keep', Items: 'e.g. The Tempest Lamp', Races: 'e.g. Brinekin', Factions: 'e.g. The Concord', Characters: 'e.g. Captain, The Grey Wolf', Creatures: 'e.g. The Bog Serpent' }[type] || '';
+  return { Locations: 'e.g. The Bramble Keep', Items: 'e.g. The Tempest Lamp', Races: 'e.g. Brinekin', Factions: 'e.g. The Concord', Characters: 'e.g. Captain, The Grey Wolf', Creatures: 'e.g. The Bog Serpent', Events: 'e.g. The Long Night' }[type] || '';
 }

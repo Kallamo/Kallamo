@@ -8,7 +8,7 @@ import {
   Rows, Columns, Trash2, Combine,
   ArrowUpToLine, ArrowDownToLine, ArrowLeftToLine, ArrowRightToLine,
   AlignLeft, AlignCenter, AlignRight, AlignJustify, ALargeSmall, AlignVerticalSpaceAround, Pilcrow, Plus, FileCog, Asterisk,
-  DatabaseZap
+  DatabaseZap, Database, DatabaseBackup, AlertCircle, MoreHorizontal, Link2, ExternalLink, Unlink, Globe
 } from 'lucide-react';
 import ColorPicker from './ui/ColorPicker';
 import Button from './ui/Button';
@@ -18,13 +18,28 @@ import ExportModal from './ExportModal';
 import { InvokeModal } from './WritingInvocation';
 import WritingFindReplace from './WritingFindReplace';
 import { useApp } from '../context/AppContext';
-import { Sparkles, X, Loader2, AlertTriangle } from 'lucide-react';
+import { Sparkles, X, Loader2, AlertTriangle, User, Users, MapPin, Package, Flag, Ghost, CalendarClock, BookOpen } from 'lucide-react';
 import { DecorationSet } from '@tiptap/pm/view';
 import {
   getEditorExtensions, estimatePagesFromWords,
   suggestionKey, buildSuggestionDecorations, suggestionCharDelta,
   selectionHasTable, sliceToMarkdown, proposalToHtml,
 } from './writingExtensions';
+
+// Type → icon/label for linked-entity affordances (hover card, menu). Mirrors the
+// Worldbuild TYPES map so the in-text bridge speaks the same visual language.
+const ENTITY_TYPE_META = {
+  System:     { label: 'System / Concept', Icon: BookOpen },
+  Locations:  { label: 'Location', Icon: MapPin },
+  Items:      { label: 'Item', Icon: Package },
+  Races:      { label: 'Race', Icon: Users },
+  Factions:   { label: 'Faction', Icon: Flag },
+  Characters: { label: 'Character', Icon: User },
+  Creatures:  { label: 'Creature', Icon: Ghost },
+  Events:     { label: 'Event', Icon: CalendarClock },
+};
+const entityMeta = (t) => ENTITY_TYPE_META[t] || { label: t || 'Entity', Icon: Globe };
+const WB_TYPE_ORDER = ['Characters', 'Locations', 'Factions', 'Items', 'Creatures', 'Races', 'Events', 'System'];
 
 export const PAPER_THEMES = [
   { label: 'Light', color: '#ffffff' },
@@ -597,7 +612,7 @@ function countWords(text) {
   return t ? t.split(/\s+/).length : 0;
 }
 
-export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight = false, pending = null, onDispatch, onResolved, toolbarMode = 'fixed', smartTypography = true, onDocPatch, onRename }) {
+export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight = false, pending = null, onDispatch, onResolved, toolbarMode = 'fixed', smartTypography = true, onDocPatch, onRename, jumpRef, onOpenEntity }) {
   const { showToast } = useApp();
   const saveTimer = useRef(null);
   // Tracks genuine unsaved edits, so leaving the chapter never re-saves unchanged
@@ -614,15 +629,62 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
   const [lastChannel, setLastChannel] = useState('replacement'); // sticky default for the Invoke modal
   const [invokeData, setInvokeData] = useState(null); // captured selection for the modal
   const [stale, setStale] = useState(false);
-  // Chapter index status: 'done' = vectorized & current, 'stale' = edited since last
-  // index (or never indexed). Editing flips it to 'stale'; vectorizing flips it back.
-  const [vecStatus, setVecStatus] = useState(doc.vectorized ? 'done' : 'stale');
+  // In-text Worldbuild bridge (selection → entity actions).
+  const [wbOpen, setWbOpen] = useState(false);
+  const [wbData, setWbData] = useState(null); // { from, to, text, entity, hasMark }
+  const [wbPicker, setWbPicker] = useState(false); // link-to-existing entity list
+  const [wbEntities, setWbEntities] = useState([]);
+  const [wbQuery, setWbQuery] = useState('');
+  const wbBtnRef = useRef(null);
+  const wbAnchorRef = useRef(null); // where the menu anchors: the ⋯ button OR a clicked entity span
+  const [entityHover, setEntityHover] = useState(null); // { name, type, x, y } custom card
+  // Chapter index status: 'done' = vectorized & current, 'outdated' = edited since
+  // last index, 'never' = no index yet, 'error' = last index failed. Editing flips a
+  // 'done' chapter to 'outdated'; vectorizing flips it back.
+  const [vecStatus, setVecStatus] = useState(doc.vectorized ? 'done' : 'never');
   const [vecBusy, setVecBusy] = useState(false);
   const [vecProgress, setVecProgress] = useState(null);
   const [vecMenuOpen, setVecMenuOpen] = useState(false);
   const vecBtnRef = useRef(null);
   const locked = inFlight || !!pending;
   const pageConfig = pageConfigFromDoc(doc);
+
+  // Chapter index pill: icon + label + color per state. Color carries the meaning
+  // (green = current, amber = the alert, red = failed); the brand accent stays for
+  // interaction only. Click always opens the Index new / Reindex all menu.
+  const vecPill = (() => {
+    if (vecBusy) {
+      const p = vecProgress ? ` ${vecProgress.done}/${vecProgress.total}` : '';
+      return { Icon: Loader2, spin: true, label: `Indexing${p}`, cls: 'text-gray-400 border-gray-500/35 bg-gray-500/10',
+        title: vecProgress ? `Indexing chapter… (${vecProgress.phase} ${vecProgress.done}/${vecProgress.total})` : 'Indexing chapter…' };
+    }
+    switch (vecStatus) {
+      case 'done':
+        return { Icon: Database, label: 'Indexed', cls: 'text-green-400 border-green-500/40 bg-green-500/10',
+          title: 'Chapter indexed. AI can see it from other chapters' };
+      case 'outdated':
+        return { Icon: DatabaseBackup, label: 'Out of date', cls: 'text-amber-400 border-amber-500/45 bg-amber-500/10',
+          title: 'Chapter edited since last index — AI is still reading the old version. Reindex to sync.' };
+      case 'error':
+        return { Icon: AlertCircle, label: 'Index failed', cls: 'text-red-400 border-red-500/40 bg-red-500/10',
+          title: 'Last index failed. Click to try again.' };
+      default:
+        return { Icon: DatabaseZap, label: 'Not indexed', cls: 'text-gray-400 border-gray-500/35 bg-gray-500/10',
+          title: 'Index this chapter for cross-chapter AI context' };
+    }
+  })();
+
+  // The index menu has two actions on different axes: syncing the memory to the
+  // current TEXT (Index new blocks) vs refreshing entity TAGS on already-indexed text
+  // (Reindex all tags). When the chapter is behind the text, the first is the answer —
+  // emphasize it and pin a contextual note so the menu explains the pill.
+  const needsSync = vecStatus === 'never' || vecStatus === 'outdated' || vecStatus === 'error';
+  const vecMenuNote = {
+    outdated: "You've edited this chapter since it was last indexed, so the AI is still reading the old version.",
+    never: "This chapter isn't in the AI's memory yet.",
+    error: 'The last index attempt failed. Try again.',
+    done: "The AI's memory is up to date with this chapter.",
+  }[vecStatus] || '';
 
   useEffect(() => { setTitle(doc.title); }, [doc.id]);
   // Resolve the indexed indicator from the actual content-vs-index comparison (not the
@@ -631,7 +693,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     let active = true;
     setVecProgress(null);
     electronAPI.getDocumentVectorStatus?.(doc.id).then(res => {
-      if (active && res?.success) setVecStatus(res.status === 'done' ? 'done' : 'stale');
+      if (active && res?.success) setVecStatus(res.status || 'never');
     });
     return () => { active = false; };
   }, [doc.id, electronAPI]);
@@ -657,6 +719,14 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     editor.commands.focus('end');
   };
 
+  // Re-read the authoritative status from the backend (content-vs-index hash compare),
+  // so the pill always tells the truth after an operation instead of guessing. Retag
+  // keeps embeddings, so on an edited chapter it legitimately stays 'outdated'.
+  const refreshVecStatus = async () => {
+    const res = await electronAPI.getDocumentVectorStatus?.(doc.id);
+    if (res?.success) setVecStatus(res.status || 'never');
+  };
+
   // Index new: embed + tag only new/changed blocks (incremental by content hash).
   const runVectorize = async () => {
     if (vecBusy) return;
@@ -666,7 +736,11 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     try {
       const res = await electronAPI.vectorizeDocument?.(doc.id);
       console.log('[vectorize-document]', res);
-      if (res?.success) setVecStatus('done');
+      if (res?.success) await refreshVecStatus();
+      else setVecStatus('error');
+    } catch (e) {
+      console.error('[vectorize-document] failed:', e);
+      setVecStatus('error');
     } finally {
       setVecBusy(false);
       setVecProgress(null);
@@ -683,6 +757,11 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     try {
       const res = await electronAPI.retagDocument?.(doc.id);
       console.log('[retag-document]', res);
+      if (res && !res.success) setVecStatus('error');
+      else await refreshVecStatus();
+    } catch (e) {
+      console.error('[retag-document] failed:', e);
+      setVecStatus('error');
     } finally {
       setVecBusy(false);
       setVecProgress(null);
@@ -703,7 +782,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
 
   // Invocation only offers the profiles ACTIVE in this workspace (the chat's
   // activeProfiles), not every profile in the app — the Writing Desk inherits the
-  // workspace's director's-table just like the chat does.
+  // workspace's active profile set just like the chat does.
   useEffect(() => {
     let active = true;
     Promise.all([
@@ -744,7 +823,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
       setCounts({ words: countWords(text), chars: text.length });
       // Edits desync the persistent index; save-document-content also resets the DB flag.
       dirty.current = true;
-      setVecStatus(s => (s === 'done' ? 'stale' : s));
+      setVecStatus(s => (s === 'done' ? 'outdated' : s));
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => {
         electronAPI.saveDocumentContent(doc.id, JSON.stringify(editor.getJSON()));
@@ -759,6 +838,100 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     const text = editor.getText();
     setCounts({ words: countWords(text), chars: text.length });
   }, [editor, doc.id]);
+
+  // Best-effort scroll-to-passage for a note's excerpt: find the text in the doc and
+  // bring it into view. No selection, no highlight — just carry the page back to it.
+  // No stored anchor, so it can't orphan.
+  useEffect(() => {
+    if (!jumpRef) return;
+    jumpRef.current = (excerpt) => {
+      if (!editor || !excerpt) return;
+      const needle = excerpt.trim();
+      const candidates = [needle, needle.slice(0, 60), needle.split(/\s+/).slice(0, 6).join(' ')];
+      let from = null;
+      for (const c of candidates) {
+        if (!c) continue;
+        editor.state.doc.descendants((node, pos) => {
+          if (from != null) return false;
+          if (node.isText && node.text) {
+            const i = node.text.indexOf(c);
+            if (i !== -1) { from = pos + i; return false; }
+          }
+          return true;
+        });
+        if (from != null) break;
+      }
+      if (from == null) return;
+      try {
+        const dom = editor.view.domAtPos(from)?.node;
+        const el = dom && dom.nodeType === 3 ? dom.parentElement : dom;
+        const block = el && el.closest ? el.closest('p, h1, h2, h3, li, blockquote') : el;
+        if (block && block.scrollIntoView) block.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } catch { /* dom lookup best-effort */ }
+    };
+    return () => { if (jumpRef) jumpRef.current = null; };
+  }, [editor, jumpRef]);
+
+  // Custom hover card for linked-entity spans (replaces the native title tooltip):
+  // shows the type icon + full entity name, positioned above the span.
+  useEffect(() => {
+    if (!editor) return;
+    const dom = editor.view.dom;
+    const onOver = (e) => {
+      const el = e.target?.closest?.('.wd-entity-ref');
+      if (!el) return;
+      const id = el.getAttribute('data-entity-id') || '';
+      const rect = el.getBoundingClientRect();
+      const base = {
+        id,
+        name: el.getAttribute('data-entity-name') || el.textContent || '',
+        type: el.getAttribute('data-entity-type') || '',
+        x: rect.left + rect.width / 2,
+        y: rect.top,
+      };
+      setEntityHover(base);
+      // Older marks (or renamed entities) may lack the stored type — resolve it by id.
+      if (id && !base.type && electronAPI.getEntity) {
+        electronAPI.getEntity(id).then(res => {
+          const ent = res?.entity || res;
+          if (ent) setEntityHover(cur => (cur && cur.id === id ? { ...cur, type: ent.type || cur.type, name: ent.canonicalName || cur.name } : cur));
+        }).catch(() => {});
+      }
+    };
+    const onOut = (e) => {
+      if (e.target?.closest?.('.wd-entity-ref')) setEntityHover(null);
+    };
+    // Clicking a linked word opens the entity menu right there — no need to reselect
+    // and hit the ⋯ button.
+    const onClick = (e) => {
+      const el = e.target?.closest?.('.wd-entity-ref');
+      if (!el) return;
+      const from = editor.view.posAtDOM(el, 0);
+      const to = from + (el.textContent?.length || 0);
+      const entityId = el.getAttribute('data-entity-id') || '';
+      const name = el.getAttribute('data-entity-name') || el.textContent || '';
+      const type = el.getAttribute('data-entity-type') || '';
+      setEntityHover(null);
+      setWbPicker(false);
+      setWbData({ from, to, text: el.textContent || name, marked: true, entity: entityId ? { id: entityId, canonicalName: name, type } : null });
+      wbAnchorRef.current = el;
+      setWbOpen(true);
+      if (entityId && electronAPI.getEntity) {
+        electronAPI.getEntity(entityId).then(res => {
+          const ent = res?.entity || res;
+          setWbData(d => (d && d.entity && d.entity.id === entityId ? { ...d, entity: ent || { id: entityId, canonicalName: name, type, missing: true } } : d));
+        }).catch(() => {});
+      }
+    };
+    dom.addEventListener('mouseover', onOver);
+    dom.addEventListener('mouseout', onOut);
+    dom.addEventListener('click', onClick);
+    return () => {
+      dom.removeEventListener('mouseover', onOver);
+      dom.removeEventListener('mouseout', onOut);
+      dom.removeEventListener('click', onClick);
+    };
+  }, [editor]);
 
   // Flush a pending save when switching documents or unmounting — only when there are
   // genuine unsaved edits, so an unchanged chapter keeps its vectorized flag intact.
@@ -812,6 +985,75 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     const before = editor.state.doc.textBetween(0, from, '\n');
     const after = editor.state.doc.textBetween(to, editor.state.doc.content.size, '\n');
     setInvokeData({ from, to, selection, spanContent, format, before, after });
+  };
+
+  // --- In-text Worldbuild bridge ---
+  // Never guess identity from the name (two "Mara"s must not collapse): the menu reads
+  // only the real mark on the selection. Marked → Open/Unlink that exact entity;
+  // unmarked → Create or Link-to-existing (a deliberate pick). Name-resolution stays in
+  // tagging, never in the text.
+  const openWorldbuildMenu = async () => {
+    if (!editor || locked) return;
+    const { from, to } = editor.state.selection;
+    if (from === to) return;
+    const text = editor.state.doc.textBetween(from, to, ' ').trim();
+    if (!text) return;
+    const marked = editor.isActive('entityRef');
+    const attrs = marked ? editor.getAttributes('entityRef') : {};
+    setWbPicker(false);
+    setWbQuery('');
+    setWbData({ from, to, text, entity: null, marked });
+    wbAnchorRef.current = wbBtnRef.current;
+    setWbOpen(true);
+    if (marked && attrs.entityId) {
+      try {
+        const res = await electronAPI.getEntity?.(attrs.entityId);
+        const ent = res?.entity || res || null;
+        // Fall back to the stored mark attrs if the entity was deleted (dangling ref).
+        setWbData(d => (d ? { ...d, entity: ent || { id: attrs.entityId, canonicalName: attrs.name, type: attrs.type, missing: true } } : d));
+      } catch { /* getEntity best-effort */ }
+    }
+  };
+
+  // Presentational mark only — retrieval still runs off chunk_tags. Stores type so the
+  // hover card can render the right icon without a fetch.
+  const applyEntityMark = async (from, to, entity) => {
+    if (!editor || !entity) return;
+    editor.chain().focus().setTextSelection({ from, to }).setMark('entityRef', { entityId: entity.id, name: entity.canonicalName, type: entity.type }).run();
+    await electronAPI.saveDocumentContent(doc.id, JSON.stringify(editor.getJSON()));
+    // The mark is presentational and never changes a chunk's hashed text, so re-assert
+    // the real index status instead of the optimistic 'outdated' the edit triggered.
+    refreshVecStatus();
+  };
+
+  const linkToEntity = async (entity) => {
+    if (!wbData || !entity) return;
+    await electronAPI.addEntityAlias?.(entity.id, wbData.text); // teaches the auto-tagger
+    applyEntityMark(wbData.from, wbData.to, entity);
+    setWbOpen(false);
+  };
+
+  const createEntityOfType = async (type) => {
+    if (!wbData) return;
+    const res = await electronAPI.createEntity?.({ workspaceId, type, canonicalName: wbData.text, status: 'confirmed' });
+    if (res?.entity) applyEntityMark(wbData.from, wbData.to, res.entity);
+    setWbOpen(false);
+  };
+
+  const unlinkEntity = async () => {
+    if (!editor || !wbData) return;
+    editor.chain().focus().setTextSelection({ from: wbData.from, to: wbData.to }).unsetMark('entityRef').run();
+    await electronAPI.saveDocumentContent(doc.id, JSON.stringify(editor.getJSON()));
+    setWbOpen(false);
+    refreshVecStatus(); // mark-only change, doesn't affect chunk hashes
+  };
+
+  const loadWbEntities = async () => {
+    setWbPicker(true);
+    try {
+      const res = await electronAPI.listEntities?.(workspaceId);
+      setWbEntities(res?.entities || []);
+    } catch { setWbEntities([]); }
   };
 
   const submitInvoke = async (profileId, intermediatePrompt, resultChannel) => {
@@ -925,38 +1167,42 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
             ref={vecBtnRef}
             onClick={() => !vecBusy && setVecMenuOpen(v => !v)}
             disabled={vecBusy}
-            title={
-              vecBusy
-                ? (vecProgress ? `Indexing chapter… (${vecProgress.phase} ${vecProgress.done}/${vecProgress.total})` : 'Indexing chapter…')
-                : vecStatus === 'done'
-                  ? 'Chapter indexed. AI can see it from other chapters'
-                  : 'Index this chapter for cross-chapter AI context'
-            }
-            className={`relative p-1.5 rounded-md transition-colors cursor-pointer disabled:cursor-default ${
-              vecStatus === 'done' ? 'text-accent hover:bg-white/5' : 'text-gray-500 hover:text-white hover:bg-white/5'
-            }`}
+            title={vecPill.title}
+            className={`flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full border text-xs font-medium transition-colors cursor-pointer disabled:cursor-default hover:bg-white/5 ${vecPill.cls}`}
           >
-            {vecBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <DatabaseZap className="w-4 h-4" />}
-            {!vecBusy && vecStatus === 'stale' && (
-              <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-400" />
-            )}
+            <vecPill.Icon className={`w-3.5 h-3.5 shrink-0 ${vecPill.spin ? 'animate-spin' : ''}`} />
+            {vecPill.label}
           </button>
-          <Popover anchorRef={vecBtnRef} open={vecMenuOpen} onClose={() => setVecMenuOpen(false)} matchAnchorWidth={false} align="right" className="w-56 !p-2">
+          <Popover anchorRef={vecBtnRef} open={vecMenuOpen} onClose={() => setVecMenuOpen(false)} matchAnchorWidth={false} align="right" className="w-72 !p-2">
+            {vecMenuNote && (
+              <div className="px-2.5 pt-1 pb-2 text-[0.625rem] leading-snug text-gray-500 border-b border-gray-800/70 mb-1.5">
+                {vecMenuNote}
+              </div>
+            )}
             <button
               type="button"
               onClick={runVectorize}
-              className="w-full text-left px-3 py-2 text-[11px] font-semibold text-gray-200 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
+              className={`w-full text-left px-3 py-2 rounded-lg transition-colors ${
+                needsSync
+                  ? 'text-white bg-white/[0.04] hover:bg-white/[0.08] ring-1 ring-inset ring-accent/30'
+                  : 'text-gray-200 hover:text-white hover:bg-white/5'
+              }`}
             >
-              Index new blocks
-              <span className="block text-[9px] font-normal text-gray-500 mt-0.5">Embed + tag only new or edited blocks.</span>
+              <span className="flex items-center justify-between gap-2 text-xs font-semibold">
+                Update the AI's memory
+                {needsSync && (
+                  <span className="text-[0.5625rem] font-semibold uppercase tracking-wide text-accent bg-accent/10 px-1.5 py-0.5 rounded">Recommended</span>
+                )}
+              </span>
+              <span className="block text-[0.625rem] font-normal text-gray-500 mt-0.5">Reads the blocks you've added or edited into the AI's memory. Do this after writing.</span>
             </button>
             <button
               type="button"
               onClick={runRetag}
-              className="w-full text-left px-3 py-2 text-[11px] font-semibold text-gray-200 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
+              className="w-full text-left px-3 py-2 text-xs font-semibold text-gray-200 hover:text-white hover:bg-white/5 rounded-lg transition-colors mt-0.5"
             >
-              Reindex all tags
-              <span className="block text-[9px] font-normal text-gray-500 mt-0.5">Re-tag every block from scratch (keeps embeddings).</span>
+              Refresh entity tags
+              <span className="block text-[0.625rem] font-normal text-gray-500 mt-0.5">Re-tags the text already in memory without re-reading it. Use after changing your Worldbuild entities, not after writing.</span>
             </button>
           </Popover>
           <button type="button" onClick={() => setShowFind(v => !v)} title="Find & Replace (Ctrl+F)" className={`p-1.5 rounded-md transition-colors cursor-pointer ${showFind ? 'text-accent bg-white/5' : 'text-gray-500 hover:text-white hover:bg-white/5'}`}>
@@ -1004,7 +1250,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
           pluginKey="invokeBubble"
           shouldShow={({ state }) => !state.selection.empty && !locked}
           options={{ placement: 'bottom' }}
-          className="flex items-center"
+          className="flex items-center gap-1"
         >
           <button
             type="button"
@@ -1013,7 +1259,106 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
           >
             <Sparkles className="w-3.5 h-3.5" /> Invoke AI
           </button>
+          <button
+            type="button"
+            ref={wbBtnRef}
+            onClick={() => (wbOpen ? setWbOpen(false) : openWorldbuildMenu())}
+            aria-label="More options"
+            className="flex items-center justify-center w-8 h-8 bg-[#1a2b33] text-gray-100 border border-gray-600 rounded-lg shadow-xl hover:bg-[#26424d] hover:text-white cursor-pointer"
+          >
+            <MoreHorizontal className="w-4 h-4" />
+          </button>
         </BubbleMenu>
+      )}
+
+      <Popover anchorRef={wbAnchorRef} open={wbOpen} onClose={() => setWbOpen(false)} matchAnchorWidth={false} align="right" scroll={false} className="w-80 !p-1.5">
+        {wbData && (
+          <div className="flex items-center gap-1.5 px-2 py-1 mb-1 border-b border-gray-800/70">
+            <Globe className="w-3 h-3 text-accent shrink-0" />
+            <span className="text-[0.625rem] uppercase tracking-wider font-bold text-gray-500">Worldbuild</span>
+            <span className="text-[0.625rem] text-gray-600 truncate ml-auto max-w-[130px]">“{wbData.text}”</span>
+          </div>
+        )}
+        {wbData && wbPicker ? (
+          <div className="flex flex-col gap-1">
+            <input
+              autoFocus
+              value={wbQuery}
+              onChange={(e) => setWbQuery(e.target.value)}
+              placeholder="Search entities…"
+              className="bg-[#00080B] border border-gray-800 text-gray-200 text-xs rounded-md px-2 py-1.5 focus:outline-none focus:border-accent"
+            />
+            <div className="max-h-48 overflow-y-auto custom-scrollbar flex flex-col">
+              {wbEntities.filter(e => !wbQuery || (e.canonicalName || '').toLowerCase().includes(wbQuery.toLowerCase())).slice(0, 30).map(e => {
+                const M = entityMeta(e.type);
+                return (
+                  <button key={e.id} onClick={() => linkToEntity(e)} className="flex items-center gap-2 text-left px-2 py-1.5 text-xs text-gray-300 hover:text-white hover:bg-white/5 rounded-md">
+                    <M.Icon className="w-3 h-3 shrink-0 text-gray-500" />
+                    <span className="truncate">{e.canonicalName}</span>
+                    <span className="ml-auto text-[0.5625rem] text-gray-600 shrink-0">{M.label}</span>
+                  </button>
+                );
+              })}
+              {wbEntities.length === 0 && <span className="px-2 py-1.5 text-[0.625rem] text-gray-600">No entities yet.</span>}
+            </div>
+          </div>
+        ) : wbData && (
+          <div className="flex flex-col gap-0.5">
+            {wbData.marked ? (
+              <>
+                {wbData.entity && (
+                  <div className="flex items-center gap-2 px-2 py-1 text-xs">
+                    {(() => { const M = entityMeta(wbData.entity.type); return <M.Icon className="w-3.5 h-3.5 shrink-0 text-accent" />; })()}
+                    <span className="text-accent font-medium truncate">{wbData.entity.canonicalName || wbData.text}</span>
+                    <span className="ml-auto text-[0.5625rem] text-gray-600 shrink-0">{entityMeta(wbData.entity.type).label}</span>
+                  </div>
+                )}
+                {wbData.entity?.missing && (
+                  <div className="px-2 pb-1 text-[0.625rem] text-amber-400/80">This entity no longer exists.</div>
+                )}
+                {wbData.entity && !wbData.entity.missing && (
+                  <button onClick={() => { setWbOpen(false); onOpenEntity?.(wbData.entity.id); }} className="flex items-center gap-2 text-left px-2 py-1.5 text-xs text-gray-200 hover:text-white hover:bg-white/5 rounded-md">
+                    <ExternalLink className="w-3.5 h-3.5 shrink-0 text-gray-500" /> Open in Worldbuild
+                  </button>
+                )}
+                <button onClick={unlinkEntity} className="flex items-center gap-2 text-left px-2 py-1.5 text-xs text-gray-400 hover:text-red-400 hover:bg-white/5 rounded-md">
+                  <Unlink className="w-3.5 h-3.5 shrink-0" /> Unlink
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="px-2 pt-1 pb-0.5 text-[0.625rem] text-gray-600">Create entity as…</div>
+                <div className="grid grid-cols-2 gap-1 px-1 pb-1">
+                  {WB_TYPE_ORDER.map(t => {
+                    const M = entityMeta(t);
+                    return (
+                      <button key={t} onClick={() => createEntityOfType(t)} className="flex items-center gap-1.5 text-left px-2 py-1 text-[0.6875rem] text-gray-300 hover:text-white bg-white/[0.03] hover:bg-white/[0.08] rounded-md">
+                        <M.Icon className="w-3 h-3 shrink-0 text-gray-500" /> {M.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <button onClick={loadWbEntities} className="flex items-center gap-2 text-left px-2 py-1.5 text-xs text-gray-200 hover:text-white hover:bg-white/5 rounded-md border-t border-gray-800/70 mt-0.5 pt-2">
+                  <Link2 className="w-3.5 h-3.5 shrink-0 text-gray-500" /> Link to existing…
+                </button>
+              </>
+            )}
+          </div>
+        )}
+      </Popover>
+
+      {entityHover && (
+        <div style={{ position: 'fixed', left: entityHover.x, top: entityHover.y - 8, transform: 'translate(-50%, -100%)', zIndex: 60 }} className="pointer-events-none">
+          {(() => { const M = entityMeta(entityHover.type); return (
+            <div className="flex items-center gap-2 bg-[#0a161d] border border-gray-700 rounded-lg px-2.5 py-1.5 shadow-2xl whitespace-nowrap">
+              <M.Icon className="w-3.5 h-3.5 text-accent shrink-0" />
+              <div className="flex flex-col leading-tight">
+                <span className="text-xs font-semibold text-gray-100">{entityHover.name}</span>
+                <span className="text-[0.625rem] text-gray-500">{M.label}</span>
+              </div>
+            </div>
+          ); })()}
+        </div>
       )}
 
       {invokeData && (
@@ -1080,19 +1425,6 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
           </div>
         )}
 
-        {/* Analysis channel: a read-only side note (no inline diff). */}
-        {pending && pending.channel === 'analysis' && (
-          <div className="sticky bottom-4 z-20 mx-auto max-w-2xl pointer-events-none">
-            <div className="pointer-events-auto bg-[#0a161d]/97 border border-gray-800 rounded-xl shadow-2xl p-4">
-              <div className="flex items-center gap-2 mb-2">
-                <Sparkles className="w-4 h-4 text-accent" />
-                <span className="text-xs font-semibold text-gray-300">AI note</span>
-                <button onClick={rejectSuggestion} className="ml-auto p-1 text-gray-500 hover:text-white cursor-pointer"><X className="w-4 h-4" /></button>
-              </div>
-              <div className="text-sm text-gray-300 whitespace-pre-wrap max-h-48 overflow-y-auto custom-scrollbar">{pending.proposedText}</div>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Status bar: live word/char count + per-chapter word goal */}
