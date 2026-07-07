@@ -2511,21 +2511,89 @@ ipcMain.handle('retag-document', async (event, { documentId }) => {
 ipcMain.handle('get-chat-memory-tags', async (event, { chatId }) => {
   try {
     const rows = db.prepare(
-      `SELECT ct.chunkId AS chunkId, ct.tag AS tag, COALESCE(e.canonicalName, ct.entity) AS value
+      `SELECT ct.chunkId AS chunkId, ct.entity AS entity,
+              COALESCE(e.canonicalName, ct.entity) AS value
        FROM chunk_tags ct
        JOIN knowledge_chunks kc ON ct.chunkId = kc.id
        LEFT JOIN entities e ON ct.entity = e.id
-       WHERE kc.ownerId = ? AND kc.ownerType = 'chat_memory'`
+       WHERE kc.ownerId = ? AND kc.ownerType = 'chat_memory' AND ct.entity IS NOT NULL`
     ).all(chatId);
+    // One chip per entity per chunk (the same entity can carry several literal rows).
     const map = {};
+    const seen = {};
     for (const r of rows) {
       if (!r.value) continue;
-      (map[r.chunkId] = map[r.chunkId] || []).push(r.value);
+      const chunkSeen = (seen[r.chunkId] = seen[r.chunkId] || new Set());
+      if (chunkSeen.has(r.entity)) continue;
+      chunkSeen.add(r.entity);
+      (map[r.chunkId] = map[r.chunkId] || []).push({ value: r.value, entity: r.entity });
     }
     return { success: true, tags: map };
   } catch (e) {
     console.error('[get-chat-memory-tags] failed:', e);
     return { success: false, error: e.message, tags: {} };
+  }
+});
+
+// Per-chunk tags for a chat's uploaded RAG files (ownerType chat_kb), for the file
+// chunk viewer. Returns { [chunkId]: { keywords: ['#x'], entities: [{ value, entity }] } }.
+// keywords = the user's manual (yellow) tags; entities = blue tags (auto + user).
+ipcMain.handle('get-chat-kb-tags', async (event, { chatId }) => {
+  try {
+    const rows = db.prepare(
+      `SELECT ct.chunkId AS chunkId, ct.tag AS tag, ct.entity AS entity, ct.manual AS manual,
+              COALESCE(e.canonicalName, ct.entity) AS value
+       FROM chunk_tags ct
+       JOIN knowledge_chunks kc ON ct.chunkId = kc.id
+       LEFT JOIN entities e ON ct.entity = e.id
+       WHERE kc.ownerId = ? AND kc.ownerType = 'chat_kb'`
+    ).all(chatId);
+    const map = {};
+    const seenEnt = {};
+    for (const r of rows) {
+      const bucket = (map[r.chunkId] = map[r.chunkId] || { keywords: [], entities: [] });
+      if (r.entity) {
+        const seen = (seenEnt[r.chunkId] = seenEnt[r.chunkId] || new Set());
+        if (r.value && !seen.has(r.entity)) { seen.add(r.entity); bucket.entities.push({ value: r.value, entity: r.entity }); }
+      } else if (r.manual === 1 && r.tag) {
+        if (!bucket.keywords.includes(r.tag)) bucket.keywords.push(r.tag);
+      }
+    }
+    return { success: true, tags: map };
+  } catch (e) {
+    console.error('[get-chat-kb-tags] failed:', e);
+    return { success: false, error: e.message, tags: {} };
+  }
+});
+
+// Replace a single chunk's user-editable tags. keywords = the full yellow set (stored
+// as manual=1 literal rows, preserved across re-tag); entities = the full blue set
+// (manual=0 entity rows). Auto literal boost rows (entity null, manual 0) are left be.
+ipcMain.handle('set-chunk-tags', async (event, { chunkId, keywords = [], entities = [] }) => {
+  try {
+    if (!chunkId) return { success: false, error: 'chunkId required' };
+    const cleanKeywords = [...new Set((keywords || []).map(k => {
+      const t = String(k || '').trim().toLowerCase();
+      return t ? (t.startsWith('#') ? t : `#${t}`) : null;
+    }).filter(Boolean))];
+    const entityIds = [...new Set((entities || []).filter(Boolean))];
+    db.transaction(() => {
+      // Yellow (user keywords): replace all manual literal rows.
+      db.prepare('DELETE FROM chunk_tags WHERE chunkId = ? AND manual = 1').run(chunkId);
+      const insKw = db.prepare('INSERT OR IGNORE INTO chunk_tags (chunkId, tag, entity, manual) VALUES (?, ?, NULL, 1)');
+      for (const kw of cleanKeywords) insKw.run(chunkId, kw);
+      // Blue (entities): replace the entity-linked rows with the desired set.
+      db.prepare('DELETE FROM chunk_tags WHERE chunkId = ? AND entity IS NOT NULL').run(chunkId);
+      const insEnt = db.prepare('INSERT OR IGNORE INTO chunk_tags (chunkId, tag, entity, manual) VALUES (?, ?, ?, 0)');
+      for (const eid of entityIds) {
+        const ent = entitiesStore.getEntity(eid);
+        if (ent) insEnt.run(chunkId, ent.canonicalName, eid);
+      }
+    })();
+    return { success: true };
+  } catch (e) {
+    console.error('[set-chunk-tags] failed:', e);
+    return { success: false, error: e.message };
   }
 });
 
@@ -2567,6 +2635,18 @@ ipcMain.handle('resolve-entity-by-name', (event, { workspaceId, name }) => {
   } catch (e) {
     console.error('[resolve-entity-by-name] failed:', e);
     return { entity: null };
+  }
+});
+
+// List entity candidates for a free-text mention (human picker for manual blue tags).
+// Returns every plausible match so the user disambiguates (e.g. two "Mara"s), instead
+// of resolveMention's single silent winner.
+ipcMain.handle('find-entity-candidates', (event, { workspaceId, mention }) => {
+  try {
+    return { success: true, candidates: entitiesStore.findCandidates(mention, workspaceId || null) };
+  } catch (e) {
+    console.error('[find-entity-candidates] failed:', e);
+    return { success: false, error: e.message, candidates: [] };
   }
 });
 
@@ -4153,6 +4233,23 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
             applyChunkTags(cls.chunkTags, [rec], chatId);
           } catch (e) {
             console.error('[Custom Memory] world-index tagging failed (save continues):', e.message);
+          }
+
+          // Apply the user's edits to the blue (entity) tags as a delta over what the
+          // auto tagger just wrote: their removals win, their picks are added. The next
+          // re-tag re-derives freely — these edits are live, not protected.
+          try {
+            const removed = Array.isArray(block.entityTagsRemoved) ? block.entityTagsRemoved : [];
+            const added = Array.isArray(block.entityTagsAdded) ? block.entityTagsAdded : [];
+            const del = db.prepare('DELETE FROM chunk_tags WHERE chunkId = ? AND entity = ?');
+            for (const eid of removed) del.run(snippetId, eid);
+            const ins = db.prepare('INSERT OR IGNORE INTO chunk_tags (chunkId, tag, entity) VALUES (?, ?, ?)');
+            for (const eid of added) {
+              const ent = entitiesStore.getEntity(eid);
+              if (ent) ins.run(snippetId, ent.canonicalName, eid);
+            }
+          } catch (e) {
+            console.error('[Custom Memory] entity tag edits failed (save continues):', e.message);
           }
         }
       }

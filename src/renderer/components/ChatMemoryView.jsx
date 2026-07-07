@@ -1,5 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Database, Plus, Trash2, Edit, Search, HelpCircle, Check, ChevronDown, Sparkles, FileText, Info, X as XIcon, Brain, Loader, Download, Upload } from 'lucide-react';
+import { Database, Plus, Trash2, Edit, Search, HelpCircle, Check, ChevronDown, Sparkles, FileText, Info, X as XIcon, Brain, Loader, Download, Upload, User, MapPin, Package, Users, Flag, Ghost, CalendarClock, BookOpen, Globe } from 'lucide-react';
+
+// Entity type -> icon, mirroring the Worldbuild view so a candidate reads the same here.
+const ENTITY_TYPE_ICON = {
+  Characters: User, Locations: MapPin, Items: Package, Races: Users,
+  Factions: Flag, Creatures: Ghost, Events: CalendarClock, System: BookOpen,
+};
+const entityTypeIcon = (t) => ENTITY_TYPE_ICON[t] || Globe;
 import { useApp } from '../context/AppContext';
 import ImportProgressModal from './modals/ImportProgressModal';
 import ConfirmDialog from './ui/ConfirmDialog';
@@ -89,6 +96,7 @@ export default function ChatMemoryView({
       if (res?.success) {
         showToast(`${full ? 'Reindexed' : 'Indexed'} ${res.chunks} chunk(s) → ${res.tagged} tag(s).`, 'success');
         loadMemoryTags();
+        loadFileChunkTags();
       } else {
         showToast(`Indexing failed: ${res?.error || 'unknown'}`, 'error');
       }
@@ -102,6 +110,13 @@ export default function ChatMemoryView({
   const [editorError, setEditorError] = useState('');
 
   const [editorKeywords, setEditorKeywords] = useState([]);
+  // Entity (blue) tags on the block being edited: [{ entity, name, type }]. The
+  // "original" snapshot lets save send only the delta (added/removed) it must apply.
+  const [editorEntityTags, setEditorEntityTags] = useState([]);
+  const [editorEntityTagsOriginal, setEditorEntityTagsOriginal] = useState([]);
+  // Live entity matches for what's being typed, shown inside the same suggestion
+  // window as the keyword suggestions: [{ id, canonicalName, type, matchedAlias }].
+  const [entityCandidates, setEntityCandidates] = useState([]);
   const [tagInput, setTagInput] = useState('');
   const [tagSuggestionsOpen, setTagSuggestionsOpen] = useState(false);
   const tagAnchorRef = useRef(null);
@@ -110,15 +125,113 @@ export default function ChatMemoryView({
   const [editorStrategy, setEditorStrategy] = useState('rag_search');
   const [viewingFileBlock, setViewingFileBlock] = useState(null);
 
+  // Per-chunk tags in the file chunk viewer: { [chunkId]: { keywords, entities } }.
+  const [fileChunkTags, setFileChunkTags] = useState({});
+  // Which chunk's add-tag input is open, plus its typing state (only one at a time).
+  const [activeTagChunk, setActiveTagChunk] = useState(null);
+  const [chunkTagInput, setChunkTagInput] = useState('');
+  const [chunkEntityCandidates, setChunkEntityCandidates] = useState([]);
+  const chunkTagAnchorRef = useRef(null);
+
+  const loadFileChunkTags = async () => {
+    if (!chat?.id || typeof electronAPI?.getChatKbTags !== 'function') return;
+    try {
+      const res = await electronAPI.getChatKbTags(chat.id);
+      if (res?.success) setFileChunkTags(res.tags || {});
+    } catch (e) { /* tags stay empty on failure */ }
+  };
+
+  // Persist a chunk's full tag state, then refresh from source of truth.
+  const persistChunkTags = async (chunkId, next) => {
+    setFileChunkTags(prev => ({ ...prev, [chunkId]: next }));
+    try {
+      await electronAPI.setChunkTags(chunkId, next.keywords, next.entities.map(e => e.entity));
+    } catch (e) {
+      console.error('Failed to save chunk tags:', e);
+      showToast('Failed to save tags.', 'error');
+      loadFileChunkTags();
+    }
+  };
+
+  const chunkTagsOf = (chunkId) => fileChunkTags[chunkId] || { keywords: [], entities: [] };
+
+  const addChunkKeyword = (chunkId, text) => {
+    const raw = String(text || '').trim().toLowerCase();
+    if (!raw) return;
+    const kw = raw.startsWith('#') ? raw : `#${raw}`;
+    const cur = chunkTagsOf(chunkId);
+    if (cur.keywords.includes(kw)) return;
+    persistChunkTags(chunkId, { ...cur, keywords: [...cur.keywords, kw] });
+    setChunkTagInput('');
+    setChunkEntityCandidates([]);
+  };
+
+  const addChunkEntity = (chunkId, candidate) => {
+    const cur = chunkTagsOf(chunkId);
+    if (cur.entities.some(e => e.entity === candidate.id)) return;
+    persistChunkTags(chunkId, { ...cur, entities: [...cur.entities, { value: candidate.canonicalName, entity: candidate.id }] });
+    setChunkTagInput('');
+    setChunkEntityCandidates([]);
+  };
+
+  const removeChunkKeyword = (chunkId, kw) => {
+    const cur = chunkTagsOf(chunkId);
+    persistChunkTags(chunkId, { ...cur, keywords: cur.keywords.filter(k => k !== kw) });
+  };
+
+  const removeChunkEntity = (chunkId, entityId) => {
+    const cur = chunkTagsOf(chunkId);
+    persistChunkTags(chunkId, { ...cur, entities: cur.entities.filter(e => e.entity !== entityId) });
+  };
+
+  const refreshChunkEntityCandidates = async (text) => {
+    const q = String(text || '').trim();
+    if (q.length < 2 || typeof electronAPI?.findEntityCandidates !== 'function') { setChunkEntityCandidates([]); return; }
+    try {
+      const res = await electronAPI.findEntityCandidates(chat?.id || null, q);
+      setChunkEntityCandidates(res?.success ? (res.candidates || []) : []);
+    } catch (e) { setChunkEntityCandidates([]); }
+  };
+
+  // Add the typed text as a plain keyword (yellow). User territory only.
+  const addKeywordTag = (text) => {
+    const rawTag = String(text || '').trim().toLowerCase();
+    if (!rawTag) return;
+    const normalizedTag = rawTag.startsWith('#') ? rawTag : `#${rawTag}`;
+    setEditorKeywords(prev => prev.includes(normalizedTag) ? prev : [...prev, normalizedTag]);
+    setTagInput('');
+    setEntityCandidates([]);
+    setTagSuggestionsOpen(false);
+  };
+
+  // Link an entity as a blue tag (dedup by entity id), picked from the suggestion list.
+  const addEntityTag = (candidate) => {
+    setEditorEntityTags(prev => prev.some(t => t.entity === candidate.id)
+      ? prev
+      : [...prev, { entity: candidate.id, name: candidate.canonicalName, type: candidate.type }]);
+    setTagInput('');
+    setEntityCandidates([]);
+    setTagSuggestionsOpen(false);
+  };
+
+  // Enter / the + button commits the typed text as a keyword. Entities are added by
+  // clicking their row in the suggestion window (we never link one on our own).
   const handleAddTag = () => {
     if (!tagInput.trim()) return;
-    const rawTag = tagInput.trim().toLowerCase();
-    const normalizedTag = rawTag.startsWith('#') ? rawTag : `#${rawTag}`;
-    if (!editorKeywords.includes(normalizedTag)) {
-      setEditorKeywords(prev => [...prev, normalizedTag]);
+    addKeywordTag(tagInput.trim());
+  };
+
+  // As the user types, ask the registry for matching entities to surface in the list.
+  const refreshEntityCandidates = async (text) => {
+    const q = String(text || '').trim();
+    if (q.length < 2 || typeof electronAPI?.findEntityCandidates !== 'function') {
+      setEntityCandidates([]);
+      return;
     }
-    setTagInput('');
-    setTagSuggestionsOpen(false);
+    try {
+      const res = await electronAPI.findEntityCandidates(chat?.id || null, q);
+      setEntityCandidates(res?.success ? (res.candidates || []) : []);
+    } catch (e) { setEntityCandidates([]); }
   };
 
   const [blocks, setBlocks] = useState([]);
@@ -265,6 +378,14 @@ export default function ChatMemoryView({
   useEffect(() => {
     setSelectedBlockIds([]);
   }, [activeFilter]);
+
+  // Load per-chunk tags when the file chunk viewer opens; reset the add-tag input.
+  useEffect(() => {
+    if (viewingFileBlock) loadFileChunkTags();
+    setActiveTagChunk(null);
+    setChunkTagInput('');
+    setChunkEntityCandidates([]);
+  }, [viewingFileBlock?.source]);
 
   // Listen to IPC vectorization progress
   useEffect(() => {
@@ -754,6 +875,10 @@ export default function ChatMemoryView({
 
     setSavingSnippet(true);
     setEditorError('');
+    const origIds = new Set(editorEntityTagsOriginal.map(t => t.entity));
+    const curIds = new Set(editorEntityTags.map(t => t.entity));
+    const entityTagsAdded = [...curIds].filter(id => !origIds.has(id));
+    const entityTagsRemoved = [...origIds].filter(id => !curIds.has(id));
     try {
       if (editingBlock) {
         // --- EDITING EXISTING BLOCK ---
@@ -764,6 +889,8 @@ export default function ChatMemoryView({
           text: editorText.trim(),
           profiles: editingBlock.profiles || [],
           keywords: editorKeywords,
+          entityTagsAdded,
+          entityTagsRemoved,
           strategy: editorStrategy
         });
         if (viewingFileBlock) {
@@ -795,6 +922,8 @@ export default function ChatMemoryView({
           text: text,
           profiles: [],
           keywords: editorKeywords,
+          entityTagsAdded,
+          entityTagsRemoved,
           strategy: editorStrategy
         });
       }
@@ -804,6 +933,7 @@ export default function ChatMemoryView({
       // Otherwise a later rename/scope edit could write back a stale copy.
       await refreshChats(chat.id);
       loadBlocks();
+      loadMemoryTags();
     } catch (err) {
       console.error("Error saving block editor:", err);
       setEditorError("Error saving block: " + (err.message || err));
@@ -946,6 +1076,9 @@ export default function ChatMemoryView({
                         setEditorTitle('');
                         setEditorText('');
                         setEditorKeywords([]);
+                        setEditorEntityTags([]);
+                        setEditorEntityTagsOriginal([]);
+                        setEntityCandidates([]);
                         setTagInput('');
                         setEditorError('');
                         setEditorOpen(true);
@@ -1168,7 +1301,7 @@ export default function ChatMemoryView({
                                 key={i}
                                 className="px-1.5 py-0.5 bg-sky-500/10 border border-sky-500/25 text-sky-300 text-[9px] font-bold rounded flex items-center gap-1"
                               >
-                                <Sparkles className="w-2.5 h-2.5" />{t}
+                                <Sparkles className="w-2.5 h-2.5" />{t.value}
                               </span>
                             ))}
                           </div>
@@ -1281,6 +1414,14 @@ export default function ChatMemoryView({
                           setEditorTitle(block.title);
                           setEditorText(block.summary);
                           setEditorKeywords(block.keywords || []);
+                          {
+                            const ents = (memoryTags[block.id] || [])
+                              .filter(t => t.entity)
+                              .map(t => ({ entity: t.entity, name: t.value }));
+                            setEditorEntityTags(ents);
+                            setEditorEntityTagsOriginal(ents);
+                          }
+                          setEntityCandidates([]);
                           setEditorStrategy(block.strategy || 'rag_search');
                           setTagInput('');
                           setEditorError('');
@@ -1611,10 +1752,27 @@ export default function ChatMemoryView({
               {(!editingBlock || editingBlock.type === 'snippet') && (
                 <div className="flex flex-col space-y-1.5">
                   <label className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">Tags (Categorization)</label>
+                  <span className="text-[9px] text-gray-500 -mt-1">Blue = world entity (pick it from the list), yellow = plain keyword (type and press Enter).</span>
 
-                  {/* Current Tags Chips */}
-                  {editorKeywords.length > 0 && (
+                  {/* Current Tags Chips: yellow keywords + blue pinned entities */}
+                  {(editorKeywords.length > 0 || editorEntityTags.length > 0) && (
                     <div className="flex flex-wrap gap-1.5 mb-1 p-2 bg-[#011419] border border-gray-800/80 rounded-xl">
+                      {editorEntityTags.map((t, idx) => (
+                        <span
+                          key={`ent_${t.entity}`}
+                          className="px-1.5 py-0.5 bg-sky-500/15 border border-sky-400/40 text-sky-200 text-[10px] font-bold rounded flex items-center gap-1.5"
+                        >
+                          <Sparkles className="w-3 h-3" />
+                          <span>{t.name}</span>
+                          <button
+                            type="button"
+                            onClick={() => setEditorEntityTags(prev => prev.filter((_, i) => i !== idx))}
+                            className="text-sky-200 hover:text-white transition-colors cursor-pointer"
+                          >
+                            <XIcon className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
                       {editorKeywords.map((tag, idx) => (
                         <Badge
                           key={idx}
@@ -1641,8 +1799,10 @@ export default function ChatMemoryView({
                         type="text"
                         value={tagInput}
                         onChange={(e) => {
-                          setTagInput(e.target.value);
+                          const v = e.target.value;
+                          setTagInput(v);
                           setTagSuggestionsOpen(true);
+                          refreshEntityCandidates(v);
                         }}
                         onFocus={() => setTagSuggestionsOpen(true)}
                         onKeyDown={(e) => {
@@ -1651,11 +1811,12 @@ export default function ChatMemoryView({
                             handleAddTag();
                           }
                         }}
-                        placeholder="Type a tag..."
+                        placeholder="Type a tag, or pick an entity below..."
                         disabled={savingSnippet}
                       />
 
-                      {/* Suggestions Dropdown */}
+                      {/* One suggestion window: matching entities (click = blue tag)
+                          on top, then keyword suggestions (click = yellow tag). */}
                       {(() => {
                         const allTags = Array.from(new Set(
                           combinedBlocks.filter(b => b.type === 'snippet').flatMap(b => b.keywords || [])
@@ -1664,23 +1825,47 @@ export default function ChatMemoryView({
                         const filteredSuggestions = allTags.filter(t =>
                           t.toLowerCase().includes(tagInput.toLowerCase())
                         );
+                        const entityMatches = entityCandidates.filter(
+                          c => !editorEntityTags.some(t => t.entity === c.id)
+                        );
+                        const hasContent = entityMatches.length > 0 || filteredSuggestions.length > 0;
 
                         return (
                           <Popover
                             anchorRef={tagAnchorRef}
-                            open={tagSuggestionsOpen && filteredSuggestions.length > 0}
+                            open={tagSuggestionsOpen && hasContent}
                             onClose={() => setTagSuggestionsOpen(false)}
-                            maxHeight={160}
+                            maxHeight={240}
                           >
+                            {entityMatches.length > 0 && (
+                              <div className="px-3 pt-1.5 pb-1 text-[8px] font-bold text-sky-400/70 uppercase tracking-widest">Entities</div>
+                            )}
+                            {entityMatches.map((c) => {
+                              const Icon = entityTypeIcon(c.type);
+                              return (
+                                <button
+                                  key={c.id}
+                                  type="button"
+                                  onClick={() => addEntityTag(c)}
+                                  className="w-full text-left px-3 py-1.5 text-[11px] font-bold text-sky-200 hover:text-white hover:bg-sky-500/10 rounded-lg transition-colors flex items-center gap-1.5"
+                                >
+                                  <Icon className="w-3.5 h-3.5 shrink-0 text-sky-400" />
+                                  <span className="truncate">{c.canonicalName}</span>
+                                  {c.matchedAlias && (
+                                    <span className="text-[8px] font-normal text-gray-500 truncate">alias: {c.matchedAlias}</span>
+                                  )}
+                                  <span className="ml-auto text-[8px] font-normal text-gray-500 uppercase shrink-0">{c.type}</span>
+                                </button>
+                              );
+                            })}
+                            {entityMatches.length > 0 && filteredSuggestions.length > 0 && (
+                              <div className="my-1 border-t border-gray-800" />
+                            )}
                             {filteredSuggestions.map((tag) => (
                               <button
                                 key={tag}
                                 type="button"
-                                onClick={() => {
-                                  setEditorKeywords(prev => [...prev, tag]);
-                                  setTagInput('');
-                                  setTagSuggestionsOpen(false);
-                                }}
+                                onClick={() => addKeywordTag(tag)}
                                 className="w-full text-left px-3 py-1.5 text-[10px] uppercase font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
                               >
                                 {tag}
@@ -1936,91 +2121,170 @@ export default function ChatMemoryView({
 
       {/* Slide-out File Chunks Viewer Panel / Drawer overlay */}
       {viewingFileBlock && (
-        <div className="fixed inset-y-0 right-0 w-[500px] bg-[#011419] border-l border-gray-800 shadow-2xl flex flex-col p-6 z-40 animate-in slide-in-from-right duration-200">
-          <div className="flex justify-between items-center mb-4 shrink-0 pb-2 border-b border-gray-800">
-            <div>
-              <h3 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5">
-                <FileText className="w-4 h-4 text-blue-400" />
-                <span>File Chunks Viewer</span>
-              </h3>
-              <span className="text-[10px] font-mono text-gray-500 truncate block mt-0.5 max-w-[380px]" title={viewingFileBlock.source}>
-                {viewingFileBlock.source}
-              </span>
+        <div className="fixed inset-0 z-40 flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200" onClick={() => setViewingFileBlock(null)}>
+          <div
+            className="bg-[#051116] border border-gray-800 rounded-2xl w-full max-w-4xl h-[85vh] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-center shrink-0 p-4 border-b border-gray-800 bg-[#011419]/50">
+              <div className="min-w-0">
+                <h3 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5">
+                  <FileText className="w-4 h-4 text-blue-400" />
+                  <span>File Chunks Viewer</span>
+                  <span className="text-gray-600 font-normal normal-case">· {viewingFileBlock.chunks.length} chunk(s)</span>
+                </h3>
+                <span className="text-[10px] font-mono text-gray-500 truncate block mt-0.5" title={viewingFileBlock.source}>
+                  {viewingFileBlock.source}
+                </span>
+              </div>
+              <button
+                onClick={() => setViewingFileBlock(null)}
+                className="text-gray-400 hover:text-red-500 transition-colors cursor-pointer shrink-0"
+              >
+                <XIcon className="w-4 h-4" />
+              </button>
             </div>
-            <button
-              onClick={() => setViewingFileBlock(null)}
-              className="text-gray-400 hover:text-red-500 transition-colors cursor-pointer"
-            >
-              <XIcon className="w-4 h-4" />
-            </button>
-          </div>
 
-          {/* Chunks List */}
-          <div className="flex-1 overflow-y-auto custom-scrollbar space-y-4 pr-1">
-            {viewingFileBlock.chunks.map((chunk, idx) => (
-              <div key={chunk.id} className="bg-[#00080B] border border-gray-800/80 rounded-lg p-3 flex flex-col relative group/chunk">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="text-[9px] font-mono text-gray-500 flex items-center gap-1.5">
-                    Chunk #{idx + 1} ({chunk.text.length} chars)
-                    {chunk.manuallyEdited && (
-                      <Badge tone="accent" title="Manually edited. Survives Knowledge Base re-indexing.">edited</Badge>
-                    )}
-                  </span>
-                  <div className="flex space-x-1 opacity-0 group-hover/chunk:opacity-100 transition-opacity">
-                    <button
-                      onClick={() => {
-                        setEditingBlock(chunk);
-                        setEditorTitle(chunk.source);
-                        setEditorText(chunk.text);
-                        setEditorKeywords(chunk.keywords || []);
-                        setEditorStrategy(chunk.strategy || 'rag_search');
-                        setTagInput('');
-                        setEditorError('');
-                        setEditorOpen(true);
-                      }}
-                      className="p-1 text-gray-500 hover:text-white hover:bg-white/5 rounded cursor-pointer"
-                      title="Edit Chunk"
-                    >
-                      <Edit className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => {
-                        setConfirmDialog({
-                          message: "Are you sure you want to delete this specific chunk?",
-                          onConfirm: async () => {
-                            if (viewingFileBlock.chunks.length === 1) {
-                              await handleDeleteEntireFile(viewingFileBlock.source);
-                              setViewingFileBlock(null);
-                            } else {
-                              try {
-                                const mappedBlock = {
-                                  id: chunk.id,
-                                  type: chunk.type === 'snippet' ? 'manual' : chunk.type,
-                                  source: chunk.source,
-                                  text: chunk.text
-                                };
-                                await electronAPI.deleteChatKbBlock(chat.id, mappedBlock);
-                                await loadBlocks();
-                              } catch (err) {
-                                console.error("Error deleting chunk:", err);
-                                showToast("Failed to delete chunk.", "error");
+            {/* Chunks List */}
+            <div className="flex-1 overflow-y-auto custom-scrollbar space-y-4 p-5">
+              {viewingFileBlock.chunks.map((chunk, idx) => {
+                const cTags = chunkTagsOf(chunk.id);
+                const isTagInputActive = activeTagChunk === chunk.id;
+                return (
+                <div key={chunk.id} className="bg-[#00080B] border border-gray-800/80 rounded-xl p-3.5 flex flex-col relative group/chunk">
+                  <div className="flex justify-between items-center mb-2">
+                    <span className="text-[9px] font-mono text-gray-500 flex items-center gap-1.5">
+                      Chunk #{idx + 1} ({chunk.text.length} chars)
+                      {chunk.manuallyEdited && (
+                        <Badge tone="accent" title="Manually edited. Survives Knowledge Base re-indexing.">edited</Badge>
+                      )}
+                    </span>
+                    <div className="flex space-x-1 opacity-0 group-hover/chunk:opacity-100 transition-opacity">
+                      <button
+                        onClick={() => {
+                          setEditingBlock(chunk);
+                          setEditorTitle(chunk.source);
+                          setEditorText(chunk.text);
+                          setEditorKeywords(chunk.keywords || []);
+                          setEditorEntityTags([]);
+                          setEditorEntityTagsOriginal([]);
+                          setEntityCandidates([]);
+                          setEditorStrategy(chunk.strategy || 'rag_search');
+                          setTagInput('');
+                          setEditorError('');
+                          setEditorOpen(true);
+                        }}
+                        className="p-1 text-gray-500 hover:text-white hover:bg-white/5 rounded cursor-pointer"
+                        title="Edit Chunk"
+                      >
+                        <Edit className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => {
+                          setConfirmDialog({
+                            message: "Are you sure you want to delete this specific chunk?",
+                            onConfirm: async () => {
+                              if (viewingFileBlock.chunks.length === 1) {
+                                await handleDeleteEntireFile(viewingFileBlock.source);
+                                setViewingFileBlock(null);
+                              } else {
+                                try {
+                                  const mappedBlock = {
+                                    id: chunk.id,
+                                    type: chunk.type === 'snippet' ? 'manual' : chunk.type,
+                                    source: chunk.source,
+                                    text: chunk.text
+                                  };
+                                  await electronAPI.deleteChatKbBlock(chat.id, mappedBlock);
+                                  await loadBlocks();
+                                } catch (err) {
+                                  console.error("Error deleting chunk:", err);
+                                  showToast("Failed to delete chunk.", "error");
+                                }
                               }
                             }
-                          }
-                        });
-                      }}
-                      className="p-1 text-gray-500 hover:text-red-500 hover:bg-red-500/10 rounded cursor-pointer"
-                      title="Delete Chunk"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                          });
+                        }}
+                        className="p-1 text-gray-500 hover:text-red-500 hover:bg-red-500/10 rounded cursor-pointer"
+                        title="Delete Chunk"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                  <p className="text-[10.5px] text-gray-300 font-mono whitespace-pre-wrap leading-relaxed max-h-[150px] overflow-y-auto custom-scrollbar select-text bg-[#011419]/30 p-2 rounded border border-gray-900/60">
+                    {chunk.text}
+                  </p>
+
+                  {/* Per-chunk tags: blue entities + yellow keywords, both add/removable */}
+                  <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
+                    {cTags.entities.map((t) => (
+                      <span key={`e_${t.entity}`} className="px-1.5 py-0.5 bg-sky-500/10 border border-sky-500/25 text-sky-300 text-[9px] font-bold rounded flex items-center gap-1">
+                        <Sparkles className="w-2.5 h-2.5" />{t.value}
+                        <button type="button" onClick={() => removeChunkEntity(chunk.id, t.entity)} className="text-sky-300/70 hover:text-white transition-colors cursor-pointer">
+                          <XIcon className="w-2.5 h-2.5" />
+                        </button>
+                      </span>
+                    ))}
+                    {cTags.keywords.map((kw) => (
+                      <span key={`k_${kw}`} className="px-1.5 py-0.5 bg-accent/10 border border-accent/20 text-accent text-[9px] font-bold uppercase tracking-wider rounded flex items-center gap-1">
+                        {kw}
+                        <button type="button" onClick={() => removeChunkKeyword(chunk.id, kw)} className="text-accent/70 hover:text-white transition-colors cursor-pointer">
+                          <XIcon className="w-2.5 h-2.5" />
+                        </button>
+                      </span>
+                    ))}
+
+                    {isTagInputActive ? (
+                      <div className="relative" ref={chunkTagAnchorRef}>
+                        <input
+                          autoFocus
+                          type="text"
+                          value={chunkTagInput}
+                          onChange={(e) => { setChunkTagInput(e.target.value); refreshChunkEntityCandidates(e.target.value); }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') { e.preventDefault(); addChunkKeyword(chunk.id, chunkTagInput); }
+                            if (e.key === 'Escape') { setActiveTagChunk(null); setChunkTagInput(''); setChunkEntityCandidates([]); }
+                          }}
+                          onBlur={() => setTimeout(() => { setActiveTagChunk(null); setChunkTagInput(''); setChunkEntityCandidates([]); }, 150)}
+                          placeholder="Type a tag, pick an entity..."
+                          className="bg-[#011419] border border-gray-700 rounded px-2 py-0.5 text-[10px] text-white placeholder-gray-600 focus:outline-none focus:border-accent w-52"
+                        />
+                        {(() => {
+                          const entityMatches = chunkEntityCandidates.filter(c => !cTags.entities.some(t => t.entity === c.id));
+                          return (
+                            <Popover anchorRef={chunkTagAnchorRef} open={entityMatches.length > 0} onClose={() => setChunkEntityCandidates([])} maxHeight={200}>
+                              <div className="px-3 pt-1.5 pb-1 text-[8px] font-bold text-sky-400/70 uppercase tracking-widest">Entities</div>
+                              {entityMatches.map((c) => {
+                                const Icon = entityTypeIcon(c.type);
+                                return (
+                                  <button key={c.id} type="button" onMouseDown={(e) => { e.preventDefault(); addChunkEntity(chunk.id, c); }}
+                                    className="w-full text-left px-3 py-1.5 text-[11px] font-bold text-sky-200 hover:text-white hover:bg-sky-500/10 rounded-lg transition-colors flex items-center gap-1.5">
+                                    <Icon className="w-3.5 h-3.5 shrink-0 text-sky-400" />
+                                    <span className="truncate">{c.canonicalName}</span>
+                                    {c.matchedAlias && <span className="text-[8px] font-normal text-gray-500 truncate">alias: {c.matchedAlias}</span>}
+                                    <span className="ml-auto text-[8px] font-normal text-gray-500 uppercase shrink-0">{c.type}</span>
+                                  </button>
+                                );
+                              })}
+                            </Popover>
+                          );
+                        })()}
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => { setActiveTagChunk(chunk.id); setChunkTagInput(''); setChunkEntityCandidates([]); }}
+                        className="px-1.5 py-0.5 border border-dashed border-gray-700 text-gray-500 hover:text-accent hover:border-accent/50 text-[9px] font-bold rounded flex items-center gap-1 transition-colors cursor-pointer"
+                      >
+                        <Plus className="w-2.5 h-2.5" />Tag
+                      </button>
+                    )}
                   </div>
                 </div>
-                <p className="text-[10.5px] text-gray-300 font-mono whitespace-pre-wrap leading-relaxed max-h-[150px] overflow-y-auto custom-scrollbar select-text bg-[#011419]/30 p-2 rounded border border-gray-900/60">
-                  {chunk.text}
-                </p>
-              </div>
-            ))}
+                );
+              })}
+            </div>
           </div>
         </div>
       )}

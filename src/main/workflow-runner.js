@@ -1082,11 +1082,14 @@ async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false,
     // entity registry instead of accumulating stale tags. Incremental (default): skip
     // chunks that already have tags so re-runs only fill gaps (e.g. a rate-limited tail).
     if (full) {
-        const delSql = `DELETE FROM chunk_tags WHERE chunkId IN
+        // Preserve user-pinned tags (manual=1, e.g. yellow keywords on file chunks);
+        // only the auto tagger's own rows reset.
+        const delSql = `DELETE FROM chunk_tags WHERE (manual IS NULL OR manual = 0) AND chunkId IN
                         (SELECT kc.id FROM knowledge_chunks kc WHERE ${where})`;
         if (chatId) db.prepare(delSql).run(chatId); else db.prepare(delSql).run();
     }
-    const skipTagged = full ? '' : 'AND NOT EXISTS (SELECT 1 FROM chunk_tags ct WHERE ct.chunkId = kc.id)';
+    // Incremental still tags a chunk that carries only manual pins (no auto row yet).
+    const skipTagged = full ? '' : 'AND NOT EXISTS (SELECT 1 FROM chunk_tags ct WHERE ct.chunkId = kc.id AND (ct.manual IS NULL OR ct.manual = 0))';
     const sql = `SELECT kc.id, kc.text, kc.ownerId FROM knowledge_chunks kc WHERE ${where}
                  ${skipTagged}
                  ORDER BY kc.createdAt ASC`;

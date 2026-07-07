@@ -712,6 +712,15 @@ try {
     console.log("Database Migration: Added ordinal column to knowledge_chunks table.");
   }
 
+  // manual=1 marks a tag the user pinned by hand. Used for keyword (yellow) tags on
+  // file chunks, which have no per-chunk JSON store — so re-tag must preserve them.
+  const ctTableInfo = db.pragma("table_info(chunk_tags)");
+  const ctColumns = ctTableInfo.map(col => col.name);
+  if (!ctColumns.includes('manual')) {
+    db.exec("ALTER TABLE chunk_tags ADD COLUMN manual INTEGER DEFAULT 0");
+    console.log("Database Migration: Added manual column to chunk_tags table.");
+  }
+
   const cmTableInfo = db.pragma("table_info(constant_memory)");
   const cmColumns = cmTableInfo.map(col => col.name);
   if (!cmColumns.includes('enabled')) {

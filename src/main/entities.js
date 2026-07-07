@@ -256,6 +256,37 @@ function resolveMention(mention, type = null, workspaceId = null) {
   return null;
 }
 
+// List every entity that could plausibly match a free-text mention, for a human
+// picker (unlike resolveMention, which commits to one winner). A candidate matches
+// when the needle equals or is contained in the canonical name or any alias — so
+// two "Mara"s both surface and the user disambiguates. Exact matches rank first.
+function findCandidates(mention, workspaceId = null, limit = 8) {
+  const needle = normalizeName(mention);
+  if (!needle || needle.length < 2) return [];
+  const rows = db.prepare('SELECT id, canonicalName, type, aliases FROM entities WHERE workspaceId IS ?').all(workspaceId || null);
+  const out = [];
+  for (const r of rows) {
+    const aliases = parseJsonArray(r.aliases);
+    // Score canonical name and each alias; keep the best hit and remember whether it
+    // came through an alias (so the UI can show "Alias: X" for the surprising matches).
+    let best = null; // { rank, matchedAlias }
+    const consider = (label, isAlias) => {
+      const n = normalizeName(label);
+      if (!n) return;
+      let rank = null;
+      if (n === needle) rank = 0;
+      else if (n.startsWith(needle) || needle.startsWith(n)) rank = 1;
+      else if (n.includes(needle) || needle.includes(n)) rank = 2;
+      if (rank === null) return;
+      if (!best || rank < best.rank) best = { rank, matchedAlias: isAlias ? label : null };
+    };
+    consider(r.canonicalName, false);
+    for (const a of aliases) consider(a, true);
+    if (best) out.push({ id: r.id, canonicalName: r.canonicalName, type: r.type, rank: best.rank, matchedAlias: best.matchedAlias });
+  }
+  return out.sort((a, b) => a.rank - b.rank || a.canonicalName.localeCompare(b.canonicalName)).slice(0, limit);
+}
+
 // The chapters (Writing Desk documents) linked to an entity's lore. Reads the
 // multi-value data.loreDocumentIds when present, else falls back to the legacy
 // single loreDocumentId column. Always returns a de-duped array of ids.
@@ -398,6 +429,7 @@ module.exports = {
   mergeEntity,
   resolveEnrichReview,
   resolveMention,
+  findCandidates,
   normalizeName,
   linkedLoreDocIds,
   getLinksFrom,
