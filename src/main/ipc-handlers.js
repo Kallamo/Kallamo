@@ -4223,6 +4223,33 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
   }
 });
 
+// Title-only rename for a Custom Memory snippet. The chunk text is unchanged, so
+// there is no need to re-embed or re-run the world-index tagger — we just update
+// the stored title (knowledge_chunks.source) and the card in memoryBlocks.
+ipcMain.handle('rename-chat-kb-block', async (event, { chatId, blockId, title }) => {
+  try {
+    const newTitle = (title || '').trim();
+    if (!newTitle) return { success: false };
+
+    db.prepare('UPDATE knowledge_chunks SET source = ? WHERE ownerId = ? AND id = ?').run(newTitle, chatId, blockId);
+
+    const chatRow = db.prepare('SELECT memoryBlocks FROM chats WHERE id = ?').get(chatId);
+    if (chatRow && chatRow.memoryBlocks) {
+      const memoryBlocks = JSON.parse(chatRow.memoryBlocks);
+      const index = memoryBlocks.findIndex(b => b.id === blockId);
+      if (index >= 0) {
+        memoryBlocks[index] = { ...memoryBlocks[index], title: newTitle };
+        db.prepare('UPDATE chats SET memoryBlocks = ? WHERE id = ?').run(JSON.stringify(memoryBlocks), chatId);
+      }
+    }
+
+    return { success: true };
+  } catch (e) {
+    console.error("Error renaming chat KB block:", e);
+    throw e;
+  }
+});
+
 ipcMain.handle('delete-chat-kb-block', async (event, { chatId, block }) => {
   try {
     if (block.type === 'manual' || block.type === 'summarized') {

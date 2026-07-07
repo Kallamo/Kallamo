@@ -816,21 +816,10 @@ export default function ChatMemoryView({
     if (!renameTitle.trim()) return;
     try {
       if (block.type === 'snippet') {
-        // Persist via saveChatKbBlock so the backend merges the rename into the
-        // fresh memoryBlocks from the DB. Rebuilding the whole JSON from the
-        // (possibly stale) chat prop would clobber snippets added this session.
-        const targetBlock = blocks.find(b => b.id === block.id);
-        if (targetBlock) {
-          await electronAPI.saveChatKbBlock(chat.id, {
-            id: targetBlock.id,
-            type: 'manual',
-            source: renameTitle.trim(),
-            text: targetBlock.text,
-            profiles: targetBlock.profiles,
-            keywords: targetBlock.keywords || [],
-            strategy: targetBlock.strategy || 'rag_search'
-          });
-        }
+        // Title-only change: the chunk text is untouched, so use the lightweight
+        // rename path that just updates the stored title. Avoids re-embedding and
+        // re-running the world-index tagger (which would also cost an API call).
+        await electronAPI.renameChatKbBlock(chat.id, block.id, renameTitle.trim());
         await refreshChats(chat.id);
         loadBlocks();
       }
@@ -1101,18 +1090,28 @@ export default function ChatMemoryView({
                           <TokenBadge tokens={block.tokenCount || 0} className="shrink-0" />
 
                           {isRenameActive ? (
-                            <input
-                              type="text"
-                              value={renameTitle}
-                              onChange={(e) => setRenameTitle(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') executeRename(block);
-                                else if (e.key === 'Escape') setRenamingId(null);
-                              }}
-                              onBlur={() => executeRename(block)}
-                              autoFocus
-                              className="bg-[#011419] border border-gray-800 text-[11px] font-bold text-accent rounded px-2.5 py-0.5 focus:outline-none focus:border-accent"
-                            />
+                            <div className="flex items-center space-x-1.5 min-w-0">
+                              <input
+                                type="text"
+                                value={renameTitle}
+                                onChange={(e) => setRenameTitle(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') executeRename(block);
+                                  else if (e.key === 'Escape') setRenamingId(null);
+                                }}
+                                onBlur={() => executeRename(block)}
+                                autoFocus
+                                className="bg-[#011419] border border-gray-800 text-[11px] font-bold text-accent rounded px-2.5 py-0.5 focus:outline-none focus:border-accent"
+                              />
+                              <button
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => executeRename(block)}
+                                title="Confirm rename"
+                                className="shrink-0 flex items-center justify-center w-5 h-5 rounded bg-accent/15 text-accent hover:bg-accent/25 transition-colors"
+                              >
+                                <Check size={12} strokeWidth={3} />
+                              </button>
+                            </div>
                           ) : (
                             <div className="flex items-center space-x-1.5 min-w-0">
                               <h4
