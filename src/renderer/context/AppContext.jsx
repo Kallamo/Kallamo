@@ -17,6 +17,8 @@ const api = window.electronAPI || {
     advanced: { chunkSize: 500, similarity: 0.3, topKKB: 5, topKMemory: 5, executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, embeddingEngine: 'local', embeddingApiProfileId: '', embeddingModelName: '' }
   }),
   saveSettings: async () => { },
+  getUiFlags: async () => ({}),
+  setUiFlag: async () => { },
   sendMessage: async () => { },
   cancelGeneration: () => { },
   onWorkflowProgress: () => () => { },
@@ -43,6 +45,10 @@ export const AppProvider = ({ children }) => {
     interface: { fontFamily: 'sans', fontSize: 'medium', layout: 'bubbles', blur: true, accentColor: '#FBCB2D', codeTheme: 'github-dark', lineNumbers: false },
     advanced: { chunkSize: 500, similarity: 0.3, topKKB: 5, topKMemory: 5, executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, embeddingEngine: 'local', embeddingApiProfileId: '', embeddingModelName: '' }
   });
+
+  // One-time UI hints (coach-marks). Keyed booleans persisted in the settings
+  // table; once true, the matching hint never shows again.
+  const [uiFlags, setUiFlags] = useState({});
 
   const [activeChatId, setActiveChatId] = useState(null);
   const [activeMessages, setActiveMessages] = useState([]);
@@ -119,6 +125,9 @@ export const AppProvider = ({ children }) => {
       const fetchedVariables = await api.getVariables();
       setVariables(fetchedVariables || []);
 
+      const fetchedFlags = await api.getUiFlags();
+      setUiFlags(fetchedFlags || {});
+
       await refreshEngineStatus();
     } catch (error) {
       console.error("Error loading initial data:", error);
@@ -161,7 +170,7 @@ export const AppProvider = ({ children }) => {
 
     const unsubReindexProgress = api.onReindexProgress ? api.onReindexProgress((data) => {
       if (data.status === 'idle') {
-        // Engine not installed — inform without blocking the UI
+        // Engine not installed, inform without blocking the UI
         showToast(data.message || 'Download the Local AI Engine to enable local indexing.', 'info', 8000);
         setReindexingProgress(null);
         return;
@@ -698,6 +707,13 @@ export const AppProvider = ({ children }) => {
   const openSettings = (tab = 'api', section = null) => setSettingsRequest({ tab, section });
   const clearSettingsRequest = () => setSettingsRequest(null);
 
+  // Record a one-time hint as seen: flip it locally (so it disappears at once)
+  // and persist so it never returns. Fire-and-forget on the write.
+  const dismissHint = (key) => {
+    setUiFlags(prev => (prev[key] ? prev : { ...prev, [key]: true }));
+    api.setUiFlag(key);
+  };
+
   const activeChat = chats.find(c => c.id === activeChatId);
 
   return (
@@ -709,6 +725,7 @@ export const AppProvider = ({ children }) => {
       workflows, setWorkflows,
       apiProfiles, setApiProfiles,
       settings, setSettings, handleSaveSettings,
+      uiFlags, dismissHint,
       activeChatId, activeChat,
       activeMessages, setActiveMessages, handleSelectChat,
       handleCreateChat, handleDeleteChat, handleSaveChat, refreshChats,

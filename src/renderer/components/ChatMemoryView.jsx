@@ -19,13 +19,15 @@ import Checkbox from './ui/Checkbox';
 import Toggle from './ui/Toggle';
 import RenameFilesModal from './ui/RenameFilesModal';
 import Popover from './ui/Popover';
+import CoachMark from './ui/CoachMark';
 
 export default function ChatMemoryView({
   chat,
   onSaveChat,
   electronAPI
 }) {
-  const { writingProfiles, settings, refreshChats, showToast } = useApp();
+  const { writingProfiles, settings, refreshChats, showToast, uiFlags, dismissHint } = useApp();
+  const worldIndexRef = useRef(null);
   const [activeFilter, setActiveFilter] = useState('all'); // 'all' | 'constants' | 'rag' | 'snippets' | 'summarized'
   const [searchQuery, setSearchQuery] = useState('');
   const [summaryTokens, setSummaryTokens] = useState({}); // { [blockId]: approxTokenCount } for history-summary blocks
@@ -686,7 +688,6 @@ export default function ChatMemoryView({
       filesToUpload = [...fresh, ...conflicts];
     } else {
       // action === 'skip'
-      // no-op, just upload fresh ones
     }
 
     try {
@@ -762,7 +763,7 @@ export default function ChatMemoryView({
   };
 
   // Enable/disable a memory unit. OFF = ignored by injection/retrieval and dropped
-  // from the token counter. Non-destructive — the content stays put.
+  // from the token counter. Non-destructive, the content stays put.
   const handleToggleEnabled = async (block, nextEnabled) => {
     setBlocks(prev => prev.map(b => {
       if (block.type === 'rag_file') {
@@ -1466,10 +1467,19 @@ export default function ChatMemoryView({
       {/* Right-Side Query Simulator Dashboard */}
       <div className="w-full md:w-80 p-5 bg-[#011419]/25 flex flex-col h-full overflow-y-auto custom-scrollbar select-none">
         {/* World Index section */}
-        <div className="flex items-center space-x-1.5 mb-2.5">
+        <div ref={worldIndexRef} className="flex items-center space-x-1.5 mb-2.5">
           <Brain className="w-4 h-4 text-accent" />
           <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest font-sans">World Index</span>
         </div>
+        <CoachMark
+          anchorRef={worldIndexRef}
+          open={!uiFlags.memoryWorldIndexSeen}
+          onDismiss={() => dismissHint('memoryWorldIndexSeen')}
+          title="Tag your memories"
+          align="left"
+        >
+          Index a tier to attach dynamic tags (characters, factions, items) to its chunks, so the AI recalls them by name during a chat.
+        </CoachMark>
 
         <div className="bg-[#051116]/80 border border-gray-800 rounded-xl p-3.5 flex flex-col gap-2.5 shrink-0 mb-5">
           <p className="caption">

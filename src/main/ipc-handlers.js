@@ -62,7 +62,7 @@ async function indexProfileKnowledgeBase(sender, profileId, knowledgeFilesInput)
   for (const src of existingChunksSources) {
     const allKnownFiles = new Set(knowledgeFiles.map(f => f.name));
     if (!allKnownFiles.has(src)) {
-      // Don't GC manual snippets — they are not represented in knowledgeFiles
+      // Don't GC manual snippets, they are not represented in knowledgeFiles
       const onlyManual = db.prepare(
         "SELECT COUNT(*) AS cnt FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ? AND source = ? AND id NOT LIKE 'manual_%' AND id NOT LIKE 'mem_%'"
       ).get(profileId, 'profile_kb', src);
@@ -198,7 +198,7 @@ async function indexChatKnowledgeBase(sender, chatId, knowledgeFilesInput) {
   for (const src of existingChunksSources) {
     const allKnownFiles = new Set(knowledgeFiles.map(f => f.name));
     if (!allKnownFiles.has(src)) {
-      // Don't GC manual snippets — they are not represented in knowledgeFiles
+      // Don't GC manual snippets, they are not represented in knowledgeFiles
       const onlyManual = db.prepare(
         "SELECT COUNT(*) AS cnt FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ? AND source = ? AND id NOT LIKE 'manual_%' AND id NOT LIKE 'mem_%'"
       ).get(chatId, 'chat_kb', src);
@@ -302,7 +302,7 @@ async function indexChatKnowledgeBase(sender, chatId, knowledgeFilesInput) {
 // ==========================================
 // Whether an API profile carries usable credentials, accounting for each
 // provider's credential shape (key vs. customConfig vs. none for local). Used to
-// flag writing profiles that point to a keyless connection — they look configured
+// flag writing profiles that point to a keyless connection, they look configured
 // but fail raw on invocation. Accepts a raw row (encrypted fields).
 function apiProfileHasCredentials(row) {
   if (!row) return false;
@@ -1923,7 +1923,7 @@ ipcMain.handle('toggle-chat-kb-block-enabled', async (event, { chatId, block, en
           db.prepare('UPDATE chats SET memoryBlocks = ? WHERE id = ?').run(JSON.stringify(memoryBlocks), chatId);
         }
       }
-      // Searchable snippets are also a vector row (chat_memory) — gate retrieval too
+      // Searchable snippets are also a vector row (chat_memory), gate retrieval too
       if (!isConstantSnippet) {
         db.prepare('UPDATE knowledge_chunks SET enabled = ? WHERE ownerId = ? AND id = ?')
           .run(val, chatId, block.id);
@@ -2273,7 +2273,7 @@ ipcMain.handle('delete-document', async (event, { id }) => {
 ipcMain.handle('save-document-content', async (event, { id, content }) => {
   const now = Date.now();
   // Only a genuine content change invalidates the chapter's vector index. An
-  // idempotent save (identical content — e.g. a spurious onUpdate on load, or a
+  // idempotent save (identical content, e.g. a spurious onUpdate on load, or a
   // flush on page switch with no edits) must keep vectorized intact, so the indexed
   // state survives navigating between chapters.
   const row = db.prepare('SELECT content FROM documents WHERE id = ?').get(id);
@@ -2735,7 +2735,7 @@ ipcMain.handle('enrich-entities', async (event, { workspaceId } = {}) => {
   }
 });
 
-// Export Worldbuild (.klwb — Kallamo Worldbuild Package: a zip holding worldbuild.json,
+// Export Worldbuild (.klwb, Kallamo Worldbuild Package: a zip holding worldbuild.json,
 // the self-contained entities + edges for this workspace).
 ipcMain.handle('export-worldbuild', async (event, { workspaceId } = {}) => {
   try {
@@ -2993,7 +2993,7 @@ ipcMain.handle('save-chat', async (event, chat) => {
     // Preserve server-managed index metadata (lastIndexedMtime) that the renderer doesn't
     // track. Without this, every chat save (e.g. adding a profile) ships a knowledgeFiles
     // blob missing lastIndexedMtime, which both makes the comparison below always differ
-    // and wipes the stored mtime — forcing a needless full re-index of every KB file.
+    // and wipes the stored mtime, forcing a needless full re-index of every KB file.
     let incomingKb = typeof chat.knowledgeFiles === 'string'
       ? JSON.parse(chat.knowledgeFiles || '[]')
       : (chat.knowledgeFiles || []);
@@ -3770,6 +3770,31 @@ ipcMain.handle('save-settings', async (event, settingsObj) => {
   }
 });
 
+// --- UI FLAGS (one-time hints / coach-marks) ---
+// Small persistent booleans stored in the settings table under a `ui_` prefix.
+// Backs first-run coach-marks so a hint shows exactly once, surviving reloads.
+ipcMain.handle('get-ui-flags', async () => {
+  try {
+    const rows = db.prepare("SELECT key, value FROM settings WHERE key LIKE 'ui\\_%' ESCAPE '\\'").all();
+    const flags = {};
+    for (const r of rows) flags[r.key.slice(3)] = r.value === '1';
+    return flags;
+  } catch (e) {
+    console.error("Error reading UI flags from SQLite:", e);
+    return {};
+  }
+});
+
+ipcMain.handle('set-ui-flag', async (event, key) => {
+  try {
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, '1')").run(`ui_${key}`);
+    return { success: true };
+  } catch (e) {
+    console.error("Error saving UI flag to SQLite:", e);
+    throw e;
+  }
+});
+
 // ==========================================
 // --- UTILITIES IPC HANDLERS ---
 // ==========================================
@@ -4237,7 +4262,7 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
 
           // Apply the user's edits to the blue (entity) tags as a delta over what the
           // auto tagger just wrote: their removals win, their picks are added. The next
-          // re-tag re-derives freely — these edits are live, not protected.
+          // re-tag re-derives freely, these edits are live, not protected.
           try {
             const removed = Array.isArray(block.entityTagsRemoved) ? block.entityTagsRemoved : [];
             const added = Array.isArray(block.entityTagsAdded) ? block.entityTagsAdded : [];
@@ -4321,7 +4346,7 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
 });
 
 // Title-only rename for a Custom Memory snippet. The chunk text is unchanged, so
-// there is no need to re-embed or re-run the world-index tagger — we just update
+// there is no need to re-embed or re-run the world-index tagger, we just update
 // the stored title (knowledge_chunks.source) and the card in memoryBlocks.
 ipcMain.handle('rename-chat-kb-block', async (event, { chatId, blockId, title }) => {
   try {
@@ -4570,12 +4595,12 @@ async function performReindexIfNeeded() {
         needsReindex = true;
       }
     } else {
-      // No stamp exists — check if there are existing chunks that need re-vectorizing
+      // No stamp exists, check if there are existing chunks that need re-vectorizing
       const chunkCount = db.prepare('SELECT COUNT(*) as cnt FROM knowledge_chunks').get();
       if (chunkCount && chunkCount.cnt > 0) {
         needsReindex = true;
       } else {
-        // Fresh install, no data — just stamp it
+        // Fresh install, no data, just stamp it
         db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run(
           'rag_model_metadata',
           JSON.stringify({ model: RAG_MODEL_ID, dimension: RAG_MODEL_DIM })
@@ -4768,7 +4793,7 @@ async function performReindexIfNeeded() {
       sendProgress({ status: 'completed', message: 'Knowledge Base upgrade complete!' });
       console.log(`[Re-Index] Completed successfully. ${successCount} chunks re-indexed.`);
     } else {
-      // Do NOT stamp — leaves the old stamp so the next launch retries.
+      // Do NOT stamp, leaves the old stamp so the next launch retries.
       sendProgress({
         status: 'error',
         message: `Re-indexing incomplete: ${failureCount} chunk(s) failed. Will retry on next launch.`
@@ -4875,7 +4900,7 @@ app.whenReady().then(() => {
     if (!done) {
       // SAFETY GUARD: only proceed if the owner tables are intact.
       // If both owner tables are empty but chunks exist, the DB is in a degenerate/half-loaded
-      // state — abort rather than mass-delete everything.
+      // state, abort rather than mass-delete everything.
       const profCount = db.prepare('SELECT COUNT(*) c FROM writing_profiles').get().c;
       const chatCount = db.prepare('SELECT COUNT(*) c FROM chats').get().c;
       const chunkCount = db.prepare('SELECT COUNT(*) c FROM knowledge_chunks').get().c;

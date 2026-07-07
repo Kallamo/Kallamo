@@ -155,6 +155,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSettings: () => ipcRenderer.invoke('get-settings'),
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
 
+  // --- UI FLAGS (one-time hints) ---
+  getUiFlags: () => ipcRenderer.invoke('get-ui-flags'),
+  setUiFlag: (key) => ipcRenderer.invoke('set-ui-flag', key),
+
   // --- LIVE GENERATION & WORKFLOWS ---
   sendMessage: (args) => ipcRenderer.invoke('send-message', args),
   cancelGeneration: () => ipcRenderer.send('cancel-generation'),

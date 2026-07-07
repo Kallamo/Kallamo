@@ -577,7 +577,7 @@ function CellColorControl({ editor }) {
   );
 }
 
-// Floating panel shown when the cursor is inside a table — structure ops + cell fill.
+// Floating panel shown when the cursor is inside a table, structure ops + cell fill.
 function TableBubble({ editor }) {
   useToolbarTick(editor);
   if (!editor) return null;
@@ -613,7 +613,7 @@ function countWords(text) {
 }
 
 export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight = false, pending = null, onDispatch, onResolved, toolbarMode = 'fixed', smartTypography = true, onDocPatch, onRename, jumpRef, onOpenEntity }) {
-  const { showToast } = useApp();
+  const { showToast, uiFlags, dismissHint } = useApp();
   const saveTimer = useRef(null);
   // Tracks genuine unsaved edits, so leaving the chapter never re-saves unchanged
   // content (which would reset the document's vectorized flag every page switch).
@@ -676,7 +676,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
 
   // The index menu has two actions on different axes: syncing the memory to the
   // current TEXT (Index new blocks) vs refreshing entity TAGS on already-indexed text
-  // (Reindex all tags). When the chapter is behind the text, the first is the answer —
+  // (Reindex all tags). When the chapter is behind the text, the first is the answer,
   // emphasize it and pin a contextual note so the menu explains the pill.
   const needsSync = vecStatus === 'never' || vecStatus === 'outdated' || vecStatus === 'error';
   const vecMenuNote = {
@@ -781,7 +781,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
   }, []);
 
   // Invocation only offers the profiles ACTIVE in this workspace (the chat's
-  // activeProfiles), not every profile in the app — the Writing Desk inherits the
+  // activeProfiles), not every profile in the app, the Writing Desk inherits the
   // workspace's active profile set just like the chat does.
   useEffect(() => {
     let active = true;
@@ -839,8 +839,9 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     setCounts({ words: countWords(text), chars: text.length });
   }, [editor, doc.id]);
 
+
   // Best-effort scroll-to-passage for a note's excerpt: find the text in the doc and
-  // bring it into view. No selection, no highlight — just carry the page back to it.
+  // bring it into view. No selection, no highlight, just carry the page back to it.
   // No stored anchor, so it can't orphan.
   useEffect(() => {
     if (!jumpRef) return;
@@ -890,7 +891,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
         y: rect.top,
       };
       setEntityHover(base);
-      // Older marks (or renamed entities) may lack the stored type — resolve it by id.
+      // Older marks (or renamed entities) may lack the stored type, resolve it by id.
       if (id && !base.type && electronAPI.getEntity) {
         electronAPI.getEntity(id).then(res => {
           const ent = res?.entity || res;
@@ -901,7 +902,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     const onOut = (e) => {
       if (e.target?.closest?.('.wd-entity-ref')) setEntityHover(null);
     };
-    // Clicking a linked word opens the entity menu right there — no need to reselect
+    // Clicking a linked word opens the entity menu right there, no need to reselect
     // and hit the ⋯ button.
     const onClick = (e) => {
       const el = e.target?.closest?.('.wd-entity-ref');
@@ -933,7 +934,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     };
   }, [editor]);
 
-  // Flush a pending save when switching documents or unmounting — only when there are
+  // Flush a pending save when switching documents or unmounting, only when there are
   // genuine unsaved edits, so an unchanged chapter keeps its vectorized flag intact.
   useEffect(() => {
     return () => {
@@ -1015,7 +1016,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     }
   };
 
-  // Presentational mark only — retrieval still runs off chunk_tags. Stores type so the
+  // Presentational mark only, retrieval still runs off chunk_tags. Stores type so the
   // hover card can render the right icon without a fetch.
   const applyEntityMark = async (from, to, entity) => {
     if (!editor || !entity) return;
@@ -1088,7 +1089,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
   const acceptSuggestion = async () => {
     if (!editor || !pending || stale) return;
     // setEditable is NOT a chain command, so it must run before the chain (calling it
-    // inside .chain() silently aborts the whole chain — the accept-does-nothing bug).
+    // inside .chain() silently aborts the whole chain, the accept-does-nothing bug).
     editor.setEditable(true);
     editor.view.dispatch(editor.state.tr.setMeta(suggestionKey, DecorationSet.empty));
     // proposedText is Markdown (or HTML for the table fallback); insertContentAt parses
@@ -1147,7 +1148,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
       {showFind && editor && (
         <WritingFindReplace editor={editor} locked={locked} onClose={() => setShowFind(false)} />
       )}
-      {/* Title bar — always visible (incl. bubble mode) so Export/Page Setup never disappear. */}
+      {/* Title bar, always visible (incl. bubble mode) so Export/Page Setup never disappear. */}
       <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-gray-800/80 bg-[#011419]/35 shrink-0">
         <input
           value={title}
@@ -1250,24 +1251,46 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
           pluginKey="invokeBubble"
           shouldShow={({ state }) => !state.selection.empty && !locked}
           options={{ placement: 'bottom' }}
-          className="flex items-center gap-1"
+          className="flex flex-col items-end gap-1.5"
         >
-          <button
-            type="button"
-            onClick={openInvoke}
-            className="flex items-center gap-1.5 bg-accent text-white text-xs font-medium rounded-lg px-2.5 py-1.5 shadow-xl hover:brightness-110 cursor-pointer"
-          >
-            <Sparkles className="w-3.5 h-3.5" /> Invoke AI
-          </button>
-          <button
-            type="button"
-            ref={wbBtnRef}
-            onClick={() => (wbOpen ? setWbOpen(false) : openWorldbuildMenu())}
-            aria-label="More options"
-            className="flex items-center justify-center w-8 h-8 bg-[#1a2b33] text-gray-100 border border-gray-600 rounded-lg shadow-xl hover:bg-[#26424d] hover:text-white cursor-pointer"
-          >
-            <MoreHorizontal className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={openInvoke}
+              className="flex items-center gap-1.5 bg-accent text-white text-xs font-medium rounded-lg px-2.5 py-1.5 shadow-xl hover:brightness-110 cursor-pointer"
+            >
+              <Sparkles className="w-3.5 h-3.5" /> Invoke AI
+            </button>
+            <button
+              type="button"
+              ref={wbBtnRef}
+              onClick={() => { if (!uiFlags.wdEntityLinkSeen) dismissHint('wdEntityLinkSeen'); wbOpen ? setWbOpen(false) : openWorldbuildMenu(); }}
+              aria-label="More options"
+              className="flex items-center justify-center w-8 h-8 bg-[#1a2b33] text-gray-100 border border-gray-600 rounded-lg shadow-xl hover:bg-[#26424d] hover:text-white cursor-pointer"
+            >
+              <MoreHorizontal className="w-4 h-4" />
+            </button>
+          </div>
+          {!uiFlags.wdEntityLinkSeen && !wbOpen && (
+            <div className="w-60 bg-[#0a161d] border border-accent/40 rounded-lg p-3 shadow-xl">
+              <div className="flex items-start gap-2">
+                <Sparkles className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-xs font-bold text-white">Link words to your world</span>
+                  <p className="text-[0.6875rem] leading-relaxed text-gray-300">
+                    Open ⋯ to link this name to a Worldbuild entity, or create one on the spot.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => dismissHint('wdEntityLinkSeen')}
+                    className="self-start mt-1 text-[0.6875rem] font-semibold text-accent hover:brightness-110 cursor-pointer"
+                  >
+                    Got it
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </BubbleMenu>
       )}
 
@@ -1371,7 +1394,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
         />
       )}
 
-      {/* Persistent loading notice — driven by the parent so it survives leaving and
+      {/* Persistent loading notice, driven by the parent so it survives leaving and
           returning to this chapter while the AI is still running. */}
       {inFlight && (
         <div className="flex items-center gap-2 px-5 py-2 border-b border-gray-800/80 bg-accent/10 text-xs text-accent shrink-0">
@@ -1397,7 +1420,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
           )}
         </div>
 
-        {/* Floating review controls — counter + Accept/Reject pinned over the page. */}
+        {/* Floating review controls, counter + Accept/Reject pinned over the page. */}
         {pending && pending.channel !== 'analysis' && (
           <div className="sticky bottom-4 z-20 flex flex-col items-center gap-2 pointer-events-none">
             {pending.status === 'flagged' && (
