@@ -256,7 +256,7 @@ export function suggestionCharDelta(suggestion) {
 
 // Inline reference to a Worldbuild entity. Presentational + navigational ONLY: it
 // tags a span with the entity id (and a display name for dangling-ref fallback) and
-// renders as a dotted-underline span. Retrieval still runs off chunk_tags — this mark
+// renders as a dotted-underline span. Retrieval still runs off chunk_tags, this mark
 // is never a source of truth for what the AI sees. Rides in the doc JSON, so it tracks
 // the text through edits and persists with saveDocumentContent.
 export const EntityRef = Mark.create({
@@ -319,7 +319,7 @@ const SmartDashes = Extension.create({
 // The live editor adds Smart Typography (curly quotes, ellipsis, ©™…) plus the
 // space-triggered dashes, when enabled in Settings → Interface → Writing Desk.
 // Input-rule-only, so omitted from the import schema (generateJSON never types).
-// Document-only — never touches chat. Typography's own immediate `--`→— rule is
+// Document-only, never touches chat. Typography's own immediate `--`→— rule is
 // disabled in favor of SmartDashes.
 export function getEditorExtensions({ smartTypography = true } = {}) {
   const base = [
@@ -334,7 +334,7 @@ export function getEditorExtensions({ smartTypography = true } = {}) {
     : base;
 }
 
-// True if the selection [from,to] contains a table — markdown serialization mangles
+// True if the selection [from,to] contains a table, markdown serialization mangles
 // rich tables, so those invocations fall back to the HTML round-trip.
 export function selectionHasTable(editor, from, to) {
   let found = false;

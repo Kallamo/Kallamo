@@ -165,7 +165,7 @@ app.whenReady().then(() => {
     }
   });
 
-  // Content-Security-Policy. Applied only in packaged builds — in development the Vite dev
+  // Content-Security-Policy. Applied only in packaged builds, in development the Vite dev
   // server needs inline scripts, eval and a websocket connection for HMR, which a strict CSP
   // would block. All runtime assets (fonts, highlight.js themes, JS bundle) are self-hosted,
   // so production can lock down to the app's own origin. connect-src is intentionally tight:
@@ -283,7 +283,7 @@ function setupAutoUpdater(mainWindow) {
       log.error('Auto-updater: Error detected during lifecycle checks:', err);
     });
   } else {
-    // macOS / Linux .deb — query the GitHub Releases API for the latest version
+    // macOS / Linux .deb, query the GitHub Releases API for the latest version
     log.info('Auto-updater: Platform does not support auto-update. Checking GitHub releases...');
 
     const https = require('https');

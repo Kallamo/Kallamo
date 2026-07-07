@@ -8,6 +8,7 @@ import SettingsModal from './components/modals/SettingsModal';
 import WorkflowErrorModal from './components/modals/WorkflowErrorModal';
 import ProfileErrorModal from './components/modals/ProfileErrorModal';
 import ContextOverflowModal from './components/modals/ContextOverflowModal';
+import WhatsNewModal from './components/modals/WhatsNewModal';
 import { X, CheckCircle, AlertCircle, Info } from 'lucide-react';
 
 // Self-hosted highlight.js themes (bundled by Vite, served from the app origin instead of a CDN)
@@ -41,7 +42,9 @@ function MainLayout() {
     downloadEngine,
     cancelEngineDownload,
     settingsRequest,
-    clearSettingsRequest
+    clearSettingsRequest,
+    whatsNewOpen,
+    closeWhatsNew
   } = useApp();
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [activeTasks, setActiveTasks] = useState({});
@@ -469,6 +472,9 @@ function MainLayout() {
       )}
       {showOverflowModal && (
         <ContextOverflowModal />
+      )}
+      {whatsNewOpen && (
+        <WhatsNewModal onClose={closeWhatsNew} />
       )}
     </div>
   );

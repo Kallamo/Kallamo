@@ -19,6 +19,8 @@ const api = window.electronAPI || {
   saveSettings: async () => { },
   getUiFlags: async () => ({}),
   setUiFlag: async () => { },
+  getWhatsNewState: async () => ({ show: false }),
+  markWhatsNewSeen: async () => { },
   sendMessage: async () => { },
   cancelGeneration: () => { },
   onWorkflowProgress: () => () => { },
@@ -49,6 +51,10 @@ export const AppProvider = ({ children }) => {
   // One-time UI hints (coach-marks). Keyed booleans persisted in the settings
   // table; once true, the matching hint never shows again.
   const [uiFlags, setUiFlags] = useState({});
+
+  // What's New modal: opens once per version bump (driven by the main process),
+  // and can be reopened any time from Settings → About.
+  const [whatsNewOpen, setWhatsNewOpen] = useState(false);
 
   const [activeChatId, setActiveChatId] = useState(null);
   const [activeMessages, setActiveMessages] = useState([]);
@@ -127,6 +133,9 @@ export const AppProvider = ({ children }) => {
 
       const fetchedFlags = await api.getUiFlags();
       setUiFlags(fetchedFlags || {});
+
+      const whatsNew = await api.getWhatsNewState();
+      if (whatsNew?.show) setWhatsNewOpen(true);
 
       await refreshEngineStatus();
     } catch (error) {
@@ -714,6 +723,15 @@ export const AppProvider = ({ children }) => {
     api.setUiFlag(key);
   };
 
+  // Open on demand (from Settings). Reopening does not need to persist anything.
+  const openWhatsNew = () => setWhatsNewOpen(true);
+  // Closing always records the current version as seen, so the auto-open won't
+  // fire again until the next update, whether it opened automatically or by hand.
+  const closeWhatsNew = () => {
+    setWhatsNewOpen(false);
+    api.markWhatsNewSeen();
+  };
+
   const activeChat = chats.find(c => c.id === activeChatId);
 
   return (
@@ -726,6 +744,7 @@ export const AppProvider = ({ children }) => {
       apiProfiles, setApiProfiles,
       settings, setSettings, handleSaveSettings,
       uiFlags, dismissHint,
+      whatsNewOpen, openWhatsNew, closeWhatsNew,
       activeChatId, activeChat,
       activeMessages, setActiveMessages, handleSelectChat,
       handleCreateChat, handleDeleteChat, handleSaveChat, refreshChats,

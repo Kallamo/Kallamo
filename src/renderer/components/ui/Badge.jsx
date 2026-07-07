@@ -1,7 +1,7 @@
 import React from 'react';
 
 /**
- * Shared label/pill. Tonal, uppercase, tiny — for source types, statuses and
+ * Shared label/pill. Tonal, uppercase, tiny, for source types, statuses and
  * keyword chips. Use `tone` for color; `dot` for a leading status dot.
  */
 const TONES = {

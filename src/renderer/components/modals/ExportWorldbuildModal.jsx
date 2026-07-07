@@ -3,7 +3,7 @@ import { X, Check, AlertTriangle, Download, Share2 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 
 // Pre-export confirmation for a Worldbuild (.klwb) package: spells out what travels, what
-// stays behind, and a privacy reminder — mirroring the Profile/Workflow export modals so
+// stays behind, and a privacy reminder, mirroring the Profile/Workflow export modals so
 // the user never exports by accident. Confirming calls onConfirm (which opens the save
 // dialog); this modal just informs.
 export default function ExportWorldbuildModal({ entityCount = 0, onClose, onConfirm }) {

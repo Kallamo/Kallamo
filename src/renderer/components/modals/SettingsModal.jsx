@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
-import { X, Plus, Key, Link2, Eye, EyeOff, Monitor, Settings, Layout, Layers, HardDrive, Trash2, FolderOpen, RefreshCw, Cpu, Database, Palette, Type, PenLine, AlertTriangle } from 'lucide-react';
+import { X, Plus, Key, Link2, Eye, EyeOff, Monitor, Settings, Layout, Layers, HardDrive, Trash2, FolderOpen, RefreshCw, Cpu, Database, Palette, Type, PenLine, AlertTriangle, Sparkles, SlidersHorizontal } from 'lucide-react';
 import Logo, { Logotype } from '../../logo';
 
 export default function SettingsModal({ onClose, initialTab, initialSection }) {
@@ -17,7 +17,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     updateOutdatedUrl,
     engineStatus,
     downloadEngine,
-    deleteEngine
+    deleteEngine,
+    openWhatsNew
   } = useApp();
 
   const [activeTab, setActiveTab] = useState(initialTab || 'api'); // 'api' | 'interface' | 'advanced'
@@ -407,7 +408,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
 
   return (
     <div className={`fixed inset-0 z-50 flex items-center justify-center titlebar-nodrag select-none p-8 ${(settings?.interface?.blur ?? true) ? 'bg-black/60 backdrop-blur-sm' : 'bg-[#011419]'}`}>
-      <div className="w-full max-w-4xl h-full max-h-[600px] bg-[#000D11] rounded-xl shadow-2xl border border-gray-800/60 flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
+      <div className="w-full max-w-4xl h-full max-h-[760px] bg-[#000D11] rounded-xl shadow-2xl border border-gray-800/60 flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
 
         {/* TitleBar Header */}
         <div className="shrink-0 flex justify-between items-center h-14 w-full px-6 bg-[#011419] border-b border-gray-800/50">
@@ -424,42 +425,54 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         <div className="flex flex-1 overflow-hidden">
 
           {/* Settings Sidebar Tabs */}
-          <div className="w-56 bg-[#011419] border-r border-gray-800/50 p-4 flex flex-col gap-2 shrink-0">
+          <div className="w-56 bg-[#011419] border-r border-gray-800/50 p-4 pb-8 flex flex-col gap-2 shrink-0">
             <button
               onClick={() => { setActiveTab('api'); setShowAddApiForm(false); }}
-              className={`text-left px-4 py-2.5 rounded-md text-sm font-medium transition-colors cursor-pointer ${activeTab === 'api' ? 'bg-[#1a2d32] text-white' : 'text-gray-400 hover:bg-[#1a2d32]/50 hover:text-gray-200'
+              className={`flex items-center gap-2.5 text-left px-4 py-2.5 rounded-md text-sm font-medium transition-colors cursor-pointer ${activeTab === 'api' ? 'bg-[#1a2d32] text-white' : 'text-gray-400 hover:bg-[#1a2d32]/50 hover:text-gray-200'
                 }`}
             >
+              <Link2 className="w-4 h-4 shrink-0" />
               API Connections
             </button>
             <button
               onClick={() => { setActiveTab('engine'); setShowAddApiForm(false); }}
-              className={`text-left px-4 py-2.5 rounded-md text-sm font-medium transition-colors cursor-pointer flex items-center justify-between gap-2 ${activeTab === 'engine' ? 'bg-[#1a2d32] text-white' : 'text-gray-400 hover:bg-[#1a2d32]/50 hover:text-gray-200'
+              className={`text-left px-4 py-2.5 rounded-md text-sm font-medium transition-colors cursor-pointer flex items-center gap-2.5 ${activeTab === 'engine' ? 'bg-[#1a2d32] text-white' : 'text-gray-400 hover:bg-[#1a2d32]/50 hover:text-gray-200'
                 }`}
             >
-              <span>Engine &amp; Memory</span>
+              <Cpu className="w-4 h-4 shrink-0" />
+              <span className="flex-1">Engine &amp; Memory</span>
               {!systemApiProfileId && <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />}
             </button>
             <button
               onClick={() => { setActiveTab('interface'); setShowAddApiForm(false); }}
-              className={`text-left px-4 py-2.5 rounded-md text-sm font-medium transition-colors cursor-pointer ${activeTab === 'interface' ? 'bg-[#1a2d32] text-white' : 'text-gray-400 hover:bg-[#1a2d32]/50 hover:text-gray-200'
+              className={`flex items-center gap-2.5 text-left px-4 py-2.5 rounded-md text-sm font-medium transition-colors cursor-pointer ${activeTab === 'interface' ? 'bg-[#1a2d32] text-white' : 'text-gray-400 hover:bg-[#1a2d32]/50 hover:text-gray-200'
                 }`}
             >
+              <Palette className="w-4 h-4 shrink-0" />
               Interface
             </button>
             <button
               onClick={() => { setActiveTab('advanced'); setShowAddApiForm(false); }}
-              className={`text-left px-4 py-2.5 rounded-md text-sm font-medium transition-colors cursor-pointer ${activeTab === 'advanced' ? 'bg-[#1a2d32] text-white' : 'text-gray-400 hover:bg-[#1a2d32]/50 hover:text-gray-200'
+              className={`flex items-center gap-2.5 text-left px-4 py-2.5 rounded-md text-sm font-medium transition-colors cursor-pointer ${activeTab === 'advanced' ? 'bg-[#1a2d32] text-white' : 'text-gray-400 hover:bg-[#1a2d32]/50 hover:text-gray-200'
                 }`}
             >
+              <SlidersHorizontal className="w-4 h-4 shrink-0" />
               Advanced
             </button>
             <div className="flex-1" />
             <button
+              onClick={openWhatsNew}
+              className="flex items-center gap-2 text-left px-4 py-1.5 rounded-md text-xs font-medium text-gray-500 hover:bg-[#1a2d32]/50 hover:text-gray-300 transition-colors cursor-pointer"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-accent shrink-0" />
+              What's New
+            </button>
+            <button
               onClick={() => { setActiveTab('about'); setShowAddApiForm(false); }}
-              className={`text-left px-4 py-2.5 rounded-md text-sm font-medium transition-colors cursor-pointer ${activeTab === 'about' ? 'bg-[#1a2d32] text-white' : 'text-gray-400 hover:bg-[#1a2d32]/50 hover:text-gray-200'
+              className={`flex items-center gap-2.5 text-left px-4 py-2.5 rounded-md text-sm font-medium transition-colors cursor-pointer ${activeTab === 'about' ? 'bg-[#1a2d32] text-white [--logo-cut:#1a2d32]' : 'text-gray-400 hover:bg-[#1a2d32]/50 hover:text-gray-200 [--logo-cut:#011419] hover:[--logo-cut:#0f2227]'
                 }`}
             >
+              <Logo size={22} fluteColor="currentColor" className="shrink-0 -my-1" />
               About Kallamo
             </button>
 
@@ -1505,7 +1518,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       <Logotype height={44} className="text-white font-bold select-none pointer-events-none" cutColor="#000D11" />
                       <span className="text-[10px] bg-accent/10 border border-accent/25 text-accent px-2 py-0.5 rounded-full font-bold uppercase tracking-wider select-none pointer-events-none">v{appVersion}</span>
                     </div>
-                    <p className="caption mt-1 font-medium select-none pointer-events-none">Local-first, highly secure AI orchestration client.</p>
+                    <p className="caption mt-1 font-medium select-none pointer-events-none">A local-first studio for writing and living worlds.</p>
                   </div>
                 </div>
 

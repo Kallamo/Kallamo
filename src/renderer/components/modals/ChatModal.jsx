@@ -37,7 +37,6 @@ export default function ChatModal({ chat, onClose }) {
 
   const bgInputRef = useRef(null);
 
-  // Load chat details if editing
   useEffect(() => {
     if (chat) {
       setTitle(chat.title || '');
@@ -252,7 +251,7 @@ export default function ChatModal({ chat, onClose }) {
                   ) : (
                     filteredProfiles.map(p => {
                       const isSelected = activeProfiles.includes(p.id);
-                      // Incomplete profiles can't be pre-activated — show a warning
+                      // Incomplete profiles can't be pre-activated, show a warning
                       // badge in place of the checkbox.
                       if (p.needsSetup) {
                         return (

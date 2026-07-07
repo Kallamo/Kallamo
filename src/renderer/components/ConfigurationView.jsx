@@ -660,7 +660,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                   </div>
                 </div>
 
-                {/* Live preview — mirrors the real chat styling for this workspace */}
+                {/* Live preview, mirrors the real chat styling for this workspace */}
                 <div className="flex flex-col">
                   <span className="text-[9px] text-gray-400 uppercase font-semibold mb-2 flex items-center space-x-1.5">
                     <span>Live Preview</span>

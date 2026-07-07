@@ -110,7 +110,7 @@ function stripInternal(data) {
 // Fold one entity into an existing one: the source's name + aliases are absorbed as
 // aliases of the target, its chunk tags and relation edges are repointed to the target,
 // its data + lore are combined with the target's, then the source is deleted. `prefer`
-// decides who wins on conflicting fields — 'target' (the existing entity, default) or
+// decides who wins on conflicting fields, 'target' (the existing entity, default) or
 // 'source' (the folded-in one, e.g. a freshly imported entity). Used both for "this AI
 // proposal is really an alias of X" and for merging an imported duplicate into a real one.
 function mergeEntity(sourceId, targetId, { prefer = 'target' } = {}) {
@@ -258,7 +258,7 @@ function resolveMention(mention, type = null, workspaceId = null) {
 
 // List every entity that could plausibly match a free-text mention, for a human
 // picker (unlike resolveMention, which commits to one winner). A candidate matches
-// when the needle equals or is contained in the canonical name or any alias — so
+// when the needle equals or is contained in the canonical name or any alias, so
 // two "Mara"s both surface and the user disambiguates. Exact matches rank first.
 function findCandidates(mention, workspaceId = null, limit = 8) {
   const needle = normalizeName(mention);
@@ -336,7 +336,7 @@ function setLink({ workspaceId, fromId, relType, toId, single = false, label = n
   if (single) db.prepare('DELETE FROM entity_links WHERE fromId = ? AND relType = ?').run(fromId, relType);
   if (!toId) return { cleared: true };
   if (!single) {
-    // For labeled relations, the same pair can hold distinct labels — dedup on (pair, label).
+    // For labeled relations, the same pair can hold distinct labels, dedup on (pair, label).
     const exists = db.prepare("SELECT id FROM entity_links WHERE fromId = ? AND relType = ? AND toId = ? AND IFNULL(label, '') = ?")
       .get(fromId, relType, toId, cleanLabel || '');
     if (exists) return { id: exists.id };
@@ -361,7 +361,7 @@ function updateLinkLabel(linkId, label) {
 
 // Serialize a workspace's Worldbuild into a self-contained, portable package: entities
 // (minus transient/workspace-bound bits) and the edges between them. Chapter links
-// (loreDocumentIds) and staged AI proposals (_enrichPending) are intentionally dropped —
+// (loreDocumentIds) and staged AI proposals (_enrichPending) are intentionally dropped,
 // they point at this workspace's Writing Desk and mean nothing elsewhere.
 function exportWorldbuild(workspaceId) {
   const rows = db.prepare('SELECT * FROM entities WHERE workspaceId IS ? AND status != ?').all(workspaceId || null, 'proposed');
@@ -382,7 +382,7 @@ function exportWorldbuild(workspaceId) {
   return { kallamoWorldbuild: 1, exportedAt: Date.now(), entities, links };
 }
 
-// Bring an exported package into a workspace WITHOUT de-duping by name — a same-named
+// Bring an exported package into a workspace WITHOUT de-duping by name, a same-named
 // entity is not assumed to be the same entity. Every imported entity lands as a `proposed`
 // row flagged _imported, and its edges are recreated among the imported set. The user then
 // reviews each in the sheet: accept as new, dismiss, or merge into an existing entity

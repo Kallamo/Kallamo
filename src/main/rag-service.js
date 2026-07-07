@@ -397,7 +397,7 @@ function fuseAndRank(queryVector, candidates, sparseNormMap, threshold = 0.3, k 
             : 0;
         const sparseNorm = (sparseNormMap && sparseNormMap.get(cand.id)) || 0;
         // Dynamic-tag boost: a fixed bonus when the chunk carries a tag the query
-        // mentions. Added on top of fusion — never rescues a chunk below the floor.
+        // mentions. Added on top of fusion, never rescues a chunk below the floor.
         const boost = (boostMap && boostMap.get(cand.id)) || 0;
         const fusionScore = ALPHA_DENSE * cosine + (1 - ALPHA_DENSE) * sparseNorm + boost;
         fusedResults.push({
@@ -542,7 +542,7 @@ function getWorldVocabulary(ownerId, ownerType, limit = 40) {
 }
 
 // Deterministic entity retrieval: resolve a surface name/alias to its tagged chunks
-// WITHOUT embedding or the similarity floor. This is the agentic "ceiling" — given a
+// WITHOUT embedding or the similarity floor. This is the agentic "ceiling", given a
 // known entity, return every chunk that carries it, so the agent can pull a full
 // dossier in one exact call instead of tentative semantic searches. Also returns the
 // distinct registry entity ids that matched, so the caller can hop the relation graph

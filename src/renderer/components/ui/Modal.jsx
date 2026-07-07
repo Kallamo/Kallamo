@@ -10,7 +10,7 @@ import { useApp } from '../../context/AppContext';
  * scroll lock. Children provide the content; pass `title` for a standard
  * header with close button, or omit it for a fully custom body.
  *
- * Never hand-roll overlay markup elsewhere — build on this.
+ * Never hand-roll overlay markup elsewhere, build on this.
  */
 const SIZES = {
   sm: 'max-w-sm',

@@ -127,8 +127,14 @@ if (fs.existsSync(markerPath)) {
   }
 }
 
+// True when no database existed before this boot: a clean first install (as
+// opposed to an upgrade over an existing DB). The What's New modal uses this to
+// stay silent on fresh installs, where onboarding already greets the user.
+const isFreshInstall = !fs.existsSync(dbPath);
+
 const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
+db.isFreshInstall = isFreshInstall;
 
 
 // --- ENCRYPTION HELPERS ---
@@ -713,7 +719,7 @@ try {
   }
 
   // manual=1 marks a tag the user pinned by hand. Used for keyword (yellow) tags on
-  // file chunks, which have no per-chunk JSON store — so re-tag must preserve them.
+  // file chunks, which have no per-chunk JSON store, so re-tag must preserve them.
   const ctTableInfo = db.pragma("table_info(chunk_tags)");
   const ctColumns = ctTableInfo.map(col => col.name);
   if (!ctColumns.includes('manual')) {
@@ -869,7 +875,7 @@ try {
 try {
   const existingMeta = db.prepare("SELECT value FROM settings WHERE key = 'rag_model_metadata'").get();
   if (!existingMeta) {
-    // First run — stamp will be written after successful re-index
+    // First run, stamp will be written after successful re-index
     console.log("Database: No rag_model_metadata found. Will be created after first indexing.");
   }
 } catch (e) {
@@ -1029,9 +1035,9 @@ function pmNodeSize(node) {
 const seedId = (prefix) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 
 // First-run onboarding: ship three editable AI Profiles (no API key by default) and
-// one example workspace that already contains generated results — a chat exchange, a
+// one example workspace that already contains generated results, a chat exchange, a
 // chapter with a pending AI edit, and canon memories. The point is "value before the
-// key": the user sees real output before any configuration. Idempotent and one-shot —
+// key": the user sees real output before any configuration. Idempotent and one-shot,
 // gated by a settings flag, so deleting the example never resurrects it.
 function seedOnboarding() {
   try {
@@ -1040,7 +1046,7 @@ function seedOnboarding() {
 
     const now = Date.now();
 
-    // All three ship agentic-RAG ON (isAgentic=1) with the default agentic loop — no
+    // All three ship agentic-RAG ON (isAgentic=1) with the default agentic loop, no
     // custom agenticPrompt, so the built-in behaviour drives retrieval.
     const profiles = [
       {
@@ -1049,7 +1055,22 @@ function seedOnboarding() {
         description: '(Example) Line-editing for the Writing Desk. Select text and invoke to tighten and sharpen your prose.',
         color: '#7CC4F2',
         resultChannel: 'replacement',
-        systemPrompt: "You are an expert line editor working inside a novelist's manuscript. Given a selected passage, you rewrite it to be tighter, clearer, and more evocative: cut redundancy and filler, replace vague abstractions with concrete sensory detail, vary sentence rhythm, and strengthen verbs. Always preserve the author's voice, tense, point of view, and intended meaning, and keep any established facts about characters and places intact. Return only the rewritten passage, with no preamble or explanation.",
+        systemPrompt: `Rewrite the selected passage so it earns every word. Work at the sentence level.
+
+### Do
+- Cut filler and redundancy.
+- Trade vague abstraction for concrete, specific detail.
+- Vary sentence length so the rhythm is not flat.
+- Let strong verbs carry the weight instead of propping weak ones up with adverbs.
+
+### Never
+- Touch a line that already works. Leave it exactly as it is.
+- Alter, add, or remove established facts about the characters, places, or events.
+- Resolve ambiguity the author left on purpose.
+- Shift the author's voice, tense, or point of view.
+
+### Output
+Return only the revised passage, written in the language of the original, with nothing before or after it: no notes, no quotation marks, no explanation.`,
       },
       {
         id: seedId('wp'),
@@ -1057,7 +1078,20 @@ function seedOnboarding() {
         description: '(Example) A thinking partner for the Chat tab. Talk through plot, character, and ideas.',
         color: '#F2C14E',
         resultChannel: 'replacement',
-        systemPrompt: "You are a creative brainstorming partner for a fiction writer. Your job is to expand the writer's thinking, not to write the manuscript for them. Ask sharp, specific questions; offer several concrete, distinct options rather than one safe answer; and pressure-test plot logic, character motivation, and theme. Draw on the story's established canon and earlier conversation so your ideas stay consistent with the world. Keep your tone collaborative and energetic. Only write finished prose when the writer explicitly asks for it.",
+        systemPrompt: `Help the writer think; do not think for them. Treat each message as a problem to open up, not one to close in a single answer.
+
+### How to help
+- Ask the question that exposes the real decision under what they said, instead of guessing.
+- Offer a few genuinely different directions and name the tradeoff of each, so the writer is choosing between real options rather than nodding at one safe suggestion.
+- Push on what is weak: plot logic that does not hold, motivation that is stated but not felt, stakes that stay abstract.
+
+### Stay grounded
+- Build on what is already true of this story: its established canon, memories, and worldbuilding, and what has been said earlier in the conversation.
+- Keep ideas fitting this world instead of pulling it somewhere generic.
+
+### Keep it tight
+- One sharp paragraph beats a long list.
+- Do not write finished prose for the manuscript unless the writer explicitly asks you to.`,
       },
       {
         id: seedId('wp'),
@@ -1065,7 +1099,26 @@ function seedOnboarding() {
         description: '(Example) Checks your text against your canon and flags contradictions. Try it from the Writing Desk.',
         color: '#C792EA',
         resultChannel: 'analysis',
-        systemPrompt: "You are a continuity and coherence editor for a novel-in-progress. Compare the text under review against the project's established facts, memories, and worldbuilding, and surface problems: factual contradictions, timeline inconsistencies, characters acting against their established traits or knowledge, unexplained plot gaps, and details that clash with canon. For each issue, name what is wrong, quote or reference the conflicting text, and suggest how to resolve it. Be concise and specific. Report your findings as a critique only — never rewrite or replace the author's body text.",
+        systemPrompt: `Check the text under review against everything the project already establishes: its canon, memories, worldbuilding, and the entities and relations recorded for this world. Find where the text and the established world disagree. Do not judge the writing's style or quality.
+
+### Look for
+- Contradictions of stated fact.
+- Chronology that does not line up.
+- Characters acting against their known traits, knowledge, or whereabouts.
+- Details that clash with canon.
+- Places where the text assumes something the world has not established.
+
+### Report each problem the same way
+- **What breaks:** one line.
+- **Text at fault:** quoted from the passage.
+- **Collides with:** the established fact.
+- **Fix:** one concrete, specific suggestion.
+
+Rank the problems by how much they break the story, most serious first.
+
+### Rules
+- Verify before you flag. If the text is consistent, say so instead of inventing issues, and do not report matters of taste as errors.
+- Report findings only. Never rewrite, rephrase, or replace the author's text; you are reviewing it, not editing it.`,
       },
     ];
 
@@ -1096,7 +1149,7 @@ function seedOnboarding() {
 
     // Ship a background image so the example also showcases workspace personalization.
     // Copied out of the app bundle into the workspace folder and served via app-file://;
-    // best-effort — a failed copy just leaves the workspace without a background.
+    // best-effort, a failed copy just leaves the workspace without a background.
     let backgroundImage = '';
     try {
       const srcBg = path.join(__dirname, '..', 'assets', 'onboarding-bg.svg');
@@ -1168,7 +1221,7 @@ function seedOnboarding() {
     `);
 
     // A four-message brainstorming exchange (user/AI/user/AI) about this very story, so
-    // the chat already shows real, on-topic output. Plain rows — no API call.
+    // the chat already shows real, on-topic output. Plain rows, no API call.
     const brainstormColor = profiles[1].color;
     const messages = [
       { role: 'user', name: '', color: '',
@@ -1192,7 +1245,7 @@ function seedOnboarding() {
         INSERT INTO chats (
           id, title, description, updatedAt, isPinned, maxContext, archiveThreshold, summarizedIndex,
           activeProfiles, activeWorkflows, backgroundImage, backdropOpacity, userBubbleOpacity, aiBubbleOpacity, memoryBlocks, knowledgeFiles, autoSummarize, syncToCloud
-        ) VALUES (?, ?, ?, ?, 0, 128000, 60000, 0, ?, '[]', ?, 75, 100, 0, ?, '[]', 0, 0)
+        ) VALUES (?, ?, ?, ?, 0, 128000, 60000, 0, ?, '[]', ?, 25, 75, 75, ?, '[]', 0, 0)
       `).run(
         workspaceId,
         'Example Project — The Lighthouse',
@@ -1229,10 +1282,12 @@ function seedOnboarding() {
         );
       }
       // Relations that mirror the scene: Mara is connected to Aldous; the logbook was
-      // created by Aldous and is found in the lighthouse.
+      // created by Aldous and is found in the lighthouse. The lighthouse is still his,
+      // missing or not, so Aldous stays its owner/leader.
       insertLink.run(seedId('lnk'), workspaceId, eMara, 'connected_to', eAldous, now);
       insertLink.run(seedId('lnk'), workspaceId, eLogbook, 'created_by', eAldous, now);
       insertLink.run(seedId('lnk'), workspaceId, eLogbook, 'found_in', eLighthouse, now);
+      insertLink.run(seedId('lnk'), workspaceId, eLighthouse, 'led_by', eAldous, now);
 
       db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('onboarding_seeded', '1')").run();
     });

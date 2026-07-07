@@ -449,7 +449,6 @@ export default function ChatWorkspaceView() {
     const text = inputValue.trim();
     if (!text && pendingFiles.length === 0) return;
 
-    // Attachments names array
     const attachedNames = pendingFiles.map(f => f.name);
     let finalContent = text;
     if (!text && attachedNames.length > 0) {

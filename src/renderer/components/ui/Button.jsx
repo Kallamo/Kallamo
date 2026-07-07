@@ -11,7 +11,7 @@ import { Loader2 } from 'lucide-react';
  *  - subtle   → borderless, lowest emphasis (inline text actions only)
  *
  * Sizes: sm | md (default). Every interactive button keeps a clear shape and
- * a comfortable hit area — never a bare borderless primary action.
+ * a comfortable hit area, never a bare borderless primary action.
  */
 const VARIANTS = {
   primary: 'bg-accent text-[#011419] hover:brightness-110 shadow-sm',

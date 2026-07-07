@@ -3,7 +3,7 @@ import { X } from 'lucide-react';
 
 /**
  * Shared side panel (slide-out drawer). Use for contextual editors and viewers
- * that sit beside content — NOT for decisions (use ConfirmDialog) or centered
+ * that sit beside content, NOT for decisions (use ConfirmDialog) or centered
  * forms (use Modal).
  *
  * Defaults to `position="absolute"` so it can live inside a relative container

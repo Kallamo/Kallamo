@@ -35,7 +35,6 @@ export default function ProfileModal({ profile, onClose, onSave }) {
 
   const colors = ['#FBCB2D', '#ff5f56', '#3b82f6', '#10b981', '#9c27b0', '#ec4899', '#6366f1', '#14b8a6', '#f97316', '#4b5563'];
 
-  // Load profile data on edit
   useEffect(() => {
     if (profile) {
       setName(profile.name || '');
@@ -260,7 +259,7 @@ export default function ProfileModal({ profile, onClose, onSave }) {
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-6 relative custom-scrollbar">
-          <div className="grid grid-cols-12 gap-6 h-full">
+          <div className="grid grid-cols-12 gap-6 h-full min-h-0">
 
             {/* Left Column (Inputs) */}
             <div className="col-span-5 space-y-4 flex flex-col">
@@ -305,7 +304,7 @@ export default function ProfileModal({ profile, onClose, onSave }) {
                 </div>
               </div>
 
-              {/* Engine Connection + Generation — one card: the model and how it generates
+              {/* Engine Connection + Generation, one card: the model and how it generates
                   belong together. Params sit as a lighter sub-section, not a second medallion. */}
               <div className={`${cardCls} flex-1 flex flex-col`}>
                 <Head icon={Cpu} title="Engine Connection" />
@@ -412,7 +411,7 @@ export default function ProfileModal({ profile, onClose, onSave }) {
             </div>
 
             {/* Right Column (System Prompt) */}
-            <div className="col-span-7 flex flex-col h-full">
+            <div className="col-span-7 flex flex-col h-full min-h-0 overflow-hidden">
               <div className={`${cardCls} flex flex-col h-full min-h-0`}>
                 <Head icon={Wand2} title="Behavior & Rules" right={
                   <div className="flex bg-[#011419] p-0.5 rounded-lg border border-gray-800 text-[10px] font-bold uppercase tracking-wider select-none shrink-0 z-10 space-x-0.5">

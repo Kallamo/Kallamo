@@ -251,7 +251,7 @@ function Section({ icon: Icon, title, editing, onEdit, showPencil, children }) {
 const draftFor = (type) => ({ id: null, type, canonicalName: '', aliases: '', lore: '', loreDocumentId: '', status: 'confirmed', data: {} });
 
 // Relation pickers (single-value and many-to-many), styled to match the light inputs.
-// Links need a saved entity id, so these render nothing until the entity exists —
+// Links need a saved entity id, so these render nothing until the entity exists,
 // the create form shows only fields that can be filled before the first save.
 function SingleRelation({ label, hint, current, options, onSet, disabled }) {
   if (disabled) return null;
@@ -511,7 +511,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
 
   // Update entities: read each non-locked entity's related chunks and let the AI refresh it.
   // The run lives in the main process, so it outlives this view. On mount we restore the
-  // lock from the main-process status, and a broadcast completion event clears it — so
+  // lock from the main-process status, and a broadcast completion event clears it, so
   // switching away and back keeps the overlay while the update is still running.
   useEffect(() => {
     if (!electronAPI.onEnrichEntitiesProgress) return;
@@ -603,7 +603,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   };
 
   const reloadRel = async () => { await loadRelations({ id: selected.id, type: selected.type }); await load(); };
-  // Every link op reports failure loudly — a silent SQL error once made every add
+  // Every link op reports failure loudly, a silent SQL error once made every add
   // look like a no-op. Any { success:false } surfaces as a toast instead of vanishing.
   const linkOp = async (fn) => {
     try { const r = await fn(); if (r && r.success === false) { showToast(`Link failed: ${r.error || 'unknown error'}`, 'error'); return false; } await reloadRel(); return true; }

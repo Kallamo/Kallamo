@@ -5,7 +5,7 @@
 const HEADING_SIZES = { h1: 28, h2: 20, h3: 16 };
 
 // Prose styling scoped under a root selector ('body' for export, a class for
-// the preview). Margins are intentionally NOT included here — the exporter
+// the preview). Margins are intentionally NOT included here, the exporter
 // (printToPDF / html-to-docx) applies page margins, and the preview applies
 // them as page-box padding, so both avoid double margins.
 export function proseCss(rootSel, page) {

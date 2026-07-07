@@ -434,7 +434,7 @@ export default function KbManagerModal({ profile, onClose }) {
   };
 
   // Enable/disable a memory unit. OFF = ignored by injection/retrieval and dropped
-  // from the token counter. Non-destructive — the content stays put.
+  // from the token counter. Non-destructive, the content stays put.
   const handleToggleEnabled = async (block, nextEnabled) => {
     // Optimistic local update on the ungrouped per-chunk blocks state
     setBlocks(prev => prev.map(b => {
@@ -568,7 +568,6 @@ export default function KbManagerModal({ profile, onClose }) {
             item.manuallyEdited = true;
           }
 
-          // Save blocks back to disk
           await electronAPI.saveProfileKbBlocks(profile.id, blocks);
           setBlocks([...blocks]);
           if (viewingFileBlock) {

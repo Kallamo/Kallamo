@@ -59,10 +59,8 @@ export default function ChatFilesView({
         }
       });
 
-      // Combine both lists
       const combined = [...diskFiles, ...images];
 
-      // Deduplicate by file path/name
       const uniqueFiles = [];
       const seen = new Set();
       combined.forEach(f => {

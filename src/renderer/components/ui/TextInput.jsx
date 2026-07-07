@@ -2,7 +2,7 @@ import React from 'react';
 
 /**
  * Shared text input. Handles label, optional leading icon, hint and error
- * states, plus disabled / read-only styling — so call sites stop re-styling
+ * states, plus disabled / read-only styling, so call sites stop re-styling
  * raw <input> elements. Spread the rest (value, onChange, placeholder, type…).
  */
 export default function TextInput({

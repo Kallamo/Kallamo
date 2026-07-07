@@ -452,7 +452,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                 const agenticResult = await executeAgenticRagLoop(profile, chatId, currentInput, ragChatHistory, webContents, includeChatContext);
                 if (agenticResult) {
                     // If detailed research context was gathered, include only it (prevents duplicate token recitation).
-                    // If NOTHING was retrieved, do NOT pass the agent's 1-sentence summary off as facts — emit an
+                    // If NOTHING was retrieved, do NOT pass the agent's 1-sentence summary off as facts, emit an
                     // explicit notice so the main AI knows retrieval ran and found nothing, instead of hallucinating
                     // document-based facts (fail-loud degradation).
                     const noContextNotice = `--- RAG NOTICE ---\nNo relevant context was retrieved from the knowledge base or memory for this request. Answer using only the conversation and the user's instructions; do not fabricate document-based facts.`;
@@ -885,7 +885,7 @@ function getSystemAi() {
 // Serialize an entity's structured `data` fields into a short human-readable clause
 // for the retrieval dossier. Nothing curated into the registry may be lost from
 // retrieval, so every scalar attribute the user set surfaces to the model. Long-form
-// prose (description/content) is skipped here — it rides on the entity's Lore instead.
+// prose (description/content) is skipped here, it rides on the entity's Lore instead.
 const DOSSIER_DATA_FIELDS = [
     ['status', 'status'], ['itemType', 'type'], ['locationType', 'type'],
     ['nature', 'nature'], ['scope', 'kind'], ['disposition', 'disposition'],
@@ -923,7 +923,7 @@ function buildEntityVocab(workspaceId) {
 }
 
 // Map a classifier's surface mention to a canonical entity id within a workspace.
-// Returns null on a miss — the tagger only tags entities that already exist in the
+// Returns null on a miss, the tagger only tags entities that already exist in the
 // Worldbuild registry, so unknown names are dropped rather than proposed or stored
 // as loose literal text.
 function resolveEntity(workspaceId, type, value) {
@@ -998,7 +998,7 @@ function allowAiEntityCreation() {
 // entity=value. Runs in one transaction; never throws on a bad index.
 function applyChunkTags(chunkTags, chunkRecords, workspaceId = null) {
     // World indexing (entity tagging) requires a dedicated System AI. Without one it is
-    // disabled everywhere — indexing only vectorizes, it does not tag. Central safety net
+    // disabled everywhere, indexing only vectorizes, it does not tag. Central safety net
     // for every tagging path (documents, chat, backfill).
     if (!getSystemAi()) return 0;
     if (!Array.isArray(chunkTags) || !chunkTags.length) return 0;
@@ -1044,7 +1044,7 @@ function applyChunkTags(chunkTags, chunkRecords, workspaceId = null) {
 
 // Backfill the world index over a chat's already-archived raw chunks (or all chats
 // when chatId is null). These predate the per-chunk tagger, so they carry no tags.
-// Batches the chunks through ONE System-AI call each (tagging only — no title/
+// Batches the chunks through ONE System-AI call each (tagging only, no title/
 // summary) and writes chunk_tags. INSERT OR IGNORE keeps re-runs from duplicating.
 async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false, tier = 'archive' } = {}) {
     const profile = db.prepare('SELECT * FROM writing_profiles LIMIT 1').get();
@@ -1177,10 +1177,10 @@ function pmDocToChunkUnits(content) {
 }
 
 // Whether a chapter's current text matches its stored index, by comparing the block
-// hash sets — the source of truth for the editor's "indexed" indicator. Immune to the
+// hash sets, the source of truth for the editor's "indexed" indicator. Immune to the
 // mutable vectorized flag (which any save can reset). Returns 'done' | 'stale'.
 // Returns 'done' (index current), 'outdated' (indexed once but content changed
-// since), or 'never' (no index yet). The caller renders these as distinct states —
+// since), or 'never' (no index yet). The caller renders these as distinct states,
 // 'never' is neutral, 'outdated' is the alert (AI is reading the old version).
 function computeDocumentVectorStatus(documentId) {
     const doc = db.prepare('SELECT content FROM documents WHERE id = ?').get(documentId);
@@ -1255,7 +1255,7 @@ async function vectorizeDocument(documentId, progressCallback = null) {
         insertChunksToDb(documentId, 'document', vectors);
         added = vectors.length;
 
-        // Tag only the freshly embedded chunks (World index). Requires a System AI —
+        // Tag only the freshly embedded chunks (World index). Requires a System AI,
         // without one, indexing only vectorizes and this whole pass is skipped.
         // Best-effort: a failed pass just leaves the new chunks untagged.
         if (getSystemAi()) {
@@ -1282,7 +1282,7 @@ async function vectorizeDocument(documentId, progressCallback = null) {
 // Re-tag every already-embedded chunk of a chapter WITHOUT re-embedding (the "Reindex
 // all" variant of the chapter index button). Wipes this document's existing chunk_tags
 // and reclassifies from scratch, so a re-run reflects the current tagger and entity
-// registry. Vectors are left untouched — new/changed blocks are still embedded by
+// registry. Vectors are left untouched, new/changed blocks are still embedded by
 // vectorizeDocument ("Index new").
 async function retagDocumentChunks(documentId, progressCallback = null) {
     const doc = db.prepare('SELECT id, workspaceId FROM documents WHERE id = ?').get(documentId);
@@ -1339,7 +1339,7 @@ const ENRICH_ENUMS = {
     itemType: ['Weapon', 'Armor', 'Artifact', 'Resource'],
 };
 // Each list mirrors the scalar `data` fields the WorldbuildView actually renders for
-// that type — nothing else. The AI may only fill what the user can see; it must never
+// that type, nothing else. The AI may only fill what the user can see; it must never
 // invent fields (e.g. a Character has no "role"/"abilities", a Creature has no
 // "description"). Relational fields (owner, race, faction, habitat…) and chapter links
 // are edges, not data, and are handled separately.
@@ -1358,7 +1358,7 @@ const ENRICH_FIELDS = {
 // controls the WorldbuildView renders. `relType`/`single`/`labeled` match entities.setLink;
 // `from` says which end of the edge the entity sits on ('self' = fromId is this entity,
 // 'target' = fromId is the linked entity, e.g. an item owned_by a character). `targetType`
-// narrows name resolution. Only EXISTING entities are linked — enrichment never creates
+// narrows name resolution. Only EXISTING entities are linked, enrichment never creates
 // new ones (only the tagger does that, when allowed). Derived-only relations (Race
 // members) are omitted.
 const ENRICH_RELATIONS = {
@@ -1413,7 +1413,7 @@ function applyProposedLink(entityId, link, workspaceId) {
 }
 
 // Chapters (Writing Desk documents) that mention this entity but are not yet linked to
-// its lore, derived deterministically from chunk_tags — no AI. `validDocs` maps id->title
+// its lore, derived deterministically from chunk_tags, no AI. `validDocs` maps id->title
 // for the workspace so we drop stale pointers and can label the proposal in the UI.
 function deriveChapterAdds(entityId, entity, validDocs) {
     const rows = db.prepare(
@@ -1499,7 +1499,7 @@ async function enrichEntities(workspaceId, progressCallback = null) {
         const currentData = {};
         for (const f of allowed) if (ent.data && ent.data[f] != null) currentData[f] = ent.data[f];
 
-        // Chapters are deterministic — derive them regardless of the model's answer.
+        // Chapters are deterministic, derive them regardless of the model's answer.
         const chapterAdds = deriveChapterAdds(ent.id, ent, validDocs);
 
         // Relation prompt: one line per relation, each with the candidate names the AI may
@@ -1606,7 +1606,7 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                 for (const l of proposedLinks) applyProposedLink(ent.id, l, workspaceId);
                 updated++;
             } else {
-                // review — stage everything for per-item accept/reject; never touch live values.
+                // review, stage everything for per-item accept/reject; never touch live values.
                 // A fresh run replaces any prior pending proposal for this entity.
                 const pending = {};
                 if (Object.keys(proposedData).length) pending.data = proposedData;
@@ -1653,7 +1653,7 @@ async function executeSummarizationInternal({ chatId, selectedMessages, newSumma
     }
 
     // World index: one System-AI pass tags each raw chunk (who/what) and gives the
-    // block its title + summary. Never blocks archiving — a failed pass just leaves
+    // block its title + summary. Never blocks archiving, a failed pass just leaves
     // the chunks untagged.
     try {
         const chunkRecords = vectors.map(v => ({ id: v.id, text: v.text }));
@@ -2186,7 +2186,7 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                     } catch (e) { }
 
                     // Persist the resolved entity's lore + relations as a deterministic
-                    // worldbuild fact — shown in the final context and exempt from pruning.
+                    // worldbuild fact, shown in the final context and exempt from pruning.
                     if (registryEntity) {
                         const factParts = [];
                         const details = entityDataFacts(registryEntity.data);

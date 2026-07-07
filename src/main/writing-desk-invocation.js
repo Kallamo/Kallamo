@@ -12,7 +12,7 @@ const {
 
 // Per-channel instruction appended to the system prompt. Replacement/insertion rely
 // on the output fence; analysis is free prose with no fence (nothing to disobey).
-// The marked span is given as Markdown (the default — models read/write it far more
+// The marked span is given as Markdown (the default, models read/write it far more
 // reliably than HTML) or HTML (the table fallback). The model returns the same format.
 const MD_RULES =
     `The marked span is Markdown. Return Markdown: # / ## / ### for H1/H2/H3, **bold**, *italic*, ` +
@@ -41,7 +41,7 @@ const CHANNEL_INSTRUCTIONS = {
 // replacement is roughly the same length as the source, an insertion can be longer.
 const MAXTOKENS_FACTOR = { replacement: 2, insertion: 3.5, analysis: 2 };
 // Per-channel floor. Replacement/analysis scale with the selection, but an insertion's
-// length is independent of the (often tiny) marked span — a small selection must not
+// length is independent of the (often tiny) marked span, a small selection must not
 // starve a full new passage, or it truncates on nearly every insert. maxTokens only
 // caps output, so a generous floor costs nothing when the model writes less.
 const MAXTOKENS_MIN = { replacement: 256, insertion: 1024, analysis: 256 };
@@ -167,7 +167,7 @@ async function gatherRag({ profileId, workspaceId, currentDocId, retrievalQuery,
         ).all(workspaceId, currentDocId).map(r => r.id);
         if (siblingIds.length) {
             // Sibling chapters are world-indexed (WD chapter indexing tags their chunks),
-            // so ride the tag boost here too — this is the cross-chapter coherence lever.
+            // so ride the tag boost here too, this is the cross-chapter coherence lever.
             const cross = await executeMultiOwnerSearch(retrievalQuery, siblingIds, 'document', threshold, 5, true);
             if (cross.length) out.push(`--- OTHER CHAPTERS ---\n${cross.map(r => r.text).join('\n\n')}`);
         }

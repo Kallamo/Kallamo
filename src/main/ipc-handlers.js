@@ -3795,6 +3795,39 @@ ipcMain.handle('set-ui-flag', async (event, key) => {
   }
 });
 
+// --- WHAT'S NEW (post-update highlights) ---
+// Shows the What's New modal once per version bump. On a clean first install we
+// record the version silently so it never fires over onboarding. Existing users
+// upgrading (no stored version, or an older one) do see it once.
+ipcMain.handle('get-whats-new-state', async () => {
+  const { app } = require('electron');
+  try {
+    const current = app.getVersion();
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'lastSeenVersion'").get();
+    const lastSeen = row ? row.value : null;
+
+    if (db.isFreshInstall) {
+      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('lastSeenVersion', ?)").run(current);
+      return { show: false, version: current };
+    }
+    return { show: lastSeen !== current, version: current };
+  } catch (e) {
+    console.error("Error reading What's New state from SQLite:", e);
+    return { show: false, version: null };
+  }
+});
+
+ipcMain.handle('mark-whats-new-seen', async () => {
+  const { app } = require('electron');
+  try {
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('lastSeenVersion', ?)").run(app.getVersion());
+    return { success: true };
+  } catch (e) {
+    console.error("Error saving What's New seen version to SQLite:", e);
+    throw e;
+  }
+});
+
 // ==========================================
 // --- UTILITIES IPC HANDLERS ---
 // ==========================================

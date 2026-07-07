@@ -159,6 +159,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getUiFlags: () => ipcRenderer.invoke('get-ui-flags'),
   setUiFlag: (key) => ipcRenderer.invoke('set-ui-flag', key),
 
+  // --- WHAT'S NEW (post-update highlights) ---
+  getWhatsNewState: () => ipcRenderer.invoke('get-whats-new-state'),
+  markWhatsNewSeen: () => ipcRenderer.invoke('mark-whats-new-seen'),
+
   // --- LIVE GENERATION & WORKFLOWS ---
   sendMessage: (args) => ipcRenderer.invoke('send-message', args),
   cancelGeneration: () => ipcRenderer.send('cancel-generation'),
