@@ -24,9 +24,11 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [activeTab, setActiveTab] = useState(initialTab || 'api'); // 'api' | 'interface' | 'advanced'
 
   useEffect(() => {
-    if (initialSection === 'embedding' && activeTab === 'engine') {
+    const sectionIds = { embedding: 'embedding-config', 'system-ai': 'system-ai-config' };
+    const targetId = sectionIds[initialSection];
+    if (targetId && activeTab === 'engine') {
       const timer = setTimeout(() => {
-        const el = document.getElementById('embedding-config');
+        const el = document.getElementById(targetId);
         if (el) {
           el.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
@@ -1039,7 +1041,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                 <div className="space-y-6">
 
                   {/* SYSTEM AI (the most important setting here) */}
-                  <div className="space-y-3">
+                  <div id="system-ai-config" className="space-y-3">
                     <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
                       <Cpu className="w-3.5 h-3.5" />
                       <span>System AI</span>

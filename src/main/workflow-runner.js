@@ -934,6 +934,39 @@ function resolveEntity(workspaceId, type, value) {
 // the block's title + summary AND the per-chunk dynamic tags (which named entities,
 // under which variable category, appear in each chunk). Variable categories = the
 // entity-bearing vocabulary; their descriptions are the classifier criteria.
+// Provider errors often arrive as a JSON string (e.g. '{"message":"..."}'); unwrap
+// to the human-readable text so the toast doesn't show raw JSON.
+function cleanErrorMessage(error) {
+    let msg = (error && error.message) ? error.message : String(error || 'Unknown error');
+    const brace = msg.indexOf('{');
+    if (brace !== -1) {
+        try {
+            const parsed = JSON.parse(msg.slice(brace));
+            const inner = parsed && (parsed.error?.message || parsed.message || parsed.error);
+            if (typeof inner === 'string' && inner.trim()) return inner.trim();
+        } catch (e) { /* not JSON: fall through to the raw message */ }
+    }
+    return msg;
+}
+
+// The entity tagger fails silently by design (a broken pass never blocks the chat,
+// summarization, or a document save). But when a System AI IS configured, a silent
+// failure misleads the user into thinking indexing/tagging ran. Notify every time it
+// fails, so a failure that slipped by once is still caught the next time. The renderer
+// keeps a single toast (later sends just refresh it), so repeats don't stack. Broadcast
+// to every window since the main window is not guaranteed to be index 0.
+function notifyTaggingFailure(error) {
+    try {
+        const { BrowserWindow } = require('electron');
+        const payload = { error: cleanErrorMessage(error) };
+        for (const win of BrowserWindow.getAllWindows()) {
+            if (win && !win.isDestroyed()) {
+                win.webContents.send('world-index-tagging-failed', payload);
+            }
+        }
+    } catch (e) { /* no window (headless/tests): nothing to notify */ }
+}
+
 async function classifyAndTagSegment(chunkRecords, profile, workspaceId = null) {
     let title = 'Archived Memory';
     let summary = '';
@@ -980,6 +1013,12 @@ async function classifyAndTagSegment(chunkRecords, profile, workspaceId = null) 
         chunkTags = validateChunkTags(safeParseArray(head.body), categories, chunkRecords.length);
     } catch (e) {
         console.error("[World Index] classify+tag failed:", e);
+        // Only surface when a System AI is configured: without one, tagging is
+        // intentionally off and this path only produced a title/summary.
+        if (systemAi) {
+            notifyTaggingFailure(e);
+            return { title, summary, chunkTags, failed: true };
+        }
     }
     return { title, summary, chunkTags };
 }

@@ -231,6 +231,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.off('settings-changed', listener);
   },
 
+  onWorldIndexTaggingFailed: (callback) => {
+    const listener = (event, data) => callback(data);
+    ipcRenderer.on('world-index-tagging-failed', listener);
+    return () => ipcRenderer.off('world-index-tagging-failed', listener);
+  },
+
   // --- AUTO-UPDATER ---
   installUpdate: () => ipcRenderer.send('install-update'),
   onUpdateAvailable: (callback) => {
