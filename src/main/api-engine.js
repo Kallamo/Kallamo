@@ -23,6 +23,29 @@ function getMimeType(filePath) {
     }
 }
 
+// The gpt-5 series and reasoning models (o1/o3/o4...) reject `max_tokens` and
+// require `max_completion_tokens` instead. Matched by name so future variants
+// are covered without a fixed ID list.
+function needsMaxCompletionTokens(model) {
+    if (!model) return false;
+    // Strip a provider prefix like "openai/" (OpenRouter uses vendor-slugged ids).
+    const m = model.toLowerCase().split('/').pop();
+    return m.startsWith('gpt-5') || /^o[1-9]($|[-.])/.test(m);
+}
+
+// A custom Base URL may be entered as a bare base (e.g. ".../v1") or as a full
+// endpoint. Normalize it to the full endpoint for the given kind so both forms
+// work. kind = 'chat' | 'embeddings'.
+function resolveEndpoint(baseUrl, kind) {
+    if (!baseUrl) return null;
+    const want = kind === 'embeddings' ? '/embeddings' : '/chat/completions';
+    const other = kind === 'embeddings' ? '/chat/completions' : '/embeddings';
+    const trimmed = baseUrl.replace(/\/+$/, '');
+    if (trimmed.endsWith(want)) return trimmed;
+    if (trimmed.endsWith(other)) return trimmed.slice(0, -other.length) + want;
+    return trimmed + want;
+}
+
 // --- AUTHENTICATION & SIGNING HELPERS ---
 
 async function getGcpAccessToken(serviceAccountJsonStr) {
@@ -202,7 +225,7 @@ async function sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory, 
         case 'openai':
         case 'openrouter':
         case 'local': {
-            endpoint = baseUrl || (provider === 'openrouter' ? "https://openrouter.ai/api/v1/chat/completions" : "https://api.openai.com/v1/chat/completions");
+            endpoint = resolveEndpoint(baseUrl, 'chat') || (provider === 'openrouter' ? "https://openrouter.ai/api/v1/chat/completions" : "https://api.openai.com/v1/chat/completions");
             requestHeaders = {
                 "Content-Type": "application/json",
                 "Authorization": `Bearer ${apiKey}`
@@ -247,9 +270,13 @@ async function sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory, 
                     { role: "user", content: userContent }
                 ],
                 temperature: temperature ?? 0.7,
-                max_tokens: maxTokens ?? 1000,
                 stream: false
             };
+            if (needsMaxCompletionTokens(model)) {
+                requestBody.max_completion_tokens = maxTokens ?? 1000;
+            } else {
+                requestBody.max_tokens = maxTokens ?? 1000;
+            }
             break;
         }
 
@@ -484,6 +511,11 @@ async function sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory, 
         try {
             const manualParams = JSON.parse(manualJson);
             requestBody = { ...requestBody, ...manualParams };
+            // A null value in the Manual JSON deletes the key, so users can drop
+            // a param entirely (e.g. remove max_tokens for gpt-5 style models).
+            for (const key of Object.keys(manualParams)) {
+                if (manualParams[key] === null) delete requestBody[key];
+            }
             console.log("Manual JSON payload injected successfully.");
         } catch (err) {
             console.error("Failed to parse Manual JSON payload. Falling back to default parameters.", err);
@@ -557,14 +589,7 @@ async function getEmbeddings(text, apiProfileId, modelName) {
         case 'openai':
         case 'openrouter':
         case 'local':
-            endpoint = baseUrl || (provider === 'openrouter' ? "https://openrouter.ai/api/v1/embeddings" : "https://api.openai.com/v1/embeddings");
-            if (baseUrl) {
-                if (baseUrl.endsWith("/chat/completions")) {
-                    endpoint = baseUrl.replace("/chat/completions", "/embeddings");
-                } else if (baseUrl.endsWith("/chat/completions/")) {
-                    endpoint = baseUrl.replace("/chat/completions/", "/embeddings");
-                }
-            }
+            endpoint = resolveEndpoint(baseUrl, 'embeddings') || (provider === 'openrouter' ? "https://openrouter.ai/api/v1/embeddings" : "https://api.openai.com/v1/embeddings");
             requestHeaders = {
                 "Content-Type": "application/json",
                 "Authorization": `Bearer ${apiKey}`
