@@ -1,4 +1,5 @@
 const { ipcMain, shell, dialog, BrowserWindow, clipboard } = require('electron');
+const log = require('electron-log');
 
 // Copy via the main-process clipboard: navigator.clipboard.writeText is gated on
 // focus/permission in Electron and fails for programmatic copies (e.g. the RAG
@@ -2462,8 +2463,9 @@ ipcMain.handle('vectorize-document', async (event, { documentId }) => {
     });
     return { success: true, ...res };
   } catch (e) {
+    log.error('[vectorize-document] failed:', e);
     console.error('[vectorize-document] failed:', e);
-    return { success: false, error: e.message };
+    return { success: false, error: e.message, stack: e.stack };
   }
 });
 

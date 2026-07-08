@@ -737,10 +737,15 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
       const res = await electronAPI.vectorizeDocument?.(doc.id);
       console.log('[vectorize-document]', res);
       if (res?.success) await refreshVecStatus();
-      else setVecStatus('error');
+      else {
+        setVecStatus('error');
+        showToast?.(`Index failed: ${res?.error || 'Unknown error'}`, 'error');
+        console.error('[vectorize-document] backend error:', res?.error, res?.stack);
+      }
     } catch (e) {
       console.error('[vectorize-document] failed:', e);
       setVecStatus('error');
+      showToast?.(`Index failed: ${e.message}`, 'error');
     } finally {
       setVecBusy(false);
       setVecProgress(null);

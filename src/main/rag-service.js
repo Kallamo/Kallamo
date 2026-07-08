@@ -62,9 +62,12 @@ function ensureLocalEngine() {
         throw new Error('Local AI Engine is not installed. Please download it from Settings or Onboarding.');
     }
 
-    // Resolve module from runtime directory
+    // The engine zip carries only onnxruntime-node's native binary; its JS dependency
+    // onnxruntime-common lives in the asar, so add the app's node_modules to the path too.
     const nodeModulesPath = path.join(runtimeDir, 'node_modules');
-    process.env.NODE_PATH = nodeModulesPath + path.delimiter + (process.env.NODE_PATH || '');
+    const { app } = require('electron');
+    const appNodeModules = path.join(app.getAppPath(), 'node_modules');
+    process.env.NODE_PATH = nodeModulesPath + path.delimiter + appNodeModules + path.delimiter + (process.env.NODE_PATH || '');
     require('module').Module._initPaths();
 
     engineInitialized = true;
@@ -202,7 +205,7 @@ async function getEmbeddingPipeline() {
 
     if (!embeddingPipeline) {
         embeddingPipeline = await pipeline('feature-extraction', RAG_MODEL_ID, {
-            quantized: true,
+            dtype: 'q8',
             device: 'cpu'
         });
     }
