@@ -571,7 +571,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           <option value="Anthropic">Anthropic</option>
                           <option value="Google AI">Google AI</option>
                           <option value="OpenAI">OpenAI</option>
-                          <option value="Local">Local (LM Studio / Ollama)</option>
+                          <option value="Local">Local / OpenAI-compatible (LM Studio, Ollama, NanoGPT...)</option>
                           <option value="Vertex AI">Google Cloud Vertex AI</option>
                           <option value="AWS Bedrock">AWS Bedrock</option>
                         </select>
@@ -671,7 +671,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                             </button>
                             {showBaseUrl && (
                               <>
-                                <p className="caption mb-1.5">An alternative base URL route to query local servers or private API reverse proxies.</p>
+                                <p className="caption mb-1.5">The base URL of a local server or OpenAI-compatible provider, ending in <code>/v1</code>. Kallamo adds the right path for chat and embeddings.</p>
                                 <input
                                   type="text"
                                   value={apiBaseUrl}
