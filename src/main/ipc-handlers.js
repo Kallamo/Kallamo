@@ -4484,7 +4484,7 @@ ipcMain.handle('test-chat-rag-search', async (event, { chatId, queryText, profil
     let isAgenticApplied = false;
 
     if (profile && profile.isAgentic === 1) {
-      const { sendApiRequest } = require('./api-engine');
+      const { sendApiRequest } = require('./features/llm/llm.service');
       try {
         const agenticSystemPrompt = profile.agenticPrompt && profile.agenticPrompt.trim()
           ? profile.agenticPrompt.trim()

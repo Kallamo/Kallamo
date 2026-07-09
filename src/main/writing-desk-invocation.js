@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const db = require('./database');
-const { sendApiRequest } = require('./api-engine');
+const { sendApiRequest } = require('./features/llm/llm.service');
 const {
     countTokens,
     chunkText,

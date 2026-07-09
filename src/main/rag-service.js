@@ -233,7 +233,7 @@ async function generateEmbeddingVector(text, isQuery = false) {
         if (!apiProfileId) {
             throw new Error("[EMBEDDING_CONFIG_MISSING] External embedding API is selected but no API profile is configured.");
         }
-        const { getEmbeddings } = require('./api-engine');
+        const { getEmbeddings } = require('./features/llm/llm.service');
         try {
             return await getEmbeddings(text, apiProfileId, modelName);
         } catch (e) {

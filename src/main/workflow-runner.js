@@ -1,6 +1,6 @@
 const db = require('./database');
 const entitiesStore = require('./entities');
-const { sendApiRequest } = require('./api-engine');
+const { sendApiRequest } = require('./features/llm/llm.service');
 const { encode } = require('gpt-tokenizer/encoding/o200k_base');
 const fs = require('fs');
 const path = require('path');
