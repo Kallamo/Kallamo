@@ -53,6 +53,10 @@ export default function ProfileModal({ profile, onClose, onSave }) {
   // Set default model when API connection changes
   const selectedApi = apiProfiles.find(ap => ap.id === apiProfileId);
   const availableModels = selectedApi ? (typeof selectedApi.models === 'string' ? JSON.parse(selectedApi.models) : selectedApi.models) : [];
+  // Keep the saved model selectable even if it is no longer in the connection's list,
+  // otherwise the controlled <select> silently falls back to the first option while
+  // state keeps the stale value, and the save persists the old model.
+  const modelOptions = (model && !availableModels.includes(model)) ? [model, ...availableModels] : availableModels;
 
   // --- Variable autocomplete & preview (System Prompt) ---
   const closeAc = () => {
@@ -333,8 +337,8 @@ export default function ProfileModal({ profile, onClose, onSave }) {
                       disabled={!apiProfileId}
                       className={`${fieldCls} appearance-none cursor-pointer disabled:opacity-50`}
                     >
-                      <option value="" disabled={!!apiProfileId}>None / Not linked</option>
-                      {availableModels.map(m => (
+                      <option value="">{apiProfileId ? 'Select a model' : 'None / Not linked'}</option>
+                      {modelOptions.map(m => (
                         <option key={m} value={m}>{m}</option>
                       ))}
                     </select>

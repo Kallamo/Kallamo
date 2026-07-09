@@ -225,6 +225,16 @@ export const AppProvider = ({ children }) => {
       loadInitialData();
     }) : () => { };
 
+    const unsubTaggingFailed = api.onWorldIndexTaggingFailed ? api.onWorldIndexTaggingFailed((data) => {
+      const reason = (data?.error || 'the System AI did not respond').replace(/\.+$/, '');
+      showToast(
+        `Entity tagging failed: ${reason}. Indexing saved your text but skipped tags.`,
+        'error',
+        10000,
+        { label: "Open Settings", onClick: () => openSettings('engine', 'system-ai') }
+      );
+    }) : () => { };
+
     return () => {
       unsubProgress();
       unsubError();
@@ -235,6 +245,7 @@ export const AppProvider = ({ children }) => {
       unsubUpdateOutdated();
       unsubDownloadEngineProgress();
       unsubSettingsChanged();
+      unsubTaggingFailed();
     };
   }, []);
 

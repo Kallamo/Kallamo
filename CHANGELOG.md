@@ -2,6 +2,16 @@
 
 All notable changes to Kallamo are documented in this file. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-07-08
+
+A hotfix that clears four issues surfaced by the community after 1.1.0.
+
+### Fixed
+- Newer OpenAI models now work. The GPT-5 series and the reasoning models (o1, o3, o4) reject the older token-limit parameter, so Kallamo now sends the one they expect and no longer errors out when you pick one of them. The Manual JSON override can also remove a parameter entirely by setting it to null.
+- Custom Base URL connections no longer return a "Not Found" error. If you point Kallamo at an OpenAI-compatible provider and enter the base address, it now resolves the full endpoint for both chat and embeddings, so providers like NanoGPT work out of the box.
+- Entity tagging no longer fails silently. When a System AI is configured and a tagging pass fails, you now get a clear notification with a shortcut to your System AI settings, instead of being left to assume your text was tagged when it was not. Your text is still indexed either way.
+- Changing an AI Profile's model now saves reliably. Switching the model in the dropdown and pressing Save no longer keeps the old value.
+
 ## [1.1.0] - 2026-07-07
 
 The first stable release of the Writing Desk and Worldbuild, giving Kallamo a place to write long-form work and a structured, living "bible" the AI keeps track of as your world grows.

@@ -24,9 +24,11 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [activeTab, setActiveTab] = useState(initialTab || 'api'); // 'api' | 'interface' | 'advanced'
 
   useEffect(() => {
-    if (initialSection === 'embedding' && activeTab === 'engine') {
+    const sectionIds = { embedding: 'embedding-config', 'system-ai': 'system-ai-config' };
+    const targetId = sectionIds[initialSection];
+    if (targetId && activeTab === 'engine') {
       const timer = setTimeout(() => {
-        const el = document.getElementById('embedding-config');
+        const el = document.getElementById(targetId);
         if (el) {
           el.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
@@ -569,7 +571,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           <option value="Anthropic">Anthropic</option>
                           <option value="Google AI">Google AI</option>
                           <option value="OpenAI">OpenAI</option>
-                          <option value="Local">Local (LM Studio / Ollama)</option>
+                          <option value="Local">Local / OpenAI-compatible (LM Studio, Ollama, NanoGPT...)</option>
                           <option value="Vertex AI">Google Cloud Vertex AI</option>
                           <option value="AWS Bedrock">AWS Bedrock</option>
                         </select>
@@ -669,7 +671,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                             </button>
                             {showBaseUrl && (
                               <>
-                                <p className="caption mb-1.5">An alternative base URL route to query local servers or private API reverse proxies.</p>
+                                <p className="caption mb-1.5">The base URL of a local server or OpenAI-compatible provider, ending in <code>/v1</code>. Kallamo adds the right path for chat and embeddings.</p>
                                 <input
                                   type="text"
                                   value={apiBaseUrl}
@@ -1039,7 +1041,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                 <div className="space-y-6">
 
                   {/* SYSTEM AI (the most important setting here) */}
-                  <div className="space-y-3">
+                  <div id="system-ai-config" className="space-y-3">
                     <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
                       <Cpu className="w-3.5 h-3.5" />
                       <span>System AI</span>
