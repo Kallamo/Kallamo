@@ -228,7 +228,7 @@ function parseStreamChunk(obj, provider) {
 
 // --- CORE API REQUESTS ---
 
-async function buildRequest({ apiProfileId, model, systemPrompt, chatHistory, newPrompt, temperature, maxTokens, manualMode, manualJson, attachedImages }) {
+async function buildRequest({ apiProfileId, model, systemPrompt, chatHistory, newPrompt, temperature, maxTokens, manualMode, manualJson, attachedImages, stream = false }) {
     try {
         const variables = db.prepare('SELECT key, value FROM variables').all();
         for (const variable of variables) {
@@ -555,6 +555,18 @@ async function buildRequest({ apiProfileId, model, systemPrompt, chatHistory, ne
             throw new Error(`The provider '${provider}' is not supported yet.`);
     }
 
+    // Streaming toggles, inert when stream is false. Bedrock has no text-SSE
+    // stream, so the streaming entry point falls back to the non-streaming path
+    // for it and never builds a streaming request here.
+    if (stream) {
+        if (provider === 'google ai' || provider === 'vertex ai') {
+            endpoint = endpoint.replace(':generateContent', ':streamGenerateContent');
+            endpoint += endpoint.includes('?') ? '&alt=sse' : '?alt=sse';
+        } else if (provider !== 'aws bedrock') {
+            requestBody.stream = true;
+        }
+    }
+
     if (manualMode && manualJson) {
         try {
             const manualParams = JSON.parse(manualJson);
@@ -710,4 +722,4 @@ async function getEmbeddings(text, apiProfileId, modelName) {
     }
 }
 
-module.exports = { sendApiRequest, getEmbeddings };
+module.exports = { sendApiRequest, getEmbeddings, buildRequest, parseStreamChunk, generationDispatcher };
