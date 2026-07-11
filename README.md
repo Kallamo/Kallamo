@@ -52,8 +52,6 @@ While developer-focused tools like Claude Code and Cursor serve the coding world
 > - **Linux:** Download the universal `Kallamo-X.X.X.AppImage` (make it executable and run) or the Debian package `kallamo_X.X.X_amd64.deb` (Ubuntu/Debian).
 >
 > Once installed, Kallamo will **automatically check for updates** in the background and notify you when a new version is available.
->
-> The Windows installer is code-signed through the free [SignPath Foundation](https://signpath.org/) program for open source projects. See our [Code Signing Policy](docs/code-signing-policy.md) for details.
 
 Looking to build from source instead? See [Developer Setup](#developer-setup) below.
 
@@ -280,6 +278,5 @@ The name **Kallamo**, the Kallamo logo, and all associated branding assets are t
 ### Contributor License Agreement (CLA)
 All contributors to this project must review and accept the [Kallamo Contributor License Agreement (CLA)](CLA.md) before their contributions can be merged.
 
-### Security & Signing
+### Security
 - [Privacy Policy](PRIVACY.md) — what Kallamo does (and does not) do with your data.
-- [Code Signing Policy](docs/code-signing-policy.md) — how official release binaries are built, reviewed, and signed.
