@@ -1,6 +1,7 @@
 const db = require('./database');
 const entitiesStore = require('./entities');
 const { sendApiRequest } = require('./features/llm/llm.service');
+const { sendApiRequestStream } = require('./features/llm/llm.stream');
 const { encode } = require('gpt-tokenizer/encoding/o200k_base');
 const fs = require('fs');
 const path = require('path');
@@ -93,6 +94,17 @@ function formatActiveHistory(messages, maxTokensAllowed) {
 }
 
 // --- WORKFLOW RUNNER ---
+
+// Live token streaming is on unless the user turned it off in Advanced settings.
+function isStreamingEnabled() {
+    try {
+        const row = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
+        if (!row) return true;
+        return JSON.parse(row.value).streaming !== false;
+    } catch (e) {
+        return true;
+    }
+}
 
 // Orchestrate workflow linear chain execution
 async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, webContents }) {
@@ -609,7 +621,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                 });
 
                 try {
-                    stepOutput = await sendApiRequest({
+                    const genParams = {
                         apiProfileId: profile.apiProfileId,
                         model: profile.model,
                         systemPrompt: compiledSystemPrompt,
@@ -621,7 +633,24 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                         manualJson: profile.manualJson,
                         abortSignal: currentRun.controller.signal,
                         attachedImages: (i === 0 ? attachedImages : [])
-                    });
+                    };
+
+                    // Only the final, user-facing generation streams; intermediate
+                    // workflow steps are plumbing and stay non-streaming.
+                    if ((i === steps.length - 1) && isStreamingEnabled()) {
+                        stepOutput = await sendApiRequestStream(genParams, (delta) => {
+                            webContents.send('stream:token', {
+                                chatId,
+                                contentDelta: delta.contentDelta || '',
+                                reasoningDelta: delta.reasoningDelta || ''
+                            });
+                        });
+                        if (currentRun.isCancelled) {
+                            return { success: false, cancelled: true };
+                        }
+                    } else {
+                        stepOutput = await sendApiRequest(genParams);
+                    }
                     success = true;
                 } catch (apiError) {
                     if (apiError.name === 'AbortError' || currentRun.isCancelled) {

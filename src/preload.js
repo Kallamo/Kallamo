@@ -173,6 +173,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('workflow-progress', listener);
     return () => ipcRenderer.off('workflow-progress', listener);
   },
+  onStreamToken: (callback) => {
+    const listener = (event, payload) => callback(payload);
+    ipcRenderer.on('stream:token', listener);
+    return () => ipcRenderer.off('stream:token', listener);
+  },
   onWorkflowError: (callback) => {
     const listener = (event, errorData) => callback(errorData);
     ipcRenderer.on('workflow-error', listener);
