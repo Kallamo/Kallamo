@@ -67,6 +67,11 @@ export const AppProvider = ({ children }) => {
   const [editError, setEditError] = useState(null);
   const [lastGeneratedMessageId, setLastGeneratedMessageId] = useState(null);
 
+  // Live-streaming buffer for the response currently being generated. Cleared
+  // when generation ends (the saved message takes over). Only one runs at a time.
+  const [streamingContent, setStreamingContent] = useState('');
+  const [streamingReasoning, setStreamingReasoning] = useState('');
+
   // --- AUTO-UPDATER STATE ---
   const [updateStatus, setUpdateStatus] = useState('idle'); // 'idle' | 'available' | 'downloaded'
   const [updateVersion, setUpdateVersion] = useState('');
@@ -153,6 +158,11 @@ export const AppProvider = ({ children }) => {
       setGenerationProgress(progress);
     });
 
+    const unsubStreamToken = api.onStreamToken ? api.onStreamToken(({ contentDelta, reasoningDelta }) => {
+      if (contentDelta) setStreamingContent(prev => prev + contentDelta);
+      if (reasoningDelta) setStreamingReasoning(prev => prev + reasoningDelta);
+    }) : () => { };
+
     const unsubError = api.onWorkflowError((err) => {
       setErrorData(err);
       setShowErrorModal(true);
@@ -237,6 +247,7 @@ export const AppProvider = ({ children }) => {
 
     return () => {
       unsubProgress();
+      unsubStreamToken();
       unsubError();
       unsubOverflowEvent();
       unsubUpdateAvailable();
@@ -248,6 +259,14 @@ export const AppProvider = ({ children }) => {
       unsubTaggingFailed();
     };
   }, []);
+
+  // Drop the live buffer once generation ends; the saved message replaces it.
+  useEffect(() => {
+    if (!isGenerating) {
+      setStreamingContent('');
+      setStreamingReasoning('');
+    }
+  }, [isGenerating]);
 
   // --- OPERATIONS & ACTIONS ---
   const refreshEngineStatus = async () => {
@@ -764,7 +783,7 @@ export const AppProvider = ({ children }) => {
       handleSaveApiProfile, handleDeleteApiProfile,
       variables, setVariables,
       handleSaveVariable, handleDeleteVariable,
-      handleSendMessage, handleRegenerateMessage, handleEditUserMessage, handleSwitchAIAlternative, isGenerating, generationProgress, handleCancelGeneration,
+      handleSendMessage, handleRegenerateMessage, handleEditUserMessage, handleSwitchAIAlternative, isGenerating, generationProgress, streamingContent, streamingReasoning, handleCancelGeneration,
       showOverflowModal, setShowOverflowModal, overflowData, handleRespondToOverflow,
       showErrorModal, setShowErrorModal, errorData, handleRespondToError,
       editError, setEditError,

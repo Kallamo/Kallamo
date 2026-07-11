@@ -86,6 +86,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [systemApiProfileId, setSystemApiProfileId] = useState(settings.advanced.systemApiProfileId || '');
   const [systemModelName, setSystemModelName] = useState(settings.advanced.systemModelName || '');
   const [allowAiEntityCreation, setAllowAiEntityCreation] = useState(settings.advanced.allowAiEntityCreation || false);
+  const [streamingEnabled, setStreamingEnabled] = useState(settings.advanced.streaming !== false);
 
   // Models pre-defined on the selected System AI connection (drives the Model dropdown).
   const systemProfileModels = (() => {
@@ -141,6 +142,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       if (key === 'ragDebug') setRagDebug(value);
       if (key === 'agenticDebug') setAgenticDebug(value);
       if (key === 'tokenDebug') setTokenDebug(value);
+      if (key === 'streaming') setStreamingEnabled(value);
       if (key === 'allowAiEntityCreation') setAllowAiEntityCreation(value);
       if (key === 'embeddingEngine') setEmbeddingEngine(value);
       if (key === 'embeddingApiProfileId') setEmbeddingApiProfileId(value);
@@ -170,6 +172,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         ragDebug: key === 'ragDebug' ? value : current.ragDebug,
         agenticDebug: key === 'agenticDebug' ? value : current.agenticDebug,
         tokenDebug: key === 'tokenDebug' ? value : current.tokenDebug,
+        streaming: key === 'streaming' ? value : current.streaming,
         allowAiEntityCreation: key === 'allowAiEntityCreation' ? value : current.allowAiEntityCreation,
         embeddingEngine: key === 'embeddingEngine' ? value : current.embeddingEngine,
         embeddingApiProfileId: key === 'embeddingApiProfileId' ? value : current.embeddingApiProfileId,
@@ -1376,6 +1379,31 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                 </div>
 
                 <div className="space-y-6">
+
+                  {/* SECTION: GENERATION */}
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
+                      <Monitor className="w-3.5 h-3.5" />
+                      <span>Generation</span>
+                    </h4>
+                    <div className="bg-[#051116] rounded-xl border border-gray-800/80 divide-y divide-gray-800/80 overflow-hidden">
+                      <div className="p-4 flex items-center justify-between">
+                        <div className="pr-4">
+                          <span className="block text-sm text-gray-200 font-bold">Stream Responses</span>
+                          <span className="caption">Show the AI's reply as it is written, token by token, instead of waiting for the full message. Also avoids timeouts on slow local models. Falls back automatically for providers that do not support streaming.</span>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                          <input
+                            type="checkbox"
+                            checked={streamingEnabled}
+                            onChange={(e) => updateSetting('advanced', 'streaming', e.target.checked)}
+                            className="sr-only peer"
+                          />
+                          <div className="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
 
                   {/* SECTION 3: DIAGNOSTICS & DEBUGGING */}
                   <div className="space-y-3">
