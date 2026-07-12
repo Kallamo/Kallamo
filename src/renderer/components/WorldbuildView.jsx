@@ -15,7 +15,7 @@ import EntityPickerButton from '../features/worldbuild/EntityPickerButton';
 import { useSidebarWidth } from '../features/worldbuild/useSidebarWidth';
 import { useWorldbuildNavigationState } from '../features/worldbuild/useWorldbuildNavigationState';
 import {
-  ABUNDANCE_HELP, CREATURE_NATURES, DISPOSITION, fieldLabel, ITEM_TYPES, meta,
+  ABUNDANCE_HELP, CREATURE_NATURES, DISPOSITION, fieldLabel, ITEM_TYPES, meta, TYPES,
   RARITY, RELATIONSHIP_LABELS, STATUS, THREAT, TYPE_ORDER,
 } from '../features/worldbuild/worldbuildConfig';
 

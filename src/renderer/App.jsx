@@ -44,6 +44,8 @@ function MainLayout() {
     settingsRequest,
     clearSettingsRequest,
     whatsNewOpen,
+    whatsNewType,
+    whatsNewVersion,
     closeWhatsNew
   } = useApp();
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -474,7 +476,7 @@ function MainLayout() {
         <ContextOverflowModal />
       )}
       {whatsNewOpen && (
-        <WhatsNewModal onClose={closeWhatsNew} />
+        <WhatsNewModal type={whatsNewType} version={whatsNewVersion} onClose={closeWhatsNew} />
       )}
     </div>
   );

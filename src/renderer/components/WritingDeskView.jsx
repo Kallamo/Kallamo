@@ -21,6 +21,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
   const [tree, setTree] = useState({ folders: [], documents: [] });
   const [expanded, setExpanded] = useState({});
   const [selectedDocId, setSelectedDocId] = useState(null);
+  const navigationStateRef = useRef({ expanded: {}, selectedDocId: null });
   const [currentDoc, setCurrentDoc] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editValue, setEditValue] = useState('');
@@ -36,6 +37,54 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
   const editorJumpRef = useRef(null); // set by the editor; lets the Notes panel scroll to a passage
   const [notesRefresh, setNotesRefresh] = useState(0);
   const [justAddedNoteId, setJustAddedNoteId] = useState(null); // note to auto-expand once
+
+  const getWritingDeskState = useCallback(async () => {
+    if (electronAPI.getWritingDeskState) {
+      try {
+        const result = await electronAPI.getWritingDeskState(workspaceId);
+        if (result?.success) return result;
+      } catch {
+        // Fall through to the established generic state IPC during process reloads.
+      }
+    }
+
+    const result = await electronAPI.getWorkspaceUiState?.(workspaceId, 'writing-desk');
+    return { ...result, state: result?.value };
+  }, [electronAPI, workspaceId]);
+
+  const saveWritingDeskState = useCallback(async (nextExpanded, nextSelectedDocId) => {
+    const state = {
+      expandedFolderIds: Object.keys(nextExpanded).filter(id => nextExpanded[id]),
+      lastDocumentId: nextSelectedDocId,
+    };
+
+    if (electronAPI.setWritingDeskState) {
+      try {
+        const result = await electronAPI.setWritingDeskState(workspaceId, state);
+        if (result?.success) return result;
+      } catch {
+        // Fall through to the established generic state IPC during process reloads.
+      }
+    }
+
+    return electronAPI.setWorkspaceUiState?.(workspaceId, 'writing-desk', state);
+  }, [electronAPI, workspaceId]);
+
+  const updateNavigationState = useCallback((nextExpanded, nextSelectedDocId, persist = true) => {
+    navigationStateRef.current = { expanded: nextExpanded, selectedDocId: nextSelectedDocId };
+    setExpanded(nextExpanded);
+    setSelectedDocId(nextSelectedDocId);
+    if (persist) saveWritingDeskState(nextExpanded, nextSelectedDocId);
+  }, [saveWritingDeskState]);
+
+  const toggleFolder = useCallback((folderId) => {
+    const { expanded: currentExpanded, selectedDocId: currentSelectedDocId } = navigationStateRef.current;
+    updateNavigationState({ ...currentExpanded, [folderId]: !currentExpanded[folderId] }, currentSelectedDocId);
+  }, [updateNavigationState]);
+
+  const selectDocument = useCallback((documentId) => {
+    updateNavigationState(navigationStateRef.current.expanded, documentId);
+  }, [updateNavigationState]);
 
   const openPanel = (name) => {
     setJustAddedNoteId(null); // a manual open shows every note minimized
@@ -68,6 +117,24 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
   }, [electronAPI, workspaceId]);
 
   useEffect(() => { loadTree(); }, [loadTree]);
+
+  useEffect(() => {
+    let active = true;
+    updateNavigationState({}, null, false);
+
+    getWritingDeskState().then(result => {
+      if (!active || !result?.success) return;
+
+      const state = result.state || {};
+      updateNavigationState(
+        Object.fromEntries((state.expandedFolderIds || []).map(id => [id, true])),
+        state.lastDocumentId || null,
+        false
+      );
+    });
+
+    return () => { active = false; };
+  }, [getWritingDeskState, updateNavigationState]);
 
   useEffect(() => {
     if (!selectedDocId) { setCurrentDoc(null); return; }
@@ -150,7 +217,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
   const newDocument = async (folderId = null) => {
     const doc = await electronAPI.createDocument(workspaceId, folderId, 'Untitled', null, DEFAULT_WRITING_DESK);
     await loadTree();
-    setSelectedDocId(doc.id);
+    selectDocument(doc.id);
   };
 
   const newFolder = async (parentId = null) => {
@@ -171,7 +238,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
     }
     const doc = await electronAPI.createDocument(workspaceId, null, res.baseName || 'Imported', content, DEFAULT_WRITING_DESK);
     await loadTree();
-    if (doc?.id) setSelectedDocId(doc.id);
+    if (doc?.id) selectDocument(doc.id);
   };
 
   const commitRename = async (item) => {
@@ -191,7 +258,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
     if (item.type === 'folder') await electronAPI.deleteFolder(item.id);
     else {
       await electronAPI.deleteDocument(item.id);
-      if (selectedDocId === item.id) { setSelectedDocId(null); setCurrentDoc(null); }
+      if (selectedDocId === item.id) { selectDocument(null); setCurrentDoc(null); }
     }
     await loadTree();
   };
@@ -345,7 +412,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
           onDragEnd={() => { setDragItem(null); setDropInfo(null); }}
           className={`group relative flex items-center gap-1 px-2 py-1 rounded-md hover:bg-white/5 cursor-pointer text-xs text-gray-300 ${dropInsideRing(folder)}`}
           style={{ paddingLeft: `${8 + depth * 12}px` }}
-          onClick={() => setExpanded(e => ({ ...e, [folder.id]: !e[folder.id] }))}
+          onClick={() => toggleFolder(folder.id)}
         >
           {dropLine(folder, 'before')}
           {dropLine(folder, 'after')}
@@ -378,7 +445,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
       onDragEnd={() => { setDragItem(null); setDropInfo(null); }}
       className={`group relative flex items-center gap-1 px-2 py-1 rounded-md cursor-pointer text-xs ${selectedDocId === doc.id ? 'bg-accent/15 text-accent' : 'text-gray-300 hover:bg-white/5'}`}
       style={{ paddingLeft: `${8 + depth * 12 + 16}px` }}
-      onClick={() => setSelectedDocId(doc.id)}
+      onClick={() => selectDocument(doc.id)}
     >
       {dropLine(doc, 'before')}
       {dropLine(doc, 'after')}

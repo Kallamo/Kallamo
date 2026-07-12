@@ -2,6 +2,25 @@
 
 All notable changes to Kallamo are documented in this file. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2026-07-12
+
+A quality-of-life update for long conversations, continuous writing, and navigating a growing world.
+
+### Added
+- End-to-end SSE response streaming for final workflow output, with buffered renderer delivery and a global `advanced.streaming` setting. AWS Bedrock remains on the non-streaming fallback path.
+- A cursor-paginated, 50-message chat viewport with incremental and full-history navigation controls.
+- Workspace-scoped Writing Desk navigation state, persisted through `workspace_ui_state` for expanded folders and the last open document.
+- Location hierarchy navigation derived from the existing `Inside` relation, while locations without a parent remain at the root.
+- Separate Global and Patch What's New flows, with independent persisted first-run and version-seen state.
+
+### Changed
+- Markdown now recognizes headings from `#` through `######`.
+- Chat input composition state is isolated from the visible message thread, avoiding message re-renders and Markdown reparsing while typing.
+- Removed per-message truncation so long narrative responses render in full.
+
+### Fixed
+- Returning to Chat from another workspace view now restores the message container to its latest position before paint.
+
 ## [1.1.1] - 2026-07-08
 
 A hotfix that clears four issues surfaced by the community after 1.1.0.

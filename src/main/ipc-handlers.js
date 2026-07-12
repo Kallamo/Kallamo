@@ -16,8 +16,11 @@ const https = require('https');
 const crypto = require('crypto');
 const db = require('./database');
 const { getMessagePage } = require('./features/chat/message-pages');
+const { registerWorkspaceStateIpc } = require('./features/workspace-state/workspace-state');
 const entitiesStore = require('./entities');
 const { chunkText, extractTextFromFile, extractDocxHtml, vectorizeChunks, insertChunksToDb, deleteChunksFromDb, searchKnowledgeBase, searchChatKnowledgeBase, searchChatMemories, RAG_MODEL_ID, RAG_MODEL_DIM, generateEmbeddingVector, countTokens } = require('./rag-service');
+
+registerWorkspaceStateIpc(ipcMain);
 
 // Resolve the APPDATA data path
 const appDataPath = process.env.APPDATA || (process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support') : path.join(os.homedir(), '.local', 'share'));
@@ -2602,32 +2605,6 @@ ipcMain.handle('set-chunk-tags', async (event, { chunkId, keywords = [], entitie
 
 // --- WORLDBUILD: per-workspace entity registry + relations ---
 
-ipcMain.handle('get-workspace-ui-state', async (event, { workspaceId, scope } = {}) => {
-  try {
-    if (!workspaceId || !scope) return { success: false, error: 'workspaceId and scope are required' };
-    const row = db.prepare('SELECT valueJson FROM workspace_ui_state WHERE workspaceId = ? AND scope = ?').get(workspaceId, scope);
-    return { success: true, value: row ? JSON.parse(row.valueJson) : null };
-  } catch (e) {
-    console.error('[get-workspace-ui-state] failed:', e);
-    return { success: false, error: e.message };
-  }
-});
-
-ipcMain.handle('set-workspace-ui-state', async (event, { workspaceId, scope, value } = {}) => {
-  try {
-    if (!workspaceId || !scope) return { success: false, error: 'workspaceId and scope are required' };
-    db.prepare(`
-      INSERT INTO workspace_ui_state (workspaceId, scope, valueJson, updatedAt)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(workspaceId, scope) DO UPDATE SET valueJson = excluded.valueJson, updatedAt = excluded.updatedAt
-    `).run(workspaceId, scope, JSON.stringify(value || {}), Date.now());
-    return { success: true };
-  } catch (e) {
-    console.error('[set-workspace-ui-state] failed:', e);
-    return { success: false, error: e.message };
-  }
-});
-
 ipcMain.handle('list-entities', async (event, { workspaceId, type } = {}) => {
   try {
     return { success: true, entities: entitiesStore.listEntities({ workspaceId, type: type || null }) };
@@ -3842,32 +3819,40 @@ ipcMain.handle('set-ui-flag', async (event, key) => {
   }
 });
 
-// --- WHAT'S NEW (post-update highlights) ---
-// Shows the What's New modal once per version bump. On a clean first install we
-// record the version silently so it never fires over onboarding. Existing users
-// upgrading (no stored version, or an older one) do see it once.
+// --- WHAT'S NEW ---
+// New installs see the release overview once. Existing installs see the notes
+// for each version they update to.
 ipcMain.handle('get-whats-new-state', async () => {
   const { app } = require('electron');
   try {
     const current = app.getVersion();
-    const row = db.prepare("SELECT value FROM settings WHERE key = 'lastSeenVersion'").get();
-    const lastSeen = row ? row.value : null;
+    const lastSeenRow = db.prepare("SELECT value FROM settings WHERE key = 'lastSeenVersion'").get();
+    const globalSeenRow = db.prepare("SELECT value FROM settings WHERE key = 'hasSeenGlobalWhatsNew'").get();
+    const lastSeen = lastSeenRow ? lastSeenRow.value : null;
+    const hasSeenGlobal = globalSeenRow?.value === '1';
 
-    if (db.isFreshInstall) {
-      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('lastSeenVersion', ?)").run(current);
-      return { show: false, version: current };
+    if (db.isFreshInstall && !hasSeenGlobal) {
+      return { show: true, type: 'global', version: current };
     }
-    return { show: lastSeen !== current, version: current };
+
+    return { show: lastSeen !== current, type: 'patch', version: current };
   } catch (e) {
     console.error("Error reading What's New state from SQLite:", e);
     return { show: false, version: null };
   }
 });
 
-ipcMain.handle('mark-whats-new-seen', async () => {
+ipcMain.handle('mark-whats-new-seen', async (event, { type } = {}) => {
   const { app } = require('electron');
   try {
-    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('lastSeenVersion', ?)").run(app.getVersion());
+    const current = app.getVersion();
+    const saveSetting = db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)");
+
+    if (type === 'global') {
+      saveSetting.run('hasSeenGlobalWhatsNew', '1');
+    }
+
+    saveSetting.run('lastSeenVersion', current);
     return { success: true };
   } catch (e) {
     console.error("Error saving What's New seen version to SQLite:", e);

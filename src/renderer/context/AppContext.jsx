@@ -57,6 +57,8 @@ export const AppProvider = ({ children }) => {
   // What's New modal: opens once per version bump (driven by the main process),
   // and can be reopened any time from Settings → About.
   const [whatsNewOpen, setWhatsNewOpen] = useState(false);
+  const [whatsNewType, setWhatsNewType] = useState('global');
+  const [whatsNewVersion, setWhatsNewVersion] = useState(null);
 
   const [showOverflowModal, setShowOverflowModal] = useState(false);
   const [overflowData, setOverflowData] = useState(null);
@@ -139,7 +141,11 @@ export const AppProvider = ({ children }) => {
       setUiFlags(fetchedFlags || {});
 
       const whatsNew = await api.getWhatsNewState();
-      if (whatsNew?.show) setWhatsNewOpen(true);
+      if (whatsNew?.show) {
+        setWhatsNewType(whatsNew.type);
+        setWhatsNewVersion(whatsNew.version);
+        setWhatsNewOpen(true);
+      }
 
       await refreshEngineStatus();
     } catch (error) {
@@ -396,13 +402,14 @@ export const AppProvider = ({ children }) => {
     api.setUiFlag(key);
   };
 
-  // Open on demand (from Settings). Reopening does not need to persist anything.
-  const openWhatsNew = () => setWhatsNewOpen(true);
-  // Closing always records the current version as seen, so the auto-open won't
-  // fire again until the next update, whether it opened automatically or by hand.
+  const openWhatsNew = () => {
+    setWhatsNewType('global');
+    setWhatsNewOpen(true);
+  };
+
   const closeWhatsNew = () => {
     setWhatsNewOpen(false);
-    api.markWhatsNewSeen();
+    api.markWhatsNewSeen(whatsNewType);
   };
 
   const activeChat = chats.find(c => c.id === activeChatId);
@@ -417,7 +424,7 @@ export const AppProvider = ({ children }) => {
       apiProfiles, setApiProfiles,
       settings, setSettings, handleSaveSettings,
       uiFlags, dismissHint,
-      whatsNewOpen, openWhatsNew, closeWhatsNew,
+      whatsNewOpen, whatsNewType, whatsNewVersion, openWhatsNew, closeWhatsNew,
       activeChatId, activeChat,
       ...chatSession,
       handleSaveProfile, handleDeleteProfile,

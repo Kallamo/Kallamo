@@ -88,6 +88,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   listEntityLinks: (workspaceId, relType) => ipcRenderer.invoke('list-entity-links', { workspaceId, relType }),
   getWorkspaceUiState: (workspaceId, scope) => ipcRenderer.invoke('get-workspace-ui-state', { workspaceId, scope }),
   setWorkspaceUiState: (workspaceId, scope, value) => ipcRenderer.invoke('set-workspace-ui-state', { workspaceId, scope, value }),
+  getWritingDeskState: (workspaceId) => ipcRenderer.invoke('get-writing-desk-state', { workspaceId }),
+  setWritingDeskState: (workspaceId, state) => ipcRenderer.invoke('set-writing-desk-state', { workspaceId, state }),
   getEntity: (id) => ipcRenderer.invoke('get-entity', { id }),
   createEntity: (payload) => ipcRenderer.invoke('create-entity', payload),
   resolveEntityByName: (workspaceId, name) => ipcRenderer.invoke('resolve-entity-by-name', { workspaceId, name }),
@@ -165,7 +167,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // --- WHAT'S NEW (post-update highlights) ---
   getWhatsNewState: () => ipcRenderer.invoke('get-whats-new-state'),
-  markWhatsNewSeen: () => ipcRenderer.invoke('mark-whats-new-seen'),
+  markWhatsNewSeen: (type) => ipcRenderer.invoke('mark-whats-new-seen', { type }),
 
   // --- LIVE GENERATION & WORKFLOWS ---
   sendMessage: (args) => ipcRenderer.invoke('send-message', args),
