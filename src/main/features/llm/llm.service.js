@@ -178,9 +178,57 @@ function parseResponse(data, provider) {
     }
 }
 
+// Decode ONE already-JSON-parsed SSE event into normalized deltas. Stateless:
+// the stream reader owns line-splitting, the `data:` prefix and the [DONE]
+// sentinel, so this only maps a provider's chunk shape to a common
+// { contentDelta, reasoningDelta, done }. The streaming mirror of parseResponse.
+function parseStreamChunk(obj, provider) {
+    const empty = { contentDelta: '', reasoningDelta: '', done: false };
+    try {
+        switch (provider.toLowerCase()) {
+            case 'openai':
+            case 'openrouter':
+            case 'local': {
+                const choice = obj.choices && obj.choices[0];
+                if (!choice) return empty;
+                const delta = choice.delta || {};
+                return {
+                    contentDelta: delta.content || '',
+                    reasoningDelta: delta.reasoning_content || delta.reasoning || '',
+                    done: choice.finish_reason != null
+                };
+            }
+            case 'anthropic': {
+                if (obj.type === 'content_block_delta') {
+                    const d = obj.delta || {};
+                    return {
+                        contentDelta: d.type === 'text_delta' ? (d.text || '') : '',
+                        reasoningDelta: d.type === 'thinking_delta' ? (d.thinking || '') : '',
+                        done: false
+                    };
+                }
+                if (obj.type === 'message_stop') return { ...empty, done: true };
+                return empty;
+            }
+            case 'google ai':
+            case 'vertex ai': {
+                const cand = obj.candidates && obj.candidates[0];
+                if (!cand || !cand.content || !cand.content.parts) return empty;
+                const text = cand.content.parts.map(p => p.text || '').join('');
+                return { contentDelta: text, reasoningDelta: '', done: cand.finishReason != null };
+            }
+            default:
+                return empty;
+        }
+    } catch (error) {
+        console.error("Failed to parse stream chunk:", error, obj);
+        return empty;
+    }
+}
+
 // --- CORE API REQUESTS ---
 
-async function sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory, newPrompt, temperature, maxTokens, manualMode, manualJson, abortSignal, attachedImages }) {
+async function buildRequest({ apiProfileId, model, systemPrompt, chatHistory, newPrompt, temperature, maxTokens, manualMode, manualJson, attachedImages, stream = false }) {
     try {
         const variables = db.prepare('SELECT key, value FROM variables').all();
         for (const variable of variables) {
@@ -507,6 +555,18 @@ async function sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory, 
             throw new Error(`The provider '${provider}' is not supported yet.`);
     }
 
+    // Streaming toggles, inert when stream is false. Bedrock has no text-SSE
+    // stream, so the streaming entry point falls back to the non-streaming path
+    // for it and never builds a streaming request here.
+    if (stream) {
+        if (provider === 'google ai' || provider === 'vertex ai') {
+            endpoint = endpoint.replace(':generateContent', ':streamGenerateContent');
+            endpoint += endpoint.includes('?') ? '&alt=sse' : '?alt=sse';
+        } else if (provider !== 'aws bedrock') {
+            requestBody.stream = true;
+        }
+    }
+
     if (manualMode && manualJson) {
         try {
             const manualParams = JSON.parse(manualJson);
@@ -537,6 +597,13 @@ async function sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory, 
             body: requestBodyPayload
         });
     }
+
+    return { endpoint, requestHeaders, requestBodyPayload, provider };
+}
+
+async function sendApiRequest(params) {
+    const { endpoint, requestHeaders, requestBodyPayload, provider } = await buildRequest(params);
+    const { abortSignal } = params;
 
     try {
         const response = await undiciFetch(endpoint, {
@@ -655,4 +722,4 @@ async function getEmbeddings(text, apiProfileId, modelName) {
     }
 }
 
-module.exports = { sendApiRequest, getEmbeddings };
+module.exports = { sendApiRequest, getEmbeddings, buildRequest, parseStreamChunk, generationDispatcher };

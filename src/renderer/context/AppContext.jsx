@@ -2,6 +2,9 @@ import React, { createContext, useContext, useState, useEffect, useRef } from 'r
 
 const AppContext = createContext();
 
+const STREAM_DISPLAY_INTERVAL_MS = 32;
+const STREAM_DISPLAY_CHARACTERS_PER_TICK = 16;
+
 export const useApp = () => useContext(AppContext);
 
 // Helper for safe electronAPI calls
@@ -66,6 +69,46 @@ export const AppProvider = ({ children }) => {
   const [errorData, setErrorData] = useState(null);
   const [editError, setEditError] = useState(null);
   const [lastGeneratedMessageId, setLastGeneratedMessageId] = useState(null);
+
+  // Live-streaming buffer for the response currently being generated. Cleared
+  // when generation ends (the saved message takes over). Only one runs at a time.
+  const [streamingContent, setStreamingContent] = useState('');
+  const [streamingReasoning, setStreamingReasoning] = useState('');
+  const streamContentQueueRef = useRef('');
+  const streamReasoningQueueRef = useRef('');
+  const streamDisplayTimerRef = useRef(null);
+
+  const flushStreamDisplay = () => {
+    const contentDelta = streamContentQueueRef.current.slice(0, STREAM_DISPLAY_CHARACTERS_PER_TICK);
+    const reasoningDelta = streamReasoningQueueRef.current.slice(0, STREAM_DISPLAY_CHARACTERS_PER_TICK);
+
+    streamContentQueueRef.current = streamContentQueueRef.current.slice(contentDelta.length);
+    streamReasoningQueueRef.current = streamReasoningQueueRef.current.slice(reasoningDelta.length);
+
+    if (contentDelta) setStreamingContent(previous => previous + contentDelta);
+    if (reasoningDelta) setStreamingReasoning(previous => previous + reasoningDelta);
+
+    if (streamContentQueueRef.current || streamReasoningQueueRef.current) {
+      streamDisplayTimerRef.current = setTimeout(flushStreamDisplay, STREAM_DISPLAY_INTERVAL_MS);
+    } else {
+      streamDisplayTimerRef.current = null;
+    }
+  };
+
+  const enqueueStreamDisplay = ({ contentDelta, reasoningDelta }) => {
+    if (contentDelta) streamContentQueueRef.current += contentDelta;
+    if (reasoningDelta) streamReasoningQueueRef.current += reasoningDelta;
+    if (!streamDisplayTimerRef.current) flushStreamDisplay();
+  };
+
+  const clearStreamDisplay = () => {
+    streamContentQueueRef.current = '';
+    streamReasoningQueueRef.current = '';
+    if (streamDisplayTimerRef.current) clearTimeout(streamDisplayTimerRef.current);
+    streamDisplayTimerRef.current = null;
+    setStreamingContent('');
+    setStreamingReasoning('');
+  };
 
   // --- AUTO-UPDATER STATE ---
   const [updateStatus, setUpdateStatus] = useState('idle'); // 'idle' | 'available' | 'downloaded'
@@ -153,6 +196,8 @@ export const AppProvider = ({ children }) => {
       setGenerationProgress(progress);
     });
 
+    const unsubStreamToken = api.onStreamToken ? api.onStreamToken(enqueueStreamDisplay) : () => { };
+
     const unsubError = api.onWorkflowError((err) => {
       setErrorData(err);
       setShowErrorModal(true);
@@ -237,6 +282,7 @@ export const AppProvider = ({ children }) => {
 
     return () => {
       unsubProgress();
+      unsubStreamToken();
       unsubError();
       unsubOverflowEvent();
       unsubUpdateAvailable();
@@ -246,8 +292,16 @@ export const AppProvider = ({ children }) => {
       unsubDownloadEngineProgress();
       unsubSettingsChanged();
       unsubTaggingFailed();
+      clearStreamDisplay();
     };
   }, []);
+
+  // Drop the live buffer once generation ends; the saved message replaces it.
+  useEffect(() => {
+    if (!isGenerating) {
+      clearStreamDisplay();
+    }
+  }, [isGenerating]);
 
   // --- OPERATIONS & ACTIONS ---
   const refreshEngineStatus = async () => {
@@ -439,7 +493,7 @@ export const AppProvider = ({ children }) => {
       if (response && response.success) {
         const msgs = await api.getChatMessages(activeChatId);
         setActiveMessages(msgs);
-        if (response.aiMsgId) {
+        if (response.aiMsgId && !response.streamed) {
           setLastGeneratedMessageId(response.aiMsgId);
         }
 
@@ -533,7 +587,7 @@ export const AppProvider = ({ children }) => {
         }
 
         setActiveMessages(msgs);
-        if (response.aiMsgId) {
+        if (response.aiMsgId && !response.streamed) {
           setLastGeneratedMessageId(response.aiMsgId);
         }
 
@@ -764,7 +818,7 @@ export const AppProvider = ({ children }) => {
       handleSaveApiProfile, handleDeleteApiProfile,
       variables, setVariables,
       handleSaveVariable, handleDeleteVariable,
-      handleSendMessage, handleRegenerateMessage, handleEditUserMessage, handleSwitchAIAlternative, isGenerating, generationProgress, handleCancelGeneration,
+      handleSendMessage, handleRegenerateMessage, handleEditUserMessage, handleSwitchAIAlternative, isGenerating, generationProgress, streamingContent, streamingReasoning, handleCancelGeneration,
       showOverflowModal, setShowOverflowModal, overflowData, handleRespondToOverflow,
       showErrorModal, setShowErrorModal, errorData, handleRespondToError,
       editError, setEditError,

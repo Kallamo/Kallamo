@@ -116,6 +116,8 @@ export default function ChatWorkspaceView() {
     handleSwitchAIAlternative,
     isGenerating,
     generationProgress,
+    streamingContent,
+    streamingReasoning,
     handleCancelGeneration,
     setCurrentView,
     settings,
@@ -252,7 +254,7 @@ export default function ChatWorkspaceView() {
   // Auto-scroll to bottom of messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [activeMessages, generationProgress, isGenerating]);
+  }, [activeMessages, generationProgress, isGenerating, streamingContent]);
 
   // Prevent default window drag/drop behavior to stop Electron from navigating/opening files
   useEffect(() => {
@@ -1274,13 +1276,32 @@ export default function ChatWorkspaceView() {
                       </div>
                     </div>
 
-                    {/* Progress message status */}
-                    <div className="flex items-center space-x-2.5 pt-0.5">
-                      <RotateCw className="w-3.5 h-3.5 animate-spin text-accent shrink-0" />
-                      <span className="text-xs font-semibold text-accent animate-pulse tracking-wide">
-                        {generationProgress.status || 'Thinking...'}
-                      </span>
-                    </div>
+                    {/* Live streamed text once tokens arrive, otherwise the status */}
+                    {(streamingContent || streamingReasoning) ? (
+                      <div className="flex flex-col space-y-2 pt-1 w-full">
+                        {streamingReasoning && (
+                          <div className="text-xs italic text-gray-500 whitespace-pre-wrap border-l border-accent/20 pl-2.5 max-h-48 overflow-y-auto custom-scrollbar">
+                            {streamingReasoning}
+                          </div>
+                        )}
+                        {streamingContent && (
+                          <div className="relative">
+                            <div
+                              className="leading-relaxed markdown-content"
+                              dangerouslySetInnerHTML={{ __html: parseMarkdown(streamingContent) }}
+                            />
+                            <span className="inline-block w-1.5 h-4 -mb-0.5 bg-accent/70 animate-pulse rounded-sm" />
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex items-center space-x-2.5 pt-0.5">
+                        <RotateCw className="w-3.5 h-3.5 animate-spin text-accent shrink-0" />
+                        <span className="text-xs font-semibold text-accent animate-pulse tracking-wide">
+                          {generationProgress.status || 'Thinking...'}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
