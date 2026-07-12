@@ -15,7 +15,7 @@ const os = require('os');
 const https = require('https');
 const crypto = require('crypto');
 const db = require('./database');
-const { getMessagePage } = require('./chat/message-pages');
+const { getMessagePage } = require('./features/chat/message-pages');
 const entitiesStore = require('./entities');
 const { chunkText, extractTextFromFile, extractDocxHtml, vectorizeChunks, insertChunksToDb, deleteChunksFromDb, searchKnowledgeBase, searchChatKnowledgeBase, searchChatMemories, RAG_MODEL_ID, RAG_MODEL_DIM, generateEmbeddingVector, countTokens } = require('./rag-service');
 

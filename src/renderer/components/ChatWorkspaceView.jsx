@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
-import { ArrowLeft, Sliders, Paperclip, Send, Cpu, Workflow, X, MoreVertical, Copy, Edit, RotateCw, Play, Square, ChevronDown, Plus, ChevronLeft, ChevronRight, Brain, Folder, MessageSquare, Trash2, RotateCcw, PenTool, Globe, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Sliders, Paperclip, Cpu, Workflow, X, MoreVertical, Copy, Edit, RotateCw, Play, ChevronDown, Plus, ChevronLeft, ChevronRight, Brain, Folder, MessageSquare, Trash2, RotateCcw, PenTool, Globe, AlertTriangle } from 'lucide-react';
 import ConfigurationView from './ConfigurationView';
 import SummarizeModal from './modals/SummarizeModal';
 import ChatFilesView from './ChatFilesView';
@@ -11,6 +11,10 @@ import FilePreviewModal from './modals/FilePreviewModal';
 import DeleteModal from './modals/DeleteModal';
 import Popover from './ui/Popover';
 import { parseMarkdown } from '../utils/markdown';
+import ChatInput from '../features/chat/components/ChatInput';
+import MessageMarkdown from '../features/chat/components/MessageMarkdown';
+import TypingText from '../features/chat/components/TypingText';
+import { parseMessageContent } from '../features/chat/message-content';
 
 const safeParseJson = (str, fallback = []) => {
   if (!str) return fallback;
@@ -31,157 +35,6 @@ const safeParseDebugNotice = (notice) => {
   } catch (e) {
     return { legacyText: notice };
   }
-};
-
-const parseMessageContent = (content) => {
-  if (!content) return { thinking: '', response: '' };
-
-  // Match both <thinking>...</thinking> and <think>...</think> (case-insensitive)
-  const thinkingRegex = /<think(?:ing)?>([\s\S]*?)<\/think(?:ing)?>/i;
-  const match = thinkingRegex.exec(content);
-
-  if (match) {
-    const thinking = match[1].trim();
-    const response = content.replace(thinkingRegex, '').trim();
-    return { thinking, response };
-  }
-
-  // Handle partial/unclosed <thinking> or <think> streams
-  const partialMatch = content.match(/<think(?:ing)?>/i);
-  if (partialMatch) {
-    const parts = content.split(partialMatch[0]);
-    const before = parts[0].trim();
-    const thinking = (parts[1] || '').trim();
-    return { thinking, response: before };
-  }
-
-  return { thinking: '', response: content };
-};
-
-const MessageMarkdown = React.memo(function MessageMarkdown({ content, className }) {
-  return (
-    <div
-      className={className}
-      dangerouslySetInnerHTML={{ __html: parseMarkdown(content) }}
-    />
-  );
-});
-
-function ChatInput({
-  canSend,
-  hasTargets,
-  isGenerating,
-  onCancel,
-  onSend,
-  pendingFileCount,
-  placeholder
-}) {
-  const [inputValue, setInputValue] = useState('');
-  const [isHoveringSend, setIsHoveringSend] = useState(false);
-  const inputRef = useRef(null);
-
-  useEffect(() => {
-    if (!inputRef.current) return;
-    inputRef.current.style.height = 'auto';
-    inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 108)}px`;
-  }, [inputValue]);
-
-  const submit = () => {
-    if (onSend(inputValue)) setInputValue('');
-  };
-
-  const handleKeyDown = (event) => {
-    if (event.key === 'Enter' && !event.shiftKey && !isGenerating) {
-      event.preventDefault();
-      submit();
-    }
-  };
-
-  const isDisabled = (!isGenerating && !inputValue.trim() && pendingFileCount === 0) || !hasTargets || (!isGenerating && !canSend);
-
-  return (
-    <>
-      <textarea
-        ref={inputRef}
-        value={inputValue}
-        onChange={(event) => setInputValue(event.target.value)}
-        onKeyDown={handleKeyDown}
-        rows={1}
-        aria-label="Message"
-        placeholder={placeholder}
-        style={{ maxHeight: '120px', overflowY: 'auto' }}
-        className="order-2 flex-1 bg-transparent border-0 text-white text-xs px-3 py-2.5 focus:outline-none resize-none font-sans custom-scrollbar leading-relaxed"
-      />
-      <span data-tooltip={(!isGenerating && !canSend) ? 'This AI Profile needs setup: create an API profile in Settings, then link it in the Library.' : undefined} className="order-4 shrink-0">
-        <button
-          type="button"
-          aria-label={isGenerating ? 'Cancel generation' : 'Send message'}
-          onClick={isGenerating ? onCancel : submit}
-          disabled={isDisabled}
-          onMouseEnter={() => setIsHoveringSend(true)}
-          onMouseLeave={() => setIsHoveringSend(false)}
-          className={`shrink-0 w-9 h-9 rounded-full flex items-center justify-center shadow-md transition-all active:scale-95 cursor-pointer border ${isGenerating
-            ? isHoveringSend
-              ? 'bg-red-600 hover:bg-red-500 border-red-500/20 text-white hover:brightness-110'
-              : 'bg-accent/20 border-accent/40 text-accent cursor-wait'
-            : 'bg-accent border-accent text-[#011419] hover:brightness-110 disabled:opacity-50 disabled:pointer-events-none'
-            }`}
-        >
-          {isGenerating ? (
-            isHoveringSend ? <Square className="w-4 h-4 fill-current text-white" /> : <RotateCw className="w-4 h-4 animate-spin text-accent" />
-          ) : (
-            <Send className="w-4 h-4" />
-          )}
-        </button>
-      </span>
-    </>
-  );
-}
-
-const TypingText = ({ text, onComplete, onClick }) => {
-  const [displayedText, setDisplayedText] = useState('');
-
-  useEffect(() => {
-    if (!text) {
-      setDisplayedText('');
-      if (onComplete) onComplete();
-      return;
-    }
-
-    const words = text.split(/(\s+)/);
-    const totalWords = words.length;
-
-    const maxDurationMs = 500;
-    const tickMs = 16;
-    const totalTicks = maxDurationMs / tickMs;
-    const wordsPerTick = Math.max(1, Math.ceil(totalWords / totalTicks));
-
-    let currentIdx = 0;
-    setDisplayedText('');
-
-    const interval = setInterval(() => {
-      if (currentIdx < totalWords) {
-        const nextIdx = Math.min(totalWords, currentIdx + wordsPerTick);
-        const chunk = words.slice(0, nextIdx).join('');
-        setDisplayedText(chunk);
-        currentIdx = nextIdx;
-      } else {
-        clearInterval(interval);
-        if (onComplete) onComplete();
-      }
-    }, tickMs);
-
-    return () => clearInterval(interval);
-  }, [text]);
-
-  return (
-    <div onClick={onClick} className="cursor-pointer select-text" title="Click to skip typing effect">
-      <div
-        className="leading-relaxed markdown-content"
-        dangerouslySetInnerHTML={{ __html: parseMarkdown(displayedText) }}
-      />
-    </div>
-  );
 };
 
 export default function ChatWorkspaceView() {
@@ -1367,7 +1220,6 @@ export default function ChatWorkspaceView() {
                       </div>
                     </div>
 
-                    {/* Live streamed text once tokens arrive, otherwise the status */}
                     {(streamingContent || streamingReasoning) ? (
                       <div className="flex flex-col space-y-2 pt-1 w-full">
                         {streamingReasoning && (

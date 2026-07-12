@@ -1380,7 +1380,6 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
 
                 <div className="space-y-6">
 
-                  {/* SECTION: GENERATION */}
                   <div className="space-y-3">
                     <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
                       <Monitor className="w-3.5 h-3.5" />
