@@ -11,66 +11,13 @@ import Popover from './ui/Popover';
 import ConfirmDialog from './ui/ConfirmDialog';
 import ExportWorldbuildModal from './modals/ExportWorldbuildModal';
 import { buildLocationTree } from '../features/worldbuild/locationTree';
-
-// Each entity type carries its own personality: a friendly label, an icon, and a
-// tonal palette (static classes so Tailwind keeps them) used for its medallion and
-// accents. `key` is the stored type, aligned with the tagger's tag categories.
-const TYPES = {
-  System:     { label: 'System / Concept', icon: BookOpen, medallion: 'bg-slate-400/15 text-slate-200 border-slate-400/30', ring: 'border-slate-400/30', soft: 'text-slate-300' },
-  Locations:  { label: 'Location',         icon: MapPin,   medallion: 'bg-emerald-400/15 text-emerald-200 border-emerald-400/30', ring: 'border-emerald-400/25', soft: 'text-emerald-300' },
-  Items:      { label: 'Item',             icon: Package,  medallion: 'bg-amber-400/15 text-amber-200 border-amber-400/30', ring: 'border-amber-400/25', soft: 'text-amber-300' },
-  Races:      { label: 'Race',             icon: Users,    medallion: 'bg-sky-400/15 text-sky-200 border-sky-400/30', ring: 'border-sky-400/25', soft: 'text-sky-300' },
-  Factions:   { label: 'Faction',          icon: Flag,     medallion: 'bg-rose-400/15 text-rose-200 border-rose-400/30', ring: 'border-rose-400/25', soft: 'text-rose-300' },
-  Characters: { label: 'Character',        icon: User,     medallion: 'bg-accent/15 text-accent border-accent/30', ring: 'border-accent/25', soft: 'text-accent' },
-  Creatures:  { label: 'Creature / Entity', icon: Ghost,    medallion: 'bg-violet-400/15 text-violet-200 border-violet-400/30', ring: 'border-violet-400/25', soft: 'text-violet-300' },
-  Events:     { label: 'Event',            icon: CalendarClock, medallion: 'bg-orange-400/15 text-orange-200 border-orange-400/30', ring: 'border-orange-400/25', soft: 'text-orange-300' },
-};
-const TYPE_ORDER = ['Characters', 'Locations', 'Factions', 'Items', 'Races', 'Creatures', 'Events', 'System'];
-const WORLDBUILD_NAVIGATION_SCOPE = 'worldbuild-navigation';
-const MIN_SIDEBAR_WIDTH = 320;
-const MAX_SIDEBAR_WIDTH = 448;
-const MIN_DETAIL_WIDTH = 672;
-const meta = (t) => TYPES[t] || { label: t, icon: Globe, medallion: 'bg-white/10 text-gray-300 border-white/20', ring: 'border-white/15', soft: 'text-gray-300' };
-const ITEM_TYPES = ['Weapon', 'Armor', 'Artifact', 'Resource'];
-
-// A living-world scale for how much of a thing exists. Shared by Resources and Creatures.
-const RARITY = ['Unique', 'Rare', 'Uncommon', 'Common', 'Abundant'];
-// How dangerous a creature is, for the AI to calibrate encounters.
-const THREAT = ['Harmless', 'Minor', 'Dangerous', 'Deadly', 'Legendary'];
-// Life state for people and creatures, shown as a colored tag and fed to retrieval.
-const STATUS = {
-  alive:    { label: 'Alive',    cls: 'bg-emerald-400/15 text-emerald-200 border-emerald-400/30' },
-  deceased: { label: 'Deceased', cls: 'bg-rose-400/15 text-rose-200 border-rose-400/30' },
-  missing:  { label: 'Missing',  cls: 'bg-amber-400/15 text-amber-200 border-amber-400/30' },
-  unknown:  { label: 'Unknown',  cls: 'bg-slate-400/15 text-slate-300 border-slate-400/30' },
-};
-// How a creature reacts to the party.
-const DISPOSITION = {
-  hostile:  { label: 'Hostile',  cls: 'bg-rose-400/15 text-rose-200 border-rose-400/30' },
-  neutral:  { label: 'Neutral',  cls: 'bg-slate-400/15 text-slate-300 border-slate-400/30' },
-  friendly: { label: 'Friendly', cls: 'bg-emerald-400/15 text-emerald-200 border-emerald-400/30' },
-  unknown:  { label: 'Unknown',  cls: 'bg-slate-400/15 text-slate-300 border-slate-400/30' },
-};
-// Seed vocabularies for the free-text datalists (users' own entries are merged in).
-const CREATURE_NATURES = ['Beast', 'Monster', 'Spirit', 'Undead', 'Construct', 'Elemental', 'Deity', 'Aberration'];
-// What each abundance level means, shown in the info popover next to the field.
-const ABUNDANCE_HELP = [
-  ['Unique', 'Only one exists in the whole world.'],
-  ['Rare', 'Very few, hard to come by.'],
-  ['Uncommon', 'Exists, but not everywhere.'],
-  ['Common', 'Found in most places.'],
-  ['Abundant', 'Everywhere, effectively unlimited.'],
-];
-const RELATIONSHIP_LABELS = ['Father', 'Mother', 'Sibling', 'Child', 'Friend', 'Rival', 'Enemy', 'Mentor', 'Ally', 'Lover'];
-
-// Friendly labels for the data fields the AI enrichment can touch, used by the review
-// panel that stages 'review'-policy proposals.
-const FIELD_LABELS = {
-  status: 'Status', age: 'Age', role: 'Role', abilities: 'Abilities',
-  disposition: 'Disposition', nature: 'Nature', abundance: 'Abundance', threat: 'Threat',
-  description: 'Description', locationType: 'Type', itemType: 'Type', content: 'Content',
-};
-const fieldLabel = (f) => FIELD_LABELS[f] || f;
+import EntityPickerButton from '../features/worldbuild/EntityPickerButton';
+import { useSidebarWidth } from '../features/worldbuild/useSidebarWidth';
+import { useWorldbuildNavigationState } from '../features/worldbuild/useWorldbuildNavigationState';
+import {
+  ABUNDANCE_HELP, CREATURE_NATURES, DISPOSITION, fieldLabel, ITEM_TYPES, meta,
+  RARITY, RELATIONSHIP_LABELS, STATUS, THREAT, TYPE_ORDER,
+} from '../features/worldbuild/worldbuildConfig';
 
 // Frosted dark inputs: their own dark backing guarantees legible text over BOTH
 // light and dark workspace backgrounds, while the blur keeps the background alive.
@@ -175,40 +122,6 @@ const InfoPopover = ({ items }) => {
   );
 };
 
-// A "+ Add" button that opens a searchable modal of options and calls onPick(id).
-// Replaces native <select> pickers (unreliable inside Electron) and is always visible,
-// even with nothing to add. `options` are entities ({ id, canonicalName }).
-function PickerButton({ label = 'Add', title, options, onPick, icon = Plus }) {
-  const [open, setOpen] = useState(false);
-  const [q, setQ] = useState('');
-  const filtered = options.filter(o => o.canonicalName.toLowerCase().includes(q.toLowerCase()));
-  return (
-    <>
-      <Button size="sm" variant="ghost" icon={icon} onClick={() => { setQ(''); setOpen(true); }}>{label}</Button>
-      {open && createPortal(
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4" onMouseDown={() => setOpen(false)}>
-          <div className="w-full max-w-sm rounded-xl border border-white/15 bg-[#08161d] shadow-2xl overflow-hidden" onMouseDown={(e) => e.stopPropagation()}>
-            <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
-              <span className="text-sm font-bold text-white">{title || 'Choose'}</span>
-              <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-white cursor-pointer"><X className="w-4 h-4" /></button>
-            </div>
-            <div className="p-3">
-              <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…"
-                className="wb-input w-full bg-[#06121a]/75 border border-white/15 text-gray-100 text-sm rounded-lg px-3 py-2 mb-2 placeholder-gray-500 focus:outline-none focus:border-accent/70" />
-              <div className="max-h-64 overflow-y-auto custom-scrollbar space-y-0.5">
-                {filtered.length === 0 && <p className="caption text-center py-4">Nothing to add. Create one first.</p>}
-                {filtered.map(o => (
-                  <button key={o.id} onClick={() => { onPick(o.id); setOpen(false); }}
-                    className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-200 hover:bg-accent/15 hover:text-white cursor-pointer transition-colors">{o.canonicalName}</button>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>, document.body)}
-    </>
-  );
-}
-
 const FieldLabel = ({ children }) => <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">{children}</label>;
 const Hint = ({ children }) => <span className="caption mt-1 block">{children}</span>;
 const Edit = ({ label, hint, children }) => (
@@ -270,7 +183,7 @@ function SingleRelation({ label, hint, current, options, onSet, disabled }) {
               <button onClick={() => onSet(null)} className="text-gray-400 hover:text-rose-300 cursor-pointer p-0.5"><X className="w-3 h-3" /></button>
             </span>
           : <span className="caption">None set.</span>}
-        <PickerButton icon={currentName ? Replace : Plus} label={currentName ? 'Change' : 'Set'} title={label} options={options} onPick={(id) => onSet(id)} />
+        <EntityPickerButton icon={currentName ? Replace : Plus} label={currentName ? 'Change' : 'Set'} title={label} options={options} onPick={(id) => onSet(id)} />
       </div>
     </Edit>
   );
@@ -288,7 +201,7 @@ function MultiRelation({ label, hint, links, options, onAdd, onRemove, disabled 
             <button onClick={() => onRemove(l.linkId)} className="text-gray-400 hover:text-rose-300 cursor-pointer p-0.5"><X className="w-3 h-3" /></button>
           </span>
         ))}
-        <PickerButton title={label} options={remaining} onPick={onAdd} />
+        <EntityPickerButton title={label} options={remaining} onPick={onAdd} />
       </div>
     </Edit>
   );
@@ -329,7 +242,7 @@ function LabeledRelation({ subjectName, links, options, priorLabels, onAdd, onRe
               <Button size="sm" icon={Check} onClick={submit}>Add</Button>
               <Button size="sm" variant="ghost" onClick={() => { setToId(''); setRole(''); }}>Cancel</Button>
             </div>
-          : <PickerButton label="Add relationship" title="Choose a character" options={remaining} onPick={(id) => setToId(id)} />}
+          : <EntityPickerButton label="Add relationship" title="Choose a character" options={remaining} onPick={(id) => setToId(id)} />}
     </Edit>
   );
 }
@@ -361,7 +274,7 @@ function MemberRoles({ links, options, onAdd, onSetRole, onRemove, disabled }) {
         {(!links || links.length === 0) && <span className="caption">No members yet.</span>}
         {(links || []).map(l => <MemberRole key={l.linkId} link={l} onSetRole={onSetRole} onRemove={onRemove} />)}
       </div>
-      <PickerButton label="Add member" title="Add member" options={remaining} onPick={onAdd} />
+      <EntityPickerButton label="Add member" title="Add member" options={remaining} onPick={onAdd} />
     </Edit>
   );
 }
@@ -391,18 +304,21 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const [mergePrompt, setMergePrompt] = useState(null); // { id, name } while choosing merge priority
   const [showExportModal, setShowExportModal] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [expandedLocations, setExpandedLocations] = useState({});
-  const [restoredEntityId, setRestoredEntityId] = useState(null);
-  const [navigationStateReady, setNavigationStateReady] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(MIN_SIDEBAR_WIDTH);
+  const { sidebarWidth, updateSidebarWidth, startSidebarResize, handleSidebarResizeKey } = useSidebarWidth();
+  const {
+    expandedLocations,
+    setExpandedLocations,
+    restoredEntityId,
+    isNavigationStateReady: navigationStateReady,
+  } = useWorldbuildNavigationState({
+    workspaceId,
+    electronAPI,
+    selectedEntityId: selected?.id || null,
+    sidebarWidth,
+    updateSidebarWidth,
+  });
 
   const isNew = !selected?.id;
-  const clampSidebarWidth = (width) => Math.max(MIN_SIDEBAR_WIDTH, Math.min(MAX_SIDEBAR_WIDTH, window.innerWidth - MIN_DETAIL_WIDTH, width));
-  useEffect(() => {
-    const clampOnResize = () => setSidebarWidth((width) => clampSidebarWidth(width));
-    window.addEventListener('resize', clampOnResize);
-    return () => window.removeEventListener('resize', clampOnResize);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const docTitle = (id) => documents.find(d => d.id === id)?.title;
 
   const byType = useMemo(() => {
@@ -431,25 +347,6 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     load();
   }, [load]);
   useEffect(() => { electronAPI.getWritingTree(workspaceId).then(t => setDocuments(t?.documents || [])).catch(() => setDocuments([])); }, [workspaceId, electronAPI]);
-  useEffect(() => {
-    let cancelled = false;
-    setNavigationStateReady(false);
-    setRestoredEntityId(null);
-    setExpandedLocations({});
-    if (!workspaceId) return undefined;
-    electronAPI.getWorkspaceUiState(workspaceId, WORLDBUILD_NAVIGATION_SCOPE)
-      .then((res) => {
-        if (cancelled) return;
-        const state = res?.value || {};
-        setExpandedLocations(state.expandedLocations || {});
-        setRestoredEntityId(state.selectedEntityId || null);
-        setSidebarWidth(clampSidebarWidth(Number(state.sidebarWidth) || MIN_SIDEBAR_WIDTH));
-      })
-      .catch(() => {})
-      .finally(() => { if (!cancelled) setNavigationStateReady(true); });
-    return () => { cancelled = true; };
-  }, [workspaceId, electronAPI]);
-
   const loadRelations = useCallback(async (ent) => {
     if (!ent?.id) { setRel({}); return; }
     const from = (r) => electronAPI.getEntityLinks(ent.id, 'from', r).then(x => x?.links || []);
@@ -484,14 +381,6 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     const en = entities.find(e => e.id === restoredEntityId);
     if (en) openEntity(en);
   }, [navigationStateReady, focusEntityId, selected, restoredEntityId, entities]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (!navigationStateReady || !workspaceId) return;
-    electronAPI.setWorkspaceUiState(workspaceId, WORLDBUILD_NAVIGATION_SCOPE, {
-      expandedLocations,
-      selectedEntityId: selected?.id || null,
-      sidebarWidth,
-    }).catch(() => {});
-  }, [navigationStateReady, workspaceId, expandedLocations, selected?.id, sidebarWidth, electronAPI]);
   const startNew = (type) => { setShowCreate(false); setEditingSection(null); setCharTab('data'); setSelected(draftFor(type)); setRel({}); };
   const patch = (f) => setSelected(p => ({ ...p, ...f }));
   const patchData = (f) => setSelected(p => ({ ...p, data: { ...p.data, ...f } }));
@@ -682,19 +571,6 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const locationTree = useMemo(() => buildLocationTree(entities, insideLinks), [entities, insideLinks]);
   const useLocationTree = !search.trim() && (!filterType || filterType === 'Locations');
   const toggleLocation = (id) => setExpandedLocations(current => ({ ...current, [id]: current[id] === false }));
-  const updateSidebarWidth = (width) => setSidebarWidth(clampSidebarWidth(width));
-  const startSidebarResize = (event) => {
-    event.preventDefault();
-    const move = (moveEvent) => updateSidebarWidth(moveEvent.clientX);
-    const stop = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', stop, { once: true });
-  };
-  const handleSidebarResizeKey = (event) => {
-    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
-    event.preventDefault();
-    updateSidebarWidth(sidebarWidth + (event.key === 'ArrowRight' ? 16 : -16));
-  };
   const proposedCount = useMemo(() => entities.filter(e => e.status === 'proposed').length, [entities]);
   const exportableCount = useMemo(() => entities.filter(e => e.status !== 'proposed').length, [entities]);
 
@@ -730,7 +606,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             </span>
           ))}
         </div>
-        <PickerButton label="Add chapter" title="Link a chapter" options={remainingDocs.map(d => ({ id: d.id, canonicalName: d.title }))} onPick={addLoreDoc} />
+        <EntityPickerButton label="Add chapter" title="Link a chapter" options={remainingDocs.map(d => ({ id: d.id, canonicalName: d.title }))} onPick={addLoreDoc} />
       </Edit>
     </>
   );
@@ -1120,7 +996,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                   ) : (
                     <div className="flex items-center flex-wrap gap-2">
                       <Button size="sm" loading={saving} onClick={() => persist({ accept: true })}>Accept as new</Button>
-                      <PickerButton icon={Link2} label="Merge into…" title="Fold this into" options={mergeTargets} onPick={startMerge} />
+                      <EntityPickerButton icon={Link2} label="Merge into…" title="Fold this into" options={mergeTargets} onPick={startMerge} />
                       <Button size="sm" variant="ghost" loading={saving} onClick={remove}>Dismiss</Button>
                     </div>
                   )}
