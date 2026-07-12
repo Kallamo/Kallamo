@@ -245,6 +245,8 @@ db.exec(`
     FOREIGN KEY(chatId) REFERENCES chats(id) ON DELETE CASCADE
   );
 
+  CREATE INDEX IF NOT EXISTS idx_messages_chat_created ON messages(chatId, createdAt, id);
+
   CREATE TABLE IF NOT EXISTS workflows (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,

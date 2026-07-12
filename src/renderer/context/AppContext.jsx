@@ -4,6 +4,7 @@ const AppContext = createContext();
 
 const STREAM_DISPLAY_INTERVAL_MS = 32;
 const STREAM_DISPLAY_CHARACTERS_PER_TICK = 16;
+const EMPTY_MESSAGE_PAGE = { messages: [], hasMore: false, oldestCursor: null };
 
 export const useApp = () => useContext(AppContext);
 
@@ -12,7 +13,7 @@ const api = window.electronAPI || {
   minimize: () => { }, maximize: () => { }, close: () => { },
   getApiProfiles: async () => [], saveApiProfile: async () => { }, deleteApiProfile: async () => { },
   getWritingProfiles: async () => [], saveWritingProfile: async () => { }, deleteWritingProfile: async () => { },
-  getChats: async () => [], saveChat: async () => { }, deleteChat: async () => { }, getChatMessages: async () => [], saveMessage: async () => { }, deleteMessage: async () => { }, revertChatToMessage: async () => ({ success: true }), triggerManualSummarize: async () => { },
+  getChats: async () => [], saveChat: async () => { }, deleteChat: async () => { }, getChatMessages: async () => [], getChatMessagePage: async () => EMPTY_MESSAGE_PAGE, saveMessage: async () => { }, deleteMessage: async () => { }, revertChatToMessage: async () => ({ success: true }), triggerManualSummarize: async () => { },
   getWorkflows: async () => [], saveWorkflow: async () => { }, deleteWorkflow: async () => { },
   getVariables: async () => [], saveVariable: async () => { }, deleteVariable: async () => { },
   getSettings: async () => ({
@@ -61,6 +62,9 @@ export const AppProvider = ({ children }) => {
 
   const [activeChatId, setActiveChatId] = useState(null);
   const [activeMessages, setActiveMessages] = useState([]);
+  const [hasOlderMessages, setHasOlderMessages] = useState(false);
+  const [oldestMessageCursor, setOldestMessageCursor] = useState(null);
+  const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
   const [generationProgress, setGenerationProgress] = useState(null); // { step, totalSteps, profileName, status }
   const [isGenerating, setIsGenerating] = useState(false);
   const [showOverflowModal, setShowOverflowModal] = useState(false);
@@ -365,10 +369,55 @@ export const AppProvider = ({ children }) => {
     }
   };
 
+  const loadLatestChatMessages = async (chatId) => {
+    const page = await api.getChatMessagePage({ chatId });
+    setActiveMessages(page.messages);
+    setHasOlderMessages(page.hasMore);
+    setOldestMessageCursor(page.oldestCursor);
+    return page.messages;
+  };
+
+  const loadOlderChatMessages = async () => {
+    if (!activeChatId || !hasOlderMessages || !oldestMessageCursor || isLoadingOlderMessages) return;
+
+    setIsLoadingOlderMessages(true);
+    try {
+      const page = await api.getChatMessagePage({ chatId: activeChatId, before: oldestMessageCursor });
+      setActiveMessages(previous => [...page.messages, ...previous]);
+      setHasOlderMessages(page.hasMore);
+      setOldestMessageCursor(page.oldestCursor);
+    } finally {
+      setIsLoadingOlderMessages(false);
+    }
+  };
+
+  const jumpToChatStart = async () => {
+    if (!activeChatId || !hasOlderMessages || !oldestMessageCursor || isLoadingOlderMessages) return;
+
+    setIsLoadingOlderMessages(true);
+    try {
+      const olderMessages = [];
+      let cursor = oldestMessageCursor;
+      let hasMore = hasOlderMessages;
+
+      while (hasMore) {
+        const page = await api.getChatMessagePage({ chatId: activeChatId, before: cursor });
+        olderMessages.unshift(...page.messages);
+        cursor = page.oldestCursor;
+        hasMore = page.hasMore;
+      }
+
+      setActiveMessages(previous => [...olderMessages, ...previous]);
+      setHasOlderMessages(false);
+      setOldestMessageCursor(cursor);
+    } finally {
+      setIsLoadingOlderMessages(false);
+    }
+  };
+
   const handleSelectChat = async (chatId) => {
     setActiveChatId(chatId);
-    const msgs = await api.getChatMessages(chatId);
-    setActiveMessages(msgs);
+    await loadLatestChatMessages(chatId);
     setCurrentView('chat');
   };
 
@@ -386,6 +435,8 @@ export const AppProvider = ({ children }) => {
     if (activeChatId === id) {
       setActiveChatId(null);
       setActiveMessages([]);
+      setHasOlderMessages(false);
+      setOldestMessageCursor(null);
       setCurrentView('dashboard');
     }
   };
@@ -395,8 +446,7 @@ export const AppProvider = ({ children }) => {
     const updatedChats = await api.getChats();
     setChats(updatedChats);
     if (activeChatId === chat.id) {
-      const msgs = await api.getChatMessages(chat.id);
-      setActiveMessages(msgs);
+      await loadLatestChatMessages(chat.id);
     }
   };
 
@@ -407,8 +457,7 @@ export const AppProvider = ({ children }) => {
     setChats(updatedChats);
     const targetId = chatId || activeChatId;
     if (targetId) {
-      const msgs = await api.getChatMessages(targetId);
-      setActiveMessages(msgs);
+      await loadLatestChatMessages(targetId);
     }
   };
 
@@ -491,8 +540,7 @@ export const AppProvider = ({ children }) => {
       });
 
       if (response && response.success) {
-        const msgs = await api.getChatMessages(activeChatId);
-        setActiveMessages(msgs);
+        await loadLatestChatMessages(activeChatId);
         if (response.aiMsgId && !response.streamed) {
           setLastGeneratedMessageId(response.aiMsgId);
         }
@@ -543,7 +591,7 @@ export const AppProvider = ({ children }) => {
       });
 
       if (response && response.success) {
-        let msgs = await api.getChatMessages(activeChatId);
+        let msgs = await loadLatestChatMessages(activeChatId);
 
         // Merge old AI response as alternative in the new AI response
         if (oldAiMsgData && msgs.length > 0) {
@@ -582,11 +630,10 @@ export const AppProvider = ({ children }) => {
             });
             await api.saveMessage(newAiMsg);
 
-            msgs = await api.getChatMessages(activeChatId);
+            msgs = await loadLatestChatMessages(activeChatId);
           }
         }
 
-        setActiveMessages(msgs);
         if (response.aiMsgId && !response.streamed) {
           setLastGeneratedMessageId(response.aiMsgId);
         }
@@ -659,7 +706,7 @@ export const AppProvider = ({ children }) => {
           await api.deleteMessage(subMsg.id);
         }
 
-        let msgs = await api.getChatMessages(activeChatId);
+        let msgs = await loadLatestChatMessages(activeChatId);
 
         // Merge old AI response as alternative in the new AI response
         if (oldAiMsgData && msgs.length > 0) {
@@ -698,11 +745,9 @@ export const AppProvider = ({ children }) => {
             });
             await api.saveMessage(newAiMsg);
 
-            msgs = await api.getChatMessages(activeChatId);
+            msgs = await loadLatestChatMessages(activeChatId);
           }
         }
-
-        setActiveMessages(msgs);
 
         const updatedChats = await api.getChats();
         setChats(updatedChats);
@@ -811,7 +856,7 @@ export const AppProvider = ({ children }) => {
       uiFlags, dismissHint,
       whatsNewOpen, openWhatsNew, closeWhatsNew,
       activeChatId, activeChat,
-      activeMessages, setActiveMessages, handleSelectChat,
+      activeMessages, setActiveMessages, hasOlderMessages, isLoadingOlderMessages, loadOlderChatMessages, jumpToChatStart, handleSelectChat,
       handleCreateChat, handleDeleteChat, handleSaveChat, refreshChats,
       handleSaveProfile, handleDeleteProfile,
       handleSaveWorkflow, handleDeleteWorkflow,

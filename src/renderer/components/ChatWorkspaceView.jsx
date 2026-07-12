@@ -58,6 +58,86 @@ const parseMessageContent = (content) => {
   return { thinking: '', response: content };
 };
 
+const MessageMarkdown = React.memo(function MessageMarkdown({ content, className }) {
+  return (
+    <div
+      className={className}
+      dangerouslySetInnerHTML={{ __html: parseMarkdown(content) }}
+    />
+  );
+});
+
+function ChatInput({
+  canSend,
+  hasTargets,
+  isGenerating,
+  onCancel,
+  onSend,
+  pendingFileCount,
+  placeholder
+}) {
+  const [inputValue, setInputValue] = useState('');
+  const [isHoveringSend, setIsHoveringSend] = useState(false);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    if (!inputRef.current) return;
+    inputRef.current.style.height = 'auto';
+    inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 108)}px`;
+  }, [inputValue]);
+
+  const submit = () => {
+    if (onSend(inputValue)) setInputValue('');
+  };
+
+  const handleKeyDown = (event) => {
+    if (event.key === 'Enter' && !event.shiftKey && !isGenerating) {
+      event.preventDefault();
+      submit();
+    }
+  };
+
+  const isDisabled = (!isGenerating && !inputValue.trim() && pendingFileCount === 0) || !hasTargets || (!isGenerating && !canSend);
+
+  return (
+    <>
+      <textarea
+        ref={inputRef}
+        value={inputValue}
+        onChange={(event) => setInputValue(event.target.value)}
+        onKeyDown={handleKeyDown}
+        rows={1}
+        aria-label="Message"
+        placeholder={placeholder}
+        style={{ maxHeight: '120px', overflowY: 'auto' }}
+        className="order-2 flex-1 bg-transparent border-0 text-white text-xs px-3 py-2.5 focus:outline-none resize-none font-sans custom-scrollbar leading-relaxed"
+      />
+      <span data-tooltip={(!isGenerating && !canSend) ? 'This AI Profile needs setup: create an API profile in Settings, then link it in the Library.' : undefined} className="order-4 shrink-0">
+        <button
+          type="button"
+          aria-label={isGenerating ? 'Cancel generation' : 'Send message'}
+          onClick={isGenerating ? onCancel : submit}
+          disabled={isDisabled}
+          onMouseEnter={() => setIsHoveringSend(true)}
+          onMouseLeave={() => setIsHoveringSend(false)}
+          className={`shrink-0 w-9 h-9 rounded-full flex items-center justify-center shadow-md transition-all active:scale-95 cursor-pointer border ${isGenerating
+            ? isHoveringSend
+              ? 'bg-red-600 hover:bg-red-500 border-red-500/20 text-white hover:brightness-110'
+              : 'bg-accent/20 border-accent/40 text-accent cursor-wait'
+            : 'bg-accent border-accent text-[#011419] hover:brightness-110 disabled:opacity-50 disabled:pointer-events-none'
+            }`}
+        >
+          {isGenerating ? (
+            isHoveringSend ? <Square className="w-4 h-4 fill-current text-white" /> : <RotateCw className="w-4 h-4 animate-spin text-accent" />
+          ) : (
+            <Send className="w-4 h-4" />
+          )}
+        </button>
+      </span>
+    </>
+  );
+}
+
 const TypingText = ({ text, onComplete, onClick }) => {
   const [displayedText, setDisplayedText] = useState('');
 
@@ -108,6 +188,10 @@ export default function ChatWorkspaceView() {
   const {
     activeChat,
     activeMessages,
+    hasOlderMessages,
+    isLoadingOlderMessages,
+    loadOlderChatMessages,
+    jumpToChatStart,
     writingProfiles,
     workflows,
     handleSendMessage,
@@ -132,12 +216,9 @@ export default function ChatWorkspaceView() {
     showToast
   } = useApp();
 
-  const [inputValue, setInputValue] = useState('');
-  const [isHoveringSend, setIsHoveringSend] = useState(false);
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const [selectedTargetId, setSelectedTargetId] = useState(''); // Selected profile or workflow ID
 
-  const [expandedUserMessages, setExpandedUserMessages] = useState({});
   const [expandedThinking, setExpandedThinking] = useState({});
   const [expandedAgenticRag, setExpandedAgenticRag] = useState({});
   const [expandedStandardRag, setExpandedStandardRag] = useState({});
@@ -184,9 +265,12 @@ export default function ChatWorkspaceView() {
   };
 
   const messagesEndRef = useRef(null);
+  const messageContainerRef = useRef(null);
+  const previousScrollHeightRef = useRef(0);
+  const preserveScrollPositionRef = useRef(false);
+  const skipAutoScrollRef = useRef(false);
   const dropdownRef = useRef(null);
   const fileInputRef = useRef(null);
-  const inputRef = useRef(null);
 
   // Helper filters for message actions
   const userMessages = activeMessages.filter(m => m.role === 'user');
@@ -197,11 +281,6 @@ export default function ChatWorkspaceView() {
 
   const isLastUserMsg = (id) => lastUserMsg && lastUserMsg.id === id;
   const isLastAiMsg = (id) => lastAiMsg && lastAiMsg.id === id;
-
-  const needsExpansion = (text) => {
-    if (!text) return false;
-    return text.split('\n').length > 3 || text.length > 220;
-  };
 
   // Electron-first copy: navigator.clipboard.writeText is permission/focus-gated in
   // Electron and throws on programmatic copies (the RAG debug copy hit this). The
@@ -241,20 +320,34 @@ export default function ChatWorkspaceView() {
   const isImage = (name) => /\.(png|jpe?g|gif|webp)$/i.test(name);
   const isVideo = (name) => /\.(mp4|webm|ogg)$/i.test(name);
 
-  // Auto-grow input text area up to 5 lines
+  // Keep the reading position stable when older messages are prepended.
   useEffect(() => {
-    if (inputRef.current) {
-      inputRef.current.style.height = 'auto';
-      const maxLinesHeight = 5 * 20 + 8; // ~108px
-      const scrollHeight = inputRef.current.scrollHeight;
-      inputRef.current.style.height = `${Math.min(scrollHeight, maxLinesHeight)}px`;
+    if (preserveScrollPositionRef.current && messageContainerRef.current) {
+      const container = messageContainerRef.current;
+      container.scrollTop += container.scrollHeight - previousScrollHeightRef.current;
+      preserveScrollPositionRef.current = false;
+      return;
     }
-  }, [inputValue]);
-
-  // Auto-scroll to bottom of messages
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (skipAutoScrollRef.current) {
+      skipAutoScrollRef.current = false;
+      return;
+    }
+    messagesEndRef.current?.scrollIntoView({ behavior: isGenerating || streamingContent ? 'smooth' : 'auto' });
   }, [activeMessages, generationProgress, isGenerating, streamingContent]);
+
+  const handleLoadOlderMessages = async () => {
+    if (messageContainerRef.current) {
+      previousScrollHeightRef.current = messageContainerRef.current.scrollHeight;
+      preserveScrollPositionRef.current = true;
+    }
+    await loadOlderChatMessages();
+  };
+
+  const handleJumpToStart = async () => {
+    skipAutoScrollRef.current = true;
+    await jumpToChatStart();
+    requestAnimationFrame(() => messageContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' }));
+  };
 
   // Prevent default window drag/drop behavior to stop Electron from navigating/opening files
   useEffect(() => {
@@ -447,9 +540,9 @@ export default function ChatWorkspaceView() {
   const isWorkflowTarget = !!effectiveTarget && displayWorkflows.some(w => w.id === effectiveTarget.id);
   const canSend = !!effectiveTarget && (isWorkflowTarget || profileReady(effectiveTarget));
 
-  const handleSend = () => {
+  const handleSend = (inputValue) => {
     const text = inputValue.trim();
-    if (!text && pendingFiles.length === 0) return;
+    if (!text && pendingFiles.length === 0) return false;
 
     const attachedNames = pendingFiles.map(f => f.name);
     let finalContent = text;
@@ -470,7 +563,7 @@ export default function ChatWorkspaceView() {
         finalTargetId = allowedWorkflowsList[0].id;
       } else {
         // No active targets! Prevent sending.
-        return;
+        return false;
       }
     }
 
@@ -479,19 +572,12 @@ export default function ChatWorkspaceView() {
     const targetProfile = writingProfiles.find(p => p.id === finalTargetId);
     if (targetProfile && !profileReady(targetProfile)) {
       showToast('This AI Profile is not set up yet. Create an API profile in Settings, then link it to this profile in the Library.', 'error');
-      return;
+      return false;
     }
 
     handleSendMessage(finalContent, finalTargetId, pendingFiles);
-    setInputValue('');
     setPendingFiles([]);
-  };
-
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
+    return true;
   };
 
   const handleFileAttachment = (e) => {
@@ -519,9 +605,7 @@ export default function ChatWorkspaceView() {
   const handleRevertChat = async (messageId) => {
     try {
       await electronAPI.revertChatToMessage(activeChat.id, messageId);
-      const msgs = await electronAPI.getChatMessages(activeChat.id);
-      setActiveMessages(msgs);
-      refreshChats();
+      await refreshChats(activeChat.id);
     } catch (e) {
       console.error("Failed to revert chat:", e);
     }
@@ -733,9 +817,33 @@ export default function ChatWorkspaceView() {
           <>
             {/* Message Container Thread */}
             <div
+              ref={messageContainerRef}
               onClick={handleContainerClick}
               className="flex-1 overflow-y-auto pt-6 pb-28 px-12 md:px-24 xl:px-48 custom-scrollbar space-y-6"
             >
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {hasOlderMessages && (
+                  <button
+                    type="button"
+                    aria-label="Attach files"
+                    onClick={handleLoadOlderMessages}
+                    disabled={isLoadingOlderMessages}
+                    className="rounded-lg border border-gray-700 bg-[#0a161d] px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-gray-300 transition-colors hover:border-accent/50 hover:text-accent disabled:cursor-wait disabled:opacity-60"
+                  >
+                    {isLoadingOlderMessages ? 'Loading history...' : 'Show 50 previous messages'}
+                  </button>
+                )}
+                {hasOlderMessages && (
+                  <button
+                    type="button"
+                    onClick={handleJumpToStart}
+                    disabled={isLoadingOlderMessages}
+                    className="rounded-lg border border-gray-700 bg-[#0a161d] px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-gray-300 transition-colors hover:border-accent/50 hover:text-accent disabled:cursor-wait disabled:opacity-60"
+                  >
+                    Go to start
+                  </button>
+                )}
+              </div>
               {activeMessages.map((msg, index) => {
                 const isUser = msg.role === 'user';
                 const sizeClass = settings?.interface?.fontSize === 'small'
@@ -871,21 +979,7 @@ export default function ChatWorkspaceView() {
                                   </div>
                                 </div>
                               ) : (
-                                <div>
-                                  <div
-                                    className={`select-text text-left markdown-content leading-relaxed ${!expandedUserMessages[msg.id] && msg.content.split('\n').length > 3 ? 'line-clamp-3' : ''
-                                      }`}
-                                    dangerouslySetInnerHTML={{ __html: parseMarkdown(msg.content) }}
-                                  />
-                                  {msg.content.split('\n').length > 3 && (
-                                    <button
-                                      onClick={() => setExpandedUserMessages(prev => ({ ...prev, [msg.id]: !prev[msg.id] }))}
-                                      className="text-[10px] font-semibold text-accent hover:underline mt-2 block cursor-pointer select-none text-left"
-                                    >
-                                      {expandedUserMessages[msg.id] ? 'Show Less' : 'Show More'}
-                                    </button>
-                                  )}
-                                </div>
+                                <MessageMarkdown content={msg.content} className="select-text text-left markdown-content leading-relaxed" />
                               )}
                             </div>
                           )}
@@ -1154,10 +1248,7 @@ export default function ChatWorkspaceView() {
                                         onClick={() => setLastGeneratedMessageId(null)}
                                       />
                                     ) : (
-                                      <div
-                                        className="leading-relaxed select-text markdown-content"
-                                        dangerouslySetInnerHTML={{ __html: parseMarkdown(response) }}
-                                      />
+                                      <MessageMarkdown content={response} className="leading-relaxed select-text markdown-content" />
                                     )}
                                   </>
                                 )}
@@ -1354,7 +1445,7 @@ export default function ChatWorkspaceView() {
 
               <div className="bg-[#051116] border border-gray-800/80 rounded-2xl flex flex-col px-2 py-2 shadow-lg shadow-black/20 focus-within:border-accent/50 transition-colors relative z-20">
 
-                <div className="flex items-end w-full">
+                <div className="flex items-center w-full">
                   {/* File attachment upload trigger */}
                   <input
                     type="file"
@@ -1366,29 +1457,14 @@ export default function ChatWorkspaceView() {
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="p-2 mb-0.5 rounded-full hover:bg-white/5 text-gray-500 hover:text-white transition-colors cursor-pointer"
+                    className="order-1 p-2 rounded-full hover:bg-white/5 text-gray-500 hover:text-white transition-colors cursor-pointer"
                     title="Attach Files"
                   >
                     <Paperclip className="w-4 h-4" />
                   </button>
 
-                  {/* Chat Input Text Area */}
-                  <textarea
-                    ref={inputRef}
-                    value={inputValue}
-                    onChange={(e) => setInputValue(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    rows={1}
-                    placeholder={activeMessages && activeMessages.length > 0 ? "Write a message..." : "Write a message or drag and drop files..."}
-                    style={{
-                      maxHeight: '120px',
-                      overflowY: 'auto'
-                    }}
-                    className="flex-1 bg-transparent border-0 text-white text-xs px-3 py-2.5 focus:outline-none resize-none font-sans custom-scrollbar leading-relaxed"
-                  />
-
                   {/* Ingestion Profile Choices Dropdown */}
-                  <div className="relative mb-0.5 mr-2" ref={dropdownRef}>
+                  <div className="relative order-3 mr-2" ref={dropdownRef}>
                     <button
                       type="button"
                       onClick={() => setProfileDropdownOpen(!profileDropdownOpen)}
@@ -1496,33 +1572,16 @@ export default function ChatWorkspaceView() {
                     </Popover>
                   </div>
 
-                  {/* Execution submit button. Wrapper carries the tooltip so it still shows
-                      when the button is disabled for lack of a configured AI Profile. */}
-                  <span data-tooltip={(!isGenerating && !canSend) ? 'This AI Profile needs setup: create an API profile in Settings, then link it in the Library.' : undefined} className="shrink-0">
-                  <button
-                    type="button"
-                    onClick={isGenerating ? handleCancelGeneration : handleSend}
-                    disabled={(!isGenerating && !inputValue.trim() && pendingFiles.length === 0) || (displayProfiles.length === 0 && displayWorkflows.length === 0) || (!isGenerating && !canSend)}
-                    onMouseEnter={() => setIsHoveringSend(true)}
-                    onMouseLeave={() => setIsHoveringSend(false)}
-                    className={`shrink-0 w-9 h-9 mb-0.5 rounded-full flex items-center justify-center shadow-md transition-all active:scale-95 cursor-pointer border ${isGenerating
-                      ? isHoveringSend
-                        ? 'bg-red-600 hover:bg-red-500 border-red-500/20 text-white hover:brightness-110'
-                        : 'bg-accent/20 border-accent/40 text-accent cursor-wait'
-                      : 'bg-accent border-accent text-[#011419] hover:brightness-110 disabled:opacity-50 disabled:pointer-events-none'
-                      }`}
-                  >
-                    {isGenerating ? (
-                      isHoveringSend ? (
-                        <Square className="w-4 h-4 fill-current text-white" />
-                      ) : (
-                        <RotateCw className="w-4 h-4 animate-spin text-accent" />
-                      )
-                    ) : (
-                      <Send className="w-4 h-4" />
-                    )}
-                  </button>
-                  </span>
+                  <ChatInput
+                    canSend={canSend}
+                    hasTargets={displayProfiles.length > 0 || displayWorkflows.length > 0}
+                    isGenerating={isGenerating}
+                    onCancel={handleCancelGeneration}
+                    onSend={handleSend}
+                    pendingFileCount={pendingFiles.length}
+                    placeholder={activeMessages.length > 0 ? "Write a message..." : "Write a message or drag and drop files..."}
+                  />
+
                 </div>
 
               </div>
@@ -1653,8 +1712,7 @@ export default function ChatWorkspaceView() {
               setConfirmDeleteData(null);
               if (isDeleteMsg) {
                 await electronAPI.deleteMessage(msgId, shouldDeleteFiles);
-                setActiveMessages(prev => prev.filter(m => m.id !== msgId));
-                refreshChats();
+                await refreshChats(activeChat.id);
               } else {
                 await handleRevertChat(msgId);
               }
