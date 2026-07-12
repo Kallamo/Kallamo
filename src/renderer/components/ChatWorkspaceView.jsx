@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { ArrowLeft, Sliders, Paperclip, Cpu, Workflow, X, MoreVertical, Copy, Edit, RotateCw, Play, ChevronDown, Plus, ChevronLeft, ChevronRight, Brain, Folder, MessageSquare, Trash2, RotateCcw, PenTool, Globe, AlertTriangle } from 'lucide-react';
 import ConfigurationView from './ConfigurationView';
@@ -124,6 +124,11 @@ export default function ChatWorkspaceView() {
   const skipAutoScrollRef = useRef(false);
   const dropdownRef = useRef(null);
   const fileInputRef = useRef(null);
+
+  useLayoutEffect(() => {
+    if (activeSubView !== 'chat' || !messageContainerRef.current) return;
+    messageContainerRef.current.scrollTop = messageContainerRef.current.scrollHeight;
+  }, [activeSubView]);
 
   // Helper filters for message actions
   const userMessages = activeMessages.filter(m => m.role === 'user');
