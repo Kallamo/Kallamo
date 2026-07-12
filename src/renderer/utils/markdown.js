@@ -177,19 +177,19 @@ export function parseMarkdown(text, lineNumbersEnabled = false) {
             }
         }
 
-        if (trimmedBlock.startsWith('### ')) {
+        const headingMatch = /^(#{1,6})\s+(.+)$/.exec(trimmedBlock);
+        if (headingMatch) {
             closeListIfNeeded();
-            htmlResult.push(`<h3 class="text-sm font-bold text-accent uppercase tracking-wider mt-5 mb-2">${parseInlineMarkdown(trimmedBlock.substring(4))}</h3>`);
-            return;
-        }
-        if (trimmedBlock.startsWith('## ')) {
-            closeListIfNeeded();
-            htmlResult.push(`<h2 class="text-base font-bold text-white border-b border-gray-800 pb-1 mt-6 mb-2">${parseInlineMarkdown(trimmedBlock.substring(3))}</h2>`);
-            return;
-        }
-        if (trimmedBlock.startsWith('# ')) {
-            closeListIfNeeded();
-            htmlResult.push(`<h1 class="text-lg font-bold text-white border-b border-gray-800 pb-2 mt-6 mb-3">${parseInlineMarkdown(trimmedBlock.substring(2))}</h1>`);
+            const level = headingMatch[1].length;
+            const headingClasses = {
+                1: 'text-lg font-bold text-white border-b border-gray-800 pb-2 mt-6 mb-3',
+                2: 'text-base font-bold text-white border-b border-gray-800 pb-1 mt-6 mb-2',
+                3: 'text-sm font-bold text-accent uppercase tracking-wider mt-5 mb-2',
+                4: 'text-sm font-bold text-accent mt-4 mb-2',
+                5: 'text-sm font-semibold text-gray-200 mt-4 mb-2',
+                6: 'text-xs font-semibold text-gray-300 uppercase tracking-wider mt-3 mb-1'
+            };
+            htmlResult.push(`<h${level} class="${headingClasses[level]}">${parseInlineMarkdown(headingMatch[2])}</h${level}>`);
             return;
         }
 

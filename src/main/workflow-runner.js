@@ -298,6 +298,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
         let currentInput = messageContent;
         let finalOutput = '';
         let lastProfileUsed = null;
+        let didStreamFinalResponse = false;
 
         let lastAgenticRagResponse = '';
         let lastAgenticRagContextGathered = '';
@@ -638,13 +639,18 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                     // Only the final, user-facing generation streams; intermediate
                     // workflow steps are plumbing and stay non-streaming.
                     if ((i === steps.length - 1) && isStreamingEnabled()) {
-                        stepOutput = await sendApiRequestStream(genParams, (delta) => {
-                            webContents.send('stream:token', {
-                                chatId,
-                                contentDelta: delta.contentDelta || '',
-                                reasoningDelta: delta.reasoningDelta || ''
+                        stepOutput = await sendApiRequestStream(
+                            genParams,
+                            (delta) => {
+                                webContents.send('stream:token', {
+                                    chatId,
+                                    contentDelta: delta.contentDelta || '',
+                                    reasoningDelta: delta.reasoningDelta || ''
+                                });
+                            },
+                            () => {
+                                didStreamFinalResponse = true;
                             });
-                        });
                         if (currentRun.isCancelled) {
                             return { success: false, cancelled: true };
                         }
@@ -773,7 +779,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                 console.error("[Auto-Summarize] error:", e);
             });
 
-            return { success: true, aiMsgId };
+            return { success: true, aiMsgId, streamed: didStreamFinalResponse };
         }
 
         return { success: true };

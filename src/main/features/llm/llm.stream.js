@@ -9,13 +9,11 @@ const STREAM_UNSUPPORTED = new Set(['aws bedrock']);
 // is accumulated here and returned in the same canonical shape sendApiRequest
 // produces, so the saved artifact is identical whether or not streaming was used.
 // On abort mid-stream the partial text collected so far is returned, not lost.
-async function sendApiRequestStream(params, onDelta) {
+async function sendApiRequestStream(params, onDelta, onStreamStart) {
     const { endpoint, requestHeaders, requestBodyPayload, provider } = await buildRequest({ ...params, stream: true });
 
     if (STREAM_UNSUPPORTED.has(provider)) {
-        const text = await sendApiRequest(params);
-        if (onDelta) onDelta({ contentDelta: text, reasoningDelta: '' });
-        return text;
+        return sendApiRequest(params);
     }
 
     let content = '';
@@ -65,6 +63,7 @@ async function sendApiRequestStream(params, onDelta) {
                 if (contentDelta) content += contentDelta;
                 if (reasoningDelta) reasoning += reasoningDelta;
                 if ((contentDelta || reasoningDelta) && onDelta) {
+                    onStreamStart?.();
                     onDelta({ contentDelta, reasoningDelta });
                 }
             }
