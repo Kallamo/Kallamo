@@ -477,6 +477,14 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_entity_links_from ON entity_links(fromId, relType);
   CREATE INDEX IF NOT EXISTS idx_entity_links_to ON entity_links(toId, relType);
 
+  CREATE TABLE IF NOT EXISTS workspace_ui_state (
+    workspaceId TEXT NOT NULL,
+    scope       TEXT NOT NULL,
+    valueJson   TEXT NOT NULL,
+    updatedAt   INTEGER NOT NULL,
+    PRIMARY KEY (workspaceId, scope)
+  );
+
   -- Drop an entity's edges (both directions) when it is deleted.
   CREATE TRIGGER IF NOT EXISTS trg_entity_links_gc
   AFTER DELETE ON entities

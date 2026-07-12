@@ -2602,6 +2602,32 @@ ipcMain.handle('set-chunk-tags', async (event, { chunkId, keywords = [], entitie
 
 // --- WORLDBUILD: per-workspace entity registry + relations ---
 
+ipcMain.handle('get-workspace-ui-state', async (event, { workspaceId, scope } = {}) => {
+  try {
+    if (!workspaceId || !scope) return { success: false, error: 'workspaceId and scope are required' };
+    const row = db.prepare('SELECT valueJson FROM workspace_ui_state WHERE workspaceId = ? AND scope = ?').get(workspaceId, scope);
+    return { success: true, value: row ? JSON.parse(row.valueJson) : null };
+  } catch (e) {
+    console.error('[get-workspace-ui-state] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('set-workspace-ui-state', async (event, { workspaceId, scope, value } = {}) => {
+  try {
+    if (!workspaceId || !scope) return { success: false, error: 'workspaceId and scope are required' };
+    db.prepare(`
+      INSERT INTO workspace_ui_state (workspaceId, scope, valueJson, updatedAt)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(workspaceId, scope) DO UPDATE SET valueJson = excluded.valueJson, updatedAt = excluded.updatedAt
+    `).run(workspaceId, scope, JSON.stringify(value || {}), Date.now());
+    return { success: true };
+  } catch (e) {
+    console.error('[set-workspace-ui-state] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
 ipcMain.handle('list-entities', async (event, { workspaceId, type } = {}) => {
   try {
     return { success: true, entities: entitiesStore.listEntities({ workspaceId, type: type || null }) };
@@ -3252,6 +3278,15 @@ ipcMain.handle('get-chat-messages', async (event, chatId) => {
   } catch (e) {
     console.error("Error loading chat messages:", e);
     return [];
+  }
+});
+
+ipcMain.handle('list-entity-links', async (event, { workspaceId, relType } = {}) => {
+  try {
+    return { success: true, links: entitiesStore.listLinks({ workspaceId, relType: relType || null }) };
+  } catch (e) {
+    console.error('[list-entity-links] failed:', e);
+    return { success: false, error: e.message, links: [] };
   }
 });
 

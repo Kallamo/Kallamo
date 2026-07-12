@@ -327,6 +327,15 @@ function getLinksTo(toId, relType = null) {
   return rows.map(r => ({ linkId: r.linkId, relType: r.relType, label: r.label || null, entity: summary(r) }));
 }
 
+function listLinks({ workspaceId, relType = null } = {}) {
+  const sql = `
+    SELECT id, fromId, relType, toId, label
+    FROM entity_links
+    WHERE workspaceId IS ?${relType ? ' AND relType = ?' : ''}
+  `;
+  return (relType ? db.prepare(sql).all(workspaceId || null, relType) : db.prepare(sql).all(workspaceId || null));
+}
+
 // Add a directed edge. `single` first clears any existing edge of (fromId, relType),
 // enforcing one-to-one relations (owner, race, parent location…). A null toId just
 // clears (used to unset a single-value relation).
@@ -434,6 +443,7 @@ module.exports = {
   linkedLoreDocIds,
   getLinksFrom,
   getLinksTo,
+  listLinks,
   setLink,
   removeLink,
   updateLinkLabel,

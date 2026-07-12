@@ -3,13 +3,14 @@ import { createPortal } from 'react-dom';
 import {
   Plus, Search, BookOpen, MapPin, Package, Users, Flag, User,
   Sparkles, Trash2, Save, X, Pencil, Check, Link2, Globe, Tag, ScrollText, Ghost, Info, Replace,
-  Lock, ShieldCheck, RefreshCw, Upload, Download, CalendarClock,
+  Lock, ShieldCheck, RefreshCw, Upload, Download, CalendarClock, ChevronRight, ChevronsLeftRight,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import Button from './ui/Button';
 import Popover from './ui/Popover';
 import ConfirmDialog from './ui/ConfirmDialog';
 import ExportWorldbuildModal from './modals/ExportWorldbuildModal';
+import { buildLocationTree } from '../features/worldbuild/locationTree';
 
 // Each entity type carries its own personality: a friendly label, an icon, and a
 // tonal palette (static classes so Tailwind keeps them) used for its medallion and
@@ -25,6 +26,10 @@ const TYPES = {
   Events:     { label: 'Event',            icon: CalendarClock, medallion: 'bg-orange-400/15 text-orange-200 border-orange-400/30', ring: 'border-orange-400/25', soft: 'text-orange-300' },
 };
 const TYPE_ORDER = ['Characters', 'Locations', 'Factions', 'Items', 'Races', 'Creatures', 'Events', 'System'];
+const WORLDBUILD_NAVIGATION_SCOPE = 'worldbuild-navigation';
+const MIN_SIDEBAR_WIDTH = 320;
+const MAX_SIDEBAR_WIDTH = 448;
+const MIN_DETAIL_WIDTH = 672;
 const meta = (t) => TYPES[t] || { label: t, icon: Globe, medallion: 'bg-white/10 text-gray-300 border-white/20', ring: 'border-white/15', soft: 'text-gray-300' };
 const ITEM_TYPES = ['Weapon', 'Armor', 'Artifact', 'Resource'];
 
@@ -369,6 +374,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const workspaceId = chat?.id;
 
   const [entities, setEntities] = useState([]);
+  const [insideLinks, setInsideLinks] = useState([]);
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -385,8 +391,18 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const [mergePrompt, setMergePrompt] = useState(null); // { id, name } while choosing merge priority
   const [showExportModal, setShowExportModal] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [expandedLocations, setExpandedLocations] = useState({});
+  const [restoredEntityId, setRestoredEntityId] = useState(null);
+  const [navigationStateReady, setNavigationStateReady] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(MIN_SIDEBAR_WIDTH);
 
   const isNew = !selected?.id;
+  const clampSidebarWidth = (width) => Math.max(MIN_SIDEBAR_WIDTH, Math.min(MAX_SIDEBAR_WIDTH, window.innerWidth - MIN_DETAIL_WIDTH, width));
+  useEffect(() => {
+    const clampOnResize = () => setSidebarWidth((width) => clampSidebarWidth(width));
+    window.addEventListener('resize', clampOnResize);
+    return () => window.removeEventListener('resize', clampOnResize);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const docTitle = (id) => documents.find(d => d.id === id)?.title;
 
   const byType = useMemo(() => {
@@ -397,13 +413,42 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
 
   const load = useCallback(async () => {
     if (!workspaceId) return;
-    try { const res = await electronAPI.listEntities(workspaceId); setEntities(res?.entities || []); }
-    catch { setEntities([]); }
+    try {
+      const [entityRes, linkRes] = await Promise.all([
+        electronAPI.listEntities(workspaceId),
+        electronAPI.listEntityLinks(workspaceId, 'inside'),
+      ]);
+      setEntities(entityRes?.entities || []);
+      setInsideLinks(linkRes?.links || []);
+    } catch { setEntities([]); setInsideLinks([]); }
     finally { setLoading(false); }
   }, [workspaceId, electronAPI]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    setLoading(true);
+    setSelected(null);
+    setRel({});
+    load();
+  }, [load]);
   useEffect(() => { electronAPI.getWritingTree(workspaceId).then(t => setDocuments(t?.documents || [])).catch(() => setDocuments([])); }, [workspaceId, electronAPI]);
+  useEffect(() => {
+    let cancelled = false;
+    setNavigationStateReady(false);
+    setRestoredEntityId(null);
+    setExpandedLocations({});
+    if (!workspaceId) return undefined;
+    electronAPI.getWorkspaceUiState(workspaceId, WORLDBUILD_NAVIGATION_SCOPE)
+      .then((res) => {
+        if (cancelled) return;
+        const state = res?.value || {};
+        setExpandedLocations(state.expandedLocations || {});
+        setRestoredEntityId(state.selectedEntityId || null);
+        setSidebarWidth(clampSidebarWidth(Number(state.sidebarWidth) || MIN_SIDEBAR_WIDTH));
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setNavigationStateReady(true); });
+    return () => { cancelled = true; };
+  }, [workspaceId, electronAPI]);
 
   const loadRelations = useCallback(async (ent) => {
     if (!ent?.id) { setRel({}); return; }
@@ -434,6 +479,19 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     if (en) openEntity(en);
     onFocusHandled?.();
   }, [focusEntityId, entities]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!navigationStateReady || focusEntityId || selected || !restoredEntityId) return;
+    const en = entities.find(e => e.id === restoredEntityId);
+    if (en) openEntity(en);
+  }, [navigationStateReady, focusEntityId, selected, restoredEntityId, entities]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!navigationStateReady || !workspaceId) return;
+    electronAPI.setWorkspaceUiState(workspaceId, WORLDBUILD_NAVIGATION_SCOPE, {
+      expandedLocations,
+      selectedEntityId: selected?.id || null,
+      sidebarWidth,
+    }).catch(() => {});
+  }, [navigationStateReady, workspaceId, expandedLocations, selected?.id, sidebarWidth, electronAPI]);
   const startNew = (type) => { setShowCreate(false); setEditingSection(null); setCharTab('data'); setSelected(draftFor(type)); setRel({}); };
   const patch = (f) => setSelected(p => ({ ...p, ...f }));
   const patchData = (f) => setSelected(p => ({ ...p, data: { ...p.data, ...f } }));
@@ -621,6 +679,22 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     const list = entities.filter(en => (!filterType || en.type === filterType) && (!q || [en.canonicalName, ...(en.aliases || [])].join(' ').toLowerCase().includes(q)));
     return list.sort((a, b) => (TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type)) || a.canonicalName.localeCompare(b.canonicalName));
   }, [entities, search, filterType]);
+  const locationTree = useMemo(() => buildLocationTree(entities, insideLinks), [entities, insideLinks]);
+  const useLocationTree = !search.trim() && (!filterType || filterType === 'Locations');
+  const toggleLocation = (id) => setExpandedLocations(current => ({ ...current, [id]: current[id] === false }));
+  const updateSidebarWidth = (width) => setSidebarWidth(clampSidebarWidth(width));
+  const startSidebarResize = (event) => {
+    event.preventDefault();
+    const move = (moveEvent) => updateSidebarWidth(moveEvent.clientX);
+    const stop = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stop, { once: true });
+  };
+  const handleSidebarResizeKey = (event) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    updateSidebarWidth(sidebarWidth + (event.key === 'ArrowRight' ? 16 : -16));
+  };
   const proposedCount = useMemo(() => entities.filter(e => e.status === 'proposed').length, [entities]);
   const exportableCount = useMemo(() => entities.filter(e => e.status !== 'proposed').length, [entities]);
 
@@ -838,6 +912,64 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const nameLabel = selected?.type === 'System' ? 'Title' : 'Name';
   const showAliases = selected?.type !== 'System';
 
+  const renderEntityButton = (en) => {
+    const t = meta(en.type);
+    const Icon = t.icon;
+    const active = selected?.id === en.id;
+    return (
+      <button key={en.id} onClick={() => openEntity(en)} className={`w-full text-left px-2.5 py-2 rounded-lg flex items-center gap-2.5 transition-colors cursor-pointer group ${active ? 'bg-accent/15' : 'hover:bg-white/5'}`}>
+        <span className={`w-7 h-7 rounded-md border flex items-center justify-center shrink-0 ${t.medallion}`}><Icon className="w-3.5 h-3.5" /></span>
+        <span className={`flex-1 min-w-0 truncate text-sm font-medium ${active ? 'text-accent' : 'text-gray-200'}`}>{en.canonicalName}</span>
+        {en.status === 'proposed' && <Sparkles className="w-3.5 h-3.5 text-amber-300 shrink-0" data-tooltip="AI proposal, needs accept" />}
+        {en.status !== 'proposed' && en.data?._enrichPending && <ShieldCheck className="w-3.5 h-3.5 text-sky-300 shrink-0" data-tooltip="AI updates awaiting review" />}
+      </button>
+    );
+  };
+
+  const renderLocationNode = (node, isNested = false, isLast = false) => {
+    const { entity, children } = node;
+    const hasChildren = children.length > 0;
+    const isExpanded = expandedLocations[entity.id] !== false;
+    const t = meta(entity.type);
+    const Icon = t.icon;
+    const active = selected?.id === entity.id;
+    return (
+      <div key={entity.id} className={`relative ${isNested ? 'pl-4' : ''}`}>
+        {isNested && (isLast
+          ? <span className="absolute left-0 top-0 h-5 w-4 rounded-bl-sm border-b border-l border-emerald-300/25" />
+          : <>
+              <span className="absolute left-0 top-0 bottom-0 border-l border-emerald-300/25" />
+              <span className="absolute left-0 top-5 w-4 border-t border-emerald-300/25" />
+            </>)}
+        <div className="relative">
+            <button onClick={() => openEntity(entity)} className={`w-full text-left px-2.5 py-2 rounded-lg flex items-center gap-2.5 transition-colors cursor-pointer group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent ${hasChildren ? 'pr-9' : ''} ${active ? 'bg-accent/15' : 'hover:bg-white/5'}`}>
+              <span className={`w-7 h-7 rounded-md border flex items-center justify-center shrink-0 ${t.medallion}`}><Icon className="w-3.5 h-3.5" /></span>
+              <span className={`flex-1 min-w-0 truncate text-sm font-medium ${active ? 'text-accent' : 'text-gray-200'}`}>{entity.canonicalName}</span>
+              {entity.status === 'proposed' && <Sparkles className="w-3.5 h-3.5 text-amber-300 shrink-0" data-tooltip="AI proposal, needs accept" />}
+              {entity.status !== 'proposed' && entity.data?._enrichPending && <ShieldCheck className="w-3.5 h-3.5 text-sky-300 shrink-0" data-tooltip="AI updates awaiting review" />}
+            </button>
+            {hasChildren && <button type="button" onClick={() => toggleLocation(entity.id)} aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${entity.canonicalName}`} className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-gray-200 hover:bg-white/5 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent">
+              <ChevronRight className={`w-3.5 h-3.5 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+            </button>}
+        </div>
+        {hasChildren && isExpanded && (
+          <div className="relative ml-4 py-0.5">
+            {children.map((child, index) => renderLocationNode(child, true, index === children.length - 1))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderSidebarEntities = () => {
+    if (!useLocationTree) return filtered.map(renderEntityButton);
+    if (filterType === 'Locations') return locationTree.map(node => renderLocationNode(node));
+    return TYPE_ORDER.flatMap((type) => {
+      if (type === 'Locations') return locationTree.map(node => renderLocationNode(node));
+      return entities.filter(en => en.type === type).sort((a, b) => a.canonicalName.localeCompare(b.canonicalName)).map(renderEntityButton);
+    });
+  };
+
   const renderSection = (s) => {
     const editing = editingSection === s.key;
     return (
@@ -862,7 +994,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   };
 
   return (
-    <div className="flex-1 flex flex-col md:flex-row h-full overflow-hidden bg-[#000508]/40 select-none relative">
+    <div className="flex-1 flex flex-col lg:flex-row h-full overflow-hidden bg-[#000508]/40 select-none relative">
       {showExportModal && createPortal(
         <ExportWorldbuildModal
           entityCount={exportableCount}
@@ -895,7 +1027,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
         </div>
       )}
       {/* Sidebar */}
-      <div className="w-full md:w-72 shrink-0 flex flex-col h-full overflow-hidden border-r border-gray-800/40 bg-[#011419]/25 backdrop-blur-md">
+      <div style={{ '--worldbuild-sidebar-width': `${sidebarWidth}px` }} className="relative w-full lg:w-[var(--worldbuild-sidebar-width)] shrink-0 flex flex-col h-full overflow-visible border-r border-gray-800/40 bg-[#011419]/25 backdrop-blur-md">
+        <button type="button" aria-label="Resize Worldbuild sidebar" onPointerDown={startSidebarResize} onKeyDown={handleSidebarResizeKey} className="hidden lg:flex absolute -right-4 top-3 z-20 w-8 h-8 items-center justify-center rounded-full border border-white/20 bg-[#071720] text-white shadow-lg cursor-col-resize transition-colors hover:border-accent hover:text-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent">
+          <ChevronsLeftRight className="w-4 h-4" />
+        </button>
         <div className="px-3 py-3 border-b border-gray-800/80 bg-[#011419]/35 flex items-center justify-between">
           <div className="flex items-center gap-2"><Globe className="w-4 h-4 text-accent" /><span className="text-sm font-bold text-white tracking-wide">Worldbuild</span></div>
           {proposedCount > 0 && <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-300 bg-amber-400/10 border border-amber-400/30 rounded-full px-2 py-0.5"><Sparkles className="w-3 h-3" />{proposedCount}</span>}
@@ -949,14 +1084,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
         <div className="flex-1 overflow-y-auto custom-scrollbar px-2 pb-2 space-y-0.5">
           {loading ? <p className="caption text-center py-8">Loading...</p>
             : filtered.length === 0 ? <p className="caption text-center py-8">Nothing here yet.</p>
-            : filtered.map(en => { const t = meta(en.type); const Icon = t.icon; const active = selected?.id === en.id; return (
-              <button key={en.id} onClick={() => openEntity(en)} className={`w-full text-left px-2.5 py-2 rounded-lg flex items-center gap-2.5 transition-colors cursor-pointer group ${active ? 'bg-accent/15' : 'hover:bg-white/5'}`}>
-                <span className={`w-7 h-7 rounded-md border flex items-center justify-center shrink-0 ${t.medallion}`}><Icon className="w-3.5 h-3.5" /></span>
-                <span className={`flex-1 min-w-0 truncate text-sm font-medium ${active ? 'text-accent' : 'text-gray-200'}`}>{en.canonicalName}</span>
-                {en.status === 'proposed' && <Sparkles className="w-3.5 h-3.5 text-amber-300 shrink-0" data-tooltip="AI proposal, needs accept" />}
-                {en.status !== 'proposed' && en.data?._enrichPending && <ShieldCheck className="w-3.5 h-3.5 text-sky-300 shrink-0" data-tooltip="AI updates awaiting review" />}
-              </button>
-            ); })}
+            : renderSidebarEntities()}
         </div>
       </div>
 

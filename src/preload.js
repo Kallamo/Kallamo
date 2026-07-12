@@ -85,6 +85,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.off('vectorize-document-progress', listener);
   },
   listEntities: (workspaceId, type) => ipcRenderer.invoke('list-entities', { workspaceId, type }),
+  listEntityLinks: (workspaceId, relType) => ipcRenderer.invoke('list-entity-links', { workspaceId, relType }),
+  getWorkspaceUiState: (workspaceId, scope) => ipcRenderer.invoke('get-workspace-ui-state', { workspaceId, scope }),
+  setWorkspaceUiState: (workspaceId, scope, value) => ipcRenderer.invoke('set-workspace-ui-state', { workspaceId, scope, value }),
   getEntity: (id) => ipcRenderer.invoke('get-entity', { id }),
   createEntity: (payload) => ipcRenderer.invoke('create-entity', payload),
   resolveEntityByName: (workspaceId, name) => ipcRenderer.invoke('resolve-entity-by-name', { workspaceId, name }),
