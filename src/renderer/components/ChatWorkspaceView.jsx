@@ -95,6 +95,7 @@ export default function ChatWorkspaceView() {
 
   const [summarizeModalOpen, setSummarizeModalOpen] = useState(false);
   const [isVectorizing, setIsVectorizing] = useState(false);
+  const [archiveMessages, setArchiveMessages] = useState([]);
 
   const [activeSubView, setActiveSubView] = useState('chat'); // 'chat' | 'memory' | 'files'
   const [worldbuildFocusId, setWorldbuildFocusId] = useState(null); // entity to focus when opening Worldbuild from the text
@@ -207,6 +208,27 @@ export default function ChatWorkspaceView() {
     requestAnimationFrame(() => messageContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' }));
   };
 
+  // The chat viewport is paginated for rendering only. Memory calculations and
+  // archiving must always use the complete persisted history.
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!activeChat?.id) {
+      setArchiveMessages([]);
+      return undefined;
+    }
+
+    const loadArchiveMessages = async () => {
+      const messages = await electronAPI.getChatMessages(activeChat.id);
+      if (!cancelled) setArchiveMessages(messages);
+    };
+
+    loadArchiveMessages();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeChat?.id, activeMessages, electronAPI]);
+
   // Prevent default window drag/drop behavior to stop Electron from navigating/opening files
   useEffect(() => {
     const preventDefault = (e) => {
@@ -237,10 +259,10 @@ export default function ChatWorkspaceView() {
 
   // Token threshold auto-trigger monitor (runs on frontend when token usage is exceeded)
   useEffect(() => {
-    if (activeChat && activeChat.autoSummarize === 1 && activeMessages.length > 0 && !summarizeModalOpen) {
+    if (activeChat && activeChat.autoSummarize === 1 && archiveMessages.length > 0 && !summarizeModalOpen) {
       const archiveThreshold = activeChat.archiveThreshold || 60000;
       const startIndex = activeChat.summarizedIndex || 0;
-      const activeMsgs = activeMessages.slice(startIndex);
+      const activeMsgs = archiveMessages.slice(startIndex);
 
       let tokensUsed = 0;
       const estimateTokens = (str) => Math.ceil((str || '').length / 4);
@@ -251,7 +273,7 @@ export default function ChatWorkspaceView() {
         setSummarizeModalOpen(true);
       }
     }
-  }, [activeMessages, activeChat, summarizeModalOpen]);
+  }, [archiveMessages, activeChat, summarizeModalOpen]);
 
   const handleExecuteSummarization = async ({ selectedMessages, newSummarizedIndex, customTitle }) => {
     if (selectedMessages.length === 0) {
@@ -513,7 +535,7 @@ export default function ChatWorkspaceView() {
   const ctxThreshold = activeChat.archiveThreshold || 60000;
   const ctxStartIndex = activeChat.summarizedIndex || 0;
   let ctxTokens = 0;
-  activeMessages.slice(ctxStartIndex).forEach(m => { ctxTokens += Math.ceil((m.content || '').length / 4); });
+  archiveMessages.slice(ctxStartIndex).forEach(m => { ctxTokens += Math.ceil((m.content || '').length / 4); });
   const ctxPercentage = Math.min((ctxTokens / ctxThreshold) * 100, 100);
 
   const generatingBubbleStyle = isDocumentMode ? {
@@ -1526,7 +1548,7 @@ export default function ChatWorkspaceView() {
       <SummarizeModal
         isOpen={summarizeModalOpen}
         onClose={() => setSummarizeModalOpen(false)}
-        messages={activeMessages}
+        messages={archiveMessages}
         currentSummarizedIndex={activeChat.summarizedIndex || 0}
         memoryBlocksCount={activeChat.memoryBlocks ? (typeof activeChat.memoryBlocks === 'string' ? JSON.parse(activeChat.memoryBlocks) : activeChat.memoryBlocks).length : 0}
         onConfirm={handleExecuteSummarization}

@@ -51,6 +51,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
   const [autoSummarize, setAutoSummarize] = useState(false);
   const [showContextBar, setShowContextBar] = useState(false);
   const [memoryBlocks, setMemoryBlocks] = useState([]);
+  const [archiveMessages, setArchiveMessages] = useState([]);
 
   const [activeSection, setActiveSection] = useState('agents');
 
@@ -69,6 +70,25 @@ export default function ConfigurationView({ onTriggerSummarize }) {
       setMemoryBlocks(activeChat.memoryBlocks ? (typeof activeChat.memoryBlocks === 'string' ? JSON.parse(activeChat.memoryBlocks) : activeChat.memoryBlocks) : []);
     }
   }, [activeChat]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!activeChat?.id) {
+      setArchiveMessages([]);
+      return undefined;
+    }
+
+    const loadArchiveMessages = async () => {
+      const messages = await electronAPI.getChatMessages(activeChat.id);
+      if (!cancelled) setArchiveMessages(messages);
+    };
+
+    loadArchiveMessages();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeChat?.id, activeMessages, electronAPI]);
 
   // Scroll-spy: pick the section whose top has crossed a line near the top of the
   // viewport. Bottom-of-scroll always activates the last section, so short trailing
@@ -225,8 +245,9 @@ export default function ConfigurationView({ onTriggerSummarize }) {
   let tokensUsed = 0;
   const estimateTokens = (str) => Math.ceil((str || '').length / 4);
   const startIndex = activeChat.summarizedIndex || 0;
-  const activeMsgs = activeMessages.slice(startIndex);
+  const activeMsgs = archiveMessages.slice(startIndex);
   activeMsgs.forEach(m => { tokensUsed += estimateTokens(m.content); });
+  const activeMessageCount = activeMsgs.length;
   const percentage = Math.min((tokensUsed / archiveThreshold) * 100, 100);
 
   const bgImage = activeChat.backgroundImage || '';
@@ -458,9 +479,13 @@ export default function ConfigurationView({ onTriggerSummarize }) {
 
               {/* Full-width active context usage bar */}
               <div className="bg-[#011419] border border-gray-800 rounded-lg px-3.5 py-3 mb-3">
-                <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center justify-between gap-3 mb-2">
                   <span className={fieldLabel}>Active Context Usage</span>
-                  <span className="text-[10px] text-gray-500 font-mono">~{tokensUsed} / {archiveThreshold} tokens</span>
+                  <div className="flex items-center gap-2 text-[10px] text-gray-500 font-mono whitespace-nowrap">
+                    <span>{activeMessageCount} {activeMessageCount === 1 ? 'message' : 'messages'}</span>
+                    <span className="text-gray-700">•</span>
+                    <span>~{tokensUsed} / {archiveThreshold} tokens</span>
+                  </div>
                 </div>
                 <div className="w-full h-2.5 bg-gray-800 rounded-full overflow-hidden shadow-inner">
                   <div

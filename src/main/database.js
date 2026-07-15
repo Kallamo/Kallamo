@@ -928,6 +928,39 @@ try {
   console.error("Migration error patching memoryBlocks data:", e);
 }
 
+// Repair summaries created while chat history was limited to the viewport. The
+// stored message ids are authoritative; summarizedIndex must only advance over
+// a contiguous archived prefix so no unarchived history is omitted from context.
+try {
+  const chatRows = db.prepare("SELECT id, summarizedIndex, memoryBlocks FROM chats WHERE summarizedIndex > 0 AND memoryBlocks IS NOT NULL AND memoryBlocks != '' AND memoryBlocks != '[]'").all();
+  const updateSummarizedIndex = db.prepare('UPDATE chats SET summarizedIndex = ? WHERE id = ?');
+
+  for (const chat of chatRows) {
+    try {
+      const archivedMessageIds = new Set(
+        JSON.parse(chat.memoryBlocks)
+          .filter(block => block.type === 'summarized' && Array.isArray(block.messages))
+          .flatMap(block => block.messages.map(message => message.id).filter(Boolean))
+      );
+      const messages = db.prepare('SELECT id FROM messages WHERE chatId = ? ORDER BY createdAt ASC, id ASC').all(chat.id);
+      let repairedIndex = 0;
+
+      while (repairedIndex < messages.length && archivedMessageIds.has(messages[repairedIndex].id)) {
+        repairedIndex += 1;
+      }
+
+      if (repairedIndex !== chat.summarizedIndex) {
+        updateSummarizedIndex.run(repairedIndex, chat.id);
+        console.log(`Database Migration: Repaired summarizedIndex for chat ${chat.id}.`);
+      }
+    } catch (parseErr) {
+      console.error(`Database Migration: Could not repair summarizedIndex for chat ${chat.id}.`, parseErr);
+    }
+  }
+} catch (e) {
+  console.error("Migration error repairing summarizedIndex values:", e);
+}
+
 // Initialize RAG model metadata stamp (used to detect model upgrades)
 try {
   const existingMeta = db.prepare("SELECT value FROM settings WHERE key = 'rag_model_metadata'").get();

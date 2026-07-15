@@ -17,7 +17,8 @@ export default function SummarizeModal({
   // Initialize the list of messages when modal opens
   useEffect(() => {
     if (isOpen) {
-      const activeRange = messages.slice(currentSummarizedIndex);
+      const archiveEndIndex = Math.max(currentSummarizedIndex, messages.length - 10);
+      const activeRange = messages.slice(currentSummarizedIndex, archiveEndIndex);
       setPendingList(activeRange.map((msg, idx) => ({
         id: msg.id,
         role: msg.role,
@@ -64,7 +65,10 @@ export default function SummarizeModal({
   const handleConfirmSubmit = () => {
     if (isVectorizing) return;
     const selectedMessages = pendingList.filter(m => m.selected);
-    const newSummarizedIndex = Math.max(0, messages.length - 10);
+    const selectedPrefixLength = pendingList.findIndex(m => !m.selected);
+    const newSummarizedIndex = currentSummarizedIndex + (
+      selectedPrefixLength === -1 ? pendingList.length : selectedPrefixLength
+    );
 
     onConfirm({
       selectedMessages,
