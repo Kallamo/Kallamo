@@ -63,7 +63,12 @@ export default function ChatMemoryView({
   const [editorTitle, setEditorTitle] = useState('');
   const [editorText, setEditorText] = useState('');
   const [savingSnippet, setSavingSnippet] = useState(false);
-  const [indexingTier, setIndexingTier] = useState(null); // 'custom' | 'archive' | 'searchable' | null
+  const [worldIndexStatuses, setWorldIndexStatuses] = useState({});
+  const [tagSelection, setTagSelection] = useState(null);
+  const [tagSelectionBlocks, setTagSelectionBlocks] = useState([]);
+  const [tagSelectionIds, setTagSelectionIds] = useState([]);
+  const [tagSelectionLoading, setTagSelectionLoading] = useState(false);
+  const [tagSelectionSearch, setTagSelectionSearch] = useState('');
   const [indexMenu, setIndexMenu] = useState(null); // which tier's variant menu is open
   const [memoryTags, setMemoryTags] = useState({}); // { [chunkId]: ["Canonical Name", ...] }
   const customIdxRef = useRef(null);
@@ -87,25 +92,18 @@ export default function ChatMemoryView({
   // ("index new"); full=true drops the tier's tags and re-tags from scratch ("reindex
   // all"), so a re-run reflects the current tagger and entity registry.
   const handleIndexMemories = async (tier, full) => {
-    if (typeof electronAPI?.backfillWorldIndex !== 'function') {
-      showToast('Indexing unavailable. Fully restart the app (close and reopen Electron).', 'error');
+    if (typeof electronAPI?.startWorldIndexTagging !== 'function') {
+      showToast('Tagging unavailable. Fully restart the app (close and reopen Electron).', 'error');
       return;
     }
     setIndexMenu(null);
-    setIndexingTier(tier);
     try {
-      const res = await electronAPI.backfillWorldIndex(chat.id, { tier, full });
-      if (res?.success) {
-        showToast(`${full ? 'Reindexed' : 'Indexed'} ${res.chunks} chunk(s) → ${res.tagged} tag(s).`, 'success');
-        loadMemoryTags();
-        loadFileChunkTags();
-      } else {
-        showToast(`Indexing failed: ${res?.error || 'unknown'}`, 'error');
-      }
+      const res = await electronAPI.startWorldIndexTagging(chat.id, { tier, full });
+      if (!res?.success) throw new Error(res?.error || 'unknown');
+      if (res.started) showToast(`${full ? 'Re-tagging' : 'Tagging'} started. You can leave this screen and return to its live progress.`, 'success');
+      if (res.status) setWorldIndexStatuses(prev => ({ ...prev, [tier]: res.status }));
     } catch (e) {
-      showToast(`Indexing failed: ${e.message}`, 'error');
-    } finally {
-      setIndexingTier(null);
+      showToast(`Tagging failed to start: ${e.message}`, 'error');
     }
   };
 
@@ -134,6 +132,11 @@ export default function ChatMemoryView({
   const [chunkTagInput, setChunkTagInput] = useState('');
   const [chunkEntityCandidates, setChunkEntityCandidates] = useState([]);
   const chunkTagAnchorRef = useRef(null);
+  const [fileTagSummary, setFileTagSummary] = useState({ chunks: 0, tags: [] });
+  const [bulkTagInput, setBulkTagInput] = useState('');
+  const [bulkEntityCandidates, setBulkEntityCandidates] = useState([]);
+  const [bulkTagBusy, setBulkTagBusy] = useState(false);
+  const bulkTagAnchorRef = useRef(null);
 
   const loadFileChunkTags = async () => {
     if (!chat?.id || typeof electronAPI?.getChatKbTags !== 'function') return;
@@ -141,6 +144,92 @@ export default function ChatMemoryView({
       const res = await electronAPI.getChatKbTags(chat.id);
       if (res?.success) setFileChunkTags(res.tags || {});
     } catch (e) { /* tags stay empty on failure */ }
+  };
+
+  const loadFileTagSummary = async (source = viewingFileBlock?.source) => {
+    if (!chat?.id || !source || typeof electronAPI?.getSearchableFileTagSummary !== 'function') return;
+    const res = await electronAPI.getSearchableFileTagSummary(chat.id, source);
+    if (res?.success) setFileTagSummary({ chunks: res.chunks || 0, tags: res.tags || [] });
+  };
+
+  const refreshBulkEntityCandidates = async (text) => {
+    const query = String(text || '').trim();
+    if (query.length < 2 || typeof electronAPI?.findEntityCandidates !== 'function') {
+      setBulkEntityCandidates([]);
+      return;
+    }
+    try {
+      const workspaceId = chat?.id;
+      const res = await electronAPI.findEntityCandidates(workspaceId, query);
+      setBulkEntityCandidates(res?.success ? (res.candidates || []) : []);
+    } catch (e) { setBulkEntityCandidates([]); }
+  };
+
+  const applyFileTag = async (action, kind, value, label) => {
+    if (!viewingFileBlock || !value || bulkTagBusy) return;
+    const run = async () => {
+      setBulkTagBusy(true);
+      try {
+        const res = await electronAPI.applySearchableFileTag(chat.id, viewingFileBlock.source, action, kind, value);
+        if (!res?.success) throw new Error(res?.error || 'Unknown error');
+        showToast(`${action === 'add' ? 'Applied' : 'Removed'} ${label} across ${fileTagSummary.chunks} chunk(s).`, 'success');
+        setBulkTagInput('');
+        setBulkEntityCandidates([]);
+        await Promise.all([loadFileChunkTags(), loadFileTagSummary()]);
+      } catch (e) {
+        showToast(`Failed to update tags: ${e.message}`, 'error');
+      } finally { setBulkTagBusy(false); }
+    };
+    if (action === 'remove') {
+      setConfirmDialog({
+        message: `Remove ${label} from every chunk in this searchable file? This also suppresses automatic entity tags so they do not return on a future World Index re-tag.`,
+        confirmLabel: 'Remove from all',
+        onConfirm: run,
+      });
+    } else await run();
+  };
+
+  const openTagSelection = async (tier) => {
+    if (typeof electronAPI?.getWorldIndexTaggableChunks !== 'function') return;
+    setTagSelection(tier);
+    setTagSelectionBlocks([]);
+    setTagSelectionIds([]);
+    setTagSelectionSearch('');
+    setTagSelectionLoading(true);
+    try {
+      const res = await electronAPI.getWorldIndexTaggableChunks(chat.id, tier);
+      if (!res?.success) throw new Error(res?.error || 'Unknown error');
+      const chunks = res.chunks || [];
+      const blocks = tier === 'searchable'
+        ? Object.values(chunks.reduce((groups, chunk) => {
+          const key = chunk.source || 'Untitled Searchable File';
+          const group = groups[key] || { id: key, title: key, excerpt: chunk.text, chunkIds: [], complete: true };
+          group.chunkIds.push(chunk.id);
+          group.complete = group.complete && chunk.worldIndexStatus === 'completed';
+          groups[key] = group;
+          return groups;
+        }, {}))
+        : chunks.map(chunk => ({ id: chunk.id, title: chunk.source || 'Custom Memory', excerpt: chunk.text, chunkIds: [chunk.id], complete: chunk.worldIndexStatus === 'completed' }));
+      setTagSelectionBlocks(blocks);
+      setTagSelectionIds(blocks.filter(block => !block.complete).map(block => block.id));
+    } catch (e) {
+      showToast(`Failed to load chunks: ${e.message}`, 'error');
+      setTagSelection(null);
+    } finally { setTagSelectionLoading(false); }
+  };
+
+  const startSelectedTagging = async () => {
+    if (!tagSelection || !tagSelectionIds.length) return;
+    const chunkIds = tagSelectionBlocks.filter(block => tagSelectionIds.includes(block.id)).flatMap(block => block.chunkIds);
+    try {
+      const res = await electronAPI.startWorldIndexTagging(chat.id, { tier: tagSelection, full: true, chunkIds });
+      if (!res?.success) throw new Error(res?.error || 'Unknown error');
+      if (res.status) setWorldIndexStatuses(prev => ({ ...prev, [tagSelection]: res.status }));
+      setTagSelection(null);
+      showToast(`Tagging ${tagSelectionIds.length} selected block(s).`, 'success');
+    } catch (e) {
+      showToast(`Tagging failed to start: ${e.message}`, 'error');
+    }
   };
 
   // Persist a chunk's full tag state, then refresh from source of truth.
@@ -379,7 +468,24 @@ export default function ChatMemoryView({
     setSelectedBlockIds([]);
     loadBlocks();
     loadMemoryTags();
+    if (!chat?.id || !electronAPI?.getWorldIndexStatus) return;
+    Promise.all(indexTiers.map(async ({ key }) => {
+      const res = await electronAPI.getWorldIndexStatus(chat.id, key);
+      return [key, res?.status];
+    })).then(entries => setWorldIndexStatuses(Object.fromEntries(entries.filter(([, status]) => status))));
   }, [chat?.id]);
+
+  useEffect(() => {
+    if (!chat?.id || !electronAPI?.onWorldIndexTaggingProgress) return;
+    return electronAPI.onWorldIndexTaggingProgress((data) => {
+      if (data.chatId !== chat.id || !data.status) return;
+      setWorldIndexStatuses(prev => ({ ...prev, [data.tier]: data.status }));
+      if (!data.status.active && data.status.latest?.status !== 'running') {
+        loadMemoryTags();
+        loadFileChunkTags();
+      }
+    });
+  }, [chat?.id, electronAPI]);
 
   useEffect(() => {
     setSelectedBlockIds([]);
@@ -387,10 +493,15 @@ export default function ChatMemoryView({
 
   // Load per-chunk tags when the file chunk viewer opens; reset the add-tag input.
   useEffect(() => {
-    if (viewingFileBlock) loadFileChunkTags();
+    if (viewingFileBlock) {
+      loadFileChunkTags();
+      loadFileTagSummary(viewingFileBlock.source);
+    }
     setActiveTagChunk(null);
     setChunkTagInput('');
     setChunkEntityCandidates([]);
+    setBulkTagInput('');
+    setBulkEntityCandidates([]);
   }, [viewingFileBlock?.source]);
 
   // Listen to IPC vectorization progress
@@ -1035,7 +1146,7 @@ export default function ChatMemoryView({
             </span>
             <span className="flex items-center gap-1.5" title="Searchable knowledge is retrieved on demand, not injected into every prompt.">
               <span className="uppercase tracking-wider w-16">Searchable</span>
-              <TokenBadge tokens={tokenTotals.searchable} />
+              <TokenBadge tokens={tokenTotals.searchable} severity="neutral" />
             </span>
           </div>
 
@@ -1492,34 +1603,59 @@ export default function ChatMemoryView({
           <div className="grid grid-cols-1 gap-1.5">
             {indexTiers.map(t => (
               <div key={t.key} className="relative" ref={t.ref}>
+                {(() => {
+                  const status = worldIndexStatuses[t.key];
+                  const active = status?.active;
+                  const label = active
+                    ? `Tagging ${active.processed || 0}/${active.total || 0}`
+                    : status?.pending
+                      ? `${status.pending} chunk${status.pending === 1 ? '' : 's'} to tag`
+                      : status?.total
+                        ? 'World Index tags up to date'
+                        : 'No searchable chunks';
+                  return <>
                 <button
                   onClick={() => setIndexMenu(indexMenu === t.key ? null : t.key)}
-                  disabled={indexingTier !== null}
-                  title={`Tag this chat's ${t.label} so the AI can recall it by character, faction, and item.`}
+                  disabled={Boolean(active)}
+                  title="World Index reads chunks that are already searchable and adds retrieval tags. It does not vectorize or change the text."
                   className="w-full text-xs font-bold tracking-wide px-3 py-2 border border-accent/40 text-accent rounded-lg hover:bg-accent/10 transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-between gap-1.5"
                 >
                   <span className="flex items-center gap-2">
-                    {indexingTier === t.key ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Brain className="w-3.5 h-3.5" />}
-                    {indexingTier === t.key ? 'Indexing…' : t.label}
+                    {active ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Brain className="w-3.5 h-3.5" />}
+                    {t.label}
                   </span>
                   <ChevronDown className={`w-3.5 h-3.5 transition-transform ${indexMenu === t.key ? 'rotate-180' : ''}`} />
                 </button>
+                <p title={status?.latest?.error || ''} className={`mt-1 px-1 text-[9px] truncate ${status?.failed ? 'text-red-400' : 'text-gray-500'}`}>
+                  {status?.failed ? `${status.failed} chunk${status.failed === 1 ? '' : 's'} need another try${status?.latest?.error ? `: ${status.latest.error}` : ''}` : label}
+                </p>
                 <Popover anchorRef={t.ref} open={indexMenu === t.key} onClose={() => setIndexMenu(null)} matchAnchorWidth={true} align="left" className="!p-2">
                   <button
                     onClick={() => handleIndexMemories(t.key, false)}
                     className="w-full text-left px-3 py-2 text-sm font-semibold text-gray-100 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
                   >
-                    Index new chunks
-                    <span className="block text-xs font-normal text-gray-400 normal-case tracking-normal mt-0.5">Only chunks not tagged yet. Fast top-up.</span>
+                    Tag new chunks
+                    <span className="block text-xs font-normal text-gray-400 normal-case tracking-normal mt-0.5">Only chunks not yet examined by World Index. Does not vectorize text.</span>
                   </button>
                   <button
                     onClick={() => handleIndexMemories(t.key, true)}
                     className="w-full text-left px-3 py-2 text-sm font-semibold text-gray-100 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
                   >
-                    Reindex all chunks
-                    <span className="block text-xs font-normal text-gray-400 normal-case tracking-normal mt-0.5">Drop and rebuild every tag from scratch.</span>
+                    Re-tag all chunks
+                    <span className="block text-xs font-normal text-gray-400 normal-case tracking-normal mt-0.5">Rebuild automatic World Index tags. Your manual tags and suppressions stay intact.</span>
                   </button>
+                  {(t.key === 'custom' || t.key === 'searchable') && (
+                    <button
+                      onClick={() => { setIndexMenu(null); openTagSelection(t.key); }}
+                      className="w-full text-left px-3 py-2 text-sm font-semibold text-gray-100 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
+                    >
+                      Tag selected blocks
+                      <span className="block text-xs font-normal text-gray-400 normal-case tracking-normal mt-0.5">Choose Custom Memory blocks or Searchable Files. World Index tags every chunk inside each chosen block.</span>
+                    </button>
+                  )}
                 </Popover>
+                  </>;
+                })()}
               </div>
             ))}
           </div>
@@ -2142,12 +2278,12 @@ export default function ChatMemoryView({
           >
             <div className="flex justify-between items-center shrink-0 p-4 border-b border-gray-800 bg-[#011419]/50">
               <div className="min-w-0">
-                <h3 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5">
-                  <FileText className="w-4 h-4 text-blue-400" />
+                <h3 className="text-sm sm:text-base font-bold text-accent uppercase tracking-widest flex items-center space-x-2">
+                  <FileText className="w-5 h-5 text-blue-400" />
                   <span>File Chunks Viewer</span>
-                  <span className="text-gray-600 font-normal normal-case">· {viewingFileBlock.chunks.length} chunk(s)</span>
+                  <span className="text-gray-500 font-normal normal-case text-xs sm:text-sm">· {viewingFileBlock.chunks.length} chunk(s)</span>
                 </h3>
-                <span className="text-[10px] font-mono text-gray-500 truncate block mt-0.5" title={viewingFileBlock.source}>
+                <span className="text-xs sm:text-sm font-mono text-gray-400 truncate block mt-1" title={viewingFileBlock.source}>
                   {viewingFileBlock.source}
                 </span>
               </div>
@@ -2159,6 +2295,44 @@ export default function ChatMemoryView({
               </button>
             </div>
 
+            <div className="px-5 py-4 sm:px-6 sm:py-5 border-b border-gray-800 bg-[#06151A] shrink-0 space-y-3">
+              <div className="flex items-center gap-2.5 text-xs sm:text-sm text-gray-300">
+                <Sparkles className="w-4 h-4 text-accent shrink-0" />
+                <span className="font-bold uppercase tracking-widest">Fast Tag</span>
+                <span className="text-gray-400">Manage every chunk in this file at once.</span>
+                <span data-tooltip="Removing an automatic entity tag creates a persistent suppression, so World Index will not add it back during a future re-tag." className="inline-flex text-gray-400 hover:text-white cursor-help"><Info className="w-4 h-4" /></span>
+              </div>
+              <div className="flex flex-wrap gap-2 max-h-20 overflow-y-auto custom-scrollbar pr-1">
+                {fileTagSummary.tags.length === 0 ? <span className="text-sm text-gray-500">No tags in this file yet.</span> : fileTagSummary.tags.map((tag) => (
+                  <span key={`${tag.tag}_${tag.entity || 'keyword'}_${tag.manual}`} className={`px-2 py-1 border text-xs sm:text-sm font-bold rounded flex items-center gap-1.5 ${tag.entity ? 'bg-sky-500/10 border-sky-500/25 text-sky-200' : 'bg-accent/10 border-accent/20 text-accent'}`}>
+                    {tag.value || tag.tag} <span className="opacity-60">{tag.count}/{fileTagSummary.chunks}</span>
+                    <button type="button" aria-label={`Remove ${tag.value || tag.tag} from this file`} disabled={bulkTagBusy} onClick={() => applyFileTag('remove', tag.entity ? 'entity' : 'keyword', tag.entity || tag.tag, tag.value || tag.tag)} className="hover:text-white focus-visible:ring-2 focus-visible:ring-accent rounded disabled:opacity-50"><XIcon className="w-3 h-3" /></button>
+                  </span>
+                ))}
+              </div>
+              <div className="flex items-center gap-2 relative" ref={bulkTagAnchorRef}>
+                <input
+                  value={bulkTagInput}
+                  name="fast-tag"
+                  autoComplete="off"
+                  aria-label="Tag to add to every chunk"
+                  onChange={(e) => { setBulkTagInput(e.target.value); refreshBulkEntityCandidates(e.target.value); }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyFileTag('add', 'keyword', bulkTagInput, `#${bulkTagInput.replace(/^#/, '')}`); } }}
+                  placeholder="Add a keyword to all chunks, or choose an entity..."
+                  className="flex-1 bg-[#011419] border border-gray-700 rounded px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-accent"
+                />
+                <button type="button" disabled={!bulkTagInput.trim() || bulkTagBusy} onClick={() => applyFileTag('add', 'keyword', bulkTagInput, `#${bulkTagInput.replace(/^#/, '')}`)} className="px-3 py-2 rounded border border-accent/40 text-accent text-sm font-bold hover:bg-accent/10 focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50">Add to all</button>
+                <Popover anchorRef={bulkTagAnchorRef} open={bulkEntityCandidates.length > 0} onClose={() => setBulkEntityCandidates([])} maxHeight={160}>
+                  <div className="px-3 pt-2 pb-1 text-xs font-bold text-sky-400/70 uppercase tracking-widest">Worldbuild matches</div>
+                  {bulkEntityCandidates.map((entity) => (
+                    <button key={entity.id} type="button" onMouseDown={(e) => { e.preventDefault(); applyFileTag('add', 'entity', entity.id, entity.canonicalName); }} className="w-full text-left px-3 py-2 text-sm font-bold text-sky-200 hover:text-white hover:bg-sky-500/10 rounded-lg">
+                      Add {entity.canonicalName} to all chunks
+                    </button>
+                  ))}
+                </Popover>
+              </div>
+            </div>
+
             {/* Chunks List */}
             <div className="flex-1 overflow-y-auto custom-scrollbar space-y-4 p-5">
               {viewingFileBlock.chunks.map((chunk, idx) => {
@@ -2167,7 +2341,7 @@ export default function ChatMemoryView({
                 return (
                 <div key={chunk.id} className="bg-[#00080B] border border-gray-800/80 rounded-xl p-3.5 flex flex-col relative group/chunk">
                   <div className="flex justify-between items-center mb-2">
-                    <span className="text-[9px] font-mono text-gray-500 flex items-center gap-1.5">
+                    <span className="text-xs font-mono text-gray-400 flex items-center gap-1.5">
                       Chunk #{idx + 1} ({chunk.text.length} chars)
                       {chunk.manuallyEdited && (
                         <Badge tone="accent" title="Manually edited. Survives Knowledge Base re-indexing.">edited</Badge>
@@ -2226,7 +2400,7 @@ export default function ChatMemoryView({
                       </button>
                     </div>
                   </div>
-                  <p className="text-[10.5px] text-gray-300 font-mono whitespace-pre-wrap leading-relaxed max-h-[150px] overflow-y-auto custom-scrollbar select-text bg-[#011419]/30 p-2 rounded border border-gray-900/60">
+                  <p className="text-sm text-gray-200 font-mono whitespace-pre-wrap leading-relaxed max-h-[170px] overflow-y-auto custom-scrollbar select-text bg-[#011419]/30 p-3 rounded border border-gray-900/60">
                     {chunk.text}
                   </p>
 
@@ -2298,6 +2472,44 @@ export default function ChatMemoryView({
                 </div>
                 );
               })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tagSelection && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-5 bg-black/70 backdrop-blur-sm overscroll-contain" onClick={() => !tagSelectionLoading && setTagSelection(null)}>
+          <div role="dialog" aria-modal="true" aria-labelledby="tag-selection-title" className="w-full max-w-3xl max-h-[82vh] flex flex-col bg-[#051116] border border-gray-700 rounded-2xl shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4 p-5 border-b border-gray-800">
+              <div>
+                <h3 id="tag-selection-title" className="text-base sm:text-lg font-bold text-white">Tag selected {tagSelection === 'custom' ? 'Custom Memory blocks' : 'Searchable Files'}</h3>
+                <p className="mt-1 text-sm text-gray-400">World Index tags every chunk inside the selected blocks. It does not vectorize or change their text.</p>
+              </div>
+              <button type="button" aria-label="Close chunk selection" onClick={() => setTagSelection(null)} className="p-2 text-gray-400 hover:text-white focus-visible:ring-2 focus-visible:ring-accent rounded"><XIcon className="w-5 h-5" /></button>
+            </div>
+
+            <div className="p-5 border-b border-gray-800 flex flex-col sm:flex-row gap-3 sm:items-center">
+              <input value={tagSelectionSearch} name="block-filter" autoComplete="off" aria-label="Filter blocks" onChange={(event) => setTagSelectionSearch(event.target.value)} placeholder="Filter blocks…" className="flex-1 bg-[#011419] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-accent" />
+              <div className="flex gap-2 text-sm">
+                <button type="button" onClick={() => setTagSelectionIds(tagSelectionBlocks.map(block => block.id))} className="px-3 py-2 border border-gray-700 rounded-lg text-gray-200 hover:border-gray-500">Select all</button>
+                <button type="button" onClick={() => setTagSelectionIds([])} className="px-3 py-2 border border-gray-700 rounded-lg text-gray-200 hover:border-gray-500">Clear</button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto overscroll-contain custom-scrollbar p-5 space-y-2">
+              {tagSelectionLoading ? <div className="py-10 flex justify-center"><Loader className="w-6 h-6 text-accent animate-spin" /></div> : tagSelectionBlocks.filter(block => `${block.title} ${block.excerpt}`.toLowerCase().includes(tagSelectionSearch.toLowerCase())).map((block) => {
+                const selected = tagSelectionIds.includes(block.id);
+                return <button key={block.id} type="button" onClick={() => setTagSelectionIds(current => selected ? current.filter(id => id !== block.id) : [...current, block.id])} className={`w-full text-left p-3 rounded-xl border transition-colors flex gap-3 [content-visibility:auto] [contain-intrinsic-size:auto_5rem] ${selected ? 'border-accent/50 bg-accent/10' : 'border-gray-800 hover:border-gray-700 bg-[#011419]/45'}`}>
+                  <span className={`mt-0.5 w-5 h-5 rounded border flex items-center justify-center shrink-0 ${selected ? 'border-accent bg-accent text-[#011419]' : 'border-gray-600'}`}>{selected && <Check className="w-3.5 h-3.5 stroke-[3]" />}</span>
+                  <span className="min-w-0"><span className="block text-sm font-bold text-gray-200">{block.title} <span className="font-normal text-gray-500">{block.complete ? 'already tagged' : 'needs tagging'}{tagSelection === 'searchable' ? ` · ${block.chunkIds.length} chunk${block.chunkIds.length === 1 ? '' : 's'}` : ''}</span></span><span className="block mt-1 text-sm text-gray-400 line-clamp-2">{block.excerpt}</span></span>
+                </button>;
+              })}
+              {!tagSelectionLoading && tagSelectionBlocks.length > 0 && tagSelectionBlocks.filter(block => `${block.title} ${block.excerpt}`.toLowerCase().includes(tagSelectionSearch.toLowerCase())).length === 0 && <p className="py-8 text-center text-sm text-gray-500">No blocks match this filter.</p>}
+            </div>
+
+            <div className="p-5 border-t border-gray-800 flex items-center justify-between gap-4">
+              <span className="text-sm text-gray-400">{tagSelectionIds.length} selected</span>
+              <div className="flex gap-3"><button type="button" onClick={() => setTagSelection(null)} className="px-4 py-2 text-sm font-semibold text-gray-300 hover:text-white">Cancel</button><button type="button" disabled={!tagSelectionIds.length || tagSelectionLoading} onClick={startSelectedTagging} className="px-4 py-2 rounded-lg bg-accent text-[#011419] text-sm font-bold disabled:opacity-50">Tag selected blocks</button></div>
             </div>
           </div>
         </div>

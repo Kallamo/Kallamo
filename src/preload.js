@@ -73,9 +73,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteDocumentNote: (id) => ipcRenderer.invoke('delete-document-note', { id }),
   copyToClipboard: (text) => ipcRenderer.invoke('copy-to-clipboard', text),
   backfillWorldIndex: (chatId, opts = {}) => ipcRenderer.invoke('backfill-world-index', { chatId, ...opts }),
+  getWorldIndexStatus: (chatId, tier) => ipcRenderer.invoke('get-world-index-status', { chatId, tier }),
+  getWorldIndexTaggableChunks: (chatId, tier) => ipcRenderer.invoke('get-world-index-taggable-chunks', { chatId, tier }),
+  startWorldIndexTagging: (chatId, opts = {}) => ipcRenderer.invoke('start-world-index-tagging', { chatId, ...opts }),
   getChatMemoryTags: (chatId) => ipcRenderer.invoke('get-chat-memory-tags', { chatId }),
   getChatKbTags: (chatId) => ipcRenderer.invoke('get-chat-kb-tags', { chatId }),
   setChunkTags: (chunkId, keywords, entities) => ipcRenderer.invoke('set-chunk-tags', { chunkId, keywords, entities }),
+  getSearchableFileTagSummary: (chatId, source) => ipcRenderer.invoke('get-searchable-file-tag-summary', { chatId, source }),
+  applySearchableFileTag: (chatId, source, action, kind, value) => ipcRenderer.invoke('apply-searchable-file-tag', { chatId, source, action, kind, value }),
   vectorizeDocument: (documentId) => ipcRenderer.invoke('vectorize-document', { documentId }),
   retagDocument: (documentId) => ipcRenderer.invoke('retag-document', { documentId }),
   getDocumentVectorStatus: (documentId) => ipcRenderer.invoke('get-document-vector-status', { documentId }),
@@ -83,6 +88,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (event, data) => callback(data);
     ipcRenderer.on('vectorize-document-progress', listener);
     return () => ipcRenderer.off('vectorize-document-progress', listener);
+  },
+  onWorldIndexTaggingProgress: (callback) => {
+    const listener = (event, data) => callback(data);
+    ipcRenderer.on('world-index-tagging-progress', listener);
+    return () => ipcRenderer.off('world-index-tagging-progress', listener);
   },
   listEntities: (workspaceId, type) => ipcRenderer.invoke('list-entities', { workspaceId, type }),
   listEntityLinks: (workspaceId, relType) => ipcRenderer.invoke('list-entity-links', { workspaceId, relType }),

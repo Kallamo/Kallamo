@@ -1290,7 +1290,7 @@ export default function KbManagerModal({ profile, onClose }) {
                       </span>
                       <span className="flex items-center gap-1.5" title="Searchable knowledge is retrieved on demand, not injected into every prompt.">
                         <span className="uppercase tracking-wider w-16">Searchable</span>
-                        <TokenBadge tokens={tokenTotals.searchable} />
+                        <TokenBadge tokens={tokenTotals.searchable} severity="neutral" />
                       </span>
                     </span>
                   </div>

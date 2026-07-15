@@ -27,6 +27,41 @@ const appDataPath = process.env.APPDATA || (process.platform === 'darwin' ? path
 const dataDir = path.join(appDataPath, 'Kallamo');
 const profilesDir = path.join(dataDir, 'AI Profiles');
 const chatsDir = path.join(dataDir, 'ChatHistory');
+const worldIndexJobs = new Map();
+
+function worldIndexScope(tier) {
+  if (tier === 'searchable') return { ownerType: 'chat_kb', sourceClause: '', params: [] };
+  if (tier === 'custom') return { ownerType: 'chat_memory', sourceClause: "AND (kc.id LIKE 'manual_%' OR kc.id LIKE 'mem_%')", params: [] };
+  return { ownerType: 'chat_memory', sourceClause: "AND kc.source = 'Chat Archive'", params: [] };
+}
+
+function getWorldIndexStatus(chatId, tier) {
+  const scope = worldIndexScope(tier);
+  const row = db.prepare(`
+    SELECT COUNT(*) AS total,
+      SUM(CASE WHEN wis.status = 'completed' THEN 1 ELSE 0 END) AS completed,
+      SUM(CASE WHEN wis.status = 'completed' AND wis.tagCount > 0 THEN 1 ELSE 0 END) AS tagged,
+      SUM(CASE WHEN wis.status = 'completed' AND wis.tagCount = 0 THEN 1 ELSE 0 END) AS empty,
+      SUM(CASE WHEN wis.status = 'failed' THEN 1 ELSE 0 END) AS failed
+    FROM knowledge_chunks kc
+    LEFT JOIN world_index_chunk_status wis ON wis.chunkId = kc.id
+    WHERE kc.ownerId = ? AND kc.ownerType = ? ${scope.sourceClause}
+  `).get(chatId, scope.ownerType);
+  const latest = db.prepare('SELECT * FROM world_index_runs WHERE chatId = ? AND tier = ? ORDER BY startedAt DESC LIMIT 1').get(chatId, tier);
+  const key = `${chatId}:${tier}`;
+  const active = worldIndexJobs.get(key);
+  const total = row.total || 0;
+  return {
+    total,
+    completed: row.completed || 0,
+    tagged: row.tagged || 0,
+    empty: row.empty || 0,
+    failed: row.failed || 0,
+    pending: Math.max(0, total - (row.completed || 0)),
+    latest: latest || null,
+    active: active ? active.state : null,
+  };
+}
 
 // Helper to index new knowledge base files in writing profile
 async function indexProfileKnowledgeBase(sender, profileId, knowledgeFilesInput) {
@@ -2578,8 +2613,8 @@ ipcMain.handle('get-chat-kb-tags', async (event, { chatId }) => {
 });
 
 // Replace a single chunk's user-editable tags. keywords = the full yellow set (stored
-// as manual=1 literal rows, preserved across re-tag); entities = the full blue set
-// (manual=0 entity rows). Auto literal boost rows (entity null, manual 0) are left be.
+// as manual=1 literal rows, preserved across re-tag); entities are kept with their
+// provenance so a point edit never turns automatic tags into manual ones by accident.
 ipcMain.handle('set-chunk-tags', async (event, { chunkId, keywords = [], entities = [] }) => {
   try {
     if (!chunkId) return { success: false, error: 'chunkId required' };
@@ -2590,15 +2625,26 @@ ipcMain.handle('set-chunk-tags', async (event, { chunkId, keywords = [], entitie
     const entityIds = [...new Set((entities || []).filter(Boolean))];
     db.transaction(() => {
       // Yellow (user keywords): replace all manual literal rows.
-      db.prepare('DELETE FROM chunk_tags WHERE chunkId = ? AND manual = 1').run(chunkId);
+      db.prepare('DELETE FROM chunk_tags WHERE chunkId = ? AND entity IS NULL AND manual = 1').run(chunkId);
       const insKw = db.prepare('INSERT OR IGNORE INTO chunk_tags (chunkId, tag, entity, manual) VALUES (?, ?, NULL, 1)');
       for (const kw of cleanKeywords) insKw.run(chunkId, kw);
-      // Blue (entities): replace the entity-linked rows with the desired set.
+      // Blue entities: preserve the origin of tags that remain selected. Removing an
+      // automatic tag adds a suppression, so a later World Index re-tag respects the
+      // user's correction instead of putting the same entity back.
+      const existingEntities = db.prepare('SELECT tag, entity, manual FROM chunk_tags WHERE chunkId = ? AND entity IS NOT NULL').all(chunkId);
+      const existingByEntity = new Map(existingEntities.map(row => [row.entity, row]));
+      const suppress = db.prepare('INSERT OR IGNORE INTO chunk_tag_suppressions (chunkId, tag, entity) VALUES (?, ?, ?)');
+      for (const row of existingEntities) {
+        if (!entityIds.includes(row.entity) && (row.manual === null || row.manual === 0)) suppress.run(chunkId, row.tag, row.entity);
+      }
       db.prepare('DELETE FROM chunk_tags WHERE chunkId = ? AND entity IS NOT NULL').run(chunkId);
-      const insEnt = db.prepare('INSERT OR IGNORE INTO chunk_tags (chunkId, tag, entity, manual) VALUES (?, ?, ?, 0)');
+      const insEnt = db.prepare('INSERT OR IGNORE INTO chunk_tags (chunkId, tag, entity, manual) VALUES (?, ?, ?, ?)');
       for (const eid of entityIds) {
         const ent = entitiesStore.getEntity(eid);
-        if (ent) insEnt.run(chunkId, ent.canonicalName, eid);
+        if (ent) {
+          const prior = existingByEntity.get(eid);
+          insEnt.run(chunkId, prior?.tag || ent.type, eid, prior?.manual === 1 ? 1 : (prior ? 0 : 1));
+        }
       }
     })();
     return { success: true };
@@ -3261,6 +3307,143 @@ ipcMain.handle('get-chat-messages', async (event, chatId) => {
     console.error("Error loading chat messages:", e);
     return [];
   }
+});
+
+ipcMain.handle('get-searchable-file-tag-summary', async (event, { chatId, source }) => {
+  try {
+    const scope = [chatId, source];
+    const chunks = db.prepare("SELECT COUNT(*) AS count FROM knowledge_chunks WHERE ownerId = ? AND ownerType = 'chat_kb' AND source = ?").get(...scope).count;
+    const rows = db.prepare(`
+      SELECT ct.tag, ct.entity, ct.manual, COALESCE(e.canonicalName, ct.entity) AS value, COUNT(*) AS count
+      FROM chunk_tags ct
+      JOIN knowledge_chunks kc ON kc.id = ct.chunkId
+      LEFT JOIN entities e ON e.id = ct.entity
+      WHERE kc.ownerId = ? AND kc.ownerType = 'chat_kb' AND kc.source = ?
+      GROUP BY ct.tag, ct.entity, ct.manual, value
+      ORDER BY count DESC, value COLLATE NOCASE
+    `).all(...scope);
+    return { success: true, chunks, tags: rows };
+  } catch (e) {
+    return { success: false, error: e.message, chunks: 0, tags: [] };
+  }
+});
+
+ipcMain.handle('apply-searchable-file-tag', async (event, { chatId, source, action, kind, value }) => {
+  try {
+    const chunkIds = db.prepare("SELECT id FROM knowledge_chunks WHERE ownerId = ? AND ownerType = 'chat_kb' AND source = ?").all(chatId, source).map(row => row.id);
+    if (!chunkIds.length) return { success: true, affected: 0 };
+    if (!['add', 'remove'].includes(action) || !['keyword', 'entity'].includes(kind)) throw new Error('Invalid tag operation');
+    let affected = 0;
+    db.transaction(() => {
+      if (kind === 'keyword') {
+        const tag = String(value || '').trim().toLowerCase();
+        if (!tag) throw new Error('Tag is required');
+        const normalized = tag.startsWith('#') ? tag : `#${tag}`;
+        if (action === 'add') {
+          const insert = db.prepare('INSERT OR IGNORE INTO chunk_tags (chunkId, tag, entity, manual) VALUES (?, ?, NULL, 1)');
+          for (const id of chunkIds) affected += insert.run(id, normalized).changes;
+        } else {
+          const remove = db.prepare('DELETE FROM chunk_tags WHERE chunkId = ? AND tag = ? AND entity IS NULL AND manual = 1');
+          for (const id of chunkIds) affected += remove.run(id, normalized).changes;
+        }
+      } else {
+        const entity = entitiesStore.getEntity(value);
+        if (!entity) throw new Error('Entity not found');
+        if (action === 'add') {
+          const promote = db.prepare('UPDATE chunk_tags SET manual = 1 WHERE chunkId = ? AND tag = ? AND entity = ?');
+          const insert = db.prepare('INSERT OR IGNORE INTO chunk_tags (chunkId, tag, entity, manual) VALUES (?, ?, ?, 1)');
+          for (const id of chunkIds) {
+            affected += promote.run(id, entity.type, entity.id).changes;
+            affected += insert.run(id, entity.type, entity.id).changes;
+          }
+        } else {
+          const automatic = db.prepare('SELECT 1 FROM chunk_tags WHERE chunkId = ? AND tag = ? AND entity = ? AND (manual IS NULL OR manual = 0)');
+          const suppress = db.prepare('INSERT OR IGNORE INTO chunk_tag_suppressions (chunkId, tag, entity) VALUES (?, ?, ?)');
+          const remove = db.prepare('DELETE FROM chunk_tags WHERE chunkId = ? AND tag = ? AND entity = ?');
+          for (const id of chunkIds) {
+            if (automatic.get(id, entity.type, entity.id)) suppress.run(id, entity.type, entity.id);
+            affected += remove.run(id, entity.type, entity.id).changes;
+          }
+        }
+      }
+    })();
+    return { success: true, affected };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('get-world-index-status', async (event, { chatId, tier }) => {
+  try {
+    return { success: true, status: getWorldIndexStatus(chatId, tier) };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('get-world-index-taggable-chunks', async (event, { chatId, tier }) => {
+  try {
+    const scope = worldIndexScope(tier);
+    const chunks = db.prepare(`
+      SELECT kc.id, kc.source, kc.text, wis.status AS worldIndexStatus
+      FROM knowledge_chunks kc
+      LEFT JOIN world_index_chunk_status wis ON wis.chunkId = kc.id
+      WHERE kc.ownerId = ? AND kc.ownerType = ? ${scope.sourceClause}
+      ORDER BY kc.createdAt ASC
+    `).all(chatId, scope.ownerType);
+    return { success: true, chunks };
+  } catch (e) {
+    return { success: false, error: e.message, chunks: [] };
+  }
+});
+
+ipcMain.handle('start-world-index-tagging', async (event, { chatId, tier = 'archive', full = false, chunkIds = null }) => {
+  const key = `${chatId}:${tier}`;
+  const existing = worldIndexJobs.get(key);
+  if (existing) return { success: true, started: false, status: getWorldIndexStatus(chatId, tier) };
+
+  const runId = crypto.randomUUID();
+  const initial = getWorldIndexStatus(chatId, tier);
+  const startedAt = Date.now();
+  const selectedCount = Array.isArray(chunkIds) ? [...new Set(chunkIds.filter(Boolean))].length : null;
+  const state = { runId, mode: selectedCount !== null ? 'selected' : (full ? 'all' : 'new'), status: 'running', total: selectedCount ?? (full ? initial.total : initial.pending), processed: 0, tagged: 0, taggedChunks: 0, empty: 0, failed: 0, error: null, startedAt };
+  db.prepare(`INSERT INTO world_index_runs (id, chatId, tier, mode, status, totalChunks, startedAt)
+              VALUES (?, ?, ?, ?, 'running', ?, ?)`)
+    .run(runId, chatId, tier, state.mode, state.total, startedAt);
+  worldIndexJobs.set(key, { state });
+
+  const sendProgress = () => {
+    try { event.sender.send('world-index-tagging-progress', { chatId, tier, status: getWorldIndexStatus(chatId, tier) }); } catch (e) {}
+  };
+  sendProgress();
+  (async () => {
+    try {
+      const { backfillWorldIndex } = require('./workflow-runner');
+      const result = await backfillWorldIndex(chatId, {
+        tier,
+        full,
+        chunkIds,
+        runId,
+        progressCallback: (progress) => {
+          Object.assign(state, progress);
+          sendProgress();
+        },
+      });
+      state.status = result.failed ? (result.processed ? 'partial' : 'failed') : 'completed';
+      state.error = result.error || null;
+      db.prepare(`UPDATE world_index_runs SET status = ?, processedChunks = ?, taggedChunks = ?, emptyChunks = ?, failedChunks = ?, error = ?, completedAt = ? WHERE id = ?`)
+        .run(state.status, result.processed, result.taggedChunks, result.empty, result.failed, state.error, Date.now(), runId);
+    } catch (e) {
+      state.status = 'failed';
+      state.error = e.message || String(e);
+      db.prepare('UPDATE world_index_runs SET status = ?, error = ?, completedAt = ? WHERE id = ?')
+        .run('failed', state.error, Date.now(), runId);
+    } finally {
+      worldIndexJobs.delete(key);
+      sendProgress();
+    }
+  })();
+  return { success: true, started: true, status: getWorldIndexStatus(chatId, tier) };
 });
 
 ipcMain.handle('list-entity-links', async (event, { workspaceId, relType } = {}) => {

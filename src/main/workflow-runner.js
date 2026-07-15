@@ -1076,7 +1076,8 @@ function applyChunkTags(chunkTags, chunkRecords, workspaceId = null) {
     // for every tagging path (documents, chat, backfill).
     if (!getSystemAi()) return 0;
     if (!Array.isArray(chunkTags) || !chunkTags.length) return 0;
-    const insert = db.prepare('INSERT OR IGNORE INTO chunk_tags (chunkId, tag, entity) VALUES (?, ?, ?)');
+    const insert = db.prepare('INSERT OR IGNORE INTO chunk_tags (chunkId, tag, entity, manual) VALUES (?, ?, ?, 0)');
+    const isSuppressed = db.prepare('SELECT 1 FROM chunk_tag_suppressions WHERE chunkId = ? AND tag = ? AND entity = ?');
     // Opt-in: unresolved mentions become empty `proposed` entities instead of being
     // dropped. Within one run a name is proposed once and reused across chunks (keyed
     // by workspace|type|normalized-name); across runs resolveEntity finds the proposed
@@ -1108,8 +1109,10 @@ function applyChunkTags(chunkTags, chunkRecords, workspaceId = null) {
                     }
                 }
                 if (!entityRef) continue;
-                insert.run(rec.id, t.tag, entityRef);
-                rows++;
+                if (!isSuppressed.get(rec.id, t.tag, entityRef)) {
+                    insert.run(rec.id, t.tag, entityRef);
+                    rows++;
+                }
             }
         }
     })();
@@ -1120,14 +1123,13 @@ function applyChunkTags(chunkTags, chunkRecords, workspaceId = null) {
 // when chatId is null). These predate the per-chunk tagger, so they carry no tags.
 // Batches the chunks through ONE System-AI call each (tagging only, no title/
 // summary) and writes chunk_tags. INSERT OR IGNORE keeps re-runs from duplicating.
-async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false, tier = 'archive' } = {}) {
-    const profile = db.prepare('SELECT * FROM writing_profiles LIMIT 1').get();
+async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false, tier = 'archive', chunkIds = null, runId = null, progressCallback = null } = {}) {
     const systemAi = getSystemAi();
-    if (!profile && !systemAi) throw new Error('No System AI or writing profile configured');
-    const apiProfileId = systemAi ? systemAi.apiProfileId : profile.apiProfileId;
-    const model = systemAi ? systemAi.model : profile.model;
-    const manualMode = systemAi ? false : (profile && profile.manualMode === 1);
-    const manualJson = systemAi ? null : (profile && profile.manualJson);
+    if (!systemAi) throw new Error('World Index tagging requires a System AI');
+    const apiProfileId = systemAi.apiProfileId;
+    const model = systemAi.model;
+    const manualMode = false;
+    const manualJson = null;
 
     let categories = [];
     try { categories = db.prepare('SELECT name, description FROM tags WHERE isEntity = 1').all(); } catch (e) { categories = []; }
@@ -1150,6 +1152,11 @@ async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false,
         sourceClause = '';
     }
     const where = (chatId ? 'kc.ownerId = ? AND ' : '') + `kc.ownerType = '${ownerType}' ${sourceClause}`;
+    const selectedIds = Array.isArray(chunkIds) ? [...new Set(chunkIds.filter(Boolean))] : [];
+    if (Array.isArray(chunkIds) && !selectedIds.length) return { chunks: 0, batches: 0, tagged: 0, processed: 0, empty: 0, failed: 0 };
+    const selectedClause = selectedIds.length ? `AND kc.id IN (${selectedIds.map(() => '?').join(', ')})` : '';
+    const queryParams = [...(chatId ? [chatId] : []), ...selectedIds];
+    const scopedWhere = `${where} ${selectedClause}`;
 
     // full: wipe this scope's existing tags and re-tag every chunk from scratch (the
     // "Index this Chat's memories" button), so a re-run reflects the current tagger and
@@ -1159,16 +1166,30 @@ async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false,
         // Preserve user-pinned tags (manual=1, e.g. yellow keywords on file chunks);
         // only the auto tagger's own rows reset.
         const delSql = `DELETE FROM chunk_tags WHERE (manual IS NULL OR manual = 0) AND chunkId IN
-                        (SELECT kc.id FROM knowledge_chunks kc WHERE ${where})`;
-        if (chatId) db.prepare(delSql).run(chatId); else db.prepare(delSql).run();
+                        (SELECT kc.id FROM knowledge_chunks kc WHERE ${scopedWhere})`;
+        db.prepare(delSql).run(...queryParams);
     }
-    // Incremental still tags a chunk that carries only manual pins (no auto row yet).
-    const skipTagged = full ? '' : 'AND NOT EXISTS (SELECT 1 FROM chunk_tags ct WHERE ct.chunkId = kc.id AND (ct.manual IS NULL OR ct.manual = 0))';
-    const sql = `SELECT kc.id, kc.text, kc.ownerId FROM knowledge_chunks kc WHERE ${where}
+    // Coverage, rather than tag rows, determines whether a chunk is done. A chunk
+    // with no named entity is still a successful World Index result and must not be
+    // sent to the System AI again by every "Tag new" run.
+    const skipTagged = full ? '' : "AND NOT EXISTS (SELECT 1 FROM world_index_chunk_status wis WHERE wis.chunkId = kc.id AND wis.status = 'completed')";
+    const sql = `SELECT kc.id, kc.text, kc.ownerId FROM knowledge_chunks kc WHERE ${scopedWhere}
                  ${skipTagged}
                  ORDER BY kc.createdAt ASC`;
-    const chunks = chatId ? db.prepare(sql).all(chatId) : db.prepare(sql).all();
-    if (!chunks.length) return { chunks: 0, batches: 0, tagged: 0 };
+    const chunks = db.prepare(sql).all(...queryParams);
+    if (!chunks.length) return { chunks: 0, batches: 0, tagged: 0, processed: 0, empty: 0, failed: 0 };
+
+    const saveCoverage = db.prepare(`
+        INSERT INTO world_index_chunk_status (chunkId, status, tagCount, lastRunId, error, updatedAt)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(chunkId) DO UPDATE SET
+          status = excluded.status,
+          tagCount = excluded.tagCount,
+          lastRunId = excluded.lastRunId,
+          error = excluded.error,
+          updatedAt = excluded.updatedAt
+    `);
+    const countAutomaticTags = db.prepare("SELECT COUNT(*) AS count FROM chunk_tags WHERE chunkId = ? AND (manual IS NULL OR manual = 0)");
 
     // Retry on provider rate-limits (Bedrock "Too many requests") with exponential
     // backoff so the run completes instead of dropping batches.
@@ -1187,7 +1208,7 @@ async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false,
         }
     };
 
-    let tagged = 0, batches = 0;
+    let tagged = 0, batches = 0, processed = 0, taggedChunks = 0, empty = 0, failed = 0, lastError = null;
     for (let i = 0; i < chunks.length; i += batchSize) {
         if (i > 0) await new Promise(r => setTimeout(r, 600)); // gentle pacing between batches
         const batch = chunks.slice(i, i + batchSize);
@@ -1206,13 +1227,30 @@ async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false,
             const head = splitHeadAndBody(response, fence);
             const chunkTags = validateChunkTags(safeParseArray(head.body), categories, batch.length);
             tagged += applyChunkTags(chunkTags, batch, chatId);
+            const now = Date.now();
+            db.transaction(() => {
+                for (const chunk of batch) {
+                    const tagCount = countAutomaticTags.get(chunk.id).count;
+                    saveCoverage.run(chunk.id, 'completed', tagCount, runId, null, now);
+                    if (tagCount) taggedChunks++; else empty++;
+                }
+            })();
+            processed += batch.length;
         } catch (e) {
             console.error(`[World Index][backfill] batch ${batches} failed:`, e.message);
+            const now = Date.now();
+            const message = e.message || String(e);
+            db.transaction(() => {
+                for (const chunk of batch) saveCoverage.run(chunk.id, 'failed', 0, runId, message, now);
+            })();
+            failed += batch.length;
+            lastError = message;
         }
         batches++;
         console.log(`[World Index][backfill] batch ${batches}: ${Math.min(i + batchSize, chunks.length)}/${chunks.length} chunks, ${tagged} tag row(s) so far.`);
+        if (progressCallback) progressCallback({ total: chunks.length, processed, tagged, taggedChunks, empty, failed, batches, error: lastError });
     }
-    return { chunks: chunks.length, batches, tagged };
+    return { chunks: chunks.length, batches, tagged, processed, taggedChunks, empty, failed, error: lastError };
 }
 
 // --- WRITING DESK: per-chapter vectorization ---

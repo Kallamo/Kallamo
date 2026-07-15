@@ -737,6 +737,44 @@ try {
     console.log("Database Migration: Added manual column to chunk_tags table.");
   }
 
+  // World Index tags are retrieval metadata, separate from vectorization. Coverage
+  // records each chunk the tagger has examined, including valid no-entity results.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS world_index_chunk_status (
+      chunkId TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      tagCount INTEGER NOT NULL DEFAULT 0,
+      lastRunId TEXT,
+      error TEXT,
+      updatedAt INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_world_index_chunk_status_run ON world_index_chunk_status(lastRunId);
+
+    CREATE TABLE IF NOT EXISTS world_index_runs (
+      id TEXT PRIMARY KEY,
+      chatId TEXT NOT NULL,
+      tier TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      status TEXT NOT NULL,
+      totalChunks INTEGER NOT NULL DEFAULT 0,
+      processedChunks INTEGER NOT NULL DEFAULT 0,
+      taggedChunks INTEGER NOT NULL DEFAULT 0,
+      emptyChunks INTEGER NOT NULL DEFAULT 0,
+      failedChunks INTEGER NOT NULL DEFAULT 0,
+      error TEXT,
+      startedAt INTEGER NOT NULL,
+      completedAt INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_world_index_runs_scope ON world_index_runs(chatId, tier, startedAt DESC);
+
+    CREATE TABLE IF NOT EXISTS chunk_tag_suppressions (
+      chunkId TEXT NOT NULL,
+      tag TEXT NOT NULL,
+      entity TEXT NOT NULL,
+      PRIMARY KEY (chunkId, tag, entity)
+    );
+  `);
+
   const cmTableInfo = db.pragma("table_info(constant_memory)");
   const cmColumns = cmTableInfo.map(col => col.name);
   if (!cmColumns.includes('enabled')) {

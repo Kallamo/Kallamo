@@ -13,9 +13,11 @@ export function formatTokens(n) {
  * Approximate token-count pill. Colors by severity: gray (small), amber (large),
  * red (very large / over `max` when a context window is provided).
  */
-export default function TokenBadge({ tokens = 0, max = 0, className = '' }) {
+export default function TokenBadge({ tokens = 0, max = 0, className = '', severity = 'auto' }) {
   let tone = 'gray';
-  if (max > 0) {
+  if (severity === 'neutral') {
+    tone = 'gray';
+  } else if (max > 0) {
     const ratio = tokens / max;
     if (ratio >= 1) tone = 'red';
     else if (ratio >= 0.6) tone = 'amber';
