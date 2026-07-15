@@ -88,7 +88,7 @@ export default function SummarizeModal({
         {/* Modal Header */}
         <div className="flex items-center justify-between p-5 border-b border-gray-800/80">
           <div className="flex flex-col">
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider">Archive & Summarize Memory</h3>
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider">Archive Chat Memory</h3>
             <span className="caption mt-0.5">Select blocks of history to vectorize and move to long-term memory</span>
           </div>
           <button
@@ -121,7 +121,8 @@ export default function SummarizeModal({
             <div className="flex flex-col space-y-1 text-[10px] text-gray-300 leading-relaxed">
               <span className="font-bold text-gray-200">How Memory Archiving Works:</span>
               <p>
-                Selected messages will be compiled, summarized, and vectorized into your local vector database (RAG).
+                Selected messages will be compiled and vectorized into your local vector database (RAG).
+                If Chat Archive Summaries is enabled and a System AI is configured, Kallamo also generates a summary and World Index tags.
                 The AI will dynamically search this database whenever relevant.
                 Archived messages stay visible in the chat log, but are excluded from active context API tokens.
                 To preserve context continuity, the last <strong>10 messages</strong> are kept active.

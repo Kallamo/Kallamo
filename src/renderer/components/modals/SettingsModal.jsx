@@ -86,6 +86,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [systemApiProfileId, setSystemApiProfileId] = useState(settings.advanced.systemApiProfileId || '');
   const [systemModelName, setSystemModelName] = useState(settings.advanced.systemModelName || '');
   const [allowAiEntityCreation, setAllowAiEntityCreation] = useState(settings.advanced.allowAiEntityCreation || false);
+  const [archiveSummarization, setArchiveSummarization] = useState(settings.advanced.archiveSummarization !== false);
   const [streamingEnabled, setStreamingEnabled] = useState(settings.advanced.streaming !== false);
 
   // Models pre-defined on the selected System AI connection (drives the Model dropdown).
@@ -121,16 +122,16 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const settingsRef = useRef({
     accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled, writingToolbar, smartTypography,
     chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug,
-    embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, allowAiEntityCreation
+    embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, allowAiEntityCreation, archiveSummarization
   });
 
   useEffect(() => {
     settingsRef.current = {
       accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled, writingToolbar,
       chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug,
-      embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, allowAiEntityCreation
+      embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, allowAiEntityCreation, archiveSummarization
     };
-  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, smartTypography, chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, allowAiEntityCreation]);
+  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, smartTypography, chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, allowAiEntityCreation, archiveSummarization]);
 
   // Handle immediate save for selects and color choices
   const updateSetting = async (category, key, value) => {
@@ -152,6 +153,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       if (key === 'tokenDebug') setTokenDebug(value);
       if (key === 'streaming') setStreamingEnabled(value);
       if (key === 'allowAiEntityCreation') setAllowAiEntityCreation(value);
+      if (key === 'archiveSummarization') setArchiveSummarization(value);
       if (key === 'embeddingEngine') setEmbeddingEngine(value);
       if (key === 'embeddingApiProfileId') setEmbeddingApiProfileId(value);
       if (key === 'systemApiProfileId') { setSystemApiProfileId(value); setSystemModelName(''); }
@@ -182,6 +184,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         tokenDebug: key === 'tokenDebug' ? value : current.tokenDebug,
         streaming: key === 'streaming' ? value : current.streaming,
         allowAiEntityCreation: key === 'allowAiEntityCreation' ? value : current.allowAiEntityCreation,
+        archiveSummarization: key === 'archiveSummarization' ? value : current.archiveSummarization,
         embeddingEngine: key === 'embeddingEngine' ? value : current.embeddingEngine,
         embeddingApiProfileId: key === 'embeddingApiProfileId' ? value : current.embeddingApiProfileId,
         embeddingModelName: current.embeddingModelName,
@@ -234,6 +237,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
           agenticDebug: current.agenticDebug,
           tokenDebug: current.tokenDebug,
           allowAiEntityCreation: current.allowAiEntityCreation,
+          archiveSummarization: current.archiveSummarization,
           embeddingEngine: current.embeddingEngine,
           embeddingApiProfileId: current.embeddingApiProfileId,
           embeddingModelName: key === 'embeddingModelName' ? value : current.embeddingModelName,
@@ -1091,6 +1095,24 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       </div>
 
                       {!systemAiReady && <p className="text-xs text-amber-300 flex items-center gap-2"><AlertTriangle className="w-3.5 h-3.5 shrink-0" />{systemAiRequirement} System AI features remain unavailable until both are selected.</p>}
+
+                      <div className="h-px bg-gray-800/50 w-full"></div>
+
+                      <div className="flex items-center justify-between">
+                        <div className="min-w-0 pr-4">
+                          <span className="block text-sm text-gray-200 font-bold">Summarize Chat Archives</span>
+                          <p className="caption">Uses the System AI to create a title and summary when chat history is archived. Turn it off to store only the raw vectorized conversation. Without a System AI, archives are always vectorized without a generated summary.</p>
+                        </div>
+                        <label className="relative inline-flex items-center shrink-0 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={archiveSummarization}
+                            onChange={(e) => updateSetting('advanced', 'archiveSummarization', e.target.checked)}
+                            className="sr-only peer"
+                          />
+                          <div className="w-7 h-4 bg-gray-700 rounded-full peer peer-focus-visible:ring-2 peer-focus-visible:ring-accent/60 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
+                        </label>
+                      </div>
 
                       <div className="h-px bg-gray-800/50 w-full"></div>
 

@@ -938,6 +938,15 @@ function getSystemAi() {
     return getSystemAiConfiguration().systemAi;
 }
 
+function isChatArchiveSummarizationEnabled() {
+    try {
+        const row = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
+        return !row || JSON.parse(row.value).archiveSummarization !== false;
+    } catch (e) {
+        return true;
+    }
+}
+
 // Render a workspace's entity registry as a prompt block so the classifier reuses
 // existing canonical names (and maps titles/variants to them) instead of coining
 // inconsistent values. Empty string when the registry has no entities yet.
@@ -1779,9 +1788,10 @@ async function executeSummarizationInternal({ chatId, selectedMessages, newSumma
     const vectors = await vectorizeChunks(chunks, "Chat Archive");
     vectors.forEach(v => v.blockId = blockId);
 
-    const profile = db.prepare('SELECT * FROM writing_profiles WHERE id = ?').get(profileId) || db.prepare('SELECT * FROM writing_profiles LIMIT 1').get();
-    let title = customTitle || "Archived Memory";
-    let summary = "Archived conversation context.";
+    const systemAi = getSystemAi();
+    const shouldSummarize = Boolean(systemAi) && isChatArchiveSummarizationEnabled();
+    let title = customTitle || "Chat Archive";
+    let summary = '';
 
     // Persist the raw chunks first so they have ids to tag (verbatim tier).
     try {
@@ -1790,18 +1800,20 @@ async function executeSummarizationInternal({ chatId, selectedMessages, newSumma
         console.error("Failed to insert summarized vectors to SQLite:", dbErr);
     }
 
-    // World index: one System-AI pass tags each raw chunk (who/what) and gives the
-    // block its title + summary. Never blocks archiving, a failed pass just leaves
-    // the chunks untagged.
-    try {
-        const chunkRecords = vectors.map(v => ({ id: v.id, text: v.text }));
-        const cls = await classifyAndTagSegment(chunkRecords, profile, chatId);
-        if (!customTitle && cls.title) title = cls.title;
-        if (cls.summary) summary = cls.summary;
-        const tagged = applyChunkTags(cls.chunkTags, chunkRecords, chatId);
-        console.log(`[World Index] segment "${title}": ${cls.chunkTags.length}/${chunkRecords.length} chunk(s) tagged, ${tagged} tag row(s).`);
-    } catch (smErr) {
-        console.error("[World Index] tagging failed (archiving continues):", smErr);
+    // The System AI is the sole source of generated archive summaries and tags.
+    // Without it, or when summarization is disabled, archiving remains local and
+    // stores only the raw vectorized conversation.
+    if (shouldSummarize) {
+        try {
+            const chunkRecords = vectors.map(v => ({ id: v.id, text: v.text }));
+            const cls = await classifyAndTagSegment(chunkRecords, null, chatId);
+            if (!customTitle && cls.title) title = cls.title;
+            if (cls.summary) summary = cls.summary;
+            const tagged = applyChunkTags(cls.chunkTags, chunkRecords, chatId);
+            console.log(`[World Index] segment "${title}": ${cls.chunkTags.length}/${chunkRecords.length} chunk(s) tagged, ${tagged} tag row(s).`);
+        } catch (smErr) {
+            console.error("[World Index] tagging failed (archiving continues):", smErr);
+        }
     }
 
     let memoryBlocks = [];
