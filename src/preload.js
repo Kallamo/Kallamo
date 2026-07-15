@@ -150,6 +150,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   testChatRagSearch: (chatId, queryText, profileId) => ipcRenderer.invoke('test-chat-rag-search', { chatId, queryText, profileId }),
   getChatKbBlocks: (chatId) => ipcRenderer.invoke('get-chat-kb-blocks', { chatId }),
   saveChatKbBlock: (chatId, block) => ipcRenderer.invoke('save-chat-kb-block', { chatId, block }),
+  setChatKbBlockProfiles: (chatId, blockId, profiles) => ipcRenderer.invoke('set-chat-kb-block-profiles', { chatId, blockId, profiles }),
   renameChatKbBlock: (chatId, blockId, title) => ipcRenderer.invoke('rename-chat-kb-block', { chatId, blockId, title }),
   deleteChatKbBlock: (chatId, block) => ipcRenderer.invoke('delete-chat-kb-block', { chatId, block }),
 

@@ -4408,7 +4408,8 @@ ipcMain.handle('get-chat-kb-blocks', async (event, { chatId }) => {
             id: v.id,
             source: v.title || v.source || 'Custom Memory',
             text: v.summary || v.text || '',
-            keywords: v.keywords || []
+            keywords: v.keywords || [],
+            profiles: v.profiles || []
           };
           loadedKbData.push({
             id: v.id || `manual_${Date.now()}_${idx}`,
@@ -4417,9 +4418,11 @@ ipcMain.handle('get-chat-kb-blocks', async (event, { chatId }) => {
             text: cleanText,
             strategy: v.strategy || 'rag_search',
             enabled: v.enabled !== false,
+            profiles: v.profiles || [],
             rawItem: {
               ...rawItem,
-              strategy: v.strategy || 'rag_search'
+              strategy: v.strategy || 'rag_search',
+              profiles: rawItem.profiles || v.profiles || []
             }
           });
         });
@@ -4668,6 +4671,24 @@ ipcMain.handle('rename-chat-kb-block', async (event, { chatId, blockId, title })
     return { success: true };
   } catch (e) {
     console.error("Error renaming chat KB block:", e);
+    throw e;
+  }
+});
+
+ipcMain.handle('set-chat-kb-block-profiles', async (event, { chatId, blockId, profiles }) => {
+  try {
+    const chatRow = db.prepare('SELECT memoryBlocks FROM chats WHERE id = ?').get(chatId);
+    if (!chatRow?.memoryBlocks) return { success: false, error: 'Memory block not found.' };
+
+    const memoryBlocks = JSON.parse(chatRow.memoryBlocks);
+    const index = memoryBlocks.findIndex(block => block.id === blockId);
+    if (index < 0) return { success: false, error: 'Memory block not found.' };
+
+    memoryBlocks[index] = { ...memoryBlocks[index], profiles: Array.isArray(profiles) ? profiles : [] };
+    db.prepare('UPDATE chats SET memoryBlocks = ? WHERE id = ?').run(JSON.stringify(memoryBlocks), chatId);
+    return { success: true };
+  } catch (e) {
+    console.error('Error setting chat KB block profiles:', e);
     throw e;
   }
 });

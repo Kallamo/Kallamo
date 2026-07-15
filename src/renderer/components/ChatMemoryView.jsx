@@ -703,27 +703,18 @@ export default function ChatMemoryView({
             : b
         ));
       } else if (block.type === 'snippet') {
-        // Persist via saveChatKbBlock so the backend merges into the fresh
-        // memoryBlocks from the DB. Rebuilding the whole JSON from the (possibly
-        // stale) chat prop would clobber any snippets added this session.
         const targetBlock = blocks.find(b => b.id === block.id);
         if (targetBlock) {
           const newList = targetBlock.profiles.includes(profileId) ? targetBlock.profiles.filter(id => id !== profileId) : [...targetBlock.profiles, profileId];
-          await electronAPI.saveChatKbBlock(chat.id, {
-            id: targetBlock.id,
-            type: 'manual',
-            source: targetBlock.source,
-            text: targetBlock.text,
-            profiles: newList,
-            keywords: targetBlock.keywords || [],
-            strategy: targetBlock.strategy || 'rag_search'
-          });
+          const result = await electronAPI.setChatKbBlockProfiles(chat.id, targetBlock.id, newList);
+          if (!result?.success) throw new Error(result?.error || 'Unable to update memory scope.');
+          setBlocks(prev => prev.map(item => item.id === targetBlock.id ? { ...item, profiles: newList } : item));
         }
         await refreshChats(chat.id);
-        loadBlocks();
       }
     } catch (err) {
       console.error("Error setting profile scoping:", err);
+      showToast('Failed to update memory scope.', 'error');
     }
   };
 
@@ -1481,9 +1472,13 @@ export default function ChatMemoryView({
 
                     {/* Writing Profiles Scoping dropdown */}
                     {block.type !== 'summarized' && (
-                      <div className="relative" ref={activeScopingBlockId === block.id ? scopeAnchorRef : null}>
+                      <div className="relative">
                         <button
-                          onClick={() => setActiveScopingBlockId(activeScopingBlockId === block.id ? null : block.id)}
+                          onClick={(event) => {
+                            const nextBlockId = activeScopingBlockId === block.id ? null : block.id;
+                            scopeAnchorRef.current = nextBlockId ? event.currentTarget : null;
+                            setActiveScopingBlockId(nextBlockId);
+                          }}
                           className={`flex items-center space-x-1 px-2.5 py-1 border rounded-lg text-[9px] font-bold uppercase transition-colors cursor-pointer ${block.profiles.length > 0
                             ? 'bg-teal-500/10 border-teal-500/35 text-teal-400 hover:bg-teal-500/25'
                             : 'bg-transparent border-gray-800 text-gray-400 hover:text-white hover:border-gray-700'
@@ -1495,7 +1490,8 @@ export default function ChatMemoryView({
                         </button>
 
                         {activeScopingBlockId === block.id && (
-                          <Popover anchorRef={scopeAnchorRef} open onClose={() => setActiveScopingBlockId(null)} matchAnchorWidth={false} align="right" scroll={false} className="w-48 !p-2">
+                          <Popover anchorRef={scopeAnchorRef} open onClose={() => { scopeAnchorRef.current = null; setActiveScopingBlockId(null); }} matchAnchorWidth={false} align="right" scroll={false} className="w-48 !p-2">
+                            <div onMouseDown={(event) => event.stopPropagation()}>
                               <span className="block text-[8px] font-bold text-gray-500 uppercase tracking-widest px-2 py-1">Scope Settings</span>
 
                               <div className="max-h-40 overflow-y-auto custom-scrollbar space-y-0.5 mt-1 select-none">
@@ -1515,6 +1511,17 @@ export default function ChatMemoryView({
 
                                   return displayProfiles.map(p => {
                                     const isSelected = block.profiles.includes(p.id);
+                                    if (p.needsSetup) {
+                                      return (
+                                        <div key={p.id} className="flex items-center justify-between p-1.5 rounded opacity-60" title="This AI Profile needs an API Connection and model before it can be used.">
+                                          <div className="flex items-center space-x-2 min-w-0 mr-2">
+                                            <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: p.color }} />
+                                            <span className="text-[10px] text-gray-400 truncate font-sans">{p.name}</span>
+                                          </div>
+                                          <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                                        </div>
+                                      );
+                                    }
                                     return (
                                       <label
                                         key={p.id}
@@ -1544,6 +1551,7 @@ export default function ChatMemoryView({
                               <span className="text-[8px] text-gray-500 italic px-2 block leading-snug">
                                 If no profiles are selected, this block is shared globally.
                               </span>
+                            </div>
                           </Popover>
                         )}
                       </div>
