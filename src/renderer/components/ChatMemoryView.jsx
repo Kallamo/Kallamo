@@ -155,7 +155,11 @@ export default function ChatMemoryView({
     }
   };
 
-  const chunkTagsOf = (chunkId) => fileChunkTags[chunkId] || { keywords: [], entities: [] };
+  const chunkTagsOf = (chunkOrId) => {
+    const chunk = typeof chunkOrId === 'object' ? chunkOrId : null;
+    const chunkId = chunk?.id || chunkOrId;
+    return fileChunkTags[chunkId] || chunk?.tags || { keywords: [], entities: [] };
+  };
 
   const addChunkKeyword = (chunkId, text) => {
     const raw = String(text || '').trim().toLowerCase();
@@ -2158,7 +2162,7 @@ export default function ChatMemoryView({
             {/* Chunks List */}
             <div className="flex-1 overflow-y-auto custom-scrollbar space-y-4 p-5">
               {viewingFileBlock.chunks.map((chunk, idx) => {
-                const cTags = chunkTagsOf(chunk.id);
+                const cTags = chunkTagsOf(chunk);
                 const isTagInputActive = activeTagChunk === chunk.id;
                 return (
                 <div key={chunk.id} className="bg-[#00080B] border border-gray-800/80 rounded-xl p-3.5 flex flex-col relative group/chunk">

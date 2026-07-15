@@ -2541,11 +2541,9 @@ ipcMain.handle('get-chat-memory-tags', async (event, { chatId }) => {
   }
 });
 
-// Per-chunk tags for a chat's uploaded RAG files (ownerType chat_kb), for the file
-// chunk viewer. Returns { [chunkId]: { keywords: ['#x'], entities: [{ value, entity }] } }.
-// keywords = the user's manual (yellow) tags; entities = blue tags (auto + user).
-ipcMain.handle('get-chat-kb-tags', async (event, { chatId }) => {
-  try {
+// Per-chunk tags for a chat's uploaded RAG files (ownerType chat_kb). Keeping this
+// query shared lets the regular chunk loader include the same data the viewer uses.
+function getChatKbTags(chatId) {
     const rows = db.prepare(
       `SELECT ct.chunkId AS chunkId, ct.tag AS tag, ct.entity AS entity, ct.manual AS manual,
               COALESCE(e.canonicalName, ct.entity) AS value
@@ -2565,7 +2563,14 @@ ipcMain.handle('get-chat-kb-tags', async (event, { chatId }) => {
         if (!bucket.keywords.includes(r.tag)) bucket.keywords.push(r.tag);
       }
     }
-    return { success: true, tags: map };
+    return map;
+}
+
+// Per-chunk tags for the file chunk viewer. keywords = the user's manual (yellow)
+// tags; entities = blue tags (auto + user).
+ipcMain.handle('get-chat-kb-tags', async (event, { chatId }) => {
+  try {
+    return { success: true, tags: getChatKbTags(chatId) };
   } catch (e) {
     console.error('[get-chat-kb-tags] failed:', e);
     return { success: false, error: e.message, tags: {} };
@@ -4099,6 +4104,7 @@ ipcMain.handle('delete-chat-manual-snippet', async (event, { chatId, snippetId }
 ipcMain.handle('get-chat-kb-blocks', async (event, { chatId }) => {
   try {
     const loadedKbData = [];
+    const chunkTags = getChatKbTags(chatId);
 
     const ragChunks = db.prepare('SELECT id, source, text, enabled, manuallyEdited FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ?').all(chatId, 'chat_kb');
     ragChunks.forEach((v) => {
@@ -4113,6 +4119,7 @@ ipcMain.handle('get-chat-kb-blocks', async (event, { chatId }) => {
         text: cleanText,
         enabled: v.enabled !== 0,
         manuallyEdited: v.manuallyEdited === 1,
+        tags: chunkTags[v.id] || { keywords: [], entities: [] },
         rawItem: v
       });
     });
