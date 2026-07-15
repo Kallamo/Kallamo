@@ -95,24 +95,31 @@ function createWindow () {
     }
   });
 
-  // Smart dev/prod loading: try Vite dev server first, fallback to built dist
-  isViteDevRunning().then((devRunning) => {
-    if (devRunning) {
-      console.log('[Main] Loading from Vite dev server...');
-      mainWindow.loadURL('http://localhost:5173');
-      mainWindow.webContents.openDevTools();
+  const loadBuiltRenderer = () => {
+    const distIndex = path.join(__dirname, '../dist/index.html');
+    if (fs.existsSync(distIndex)) {
+      console.log('[Main] Loading from built dist/index.html...');
+      mainWindow.loadFile(distIndex);
     } else {
-      const distIndex = path.join(__dirname, '../dist/index.html');
-      if (fs.existsSync(distIndex)) {
-        console.log('[Main] Loading from built dist/index.html...');
-        mainWindow.loadFile(distIndex);
-      } else {
-        console.error('[Main] ERROR: No Vite dev server and no dist/index.html found!');
-      }
+      console.error('[Main] ERROR: No Vite dev server and no dist/index.html found!');
     }
+  };
 
-    setupAutoUpdater(mainWindow);
-  });
+  if (app.isPackaged) {
+    loadBuiltRenderer();
+  } else {
+    isViteDevRunning().then((devRunning) => {
+      if (devRunning) {
+        console.log('[Main] Loading from Vite dev server...');
+        mainWindow.loadURL('http://localhost:5173');
+        mainWindow.webContents.openDevTools();
+      } else {
+        loadBuiltRenderer();
+      }
+    });
+  }
+
+  setupAutoUpdater(mainWindow);
 
   return mainWindow;
 }
