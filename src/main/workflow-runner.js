@@ -902,16 +902,40 @@ function splitHeadAndBody(response, fence) {
 }
 
 // The designated System AI (api profile + model) for background tasks, read from
-// global settings. Null when unset → callers fall back to the active profile.
-function getSystemAi() {
+// global settings. Both fields are required so a provider never picks a default model.
+function getSystemAiConfiguration() {
     try {
         const row = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
-        if (row) {
-            const adv = JSON.parse(row.value);
-            if (adv.systemApiProfileId) return { apiProfileId: adv.systemApiProfileId, model: adv.systemModelName || '' };
+        const advanced = row ? JSON.parse(row.value) : {};
+        const apiProfileId = String(advanced.systemApiProfileId || '').trim();
+        const model = String(advanced.systemModelName || '').trim();
+
+        if (!apiProfileId) {
+            return { systemAi: null, error: 'System AI needs an API Connection. Select one in Settings → Engine & Memory.' };
         }
-    } catch (e) { }
-    return null;
+        if (!model) {
+            return { systemAi: null, error: 'System AI needs a model for the selected API Connection. Select one in Settings → Engine & Memory.' };
+        }
+
+        const apiProfile = db.prepare('SELECT id, models FROM api_profiles WHERE id = ?').get(apiProfileId);
+        if (!apiProfile) {
+            return { systemAi: null, error: 'The selected System AI connection is no longer available. Choose another API Connection in Settings → Engine & Memory.' };
+        }
+
+        let models = [];
+        try { models = typeof apiProfile.models === 'string' ? JSON.parse(apiProfile.models) : (apiProfile.models || []); } catch (e) { models = []; }
+        if (Array.isArray(models) && models.length && !models.includes(model)) {
+            return { systemAi: null, error: 'The selected System AI model is no longer available on this API Connection. Choose a model in Settings → Engine & Memory.' };
+        }
+
+        return { systemAi: { apiProfileId, model }, error: null };
+    } catch (e) {
+        return { systemAi: null, error: 'System AI settings could not be read. Open Settings → Engine & Memory and select an API Connection and model again.' };
+    }
+}
+
+function getSystemAi() {
+    return getSystemAiConfiguration().systemAi;
 }
 
 // Render a workspace's entity registry as a prompt block so the classifier reuses
@@ -1124,8 +1148,9 @@ function applyChunkTags(chunkTags, chunkRecords, workspaceId = null) {
 // Batches the chunks through ONE System-AI call each (tagging only, no title/
 // summary) and writes chunk_tags. INSERT OR IGNORE keeps re-runs from duplicating.
 async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false, tier = 'archive', chunkIds = null, runId = null, progressCallback = null } = {}) {
-    const systemAi = getSystemAi();
-    if (!systemAi) throw new Error('World Index tagging requires a System AI');
+    const systemAiConfig = getSystemAiConfiguration();
+    const systemAi = systemAiConfig.systemAi;
+    if (!systemAi) throw new Error(systemAiConfig.error);
     const apiProfileId = systemAi.apiProfileId;
     const model = systemAi.model;
     const manualMode = false;
@@ -1153,7 +1178,7 @@ async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false,
     }
     const where = (chatId ? 'kc.ownerId = ? AND ' : '') + `kc.ownerType = '${ownerType}' ${sourceClause}`;
     const selectedIds = Array.isArray(chunkIds) ? [...new Set(chunkIds.filter(Boolean))] : [];
-    if (Array.isArray(chunkIds) && !selectedIds.length) return { chunks: 0, batches: 0, tagged: 0, processed: 0, empty: 0, failed: 0 };
+    if (Array.isArray(chunkIds) && !selectedIds.length) return { chunks: 0, batches: 0, tagged: 0, taggedChunks: 0, processed: 0, empty: 0, failed: 0 };
     const selectedClause = selectedIds.length ? `AND kc.id IN (${selectedIds.map(() => '?').join(', ')})` : '';
     const queryParams = [...(chatId ? [chatId] : []), ...selectedIds];
     const scopedWhere = `${where} ${selectedClause}`;
@@ -1177,7 +1202,7 @@ async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false,
                  ${skipTagged}
                  ORDER BY kc.createdAt ASC`;
     const chunks = db.prepare(sql).all(...queryParams);
-    if (!chunks.length) return { chunks: 0, batches: 0, tagged: 0, processed: 0, empty: 0, failed: 0 };
+    if (!chunks.length) return { chunks: 0, batches: 0, tagged: 0, taggedChunks: 0, processed: 0, empty: 0, failed: 0 };
 
     const saveCoverage = db.prepare(`
         INSERT INTO world_index_chunk_status (chunkId, status, tagCount, lastRunId, error, updatedAt)
@@ -1570,8 +1595,9 @@ async function enrichEntities(workspaceId, progressCallback = null) {
     if (!workspaceId) throw new Error('workspaceId is required');
     // Entity enrichment is a precise-extraction task; it runs on the dedicated System AI
     // only, never on a writing profile. No System AI → the feature is unavailable.
-    const systemAi = getSystemAi();
-    if (!systemAi) throw new Error('Set a System AI in Settings → Engine & Memory to update entities.');
+    const systemAiConfig = getSystemAiConfiguration();
+    const systemAi = systemAiConfig.systemAi;
+    if (!systemAi) throw new Error(systemAiConfig.error);
     const apiProfileId = systemAi.apiProfileId;
     const model = systemAi.model;
     const manualMode = false;
@@ -2601,5 +2627,6 @@ module.exports = {
     classifyAndTagSegment,
     applyChunkTags,
     computeDocumentVectorStatus,
-    checkAndAutoSummarize
+    checkAndAutoSummarize,
+    getSystemAiConfiguration
 };

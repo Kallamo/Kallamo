@@ -63,6 +63,24 @@ function getWorldIndexStatus(chatId, tier) {
   };
 }
 
+function getWorldIndexErrors(chatId) {
+  const runs = db.prepare(`
+    SELECT id, tier, mode, status, failedChunks, error, startedAt, completedAt
+    FROM world_index_runs
+    WHERE chatId = ? AND status IN ('partial', 'failed') AND dismissedAt IS NULL
+    ORDER BY completedAt DESC, startedAt DESC
+  `).all(chatId);
+  const failedSources = db.prepare(`
+    SELECT kc.source AS source, COUNT(*) AS chunks, COALESCE(wis.error, '') AS error
+    FROM world_index_chunk_status wis
+    JOIN knowledge_chunks kc ON kc.id = wis.chunkId
+    WHERE wis.lastRunId = ? AND wis.status = 'failed'
+    GROUP BY kc.source, wis.error
+    ORDER BY chunks DESC, source COLLATE NOCASE
+  `);
+  return runs.map(run => ({ ...run, sources: failedSources.all(run.id) }));
+}
+
 // Helper to index new knowledge base files in writing profile
 async function indexProfileKnowledgeBase(sender, profileId, knowledgeFilesInput) {
   const knowledgeFiles = typeof knowledgeFilesInput === 'string'
@@ -3381,6 +3399,23 @@ ipcMain.handle('get-world-index-status', async (event, { chatId, tier }) => {
   }
 });
 
+ipcMain.handle('get-world-index-errors', async (event, { chatId }) => {
+  try {
+    return { success: true, errors: getWorldIndexErrors(chatId) };
+  } catch (e) {
+    return { success: false, error: e.message, errors: [] };
+  }
+});
+
+ipcMain.handle('dismiss-world-index-error', async (event, { runId }) => {
+  try {
+    db.prepare('UPDATE world_index_runs SET dismissedAt = ? WHERE id = ?').run(Date.now(), runId);
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
 ipcMain.handle('get-world-index-taggable-chunks', async (event, { chatId, tier }) => {
   try {
     const scope = worldIndexScope(tier);
@@ -3407,6 +3442,16 @@ ipcMain.handle('start-world-index-tagging', async (event, { chatId, tier = 'arch
   const startedAt = Date.now();
   const selectedCount = Array.isArray(chunkIds) ? [...new Set(chunkIds.filter(Boolean))].length : null;
   const state = { runId, mode: selectedCount !== null ? 'selected' : (full ? 'all' : 'new'), status: 'running', total: selectedCount ?? (full ? initial.total : initial.pending), processed: 0, tagged: 0, taggedChunks: 0, empty: 0, failed: 0, error: null, startedAt };
+  const { getSystemAiConfiguration } = require('./workflow-runner');
+  const systemAiConfig = getSystemAiConfiguration();
+  if (!systemAiConfig.systemAi) {
+    db.prepare(`INSERT INTO world_index_runs (id, chatId, tier, mode, status, totalChunks, error, startedAt, completedAt)
+                VALUES (?, ?, ?, ?, 'failed', 0, ?, ?, ?)`)
+      .run(runId, chatId, tier, state.mode, systemAiConfig.error, startedAt, startedAt);
+    const status = getWorldIndexStatus(chatId, tier);
+    try { event.sender.send('world-index-tagging-progress', { chatId, tier, status }); } catch (e) {}
+    return { success: false, error: systemAiConfig.error, status };
+  }
   db.prepare(`INSERT INTO world_index_runs (id, chatId, tier, mode, status, totalChunks, startedAt)
               VALUES (?, ?, ?, ?, 'running', ?, ?)`)
     .run(runId, chatId, tier, state.mode, state.total, startedAt);

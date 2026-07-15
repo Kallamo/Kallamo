@@ -74,6 +74,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   copyToClipboard: (text) => ipcRenderer.invoke('copy-to-clipboard', text),
   backfillWorldIndex: (chatId, opts = {}) => ipcRenderer.invoke('backfill-world-index', { chatId, ...opts }),
   getWorldIndexStatus: (chatId, tier) => ipcRenderer.invoke('get-world-index-status', { chatId, tier }),
+  getWorldIndexErrors: (chatId) => ipcRenderer.invoke('get-world-index-errors', { chatId }),
+  dismissWorldIndexError: (runId) => ipcRenderer.invoke('dismiss-world-index-error', { runId }),
   getWorldIndexTaggableChunks: (chatId, tier) => ipcRenderer.invoke('get-world-index-taggable-chunks', { chatId, tier }),
   startWorldIndexTagging: (chatId, opts = {}) => ipcRenderer.invoke('start-world-index-tagging', { chatId, ...opts }),
   getChatMemoryTags: (chatId) => ipcRenderer.invoke('get-chat-memory-tags', { chatId }),

@@ -94,6 +94,14 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     if (!p) return [];
     try { return typeof p.models === 'string' ? JSON.parse(p.models) : (p.models || []); } catch (e) { return []; }
   })();
+  const systemAiReady = Boolean(systemApiProfileId && systemModelName && systemProfileModels.includes(systemModelName));
+  const systemAiRequirement = !systemApiProfileId
+    ? 'Select an API Connection, then select a model.'
+    : !systemModelName
+      ? 'Select a model for this API Connection.'
+      : !systemProfileModels.includes(systemModelName)
+        ? 'The selected model is no longer available. Choose another model.'
+        : '';
 
   const [confirmAction, setConfirmAction] = useState(null); // null | 'purge' | 'clearCache' | 'wipe'
   const [backupStatus, setBackupStatus] = useState(null); // null | { success: boolean, path?: string, error?: string }
@@ -446,7 +454,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
             >
               <Cpu className="w-4 h-4 shrink-0" />
               <span className="flex-1">Engine &amp; Memory</span>
-              {!systemApiProfileId && <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />}
+              {!systemAiReady && <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />}
             </button>
             <button
               onClick={() => { setActiveTab('interface'); setShowAddApiForm(false); }}
@@ -1048,10 +1056,10 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                     <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
                       <Cpu className="w-3.5 h-3.5" />
                       <span>System AI</span>
-                      {!systemApiProfileId && <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />}
+                      {!systemAiReady && <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />}
                     </h4>
                     <div className="bg-[#051116] p-5 rounded-xl border border-gray-800/80 space-y-4">
-                      <p className="caption">Powers summaries and structured memory. Pick a model that handles JSON well. Unset uses the active profile.</p>
+                      <p className="caption">Powers structured memory and World Index tagging. Select both an API Connection and a model. Kallamo never falls back to the active profile or a provider default for System AI work.</p>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
                           <label className="block text-xs font-bold text-gray-400 mb-1.5">API Connection</label>
@@ -1060,7 +1068,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                             onChange={(e) => updateSetting('advanced', 'systemApiProfileId', e.target.value)}
                             className="w-full bg-[#011419] border border-gray-700 text-gray-200 text-xs rounded-md px-3 py-2 focus:outline-none focus:border-accent cursor-pointer"
                           >
-                            <option value="">Active profile</option>
+                            <option value="">Select API Connection</option>
                             {apiProfiles.map(apiProf => (
                               <option key={apiProf.id} value={apiProf.id}>{apiProf.name} ({apiProf.provider})</option>
                             ))}
@@ -1082,20 +1090,22 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                         </div>
                       </div>
 
+                      {!systemAiReady && <p className="text-xs text-amber-300 flex items-center gap-2"><AlertTriangle className="w-3.5 h-3.5 shrink-0" />{systemAiRequirement} System AI features remain unavailable until both are selected.</p>}
+
                       <div className="h-px bg-gray-800/50 w-full"></div>
 
                       {/* World Index: let the AI create unregistered entities during tagging.
                           Belongs with the System AI because tagging runs on it. */}
-                      <div className={`flex items-center justify-between ${!systemApiProfileId ? 'opacity-50' : ''}`}>
+                      <div className={`flex items-center justify-between ${!systemAiReady ? 'opacity-50' : ''}`}>
                         <div className="pr-4">
                           <span className="block text-sm text-gray-200 font-bold">Let the AI create new entities</span>
-                          <p className="caption">When indexing your chapters and chat, the System AI usually tags only entities that already exist in your Worldbuild. Turn this on to let it propose new ones for names it can't match, added to Worldbuild as pending suggestions you accept, merge, or dismiss. Off by default.{!systemApiProfileId && ' Requires a System AI above.'}</p>
+                          <p className="caption">When indexing your chapters and chat, the System AI usually tags only entities that already exist in your Worldbuild. Turn this on to let it propose new ones for names it can't match, added to Worldbuild as pending suggestions you accept, merge, or dismiss. Off by default.{!systemAiReady && ' Requires an API Connection and model above.'}</p>
                         </div>
-                        <label className={`relative inline-flex items-center shrink-0 ${systemApiProfileId ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
+                        <label className={`relative inline-flex items-center shrink-0 ${systemAiReady ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
                           <input
                             type="checkbox"
                             checked={allowAiEntityCreation}
-                            disabled={!systemApiProfileId}
+                            disabled={!systemAiReady}
                             onChange={(e) => updateSetting('advanced', 'allowAiEntityCreation', e.target.checked)}
                             className="sr-only peer"
                           />

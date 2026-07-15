@@ -283,7 +283,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const { showToast, settings } = useApp();
   // Entity enrichment (and world tagging) run on the dedicated System AI only. Without one
   // the "Update entities" button stays visible but disabled, with a tooltip pointing here.
-  const hasSystemAi = !!settings?.advanced?.systemApiProfileId;
+  const hasSystemAi = !!settings?.advanced?.systemApiProfileId && !!settings?.advanced?.systemModelName;
   const workspaceId = chat?.id;
 
   const [entities, setEntities] = useState([]);
@@ -505,7 +505,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
 
   const runEnrichment = async () => {
     if (enriching || !workspaceId) return;
-    if (!hasSystemAi) { showToast('Set a System AI in Settings → Engine & Memory to update entities.', 'error'); return; }
+    if (!hasSystemAi) { showToast('System AI needs both an API Connection and a model in Settings → Engine & Memory.', 'error'); return; }
     setEnriching(true); setEnrichProgress(null);
     // The completion event drives the toast, reload and clearing of the overlay. Here we
     // only surface a failure to even start the run (e.g. one is already in flight).
@@ -920,7 +920,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                 (a disabled button has pointer-events: none). */}
             <div className="flex-1 min-w-0" data-tooltip={hasSystemAi
               ? "Read your story and refresh each entity's details (skips locked ones)"
-              : 'Set a System AI in Settings → Engine & Memory to update entities.'}>
+              : 'Select both an API Connection and a model in Settings → Engine & Memory to update entities.'}>
               <Button fullWidth size="sm" variant="ghost" icon={RefreshCw} loading={enriching}
                 disabled={enriching || entities.length === 0 || !hasSystemAi}
                 onClick={runEnrichment}>

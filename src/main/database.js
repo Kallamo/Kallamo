@@ -763,7 +763,8 @@ try {
       failedChunks INTEGER NOT NULL DEFAULT 0,
       error TEXT,
       startedAt INTEGER NOT NULL,
-      completedAt INTEGER
+      completedAt INTEGER,
+      dismissedAt INTEGER
     );
     CREATE INDEX IF NOT EXISTS idx_world_index_runs_scope ON world_index_runs(chatId, tier, startedAt DESC);
 
@@ -774,6 +775,14 @@ try {
       PRIMARY KEY (chunkId, tag, entity)
     );
   `);
+  const wirColumns = db.pragma("table_info(world_index_runs)").map(col => col.name);
+  if (!wirColumns.includes('dismissedAt')) {
+    db.exec('ALTER TABLE world_index_runs ADD COLUMN dismissedAt INTEGER');
+  }
+  db.prepare(`UPDATE world_index_runs
+              SET status = 'completed', error = NULL, failedChunks = 0
+              WHERE error = 'NOT NULL constraint failed: world_index_runs.taggedChunks'
+                AND processedChunks = 0 AND failedChunks = 0`).run();
 
   const cmTableInfo = db.pragma("table_info(constant_memory)");
   const cmColumns = cmTableInfo.map(col => col.name);
