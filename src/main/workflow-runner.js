@@ -849,7 +849,8 @@ function safeParseArray(body) {
 // Validate the per-chunk tag array from the classifier. Keep only known categories
 // and in-range chunk indices; explode each category's value list into {tag, value}
 // pairs (create-off: unknown categories dropped). Returns [{chunkIndex, tags:[{tag,value}]}].
-function validateChunkTags(arr, categories, chunkCount) {
+function validateChunkTags(arr, categories, chunkRecords) {
+    const chunkCount = Array.isArray(chunkRecords) ? chunkRecords.length : Number(chunkRecords) || 0;
     const byName = new Map(categories.map(c => [c.name.toLowerCase(), c.name]));
     const out = [];
     for (const entry of (Array.isArray(arr) ? arr : [])) {
@@ -857,6 +858,14 @@ function validateChunkTags(arr, categories, chunkCount) {
         const idx = Number(entry.chunk);
         if (!Number.isInteger(idx) || idx < 0 || idx >= chunkCount) continue;
         const tags = [];
+        const chunkText = Array.isArray(chunkRecords) ? String(chunkRecords[idx]?.text || '') : '';
+        for (const mention of (Array.isArray(entry.mentions) ? entry.mentions : [])) {
+            const name = byName.get(String(mention && (mention.type || mention.tag) || '').toLowerCase());
+            const value = String(mention && (mention.canonicalName || mention.value || mention.text) || '').trim();
+            const evidence = String(mention && evidenceText(mention.evidence) || '').trim();
+            if (!name || !value || !evidence || !chunkContainsEvidence(chunkText, evidence)) continue;
+            tags.push({ tag: name, value, evidence });
+        }
         for (const rt of (Array.isArray(entry.tags) ? entry.tags : [])) {
             const name = byName.get(String(rt && rt.tag || '').toLowerCase());
             if (!name) continue;
@@ -934,6 +943,30 @@ function getSystemAiConfiguration() {
     }
 }
 
+function evidenceText(value) {
+    if (Array.isArray(value)) return value.map(v => String(v || '').trim()).filter(Boolean).join(' ');
+    return value;
+}
+
+function normalizeEvidence(value) {
+    return String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function chunkContainsEvidence(chunkText, evidence) {
+    const haystack = normalizeEvidence(chunkText);
+    const needle = normalizeEvidence(evidence);
+    return needle.length >= 2 && haystack.includes(needle);
+}
+
+function entityEvidenceExcerpt(text, entityName, limit = 500) {
+    const source = String(text || '').trim();
+    if (source.length <= limit) return source;
+    const index = source.toLowerCase().indexOf(String(entityName || '').toLowerCase());
+    const start = Math.max(0, (index === -1 ? 0 : index) - Math.floor(limit * 0.3));
+    const excerpt = source.slice(start, start + limit).trim();
+    return `${start > 0 ? '…' : ''}${excerpt}${start + limit < source.length ? '…' : ''}`;
+}
+
 function getSystemAi() {
     return getSystemAiConfiguration().systemAi;
 }
@@ -972,15 +1005,20 @@ function entityDataFacts(data) {
     return parts.join('; ');
 }
 
-function buildEntityVocab(workspaceId) {
+function buildEntityVocab(workspaceId, sourceText = '') {
     if (!workspaceId) return '';
     let rows = [];
     try { rows = db.prepare('SELECT type, canonicalName, aliases FROM entities WHERE workspaceId IS ?').all(workspaceId); } catch (e) { return ''; }
     if (!rows.length) return '';
     const byType = new Map();
+    const normalizedSource = entitiesStore.normalizeName(sourceText);
     for (const r of rows) {
         let aliases = [];
         try { const a = JSON.parse(r.aliases); if (Array.isArray(a)) aliases = a; } catch (e) { }
+        if (normalizedSource) {
+            const names = [r.canonicalName, ...aliases].map(entitiesStore.normalizeName).filter(Boolean);
+            if (!names.some(name => normalizedSource.includes(name))) continue;
+        }
         const label = aliases.length ? `${r.canonicalName} [aka ${aliases.join(', ')}]` : r.canonicalName;
         if (!byType.has(r.type)) byType.set(r.type, []);
         byType.get(r.type).push(label);
@@ -1055,16 +1093,17 @@ async function classifyAndTagSegment(chunkRecords, profile, workspaceId = null) 
         ? categories.map(c => `- ${c.name}: ${c.description}`).join('\n')
         : '- Characters: People, beings, or named agents present in the scene.';
     const fence = buildItemsFence();
-    const vocab = buildEntityVocab(workspaceId);
+    const vocab = buildEntityVocab(workspaceId, numbered);
     const systemPrompt =
         "You index a conversation segment that is split into numbered chunks.\n" +
         "First line MUST be 'TITLE: [3-word title]'. Then write a 2-sentence summary of the whole segment.\n" +
-        "Then, for EACH chunk, list the specific NAMED entities that actually appear in it, grouped under these categories:\n" +
+        "Then, for EACH chunk, identify the specific persistent story entities explicitly named in the text. A persistent entity is something a user would reasonably find and reuse in a world bible.\n" +
         catLines + "\n" +
         (vocab ? vocab + "\n" : "") +
-        "Use ONLY these category names; skip a category when it has no named instance in that chunk. " +
+        "Resolve titles, shortened names, and aliases to the supplied canonical name when the text supports that match. Never propose a name already present in Known entities, even under another category. Do not turn generic nouns, unnamed roles, pronouns, descriptive phrases, or one-off concepts into entities. When identity or category is ambiguous, omit the mention. Every mention must include a short verbatim evidence excerpt copied from that chunk. " +
+        "Use ONLY these category names; skip a chunk when it has no qualifying named entity. " +
         "Output a JSON array wrapped exactly once in " + fence.open + " and " + fence.close + ", " +
-        "one element per chunk that has any entity: {\"chunk\": <number>, \"tags\": [{\"tag\": \"<Category>\", \"values\": [\"<name>\", ...]}]}. " +
+        "one element per chunk that has any entity: {\"chunk\": <number>, \"mentions\": [{\"text\": \"<surface text>\", \"canonicalName\": \"<existing canonical name or exact explicit name>\", \"type\": \"<Category>\", \"evidence\": \"<verbatim excerpt>\"}]}. " +
         "Write nothing after the closing marker.";
     try {
         const response = await sendApiRequest({
@@ -1078,7 +1117,7 @@ async function classifyAndTagSegment(chunkRecords, profile, workspaceId = null) 
         const head = splitHeadAndBody(response, fence);
         title = head.title || title;
         summary = head.summary || String(response || '').trim();
-        chunkTags = validateChunkTags(safeParseArray(head.body), categories, chunkRecords.length);
+        chunkTags = validateChunkTags(safeParseArray(head.body), categories, chunkRecords);
     } catch (e) {
         console.error("[World Index] classify+tag failed:", e);
         // Only surface when a System AI is configured: without one, tagging is
@@ -1129,21 +1168,38 @@ function applyChunkTags(chunkTags, chunkRecords, workspaceId = null) {
             const ws = workspaceId || rec.ownerId;
             for (const t of entry.tags) {
                 let entityRef = resolveEntity(ws, t.tag, t.value);
+                if (!entityRef) entityRef = resolveEntity(ws, null, t.value);
                 if (!entityRef && allowCreate) {
                     const key = `${ws || ''}|${t.tag}|${entitiesStore.normalizeName(t.value)}`;
                     if (proposedCache.has(key)) {
                         entityRef = proposedCache.get(key);
                     } else {
                         try {
-                            const ent = entitiesStore.createEntity({ workspaceId: ws, type: t.tag, canonicalName: t.value, status: 'proposed' });
+                            const ent = entitiesStore.createEntity({
+                                workspaceId: ws,
+                                type: t.tag,
+                                canonicalName: t.value,
+                                status: 'proposed',
+                                data: { proposalEvidence: t.evidence ? [{ chunkId: rec.id, excerpt: t.evidence }] : [] }
+                            });
                             entityRef = ent && ent.id;
                             if (entityRef) proposedCache.set(key, entityRef);
                         } catch (e) { entityRef = null; }
                     }
                 }
                 if (!entityRef) continue;
-                if (!isSuppressed.get(rec.id, t.tag, entityRef)) {
-                    insert.run(rec.id, t.tag, entityRef);
+                const resolved = entitiesStore.getEntity(entityRef);
+                const resolvedTag = resolved?.type || t.tag;
+                if (resolved?.status === 'proposed' && t.evidence) {
+                    const evidence = Array.isArray(resolved.data?.proposalEvidence) ? resolved.data.proposalEvidence : [];
+                    if (!evidence.some(item => item.chunkId === rec.id && item.excerpt === t.evidence)) {
+                        entitiesStore.updateEntity(entityRef, {
+                            data: { ...(resolved.data || {}), proposalEvidence: [...evidence, { chunkId: rec.id, excerpt: t.evidence }].slice(-8) }
+                        });
+                    }
+                }
+                if (!isSuppressed.get(rec.id, resolvedTag, entityRef)) {
+                    insert.run(rec.id, resolvedTag, entityRef);
                     rows++;
                 }
             }
@@ -1171,8 +1227,6 @@ async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false,
     const catLines = categories.map(c => `- ${c.name}: ${c.description}`).join('\n');
     // Scoped vocab only when backfilling a single chat; the all-chats path leaves it
     // empty to avoid bleeding one workspace's names into another's prompt.
-    const vocab = buildEntityVocab(chatId);
-
     // Which slice of a chat's memory this run tags. Each tier maps to its own button:
     // archive = summarized Chat Archive (also tagged live at summarization); custom =
     // searchable Custom Memory snippets (manual_/mem_); searchable = uploaded RAG files
@@ -1247,19 +1301,20 @@ async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false,
         if (i > 0) await new Promise(r => setTimeout(r, 600)); // gentle pacing between batches
         const batch = chunks.slice(i, i + batchSize);
         const numbered = batch.map((c, idx) => `[CHUNK ${idx}]\n${c.text}`).join('\n\n');
+        const batchVocab = buildEntityVocab(chatId, numbered);
         const fence = buildItemsFence();
         const systemPrompt =
-            "You index conversation chunks. For EACH numbered chunk, list the specific NAMED entities present, grouped under these categories:\n" +
+            "You index conversation chunks. For EACH numbered chunk, identify persistent story entities explicitly named in the text, grouped under these categories:\n" +
             catLines + "\n" +
-            (vocab ? vocab + "\n" : "") +
-            "Use ONLY these category names; skip a category with no named instance in that chunk. " +
+            (batchVocab ? batchVocab + "\n" : "") +
+            "Resolve aliases to supplied canonical names. Never propose an entity already present in Known entities. Omit generic nouns, unnamed roles, pronouns, descriptive phrases, and ambiguous identities. Every mention must include a short verbatim evidence excerpt copied from that chunk. Use ONLY these category names. " +
             "Output ONLY a JSON array wrapped exactly once in " + fence.open + " and " + fence.close + ", " +
-            "one element per chunk that has any entity: {\"chunk\": <number>, \"tags\": [{\"tag\": \"<Category>\", \"values\": [\"<name>\", ...]}]}. " +
+            "one element per chunk that has any entity: {\"chunk\": <number>, \"mentions\": [{\"text\": \"<surface text>\", \"canonicalName\": \"<canonical or exact explicit name>\", \"type\": \"<Category>\", \"evidence\": \"<verbatim excerpt>\"}]}. " +
             "Write nothing else.";
         try {
             const response = await callWithRetry({ apiProfileId, model, systemPrompt, chatHistory: [], newPrompt: numbered, temperature: 0.3, maxTokens: 1500, manualMode, manualJson });
             const head = splitHeadAndBody(response, fence);
-            const chunkTags = validateChunkTags(safeParseArray(head.body), categories, batch.length);
+            const chunkTags = validateChunkTags(safeParseArray(head.body), categories, batch);
             tagged += applyChunkTags(chunkTags, batch, chatId);
             const now = Date.now();
             db.transaction(() => {
@@ -1500,6 +1555,104 @@ const ENRICH_FIELDS = {
     System: ['content'],
 };
 
+const ENRICH_TYPE_GUIDANCE = {
+    Characters: 'A specific person or personified agent. Record their current canonical state, not temporary scene circumstances or thematic interpretations.',
+    Creatures: 'An individual creature or a creature group/species. Respect its scope: individuals have status; groups have abundance. Do not convert metaphorical descriptions into biology or powers.',
+    Locations: 'A persistent physical place. Do not treat a temporary scene setting, organization, plane of thought, or mere association as physical containment.',
+    Items: 'A persistent object, artifact, equipment, or resource. Distinguish possession, use, creation, and discovery; they are not interchangeable.',
+    Factions: 'An organized group with shared identity. Describe established goals, structure, or reputation without inferring collective intent from one member.',
+    Races: 'A canonical species, lineage, ancestry, or people. Describe established traits and culture without generalizing from one individual.',
+    Events: 'A named or canonically significant happening. Record what occurred and why it factually matters, not speculative consequences.',
+    System: 'A reusable canonical concept, law, doctrine, magic system, technology, currency, cosmological mechanism, or world rule. Content must explain its operation, scope, limits, terminology, and consequences without turning examples into universal rules.',
+};
+
+const ENRICH_FIELD_GUIDANCE = {
+    status: 'Current state only. alive requires explicit survival or a current direct action that cannot be posthumous. deceased requires explicit confirmation of death or a canonically defined irreversible equivalent. Surrender, defeat, disappearance, transformation, assimilation, imprisonment, incapacitation, or leaving a role are not death. missing means whereabouts are explicitly unknown; unknown means the evidence cannot establish a state.',
+    age: 'A literal current age explicitly stated for this character. Never calculate it from dates, elapsed time, appearance, or life stage.',
+    disposition: 'A stable default attitude toward relevant people, not a momentary emotional reaction in one scene.',
+    nature: 'The explicitly established creature category or nature, such as Beast, Spirit, or Deity. Do not infer it from appearance or abilities.',
+    abundance: 'World-level prevalence of a resource or creature group, not the quantity present in one scene.',
+    threat: 'An explicitly established general danger level, not how frightening or powerful one scene makes the entity appear.',
+    abilities: 'Concrete repeatable capabilities or traits explicitly demonstrated or stated. Exclude metaphors, one-time circumstances, equipment, and speculation.',
+    locationType: 'The explicit kind of place, such as continent, city, fortress, or tavern. Do not use its name, owner, atmosphere, or current purpose as its type.',
+    itemType: 'Weapon, Armor, Artifact, or Resource according to the item’s canonical function. Use Resource only for material that can naturally occur, be gathered, or be consumed as a supply.',
+    description: 'A concise factual description built only from established properties, function, appearance, culture, goals, structure, or importance appropriate to this entity type.',
+    kind: 'The explicit category of event, such as Battle, Festival, Holiday, Disaster, or Coronation. Do not use its outcome or emotional tone as its kind.',
+    content: 'A precise canonical explanation of the concept or system: definition, mechanism, scope, constraints, terminology, exceptions, and consequences when supported. Preserve distinctions between related concepts and never universalize a single example.',
+};
+
+const ENRICH_RELATION_GUIDANCE = {
+    'Characters.race': 'Only an explicitly established ancestry, species, lineage, or people.',
+    'Characters.factions': 'Only explicit membership or formal allegiance, not cooperation, employment, sympathy, or proximity.',
+    'Characters.locations': 'Only a persistent meaningful connection, such as residence, origin, rule, or established base; not presence in one scene.',
+    'Characters.relationships': 'Only an explicitly established personal relationship; the label must state the supported role.',
+    'Characters.inventory': 'Only an item explicitly held or owned by the character, not briefly touched, observed, or used by someone else.',
+    'Locations.inside': 'Only explicit physical containment inside another location, never proximity, jurisdiction, association, or travel between places.',
+    'Locations.leader': 'Only explicit ownership, leadership, or governance of the location.',
+    'Items.creator': 'Only the explicitly established creator or maker.',
+    'Items.owner': 'Only current explicit ownership; use, custody, discovery, or theft alone does not prove ownership.',
+    'Items.foundIn': 'Only an explicit place where the item or resource is found, stored, produced, or gathered.',
+    'Creatures.habitat': 'Only an explicitly established natural or habitual location, not a single encounter site.',
+    'Factions.leader': 'Only an explicitly established current leader.',
+    'Factions.operatesIn': 'Only an established area of operation, base, territory, or sustained activity.',
+    'Factions.members': 'Only explicit membership; the label must state the supported role when available.',
+    'Events.happenedAt': 'Only a location where the event explicitly occurred.',
+    'Events.involved': 'Only a character explicitly participating in or materially affected by the event, not merely mentioned nearby.',
+};
+
+const ENTITY_ENRICHMENT_SCHEMA_VERSION = 'semantic-v2';
+
+function entityEnrichmentSignature(chunk) {
+    return `${ENTITY_ENRICHMENT_SCHEMA_VERSION}:${chunk.isTagged ? 'tagged' : 'text'}:${chunk.contentHash}`;
+}
+
+function enrichFieldsForEntity(entity) {
+    const fields = [...(ENRICH_FIELDS[entity.type] || [])];
+    if (entity.type === 'Creatures') {
+        const isGroup = entity.data?.scope === 'group';
+        return fields.filter(field => isGroup ? field !== 'status' : field !== 'abundance');
+    }
+    if (entity.type === 'Items' && entity.data?.itemType !== 'Resource') {
+        return fields.filter(field => field !== 'abundance');
+    }
+    return fields;
+}
+
+function describeStructuredObjectFailure(response, fence) {
+    const raw = String(response || '').trim();
+    if (!raw) return 'The System AI returned an empty response.';
+    const hasOpenFence = raw.includes(fence.open);
+    const hasCloseFence = raw.includes(fence.close);
+    const firstBrace = raw.indexOf('{');
+    const lastBrace = raw.lastIndexOf('}');
+    if (firstBrace === -1) return 'The System AI response did not contain a JSON object.';
+    if (lastBrace < firstBrace) return 'The System AI response was truncated before the JSON object was complete.';
+    try {
+        JSON.parse(raw.slice(firstBrace, lastBrace + 1));
+    } catch (error) {
+        return `The System AI returned invalid JSON: ${cleanErrorMessage(error)}`;
+    }
+    if (hasOpenFence && !hasCloseFence) return 'The System AI response was truncated before the structured update was closed.';
+    return 'The System AI response used an unsupported structured update shape.';
+}
+
+function isEntityUpdateShape(value, allowLore = true) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const isObject = candidate => candidate && typeof candidate === 'object' && !Array.isArray(candidate);
+    if (!allowLore && 'lore' in value) return false;
+    if ('lore' in value && value.lore !== null && !isObject(value.lore)) return false;
+    if ('data' in value && !isObject(value.data)) return false;
+    if ('links' in value && !isObject(value.links)) return false;
+    return true;
+}
+
+function entityEnrichmentMaxTokens(entity) {
+    const currentLoreLength = String(entity.type === 'System' ? entity.data?.content || '' : entity.lore || '').length;
+    const minimum = entity.type === 'System' ? 2400 : 1800;
+    const maximum = entity.type === 'System' ? 5000 : 4000;
+    return Math.min(maximum, Math.max(minimum, 1200 + Math.ceil(currentLoreLength / 3.5)));
+}
+
 // The entity-to-entity edges the enrichment may propose per type, mirroring the relation
 // controls the WorldbuildView renders. `relType`/`single`/`labeled` match entities.setLink;
 // `from` says which end of the edge the entity sits on ('self' = fromId is this entity,
@@ -1558,23 +1711,6 @@ function applyProposedLink(entityId, link, workspaceId) {
     entitiesStore.setLink({ workspaceId, fromId, relType: link.relType, toId, single: !!link.single, label: link.label || null });
 }
 
-// Chapters (Writing Desk documents) that mention this entity but are not yet linked to
-// its lore, derived deterministically from chunk_tags, no AI. `validDocs` maps id->title
-// for the workspace so we drop stale pointers and can label the proposal in the UI.
-function deriveChapterAdds(entityId, entity, validDocs) {
-    const rows = db.prepare(
-        `SELECT DISTINCT kc.ownerId AS id FROM chunk_tags ct JOIN knowledge_chunks kc ON ct.chunkId = kc.id
-         WHERE ct.entity = ? AND kc.ownerType = 'document'`
-    ).all(entityId);
-    const already = new Set(entitiesStore.linkedLoreDocIds(entity));
-    const adds = [];
-    for (const r of rows) {
-        if (!r.id || already.has(r.id) || !validDocs.has(r.id)) continue;
-        adds.push({ id: r.id, title: validDocs.get(r.id) });
-    }
-    return adds;
-}
-
 // Pick chunk texts in order within a char budget. When they overflow, keep a head + a
 // tail (recent state matters for status changes; the head preserves origin/lore) with
 // an elision marker, so the model still sees both ends in chronological order.
@@ -1593,11 +1729,80 @@ function windowChunks(texts, budget = 16000) {
     return head.join('\n\n') + '\n\n[…earlier passages omitted…]\n\n' + tail.join('\n\n');
 }
 
-// The "Update entities" enrichment pass. Reads each non-locked, confirmed
-// entity's related chunks in chronological order and lets the System AI refresh its lore,
-// a constrained set of data fields, AND its links to other existing entities (race, owner,
-// faction, habitat, relationships…). Chapter links are derived deterministically from the
-// tags, no AI. Per-entity aiPolicy governs writes: 'open' applies everything directly,
+function entityMentionNames(entity) {
+    return [...new Set([entity.canonicalName, ...(entity.aliases || [])]
+        .map(entitiesStore.normalizeName)
+        .filter(Boolean))];
+}
+
+function textMentionsEntity(text, names) {
+    const normalized = entitiesStore.normalizeName(text);
+    return names.some(name => {
+        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}(?=$|[^\\p{L}\\p{N}])`, 'u').test(normalized);
+    });
+}
+
+function chronologicalSlice(entries, budget) {
+    const total = entries.reduce((sum, entry) => sum + entry.prompt.length + 2, 0);
+    if (total <= budget) return entries;
+    const selected = [];
+    const selectedIds = new Set();
+    let used = 0;
+    const headBudget = Math.floor(budget * 0.4);
+    for (const entry of entries) {
+        if (used + entry.prompt.length > headBudget) break;
+        selected.push(entry); selectedIds.add(entry.id); used += entry.prompt.length + 2;
+    }
+    for (let index = entries.length - 1; index >= 0; index--) {
+        const entry = entries[index];
+        if (selectedIds.has(entry.id)) continue;
+        if (used + entry.prompt.length > budget) break;
+        selected.push(entry); selectedIds.add(entry.id); used += entry.prompt.length + 2;
+    }
+    return selected.sort((a, b) => a.order - b.order);
+}
+
+function selectEntityEvidence(entries, budget = 16000) {
+    const tagged = chronologicalSlice(entries.filter(entry => entry.chunk.isTagged), budget);
+    const used = tagged.reduce((sum, entry) => sum + entry.prompt.length + 2, 0);
+    if (used >= budget) return tagged;
+    const untagged = chronologicalSlice(entries.filter(entry => !entry.chunk.isTagged), budget - used);
+    return [...tagged, ...untagged].sort((a, b) => a.order - b.order);
+}
+
+async function loadConstantMemoryChunks(workspaceId) {
+    const row = db.prepare('SELECT memoryBlocks, knowledgeFiles FROM chats WHERE id = ?').get(workspaceId);
+    if (!row) return [];
+    const sources = [];
+    try {
+        for (const block of JSON.parse(row.memoryBlocks || '[]')) {
+            if (block.strategy !== 'constant' || block.enabled === false) continue;
+            sources.push({ key: `memory:${block.id}`, source: block.title || block.source || 'Constant Memory', text: block.summary || block.text || '', createdAt: block.createdAt || 0 });
+        }
+    } catch (error) { console.warn('[Enrich] Could not read constant memory blocks:', error.message); }
+    try {
+        for (const file of JSON.parse(row.knowledgeFiles || '[]')) {
+            if (!['constant', 'full_context'].includes(file.strategy || 'constant') || file.enabled === false || !file.internalPath || !fs.existsSync(file.internalPath)) continue;
+            const extension = path.extname(file.name || file.internalPath).toLowerCase();
+            const text = ['.txt', '.md', '.json', '.csv'].includes(extension)
+                ? fs.readFileSync(file.internalPath, 'utf8')
+                : await extractTextFromFile(file.internalPath);
+            sources.push({ key: `file:${file.internalPath}`, source: file.name || 'Full-context Memory', text, createdAt: 0 });
+        }
+    } catch (error) { console.warn('[Enrich] Could not read full-context memory files:', error.message); }
+    return sources.flatMap(source => chunkText(String(source.text || ''), 800).map((text, index) => {
+        const id = `virtual_memory_${crypto.createHash('sha256').update(`${workspaceId}:${source.key}:${index}`).digest('hex')}`;
+        return { id, text, source: source.source, createdAt: source.createdAt + index, contentHash: crypto.createHash('sha256').update(text).digest('hex'), evidenceSource: 'Memory', isTagged: false };
+    }));
+}
+
+// The "Update entities" enrichment pass. Reads each non-locked, confirmed entity's
+// related chunks in chronological order and lets the System AI refresh the fields valid
+// for that entity type and its links to existing entities. System entities update Concept
+// instead of Lore. Linking a dedicated lore document remains an explicit user decision;
+// ordinary mentions stay in the World Index and never become linked lore documents.
+// Per-entity aiPolicy governs writes: 'open' applies everything directly,
 // 'review' stages it all into data._enrichPending for per-item accept/reject in the sheet
 // (never touches live values), 'locked' is skipped. Best-effort; one failure never aborts.
 async function enrichEntities(workspaceId, progressCallback = null) {
@@ -1614,100 +1819,257 @@ async function enrichEntities(workspaceId, progressCallback = null) {
 
     const all = entitiesStore.listEntities({ workspaceId });
     const targets = all.filter(e => e.status !== 'proposed' && (e.data?.aiPolicy || 'review') !== 'locked');
-    const chunkQuery = db.prepare(
-        `SELECT kc.text AS text FROM chunk_tags ct JOIN knowledge_chunks kc ON ct.chunkId = kc.id
-         WHERE ct.entity = ? ORDER BY kc.createdAt ASC`
-    );
+    const taggedWritingChunks = db.prepare(`
+        SELECT DISTINCT kc.id, kc.text, kc.source, kc.createdAt,
+          COALESCE(kc.content_hash, '') AS contentHash, 'Writing Desk' AS evidenceSource, 1 AS isTagged
+        FROM chunk_tags ct
+        JOIN knowledge_chunks kc ON ct.chunkId = kc.id AND kc.ownerType = 'document'
+        JOIN documents d ON d.id = kc.ownerId
+        WHERE ct.entity = ? AND d.workspaceId = ? AND kc.enabled = 1
+        ORDER BY kc.createdAt ASC
+    `);
+    const memoryChunks = db.prepare(`
+        SELECT id, text, source, ownerType, createdAt, COALESCE(content_hash, '') AS contentHash
+        FROM knowledge_chunks
+        WHERE ownerId = ? AND ownerType IN ('chat_kb', 'chat_memory') AND enabled = 1
+        ORDER BY createdAt ASC
+    `).all(workspaceId).map(chunk => ({ ...chunk, evidenceSource: 'Memory' }));
+    const constantMemoryChunks = await loadConstantMemoryChunks(workspaceId);
+    const taggedMemoryChunks = db.prepare(`
+        SELECT ct.chunkId FROM chunk_tags ct
+        JOIN knowledge_chunks kc ON kc.id = ct.chunkId
+        WHERE ct.entity = ? AND kc.ownerId = ? AND kc.ownerType IN ('chat_kb', 'chat_memory')
+    `);
+    const processedChunks = db.prepare('SELECT chunkId, contentHash FROM entity_enrichment_chunks WHERE entityId = ?');
+    const markChunkProcessed = db.prepare(`
+        INSERT INTO entity_enrichment_chunks (entityId, chunkId, contentHash, processedAt)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(entityId, chunkId) DO UPDATE SET contentHash = excluded.contentHash, processedAt = excluded.processedAt
+    `);
+    const recordEnrichmentError = db.prepare(`
+        INSERT INTO entity_enrichment_errors (id, workspaceId, entityId, entityName, entityType, error, createdAt, dismissedAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+        ON CONFLICT(workspaceId, entityId) DO UPDATE SET entityName = excluded.entityName,
+          entityType = excluded.entityType, error = excluded.error, createdAt = excluded.createdAt, dismissedAt = NULL
+    `);
+    const clearEnrichmentError = db.prepare('DELETE FROM entity_enrichment_errors WHERE workspaceId = ? AND entityId = ?');
+    const failures = [];
+    const rememberFailure = (entity, error) => {
+        const message = cleanErrorMessage(error) || 'The System AI could not produce a valid entity update.';
+        failures.push({ entityId: entity.id, entityName: entity.canonicalName, entityType: entity.type, error: message });
+        recordEnrichmentError.run(`enrich_error_${crypto.randomUUID()}`, workspaceId, entity.id, entity.canonicalName, entity.type, message, Date.now());
+    };
 
     // Names the AI may reference when proposing links (only existing, non-proposed
-    // entities), grouped by type, plus the workspace's real document ids for chapter links.
+    // entities), grouped by type.
     const namesByType = {};
     for (const e of all) {
         if (e.status === 'proposed') continue;
         (namesByType[e.type] = namesByType[e.type] || []).push(e.canonicalName);
     }
-    const validDocs = new Map(
-        db.prepare('SELECT id, title FROM documents WHERE workspaceId = ?').all(workspaceId).map(d => [d.id, d.title])
-    );
-
-    let updated = 0, staged = 0, skippedNoChunks = 0, failed = 0;
+    let updated = 0, staged = 0, upToDate = 0, noEvidence = 0, failed = 0;
+    let evidenceUsed = 0, taggedEvidenceRemaining = 0, textMatchesSkipped = 0;
     for (let i = 0; i < targets.length; i++) {
         const ent = targets[i];
+        if (ent.type === 'System' && ent.data?._enrichPending?.lore != null) {
+            const pending = { ...ent.data._enrichPending };
+            delete pending.lore;
+            const hasActionableChanges = Object.keys(pending.data || {}).length || (pending.links || []).length || (pending.chapters || []).length;
+            const nextData = { ...ent.data };
+            if (hasActionableChanges) nextData._enrichPending = pending;
+            else delete nextData._enrichPending;
+            entitiesStore.updateEntity(ent.id, { data: nextData });
+            ent.data = nextData;
+        }
         if (progressCallback) progressCallback({ phase: 'enriching', done: i, total: targets.length, name: ent.canonicalName });
-        const texts = chunkQuery.all(ent.id).map(r => r.text).filter(Boolean);
-        if (!texts.length) { skippedNoChunks++; continue; }
+        const candidates = new Map();
+        for (const chunk of taggedWritingChunks.all(ent.id, workspaceId)) {
+            if (chunk.text) candidates.set(chunk.id, chunk);
+        }
+        const taggedMemoryIds = new Set(taggedMemoryChunks.all(ent.id, workspaceId).map(row => row.chunkId));
+        for (const chunk of memoryChunks) {
+            if (chunk.text && taggedMemoryIds.has(chunk.id)) candidates.set(chunk.id, { ...chunk, isTagged: true });
+        }
+        const mentionNames = entityMentionNames(ent);
+        for (const chunk of memoryChunks) {
+            if (chunk.text && textMentionsEntity(chunk.text, mentionNames)) {
+                if (!candidates.has(chunk.id)) candidates.set(chunk.id, { ...chunk, isTagged: false });
+            }
+        }
+        for (const chunk of constantMemoryChunks) {
+            if (chunk.text && textMentionsEntity(chunk.text, mentionNames)) candidates.set(chunk.id, chunk);
+        }
+        if (!candidates.size) { noEvidence++; continue; }
+        const processed = new Map(processedChunks.all(ent.id).map(row => [row.chunkId, row.contentHash]));
+        const chunks = [...candidates.values()]
+            .filter(chunk => processed.get(chunk.id) !== entityEnrichmentSignature(chunk))
+            .sort((a, b) => (a.createdAt - b.createdAt) || String(a.id).localeCompare(String(b.id)));
+        if (!chunks.length) { upToDate++; continue; }
 
-        const allowed = ENRICH_FIELDS[ent.type] || [];
-        const fieldLines = allowed.map(f => ENRICH_ENUMS[f]
-            ? `- ${f}: one of [${ENRICH_ENUMS[f].join(', ')}]`
-            : `- ${f}: a short literal value, only if explicitly stated`).join('\n');
+        const allowed = enrichFieldsForEntity(ent);
+        const fieldLines = allowed.map(field => {
+            const shape = ENRICH_ENUMS[field]
+                ? `one of [${ENRICH_ENUMS[field].join(', ')}]`
+                : 'a concise literal value';
+            return `- ${field}: ${shape}. ${ENRICH_FIELD_GUIDANCE[field]}`;
+        }).join('\n');
         const relSpecs = ENRICH_RELATIONS[ent.type] || [];
         const fence = buildItemsFence();
         const currentData = {};
         for (const f of allowed) if (ent.data && ent.data[f] != null) currentData[f] = ent.data[f];
 
-        // Chapters are deterministic, derive them regardless of the model's answer.
-        const chapterAdds = deriveChapterAdds(ent.id, ent, validDocs);
-
         // Relation prompt: one line per relation, each with the candidate names the AI may
         // pick from (drawn from the registry, self excluded). Relations with no candidate
         // entities are omitted so we never ask for links that can't exist yet.
+        const evidencePrefix = crypto.randomBytes(2).toString('hex');
+        const evidenceExample = `E_${evidencePrefix}_1`;
         const relBlocks = [];
         for (const spec of relSpecs) {
             const names = (namesByType[spec.targetType] || []).filter(n => n !== ent.canonicalName);
             if (!names.length) continue;
-            const shape = spec.labeled ? `[{"name": "<one of the names>", "label": "<short role/relation>"}]`
-                : spec.single ? `"<one name, or omit>"` : `["<names>"]`;
-            relBlocks.push({ spec, names, line: `- ${spec.key}: ${spec.label} — ${shape}. Candidates: ${names.join(', ')}` });
+            const base = `{"name": "<one name>", "certainty": "explicit", "support": "<why the evidence directly proves this relation>", "evidence": ["${evidenceExample}"]`;
+            const item = spec.labeled ? `${base}, "label": "<short supported role/relation>"}` : `${base}}`;
+            const shape = spec.single ? item : `[${item}]`;
+            const guidance = ENRICH_RELATION_GUIDANCE[`${ent.type}.${spec.key}`] || 'Only when the exact relation is explicitly established.';
+            relBlocks.push({ spec, names, line: `- ${spec.key}: ${spec.label} — ${shape}. ${guidance} Candidates: ${names.join(', ')}` });
         }
 
+        const evidenceEntries = chunks.map((chunk, index) => ({
+            id: `E_${evidencePrefix}_${index + 1}`,
+            order: index,
+            chunk,
+            prompt: `[E_${evidencePrefix}_${index + 1} | ${chunk.evidenceSource}: ${chunk.source || 'Untitled'} | ${chunk.isTagged ? 'indexed entity match' : 'name or alias match'} | chunk ${chunk.id}]\n${chunk.text}`
+        }));
+        const includedEvidence = selectEntityEvidence(evidenceEntries);
+        const includedIds = new Set(includedEvidence.map(entry => entry.id));
+        const skippedTextualEvidence = evidenceEntries.filter(entry => !entry.chunk.isTagged && !includedIds.has(entry.id));
+        const pendingTaggedEvidence = evidenceEntries.filter(entry => entry.chunk.isTagged && !includedIds.has(entry.id));
+        const evidenceWindow = includedEvidence.map(entry => entry.prompt).join('\n\n');
+        const chunkIds = includedEvidence.map(entry => entry.chunk.id);
+        let relevantSystems = [];
+        if (chunkIds.length) {
+            const placeholders = chunkIds.map(() => '?').join(', ');
+            const relatedIds = new Set(db.prepare(
+                `SELECT DISTINCT entity FROM chunk_tags WHERE chunkId IN (${placeholders}) AND entity IS NOT NULL`
+            ).all(...chunkIds).map(row => row.entity));
+            const normalizedEvidence = entitiesStore.normalizeName(evidenceWindow);
+            relevantSystems = all.filter(candidate => {
+                if (candidate.id === ent.id || candidate.type !== 'System' || candidate.status === 'proposed') return false;
+                const names = [candidate.canonicalName, ...(candidate.aliases || [])]
+                    .map(entitiesStore.normalizeName)
+                    .filter(Boolean);
+                return relatedIds.has(candidate.id) || names.some(name => normalizedEvidence.includes(name));
+            }).slice(0, 3);
+        }
+        const systemContext = relevantSystems.map(system => {
+            const aliases = system.aliases?.length ? ` (aliases: ${system.aliases.join(', ')})` : '';
+            const content = [system.data?.content, system.lore]
+                .map(value => String(value || '').trim())
+                .filter(Boolean)
+                .join('\n');
+            return content ? `### ${system.canonicalName}${aliases}\n${content.slice(0, 2400)}` : '';
+        }).filter(Boolean).join('\n\n');
+
+        const allowLore = ent.type !== 'System';
+        const responseShape = allowLore ? `{"lore": null, "data": {}, "links": {}}` : `{"data": {}, "links": {}}`;
         const systemPrompt =
             `You maintain a story's world bible. Update the record for one ${ent.type.replace(/s$/, '')} named "${ent.canonicalName}" ` +
-            `using ONLY the story passages provided, in the order given (later passages reflect more recent events).\n` +
-            `Return a single JSON object wrapped exactly once in ${fence.open} and ${fence.close}:\n` +
-            `{"lore": "<a concise, up-to-date description of this entity synthesised from the passages>"` +
-            (fieldLines ? `, "data": { <only fields explicitly established by the passages, omit the rest> }` : ``) +
-            (relBlocks.length ? `, "links": { <only relations the passages explicitly establish, using ONLY the listed candidate names, omit the rest> }` : ``) +
-            `}\n` +
+            (allowLore
+                ? `using the CURRENT RECORD plus ONLY the NEW STORY EVIDENCE provided. Preserve established lore unless new evidence explicitly changes or contradicts it.\n`
+                : `using the CURRENT CONCEPT plus ONLY the NEW STORY EVIDENCE provided. Preserve established concept content unless new evidence explicitly changes or contradicts it.\n`) +
+            `Return one valid JSON object wrapped exactly once in ${fence.open} and ${fence.close}. The complete top-level shape is:\n${responseShape}\n` +
+            (allowLore ? `Use null for unchanged lore, {} for no data changes, and {} for no link changes. A changed lore or data field must use ` : `This entity type has no Lore field. Never return a lore key. Use {} for no data or link changes. A changed data field must use `) +
+            `{"value":"<value>","certainty":"explicit","support":"<direct support>","evidence":["${evidenceExample}"]}. ` +
+            `A link entry must use the exact valid JSON shape shown in ALLOWED LINKS below. Never output angle-bracket placeholders.\n` +
+            `ENTITY TYPE CONTRACT:\n${ENRICH_TYPE_GUIDANCE[ent.type] || 'A persistent canonical world entity.'}\n` +
             (fieldLines ? `Allowed data fields:\n${fieldLines}\n` : '') +
             (relBlocks.length ? `Allowed links (use the exact candidate names, never invent a name):\n${relBlocks.map(b => b.line).join('\n')}\n` : '') +
             `STRICT RULES:\n` +
             `- Fill a field or propose a link ONLY when the passages state it explicitly and unambiguously. When unsure, omit it — returning few or no fields is correct and expected.\n` +
+            `- Every proposed change must cite one or more supplied evidence IDs. Never cite an ID that does not support the exact change.\n` +
+            `- Set certainty to "explicit" only when the evidence directly entails the exact value or relation. Inference, implication, symbolism, genre convention, probability, and interpretation are not explicit. Omit anything that is not explicit.\n` +
+            (allowLore ? `- Do not return unchanged fields, unchanged links, or unchanged lore. An empty object is correct when the new evidence changes nothing.\n` : `- Do not return unchanged concept content or unchanged links. An empty object is correct when the new evidence changes nothing.\n`) +
+            `- Existing values are canonical context, not protected blanks. When new explicit evidence changes an existing value, propose the replacement and explain the direct support. Never replace a value merely to rephrase it.\n` +
             `- Never infer, estimate, or compute a value. Do not write reasoning, ranges, or hedged phrases ("about", "at least", "since ...") as a value; give the concrete literal value or omit the field entirely.\n` +
             `- Only link two entities when the text directly establishes that exact relation. In particular, only nest a location inside another when the passages explicitly say one place is physically within the other — never by mere association or proximity.\n` +
-            `- The lore string may synthesise; field and link VALUES must be literal and drawn straight from the text.\n` +
+            (allowLore ? `- Lore may synthesise the current record with new evidence; field and link VALUES must be literal and drawn straight from the evidence.\n` : '') +
+            (allowLore ? `- Canonical lore contains established facts and grounded chronology only. Never attribute thoughts, motives, understanding, philosophy, intention, causation, or moral meaning unless the evidence explicitly attributes it to the entity. Never turn metaphor into fact, consequence into intent, absence into death, transformation into death, or association into a relationship.\n` : '') +
+            `- CANONICAL SYSTEM / CONCEPT CONTEXT defines setting-specific terms. Use it to interpret evidence, but do not copy a concept's facts into this entity unless the evidence explicitly connects them.\n` +
             `Do not invent facts, names, or fields absent from the passages. Write nothing outside the fence.`;
         const userPrompt =
-            `CURRENT RECORD:\n${ent.lore ? ent.lore : '(no lore yet)'}\n` +
+            `${allowLore ? 'CURRENT RECORD' : 'CURRENT CONCEPT'}:\nName: ${ent.canonicalName}\nAliases: ${ent.aliases?.join(', ') || '(none)'}\n` +
+            (allowLore ? `Lore: ${ent.lore ? ent.lore : '(no lore yet)'}\n` : '') +
             (Object.keys(currentData).length ? `Current fields: ${JSON.stringify(currentData)}\n` : '') +
-            `\nSTORY PASSAGES (chronological):\n${windowChunks(texts)}`;
+            (systemContext ? `\nCANONICAL SYSTEM / CONCEPT CONTEXT:\n${systemContext}\n` : '') +
+            `\nNEW STORY EVIDENCE (chronological):\n${evidenceWindow}`;
 
         try {
-            const response = await sendApiRequest({ apiProfileId, model, systemPrompt, chatHistory: [], newPrompt: userPrompt, temperature: 0.15, maxTokens: 1200, manualMode, manualJson });
-            const head = splitHeadAndBody(response, fence);
-            const parsed = safeParseObject(head.body) || safeParseObject(response);
-            if (!parsed) { failed++; continue; }
+            const maxTokens = entityEnrichmentMaxTokens(ent);
+            const requestUpdate = (retry = false) => sendApiRequest({
+                apiProfileId,
+                model,
+                systemPrompt: retry
+                    ? `${systemPrompt}\nCORRECTION: Your previous reply could not be parsed. Return only the fenced, valid JSON object. Keep unchanged sections empty and make the response as concise as the evidence permits.`
+                    : systemPrompt,
+                chatHistory: [],
+                newPrompt: userPrompt,
+                temperature: 0.1,
+                maxTokens,
+                manualMode,
+                manualJson
+            });
+            let response = await requestUpdate();
+            let head = splitHeadAndBody(response, fence);
+            let parsed = safeParseObject(head.body) || safeParseObject(response);
+            if (!isEntityUpdateShape(parsed, allowLore)) {
+                const firstFailure = parsed
+                    ? 'The System AI returned JSON using an unsupported entity update shape.'
+                    : describeStructuredObjectFailure(response, fence);
+                response = await requestUpdate(true);
+                head = splitHeadAndBody(response, fence);
+                parsed = safeParseObject(head.body) || safeParseObject(response);
+                if (!isEntityUpdateShape(parsed, allowLore)) {
+                    failed++;
+                    const retryFailure = parsed
+                        ? 'The System AI returned JSON using an unsupported entity update shape.'
+                        : describeStructuredObjectFailure(response, fence);
+                    rememberFailure(ent, `${retryFailure} Automatic retry also failed. First response: ${firstFailure}`);
+                    continue;
+                }
+            }
 
             const policy = ent.data?.aiPolicy || 'review';
             const incoming = (parsed.data && typeof parsed.data === 'object') ? parsed.data : {};
+            const validEvidenceIds = new Set(includedEvidence.map(entry => entry.id));
+            const readProposal = (raw) => {
+                if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.value == null) return null;
+                if (String(raw.certainty || '').toLowerCase() !== 'explicit') return null;
+                const support = String(raw.support || '').trim();
+                if (!support) return null;
+                const evidence = (Array.isArray(raw.evidence) ? raw.evidence : [])
+                    .map(String)
+                    .filter(id => validEvidenceIds.has(id));
+                const value = String(raw.value).trim();
+                return value && evidence.length ? { value, evidence, support } : null;
+            };
             // Validate the AI's proposal against the allowlist + enums first, keeping only
             // fields whose value actually differs from what the entity holds now. `review`
             // and `open` share this diff; they only differ in where it lands.
             const proposedData = {};
             for (const f of allowed) {
-                let v = incoming[f];
-                if (v == null) continue;
-                v = String(v).trim();
-                if (!v) continue;
+                const proposal = readProposal(incoming[f]);
+                if (!proposal) continue;
+                let v = proposal.value;
                 if (ENRICH_ENUMS[f]) {
                     const match = ENRICH_ENUMS[f].find(o => o.toLowerCase() === v.toLowerCase());
                     if (!match) continue;
                     v = match;
                 }
                 const cur = ent.data?.[f] == null ? '' : String(ent.data[f]).trim();
-                if (v !== cur) proposedData[f] = v;
+                if (v !== cur) proposedData[f] = { value: v, evidence: proposal.evidence, support: proposal.support };
             }
-            const incomingLore = parsed.lore != null ? String(parsed.lore).trim() : '';
+            const loreProposal = allowLore ? readProposal(parsed.lore) : null;
+            const incomingLore = loreProposal?.value || '';
             const loreChanged = !!incomingLore && incomingLore !== (ent.lore || '').trim();
 
             // Resolve the AI's link proposals: only listed candidate names, resolved to real
@@ -1721,7 +2083,15 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                 const existing = existingLinkTargets(ent.id, spec);
                 const seen = new Set();
                 for (const item of items) {
-                    const name = String((item && typeof item === 'object') ? item.name : item || '').trim();
+                    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+                    if (String(item.certainty || '').toLowerCase() !== 'explicit') continue;
+                    const support = String(item.support || '').trim();
+                    if (!support) continue;
+                    const evidence = (Array.isArray(item.evidence) ? item.evidence : [])
+                        .map(String)
+                        .filter(id => validEvidenceIds.has(id));
+                    if (!evidence.length) continue;
+                    const name = String(item.name || '').trim();
                     if (!name) continue;
                     const label = (spec.labeled && item && typeof item === 'object' && item.label != null) ? String(item.label).trim() : null;
                     const targetId = entitiesStore.resolveMention(name, spec.targetType, workspaceId);
@@ -1729,49 +2099,71 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                     const dedupe = `${targetId}:${label || ''}`;
                     if (seen.has(dedupe)) continue;
                     seen.add(dedupe);
-                    proposedLinks.push({ relKey: spec.key, relLabel: spec.label, relType: spec.relType, from: spec.from, single: !!spec.single, label, targetId, targetName: name });
+                    proposedLinks.push({ relKey: spec.key, relLabel: spec.label, relType: spec.relType, from: spec.from, single: !!spec.single, label, targetId, targetName: name, evidence, support });
                     if (spec.single) break; // one target for single-valued relations
                 }
             }
 
-            const hasChange = Object.keys(proposedData).length || loreChanged || proposedLinks.length || chapterAdds.length;
-            if (!hasChange) continue;
+            const hasChange = Object.keys(proposedData).length || loreChanged || proposedLinks.length;
+            evidenceUsed += includedEvidence.length;
+            taggedEvidenceRemaining += pendingTaggedEvidence.length;
+            textMatchesSkipped += skippedTextualEvidence.length;
+            const markIncludedProcessed = () => {
+                const processedAt = Date.now();
+                db.transaction(() => {
+                    for (const entry of [...includedEvidence, ...skippedTextualEvidence]) {
+                        markChunkProcessed.run(ent.id, entry.chunk.id, entityEnrichmentSignature(entry.chunk), processedAt);
+                    }
+                })();
+            };
+            if (!hasChange) { markIncludedProcessed(); clearEnrichmentError.run(workspaceId, ent.id); continue; }
 
             if (policy === 'open') {
                 // Apply everything directly. Only touch what changed, and clear any staged
                 // review left over from when this entity was on the 'review' policy.
                 const nextData = { ...(ent.data || {}) };
                 delete nextData._enrichPending;
-                Object.assign(nextData, proposedData);
-                if (chapterAdds.length) {
-                    nextData.loreDocumentIds = [...entitiesStore.linkedLoreDocIds(ent), ...chapterAdds.map(c => c.id)];
-                }
+                for (const [field, proposal] of Object.entries(proposedData)) nextData[field] = proposal.value;
                 const fields = { data: nextData };
                 if (loreChanged) fields.lore = incomingLore;
-                if (chapterAdds.length) fields.loreDocumentId = nextData.loreDocumentIds[0] || null;
                 entitiesStore.updateEntity(ent.id, fields);
                 for (const l of proposedLinks) applyProposedLink(ent.id, l, workspaceId);
                 updated++;
             } else {
-                // review, stage everything for per-item accept/reject; never touch live values.
-                // A fresh run replaces any prior pending proposal for this entity.
-                const pending = {};
-                if (Object.keys(proposedData).length) pending.data = proposedData;
-                if (loreChanged) pending.lore = incomingLore;
-                if (proposedLinks.length) pending.links = proposedLinks;
-                if (chapterAdds.length) pending.chapters = chapterAdds;
+                // Review stages everything for per-item accept/reject without touching live values.
+                // Preserve unresolved review items while adding evidence from new chunks.
+                const previous = (ent.data?._enrichPending && typeof ent.data._enrichPending === 'object') ? ent.data._enrichPending : {};
+                const pending = { ...previous };
+                pending.evidence = {
+                    ...(previous.evidence || {}),
+                    ...Object.fromEntries(includedEvidence.map(entry => [entry.id, {
+                        chunkId: entry.chunk.id,
+                        excerpt: entityEvidenceExcerpt(entry.chunk.text, ent.canonicalName)
+                    }]))
+                };
+                if (Object.keys(proposedData).length) pending.data = { ...(previous.data || {}), ...proposedData };
+                if (loreChanged) pending.lore = { value: incomingLore, evidence: loreProposal.evidence, support: loreProposal.support };
+                if (proposedLinks.length) {
+                    const priorLinks = Array.isArray(previous.links) ? previous.links : [];
+                    const links = new Map(priorLinks.map(link => [`${link.relKey}:${link.targetId}:${link.label || ''}`, link]));
+                    for (const link of proposedLinks) links.set(`${link.relKey}:${link.targetId}:${link.label || ''}`, link);
+                    pending.links = [...links.values()];
+                }
                 pending.at = Date.now();
                 const nextData = { ...(ent.data || {}), _enrichPending: pending };
                 entitiesStore.updateEntity(ent.id, { data: nextData });
                 staged++;
             }
+            markIncludedProcessed();
+            clearEnrichmentError.run(workspaceId, ent.id);
         } catch (e) {
             console.error(`[Enrich] ${ent.canonicalName} failed (continues):`, e.message);
             failed++;
+            rememberFailure(ent, e);
         }
     }
     if (progressCallback) progressCallback({ phase: 'enriching', done: targets.length, total: targets.length });
-    return { entities: targets.length, updated, staged, skippedNoChunks, failed };
+    return { entities: targets.length, updated, staged, upToDate, noEvidence, failed, failures, evidenceUsed, taggedEvidenceRemaining, textMatchesSkipped };
 }
 
 async function executeSummarizationInternal({ chatId, selectedMessages, newSummarizedIndex, customTitle, profileId }) {

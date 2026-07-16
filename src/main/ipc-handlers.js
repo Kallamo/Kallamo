@@ -29,6 +29,10 @@ const profilesDir = path.join(dataDir, 'AI Profiles');
 const chatsDir = path.join(dataDir, 'ChatHistory');
 const worldIndexJobs = new Map();
 
+function hashText(text) {
+  return crypto.createHash('sha256').update(String(text || '')).digest('hex');
+}
+
 function worldIndexScope(tier) {
   if (tier === 'searchable') return { ownerType: 'chat_kb', sourceClause: '', params: [] };
   if (tier === 'custom') return { ownerType: 'chat_memory', sourceClause: "AND (kc.id LIKE 'manual_%' OR kc.id LIKE 'mem_%')", params: [] };
@@ -2781,6 +2785,31 @@ ipcMain.handle('resolve-enrich-review', async (event, { id, accept, reject } = {
   }
 });
 
+ipcMain.handle('summarize-bulk-entities', async (event, { workspaceId, ids } = {}) => {
+  try {
+    return { success: true, ...entitiesStore.summarizeBulkEntities(workspaceId, ids) };
+  } catch (e) {
+    console.error('[summarize-bulk-entities] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('bulk-manage-entities', async (event, { workspaceId, ids, action, policy } = {}) => {
+  try {
+    let result;
+    if (action === 'policy') result = entitiesStore.bulkSetAiPolicy(workspaceId, ids, policy);
+    else if (action === 'accept-proposed') result = entitiesStore.bulkAcceptProposed(workspaceId, ids);
+    else if (action === 'accept-updates') result = entitiesStore.bulkAcceptEnrichUpdates(workspaceId, ids);
+    else if (action === 'accept-all') result = entitiesStore.bulkAcceptAll(workspaceId, ids);
+    else if (action === 'delete') result = entitiesStore.bulkDeleteEntities(workspaceId, ids);
+    else throw new Error('unknown bulk entity action');
+    return { success: true, ...result };
+  } catch (e) {
+    console.error('[bulk-manage-entities] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
 // Enrichment runs in the main process; the WorldbuildView that started it can unmount
 // (view switch) while it keeps going. Track the run here so a remounted view can restore
 // the lock overlay via get-enrich-status, and broadcast completion so it clears even if
@@ -2788,6 +2817,25 @@ ipcMain.handle('resolve-enrich-review', async (event, { id, accept, reject } = {
 let enrichState = { running: false, workspaceId: null, progress: null };
 
 ipcMain.handle('get-enrich-status', async () => ({ ...enrichState }));
+
+ipcMain.handle('get-entity-enrichment-errors', async (event, { workspaceId } = {}) => {
+  try {
+    const errors = db.prepare(`SELECT id, entityId, entityName, entityType, error, createdAt
+      FROM entity_enrichment_errors WHERE workspaceId = ? AND dismissedAt IS NULL ORDER BY createdAt DESC`).all(workspaceId);
+    return { success: true, errors };
+  } catch (e) {
+    return { success: false, error: e.message, errors: [] };
+  }
+});
+
+ipcMain.handle('dismiss-entity-enrichment-error', async (event, { id } = {}) => {
+  try {
+    db.prepare('UPDATE entity_enrichment_errors SET dismissedAt = ? WHERE id = ?').run(Date.now(), id);
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
 
 ipcMain.handle('enrich-entities', async (event, { workspaceId } = {}) => {
   if (enrichState.running) return { success: false, error: 'An entity update is already running.' };
@@ -4295,15 +4343,16 @@ ipcMain.handle('save-chat-manual-snippet', async (event, { chatId, snippetId, ti
     const chunk = vectorData[0] || null;
     if (chunk) {
       const insertChunk = db.prepare(`
-        INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, content_hash)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const insertFts = db.prepare(`
         INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text)
         VALUES (?, ?)
       `);
       db.transaction(() => {
-        insertChunk.run(snippetId, chatId, 'chat_memory', title, content, JSON.stringify(chunk.vector), Date.now());
+        db.prepare('DELETE FROM entity_enrichment_chunks WHERE chunkId = ?').run(snippetId);
+        insertChunk.run(snippetId, chatId, 'chat_memory', title, content, JSON.stringify(chunk.vector), Date.now(), hashText(content));
         insertFts.run(snippetId, content);
       })();
     }
@@ -4379,15 +4428,15 @@ ipcMain.handle('get-chat-kb-blocks', async (event, { chatId }) => {
               const chunk = vectorData[0] || null;
               if (chunk) {
                 const insertChunk = db.prepare(`
-                  INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt)
-                  VALUES (?, ?, ?, ?, ?, ?, ?)
+                  INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, content_hash)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 `);
                 const insertFts = db.prepare(`
                   INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text)
                   VALUES (?, ?)
                 `);
                 db.transaction(() => {
-                  insertChunk.run(v.id, chatId, 'chat_memory', title, content, JSON.stringify(chunk.vector), Date.now());
+                  insertChunk.run(v.id, chatId, 'chat_memory', title, content, JSON.stringify(chunk.vector), Date.now(), hashText(content));
                   insertFts.run(v.id, content);
                 })();
               }
@@ -4528,14 +4577,15 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
           chunk.keywords = cleanKeywords;
 
           const insertChunk = db.prepare(`
-            INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, enabled)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, enabled, content_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
           `);
           const insertFts = db.prepare(`
             INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text)
             VALUES (?, ?)
           `);
           db.transaction(() => {
+            db.prepare('DELETE FROM entity_enrichment_chunks WHERE chunkId = ?').run(snippetId);
             insertChunk.run(
               snippetId,
               chatId,
@@ -4544,7 +4594,8 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
               chunk.text,
               JSON.stringify(chunk.vector),
               Date.now(),
-              resolvedEnabled ? 1 : 0
+              resolvedEnabled ? 1 : 0,
+              hashText(chunk.text)
             );
             insertFts.run(snippetId, chunk.text);
           })();
@@ -4629,15 +4680,16 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
       const vectorData = await vectorizeChunks([block.text], block.source);
       const chunk = vectorData[0] || null;
       if (chunk) {
-        db.prepare('UPDATE knowledge_chunks SET text = ?, vector = ?, manuallyEdited = 1 WHERE id = ?').run(
-          chunk.text,
-          JSON.stringify(chunk.vector),
-          block.id
-        );
-        db.prepare('UPDATE knowledge_chunks_fts SET text = ? WHERE chunkId = ?').run(
-          chunk.text,
-          block.id
-        );
+        db.transaction(() => {
+          db.prepare('DELETE FROM entity_enrichment_chunks WHERE chunkId = ?').run(block.id);
+          db.prepare('UPDATE knowledge_chunks SET text = ?, vector = ?, content_hash = ?, manuallyEdited = 1 WHERE id = ?').run(
+            chunk.text,
+            JSON.stringify(chunk.vector),
+            hashText(chunk.text),
+            block.id
+          );
+          db.prepare('UPDATE knowledge_chunks_fts SET text = ? WHERE chunkId = ?').run(chunk.text, block.id);
+        })();
       }
     }
 

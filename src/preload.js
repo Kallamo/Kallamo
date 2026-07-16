@@ -111,10 +111,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteEntity: (id) => ipcRenderer.invoke('delete-entity', { id }),
   mergeEntity: (sourceId, targetId, prefer) => ipcRenderer.invoke('merge-entity', { sourceId, targetId, prefer }),
   resolveEnrichReview: (id, accept, reject) => ipcRenderer.invoke('resolve-enrich-review', { id, accept, reject }),
+  summarizeBulkEntities: (workspaceId, ids) => ipcRenderer.invoke('summarize-bulk-entities', { workspaceId, ids }),
+  bulkManageEntities: (workspaceId, ids, action, policy) => ipcRenderer.invoke('bulk-manage-entities', { workspaceId, ids, action, policy }),
   exportWorldbuild: (workspaceId) => ipcRenderer.invoke('export-worldbuild', { workspaceId }),
   importWorldbuild: (workspaceId) => ipcRenderer.invoke('import-worldbuild', { workspaceId }),
   enrichEntities: (workspaceId) => ipcRenderer.invoke('enrich-entities', { workspaceId }),
   getEnrichStatus: () => ipcRenderer.invoke('get-enrich-status'),
+  getEntityEnrichmentErrors: (workspaceId) => ipcRenderer.invoke('get-entity-enrichment-errors', { workspaceId }),
+  dismissEntityEnrichmentError: (id) => ipcRenderer.invoke('dismiss-entity-enrichment-error', { id }),
   onEnrichEntitiesProgress: (callback) => {
     const listener = (event, data) => callback(data);
     ipcRenderer.on('enrich-entities-progress', listener);

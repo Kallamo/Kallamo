@@ -25,6 +25,7 @@ const HLJS_THEME_URLS = {
 function MainLayout() {
   const {
     currentView,
+    activeWorkspaceView,
     showOverflowModal,
     showErrorModal,
     errorData,
@@ -317,7 +318,7 @@ function MainLayout() {
       {/* Floating Settings Button - Globally available at bottom left */}
       <button
         onClick={() => setShowSettingsModal(true)}
-        className="absolute bottom-6 left-6 p-3 bg-[#0a161d] hover:bg-[#1a2d32] border border-gray-800 rounded-full text-gray-400 hover:text-white transition-all shadow-lg group titlebar-nodrag z-30 cursor-pointer"
+        className={`absolute bottom-6 p-3 bg-[#0a161d] hover:bg-[#1a2d32] border border-gray-800 rounded-full text-gray-400 hover:text-white transition-all shadow-lg group titlebar-nodrag z-30 cursor-pointer ${currentView === 'chat' && activeWorkspaceView === 'worldbuild' ? 'right-6' : 'left-6'}`}
         title="Settings"
       >
         <svg

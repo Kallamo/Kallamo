@@ -4,9 +4,11 @@ import {
   Plus, Search, BookOpen, MapPin, Package, Users, Flag, User,
   Sparkles, Trash2, Save, X, Pencil, Check, Link2, Globe, Tag, ScrollText, Ghost, Info, Replace,
   Lock, ShieldCheck, RefreshCw, Upload, Download, CalendarClock, ChevronRight, ChevronsLeftRight,
+  AlertTriangle,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import Button from './ui/Button';
+import Checkbox from './ui/Checkbox';
 import Popover from './ui/Popover';
 import ConfirmDialog from './ui/ConfirmDialog';
 import ExportWorldbuildModal from './modals/ExportWorldbuildModal';
@@ -280,7 +282,7 @@ function MemberRoles({ links, options, onAdd, onSetRole, onRemove, disabled }) {
 }
 
 export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFocusHandled }) {
-  const { showToast, settings } = useApp();
+  const { showToast, settings, openSettings } = useApp();
   // Entity enrichment (and world tagging) run on the dedicated System AI only. Without one
   // the "Update entities" button stays visible but disabled, with a tooltip pointing here.
   const hasSystemAi = !!settings?.advanced?.systemApiProfileId && !!settings?.advanced?.systemModelName;
@@ -292,6 +294,11 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState(null);
+  const [reviewFilter, setReviewFilter] = useState(null);
+  const [manageMode, setManageMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [bulkConfirm, setBulkConfirm] = useState(null);
+  const [bulkSaving, setBulkSaving] = useState(false);
   const [selected, setSelected] = useState(null);
   const [rel, setRel] = useState({});
   const [charTab, setCharTab] = useState('data');
@@ -301,6 +308,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const createRef = useRef(null);
   const [enriching, setEnriching] = useState(false);
   const [enrichProgress, setEnrichProgress] = useState(null);
+  const [enrichErrors, setEnrichErrors] = useState([]);
   const [mergePrompt, setMergePrompt] = useState(null); // { id, name } while choosing merge priority
   const [showExportModal, setShowExportModal] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -340,12 +348,22 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     finally { setLoading(false); }
   }, [workspaceId, electronAPI]);
 
+  const loadEnrichErrors = useCallback(async () => {
+    if (!workspaceId || !electronAPI.getEntityEnrichmentErrors) return;
+    const result = await electronAPI.getEntityEnrichmentErrors(workspaceId).catch(() => null);
+    setEnrichErrors(result?.errors || []);
+  }, [workspaceId, electronAPI]);
+
   useEffect(() => {
     setLoading(true);
     setSelected(null);
     setRel({});
+    setManageMode(false);
+    setSelectedIds(new Set());
+    setReviewFilter(null);
     load();
-  }, [load]);
+    loadEnrichErrors();
+  }, [load, loadEnrichErrors]);
   useEffect(() => { electronAPI.getWritingTree(workspaceId).then(t => setDocuments(t?.documents || [])).catch(() => setDocuments([])); }, [workspaceId, electronAPI]);
   const loadRelations = useCallback(async (ent) => {
     if (!ent?.id) { setRel({}); return; }
@@ -409,6 +427,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       if (selected.id) { const r = await electronAPI.updateEntity(selected.id, payload); if (!r?.success) throw new Error(r?.error || 'update failed'); patch({ status: payload.status }); }
       else { const r = await electronAPI.createEntity(payload); if (!r?.success) throw new Error(r?.error || 'create failed'); id = r.entity.id; setSelected(s => ({ ...s, id, status: r.entity.status })); }
       await load();
+      await loadEnrichErrors();
       return id;
     } catch (e) { showToast(`Save failed: ${e.message}`, 'error'); return null; }
     finally { setSaving(false); }
@@ -486,15 +505,24 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     if (res && res.workspaceId && res.workspaceId !== workspaceId) return;
     if (res && res.success) {
       await load();
+      await loadEnrichErrors();
       if (selected?.id) { const cur = (await electronAPI.getEntity(selected.id))?.entity; if (cur) await openEntity(cur); }
       const bits = [`${res.updated} updated`];
       if (res.staged) bits.push(`${res.staged} staged for review`);
-      if (res.skippedNoChunks) bits.push(`${res.skippedNoChunks} had no linked passages`);
+      if (res.upToDate) bits.push(`${res.upToDate} already up to date`);
+      if (res.noEvidence) bits.push(`${res.noEvidence} with no matching evidence`);
+      if (res.evidenceUsed) bits.push(`${res.evidenceUsed} evidence passages read`);
+      if (res.taggedEvidenceRemaining) bits.push(`${res.taggedEvidenceRemaining} tagged passages pending`);
+      if (res.textMatchesSkipped) bits.push(`${res.textMatchesSkipped} lower-priority text matches skipped`);
       if (res.failed) bits.push(`${res.failed} failed`);
       showToast(`Update complete: ${bits.join(', ')}.`, res.failed ? 'error' : 'success');
     } else if (res) {
       showToast(`Update failed: ${res.error || 'unknown error'}`, 'error');
     }
+  };
+  const dismissEnrichError = async (id) => {
+    const result = await electronAPI.dismissEntityEnrichmentError?.(id);
+    if (result?.success) setEnrichErrors(current => current.filter(item => item.id !== id));
   };
   const onEnrichCompleteRef = useRef(onEnrichComplete);
   onEnrichCompleteRef.current = onEnrichComplete;
@@ -565,14 +593,78 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const list = entities.filter(en => (!filterType || en.type === filterType) && (!q || [en.canonicalName, ...(en.aliases || [])].join(' ').toLowerCase().includes(q)));
+    const list = entities.filter(en =>
+      (!filterType || en.type === filterType) &&
+      (!reviewFilter || (reviewFilter === 'proposed' ? en.status === 'proposed' : en.status !== 'proposed' && en.data?._enrichPending)) &&
+      (!q || [en.canonicalName, ...(en.aliases || [])].join(' ').toLowerCase().includes(q))
+    );
     return list.sort((a, b) => (TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type)) || a.canonicalName.localeCompare(b.canonicalName));
-  }, [entities, search, filterType]);
+  }, [entities, search, filterType, reviewFilter]);
   const locationTree = useMemo(() => buildLocationTree(entities, insideLinks), [entities, insideLinks]);
-  const useLocationTree = !search.trim() && (!filterType || filterType === 'Locations');
+  const useLocationTree = !search.trim() && !reviewFilter && (!filterType || filterType === 'Locations');
   const toggleLocation = (id) => setExpandedLocations(current => ({ ...current, [id]: current[id] === false }));
   const proposedCount = useMemo(() => entities.filter(e => e.status === 'proposed').length, [entities]);
+  const pendingUpdateCount = useMemo(() => entities.filter(e => e.status !== 'proposed' && e.data?._enrichPending).length, [entities]);
   const exportableCount = useMemo(() => entities.filter(e => e.status !== 'proposed').length, [entities]);
+  const selectedEntities = useMemo(() => entities.filter(entity => selectedIds.has(entity.id)), [entities, selectedIds]);
+  const visibleIds = useMemo(() => new Set(filtered.map(entity => entity.id)), [filtered]);
+  const hiddenSelectedCount = useMemo(() => selectedEntities.filter(entity => !visibleIds.has(entity.id)).length, [selectedEntities, visibleIds]);
+  const selectedProposedCount = selectedEntities.filter(entity => entity.status === 'proposed').length;
+  const selectedUpdateCount = selectedEntities.filter(entity => entity.status !== 'proposed' && entity.data?._enrichPending).length;
+
+  useEffect(() => {
+    if (reviewFilter === 'proposed' && proposedCount === 0) setReviewFilter(null);
+    if (reviewFilter === 'updates' && pendingUpdateCount === 0) setReviewFilter(null);
+  }, [reviewFilter, proposedCount, pendingUpdateCount]);
+
+  const toggleEntitySelection = (id) => setSelectedIds(current => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const selectEntities = list => setSelectedIds(new Set(list.map(entity => entity.id)));
+  const selectVisibleEntities = () => setSelectedIds(current => new Set([...current, ...filtered.map(entity => entity.id)]));
+  const leaveManageMode = () => { setManageMode(false); setSelectedIds(new Set()); };
+
+  const runBulkAction = async (action, policy = null) => {
+    const ids = [...selectedIds];
+    if (!ids.length) return;
+    setBulkSaving(true);
+    try {
+      const result = await electronAPI.bulkManageEntities(workspaceId, ids, action, policy);
+      if (!result?.success) throw new Error(result?.error || 'bulk action failed');
+      if (action === 'policy') showToast(`AI policy changed for ${result.updated} entit${result.updated === 1 ? 'y' : 'ies'}${result.skipped ? `; ${result.skipped} proposal${result.skipped === 1 ? '' : 's'} skipped` : ''}.`, 'success');
+      else if (action === 'accept-proposed') showToast(`Accepted ${result.accepted} proposed entit${result.accepted === 1 ? 'y' : 'ies'}.`, 'success');
+      else if (action === 'accept-updates') showToast(`Accepted AI updates for ${result.accepted} entit${result.accepted === 1 ? 'y' : 'ies'}.`, 'success');
+      else if (action === 'accept-all') showToast(`Accepted ${result.proposed.accepted} proposal${result.proposed.accepted === 1 ? '' : 's'} and updates for ${result.updates.accepted} entit${result.updates.accepted === 1 ? 'y' : 'ies'}.`, 'success');
+      else if (action === 'delete') showToast(`Deleted ${result.deleted} entit${result.deleted === 1 ? 'y' : 'ies'}.`, 'success');
+      const selectedId = selected?.id;
+      if (action === 'delete' && selectedId && ids.includes(selectedId)) setSelected(null);
+      setSelectedIds(new Set());
+      setBulkConfirm(null);
+      await load();
+      if (action !== 'delete' && selectedId && ids.includes(selectedId)) {
+        const refreshed = await electronAPI.getEntity(selectedId);
+        if (refreshed?.entity) await openEntity(refreshed.entity);
+      }
+    } catch (error) {
+      showToast(`Bulk action failed: ${error.message}`, 'error');
+    } finally {
+      setBulkSaving(false);
+    }
+  };
+
+  const requestBulkConfirmation = async action => {
+    const ids = [...selectedIds];
+    if (!ids.length) return;
+    try {
+      const summary = await electronAPI.summarizeBulkEntities(workspaceId, ids);
+      if (!summary?.success) throw new Error(summary?.error || 'could not inspect selection');
+      setBulkConfirm({ action, summary });
+    } catch (error) {
+      showToast(`Could not inspect selection: ${error.message}`, 'error');
+    }
+  };
 
   const isResource = selected?.type === 'Items' && (selected?.data?.itemType || '') === 'Resource';
   const isGear = selected?.type === 'Items' && !isResource;
@@ -596,7 +688,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const loreEdit = (
     <>
       <Edit label="Lore"><LTextarea rows={5} placeholder="History, secrets, texture. Or link Writing Desk chapters below." value={selected?.lore || ''} onChange={(e) => patch({ lore: e.target.value })} /></Edit>
-      <Edit label="Linked Writing Desk chapters" hint="RAG auto-correlates these chapters with this entity. Link as many as apply.">
+      <Edit label="Linked Writing Desk chapters" hint="Explicitly link chapters authored as canonical background for this entity. Ordinary story mentions remain available through the World Index.">
         <div className="flex flex-wrap gap-1.5 mb-2">
           {linkedDocs.length === 0 && <span className="caption">None linked.</span>}
           {linkedDocs.map(id => (
@@ -786,19 +878,22 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const sections = selected ? (selected.type === 'Characters' ? characterSections() : sectionsFor(selected.type)) : [];
   const m = selected ? meta(selected.type) : null;
   const nameLabel = selected?.type === 'System' ? 'Title' : 'Name';
-  const showAliases = selected?.type !== 'System';
+  const showAliases = !!selected;
 
   const renderEntityButton = (en) => {
     const t = meta(en.type);
     const Icon = t.icon;
     const active = selected?.id === en.id;
     return (
-      <button key={en.id} onClick={() => openEntity(en)} className={`w-full text-left px-2.5 py-2 rounded-lg flex items-center gap-2.5 transition-colors cursor-pointer group ${active ? 'bg-accent/15' : 'hover:bg-white/5'}`}>
-        <span className={`w-7 h-7 rounded-md border flex items-center justify-center shrink-0 ${t.medallion}`}><Icon className="w-3.5 h-3.5" /></span>
-        <span className={`flex-1 min-w-0 truncate text-sm font-medium ${active ? 'text-accent' : 'text-gray-200'}`}>{en.canonicalName}</span>
-        {en.status === 'proposed' && <Sparkles className="w-3.5 h-3.5 text-amber-300 shrink-0" data-tooltip="AI proposal, needs accept" />}
-        {en.status !== 'proposed' && en.data?._enrichPending && <ShieldCheck className="w-3.5 h-3.5 text-sky-300 shrink-0" data-tooltip="AI updates awaiting review" />}
-      </button>
+      <div key={en.id} className="relative">
+        {manageMode && <Checkbox size="sm" checked={selectedIds.has(en.id)} onChange={() => toggleEntitySelection(en.id)} ariaLabel={`Select ${en.canonicalName}`} className="absolute z-10 left-2.5 top-1/2 -translate-y-1/2" />}
+        <button onClick={() => openEntity(en)} className={`w-full text-left pr-2.5 py-2 rounded-lg flex items-center gap-2.5 transition-colors cursor-pointer group ${manageMode ? 'pl-9' : 'pl-2.5'} ${active ? 'bg-accent/15' : 'hover:bg-white/5'}`}>
+          <span className={`w-7 h-7 rounded-md border flex items-center justify-center shrink-0 ${t.medallion}`}><Icon className="w-3.5 h-3.5" /></span>
+          <span className={`flex-1 min-w-0 truncate text-sm font-medium ${active ? 'text-accent' : 'text-gray-200'}`}>{en.canonicalName}</span>
+          {en.status === 'proposed' && <Sparkles className="w-3.5 h-3.5 text-amber-300 shrink-0" data-tooltip="AI proposal, needs accept" />}
+          {en.status !== 'proposed' && en.data?._enrichPending && <ShieldCheck className="w-3.5 h-3.5 text-sky-300 shrink-0" data-tooltip="AI updates awaiting review" />}
+        </button>
+      </div>
     );
   };
 
@@ -818,7 +913,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               <span className="absolute left-0 top-5 w-4 border-t border-emerald-300/25" />
             </>)}
         <div className="relative">
-            <button onClick={() => openEntity(entity)} className={`w-full text-left px-2.5 py-2 rounded-lg flex items-center gap-2.5 transition-colors cursor-pointer group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent ${hasChildren ? 'pr-9' : ''} ${active ? 'bg-accent/15' : 'hover:bg-white/5'}`}>
+            {manageMode && <Checkbox size="sm" checked={selectedIds.has(entity.id)} onChange={() => toggleEntitySelection(entity.id)} ariaLabel={`Select ${entity.canonicalName}`} className="absolute z-10 left-2.5 top-1/2 -translate-y-1/2" />}
+            <button onClick={() => openEntity(entity)} className={`w-full text-left pr-2.5 py-2 rounded-lg flex items-center gap-2.5 transition-colors cursor-pointer group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent ${manageMode ? 'pl-9' : 'pl-2.5'} ${hasChildren ? 'pr-9' : ''} ${active ? 'bg-accent/15' : 'hover:bg-white/5'}`}>
               <span className={`w-7 h-7 rounded-md border flex items-center justify-center shrink-0 ${t.medallion}`}><Icon className="w-3.5 h-3.5" /></span>
               <span className={`flex-1 min-w-0 truncate text-sm font-medium ${active ? 'text-accent' : 'text-gray-200'}`}>{entity.canonicalName}</span>
               {entity.status === 'proposed' && <Sparkles className="w-3.5 h-3.5 text-amber-300 shrink-0" data-tooltip="AI proposal, needs accept" />}
@@ -869,6 +965,30 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     );
   };
 
+  const bulkDialog = (() => {
+    if (!bulkConfirm) return null;
+    const { action, summary } = bulkConfirm;
+    if (action === 'delete') return {
+      tone: 'danger',
+      title: `Delete ${summary.entities} entities`,
+      confirm: 'Delete entities',
+      message: `${summary.proposed} proposed and ${summary.entities - summary.proposed} confirmed entities will be permanently deleted, together with ${summary.relationships} relationships and ${summary.storyTags} World Index associations. This cannot be undone.`,
+    };
+    const updateDetails = `${summary.pendingFields} field changes, ${summary.pendingLore} lore updates, and ${summary.pendingLinks} relationships`;
+    if (action === 'accept-proposed') return {
+      tone: 'warning', title: 'Accept proposed entities', confirm: 'Accept proposals',
+      message: `${summary.proposed} selected proposals will become confirmed entities. Possible duplicates still need to be merged manually.`,
+    };
+    if (action === 'accept-updates') return {
+      tone: 'warning', title: 'Accept AI updates', confirm: 'Accept updates',
+      message: `Accept all pending AI changes for ${summary.pendingUpdates} selected entities: ${updateDetails}.`,
+    };
+    return {
+      tone: 'warning', title: 'Accept proposals and updates', confirm: 'Accept both',
+      message: `Confirm ${summary.proposed} proposed entities and accept pending changes for ${summary.pendingUpdates} entities: ${updateDetails}.`,
+    };
+  })();
+
   return (
     <div className="flex-1 flex flex-col lg:flex-row h-full overflow-hidden bg-[#000508]/40 select-none relative">
       {showExportModal && createPortal(
@@ -877,6 +997,18 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           onClose={() => setShowExportModal(false)}
           onConfirm={() => { setShowExportModal(false); exportWorld(); }}
         />, document.body)}
+      {bulkDialog && (
+        <ConfirmDialog
+          tone={bulkDialog.tone}
+          title={bulkDialog.title}
+          message={bulkDialog.message}
+          actions={[
+            { label: 'Cancel', variant: 'ghost', onClick: () => setBulkConfirm(null) },
+            { label: bulkDialog.confirm, variant: bulkConfirm.action === 'delete' ? 'danger' : 'primary', autoFocus: true, loading: bulkSaving, onClick: () => runBulkAction(bulkConfirm.action) },
+          ]}
+          onClose={() => setBulkConfirm(null)}
+        />
+      )}
       {confirmDelete && selected && (
         <ConfirmDialog
           tone="danger"
@@ -902,14 +1034,40 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           </div>
         </div>
       )}
-      {/* Sidebar */}
+      {enrichErrors.length > 0 && (
+        <aside className="fixed right-5 bottom-20 z-[70] w-[min(30rem,calc(100vw-2.5rem))] max-h-[70vh] overflow-y-auto overscroll-contain space-y-3" aria-live="polite">
+          {enrichErrors.map(error => (
+            <section key={error.id} className="bg-[#1a0b0b] border border-red-500/45 shadow-2xl rounded-xl p-4 text-sm">
+              <div className="flex gap-3">
+                <AlertTriangle className="w-5 h-5 text-red-300 shrink-0 mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-3">
+                    <div><h3 className="font-bold text-red-100">Entity update failed</h3><p className="mt-0.5 text-red-200/80">{error.entityName} · {meta(error.entityType).label}</p></div>
+                    <button type="button" aria-label={`Dismiss update error for ${error.entityName}`} onClick={() => dismissEnrichError(error.id)} className="p-1 text-red-200/70 hover:text-white focus-visible:ring-2 focus-visible:ring-red-300 rounded"><X className="w-4 h-4" /></button>
+                  </div>
+                  <p className="mt-3 text-red-100 leading-relaxed break-words">{error.error}</p>
+                  <div className="mt-4 flex items-center justify-between gap-3">
+                    <button type="button" onClick={() => openSettings('engine', 'system-ai')} className="text-sm font-bold text-red-100 hover:text-white underline underline-offset-4">Open System AI settings</button>
+                    <button type="button" onClick={() => dismissEnrichError(error.id)} className="text-sm text-red-200/80 hover:text-white">Dismiss</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          ))}
+        </aside>
+      )}
       <div style={{ '--worldbuild-sidebar-width': `${sidebarWidth}px` }} className="relative w-full lg:w-[var(--worldbuild-sidebar-width)] shrink-0 flex flex-col h-full overflow-visible border-r border-gray-800/40 bg-[#011419]/25 backdrop-blur-md">
         <button type="button" aria-label="Resize Worldbuild sidebar" onPointerDown={startSidebarResize} onKeyDown={handleSidebarResizeKey} className="hidden lg:flex absolute -right-4 top-3 z-20 w-8 h-8 items-center justify-center rounded-full border border-white/20 bg-[#071720] text-white shadow-lg cursor-col-resize transition-colors hover:border-accent hover:text-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent">
           <ChevronsLeftRight className="w-4 h-4" />
         </button>
         <div className="px-3 py-3 border-b border-gray-800/80 bg-[#011419]/35 flex items-center justify-between">
-          <div className="flex items-center gap-2"><Globe className="w-4 h-4 text-accent" /><span className="text-sm font-bold text-white tracking-wide">Worldbuild</span></div>
-          {proposedCount > 0 && <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-300 bg-amber-400/10 border border-amber-400/30 rounded-full px-2 py-0.5"><Sparkles className="w-3 h-3" />{proposedCount}</span>}
+          <div className="flex items-center gap-2">
+            <Globe className="w-4 h-4 text-accent" /><span className="text-sm font-bold text-white tracking-wide">Worldbuild</span>
+            <button type="button" onClick={() => manageMode ? leaveManageMode() : setManageMode(true)} className={`ml-1 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md border transition-colors cursor-pointer ${manageMode ? 'bg-accent/20 text-accent border-accent/40' : 'text-gray-400 border-white/10 hover:text-white hover:bg-white/5'}`}>{manageMode ? 'Done' : 'Manage'}</button>
+          </div>
+          <div className="flex items-center gap-2">
+            {proposedCount > 0 && <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-300 bg-amber-400/10 border border-amber-400/30 rounded-full px-2 py-0.5"><Sparkles className="w-3 h-3" />{proposedCount}</span>}
+          </div>
         </div>
 
         <div className="p-3 space-y-3">
@@ -952,8 +1110,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           </div>
 
           <div className="flex flex-wrap gap-1.5">
-            <button onClick={() => setFilterType(null)} className={`text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md transition-colors cursor-pointer ${!filterType ? 'bg-accent text-[#011419]' : 'bg-white/5 text-gray-400 hover:text-white border border-white/10'}`}>All</button>
+            <button onClick={() => { setFilterType(null); setReviewFilter(null); }} className={`text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md transition-colors cursor-pointer ${!filterType && !reviewFilter ? 'bg-accent text-[#011419]' : 'bg-white/5 text-gray-400 hover:text-white border border-white/10'}`}>All</button>
             {TYPE_ORDER.map(key => <button key={key} onClick={() => setFilterType(key === filterType ? null : key)} className={`text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md transition-colors cursor-pointer ${filterType === key ? 'bg-accent text-[#011419]' : 'bg-white/5 text-gray-400 hover:text-white border border-white/10'}`}>{meta(key).label}</button>)}
+            {proposedCount > 0 && <button onClick={() => setReviewFilter(reviewFilter === 'proposed' ? null : 'proposed')} className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md border transition-colors cursor-pointer ${reviewFilter === 'proposed' ? 'bg-amber-400/20 text-amber-200 border-amber-400/40' : 'bg-amber-400/[0.06] text-amber-300/80 border-amber-400/20 hover:bg-amber-400/10'}`}><Sparkles className="w-3 h-3" />Proposed</button>}
+            {pendingUpdateCount > 0 && <button onClick={() => setReviewFilter(reviewFilter === 'updates' ? null : 'updates')} className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md border transition-colors cursor-pointer ${reviewFilter === 'updates' ? 'bg-sky-400/20 text-sky-100 border-sky-400/40' : 'bg-sky-400/[0.06] text-sky-300/80 border-sky-400/20 hover:bg-sky-400/10'}`}><ShieldCheck className="w-3 h-3" />AI Updates</button>}
           </div>
         </div>
 
@@ -962,9 +1122,41 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             : filtered.length === 0 ? <p className="caption text-center py-8">Nothing here yet.</p>
             : renderSidebarEntities()}
         </div>
+        {manageMode && (
+          <div className="shrink-0 border-t border-white/10 bg-[#03141d]/95 backdrop-blur-md p-3 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-gray-200">{selectedIds.size} selected{hiddenSelectedCount ? ` · ${hiddenSelectedCount} hidden` : ''}</span>
+              <button type="button" onClick={() => setSelectedIds(new Set())} disabled={!selectedIds.size} className="text-[10px] font-bold uppercase tracking-wider text-gray-500 hover:text-white disabled:opacity-40 cursor-pointer">Clear</button>
+            </div>
+            <div className="space-y-1.5">
+              <span className="block text-[10px] font-bold uppercase tracking-wider text-gray-500">Select entities</span>
+              <div className="flex flex-wrap gap-1.5">
+              <button type="button" onClick={selectVisibleEntities} disabled={!filtered.length} className="text-[10px] font-semibold px-2 py-1 rounded-md border border-white/10 text-gray-300 hover:bg-white/5 disabled:opacity-40 cursor-pointer">Select visible</button>
+              {proposedCount > 0 && <button type="button" onClick={() => selectEntities(entities.filter(entity => entity.status === 'proposed'))} className="text-[10px] font-semibold px-2 py-1 rounded-md border border-amber-400/25 text-amber-300 hover:bg-amber-400/10 cursor-pointer">Proposed</button>}
+              {pendingUpdateCount > 0 && <button type="button" onClick={() => selectEntities(entities.filter(entity => entity.status !== 'proposed' && entity.data?._enrichPending))} className="text-[10px] font-semibold px-2 py-1 rounded-md border border-sky-400/25 text-sky-300 hover:bg-sky-400/10 cursor-pointer">AI updates</button>}
+              {Object.keys(AI_POLICY).map(policy => {
+                const matches = entities.filter(entity => entity.status !== 'proposed' && (entity.data?.aiPolicy || 'review') === policy);
+                return <button key={`select-${policy}`} type="button" onClick={() => selectEntities(matches)} disabled={!matches.length} data-tooltip={`Select all entities with the ${AI_POLICY[policy].label} AI policy`} className="text-[10px] font-semibold px-2 py-1 rounded-md border border-white/10 text-gray-400 hover:bg-white/5 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer">{AI_POLICY[policy].label} ({matches.length})</button>;
+              })}
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mr-1">Set AI policy</span>
+              {Object.entries(AI_POLICY).map(([policy, config]) => {
+                const Icon = config.icon;
+                return <button key={policy} type="button" onClick={() => runBulkAction('policy', policy)} disabled={!selectedIds.size || bulkSaving} data-tooltip={config.tip} className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-md border border-white/10 text-gray-300 hover:bg-white/5 disabled:opacity-40 cursor-pointer"><Icon className="w-3 h-3" />{config.label}</button>;
+              })}
+            </div>
+            <div className="grid grid-cols-2 gap-1.5">
+              <button type="button" onClick={() => requestBulkConfirmation('accept-proposed')} disabled={!selectedProposedCount || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-amber-400/25 text-amber-200 hover:bg-amber-400/10 disabled:opacity-40 cursor-pointer">Accept proposals</button>
+              <button type="button" onClick={() => requestBulkConfirmation('accept-updates')} disabled={!selectedUpdateCount || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-sky-400/25 text-sky-100 hover:bg-sky-400/10 disabled:opacity-40 cursor-pointer">Accept updates</button>
+              <button type="button" onClick={() => requestBulkConfirmation('accept-all')} disabled={(!selectedProposedCount && !selectedUpdateCount) || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-accent/25 text-accent hover:bg-accent/10 disabled:opacity-40 cursor-pointer">Accept both</button>
+              <button type="button" onClick={() => requestBulkConfirmation('delete')} disabled={!selectedIds.size || bulkSaving} className="inline-flex items-center justify-center gap-1 text-[10px] font-semibold px-2 py-1.5 rounded-md border border-red-400/25 text-red-300 hover:bg-red-400/10 disabled:opacity-40 cursor-pointer"><Trash2 className="w-3 h-3" />Delete</button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Detail */}
       <div className="flex-1 min-w-0 overflow-y-auto custom-scrollbar">
         {!selected ? (
           <div className="h-full flex flex-col items-center justify-center text-center px-8 gap-4">
@@ -976,7 +1168,6 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           </div>
         ) : (
           <div className="max-w-2xl mx-auto p-6 space-y-4">
-            {/* Header band */}
             <div className={`rounded-2xl border ${m.ring} bg-[#0a1721]/60 backdrop-blur-md p-5`}>
               {selected.status === 'proposed' && (
                 <div className="flex flex-col gap-2 mb-4 bg-amber-400/10 border border-amber-400/30 rounded-xl px-3 py-2.5">
@@ -986,6 +1177,9 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                       ? 'Imported from a Worldbuild package. Keep it as a new entity, merge it into an existing one, or dismiss it.'
                       : 'The AI proposed this entity. Keep it, fold it into an existing one, or dismiss it.'}
                   </span>
+                  {!selected.data?._imported && Array.isArray(selected.data?.proposalEvidence) && selected.data.proposalEvidence.map((item, index) => (
+                    <p key={`${item.chunkId || 'evidence'}-${index}`} className="caption text-amber-100/75 line-clamp-2">“{item.excerpt}”</p>
+                  ))}
                   {mergePrompt ? (
                     <div className="flex items-center flex-wrap gap-2">
                       <span className="text-xs text-amber-100/90 min-w-0">Merge into “{mergePrompt.name}”. On conflicting details, keep:</span>
@@ -1038,8 +1232,14 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             {!isNew && selected.status !== 'proposed' && selected.data?._enrichPending && (() => {
               const pending = selected.data._enrichPending;
               const pData = (pending.data && typeof pending.data === 'object') ? pending.data : {};
+              const proposalValue = proposal => proposal && typeof proposal === 'object' && 'value' in proposal ? proposal.value : proposal;
+              const proposalEvidence = proposal => {
+                const ids = proposal && typeof proposal === 'object' && Array.isArray(proposal.evidence) ? proposal.evidence : [];
+                return ids.map(id => pending.evidence?.[id]?.excerpt).filter(Boolean);
+              };
+              const proposalSupport = proposal => proposal && typeof proposal === 'object' ? String(proposal.support || '').trim() : '';
               const fields = Object.keys(pData);
-              const hasLore = pending.lore != null && String(pending.lore).trim() !== '';
+              const hasLore = selected.type !== 'System' && pending.lore != null && String(pending.lore).trim() !== '';
               const links = Array.isArray(pending.links) ? pending.links : [];
               const chapters = Array.isArray(pending.chapters) ? pending.chapters : [];
               const linkKey = (l) => `${l.relKey}:${l.targetId}:${l.label || ''}`;
@@ -1063,8 +1263,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                             <div className="flex items-center flex-wrap gap-2 text-sm">
                               <span className="text-gray-500 line-through">{curStr}</span>
                               <span className="text-gray-500">→</span>
-                              <span className="text-sky-100 font-medium">{String(pData[f])}</span>
+                              <span className="text-sky-100 font-medium">{String(proposalValue(pData[f]))}</span>
                             </div>
+                            {proposalSupport(pData[f]) && <p className="caption mt-1 text-sky-100/75">{proposalSupport(pData[f])}</p>}
+                            {proposalEvidence(pData[f]).map((excerpt, index) => <p key={index} className="caption mt-1 line-clamp-2">“{excerpt}”</p>)}
                           </div>
                           <div className="flex items-center gap-1 shrink-0">
                             <button onClick={() => resolveReview({ fields: [f] }, {})} disabled={saving} data-tooltip="Accept" className="p-1.5 rounded-md text-emerald-300 hover:bg-emerald-400/15 transition-colors cursor-pointer"><Check className="w-3.5 h-3.5" /></button>
@@ -1082,7 +1284,9 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                             <button onClick={() => resolveReview({}, { lore: true })} disabled={saving} data-tooltip="Reject" className="p-1.5 rounded-md text-gray-400 hover:bg-white/10 transition-colors cursor-pointer"><X className="w-3.5 h-3.5" /></button>
                           </div>
                         </div>
-                        <p className="text-sm text-sky-100 leading-relaxed whitespace-pre-wrap">{String(pending.lore)}</p>
+                        <p className="text-sm text-sky-100 leading-relaxed whitespace-pre-wrap">{String(proposalValue(pending.lore))}</p>
+                        {proposalSupport(pending.lore) && <p className="caption mt-2 text-sky-100/75">{proposalSupport(pending.lore)}</p>}
+                        {proposalEvidence(pending.lore).map((excerpt, index) => <p key={index} className="caption mt-2 line-clamp-2">“{excerpt}”</p>)}
                       </div>
                     )}
                     {links.map(l => { const k = linkKey(l); return (
@@ -1091,6 +1295,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                         <div className="min-w-0 flex-1 text-sm">
                           <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mr-2">{l.relLabel || l.relKey}</span>
                           <span className="text-sky-100 font-medium">{l.targetName}</span>
+                          {proposalSupport(l) && <p className="caption mt-1 text-sky-100/75">{proposalSupport(l)}</p>}
+                          {proposalEvidence(l).map((excerpt, index) => <p key={index} className="caption mt-1 line-clamp-2">“{excerpt}”</p>)}
                           {l.label && <span className="text-accent/90"> · {l.label}</span>}
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
@@ -1178,5 +1384,5 @@ function placeholderName(type) {
   return { System: 'e.g. The Three Laws of Aether', Locations: 'e.g. Thornhall', Items: 'e.g. Stormglass Lantern', Races: 'e.g. Tidewalkers', Factions: 'e.g. The Ember Concord', Characters: 'e.g. Captain Aldric Venn', Creatures: 'e.g. The Gloamwyrm', Events: 'e.g. The Siege of Thornhall' }[type] || 'Name';
 }
 function placeholderAlias(type) {
-  return { Locations: 'e.g. The Bramble Keep', Items: 'e.g. The Tempest Lamp', Races: 'e.g. Brinekin', Factions: 'e.g. The Concord', Characters: 'e.g. Captain, The Grey Wolf', Creatures: 'e.g. The Bog Serpent', Events: 'e.g. The Long Night' }[type] || '';
+  return { System: 'e.g. Assimilation, The Assimilation Protocol', Locations: 'e.g. The Bramble Keep', Items: 'e.g. The Tempest Lamp', Races: 'e.g. Brinekin', Factions: 'e.g. The Concord', Characters: 'e.g. Captain, The Grey Wolf', Creatures: 'e.g. The Bog Serpent', Events: 'e.g. The Long Night' }[type] || '';
 }

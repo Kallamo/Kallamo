@@ -74,6 +74,8 @@ function createEntity({ workspaceId, type, canonicalName, aliases = [], lore = '
 function updateEntity(id, fields = {}) {
   const cur = db.prepare('SELECT * FROM entities WHERE id = ?').get(id);
   if (!cur) return null;
+  const nextData = fields.data != null ? { ...fields.data } : parseJsonObject(cur.data);
+  if (cur.status === 'proposed' && fields.status === 'confirmed') delete nextData.proposalEvidence;
   const next = {
     type: fields.type != null ? fields.type : cur.type,
     canonicalName: fields.canonicalName != null ? String(fields.canonicalName).trim() : cur.canonicalName,
@@ -82,7 +84,7 @@ function updateEntity(id, fields = {}) {
       : cur.aliases,
     lore: fields.lore != null ? fields.lore : cur.lore,
     loreDocumentId: fields.loreDocumentId !== undefined ? fields.loreDocumentId : cur.loreDocumentId,
-    data: fields.data != null ? JSON.stringify(fields.data) : cur.data,
+    data: JSON.stringify(nextData),
     status: fields.status != null ? fields.status : cur.status,
   };
   db.prepare(`
@@ -103,6 +105,7 @@ function stripInternal(data) {
   const d = { ...(data || {}) };
   delete d._enrichPending;
   delete d._imported;
+  delete d.proposalEvidence;
   delete d.loreDocumentIds;
   return d;
 }
@@ -178,22 +181,27 @@ function resolveEnrichReview(id, { accept = {}, reject = {} } = {}) {
   const rejectFields = new Set(Array.isArray(reject.fields) ? reject.fields : []);
   const acceptLinks = new Set(Array.isArray(accept.links) ? accept.links : []);
   const rejectLinks = new Set(Array.isArray(reject.links) ? reject.links : []);
-  const acceptChapters = new Set(Array.isArray(accept.chapters) ? accept.chapters : []);
-  const rejectChapters = new Set(Array.isArray(reject.chapters) ? reject.chapters : []);
 
   const nextData = { ...cur.data };
   const fields = { data: nextData };
   const nextPending = {};
 
-  // Scalar data fields.
   const pendingData = (pending.data && typeof pending.data === 'object') ? { ...pending.data } : {};
-  for (const f of acceptFields) { if (f in pendingData) { nextData[f] = pendingData[f]; delete pendingData[f]; } }
+  for (const f of acceptFields) {
+    if (!(f in pendingData)) continue;
+    const proposal = pendingData[f];
+    nextData[f] = proposal && typeof proposal === 'object' && 'value' in proposal ? proposal.value : proposal;
+    delete pendingData[f];
+  }
   for (const f of rejectFields) delete pendingData[f];
   if (Object.keys(pendingData).length) nextPending.data = pendingData;
 
   // Lore is a single unit: accept applies it, reject drops it, otherwise it stays staged.
-  if (pending.lore != null) {
-    if (accept.lore) fields.lore = String(pending.lore);
+  if (pending.lore != null && cur.type !== 'System') {
+    if (accept.lore) {
+      const proposal = pending.lore;
+      fields.lore = String(proposal && typeof proposal === 'object' && 'value' in proposal ? proposal.value : proposal);
+    }
     else if (!reject.lore) nextPending.lore = pending.lore;
   }
 
@@ -229,6 +237,18 @@ function resolveEnrichReview(id, { accept = {}, reject = {} } = {}) {
       fields.loreDocumentId = merged[0] || null;
     }
     if (keptChapters.length) nextPending.chapters = keptChapters;
+  }
+
+  const evidenceIds = new Set();
+  const collectEvidence = proposal => {
+    if (!proposal || typeof proposal !== 'object') return;
+    for (const id of (Array.isArray(proposal.evidence) ? proposal.evidence : [])) evidenceIds.add(id);
+  };
+  Object.values(nextPending.data || {}).forEach(collectEvidence);
+  collectEvidence(nextPending.lore);
+  (nextPending.links || []).forEach(collectEvidence);
+  if (evidenceIds.size && pending.evidence && typeof pending.evidence === 'object') {
+    nextPending.evidence = Object.fromEntries([...evidenceIds].filter(id => pending.evidence[id]).map(id => [id, pending.evidence[id]]));
   }
 
   if (Object.keys(nextPending).length) { nextPending.at = pending.at || Date.now(); nextData._enrichPending = nextPending; }
@@ -427,6 +447,105 @@ function importWorldbuild(workspaceId, payload) {
   return { entitiesAdded, linksAdded };
 }
 
+function bulkEntityRows(workspaceId, ids) {
+  const uniqueIds = [...new Set((Array.isArray(ids) ? ids : []).map(String).filter(Boolean))];
+  if (!uniqueIds.length) return [];
+  const placeholders = uniqueIds.map(() => '?').join(', ');
+  return db.prepare(`SELECT * FROM entities WHERE workspaceId IS ? AND id IN (${placeholders})`)
+    .all(workspaceId || null, ...uniqueIds)
+    .map(hydrate);
+}
+
+function summarizeBulkEntities(workspaceId, ids) {
+  const rows = bulkEntityRows(workspaceId, ids);
+  if (!rows.length) return { entities: 0, proposed: 0, pendingUpdates: 0, pendingFields: 0, pendingLore: 0, pendingLinks: 0, relationships: 0, storyTags: 0 };
+  const placeholders = rows.map(() => '?').join(', ');
+  const rowIds = rows.map(row => row.id);
+  const relationships = db.prepare(`SELECT COUNT(*) AS count FROM entity_links WHERE fromId IN (${placeholders}) OR toId IN (${placeholders})`)
+    .get(...rowIds, ...rowIds).count;
+  const storyTags = db.prepare(`SELECT COUNT(*) AS count FROM chunk_tags WHERE entity IN (${placeholders})`).get(...rowIds).count;
+  const pending = rows.filter(row => row.status !== 'proposed' && row.data?._enrichPending).map(row => ({ type: row.type, proposal: row.data._enrichPending }));
+  return {
+    entities: rows.length,
+    proposed: rows.filter(row => row.status === 'proposed').length,
+    pendingUpdates: pending.length,
+    pendingFields: pending.reduce((count, entry) => count + Object.keys(entry.proposal.data || {}).length, 0),
+    pendingLore: pending.filter(entry => entry.type !== 'System' && entry.proposal.lore != null).length,
+    pendingLinks: pending.reduce((count, entry) => count + (entry.proposal.links || []).length, 0),
+    relationships,
+    storyTags,
+  };
+}
+
+function bulkSetAiPolicy(workspaceId, ids, policy) {
+  if (!['open', 'review', 'locked'].includes(policy)) throw new Error('invalid AI policy');
+  const rows = bulkEntityRows(workspaceId, ids);
+  let updated = 0, skipped = 0;
+  db.transaction(() => {
+    for (const row of rows) {
+      if (row.status === 'proposed') { skipped++; continue; }
+      updateEntity(row.id, { data: { ...(row.data || {}), aiPolicy: policy } });
+      updated++;
+    }
+  })();
+  return { updated, skipped };
+}
+
+function bulkAcceptProposed(workspaceId, ids) {
+  const rows = bulkEntityRows(workspaceId, ids);
+  let accepted = 0, skipped = 0;
+  db.transaction(() => {
+    for (const row of rows) {
+      if (row.status !== 'proposed') { skipped++; continue; }
+      updateEntity(row.id, { status: 'confirmed', data: { ...(row.data || {}), _imported: undefined } });
+      accepted++;
+    }
+  })();
+  return { accepted, skipped };
+}
+
+function bulkAcceptEnrichUpdates(workspaceId, ids) {
+  const rows = bulkEntityRows(workspaceId, ids);
+  let accepted = 0, fields = 0, lore = 0, links = 0, chapters = 0, skipped = 0;
+  db.transaction(() => {
+    for (const row of rows) {
+      const pending = row.status !== 'proposed' ? row.data?._enrichPending : null;
+      if (!pending) { skipped++; continue; }
+      const fieldKeys = Object.keys(pending.data || {});
+      const linkKeys = (pending.links || []).map(enrichLinkKey);
+      const chapterIds = (pending.chapters || []).map(chapter => chapter.id);
+      const hasLore = row.type !== 'System' && pending.lore != null;
+      resolveEnrichReview(row.id, {
+        accept: { fields: fieldKeys, lore: hasLore, links: linkKeys, chapters: chapterIds },
+        reject: {},
+      });
+      fields += fieldKeys.length;
+      lore += hasLore ? 1 : 0;
+      links += linkKeys.length;
+      chapters += chapterIds.length;
+      accepted++;
+    }
+  })();
+  return { accepted, fields, lore, links, chapters, skipped };
+}
+
+function bulkDeleteEntities(workspaceId, ids) {
+  const rows = bulkEntityRows(workspaceId, ids);
+  const summary = summarizeBulkEntities(workspaceId, rows.map(row => row.id));
+  db.transaction(() => { for (const row of rows) deleteEntity(row.id); })();
+  return { deleted: rows.length, ...summary };
+}
+
+function bulkAcceptAll(workspaceId, ids) {
+  let proposed;
+  let updates;
+  db.transaction(() => {
+    updates = bulkAcceptEnrichUpdates(workspaceId, ids);
+    proposed = bulkAcceptProposed(workspaceId, ids);
+  })();
+  return { proposed, updates };
+}
+
 module.exports = {
   listEntities,
   getEntity,
@@ -447,4 +566,10 @@ module.exports = {
   setLink,
   removeLink,
   updateLinkLabel,
+  summarizeBulkEntities,
+  bulkSetAiPolicy,
+  bulkAcceptProposed,
+  bulkAcceptEnrichUpdates,
+  bulkDeleteEntities,
+  bulkAcceptAll,
 };

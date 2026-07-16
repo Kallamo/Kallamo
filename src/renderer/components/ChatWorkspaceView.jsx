@@ -57,6 +57,8 @@ export default function ChatWorkspaceView() {
     streamingReasoning,
     handleCancelGeneration,
     setCurrentView,
+    activeWorkspaceView,
+    setActiveWorkspaceView,
     settings,
     electronAPI,
     editError,
@@ -97,7 +99,8 @@ export default function ChatWorkspaceView() {
   const [isVectorizing, setIsVectorizing] = useState(false);
   const [archiveMessages, setArchiveMessages] = useState([]);
 
-  const [activeSubView, setActiveSubView] = useState('chat'); // 'chat' | 'memory' | 'files'
+  const activeSubView = activeWorkspaceView;
+  const setActiveSubView = setActiveWorkspaceView;
   const [worldbuildFocusId, setWorldbuildFocusId] = useState(null); // entity to focus when opening Worldbuild from the text
 
   const openEntityInWorldbuild = (entityId) => {

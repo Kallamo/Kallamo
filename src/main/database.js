@@ -3,6 +3,7 @@ const { app, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const crypto = require('crypto');
 
 // --- DATABASE INITIALIZATION & MIGRATIONS ---
 
@@ -723,6 +724,19 @@ try {
     db.exec("ALTER TABLE knowledge_chunks ADD COLUMN content_hash TEXT");
     console.log("Database Migration: Added content_hash column to knowledge_chunks table.");
   }
+  const unhashedMemoryChunks = db.prepare(`
+    SELECT id, text FROM knowledge_chunks
+    WHERE ownerType IN ('chat_kb', 'chat_memory') AND (content_hash IS NULL OR content_hash = '')
+  `).all();
+  if (unhashedMemoryChunks.length) {
+    const updateHash = db.prepare('UPDATE knowledge_chunks SET content_hash = ? WHERE id = ?');
+    db.transaction(() => {
+      for (const chunk of unhashedMemoryChunks) {
+        updateHash.run(crypto.createHash('sha256').update(String(chunk.text || '')).digest('hex'), chunk.id);
+      }
+    })();
+    console.log(`Database Migration: Hashed ${unhashedMemoryChunks.length} existing memory chunk(s).`);
+  }
   if (!kcColumns.includes('ordinal')) {
     db.exec("ALTER TABLE knowledge_chunks ADD COLUMN ordinal INTEGER");
     console.log("Database Migration: Added ordinal column to knowledge_chunks table.");
@@ -774,6 +788,43 @@ try {
       entity TEXT NOT NULL,
       PRIMARY KEY (chunkId, tag, entity)
     );
+
+    CREATE TABLE IF NOT EXISTS entity_enrichment_chunks (
+      entityId TEXT NOT NULL,
+      chunkId TEXT NOT NULL,
+      contentHash TEXT NOT NULL DEFAULT '',
+      processedAt INTEGER NOT NULL,
+      PRIMARY KEY (entityId, chunkId)
+    );
+    CREATE INDEX IF NOT EXISTS idx_entity_enrichment_chunks_entity ON entity_enrichment_chunks(entityId);
+
+    CREATE TABLE IF NOT EXISTS entity_enrichment_errors (
+      id TEXT PRIMARY KEY,
+      workspaceId TEXT NOT NULL,
+      entityId TEXT NOT NULL,
+      entityName TEXT NOT NULL,
+      entityType TEXT NOT NULL,
+      error TEXT NOT NULL,
+      createdAt INTEGER NOT NULL,
+      dismissedAt INTEGER,
+      UNIQUE(workspaceId, entityId)
+    );
+    CREATE INDEX IF NOT EXISTS idx_entity_enrichment_errors_workspace ON entity_enrichment_errors(workspaceId, createdAt DESC);
+
+    CREATE TRIGGER IF NOT EXISTS trg_entity_enrichment_chunks_chunk_gc
+    AFTER DELETE ON knowledge_chunks
+    FOR EACH ROW
+    BEGIN
+        DELETE FROM entity_enrichment_chunks WHERE chunkId = OLD.id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_entity_enrichment_chunks_entity_gc
+    AFTER DELETE ON entities
+    FOR EACH ROW
+    BEGIN
+        DELETE FROM entity_enrichment_chunks WHERE entityId = OLD.id;
+        DELETE FROM entity_enrichment_errors WHERE entityId = OLD.id;
+    END;
   `);
   const wirColumns = db.pragma("table_info(world_index_runs)").map(col => col.name);
   if (!wirColumns.includes('dismissedAt')) {
@@ -845,6 +896,7 @@ try {
     ["Races", "Species, lineages, or peoples a character can belong to.", 1],
     ["Creatures", "Monsters, beasts, spirits, or non-personified entities present or referenced.", 1],
     ["Events", "Notable happenings: battles, festivals, holidays, disasters, or milestones worth remembering.", 1],
+    ["System", "Named laws, magic systems, doctrines, currencies, technologies, or world rules used as reusable canon.", 1],
     ["Planning", "Decisions, goals, deadlines, tasks, and who is responsible for them.", 0],
     ["Chat", "General context: what a conversation segment is broadly about.", 0],
   ];

@@ -40,6 +40,7 @@ const api = window.electronAPI || {
 export const AppProvider = ({ children }) => {
   // --- STATE INITIALIZATION ---
   const [currentView, setCurrentView] = useState('dashboard'); // 'dashboard', 'library', 'chat'
+  const [activeWorkspaceView, setActiveWorkspaceView] = useState('chat');
   const [chats, setChats] = useState([]);
   const [writingProfiles, setWritingProfiles] = useState([]);
   const [workflows, setWorkflows] = useState([]);
@@ -417,6 +418,7 @@ export const AppProvider = ({ children }) => {
   return (
     <AppContext.Provider value={{
       currentView, setCurrentView,
+      activeWorkspaceView, setActiveWorkspaceView,
       settingsRequest, openSettings, clearSettingsRequest,
       chats, setChats,
       writingProfiles, setWritingProfiles,
