@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
-import { ArrowLeft, Sliders, Paperclip, Cpu, Workflow, X, MoreVertical, Copy, Edit, RotateCw, Play, ChevronDown, Plus, ChevronLeft, ChevronRight, Brain, Folder, MessageSquare, Trash2, RotateCcw, PenTool, Globe, AlertTriangle } from 'lucide-react';
+import { ArrowDown, ArrowLeft, Sliders, Paperclip, Cpu, Workflow, X, MoreVertical, Copy, Edit, RotateCw, Play, ChevronDown, Plus, ChevronLeft, ChevronRight, Brain, Folder, MessageSquare, Trash2, RotateCcw, PenTool, Globe, AlertTriangle } from 'lucide-react';
 import ConfigurationView from './ConfigurationView';
 import SummarizeModal from './modals/SummarizeModal';
 import ChatFilesView from './ChatFilesView';
@@ -126,11 +126,18 @@ export default function ChatWorkspaceView() {
   const previousScrollHeightRef = useRef(0);
   const preserveScrollPositionRef = useRef(false);
   const skipAutoScrollRef = useRef(false);
+  const isFollowingLatestRef = useRef(true);
+  const wasGeneratingRef = useRef(false);
   const dropdownRef = useRef(null);
   const fileInputRef = useRef(null);
+  const [isFollowingLatest, setIsFollowingLatest] = useState(true);
+  const [hasCompletedResponseBelow, setHasCompletedResponseBelow] = useState(false);
 
   useLayoutEffect(() => {
     if (activeSubView !== 'chat' || !messageContainerRef.current) return;
+    isFollowingLatestRef.current = true;
+    setIsFollowingLatest(true);
+    setHasCompletedResponseBelow(false);
     messageContainerRef.current.scrollTop = messageContainerRef.current.scrollHeight;
   }, [activeSubView]);
 
@@ -194,8 +201,44 @@ export default function ChatWorkspaceView() {
       skipAutoScrollRef.current = false;
       return;
     }
+    if (!isFollowingLatestRef.current) return;
     messagesEndRef.current?.scrollIntoView({ behavior: isGenerating || streamingContent ? 'smooth' : 'auto' });
   }, [activeMessages, generationProgress, isGenerating, streamingContent]);
+
+  useEffect(() => {
+    if (isGenerating) {
+      setHasCompletedResponseBelow(false);
+    } else if (wasGeneratingRef.current && !isFollowingLatestRef.current) {
+      setHasCompletedResponseBelow(true);
+    }
+    wasGeneratingRef.current = isGenerating;
+  }, [isGenerating]);
+
+  const updateFollowingLatest = () => {
+    const container = messageContainerRef.current;
+    if (!container) return;
+
+    const nextIsFollowingLatest = container.scrollHeight - container.scrollTop - container.clientHeight <= 96;
+    if (nextIsFollowingLatest === isFollowingLatestRef.current) return;
+
+    isFollowingLatestRef.current = nextIsFollowingLatest;
+    setIsFollowingLatest(nextIsFollowingLatest);
+    if (nextIsFollowingLatest) setHasCompletedResponseBelow(false);
+  };
+
+  const scrollToLatest = () => {
+    isFollowingLatestRef.current = true;
+    setIsFollowingLatest(true);
+    setHasCompletedResponseBelow(false);
+    messageContainerRef.current?.scrollTo({ top: messageContainerRef.current.scrollHeight, behavior: 'smooth' });
+  };
+
+  const handleSendWithLatestFollow = (...args) => {
+    isFollowingLatestRef.current = true;
+    setIsFollowingLatest(true);
+    setHasCompletedResponseBelow(false);
+    return handleSendMessage(...args);
+  };
 
   const handleLoadOlderMessages = async () => {
     if (messageContainerRef.current) {
@@ -207,6 +250,8 @@ export default function ChatWorkspaceView() {
 
   const handleJumpToStart = async () => {
     skipAutoScrollRef.current = true;
+    isFollowingLatestRef.current = false;
+    setIsFollowingLatest(false);
     await jumpToChatStart();
     requestAnimationFrame(() => messageContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' }));
   };
@@ -702,6 +747,7 @@ export default function ChatWorkspaceView() {
             <div
               ref={messageContainerRef}
               onClick={handleContainerClick}
+              onScroll={updateFollowingLatest}
               className="flex-1 overflow-y-auto pt-6 pb-28 px-12 md:px-24 xl:px-48 custom-scrollbar space-y-6"
             >
               <div className="flex flex-wrap items-center justify-center gap-2">
@@ -1282,6 +1328,17 @@ export default function ChatWorkspaceView() {
               <div ref={messagesEndRef} />
             </div>
 
+            {hasCompletedResponseBelow && !isFollowingLatest && (
+              <button
+                type="button"
+                onClick={scrollToLatest}
+                className="absolute right-6 bottom-28 z-20 flex items-center gap-2 rounded-full border border-accent/35 bg-[#0a161d]/95 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-accent shadow-lg shadow-black/30 backdrop-blur-md transition-colors hover:bg-accent hover:text-[#011419]"
+              >
+                <ArrowDown className="w-3.5 h-3.5" />
+                <span>New response below</span>
+              </button>
+            )}
+
             {/* Digitization Chat Input Area */}
             <div className="shrink-0 p-6 pt-0 w-full max-w-4xl mx-auto absolute bottom-0 inset-x-0 bg-gradient-to-t from-[#011419] via-[#011419] to-transparent pb-6 pt-4">
 
@@ -1459,7 +1516,7 @@ export default function ChatWorkspaceView() {
                     hasTargets={displayProfiles.length > 0 || displayWorkflows.length > 0}
                     isGenerating={isGenerating}
                     onCancel={handleCancelGeneration}
-                    onSend={handleSend}
+                    onSend={handleSendWithLatestFollow}
                     pendingFileCount={pendingFiles.length}
                     placeholder={activeMessages.length > 0 ? "Write a message..." : "Write a message or drag and drop files..."}
                   />
