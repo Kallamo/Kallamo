@@ -19,6 +19,41 @@ const RELEASE_1_1_2 = {
   },
 };
 
+const RELEASE_1_1_3 = {
+  title: 'More control over memory and your world',
+  sections: {
+    Added: [
+      'Fast Tag in the File Chunks Viewer lets you add a keyword or Worldbuild entity to every chunk in a searchable file, or remove a tag across the file.',
+      'Choose the exact Custom Memory blocks and Searchable Files that World Index should tag.',
+      'Choose whether Kallamo creates summaries for archived chats, or keeps their local memory without a summary.',
+      'Manage Worldbuild entries in bulk: adjust their AI policy, review proposals and updates, or remove reviewed entries together.',
+      'New filters help you focus on proposed entities and AI updates when either needs your attention.',
+      'Entity updates that could not be completed now stay together in one clear review area, with details and ways to dismiss them.',
+    ],
+    Changed: [
+      'Searchable Memory totals are now informational. Context warnings stay focused on Always-on memory, which is sent with every request.',
+      'World Index now makes its tagging progress clear across each memory area, including items with no matching entity or a failed attempt.',
+      'The File Chunks Viewer and Fast Tag controls are easier to read on desktop screens.',
+      'Chat replies follow along only while you are already at the latest message, so you can read earlier messages without being pulled away.',
+      'Chat archive titles, summaries, and World Index tags now use your configured System AI only.',
+      'Custom Memory is tagged when you choose to run World Index, instead of automatically when you save it.',
+      'New entity suggestions now show the source that supports them and avoid names or aliases already in your Worldbuild.',
+      'AI updates can now suggest well-supported improvements to existing entity details and relationships, not only fill blank fields. Every change remains reviewable beside your current canon.',
+      'Entity updates now prioritize material explicitly connected to an entity, then use its names and aliases only as a focused fallback.',
+      'System and Concept entries now support aliases and receive suggestions designed for their own type.',
+    ],
+    Fixed: [
+      'Memory Scope menus now open reliably, so you can assign Custom Memory and Searchable Memory to specific AI Profiles again.',
+      'World Index tags now appear in the Searchable Memory chunk viewer, including tags created before this update.',
+      'Archived chats now keep their complete context, while the chat view can remain focused on recent messages.',
+      'Context and Memory now shows how many active messages are included beside the token total.',
+      'Entity updates no longer skip System and Concept entries or offer fields that do not belong to them.',
+      'If an AI provider returns an unusable entity update, Kallamo makes one correction attempt and clearly explains what still needs attention.',
+      'Writing Desk only creates linked lore documents for documents intentionally dedicated to an entity.',
+    ],
+  },
+};
+
 export const GLOBAL_WHATS_NEW = {
   version: '1.1',
   title: 'Writing Desk, Worldbuild, and everything since',
@@ -41,6 +76,10 @@ export const GLOBAL_WHATS_NEW = {
     },
   ],
   releases: [
+    {
+      version: '1.1.3',
+      ...RELEASE_1_1_3,
+    },
     {
       version: '1.1.2',
       ...RELEASE_1_1_2,
@@ -65,16 +104,29 @@ export const GLOBAL_WHATS_NEW = {
           'Writing Desk with formatting, page setup, find and replace, import and export, and non-destructive inline AI editing suggestions.',
           'Per-chapter Writing Desk notes that preserve an analysis, its source passage, and a jump back to it later.',
           'Worldbuild, a workspace registry for characters, places, creatures, events, and their relations.',
-          'Worldbuild auto-fill, enrichment review, in-text entity links, and portable .klwb packages.',
-          'Living-world indexing that tags knowledge with the entities and variables it mentions, plus clear indexing status.',
-          'Guided first run, memory switches, Retrieval Strictness, durable chunk edits, and unified memory tags.',
+          'Worldbuild auto-fill and reviewable entity updates, with a per-workspace policy that lets you decide how active the AI should be.',
+          'An in-text Worldbuild bridge: link a selected name to an entity or create one without leaving Writing Desk.',
+          'Portable Worldbuild packages (.klwb) for sharing a whole world, with imported entities arriving as reviewable proposals.',
+          'Living-world indexing that connects your knowledge to the entities and world variables it mentions, plus clear indexing status.',
+          'A guided first run with three editable AI Profiles, helpful empty states, and one-time pointers for entity linking and memory tagging.',
+          'Memory switches that let you keep knowledge while excluding it from AI context and retrieval.',
+          'Retrieval Strictness, a clearer way to decide how closely knowledge should match before Kallamo brings it into a response.',
+          'Durable chunk edits that remain intact when a knowledge file is re-indexed and travel with an exported knowledge base.',
+          'Unified memory tags across memory and file chunks, including editable file tags and inline entity linking.',
         ],
         Changed: [
-          'More accurate retrieval, stronger agentic Worldbuild research, clearer System AI requirements, and more reliable menus.',
-          'Helper text now scales with your Interface font-size setting.',
+          'Knowledge results are ranked more accurately, so stronger matches rise above weak or unrelated material.',
+          'Agentic retrieval can work across turns, follow your Worldbuild, and handle imperfect AI output more reliably.',
+          'Chat, entity tagging, and Worldbuild enrichment now clearly point to the System AI they require.',
+          'Menus and dropdowns are more reliable and no longer hide behind nearby panels.',
+          'Helper text is more consistent and scales with your Interface font-size setting.',
+          'The AI Profile setup flow now calls its knowledge step simply Knowledge Base.',
         ],
         Fixed: [
-          'Worldbuild fields reach the AI, Writing Desk chapter indexing stays scoped to its document, and weak retrieval results are filtered out.',
+          'Worldbuild facts now reach the AI from an entity’s structured fields as well as its lore.',
+          'Writing Desk chapter indexing stays scoped to the current document.',
+          'Empty and low-information sections no longer crowd out useful retrieval results.',
+          'The relevance cutoff now filters weak keyword matches as well as semantic ones.',
         ],
       },
     },
@@ -82,6 +134,32 @@ export const GLOBAL_WHATS_NEW = {
 };
 
 export const PATCH_WHATS_NEW = {
+  '1.1.3': {
+    ...RELEASE_1_1_3,
+    intro: 'This update makes Worldbuild and memory easier to review, manage, and trust as your project grows.',
+    highlights: [
+      {
+        icon: 'Globe2',
+        title: 'Smarter Worldbuild suggestions',
+        text: 'AI suggestions now show the source behind them, avoid duplicating your existing world, and can propose evidence-based improvements to the canon you already have.',
+      },
+      {
+        icon: 'Brain',
+        title: 'Manage your Worldbuild at scale',
+        text: 'Select groups of entries to adjust their AI policy, review suggestions and updates, or remove reviewed entries together with a clear confirmation.',
+      },
+      {
+        icon: 'Sparkles',
+        title: 'Stay where you are reading',
+        text: 'Replies follow live only when you are already at the newest message. Scroll up freely, then return to the latest response when you are ready.',
+      },
+      {
+        icon: 'PenLine',
+        title: 'A cleaner Writing Desk bridge',
+        text: 'Only documents intentionally dedicated to an entity become linked lore, keeping ordinary story mentions in their proper place.',
+      },
+    ],
+  },
   '1.1.2': {
     title: 'A smoother way back into your work',
     intro: 'This update makes everyday writing, chat, and world navigation feel more continuous.',

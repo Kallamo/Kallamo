@@ -2,6 +2,37 @@
 
 All notable changes to Kallamo are documented in this file. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.3] - 2026-07-17
+
+### Added
+- **Fast Tag for Searchable Files**: the File Chunks Viewer now gives you a file-wide tag overview, lets you add a keyword or Worldbuild entity to every chunk at once, and lets you remove a tag across the file. Removing an automatic entity tag creates a persistent suppression, so a later World Index re-tag respects that editorial decision.
+- **Selective World Index tagging**: Custom Memory and Searchable Memory now offer **Tag selected blocks**. Choose individual Custom Memory blocks or whole Searchable Files, and World Index tags every chunk inside only those selections.
+- **Chat archive summary control**: Engine & Memory now includes a switch for generated chat archive summaries. Turn it off to keep archived conversations as raw local vectors only.
+- **Worldbuild bulk management**: Manage mode lets you select visible entities or groups by AI policy, change their Open, Review, or Locked policy together, accept proposed entities and AI updates in bulk, or delete a reviewed selection with a clear confirmation summary.
+- **Worldbuild review filters**: Proposed Entities and AI Updates receive dedicated filters whenever either group needs attention.
+- **Entity update failure review**: Update Entities now groups unresolved failures in one compact panel, with per-entity details, individual dismissal, and a dismiss-all control that links to System AI settings.
+
+### Changed
+- Searchable Memory token totals are now informational rather than an urgency signal. Only Always-on memory uses amber and red context-budget warnings, because it is the only memory sent in full with every invocation.
+- The Memory Tab's World Index is now presented as a tagging process, not text indexing. It reports pending, active, completed, empty, and failed tagging coverage per memory tier. Failed runs show a concise retry count for the current workspace session, while correctly examined chunks are not processed again when they contain no matching entity.
+- The File Chunks Viewer and Fast Tag controls now use a larger, responsive type scale for more legible desktop reading.
+- Streaming now follows the reply only while you are already at the end of the chat. Scroll up to read earlier messages without interruption, then use the new control to return to the latest response.
+- Generated chat archive titles, summaries, and World Index tags now run only through the configured System AI. Kallamo never falls back to an active writing profile for this background work.
+- Custom Memory is no longer tagged automatically when saved. Use the manual World Index actions when you want to tag it.
+- Proposed Entities now require direct supporting evidence, avoid names and aliases already represented in Worldbuild, and show the source excerpt that justified each proposal.
+- Update Entities now uses existing values as canon instead of limiting suggestions to empty fields. Every proposed replacement or relationship includes its supporting evidence, remains reviewable beside the current value, and is restricted to fields valid for that entity type.
+- Entity evidence retrieval now prioritizes explicitly tagged Writing Desk and Memory chunks, then uses canonical names and aliases as a bounded fallback. This keeps relevant matches first without sending every mention to the System AI.
+- System / Concept entities now support aliases and receive Concept-specific updates instead of generic Lore suggestions.
+
+### Fixed
+- Memory Scope menus now open reliably, so Custom Memory and Searchable Memory can be assigned to specific AI Profiles again.
+- World Index entity tags now appear in the Searchable Memory chunk viewer, including tags generated before the fix.
+- Chat archiving and context usage now read the complete persisted conversation instead of the 50-message viewport. Existing summaries created during the affected period are repaired on startup so unarchived messages return to active context.
+- Context & Memory now shows the number of active user and AI messages beside the token total, making the archive threshold easier to interpret.
+- Update Entities no longer skips System / Concept entities or stages nonexistent Lore fields for them.
+- Invalid structured entity updates now receive an automatic correction attempt and surface an actionable failure when the provider still returns an unusable response.
+- Ordinary Writing Desk mentions no longer become linked lore documents. Lore linking is reserved for documents intentionally dedicated to an entity.
+
 ## [1.1.2] - 2026-07-12
 
 A quality-of-life update for long conversations, continuous writing, and navigating a growing world.
