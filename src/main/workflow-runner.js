@@ -2,6 +2,7 @@ const db = require('./database');
 const entitiesStore = require('./entities');
 const { sendApiRequest } = require('./features/llm/llm.service');
 const { sendApiRequestStream } = require('./features/llm/llm.stream');
+const { ROLE_IDS, readAdvancedSettings, resolveAiEngineRole } = require('./features/ai-engine/role-resolver');
 const { encode } = require('gpt-tokenizer/encoding/o200k_base');
 const fs = require('fs');
 const path = require('path');
@@ -451,7 +452,8 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                 throw new Error(`Profile "${profile.name}": its constant / full-context knowledge is ~${projectedConstantTokens.toLocaleString()} tokens, which exceeds this chat's context window of ${maxContextTokens.toLocaleString()} tokens. Reduce the constant knowledge or switch those knowledge files to RAG search strategy.`);
             }
 
-            if (profile.isAgentic === 1) {
+            const retrievalPlanner = getRoleExecutor(ROLE_IDS.RETRIEVAL_PLANNER, profile);
+            if (profile.isAgentic === 1 && retrievalPlanner.executor) {
                 const initialInputTokens = estimateTokens(currentInput);
                 const initialSystemTokens = estimateTokens(compiledSystemPrompt + contextBlock);
                 const initialRemainingTokens = maxContextTokens - initialInputTokens - initialSystemTokens;
@@ -462,7 +464,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                     ragChatHistory = formatActiveHistory(ragActiveMessages, initialRemainingTokens);
                 }
 
-                const agenticResult = await executeAgenticRagLoop(profile, chatId, currentInput, ragChatHistory, webContents, includeChatContext);
+                const agenticResult = await executeAgenticRagLoop(profile, chatId, currentInput, ragChatHistory, webContents, includeChatContext, retrievalPlanner.executor);
                 if (agenticResult) {
                     // If detailed research context was gathered, include only it (prevents duplicate token recitation).
                     // If NOTHING was retrieved, do NOT pass the agent's 1-sentence summary off as facts, emit an
@@ -912,7 +914,7 @@ function splitHeadAndBody(response, fence) {
 
 // The designated System AI (api profile + model) for background tasks, read from
 // global settings. Both fields are required so a provider never picks a default model.
-function getSystemAiConfiguration() {
+function getLegacySystemAiConfiguration() {
     try {
         const row = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
         const advanced = row ? JSON.parse(row.value) : {};
@@ -943,6 +945,11 @@ function getSystemAiConfiguration() {
     }
 }
 
+function getSystemAiConfiguration() {
+    const resolved = resolveAiEngineRole(ROLE_IDS.SYSTEM);
+    return { systemAi: resolved.executor, error: resolved.error };
+}
+
 function evidenceText(value) {
     if (Array.isArray(value)) return value.map(v => String(v || '').trim()).filter(Boolean).join(' ');
     return value;
@@ -971,13 +978,17 @@ function getSystemAi() {
     return getSystemAiConfiguration().systemAi;
 }
 
+function getRoleExecutor(roleId, profile = null) {
+    return resolveAiEngineRole(roleId, { profile });
+}
+
 function isChatArchiveSummarizationEnabled() {
-    try {
-        const row = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
-        return !row || JSON.parse(row.value).archiveSummarization !== false;
-    } catch (e) {
-        return true;
-    }
+    return readAdvancedSettings().archiveSummarization !== false;
+}
+
+function getSystemLanguageInstruction() {
+    const language = String(readAdvancedSettings().systemOutputLanguage || 'English').trim() || 'English';
+    return `Write all generated natural-language content in ${language}. Never translate or transliterate proper nouns, canonical names, titles used as names, identifiers, JSON keys, enum values, control markers, or verbatim evidence. Keep each of them exactly as supplied.`;
 }
 
 // Render a workspace's entity registry as a prompt block so the classifier reuses
@@ -1078,12 +1089,11 @@ async function classifyAndTagSegment(chunkRecords, profile, workspaceId = null) 
     let summary = '';
     let chunkTags = [];
 
-    const systemAi = getSystemAi();
-    if (!profile && !systemAi) return { title, summary, chunkTags };
-    const apiProfileId = systemAi ? systemAi.apiProfileId : profile.apiProfileId;
-    const model = systemAi ? systemAi.model : profile.model;
-    const manualMode = systemAi ? false : (profile && profile.manualMode === 1);
-    const manualJson = systemAi ? null : (profile && profile.manualJson);
+    const tagger = getRoleExecutor(ROLE_IDS.TAGGER);
+    if (!tagger.executor) return { title, summary, chunkTags, failed: Boolean(tagger.error), error: tagger.error };
+    const { apiProfileId, model } = tagger.executor;
+    const manualMode = false;
+    const manualJson = null;
 
     let categories = [];
     try { categories = db.prepare('SELECT name, description FROM tags WHERE isEntity = 1').all(); } catch (e) { categories = []; }
@@ -1095,9 +1105,9 @@ async function classifyAndTagSegment(chunkRecords, profile, workspaceId = null) 
     const fence = buildItemsFence();
     const vocab = buildEntityVocab(workspaceId, numbered);
     const systemPrompt =
-        "You index a conversation segment that is split into numbered chunks.\n" +
-        "First line MUST be 'TITLE: [3-word title]'. Then write a 2-sentence summary of the whole segment.\n" +
-        "Then, for EACH chunk, identify the specific persistent story entities explicitly named in the text. A persistent entity is something a user would reasonably find and reuse in a world bible.\n" +
+        getSystemLanguageInstruction() + "\n" +
+        "You tag a text segment that is split into numbered chunks.\n" +
+        "For EACH chunk, identify the specific persistent story entities explicitly named in the text. A persistent entity is something a user would reasonably find and reuse in a world bible.\n" +
         catLines + "\n" +
         (vocab ? vocab + "\n" : "") +
         "Resolve titles, shortened names, and aliases to the supplied canonical name when the text supports that match. Never propose a name already present in Known entities, even under another category. Do not turn generic nouns, unnamed roles, pronouns, descriptive phrases, or one-off concepts into entities. When identity or category is ambiguous, omit the mention. Every mention must include a short verbatim evidence excerpt copied from that chunk. " +
@@ -1110,24 +1120,42 @@ async function classifyAndTagSegment(chunkRecords, profile, workspaceId = null) 
             apiProfileId, model, systemPrompt,
             chatHistory: [],
             newPrompt: numbered,
-            temperature: 0.3,
+            temperature: 0.1,
             maxTokens: 1200,
             manualMode, manualJson
         });
         const head = splitHeadAndBody(response, fence);
-        title = head.title || title;
-        summary = head.summary || String(response || '').trim();
         chunkTags = validateChunkTags(safeParseArray(head.body), categories, chunkRecords);
     } catch (e) {
         console.error("[World Index] classify+tag failed:", e);
         // Only surface when a System AI is configured: without one, tagging is
         // intentionally off and this path only produced a title/summary.
-        if (systemAi) {
-            notifyTaggingFailure(e);
-            return { title, summary, chunkTags, failed: true };
-        }
+        notifyTaggingFailure(e);
+        return { title, summary, chunkTags, failed: true };
     }
     return { title, summary, chunkTags };
+}
+
+async function summarizeArchiveSegment(rawText) {
+    const summarizer = getRoleExecutor(ROLE_IDS.SUMMARIZER);
+    if (!summarizer.executor) return { title: 'Chat Archive', summary: '', skipped: true, error: summarizer.error };
+
+    const response = await sendApiRequest({
+        ...summarizer.executor,
+        systemPrompt: `${getSystemLanguageInstruction()}\nCreate faithful long-term memory from an archived conversation. The first line must be 'TITLE: [concise 3-word title]'. Then write a concise two-sentence summary that preserves consequential facts, decisions, changes, and unresolved threads. Do not invent details.`,
+        chatHistory: [],
+        newPrompt: rawText,
+        temperature: 0.1,
+        maxTokens: 500,
+        manualMode: false,
+        manualJson: null
+    });
+    const lines = String(response || '').trim().split('\n');
+    const hasTitle = lines[0]?.toUpperCase().startsWith('TITLE:');
+    return {
+        title: hasTitle ? lines[0].slice(6).trim() || 'Chat Archive' : 'Chat Archive',
+        summary: (hasTitle ? lines.slice(1) : lines).join('\n').trim()
+    };
 }
 
 // Whether the "let the AI create unregistered entities" opt-in is on. Off by default,
@@ -1143,10 +1171,9 @@ function allowAiEntityCreation() {
 // chunk index back to the real stored chunk id. Variable tags: tag=category,
 // entity=value. Runs in one transaction; never throws on a bad index.
 function applyChunkTags(chunkTags, chunkRecords, workspaceId = null) {
-    // World indexing (entity tagging) requires a dedicated System AI. Without one it is
-    // disabled everywhere, indexing only vectorizes, it does not tag. Central safety net
-    // for every tagging path (documents, chat, backfill).
-    if (!getSystemAi()) return 0;
+    // Tagger may inherit System AI or use a dedicated model. If it is unavailable,
+    // vectorization still succeeds and existing tags remain untouched.
+    if (!getRoleExecutor(ROLE_IDS.TAGGER).executor) return 0;
     if (!Array.isArray(chunkTags) || !chunkTags.length) return 0;
     const insert = db.prepare('INSERT OR IGNORE INTO chunk_tags (chunkId, tag, entity, manual) VALUES (?, ?, ?, 0)');
     const isSuppressed = db.prepare('SELECT 1 FROM chunk_tag_suppressions WHERE chunkId = ? AND tag = ? AND entity = ?');
@@ -1213,11 +1240,10 @@ function applyChunkTags(chunkTags, chunkRecords, workspaceId = null) {
 // Batches the chunks through ONE System-AI call each (tagging only, no title/
 // summary) and writes chunk_tags. INSERT OR IGNORE keeps re-runs from duplicating.
 async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false, tier = 'archive', chunkIds = null, runId = null, progressCallback = null } = {}) {
-    const systemAiConfig = getSystemAiConfiguration();
-    const systemAi = systemAiConfig.systemAi;
-    if (!systemAi) throw new Error(systemAiConfig.error);
-    const apiProfileId = systemAi.apiProfileId;
-    const model = systemAi.model;
+    const tagger = getRoleExecutor(ROLE_IDS.TAGGER);
+    if (!tagger.executor) throw new Error(tagger.error || 'Tagger is disabled.');
+    const apiProfileId = tagger.executor.apiProfileId;
+    const model = tagger.executor.model;
     const manualMode = false;
     const manualJson = null;
 
@@ -1304,7 +1330,8 @@ async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false,
         const batchVocab = buildEntityVocab(chatId, numbered);
         const fence = buildItemsFence();
         const systemPrompt =
-            "You index conversation chunks. For EACH numbered chunk, identify persistent story entities explicitly named in the text, grouped under these categories:\n" +
+            getSystemLanguageInstruction() + "\n" +
+            "You tag conversation chunks. For EACH numbered chunk, identify persistent story entities explicitly named in the text, grouped under these categories:\n" +
             catLines + "\n" +
             (batchVocab ? batchVocab + "\n" : "") +
             "Resolve aliases to supplied canonical names. Never propose an entity already present in Known entities. Omit generic nouns, unnamed roles, pronouns, descriptive phrases, and ambiguous identities. Every mention must include a short verbatim evidence excerpt copied from that chunk. Use ONLY these category names. " +
@@ -1459,7 +1486,7 @@ async function vectorizeDocument(documentId, progressCallback = null) {
         // Tag only the freshly embedded chunks (World index). Requires a System AI,
         // without one, indexing only vectorizes and this whole pass is skipped.
         // Best-effort: a failed pass just leaves the new chunks untagged.
-        if (getSystemAi()) {
+        if (getRoleExecutor(ROLE_IDS.TAGGER).executor) {
             try {
                 const records = vectors.map(v => ({ id: v.id, text: v.text, ownerId: doc.workspaceId }));
                 const BATCH = 12;
@@ -1495,7 +1522,7 @@ async function retagDocumentChunks(documentId, progressCallback = null) {
     if (!rows.length) return { tagged: 0, chunks: 0 };
 
     // No System AI → tagging is disabled; don't wipe the existing tags for nothing.
-    if (!getSystemAi()) return { tagged: 0, chunks: rows.length, skipped: true };
+    if (!getRoleExecutor(ROLE_IDS.TAGGER).executor) return { tagged: 0, chunks: rows.length, skipped: true };
 
     const del = db.prepare('DELETE FROM chunk_tags WHERE chunkId = ?');
     db.transaction(() => { for (const r of rows) del.run(r.id); })();
@@ -1973,6 +2000,7 @@ async function enrichEntities(workspaceId, progressCallback = null) {
         const allowLore = ent.type !== 'System';
         const responseShape = allowLore ? `{"lore": null, "data": {}, "links": {}}` : `{"data": {}, "links": {}}`;
         const systemPrompt =
+            getSystemLanguageInstruction() + "\n" +
             `You maintain a story's world bible. Update the record for one ${ent.type.replace(/s$/, '')} named "${ent.canonicalName}" ` +
             (allowLore
                 ? `using the CURRENT RECORD plus ONLY the NEW STORY EVIDENCE provided. Preserve established lore unless new evidence explicitly changes or contradicts it.\n`
@@ -2180,8 +2208,7 @@ async function executeSummarizationInternal({ chatId, selectedMessages, newSumma
     const vectors = await vectorizeChunks(chunks, "Chat Archive");
     vectors.forEach(v => v.blockId = blockId);
 
-    const systemAi = getSystemAi();
-    const shouldSummarize = Boolean(systemAi) && isChatArchiveSummarizationEnabled();
+    const shouldSummarize = isChatArchiveSummarizationEnabled();
     let title = customTitle || "Chat Archive";
     let summary = '';
 
@@ -2192,20 +2219,23 @@ async function executeSummarizationInternal({ chatId, selectedMessages, newSumma
         console.error("Failed to insert summarized vectors to SQLite:", dbErr);
     }
 
-    // The System AI is the sole source of generated archive summaries and tags.
-    // Without it, or when summarization is disabled, archiving remains local and
-    // stores only the raw vectorized conversation.
     if (shouldSummarize) {
         try {
-            const chunkRecords = vectors.map(v => ({ id: v.id, text: v.text }));
-            const cls = await classifyAndTagSegment(chunkRecords, null, chatId);
-            if (!customTitle && cls.title) title = cls.title;
-            if (cls.summary) summary = cls.summary;
-            const tagged = applyChunkTags(cls.chunkTags, chunkRecords, chatId);
-            console.log(`[World Index] segment "${title}": ${cls.chunkTags.length}/${chunkRecords.length} chunk(s) tagged, ${tagged} tag row(s).`);
+            const result = await summarizeArchiveSegment(rawTextToArchive);
+            if (!customTitle && result.title) title = result.title;
+            summary = result.summary || '';
         } catch (smErr) {
-            console.error("[World Index] tagging failed (archiving continues):", smErr);
+            console.error("[Summarizer] archive summary failed (archiving continues):", smErr);
         }
+    }
+
+    const chunkRecords = vectors.map(v => ({ id: v.id, text: v.text }));
+    try {
+        const taggedResult = await classifyAndTagSegment(chunkRecords, null, chatId);
+        const tagged = applyChunkTags(taggedResult.chunkTags, chunkRecords, chatId);
+        console.log(`[Tagger] archive segment: ${taggedResult.chunkTags.length}/${chunkRecords.length} chunk(s) tagged, ${tagged} tag row(s).`);
+    } catch (tagError) {
+        console.error("[Tagger] archive tagging failed (archiving continues):", tagError);
     }
 
     let memoryBlocks = [];
@@ -2267,7 +2297,7 @@ function readEntireKbFile(ownerId, fileName) {
 
 // --- AGENTIC RAG SYSTEM ---
 
-async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory = [], webContents = null, includeChatContext = true) {
+async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory = [], webContents = null, includeChatContext = true, executor = profile) {
     console.log(`[Agentic RAG] Starting autonomous retrieval loop for: ${profile.name}`);
     const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
 
@@ -2321,6 +2351,7 @@ async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory 
     } catch (e) { }
 
     const toolsPrompt = `
+${getSystemLanguageInstruction()}
 ${mainInstruction}
 
 You are an expert Research Assistant Agent. Your task is to investigate the knowledge bases and memories of the chat to retrieve all relevant details needed to answer the user's prompt.
@@ -2406,13 +2437,13 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
         }
 
         try {
-            const systemPromptText = "You are a precise researcher. You communicate strictly using the tools specified.";
+            const systemPromptText = `You are a precise researcher. You communicate strictly using the tools specified. ${getSystemLanguageInstruction()}`;
             const messagesText = JSON.stringify(messages);
             agenticRagInputTokens += estimateTokens(systemPromptText) + estimateTokens(messagesText);
 
             const agentOutput = await sendApiRequest({
-                apiProfileId: profile.apiProfileId,
-                model: profile.model,
+                apiProfileId: executor.apiProfileId,
+                model: executor.model,
                 systemPrompt: systemPromptText,
                 chatHistory: [],
                 newPrompt: messagesText,

@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
-import { X, Plus, Key, Link2, Eye, EyeOff, Monitor, Settings, Layout, Layers, HardDrive, Trash2, FolderOpen, RefreshCw, Cpu, Database, Palette, Type, PenLine, AlertTriangle, Sparkles, SlidersHorizontal } from 'lucide-react';
+import { X, Plus, Key, Link2, Eye, EyeOff, Monitor, Settings, Layout, Layers, HardDrive, Trash2, FolderOpen, RefreshCw, Cpu, Database, Palette, Type, PenLine, AlertTriangle, Sparkles, SlidersHorizontal, Languages } from 'lucide-react';
 import Logo, { Logotype } from '../../logo';
+import AiEngineRoleCard from '../../features/ai-engine/AiEngineRoleCard';
+import { AI_ENGINE_ROLE_DEFINITIONS, SYSTEM_AI_LANGUAGES } from '../../../shared/contracts/ai-engine-roles';
 
 export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const {
@@ -24,7 +26,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [activeTab, setActiveTab] = useState(initialTab || 'api'); // 'api' | 'interface' | 'advanced'
 
   useEffect(() => {
-    const sectionIds = { embedding: 'embedding-config', 'system-ai': 'system-ai-config' };
+    const sectionIds = { embedding: 'embedding-config', 'system-ai': 'system-ai-config', tagger: 'ai-engine-roles-config' };
     const targetId = sectionIds[initialSection];
     if (targetId && activeTab === 'engine') {
       const timer = setTimeout(() => {
@@ -85,6 +87,16 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [embeddingModelName, setEmbeddingModelName] = useState(settings.advanced.embeddingModelName || '');
   const [systemApiProfileId, setSystemApiProfileId] = useState(settings.advanced.systemApiProfileId || '');
   const [systemModelName, setSystemModelName] = useState(settings.advanced.systemModelName || '');
+  const [systemOutputLanguage, setSystemOutputLanguage] = useState(settings.advanced.systemOutputLanguage || 'English');
+  const [taggerMode, setTaggerMode] = useState(settings.advanced.taggerMode || 'inherit-system');
+  const [taggerApiProfileId, setTaggerApiProfileId] = useState(settings.advanced.taggerApiProfileId || '');
+  const [taggerModelName, setTaggerModelName] = useState(settings.advanced.taggerModelName || '');
+  const [summarizerMode, setSummarizerMode] = useState(settings.advanced.summarizerMode || 'inherit-system');
+  const [summarizerApiProfileId, setSummarizerApiProfileId] = useState(settings.advanced.summarizerApiProfileId || '');
+  const [summarizerModelName, setSummarizerModelName] = useState(settings.advanced.summarizerModelName || '');
+  const [retrievalPlannerMode, setRetrievalPlannerMode] = useState(settings.advanced.retrievalPlannerMode || 'profile');
+  const [retrievalPlannerApiProfileId, setRetrievalPlannerApiProfileId] = useState(settings.advanced.retrievalPlannerApiProfileId || '');
+  const [retrievalPlannerModelName, setRetrievalPlannerModelName] = useState(settings.advanced.retrievalPlannerModelName || '');
   const [allowAiEntityCreation, setAllowAiEntityCreation] = useState(settings.advanced.allowAiEntityCreation || false);
   const [archiveSummarization, setArchiveSummarization] = useState(settings.advanced.archiveSummarization !== false);
   const [streamingEnabled, setStreamingEnabled] = useState(settings.advanced.streaming !== false);
@@ -120,18 +132,22 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
 
   // Keep ref of settings to prevent stale closures in debounce timeout
   const settingsRef = useRef({
-    accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled, writingToolbar, smartTypography,
+    accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled, writingToolbar, smartTypography, streaming: streamingEnabled,
     chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug,
-    embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, allowAiEntityCreation, archiveSummarization
+    embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage,
+    taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName,
+    retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, allowAiEntityCreation, archiveSummarization
   });
 
   useEffect(() => {
     settingsRef.current = {
-      accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled, writingToolbar,
+      accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled, writingToolbar, smartTypography, streaming: streamingEnabled,
       chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug,
-      embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, allowAiEntityCreation, archiveSummarization
+      embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage,
+      taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName,
+      retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, allowAiEntityCreation, archiveSummarization
     };
-  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, smartTypography, chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, allowAiEntityCreation, archiveSummarization]);
+  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, smartTypography, streamingEnabled, chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage, taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName, retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, allowAiEntityCreation, archiveSummarization]);
 
   // Handle immediate save for selects and color choices
   const updateSetting = async (category, key, value) => {
@@ -158,11 +174,22 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       if (key === 'embeddingApiProfileId') setEmbeddingApiProfileId(value);
       if (key === 'systemApiProfileId') { setSystemApiProfileId(value); setSystemModelName(''); }
       if (key === 'systemModelName') setSystemModelName(value);
+      if (key === 'systemOutputLanguage') setSystemOutputLanguage(value);
+      if (key === 'taggerMode') setTaggerMode(value);
+      if (key === 'taggerApiProfileId') { setTaggerApiProfileId(value); setTaggerModelName(''); }
+      if (key === 'taggerModelName') setTaggerModelName(value);
+      if (key === 'summarizerMode') setSummarizerMode(value);
+      if (key === 'summarizerApiProfileId') { setSummarizerApiProfileId(value); setSummarizerModelName(''); }
+      if (key === 'summarizerModelName') setSummarizerModelName(value);
+      if (key === 'retrievalPlannerMode') setRetrievalPlannerMode(value);
+      if (key === 'retrievalPlannerApiProfileId') { setRetrievalPlannerApiProfileId(value); setRetrievalPlannerModelName(''); }
+      if (key === 'retrievalPlannerModelName') setRetrievalPlannerModelName(value);
     }
 
     const current = settingsRef.current;
     const newSettings = {
       interface: {
+        ...settings.interface,
         accentColor: key === 'accentColor' ? value : current.accentColor,
         fontFamily: key === 'fontFamily' ? value : current.fontFamily,
         fontSize: key === 'fontSize' ? value : current.fontSize,
@@ -174,6 +201,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         smartTypography: key === 'smartTypography' ? value : current.smartTypography
       },
       advanced: {
+        ...settings.advanced,
         chunkSize: Number(current.chunkSize),
         similarity: Number(current.similarity),
         topKKB: Number(current.topKKB),
@@ -189,7 +217,17 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         embeddingApiProfileId: key === 'embeddingApiProfileId' ? value : current.embeddingApiProfileId,
         embeddingModelName: current.embeddingModelName,
         systemApiProfileId: key === 'systemApiProfileId' ? value : current.systemApiProfileId,
-        systemModelName: key === 'systemModelName' ? value : (key === 'systemApiProfileId' ? '' : current.systemModelName)
+        systemModelName: key === 'systemModelName' ? value : (key === 'systemApiProfileId' ? '' : current.systemModelName),
+        systemOutputLanguage: key === 'systemOutputLanguage' ? value : current.systemOutputLanguage,
+        taggerMode: key === 'taggerMode' ? value : current.taggerMode,
+        taggerApiProfileId: key === 'taggerApiProfileId' ? value : current.taggerApiProfileId,
+        taggerModelName: key === 'taggerModelName' ? value : (key === 'taggerApiProfileId' ? '' : current.taggerModelName),
+        summarizerMode: key === 'summarizerMode' ? value : current.summarizerMode,
+        summarizerApiProfileId: key === 'summarizerApiProfileId' ? value : current.summarizerApiProfileId,
+        summarizerModelName: key === 'summarizerModelName' ? value : (key === 'summarizerApiProfileId' ? '' : current.summarizerModelName),
+        retrievalPlannerMode: key === 'retrievalPlannerMode' ? value : current.retrievalPlannerMode,
+        retrievalPlannerApiProfileId: key === 'retrievalPlannerApiProfileId' ? value : current.retrievalPlannerApiProfileId,
+        retrievalPlannerModelName: key === 'retrievalPlannerModelName' ? value : (key === 'retrievalPlannerApiProfileId' ? '' : current.retrievalPlannerModelName)
       }
     };
 
@@ -217,6 +255,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       const current = settingsRef.current;
       const newSettings = {
         interface: {
+          ...settings.interface,
           accentColor: current.accentColor,
           fontFamily: current.fontFamily,
           fontSize: current.fontSize,
@@ -228,6 +267,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
           smartTypography: current.smartTypography
         },
         advanced: {
+          ...settings.advanced,
           chunkSize: key === 'chunkSize' ? Number(value) : Number(current.chunkSize),
           similarity: key === 'similarity' ? Number(value) : Number(current.similarity),
           topKKB: key === 'topKKB' ? Number(value) : Number(current.topKKB),
@@ -242,7 +282,17 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
           embeddingApiProfileId: current.embeddingApiProfileId,
           embeddingModelName: key === 'embeddingModelName' ? value : current.embeddingModelName,
           systemApiProfileId: current.systemApiProfileId,
-          systemModelName: key === 'systemModelName' ? value : current.systemModelName
+          systemModelName: key === 'systemModelName' ? value : current.systemModelName,
+          systemOutputLanguage: current.systemOutputLanguage,
+          taggerMode: current.taggerMode,
+          taggerApiProfileId: current.taggerApiProfileId,
+          taggerModelName: current.taggerModelName,
+          summarizerMode: current.summarizerMode,
+          summarizerApiProfileId: current.summarizerApiProfileId,
+          summarizerModelName: current.summarizerModelName,
+          retrievalPlannerMode: current.retrievalPlannerMode,
+          retrievalPlannerApiProfileId: current.retrievalPlannerApiProfileId,
+          retrievalPlannerModelName: current.retrievalPlannerModelName
         }
       };
       await handleSaveSettings(newSettings);
@@ -1063,7 +1113,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       {!systemAiReady && <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />}
                     </h4>
                     <div className="bg-[#051116] p-5 rounded-xl border border-gray-800/80 space-y-4">
-                      <p className="caption">Powers structured memory and World Index tagging. Select both an API Connection and a model. Kallamo never falls back to the active profile or a provider default for System AI work.</p>
+                      <p className="caption">The global base model for Kallamo's internal AI work. Tagger and Summarizer inherit it by default, or you can assign dedicated models below. Kallamo never selects a provider default silently.</p>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
                           <label className="block text-xs font-bold text-gray-400 mb-1.5">API Connection</label>
@@ -1094,46 +1144,86 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                         </div>
                       </div>
 
-                      {!systemAiReady && <p className="text-xs text-amber-300 flex items-center gap-2"><AlertTriangle className="w-3.5 h-3.5 shrink-0" />{systemAiRequirement} System AI features remain unavailable until both are selected.</p>}
-
-                      <div className="h-px bg-gray-800/50 w-full"></div>
-
-                      <div className="flex items-center justify-between">
-                        <div className="min-w-0 pr-4">
-                          <span className="block text-sm text-gray-200 font-bold">Summarize Chat Archives</span>
-                          <p className="caption">Uses the System AI to create a title and summary when chat history is archived. Turn it off to store only the raw vectorized conversation. Without a System AI, archives are always vectorized without a generated summary.</p>
+                      <div className="flex flex-col gap-3 rounded-lg border border-gray-800 bg-[#021015] p-4 md:flex-row md:items-center md:justify-between">
+                        <div className="flex min-w-0 gap-3">
+                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-accent/15 bg-accent/[0.06] text-accent">
+                            <Languages className="h-4 w-4" />
+                          </div>
+                          <div>
+                            <label htmlFor="system-output-language" className="block text-xs font-bold text-gray-200">Internal Output Language</label>
+                            <p className="mt-1 max-w-xl text-[0.6875rem] leading-relaxed text-gray-500">Used for summaries, analysis, and internal research. Proper nouns, canonical names, identifiers, and quoted evidence are never translated.</p>
+                          </div>
                         </div>
-                        <label className="relative inline-flex items-center shrink-0 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={archiveSummarization}
-                            onChange={(e) => updateSetting('advanced', 'archiveSummarization', e.target.checked)}
-                            className="sr-only peer"
-                          />
-                          <div className="w-7 h-4 bg-gray-700 rounded-full peer peer-focus-visible:ring-2 peer-focus-visible:ring-accent/60 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
-                        </label>
+                        <select
+                          id="system-output-language"
+                          value={systemOutputLanguage}
+                          onChange={(e) => updateSetting('advanced', 'systemOutputLanguage', e.target.value)}
+                          className="w-full shrink-0 bg-[#011419] border border-gray-700 text-gray-200 text-xs rounded-md px-3 py-2 focus:outline-none focus:border-accent cursor-pointer md:w-56"
+                        >
+                          {SYSTEM_AI_LANGUAGES.map(language => (
+                            <option key={language.value} value={language.value}>{language.label}</option>
+                          ))}
+                        </select>
                       </div>
 
-                      <div className="h-px bg-gray-800/50 w-full"></div>
+                      {!systemAiReady && <p className="text-xs text-amber-300 flex items-center gap-2"><AlertTriangle className="w-3.5 h-3.5 shrink-0" />{systemAiRequirement} Roles that inherit System AI remain unavailable until both are selected.</p>}
 
-                      {/* World Index: let the AI create unregistered entities during tagging.
-                          Belongs with the System AI because tagging runs on it. */}
-                      <div className={`flex items-center justify-between ${!systemAiReady ? 'opacity-50' : ''}`}>
-                        <div className="pr-4">
-                          <span className="block text-sm text-gray-200 font-bold">Let the AI create new entities</span>
-                          <p className="caption">When indexing your chapters and chat, the System AI usually tags only entities that already exist in your Worldbuild. Turn this on to let it propose new ones for names it can't match, added to Worldbuild as pending suggestions you accept, merge, or dismiss. Off by default.{!systemAiReady && ' Requires an API Connection and model above.'}</p>
-                        </div>
-                        <label className={`relative inline-flex items-center shrink-0 ${systemAiReady ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
-                          <input
-                            type="checkbox"
-                            checked={allowAiEntityCreation}
-                            disabled={!systemAiReady}
-                            onChange={(e) => updateSetting('advanced', 'allowAiEntityCreation', e.target.checked)}
-                            className="sr-only peer"
-                          />
-                          <div className="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
-                        </label>
-                      </div>
+                    </div>
+                  </div>
+
+                  <div id="ai-engine-roles-config" className="space-y-3 scroll-mt-6">
+                    <div>
+                      <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>AI Engine Roles</span>
+                      </h4>
+                      <p className="caption mt-1">Assign a global execution model to each internal responsibility. AI Profiles still control visible responses, voice, and creative behavior.</p>
+                    </div>
+                    <div className="space-y-4">
+                      {AI_ENGINE_ROLE_DEFINITIONS.map((definition) => {
+                        const roleState = definition.id === 'tagger'
+                          ? { mode: taggerMode, apiProfileId: taggerApiProfileId, modelName: taggerModelName }
+                          : definition.id === 'summarizer'
+                            ? { mode: summarizerMode, apiProfileId: summarizerApiProfileId, modelName: summarizerModelName }
+                            : { mode: retrievalPlannerMode, apiProfileId: retrievalPlannerApiProfileId, modelName: retrievalPlannerModelName };
+                        return (
+                          <AiEngineRoleCard
+                            key={definition.id}
+                            definition={definition}
+                            {...roleState}
+                            apiProfiles={apiProfiles}
+                            systemReady={systemAiReady}
+                            onModeChange={(value) => updateSetting('advanced', `${definition.id}Mode`, value)}
+                            onConnectionChange={(value) => updateSetting('advanced', `${definition.id}ApiProfileId`, value)}
+                            onModelChange={(value) => updateSetting('advanced', `${definition.id}ModelName`, value)}
+                          >
+                            {definition.id === 'tagger' && (
+                              <div className={`flex items-center justify-between gap-4 rounded-lg bg-[#021015] px-3.5 py-3 ${taggerMode === 'disabled' ? 'opacity-50' : ''}`}>
+                                <div>
+                                  <span className="block text-xs font-bold text-gray-200">Propose unknown entities</span>
+                                  <p className="mt-1 text-[0.6875rem] leading-relaxed text-gray-500">Create reviewable Worldbuild suggestions for explicit names that cannot be matched.</p>
+                                </div>
+                                <label className={`relative inline-flex items-center shrink-0 ${taggerMode !== 'disabled' ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
+                                  <input type="checkbox" checked={allowAiEntityCreation} disabled={taggerMode === 'disabled'} onChange={(event) => updateSetting('advanced', 'allowAiEntityCreation', event.target.checked)} className="sr-only peer" />
+                                  <div className="w-7 h-4 bg-gray-700 rounded-full peer peer-focus-visible:ring-2 peer-focus-visible:ring-accent/60 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
+                                </label>
+                              </div>
+                            )}
+                            {definition.id === 'summarizer' && (
+                              <div className="flex items-center justify-between gap-4 rounded-lg bg-[#021015] px-3.5 py-3">
+                                <div className="min-w-0">
+                                  <span className="block text-xs font-bold text-gray-200">Generate archive summaries</span>
+                                  <p className="mt-1 text-[0.6875rem] leading-relaxed text-gray-500">Add a title and concise summary while keeping the original searchable conversation.</p>
+                                </div>
+                                <label className="relative inline-flex items-center shrink-0 cursor-pointer">
+                                  <input type="checkbox" checked={archiveSummarization} onChange={(event) => updateSetting('advanced', 'archiveSummarization', event.target.checked)} className="sr-only peer" />
+                                  <div className="w-7 h-4 bg-gray-700 rounded-full peer peer-focus-visible:ring-2 peer-focus-visible:ring-accent/60 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
+                                </label>
+                              </div>
+                            )}
+                          </AiEngineRoleCard>
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -1238,10 +1328,16 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                         />
                       </div>
 
-                      <div className="h-px bg-gray-800/50 w-full"></div>
+                    </div>
+                  </div>
 
-                      {/* Embedding Engine Config */}
-                      <div id="embedding-config">
+                  <div id="embedding-config" className="space-y-3 scroll-mt-6">
+                    <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
+                      <Layers className="w-3.5 h-3.5" />
+                      <span>Embedding Engine</span>
+                    </h4>
+                    <div className="bg-[#051116] p-5 rounded-xl border border-gray-800/80 space-y-5">
+                      <div>
                         <span className="block text-sm text-gray-200 font-bold mb-1">Vector Embedding Engine</span>
                         <p className="caption mb-3">
                           Generate vector embeddings locally on your hardware or offload calculations to an external API provider.
@@ -1358,11 +1454,11 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                     </div>
                   </div>
 
-                  {/* SECTION 2: HARDWARE & CACHE */}
+                  {/* Embedding engine maintenance */}
                   <div className="space-y-3">
                     <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
                       <Cpu className="w-3.5 h-3.5" />
-                      <span>Hardware & Model Cache</span>
+                      <span>Embedding Runtime &amp; Cache</span>
                     </h4>
                     <div className="bg-[#051116] rounded-xl border border-gray-800/80 divide-y divide-gray-800/80 overflow-hidden">
                       <div className="p-4 flex items-center justify-between">

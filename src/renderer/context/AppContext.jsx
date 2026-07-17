@@ -16,7 +16,7 @@ const api = window.electronAPI || {
   getVariables: async () => [], saveVariable: async () => { }, deleteVariable: async () => { },
   getSettings: async () => ({
     interface: { fontFamily: 'sans', fontSize: 'medium', layout: 'bubbles', blur: true, accentColor: '#FBCB2D', codeTheme: 'github-dark', lineNumbers: false },
-    advanced: { chunkSize: 500, similarity: 0.3, topKKB: 5, topKMemory: 5, executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, archiveSummarization: true, embeddingEngine: 'local', embeddingApiProfileId: '', embeddingModelName: '' }
+    advanced: { chunkSize: 500, similarity: 0.3, topKKB: 5, topKMemory: 5, executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, archiveSummarization: true, embeddingEngine: 'local', embeddingApiProfileId: '', embeddingModelName: '', systemOutputLanguage: 'English', taggerMode: 'inherit-system', summarizerMode: 'inherit-system', retrievalPlannerMode: 'profile' }
   }),
   saveSettings: async () => { },
   getUiFlags: async () => ({}),
@@ -48,7 +48,7 @@ export const AppProvider = ({ children }) => {
   const [variables, setVariables] = useState([]);
   const [settings, setSettings] = useState({
     interface: { fontFamily: 'sans', fontSize: 'medium', layout: 'bubbles', blur: true, accentColor: '#FBCB2D', codeTheme: 'github-dark', lineNumbers: false },
-    advanced: { chunkSize: 500, similarity: 0.3, topKKB: 5, topKMemory: 5, executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, archiveSummarization: true, embeddingEngine: 'local', embeddingApiProfileId: '', embeddingModelName: '' }
+    advanced: { chunkSize: 500, similarity: 0.3, topKKB: 5, topKMemory: 5, executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, archiveSummarization: true, embeddingEngine: 'local', embeddingApiProfileId: '', embeddingModelName: '', systemOutputLanguage: 'English', taggerMode: 'inherit-system', summarizerMode: 'inherit-system', retrievalPlannerMode: 'profile' }
   });
 
   // One-time UI hints (coach-marks). Keyed booleans persisted in the settings
@@ -241,10 +241,10 @@ export const AppProvider = ({ children }) => {
     const unsubTaggingFailed = api.onWorldIndexTaggingFailed ? api.onWorldIndexTaggingFailed((data) => {
       const reason = (data?.error || 'the System AI did not respond').replace(/\.+$/, '');
       showToast(
-        `Entity tagging failed: ${reason}. Indexing saved your text but skipped tags.`,
+        `Entity tagging failed: ${reason}. Your text and vector retrieval were preserved, but World Index tags were skipped.`,
         'error',
         10000,
-        { label: "Open Settings", onClick: () => openSettings('engine', 'system-ai') }
+        { label: "Open Settings", onClick: () => openSettings('engine', 'tagger') }
       );
     }) : () => { };
 

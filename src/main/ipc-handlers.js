@@ -3490,15 +3490,15 @@ ipcMain.handle('start-world-index-tagging', async (event, { chatId, tier = 'arch
   const startedAt = Date.now();
   const selectedCount = Array.isArray(chunkIds) ? [...new Set(chunkIds.filter(Boolean))].length : null;
   const state = { runId, mode: selectedCount !== null ? 'selected' : (full ? 'all' : 'new'), status: 'running', total: selectedCount ?? (full ? initial.total : initial.pending), processed: 0, tagged: 0, taggedChunks: 0, empty: 0, failed: 0, error: null, startedAt };
-  const { getSystemAiConfiguration } = require('./workflow-runner');
-  const systemAiConfig = getSystemAiConfiguration();
-  if (!systemAiConfig.systemAi) {
+  const { ROLE_IDS, resolveAiEngineRole } = require('./features/ai-engine/role-resolver');
+  const taggerConfig = resolveAiEngineRole(ROLE_IDS.TAGGER);
+  if (!taggerConfig.executor) {
     db.prepare(`INSERT INTO world_index_runs (id, chatId, tier, mode, status, totalChunks, error, startedAt, completedAt)
                 VALUES (?, ?, ?, ?, 'failed', 0, ?, ?, ?)`)
-      .run(runId, chatId, tier, state.mode, systemAiConfig.error, startedAt, startedAt);
+      .run(runId, chatId, tier, state.mode, taggerConfig.error || 'Tagger is disabled.', startedAt, startedAt);
     const status = getWorldIndexStatus(chatId, tier);
     try { event.sender.send('world-index-tagging-progress', { chatId, tier, status }); } catch (e) {}
-    return { success: false, error: systemAiConfig.error, status };
+    return { success: false, error: taggerConfig.error || 'Tagger is disabled.', status };
   }
   db.prepare(`INSERT INTO world_index_runs (id, chatId, tier, mode, status, totalChunks, startedAt)
               VALUES (?, ?, ?, ?, 'running', ?, ?)`)
@@ -4050,7 +4050,7 @@ ipcMain.handle('get-settings', async () => {
 
     const defaultSettings = {
       interface: { fontFamily: 'sans', fontSize: 'medium', layout: 'bubbles', blur: true, accentColor: '#FBCB2D', codeTheme: 'github-dark', lineNumbers: false },
-      advanced: { chunkSize: 500, similarity: 0.3, topKKB: 5, topKMemory: 5, executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, archiveSummarization: true }
+      advanced: { chunkSize: 500, similarity: 0.3, topKKB: 5, topKMemory: 5, executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, archiveSummarization: true, systemOutputLanguage: 'English', taggerMode: 'inherit-system', summarizerMode: 'inherit-system', retrievalPlannerMode: 'profile' }
     };
 
     return {
