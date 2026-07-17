@@ -34,6 +34,24 @@ const StateTag = ({ map, value }) => {
   return <span className={`inline-flex items-center text-[10px] font-bold uppercase tracking-wider border rounded-full px-2 py-0.5 ${s.cls}`}>{s.label}</span>;
 };
 
+const EvidenceReferences = ({ excerpts, support = '' }) => {
+  const [open, setOpen] = useState(false);
+  const references = excerpts.filter(Boolean);
+  if (!references.length && !support) return null;
+  return (
+    <div className="mt-2">
+      <button type="button" onClick={() => setOpen(value => !value)} className="inline-flex items-center gap-1 text-xs font-semibold text-sky-100/75 hover:text-sky-50 transition-colors">
+        <ChevronRight className={`w-3.5 h-3.5 transition-transform ${open ? 'rotate-90' : ''}`} />
+        {open ? 'Hide references' : references.length ? `View references (${references.length})` : 'View explanation'}
+      </button>
+      {open && <div className="mt-2 max-h-56 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+        {support && <p className="caption text-sky-100/75">{support}</p>}
+        {references.map((excerpt, index) => <p key={index} className="caption text-sky-100/75">“{excerpt}”</p>)}
+      </div>}
+    </div>
+  );
+};
+
 // Per-entity AI write permission, used by the "Update entities" enrichment pass:
 // open = AI writes directly, review = AI stages changes for approval, locked = the
 // enrichment skips it entirely (still readable by search/tagging). Stored in
@@ -309,6 +327,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const [enriching, setEnriching] = useState(false);
   const [enrichProgress, setEnrichProgress] = useState(null);
   const [enrichErrors, setEnrichErrors] = useState([]);
+  const [showEnrichErrors, setShowEnrichErrors] = useState(false);
+  const [enrichErrorSummary, setEnrichErrorSummary] = useState('');
   const [mergePrompt, setMergePrompt] = useState(null); // { id, name } while choosing merge priority
   const [showExportModal, setShowExportModal] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -352,6 +372,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     if (!workspaceId || !electronAPI.getEntityEnrichmentErrors) return;
     const result = await electronAPI.getEntityEnrichmentErrors(workspaceId).catch(() => null);
     setEnrichErrors(result?.errors || []);
+    if (result?.errors?.length) setShowEnrichErrors(true);
   }, [workspaceId, electronAPI]);
 
   useEffect(() => {
@@ -515,14 +536,35 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       if (res.taggedEvidenceRemaining) bits.push(`${res.taggedEvidenceRemaining} tagged passages pending`);
       if (res.textMatchesSkipped) bits.push(`${res.textMatchesSkipped} lower-priority text matches skipped`);
       if (res.failed) bits.push(`${res.failed} failed`);
-      showToast(`Update complete: ${bits.join(', ')}.`, res.failed ? 'error' : 'success');
+      const summary = bits.join(', ');
+      if (res.failed) {
+        setShowEnrichErrors(true);
+      }
+      if (res.failed && !res.updated) {
+        setEnrichErrorSummary(`Update Failed: ${summary}.`);
+      } else {
+        setEnrichErrorSummary('');
+        showToast(`Update complete: ${summary}.`, res.failed ? 'error' : 'success');
+      }
     } else if (res) {
       showToast(`Update failed: ${res.error || 'unknown error'}`, 'error');
     }
   };
   const dismissEnrichError = async (id) => {
     const result = await electronAPI.dismissEntityEnrichmentError?.(id);
-    if (result?.success) setEnrichErrors(current => current.filter(item => item.id !== id));
+    if (result?.success) setEnrichErrors(current => {
+      const next = current.filter(item => item.id !== id);
+      if (!next.length) setShowEnrichErrors(false);
+      return next;
+    });
+  };
+  const dismissAllEnrichErrors = async () => {
+    const ids = enrichErrors.map(error => error.id);
+    const results = await Promise.all(ids.map(id => electronAPI.dismissEntityEnrichmentError?.(id)));
+    const dismissed = new Set(ids.filter((_, index) => results[index]?.success));
+    setEnrichErrors(current => current.filter(error => !dismissed.has(error.id)));
+    if (dismissed.size === ids.length) setShowEnrichErrors(false);
+    else showToast('Some update errors could not be dismissed.', 'error');
   };
   const onEnrichCompleteRef = useRef(onEnrichComplete);
   onEnrichCompleteRef.current = onEnrichComplete;
@@ -1034,26 +1076,35 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           </div>
         </div>
       )}
-      {enrichErrors.length > 0 && (
-        <aside className="fixed right-5 bottom-20 z-[70] w-[min(30rem,calc(100vw-2.5rem))] max-h-[70vh] overflow-y-auto overscroll-contain space-y-3" aria-live="polite">
-          {enrichErrors.map(error => (
-            <section key={error.id} className="bg-[#1a0b0b] border border-red-500/45 shadow-2xl rounded-xl p-4 text-sm">
-              <div className="flex gap-3">
-                <AlertTriangle className="w-5 h-5 text-red-300 shrink-0 mt-0.5" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-start justify-between gap-3">
-                    <div><h3 className="font-bold text-red-100">Entity update failed</h3><p className="mt-0.5 text-red-200/80">{error.entityName} · {meta(error.entityType).label}</p></div>
-                    <button type="button" aria-label={`Dismiss update error for ${error.entityName}`} onClick={() => dismissEnrichError(error.id)} className="p-1 text-red-200/70 hover:text-white focus-visible:ring-2 focus-visible:ring-red-300 rounded"><X className="w-4 h-4" /></button>
-                  </div>
-                  <p className="mt-3 text-red-100 leading-relaxed break-words">{error.error}</p>
-                  <div className="mt-4 flex items-center justify-between gap-3">
-                    <button type="button" onClick={() => openSettings('engine', 'system-ai')} className="text-sm font-bold text-red-100 hover:text-white underline underline-offset-4">Open System AI settings</button>
-                    <button type="button" onClick={() => dismissEnrichError(error.id)} className="text-sm text-red-200/80 hover:text-white">Dismiss</button>
-                  </div>
-                </div>
+      {showEnrichErrors && enrichErrors.length > 0 && (
+        <aside className="fixed right-5 bottom-20 z-[70] w-[min(30rem,calc(100vw-2.5rem))] max-h-[70vh] overflow-hidden rounded-xl border border-red-400/40 bg-[#180b0b]/85 backdrop-blur-xl shadow-2xl flex flex-col" aria-labelledby="entity-update-errors-title">
+          <header className="shrink-0 flex items-start justify-between gap-4 px-4 py-3 border-b border-red-400/20 bg-[#210d0d]/70">
+            <div className="flex min-w-0 gap-3">
+              <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5 text-red-300" />
+              <div>
+                <h2 id="entity-update-errors-title" className="font-bold text-red-100">Entity updates need attention</h2>
+                <p className="mt-0.5 text-sm leading-relaxed text-red-200/80">{enrichErrorSummary || `${enrichErrors.length} ${enrichErrors.length === 1 ? 'entity update failed' : 'entity updates failed'}.`}</p>
               </div>
-            </section>
-          ))}
+            </div>
+            <button type="button" aria-label="Dismiss all entity update errors" onClick={dismissAllEnrichErrors} className="shrink-0 p-1 rounded text-red-200/70 hover:text-white focus-visible:ring-2 focus-visible:ring-red-300"><X className="w-5 h-5" /></button>
+          </header>
+          <div className="flex-1 overflow-y-auto overscroll-contain divide-y divide-red-500/20 custom-scrollbar" aria-live="polite">
+              {enrichErrors.map(error => (
+                <article key={error.id} className="p-4 text-sm">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <h3 className="font-bold text-red-100">{error.entityName}</h3>
+                      <p className="mt-0.5 text-red-200/80">{meta(error.entityType).label}</p>
+                      <p className="mt-3 leading-relaxed break-words text-red-100">{error.error}</p>
+                    </div>
+                  </div>
+                  <div className="mt-4 flex items-center justify-between gap-3">
+                    <button type="button" onClick={() => openSettings('engine', 'system-ai')} className="font-bold text-red-100 hover:text-white underline underline-offset-4">Open System AI settings</button>
+                    <button type="button" onClick={() => dismissEnrichError(error.id)} className="text-red-200/80 hover:text-white">Dismiss</button>
+                  </div>
+                </article>
+              ))}
+          </div>
         </aside>
       )}
       <div style={{ '--worldbuild-sidebar-width': `${sidebarWidth}px` }} className="relative w-full lg:w-[var(--worldbuild-sidebar-width)] shrink-0 flex flex-col h-full overflow-visible border-r border-gray-800/40 bg-[#011419]/25 backdrop-blur-md">
@@ -1177,9 +1228,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                       ? 'Imported from a Worldbuild package. Keep it as a new entity, merge it into an existing one, or dismiss it.'
                       : 'The AI proposed this entity. Keep it, fold it into an existing one, or dismiss it.'}
                   </span>
-                  {!selected.data?._imported && Array.isArray(selected.data?.proposalEvidence) && selected.data.proposalEvidence.map((item, index) => (
-                    <p key={`${item.chunkId || 'evidence'}-${index}`} className="caption text-amber-100/75 line-clamp-2">“{item.excerpt}”</p>
-                  ))}
+                  {!selected.data?._imported && Array.isArray(selected.data?.proposalEvidence) && <EvidenceReferences excerpts={selected.data.proposalEvidence.map(item => item.excerpt)} />}
                   {mergePrompt ? (
                     <div className="flex items-center flex-wrap gap-2">
                       <span className="text-xs text-amber-100/90 min-w-0">Merge into “{mergePrompt.name}”. On conflicting details, keep:</span>
@@ -1265,8 +1314,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                               <span className="text-gray-500">→</span>
                               <span className="text-sky-100 font-medium">{String(proposalValue(pData[f]))}</span>
                             </div>
-                            {proposalSupport(pData[f]) && <p className="caption mt-1 text-sky-100/75">{proposalSupport(pData[f])}</p>}
-                            {proposalEvidence(pData[f]).map((excerpt, index) => <p key={index} className="caption mt-1 line-clamp-2">“{excerpt}”</p>)}
+                            <EvidenceReferences excerpts={proposalEvidence(pData[f])} support={proposalSupport(pData[f])} />
                           </div>
                           <div className="flex items-center gap-1 shrink-0">
                             <button onClick={() => resolveReview({ fields: [f] }, {})} disabled={saving} data-tooltip="Accept" className="p-1.5 rounded-md text-emerald-300 hover:bg-emerald-400/15 transition-colors cursor-pointer"><Check className="w-3.5 h-3.5" /></button>
@@ -1285,8 +1333,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                           </div>
                         </div>
                         <p className="text-sm text-sky-100 leading-relaxed whitespace-pre-wrap">{String(proposalValue(pending.lore))}</p>
-                        {proposalSupport(pending.lore) && <p className="caption mt-2 text-sky-100/75">{proposalSupport(pending.lore)}</p>}
-                        {proposalEvidence(pending.lore).map((excerpt, index) => <p key={index} className="caption mt-2 line-clamp-2">“{excerpt}”</p>)}
+                        <EvidenceReferences excerpts={proposalEvidence(pending.lore)} support={proposalSupport(pending.lore)} />
                       </div>
                     )}
                     {links.map(l => { const k = linkKey(l); return (
@@ -1295,8 +1342,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                         <div className="min-w-0 flex-1 text-sm">
                           <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mr-2">{l.relLabel || l.relKey}</span>
                           <span className="text-sky-100 font-medium">{l.targetName}</span>
-                          {proposalSupport(l) && <p className="caption mt-1 text-sky-100/75">{proposalSupport(l)}</p>}
-                          {proposalEvidence(l).map((excerpt, index) => <p key={index} className="caption mt-1 line-clamp-2">“{excerpt}”</p>)}
+                          <EvidenceReferences excerpts={proposalEvidence(l)} support={proposalSupport(l)} />
                           {l.label && <span className="text-accent/90"> · {l.label}</span>}
                         </div>
                         <div className="flex items-center gap-1 shrink-0">

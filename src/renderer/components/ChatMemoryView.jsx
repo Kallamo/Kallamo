@@ -64,7 +64,6 @@ export default function ChatMemoryView({
   const [editorText, setEditorText] = useState('');
   const [savingSnippet, setSavingSnippet] = useState(false);
   const [worldIndexStatuses, setWorldIndexStatuses] = useState({});
-  const [worldIndexErrors, setWorldIndexErrors] = useState([]);
   const [tagSelection, setTagSelection] = useState(null);
   const [tagSelectionBlocks, setTagSelectionBlocks] = useState([]);
   const [tagSelectionIds, setTagSelectionIds] = useState([]);
@@ -89,22 +88,6 @@ export default function ChatMemoryView({
     } catch (e) { /* markers stay empty on failure */ }
   };
 
-  const loadWorldIndexErrors = async () => {
-    if (!chat?.id || typeof electronAPI?.getWorldIndexErrors !== 'function') return;
-    const res = await electronAPI.getWorldIndexErrors(chat.id);
-    if (res?.success) setWorldIndexErrors(res.errors || []);
-  };
-
-  const dismissWorldIndexError = async (runId) => {
-    try {
-      const res = await electronAPI.dismissWorldIndexError(runId);
-      if (!res?.success) throw new Error(res?.error || 'Unknown error');
-      setWorldIndexErrors(current => current.filter(error => error.id !== runId));
-    } catch (e) {
-      showToast(`Failed to dismiss tagging error: ${e.message}`, 'error');
-    }
-  };
-
   // World-index a memory tier. full=false tags only chunks that carry no tags yet
   // ("index new"); full=true drops the tier's tags and re-tags from scratch ("reindex
   // all"), so a re-run reflects the current tagger and entity registry.
@@ -118,7 +101,6 @@ export default function ChatMemoryView({
       const res = await electronAPI.startWorldIndexTagging(chat.id, { tier, full });
       if (!res?.success) {
         if (res?.status) setWorldIndexStatuses(prev => ({ ...prev, [tier]: res.status }));
-        await loadWorldIndexErrors();
         return;
       }
       if (res.started) showToast(`${full ? 'Re-tagging' : 'Tagging'} started. You can leave this screen and return to its live progress.`, 'success');
@@ -246,7 +228,6 @@ export default function ChatMemoryView({
       const res = await electronAPI.startWorldIndexTagging(chat.id, { tier: tagSelection, full: true, chunkIds });
       if (!res?.success) {
         if (res?.status) setWorldIndexStatuses(prev => ({ ...prev, [tagSelection]: res.status }));
-        await loadWorldIndexErrors();
         return;
       }
       if (res.status) setWorldIndexStatuses(prev => ({ ...prev, [tagSelection]: res.status }));
@@ -493,11 +474,12 @@ export default function ChatMemoryView({
     setSelectedBlockIds([]);
     loadBlocks();
     loadMemoryTags();
-    loadWorldIndexErrors();
     if (!chat?.id || !electronAPI?.getWorldIndexStatus) return;
     Promise.all(indexTiers.map(async ({ key }) => {
       const res = await electronAPI.getWorldIndexStatus(chat.id, key);
-      return [key, res?.status];
+      // Failure counts are session feedback. Once the user leaves this workspace,
+      // show the pending chunks normally rather than reviving an old provider message.
+      return [key, res?.status ? { ...res.status, failed: 0 } : null];
     })).then(entries => setWorldIndexStatuses(Object.fromEntries(entries.filter(([, status]) => status))));
   }, [chat?.id]);
 
@@ -509,7 +491,6 @@ export default function ChatMemoryView({
       if (!data.status.active && data.status.latest?.status !== 'running') {
         loadMemoryTags();
         loadFileChunkTags();
-        loadWorldIndexErrors();
       }
     });
   }, [chat?.id, electronAPI]);
@@ -1661,8 +1642,8 @@ export default function ChatMemoryView({
                   </span>
                   <ChevronDown className={`w-3.5 h-3.5 transition-transform ${indexMenu === t.key ? 'rotate-180' : ''}`} />
                 </button>
-                <p title={status?.latest?.error || ''} className={`mt-1 px-1 text-[9px] truncate ${status?.failed ? 'text-red-400' : 'text-gray-500'}`}>
-                  {status?.failed ? `${status.failed} chunk${status.failed === 1 ? '' : 's'} need another try${status?.latest?.error ? `: ${status.latest.error}` : ''}` : label}
+                <p className={`mt-1 px-1 text-[9px] truncate ${status?.failed ? 'text-red-400' : 'text-gray-500'}`}>
+                  {status?.failed ? `${status.failed} chunk${status.failed === 1 ? '' : 's'} need another try` : label}
                 </p>
                 <Popover anchorRef={t.ref} open={indexMenu === t.key} onClose={() => setIndexMenu(null)} matchAnchorWidth={true} align="left" className="!p-2">
                   <button
@@ -2510,46 +2491,6 @@ export default function ChatMemoryView({
             </div>
           </div>
         </div>
-      )}
-
-      {worldIndexErrors.length > 0 && (
-        <aside className="fixed right-5 bottom-5 z-[70] w-[min(30rem,calc(100vw-2.5rem))] max-h-[70vh] overflow-y-auto overscroll-contain space-y-3" aria-live="polite">
-          {worldIndexErrors.map((error) => {
-            const tierLabel = error.tier === 'custom' ? 'Custom Memory' : error.tier === 'searchable' ? 'Searchable Memory' : 'Chat Archive';
-            const reason = error.error || error.sources?.find(source => source.error)?.error || 'The System AI could not complete this tagging run.';
-            const failedChunks = error.failedChunks || error.sources?.reduce((sum, source) => sum + source.chunks, 0) || 0;
-            const preventedStart = failedChunks === 0 && !error.sources?.length;
-            return (
-              <section key={error.id} className="bg-[#1a0b0b] border border-red-500/45 shadow-2xl rounded-xl p-4 text-sm">
-                <div className="flex gap-3">
-                  <AlertTriangle className="w-5 h-5 text-red-300 shrink-0 mt-0.5" />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <h3 className="font-bold text-red-100">{preventedStart ? 'World Index could not start' : 'World Index tagging incomplete'}</h3>
-                        <p className="mt-0.5 text-red-200/80">{preventedStart ? `${tierLabel} · Configuration needs attention` : `${tierLabel} · ${failedChunks} failed chunk(s)`}</p>
-                      </div>
-                      <button type="button" aria-label="Dismiss World Index error" onClick={() => dismissWorldIndexError(error.id)} className="p-1 text-red-200/70 hover:text-white focus-visible:ring-2 focus-visible:ring-red-300 rounded"><XIcon className="w-4 h-4" /></button>
-                    </div>
-                    <p className="mt-3 text-red-100 leading-relaxed break-words">{reason}</p>
-                    {error.sources?.length > 0 && (
-                      <div className="mt-3 border-t border-red-400/20 pt-3">
-                        <p className="text-xs font-bold uppercase tracking-wider text-red-200/70">Where it failed</p>
-                        <ul className="mt-1.5 space-y-1.5">
-                          {error.sources.map((source) => <li key={`${source.source}_${source.error}`} className="text-red-100/90 break-words"><span className="font-semibold">{source.source || 'Untitled memory'}</span> · {source.chunks} chunk{source.chunks === 1 ? '' : 's'}{source.error && source.error !== reason ? `: ${source.error}` : ''}</li>)}
-                        </ul>
-                      </div>
-                    )}
-                    <div className="mt-4 flex items-center justify-between gap-3">
-                      <button type="button" onClick={() => openSettings('engine', 'system-ai')} className="text-sm font-bold text-red-100 hover:text-white underline underline-offset-4">Open System AI settings</button>
-                      <button type="button" onClick={() => dismissWorldIndexError(error.id)} className="text-sm text-red-200/80 hover:text-white">Dismiss</button>
-                    </div>
-                  </div>
-                </div>
-              </section>
-            );
-          })}
-        </aside>
       )}
 
       {tagSelection && (

@@ -4600,23 +4600,8 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
             insertFts.run(snippetId, chunk.text);
           })();
 
-          // World-index the snippet on creation/edit (mirrors what summarization does
-          // for Chat Archive). Best-effort: a failed tag pass never blocks the save.
-          // INSERT OR REPLACE may have changed the text, so drop stale tags first.
-          try {
-            const { classifyAndTagSegment, applyChunkTags } = require('./workflow-runner');
-            db.prepare('DELETE FROM chunk_tags WHERE chunkId = ?').run(snippetId);
-            const taggerProfile = db.prepare('SELECT * FROM writing_profiles LIMIT 1').get();
-            const rec = { id: snippetId, text: chunk.text, ownerId: chatId };
-            const cls = await classifyAndTagSegment([rec], taggerProfile, chatId);
-            applyChunkTags(cls.chunkTags, [rec], chatId);
-          } catch (e) {
-            console.error('[Custom Memory] world-index tagging failed (save continues):', e.message);
-          }
-
-          // Apply the user's edits to the blue (entity) tags as a delta over what the
-          // auto tagger just wrote: their removals win, their picks are added. The next
-          // re-tag re-derives freely, these edits are live, not protected.
+          // Apply explicit entity-tag edits from the editor. World Index tagging itself
+          // is intentionally user-triggered through the Memory view.
           try {
             const removed = Array.isArray(block.entityTagsRemoved) ? block.entityTagsRemoved : [];
             const added = Array.isArray(block.entityTagsAdded) ? block.entityTagsAdded : [];
