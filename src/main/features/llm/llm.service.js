@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { fetch: undiciFetch, Agent } = require('undici');
+const { getResponseMetadata } = require('./response-metadata');
 
 // undici's default 300s headersTimeout aborts slow local generations
 // (stream:false sends headers only when generation finishes). 30 min ceiling.
@@ -624,7 +625,9 @@ async function sendApiRequest(params) {
         }
 
         const data = await response.json();
-        return parseResponse(data, provider);
+        const content = parseResponse(data, provider);
+        if (!params.includeResponseMetadata) return content;
+        return { content, ...getResponseMetadata(data, provider) };
 
     } catch (error) {
         console.error("API Request Failed:", error);
