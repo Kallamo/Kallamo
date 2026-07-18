@@ -104,6 +104,63 @@ const MIGRATIONS = [
       CREATE INDEX IF NOT EXISTS idx_kanora_attempts_workspace_event
         ON kanora_change_set_attempts (workspace_id, event_id, attempted_at, attempt_id);
     `)
+  },
+  {
+    id: 'kanora_scenes_and_individual_knowledge_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS kanora_scenes (
+        workspace_id TEXT NOT NULL,
+        scene_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('active', 'completed')),
+        location_id TEXT,
+        perspective_access TEXT NOT NULL CHECK (perspective_access IN ('subjective', 'omniscient', 'explicit')),
+        focal_subject_id TEXT,
+        allowed_subject_ids_json TEXT,
+        narrative_sequence INTEGER NOT NULL CHECK (narrative_sequence >= 0),
+        narrative_timestamp TEXT,
+        origin_type TEXT,
+        origin_id TEXT,
+        PRIMARY KEY (workspace_id, scene_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS kanora_scene_participants (
+        workspace_id TEXT NOT NULL,
+        scene_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+        entity_id TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, scene_id, ordinal),
+        UNIQUE (workspace_id, scene_id, entity_id),
+        FOREIGN KEY (workspace_id, scene_id)
+          REFERENCES kanora_scenes (workspace_id, scene_id)
+          ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS kanora_scene_possible_observers (
+        workspace_id TEXT NOT NULL,
+        scene_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+        entity_id TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, scene_id, ordinal),
+        UNIQUE (workspace_id, scene_id, entity_id),
+        FOREIGN KEY (workspace_id, scene_id)
+          REFERENCES kanora_scenes (workspace_id, scene_id)
+          ON DELETE CASCADE
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_kanora_one_active_scene
+        ON kanora_scenes (workspace_id) WHERE status = 'active';
+
+      CREATE INDEX IF NOT EXISTS idx_kanora_scenes_workspace_order
+        ON kanora_scenes (workspace_id, narrative_sequence, scene_id);
+
+      CREATE INDEX IF NOT EXISTS idx_kanora_knowledge_subject
+        ON kanora_narrative_records (
+          workspace_id,
+          json_extract(payload_json, '$.subjectId'),
+          applied_at,
+          record_id
+        ) WHERE record_type = 'knowledge';
+    `)
   }
 ];
 

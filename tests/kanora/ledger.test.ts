@@ -137,9 +137,10 @@ describe('Narrative Event Ledger SQLite repository', () => {
     runDatabaseMigrations(db);
 
     expect(db.prepare('SELECT * FROM existing_records').get()).toEqual({ id: 'legacy', value: 'preserved' });
-    expect(db.prepare('SELECT id FROM schema_migrations').all()).toEqual([
+    expect(db.prepare('SELECT id FROM schema_migrations ORDER BY rowid').all()).toEqual([
       { id: 'kanora_narrative_event_ledger_v1' },
-      { id: 'kanora_transactional_change_sets_v1' }
+      { id: 'kanora_transactional_change_sets_v1' },
+      { id: 'kanora_scenes_and_individual_knowledge_v1' }
     ]);
     repository = new NarrativeEventLedgerRepository(db);
     expect(repository.save(possessionTransferScenario).proposal).toEqual(possessionTransferScenario);
