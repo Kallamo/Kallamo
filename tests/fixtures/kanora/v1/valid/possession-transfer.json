@@ -1,0 +1,54 @@
+{
+  "name": "possession transfer updates current ownership",
+  "proposal": {
+    "contractVersion": "1.0",
+    "id": "proposal-transfer",
+    "projectId": "project-example",
+    "status": "proposed",
+    "changeSet": {
+      "id": "proposal-transfer-changes",
+      "event": {
+        "id": "proposal-transfer-event",
+        "type": "possession-transfer",
+        "description": "Mara gives the brass key to Elias.",
+        "sceneId": "scene-example",
+        "participants": [
+          { "entityId": "mara", "role": "actor" },
+          { "entityId": "elias", "role": "recipient" }
+        ],
+        "position": { "sequence": 12 },
+        "evidenceIds": ["evidence-transfer"]
+      },
+      "operations": [
+        {
+          "id": "operation-key-owner",
+          "type": "set-state",
+          "evidenceIds": ["evidence-transfer"],
+          "state": {
+            "entityId": "brass-key",
+            "property": "ownerId",
+            "value": "elias",
+            "effectiveFrom": { "sequence": 12 }
+          }
+        }
+      ]
+    },
+    "evidence": [
+      {
+        "id": "evidence-transfer",
+        "originType": "writing-document",
+        "originId": "chapter-example",
+        "excerpt": "Mara gives the brass key to Elias."
+      }
+    ],
+    "provenance": {
+      "interpreter": "model",
+      "interpreterId": "narrative-state",
+      "promptVersion": "1.0",
+      "schemaVersion": "1.0",
+      "createdAt": "2026-07-18T12:00:00.000Z"
+    }
+  },
+  "expectedOperationTypes": ["set-state"],
+  "forbiddenOperationTypes": []
+}

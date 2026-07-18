@@ -15,5 +15,13 @@
     "paths": { "@/*": ["./src/renderer/*"], "@shared/*": ["./src/shared/*"] },
     "types": ["vite/client", "node"]
   },
-  "include": ["src/renderer/**/*.ts", "src/renderer/**/*.tsx", "src/shared/**/*.ts", "src/shared/**/*.tsx"]
+  "include": [
+    "src/kanora/**/*.ts",
+    "src/renderer/**/*.ts",
+    "src/renderer/**/*.tsx",
+    "src/shared/**/*.ts",
+    "src/shared/**/*.tsx",
+    "tests/**/*.ts",
+    "vitest.config.ts"
+  ]
 }

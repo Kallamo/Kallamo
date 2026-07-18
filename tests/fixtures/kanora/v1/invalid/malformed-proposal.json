@@ -1,0 +1,55 @@
+{
+  "name": "malformed proposal reports stable validation paths",
+  "proposal": {
+    "contractVersion": "0.9",
+    "id": "proposal-invalid",
+    "projectId": "project-example",
+    "status": "proposed",
+    "changeSet": {
+      "id": "proposal-invalid-changes",
+      "event": {
+        "id": "proposal-invalid-event",
+        "type": "revelation",
+        "description": "Malformed proposal.",
+        "participants": [{ "entityId": "mara", "role": "speaker" }],
+        "position": { "sequence": 1 },
+        "evidenceIds": ["missing-evidence"]
+      },
+      "operations": [
+        {
+          "id": "operation-invalid-knowledge",
+          "type": "grant-knowledge",
+          "evidenceIds": ["evidence-invalid"],
+          "knowledge": {
+            "id": "knowledge-invalid",
+            "subjectId": "",
+            "proposition": { "subjectId": "vault", "predicate": "empty", "object": true },
+            "sourceEventId": "proposal-invalid-event",
+            "acquisition": "participant",
+            "confidence": 1.5,
+            "status": "active"
+          }
+        }
+      ]
+    },
+    "evidence": [
+      {
+        "id": "evidence-invalid",
+        "originType": "writing-document",
+        "originId": "chapter-example"
+      }
+    ],
+    "provenance": {
+      "interpreter": "model",
+      "schemaVersion": "0.9",
+      "createdAt": "2026-07-18T12:00:00.000Z"
+    }
+  },
+  "expectedIssuePaths": [
+    "$.contractVersion",
+    "$.changeSet.operations[0].knowledge.subjectId",
+    "$.changeSet.operations[0].knowledge.confidence",
+    "$.provenance.schemaVersion",
+    "$.changeSet"
+  ]
+}

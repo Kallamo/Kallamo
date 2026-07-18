@@ -1,0 +1,57 @@
+{
+  "name": "deception creates belief without changing canon",
+  "proposal": {
+    "contractVersion": "1.0",
+    "id": "proposal-deception",
+    "projectId": "project-example",
+    "status": "proposed",
+    "changeSet": {
+      "id": "proposal-deception-changes",
+      "event": {
+        "id": "proposal-deception-event",
+        "type": "deception",
+        "description": "Mara lies to Elias that the vault is empty.",
+        "sceneId": "scene-example",
+        "participants": [
+          { "entityId": "mara", "role": "actor" },
+          { "entityId": "elias", "role": "recipient" }
+        ],
+        "position": { "sequence": 12 },
+        "evidenceIds": ["evidence-deception"]
+      },
+      "operations": [
+        {
+          "id": "operation-elias-vault-belief",
+          "type": "set-belief",
+          "evidenceIds": ["evidence-deception"],
+          "belief": {
+            "id": "belief-elias-vault-empty",
+            "subjectId": "elias",
+            "proposition": { "subjectId": "vault", "predicate": "empty", "object": true },
+            "sourceEventId": "proposal-deception-event",
+            "confidence": 0.9,
+            "relationToCanon": "contradicted",
+            "status": "active"
+          }
+        }
+      ]
+    },
+    "evidence": [
+      {
+        "id": "evidence-deception",
+        "originType": "writing-document",
+        "originId": "chapter-example",
+        "excerpt": "Mara lies to Elias that the vault is empty."
+      }
+    ],
+    "provenance": {
+      "interpreter": "model",
+      "interpreterId": "narrative-state",
+      "promptVersion": "1.0",
+      "schemaVersion": "1.0",
+      "createdAt": "2026-07-18T12:00:00.000Z"
+    }
+  },
+  "expectedOperationTypes": ["set-belief"],
+  "forbiddenOperationTypes": ["assert-fact", "grant-knowledge"]
+}

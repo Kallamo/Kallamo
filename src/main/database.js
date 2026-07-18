@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
+const { runDatabaseMigrations } = require('./database/migrations');
 
 // --- DATABASE INITIALIZATION & MIGRATIONS ---
 
@@ -135,7 +136,9 @@ const isFreshInstall = !fs.existsSync(dbPath);
 
 const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
 db.isFreshInstall = isFreshInstall;
+runDatabaseMigrations(db);
 
 
 // --- ENCRYPTION HELPERS ---
