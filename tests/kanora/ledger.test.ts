@@ -104,7 +104,7 @@ describe('Narrative Event Ledger SQLite repository', () => {
 
     expect(stored.status).toBe('rejected');
     expect(stored.proposal.changeSet.operations).toEqual(secretRevelationScenario.changeSet.operations);
-    expect(db!.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'kanora_%'").all())
+    expect(db!.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'kanora_narrative_event%'").all())
       .toHaveLength(3);
   });
 
@@ -138,7 +138,8 @@ describe('Narrative Event Ledger SQLite repository', () => {
 
     expect(db.prepare('SELECT * FROM existing_records').get()).toEqual({ id: 'legacy', value: 'preserved' });
     expect(db.prepare('SELECT id FROM schema_migrations').all()).toEqual([
-      { id: 'kanora_narrative_event_ledger_v1' }
+      { id: 'kanora_narrative_event_ledger_v1' },
+      { id: 'kanora_transactional_change_sets_v1' }
     ]);
     repository = new NarrativeEventLedgerRepository(db);
     expect(repository.save(possessionTransferScenario).proposal).toEqual(possessionTransferScenario);
