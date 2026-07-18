@@ -1968,9 +1968,6 @@ async function enrichEntities(workspaceId, progressCallback = null) {
             prompt: `[E_${evidencePrefix}_${index + 1} | ${chunk.evidenceSource}: ${chunk.source || 'Untitled'} | ${chunk.isTagged ? 'indexed entity match' : 'name or alias match'} | chunk ${chunk.id}]\n${chunk.text}`
         }));
         const includedEvidence = selectEntityEvidence(evidenceEntries);
-        const includedIds = new Set(includedEvidence.map(entry => entry.id));
-        const skippedTextualEvidence = evidenceEntries.filter(entry => !entry.chunk.isTagged && !includedIds.has(entry.id));
-        const pendingTaggedEvidence = evidenceEntries.filter(entry => entry.chunk.isTagged && !includedIds.has(entry.id));
         const evidenceWindow = includedEvidence.map(entry => entry.prompt).join('\n\n');
         const chunkIds = includedEvidence.map(entry => entry.chunk.id);
         let relevantSystems = [];
@@ -2024,41 +2021,50 @@ async function enrichEntities(workspaceId, progressCallback = null) {
             (allowLore ? `- Canonical lore contains established facts and grounded chronology only. Never attribute thoughts, motives, understanding, philosophy, intention, causation, or moral meaning unless the evidence explicitly attributes it to the entity. Never turn metaphor into fact, consequence into intent, absence into death, transformation into death, or association into a relationship.\n` : '') +
             `- CANONICAL SYSTEM / CONCEPT CONTEXT defines setting-specific terms. Use it to interpret evidence, but do not copy a concept's facts into this entity unless the evidence explicitly connects them.\n` +
             `Do not invent facts, names, or fields absent from the passages. Write nothing outside the fence.`;
-        const userPrompt =
+        const userPromptPrefix =
             `${allowLore ? 'CURRENT RECORD' : 'CURRENT CONCEPT'}:\nName: ${ent.canonicalName}\nAliases: ${ent.aliases?.join(', ') || '(none)'}\n` +
             (allowLore ? `Lore: ${ent.lore ? ent.lore : '(no lore yet)'}\n` : '') +
             (Object.keys(currentData).length ? `Current fields: ${JSON.stringify(currentData)}\n` : '') +
-            (systemContext ? `\nCANONICAL SYSTEM / CONCEPT CONTEXT:\n${systemContext}\n` : '') +
-            `\nNEW STORY EVIDENCE (chronological):\n${evidenceWindow}`;
+            (systemContext ? `\nCANONICAL SYSTEM / CONCEPT CONTEXT:\n${systemContext}\n` : '');
 
         try {
             const maxTokens = entityEnrichmentMaxTokens(ent);
-            const requestUpdate = (retry = false) => sendApiRequest({
+            const requestUpdate = (evidence, retry = false, outputTokens = maxTokens) => sendApiRequest({
                 apiProfileId,
                 model,
                 systemPrompt: retry
                     ? `${systemPrompt}\nCORRECTION: Your previous reply could not be parsed. Return only the fenced, valid JSON object. Keep unchanged sections empty and make the response as concise as the evidence permits.`
                     : systemPrompt,
                 chatHistory: [],
-                newPrompt: userPrompt,
+                newPrompt: `${userPromptPrefix}\nNEW STORY EVIDENCE (chronological):\n${evidence.map(entry => entry.prompt).join('\n\n')}`,
                 temperature: 0.1,
-                maxTokens,
+                maxTokens: outputTokens,
                 manualMode,
-                manualJson
+                manualJson,
+                includeResponseMetadata: true
             });
-            let response = await requestUpdate();
+            let activeEvidence = includedEvidence;
+            let result = await requestUpdate(activeEvidence);
+            let response = result.content;
             let head = splitHeadAndBody(response, fence);
             let parsed = safeParseObject(head.body) || safeParseObject(response);
             if (!isEntityUpdateShape(parsed, allowLore)) {
-                const firstFailure = parsed
+                const firstFailure = result.truncated
+                    ? 'The System AI response reached its output limit before the entity update was complete.'
+                    : parsed
                     ? 'The System AI returned JSON using an unsupported entity update shape.'
                     : describeStructuredObjectFailure(response, fence);
-                response = await requestUpdate(true);
+                if (result.truncated) activeEvidence = selectEntityEvidence(evidenceEntries, 8000);
+                const retryTokens = result.truncated ? Math.min(8000, Math.ceil(maxTokens * 1.5)) : maxTokens;
+                result = await requestUpdate(activeEvidence, true, retryTokens);
+                response = result.content;
                 head = splitHeadAndBody(response, fence);
                 parsed = safeParseObject(head.body) || safeParseObject(response);
                 if (!isEntityUpdateShape(parsed, allowLore)) {
                     failed++;
-                    const retryFailure = parsed
+                    const retryFailure = result.truncated
+                        ? 'The System AI response reached its output limit before the entity update was complete.'
+                        : parsed
                         ? 'The System AI returned JSON using an unsupported entity update shape.'
                         : describeStructuredObjectFailure(response, fence);
                     rememberFailure(ent, `${retryFailure} Automatic retry also failed. First response: ${firstFailure}`);
@@ -2068,7 +2074,10 @@ async function enrichEntities(workspaceId, progressCallback = null) {
 
             const policy = ent.data?.aiPolicy || 'review';
             const incoming = (parsed.data && typeof parsed.data === 'object') ? parsed.data : {};
-            const validEvidenceIds = new Set(includedEvidence.map(entry => entry.id));
+            const activeEvidenceIds = new Set(activeEvidence.map(entry => entry.id));
+            const skippedTextualEvidence = evidenceEntries.filter(entry => !entry.chunk.isTagged && !activeEvidenceIds.has(entry.id));
+            const pendingTaggedEvidence = evidenceEntries.filter(entry => entry.chunk.isTagged && !activeEvidenceIds.has(entry.id));
+            const validEvidenceIds = activeEvidenceIds;
             const readProposal = (raw) => {
                 if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.value == null) return null;
                 if (String(raw.certainty || '').toLowerCase() !== 'explicit') return null;
@@ -2133,13 +2142,13 @@ async function enrichEntities(workspaceId, progressCallback = null) {
             }
 
             const hasChange = Object.keys(proposedData).length || loreChanged || proposedLinks.length;
-            evidenceUsed += includedEvidence.length;
+            evidenceUsed += activeEvidence.length;
             taggedEvidenceRemaining += pendingTaggedEvidence.length;
             textMatchesSkipped += skippedTextualEvidence.length;
             const markIncludedProcessed = () => {
                 const processedAt = Date.now();
                 db.transaction(() => {
-                    for (const entry of [...includedEvidence, ...skippedTextualEvidence]) {
+                    for (const entry of [...activeEvidence, ...skippedTextualEvidence]) {
                         markChunkProcessed.run(ent.id, entry.chunk.id, entityEnrichmentSignature(entry.chunk), processedAt);
                     }
                 })();
@@ -2164,7 +2173,7 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                 const pending = { ...previous };
                 pending.evidence = {
                     ...(previous.evidence || {}),
-                    ...Object.fromEntries(includedEvidence.map(entry => [entry.id, {
+                    ...Object.fromEntries(activeEvidence.map(entry => [entry.id, {
                         chunkId: entry.chunk.id,
                         excerpt: entityEvidenceExcerpt(entry.chunk.text, ent.canonicalName)
                     }]))
