@@ -1,13 +1,15 @@
 import {
   KANORA_CONTRACT_VERSION,
   type EvidenceReference,
+  type Belief,
   type Knowledge,
   type NarrativeEvent,
   type NarrativeOperation,
   type NarrativeProposal,
   type NarrativeProjection,
   type Scene,
-  type Proposition
+  type Proposition,
+  type RelationshipState
 } from './contracts';
 import { isSupportedContractVersion } from './versioning';
 
@@ -70,12 +72,6 @@ function requireConfidence(record: Record<string, unknown>, key: string, path: s
   }
 }
 
-function requireNumber(record: Record<string, unknown>, key: string, path: string, issues: ValidationIssue[]): void {
-  if (typeof record[key] !== 'number' || !Number.isFinite(record[key])) {
-    addIssue(issues, VALIDATION_ISSUE_CODES.INVALID_TYPE, `${path}.${key}`, 'Expected a finite number.');
-  }
-}
-
 function requireEnum(record: Record<string, unknown>, key: string, values: string[], path: string, issues: ValidationIssue[]): void {
   if (!values.includes(String(record[key]))) addIssue(issues, VALIDATION_ISSUE_CODES.INVALID_VALUE, `${path}.${key}`, `Expected one of: ${values.join(', ')}.`);
 }
@@ -106,6 +102,29 @@ function validateKnowledgeValue(value: unknown, path: string, issues: Validation
   requireConfidence(knowledge, 'confidence', path, issues);
   requireEnum(knowledge, 'accessibility', ['available', 'suppressed', 'inaccessible'], path, issues);
   requireEnum(knowledge, 'status', ['active', 'forgotten', 'revoked', 'superseded'], path, issues);
+}
+
+function validateBeliefValue(value: unknown, path: string, issues: ValidationIssue[]): void {
+  const belief = requireRecord(value, path, issues);
+  if (!belief) return;
+  requireString(belief, 'id', path, issues);
+  requireString(belief, 'subjectId', path, issues);
+  requireString(belief, 'sourceEventId', path, issues);
+  validateProposition(belief.proposition, `${path}.proposition`, issues);
+  requireConfidence(belief, 'confidence', path, issues);
+  requireEnum(belief, 'relationToCanon', ['aligned', 'contradicted', 'uncertain', 'unknown'], path, issues);
+  requireEnum(belief, 'status', ['active', 'superseded', 'abandoned'], path, issues);
+}
+
+function validateRelationshipValue(value: unknown, path: string, issues: ValidationIssue[]): void {
+  const relationship = requireRecord(value, path, issues);
+  if (!relationship) return;
+  requireString(relationship, 'id', path, issues);
+  requireString(relationship, 'sourceEntityId', path, issues);
+  requireString(relationship, 'targetEntityId', path, issues);
+  requireString(relationship, 'dimension', path, issues);
+  requireConfidence(relationship, 'value', path, issues);
+  requireString(relationship, 'sourceEventId', path, issues);
 }
 
 function validateEvidence(value: unknown, path: string, issues: ValidationIssue[]): void {
@@ -175,13 +194,7 @@ function validateOperationPayload(operation: Record<string, unknown>, path: stri
       validateKnowledgeValue(payload, payloadPath, issues);
       break;
     case 'set-belief':
-      requireString(payload, 'id', payloadPath, issues);
-      requireString(payload, 'subjectId', payloadPath, issues);
-      requireString(payload, 'sourceEventId', payloadPath, issues);
-      validateProposition(payload.proposition, `${payloadPath}.proposition`, issues);
-      requireConfidence(payload, 'confidence', payloadPath, issues);
-      requireEnum(payload, 'relationToCanon', ['aligned', 'contradicted', 'uncertain', 'unknown'], payloadPath, issues);
-      requireEnum(payload, 'status', ['active', 'superseded', 'abandoned'], payloadPath, issues);
+      validateBeliefValue(payload, payloadPath, issues);
       break;
     case 'record-memory':
       requireString(payload, 'id', payloadPath, issues);
@@ -191,12 +204,7 @@ function validateOperationPayload(operation: Record<string, unknown>, path: stri
       requireEnum(payload, 'accessibility', ['available', 'suppressed', 'inaccessible'], payloadPath, issues);
       break;
     case 'set-relationship':
-      requireString(payload, 'id', payloadPath, issues);
-      requireString(payload, 'sourceEntityId', payloadPath, issues);
-      requireString(payload, 'targetEntityId', payloadPath, issues);
-      requireString(payload, 'dimension', payloadPath, issues);
-      requireNumber(payload, 'value', payloadPath, issues);
-      requireString(payload, 'sourceEventId', payloadPath, issues);
+      validateRelationshipValue(payload, payloadPath, issues);
       break;
   }
 }
@@ -252,6 +260,18 @@ export function validateNarrativeOperation(value: unknown): ValidationResult<Nar
 export function validateKnowledge(value: unknown): ValidationResult<Knowledge> {
   const issues: ValidationIssue[] = [];
   validateKnowledgeValue(value, '$', issues);
+  return result(value, issues);
+}
+
+export function validateBelief(value: unknown): ValidationResult<Belief> {
+  const issues: ValidationIssue[] = [];
+  validateBeliefValue(value, '$', issues);
+  return result(value, issues);
+}
+
+export function validateRelationshipState(value: unknown): ValidationResult<RelationshipState> {
+  const issues: ValidationIssue[] = [];
+  validateRelationshipValue(value, '$', issues);
   return result(value, issues);
 }
 

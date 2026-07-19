@@ -293,6 +293,6 @@ function getOperationRecord(operation: NarrativeOperation): {
     case 'grant-knowledge': return { type: 'knowledge', id: operation.knowledge.id, subjectId: operation.knowledge.subjectId, payload: operation.knowledge };
     case 'set-belief': return { type: 'belief', id: operation.belief.id, subjectId: operation.belief.subjectId, payload: operation.belief };
     case 'record-memory': return { type: 'memory', id: operation.memory.id, subjectId: operation.memory.subjectId, payload: operation.memory };
-    case 'set-relationship': return { type: 'relationship', id: operation.relationship.id, subjectId: null, payload: operation.relationship };
+    case 'set-relationship': return { type: 'relationship', id: operation.relationship.id, subjectId: operation.relationship.sourceEntityId, payload: operation.relationship };
   }
 }

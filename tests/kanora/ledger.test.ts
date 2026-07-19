@@ -141,7 +141,8 @@ describe('Narrative Event Ledger SQLite repository', () => {
       { id: 'kanora_narrative_event_ledger_v1' },
       { id: 'kanora_transactional_change_sets_v1' },
       { id: 'kanora_scenes_and_individual_knowledge_v1' },
-      { id: 'kanora_explicit_knowledge_accessibility_draft_v1' }
+      { id: 'kanora_explicit_knowledge_accessibility_draft_v1' },
+      { id: 'kanora_beliefs_and_dynamic_relationships_v1' }
     ]);
     repository = new NarrativeEventLedgerRepository(db);
     expect(repository.save(possessionTransferScenario).proposal).toEqual(possessionTransferScenario);

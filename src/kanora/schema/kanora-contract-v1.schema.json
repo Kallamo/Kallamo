@@ -131,7 +131,7 @@
         "sourceEntityId": { "$ref": "#/$defs/Id" },
         "targetEntityId": { "$ref": "#/$defs/Id" },
         "dimension": { "$ref": "#/$defs/Id" },
-        "value": { "type": "number" },
+        "value": { "type": "number", "minimum": 0, "maximum": 1 },
         "sourceEventId": { "$ref": "#/$defs/Id" }
       },
       "additionalProperties": false

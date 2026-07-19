@@ -193,6 +193,30 @@ const MIGRATIONS = [
           WHERE record_type = 'knowledge';
       `);
     }
+  },
+  {
+    id: 'kanora_beliefs_and_dynamic_relationships_v1',
+    up: (db) => db.exec(`
+      UPDATE kanora_narrative_records
+      SET subject_id = json_extract(payload_json, '$.subjectId')
+      WHERE record_type = 'belief'
+        AND subject_id IS NULL
+        AND json_valid(payload_json);
+
+      UPDATE kanora_narrative_records
+      SET subject_id = json_extract(payload_json, '$.sourceEntityId')
+      WHERE record_type = 'relationship'
+        AND subject_id IS NULL
+        AND json_valid(payload_json);
+
+      CREATE INDEX IF NOT EXISTS idx_kanora_belief_subject
+        ON kanora_narrative_records (workspace_id, subject_id, applied_at, record_id)
+        WHERE record_type = 'belief';
+
+      CREATE INDEX IF NOT EXISTS idx_kanora_relationship_source
+        ON kanora_narrative_records (workspace_id, subject_id, applied_at, record_id)
+        WHERE record_type = 'relationship';
+    `)
   }
 ];
 
