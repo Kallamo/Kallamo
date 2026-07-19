@@ -27,6 +27,7 @@
             "sourceEventId": "proposal-invalid-event",
             "acquisition": "participant",
             "confidence": 1.5,
+            "accessibility": "available",
             "status": "active"
           }
         }

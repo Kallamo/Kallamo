@@ -70,6 +70,7 @@ const MIGRATIONS = [
           'fact', 'state', 'observation', 'knowledge', 'belief', 'memory', 'relationship'
         )),
         record_id TEXT NOT NULL,
+        subject_id TEXT,
         source_event_id TEXT NOT NULL,
         operation_id TEXT NOT NULL,
         payload_json TEXT NOT NULL,
@@ -154,13 +155,44 @@ const MIGRATIONS = [
         ON kanora_scenes (workspace_id, narrative_sequence, scene_id);
 
       CREATE INDEX IF NOT EXISTS idx_kanora_knowledge_subject
-        ON kanora_narrative_records (
-          workspace_id,
-          json_extract(payload_json, '$.subjectId'),
-          applied_at,
-          record_id
-        ) WHERE record_type = 'knowledge';
+        ON kanora_narrative_records (workspace_id, subject_id, applied_at, record_id)
+        WHERE record_type = 'knowledge';
     `)
+  },
+  {
+    id: 'kanora_explicit_knowledge_accessibility_draft_v1',
+    up: (db) => {
+      const columns = db.prepare('PRAGMA table_info(kanora_narrative_records)').all();
+      if (!columns.some(column => column.name === 'subject_id')) {
+        db.exec('ALTER TABLE kanora_narrative_records ADD COLUMN subject_id TEXT');
+      }
+      db.exec(`
+        UPDATE kanora_narrative_records
+        SET subject_id = json_extract(payload_json, '$.subjectId')
+        WHERE record_type = 'knowledge'
+          AND subject_id IS NULL
+          AND json_valid(payload_json);
+
+        UPDATE kanora_narrative_records
+        SET payload_json = json_set(
+          payload_json,
+          '$.accessibility',
+          CASE json_extract(payload_json, '$.status')
+            WHEN 'active' THEN 'available'
+            ELSE 'inaccessible'
+          END
+        )
+        WHERE record_type = 'knowledge'
+          AND json_valid(payload_json)
+          AND json_type(payload_json, '$.accessibility') IS NULL;
+
+        DROP INDEX IF EXISTS idx_kanora_knowledge_subject;
+
+        CREATE INDEX idx_kanora_knowledge_subject
+          ON kanora_narrative_records (workspace_id, subject_id, applied_at, record_id)
+          WHERE record_type = 'knowledge';
+      `);
+    }
   }
 ];
 

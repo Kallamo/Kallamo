@@ -3,6 +3,7 @@ import { possessionTransferScenario } from '../../src/kanora/scenarios';
 import {
   VALIDATION_ISSUE_CODES,
   validateEvidenceReference,
+  validateKnowledge,
   validateNarrativeEvent,
   validateNarrativeOperation,
   validateNarrativeProjection,
@@ -14,6 +15,35 @@ describe('public Contract v1 validators', () => {
     expect(validateEvidenceReference(possessionTransferScenario.evidence[0]).success).toBe(true);
     expect(validateNarrativeEvent(possessionTransferScenario.changeSet.event).success).toBe(true);
     expect(validateNarrativeOperation(possessionTransferScenario.changeSet.operations[0]).success).toBe(true);
+  });
+
+  test('validates knowledge accessibility independently from its status', () => {
+    expect(validateKnowledge({
+      id: 'knowledge-suppressed',
+      subjectId: 'elias',
+      proposition: { subjectId: 'vault', predicate: 'location', object: 'citadel' },
+      sourceEventId: 'event-discovery',
+      acquisition: 'participant',
+      confidence: 0.8,
+      accessibility: 'suppressed',
+      status: 'active'
+    }).success).toBe(true);
+  });
+
+  test('rejects knowledge without explicit accessibility', () => {
+    const result = validateKnowledge({
+      id: 'knowledge-missing-accessibility',
+      subjectId: 'elias',
+      proposition: { subjectId: 'vault', predicate: 'location', object: 'citadel' },
+      sourceEventId: 'event-discovery',
+      acquisition: 'participant',
+      confidence: 0.8,
+      status: 'active'
+    });
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.issues).toContainEqual(expect.objectContaining({ path: '$.accessibility' }));
   });
 
   test('requires a focal subject for subjective scenes', () => {

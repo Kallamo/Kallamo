@@ -3,11 +3,13 @@ import { KANORA_CONTRACT_VERSION, type KanoraContractVersion } from './contracts
 export type ContractCompatibility = 'compatible' | 'unsupported' | 'invalid';
 
 export const KANORA_COMPATIBILITY_POLICY = {
+  releaseStatus: 'draft',
   versionFormat: 'major.minor',
   acceptance: 'exact-version',
   additiveChangesRequire: 'minor-version',
   breakingChangesRequire: 'major-version',
-  releasedVersionsAreImmutable: true
+  releasedVersionsAreImmutable: true,
+  compatibilityGuaranteedAfter: 'first-public-release'
 } as const;
 
 const VERSION_PATTERN = /^(\d+)\.(\d+)$/;

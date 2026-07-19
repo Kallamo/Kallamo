@@ -6,7 +6,10 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { runDatabaseMigrations } from '../../src/main/database/migrations.js';
 import { NarrativeChangeSetRepository } from '../../src/kanora/change-sets';
 import type { NarrativeProposal } from '../../src/kanora/contracts';
-import { IndividualKnowledgeRepository } from '../../src/kanora/individual-knowledge';
+import {
+  IndividualKnowledgeReadError,
+  IndividualKnowledgeRepository
+} from '../../src/kanora/individual-knowledge';
 import { NarrativeEventLedgerRepository } from '../../src/kanora/ledger';
 import { possessionTransferScenario, secretRevelationScenario } from '../../src/kanora/scenarios';
 
@@ -39,13 +42,19 @@ describe('individual knowledge persistence', () => {
 
     expect(knowledge.listForSubject(secretRevelationScenario.projectId, 'elias')).toEqual([
       expect.objectContaining({
-        knowledge: expect.objectContaining({ subjectId: 'elias', acquisition: 'participant', confidence: 1 }),
+        knowledge: expect.objectContaining({
+          subjectId: 'elias',
+          acquisition: 'participant',
+          confidence: 1,
+          accessibility: 'available'
+        }),
         sourceEventId: secretRevelationScenario.changeSet.event.id,
         acquiredAt: secretRevelationScenario.changeSet.event.position,
-        accessibility: 'available',
         appliedAt: APPLIED_AT
       })
     ]);
+    expect(db.prepare("SELECT subject_id FROM kanora_narrative_records WHERE record_type = 'knowledge'").get())
+      .toEqual({ subject_id: 'elias' });
   });
 
   test('does not infer knowledge from participation or possible observation', () => {
@@ -78,17 +87,60 @@ describe('individual knowledge persistence', () => {
     ]);
   });
 
-  test('filters inaccessible knowledge deterministically from its status', () => {
-    const forgotten = structuredClone(secretRevelationScenario);
-    const forgottenKnowledge = forgotten.changeSet.operations.find(operation => operation.type === 'grant-knowledge');
-    if (!forgottenKnowledge || forgottenKnowledge.type !== 'grant-knowledge') throw new Error('Knowledge fixture is missing.');
-    forgottenKnowledge.knowledge.status = 'forgotten';
-    apply(forgotten, 'attempt-forgotten');
+  test('filters suppressed knowledge independently from its active status', () => {
+    const suppressed = structuredClone(secretRevelationScenario);
+    const suppressedKnowledge = suppressed.changeSet.operations.find(operation => operation.type === 'grant-knowledge');
+    if (!suppressedKnowledge || suppressedKnowledge.type !== 'grant-knowledge') throw new Error('Knowledge fixture is missing.');
+    suppressedKnowledge.knowledge.accessibility = 'suppressed';
+    apply(suppressed, 'attempt-suppressed');
 
-    expect(knowledge.listForSubject(forgotten.projectId, 'elias', { accessibleOnly: true })).toEqual([]);
-    expect(knowledge.listForSubject(forgotten.projectId, 'elias')).toEqual([
-      expect.objectContaining({ accessibility: 'inaccessible' })
+    expect(knowledge.listForSubject(suppressed.projectId, 'elias', { accessibleOnly: true })).toEqual([]);
+    expect(knowledge.listForSubject(suppressed.projectId, 'elias')).toEqual([
+      expect.objectContaining({ knowledge: expect.objectContaining({ status: 'active', accessibility: 'suppressed' }) })
     ]);
+  });
+
+  test('rejects malformed knowledge JSON read from the database', () => {
+    apply(secretRevelationScenario, 'attempt-malformed');
+    db.prepare("UPDATE kanora_narrative_records SET payload_json = '{' WHERE record_type = 'knowledge'").run();
+
+    expect(() => knowledge.listForSubject(secretRevelationScenario.projectId, 'elias'))
+      .toThrowError(expect.objectContaining({
+        code: 'MALFORMED_KNOWLEDGE_JSON',
+        recordId: 'knowledge-elias-northern-gate'
+      }));
+  });
+
+  test('rejects knowledge that no longer conforms to the runtime contract', () => {
+    apply(secretRevelationScenario, 'attempt-invalid');
+    const invalidKnowledge = {
+      id: 'knowledge-elias-northern-gate',
+      subjectId: 'elias',
+      proposition: { subjectId: 'northern-gate', predicate: 'guarded', object: false },
+      sourceEventId: 'proposal-secret-event',
+      acquisition: 'participant',
+      confidence: 900,
+      accessibility: 'available',
+      status: 'active'
+    };
+    db.prepare("UPDATE kanora_narrative_records SET payload_json = ? WHERE record_type = 'knowledge'")
+      .run(JSON.stringify(invalidKnowledge));
+
+    expect(() => knowledge.listForSubject(secretRevelationScenario.projectId, 'elias'))
+      .toThrow(IndividualKnowledgeReadError);
+  });
+
+  test('rejects a payload whose source event differs from its persisted provenance', () => {
+    apply(secretRevelationScenario, 'attempt-source-mismatch');
+    const mismatched = structuredClone(secretRevelationScenario);
+    const mismatchedKnowledge = mismatched.changeSet.operations.find(operation => operation.type === 'grant-knowledge');
+    if (!mismatchedKnowledge || mismatchedKnowledge.type !== 'grant-knowledge') throw new Error('Knowledge fixture is missing.');
+    mismatchedKnowledge.knowledge.sourceEventId = 'event-other';
+    db.prepare("UPDATE kanora_narrative_records SET payload_json = ? WHERE record_type = 'knowledge'")
+      .run(JSON.stringify(mismatchedKnowledge.knowledge));
+
+    expect(() => knowledge.listForSubject(secretRevelationScenario.projectId, 'elias'))
+      .toThrowError(expect.objectContaining({ code: 'KNOWLEDGE_SOURCE_MISMATCH' }));
   });
 
   function apply(proposal: NarrativeProposal, attemptId: string): void {

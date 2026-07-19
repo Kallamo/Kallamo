@@ -2,6 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://kanora.dev/schema/contract/v1",
   "title": "Kanora Contract v1",
+  "description": "Draft contract under active development until the first public Kanora release.",
   "$ref": "#/$defs/NarrativeProposal",
   "$defs": {
     "Id": { "type": "string", "minLength": 1 },
@@ -83,7 +84,7 @@
     },
     "Knowledge": {
       "type": "object",
-      "required": ["id", "subjectId", "proposition", "sourceEventId", "acquisition", "confidence", "status"],
+      "required": ["id", "subjectId", "proposition", "sourceEventId", "acquisition", "confidence", "accessibility", "status"],
       "properties": {
         "id": { "$ref": "#/$defs/Id" },
         "subjectId": { "$ref": "#/$defs/Id" },
@@ -91,6 +92,7 @@
         "sourceEventId": { "$ref": "#/$defs/Id" },
         "acquisition": { "enum": ["participant", "witness", "reported", "inferred"] },
         "confidence": { "$ref": "#/$defs/Confidence" },
+        "accessibility": { "enum": ["available", "suppressed", "inaccessible"] },
         "status": { "enum": ["active", "forgotten", "revoked", "superseded"] }
       },
       "additionalProperties": false

@@ -92,9 +92,9 @@ export class NarrativeChangeSetRepository {
     this.ledger = new NarrativeEventLedgerRepository(db);
     this.insertRecord = db.prepare(`
       INSERT INTO kanora_narrative_records (
-        workspace_id, record_type, record_id, source_event_id,
+        workspace_id, record_type, record_id, subject_id, source_event_id,
         operation_id, payload_json, applied_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
     this.insertAttempt = db.prepare(`
       INSERT INTO kanora_change_set_attempts (
@@ -210,6 +210,7 @@ export class NarrativeChangeSetRepository {
       workspaceId,
       record.type,
       record.id,
+      record.subjectId,
       eventId,
       operation.id,
       JSON.stringify(record.payload),
@@ -279,14 +280,19 @@ export class NarrativeChangeSetRepository {
   }
 }
 
-function getOperationRecord(operation: NarrativeOperation): { type: NarrativeRecordType; id: string; payload: unknown } {
+function getOperationRecord(operation: NarrativeOperation): {
+  type: NarrativeRecordType;
+  id: string;
+  subjectId: string | null;
+  payload: unknown;
+} {
   switch (operation.type) {
-    case 'assert-fact': return { type: 'fact', id: operation.fact.id, payload: operation.fact };
-    case 'set-state': return { type: 'state', id: operation.id, payload: operation.state };
-    case 'record-observation': return { type: 'observation', id: operation.id, payload: operation.observation };
-    case 'grant-knowledge': return { type: 'knowledge', id: operation.knowledge.id, payload: operation.knowledge };
-    case 'set-belief': return { type: 'belief', id: operation.belief.id, payload: operation.belief };
-    case 'record-memory': return { type: 'memory', id: operation.memory.id, payload: operation.memory };
-    case 'set-relationship': return { type: 'relationship', id: operation.relationship.id, payload: operation.relationship };
+    case 'assert-fact': return { type: 'fact', id: operation.fact.id, subjectId: null, payload: operation.fact };
+    case 'set-state': return { type: 'state', id: operation.id, subjectId: null, payload: operation.state };
+    case 'record-observation': return { type: 'observation', id: operation.id, subjectId: operation.observation.subjectId, payload: operation.observation };
+    case 'grant-knowledge': return { type: 'knowledge', id: operation.knowledge.id, subjectId: operation.knowledge.subjectId, payload: operation.knowledge };
+    case 'set-belief': return { type: 'belief', id: operation.belief.id, subjectId: operation.belief.subjectId, payload: operation.belief };
+    case 'record-memory': return { type: 'memory', id: operation.memory.id, subjectId: operation.memory.subjectId, payload: operation.memory };
+    case 'set-relationship': return { type: 'relationship', id: operation.relationship.id, subjectId: null, payload: operation.relationship };
   }
 }

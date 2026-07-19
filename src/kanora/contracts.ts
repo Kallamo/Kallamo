@@ -3,6 +3,7 @@ export const KANORA_CONTRACT_VERSION = '1.0' as const;
 export type KanoraContractVersion = typeof KANORA_CONTRACT_VERSION;
 export type NarrativeId = string;
 export type Confidence = number;
+export type KnowledgeAccessibility = 'available' | 'suppressed' | 'inaccessible';
 
 export interface NarrativePosition {
   sequence: number;
@@ -58,6 +59,7 @@ export interface Knowledge {
   sourceEventId: NarrativeId;
   acquisition: Observation['method'];
   confidence: Confidence;
+  accessibility: KnowledgeAccessibility;
   status: 'active' | 'forgotten' | 'revoked' | 'superseded';
 }
 
@@ -76,7 +78,7 @@ export interface NarrativeMemory {
   subjectId: NarrativeId;
   eventId: NarrativeId;
   summary: string;
-  accessibility: 'available' | 'suppressed' | 'inaccessible';
+  accessibility: KnowledgeAccessibility;
 }
 
 export interface RelationshipState {

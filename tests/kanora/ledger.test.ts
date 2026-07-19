@@ -140,9 +140,52 @@ describe('Narrative Event Ledger SQLite repository', () => {
     expect(db.prepare('SELECT id FROM schema_migrations ORDER BY rowid').all()).toEqual([
       { id: 'kanora_narrative_event_ledger_v1' },
       { id: 'kanora_transactional_change_sets_v1' },
-      { id: 'kanora_scenes_and_individual_knowledge_v1' }
+      { id: 'kanora_scenes_and_individual_knowledge_v1' },
+      { id: 'kanora_explicit_knowledge_accessibility_draft_v1' }
     ]);
     repository = new NarrativeEventLedgerRepository(db);
     expect(repository.save(possessionTransferScenario).proposal).toEqual(possessionTransferScenario);
+  });
+
+  test('upgrades draft knowledge records with normalized subjects and explicit accessibility', () => {
+    db!.close();
+    const draftPath = join(directory, 'draft-knowledge.db');
+    db = new Database(draftPath);
+    db.exec(`
+      CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL);
+      INSERT INTO schema_migrations (id, applied_at) VALUES
+        ('kanora_narrative_event_ledger_v1', '2026-07-18T00:00:00.000Z'),
+        ('kanora_transactional_change_sets_v1', '2026-07-18T00:00:00.000Z'),
+        ('kanora_scenes_and_individual_knowledge_v1', '2026-07-18T00:00:00.000Z');
+      CREATE TABLE kanora_narrative_records (
+        workspace_id TEXT NOT NULL,
+        record_type TEXT NOT NULL,
+        record_id TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        applied_at TEXT NOT NULL
+      );
+    `);
+    const draftKnowledge = {
+      id: 'knowledge-draft',
+      subjectId: 'elias',
+      proposition: { subjectId: 'gate', predicate: 'open', object: true },
+      sourceEventId: 'event-draft',
+      acquisition: 'witness',
+      confidence: 0.8,
+      status: 'active'
+    };
+    db.prepare(`
+      INSERT INTO kanora_narrative_records
+        (workspace_id, record_type, record_id, payload_json, applied_at)
+      VALUES (?, 'knowledge', ?, ?, ?)
+    `).run('project-example', draftKnowledge.id, JSON.stringify(draftKnowledge), '2026-07-18T00:00:00.000Z');
+
+    runDatabaseMigrations(db);
+
+    const migrated = db.prepare(`
+      SELECT subject_id, json_extract(payload_json, '$.accessibility') AS accessibility
+      FROM kanora_narrative_records WHERE record_id = ?
+    `).get(draftKnowledge.id);
+    expect(migrated).toEqual({ subject_id: 'elias', accessibility: 'available' });
   });
 });

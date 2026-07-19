@@ -1,6 +1,7 @@
 import {
   KANORA_CONTRACT_VERSION,
   type EvidenceReference,
+  type Knowledge,
   type NarrativeEvent,
   type NarrativeOperation,
   type NarrativeProposal,
@@ -94,6 +95,19 @@ function validateProposition(value: unknown, path: string, issues: ValidationIss
   if (!Object.hasOwn(proposition, 'object')) addIssue(issues, VALIDATION_ISSUE_CODES.REQUIRED, `${path}.object`, 'Expected a proposition object value.');
 }
 
+function validateKnowledgeValue(value: unknown, path: string, issues: ValidationIssue[]): void {
+  const knowledge = requireRecord(value, path, issues);
+  if (!knowledge) return;
+  requireString(knowledge, 'id', path, issues);
+  requireString(knowledge, 'subjectId', path, issues);
+  requireString(knowledge, 'sourceEventId', path, issues);
+  validateProposition(knowledge.proposition, `${path}.proposition`, issues);
+  requireEnum(knowledge, 'acquisition', ['participant', 'witness', 'reported', 'inferred'], path, issues);
+  requireConfidence(knowledge, 'confidence', path, issues);
+  requireEnum(knowledge, 'accessibility', ['available', 'suppressed', 'inaccessible'], path, issues);
+  requireEnum(knowledge, 'status', ['active', 'forgotten', 'revoked', 'superseded'], path, issues);
+}
+
 function validateEvidence(value: unknown, path: string, issues: ValidationIssue[]): void {
   const evidence = requireRecord(value, path, issues);
   if (!evidence) return;
@@ -158,13 +172,7 @@ function validateOperationPayload(operation: Record<string, unknown>, path: stri
       requireConfidence(payload, 'confidence', payloadPath, issues);
       break;
     case 'grant-knowledge':
-      requireString(payload, 'id', payloadPath, issues);
-      requireString(payload, 'subjectId', payloadPath, issues);
-      requireString(payload, 'sourceEventId', payloadPath, issues);
-      validateProposition(payload.proposition, `${payloadPath}.proposition`, issues);
-      requireEnum(payload, 'acquisition', ['participant', 'witness', 'reported', 'inferred'], payloadPath, issues);
-      requireConfidence(payload, 'confidence', payloadPath, issues);
-      requireEnum(payload, 'status', ['active', 'forgotten', 'revoked', 'superseded'], payloadPath, issues);
+      validateKnowledgeValue(payload, payloadPath, issues);
       break;
     case 'set-belief':
       requireString(payload, 'id', payloadPath, issues);
@@ -238,6 +246,12 @@ export function validateNarrativeEvent(value: unknown): ValidationResult<Narrati
 export function validateNarrativeOperation(value: unknown): ValidationResult<NarrativeOperation> {
   const issues: ValidationIssue[] = [];
   validateOperation(value, '$', issues);
+  return result(value, issues);
+}
+
+export function validateKnowledge(value: unknown): ValidationResult<Knowledge> {
+  const issues: ValidationIssue[] = [];
+  validateKnowledgeValue(value, '$', issues);
   return result(value, issues);
 }
 

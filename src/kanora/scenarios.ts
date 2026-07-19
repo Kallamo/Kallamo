@@ -71,6 +71,7 @@ export const secretRevelationScenario = proposal(
         sourceEventId: 'proposal-secret-event',
         acquisition: 'participant',
         confidence: 1,
+        accessibility: 'available',
         status: 'active'
       }
     }
