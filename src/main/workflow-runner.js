@@ -1564,7 +1564,7 @@ const ENRICH_ENUMS = {
     disposition: ['hostile', 'neutral', 'friendly', 'unknown'],
     abundance: ['Unique', 'Rare', 'Uncommon', 'Common', 'Abundant'],
     threat: ['Harmless', 'Minor', 'Dangerous', 'Deadly', 'Legendary'],
-    itemType: ['Weapon', 'Armor', 'Artifact', 'Resource'],
+    itemType: ['Weapon', 'Armor', 'Tool', 'Consumable', 'Artifact', 'Document', 'Container', 'Currency', 'Material', 'Resource', 'Object'],
 };
 // Each list mirrors the scalar `data` fields the WorldbuildView actually renders for
 // that type, nothing else. The AI may only fill what the user can see; it must never
@@ -1602,7 +1602,7 @@ const ENRICH_FIELD_GUIDANCE = {
     threat: 'An explicitly established general danger level, not how frightening or powerful one scene makes the entity appear.',
     abilities: 'Concrete repeatable capabilities or traits explicitly demonstrated or stated. Exclude metaphors, one-time circumstances, equipment, and speculation.',
     locationType: 'The explicit kind of place, such as continent, city, fortress, or tavern. Do not use its name, owner, atmosphere, or current purpose as its type.',
-    itemType: 'Weapon, Armor, Artifact, or Resource according to the item’s canonical function. Use Resource only for material that can naturally occur, be gathered, or be consumed as a supply.',
+    itemType: 'Classify the item by its canonical function. Use Resource only for something naturally occurring or gathered, Material for processed substance, and Object for items without a narrower category.',
     description: 'A concise factual description built only from established properties, function, appearance, culture, goals, structure, or importance appropriate to this entity type.',
     kind: 'The explicit category of event, such as Battle, Festival, Holiday, Disaster, or Coronation. Do not use its outcome or emotional tone as its kind.',
     content: 'A precise canonical explanation of the concept or system: definition, mechanism, scope, constraints, terminology, exceptions, and consequences when supported. Preserve distinctions between related concepts and never universalize a single example.',
@@ -1627,7 +1627,7 @@ const ENRICH_RELATION_GUIDANCE = {
     'Events.involved': 'Only a character explicitly participating in or materially affected by the event, not merely mentioned nearby.',
 };
 
-const ENTITY_ENRICHMENT_SCHEMA_VERSION = 'semantic-v2';
+const ENTITY_ENRICHMENT_SCHEMA_VERSION = 'semantic-v3-custom-fields';
 
 function entityEnrichmentSignature(chunk) {
     return `${ENTITY_ENRICHMENT_SCHEMA_VERSION}:${chunk.isTagged ? 'tagged' : 'text'}:${chunk.contentHash}`;
@@ -1643,6 +1643,45 @@ function enrichFieldsForEntity(entity) {
         return fields.filter(field => field !== 'abundance');
     }
     return fields;
+}
+
+function customFieldPromptShape(field) {
+    if (field.valueType === 'boolean') return 'true or false';
+    if (field.valueType === 'number' || field.valueType === 'range') return 'a JSON number';
+    if (field.valueType === 'multiple-choice') return `an array using only [${field.options.map(option => option.label).join(', ')}]`;
+    if (field.valueType === 'single-choice') return `one of [${field.options.map(option => option.label).join(', ')}]`;
+    if (field.valueType === 'entity-reference-list') return 'an array of exact existing entity names';
+    if (field.valueType === 'entity-reference') return 'one exact existing entity name';
+    return 'a concise literal string';
+}
+
+function normalizeCustomProposalValue(value, field, workspaceId) {
+    if (field.valueType === 'boolean') {
+        if (typeof value === 'boolean') return value;
+        if (String(value).toLowerCase() === 'true') return true;
+        if (String(value).toLowerCase() === 'false') return false;
+        return undefined;
+    }
+    if (field.valueType === 'number' || field.valueType === 'range') {
+        const number = Number(value);
+        return Number.isFinite(number) ? number : undefined;
+    }
+    if (field.valueType === 'single-choice') {
+        const option = field.options.find(candidate => candidate.id === value || candidate.label.toLowerCase() === String(value).toLowerCase());
+        return option?.id;
+    }
+    if (field.valueType === 'multiple-choice') {
+        if (!Array.isArray(value)) return undefined;
+        const selected = value.map(item => field.options.find(candidate => candidate.id === item || candidate.label.toLowerCase() === String(item).toLowerCase())?.id);
+        return selected.every(Boolean) ? [...new Set(selected)] : undefined;
+    }
+    if (field.valueType === 'entity-reference') return entitiesStore.resolveMention(String(value || ''), null, workspaceId) || undefined;
+    if (field.valueType === 'entity-reference-list') {
+        if (!Array.isArray(value)) return undefined;
+        const ids = value.map(item => entitiesStore.resolveMention(String(item || ''), null, workspaceId));
+        return ids.every(Boolean) ? [...new Set(ids)] : undefined;
+    }
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function describeStructuredObjectFailure(response, fence) {
@@ -1867,6 +1906,14 @@ async function enrichEntities(workspaceId, progressCallback = null) {
         JOIN knowledge_chunks kc ON kc.id = ct.chunkId
         WHERE ct.entity = ? AND kc.ownerId = ? AND kc.ownerType IN ('chat_kb', 'chat_memory')
     `);
+    const customFieldDefinitions = db.prepare(`
+        SELECT field_key AS key, label, value_type AS valueType,
+          options_json AS optionsJson, constraints_json AS constraintsJson,
+          ai_access AS aiAccess, ai_guidance AS aiGuidance
+        FROM worldbuild_field_definitions
+        WHERE workspace_id = ? AND type_id = ?
+        ORDER BY position, field_id
+    `);
     const processedChunks = db.prepare('SELECT chunkId, contentHash FROM entity_enrichment_chunks WHERE entityId = ?');
     const markChunkProcessed = db.prepare(`
         INSERT INTO entity_enrichment_chunks (entityId, chunkId, contentHash, processedAt)
@@ -1934,16 +1981,37 @@ async function enrichEntities(workspaceId, progressCallback = null) {
         if (!chunks.length) { upToDate++; continue; }
 
         const allowed = enrichFieldsForEntity(ent);
-        const fieldLines = allowed.map(field => {
+        const customDefinitions = customFieldDefinitions.all(workspaceId, ent.type).map(row => ({
+            ...row,
+            options: row.optionsJson ? JSON.parse(row.optionsJson) : [],
+            constraints: row.constraintsJson ? JSON.parse(row.constraintsJson) : {}
+        }));
+        const visibleCustomFields = customDefinitions.filter(field => field.aiAccess !== 'hidden');
+        const writableCustomFields = visibleCustomFields.filter(field => field.aiAccess === 'read-write');
+        const nativeFieldLines = allowed.map(field => {
             const shape = ENRICH_ENUMS[field]
                 ? `one of [${ENRICH_ENUMS[field].join(', ')}]`
                 : 'a concise literal value';
             return `- ${field}: ${shape}. ${ENRICH_FIELD_GUIDANCE[field]}`;
-        }).join('\n');
+        });
+        const customFieldLines = writableCustomFields.map(field =>
+            `- customFields.${field.key}: ${customFieldPromptShape(field)}. ${field.aiGuidance || `Use this field only for the meaning expressed by “${field.label}”.`}`
+        );
+        const fieldLines = [...nativeFieldLines, ...customFieldLines].join('\n');
         const relSpecs = ENRICH_RELATIONS[ent.type] || [];
         const fence = buildItemsFence();
         const currentData = {};
         for (const f of allowed) if (ent.data && ent.data[f] != null) currentData[f] = ent.data[f];
+        const currentCustomFields = {};
+        for (const field of visibleCustomFields) {
+            const value = ent.data?.customFields?.[field.key];
+            if (value != null) currentCustomFields[field.key] = {
+                label: field.label,
+                value,
+                access: field.aiAccess,
+                ...(field.aiGuidance ? { guidance: field.aiGuidance } : {})
+            };
+        }
 
         // Relation prompt: one line per relation, each with the candidate names the AI may
         // pick from (drawn from the registry, self excluded). Relations with no candidate
@@ -2028,6 +2096,7 @@ async function enrichEntities(workspaceId, progressCallback = null) {
             `${allowLore ? 'CURRENT RECORD' : 'CURRENT CONCEPT'}:\nName: ${ent.canonicalName}\nAliases: ${ent.aliases?.join(', ') || '(none)'}\n` +
             (allowLore ? `Lore: ${ent.lore ? ent.lore : '(no lore yet)'}\n` : '') +
             (Object.keys(currentData).length ? `Current fields: ${JSON.stringify(currentData)}\n` : '') +
+            (Object.keys(currentCustomFields).length ? `Current custom fields (read-only fields are context and must never be proposed): ${JSON.stringify(currentCustomFields)}\n` : '') +
             (systemContext ? `\nCANONICAL SYSTEM / CONCEPT CONTEXT:\n${systemContext}\n` : '') +
             `\nNEW STORY EVIDENCE (chronological):\n${evidenceWindow}`;
 
@@ -2080,6 +2149,16 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                 const value = String(raw.value).trim();
                 return value && evidence.length ? { value, evidence, support } : null;
             };
+            const readTypedProposal = (raw) => {
+                if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.value == null) return null;
+                if (String(raw.certainty || '').toLowerCase() !== 'explicit') return null;
+                const support = String(raw.support || '').trim();
+                if (!support) return null;
+                const evidence = (Array.isArray(raw.evidence) ? raw.evidence : [])
+                    .map(String)
+                    .filter(id => validEvidenceIds.has(id));
+                return evidence.length ? { value: raw.value, evidence, support } : null;
+            };
             // Validate the AI's proposal against the allowlist + enums first, keeping only
             // fields whose value actually differs from what the entity holds now. `review`
             // and `open` share this diff; they only differ in where it lands.
@@ -2095,6 +2174,21 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                 }
                 const cur = ent.data?.[f] == null ? '' : String(ent.data[f]).trim();
                 if (v !== cur) proposedData[f] = { value: v, evidence: proposal.evidence, support: proposal.support };
+            }
+            for (const field of writableCustomFields) {
+                const proposal = readTypedProposal(incoming[`customFields.${field.key}`]);
+                if (!proposal) continue;
+                const value = normalizeCustomProposalValue(proposal.value, field, workspaceId);
+                if (value === undefined) continue;
+                const current = ent.data?.customFields?.[field.key];
+                if (JSON.stringify(value) !== JSON.stringify(current)) {
+                    proposedData[`customFields.${field.key}`] = {
+                        value,
+                        evidence: proposal.evidence,
+                        support: proposal.support,
+                        fieldLabel: field.label
+                    };
+                }
             }
             const loreProposal = allowLore ? readProposal(parsed.lore) : null;
             const incomingLore = loreProposal?.value || '';
@@ -2151,7 +2245,12 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                 // review left over from when this entity was on the 'review' policy.
                 const nextData = { ...(ent.data || {}) };
                 delete nextData._enrichPending;
-                for (const [field, proposal] of Object.entries(proposedData)) nextData[field] = proposal.value;
+                for (const [field, proposal] of Object.entries(proposedData)) {
+                    if (field.startsWith('customFields.')) {
+                        const key = field.slice('customFields.'.length);
+                        nextData.customFields = { ...(nextData.customFields || {}), [key]: proposal.value };
+                    } else nextData[field] = proposal.value;
+                }
                 const fields = { data: nextData };
                 if (loreChanged) fields.lore = incomingLore;
                 entitiesStore.updateEntity(ent.id, fields);

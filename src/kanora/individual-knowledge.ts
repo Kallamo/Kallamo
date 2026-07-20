@@ -2,16 +2,20 @@ import type Database from 'better-sqlite3';
 import type { Knowledge, NarrativePosition } from './contracts';
 import { validateKnowledge, type ValidationIssue } from './validation';
 
-export interface IndividualKnowledgeRecord {
+export interface SubjectKnowledgeRecord {
   knowledge: Knowledge;
   sourceEventId: string;
   acquiredAt: NarrativePosition;
   appliedAt: string;
 }
 
-export interface ListIndividualKnowledgeOptions {
+export interface ListSubjectKnowledgeOptions {
   accessibleOnly?: boolean;
+  throughSequence?: number;
 }
+
+export type IndividualKnowledgeRecord = SubjectKnowledgeRecord;
+export type ListIndividualKnowledgeOptions = ListSubjectKnowledgeOptions;
 
 interface KnowledgeRow {
   record_id: string;
@@ -39,7 +43,7 @@ export class IndividualKnowledgeReadError extends Error {
   }
 }
 
-export class IndividualKnowledgeRepository {
+export class SubjectKnowledgeRepository {
   private readonly selectForSubject;
 
   constructor(db: Database.Database) {
@@ -53,6 +57,7 @@ export class IndividualKnowledgeRepository {
       WHERE records.workspace_id = ?
         AND records.record_type = 'knowledge'
         AND records.subject_id = ?
+        AND events.narrative_sequence <= ?
       ORDER BY events.narrative_sequence, records.applied_at, records.record_id
     `);
   }
@@ -60,9 +65,11 @@ export class IndividualKnowledgeRepository {
   listForSubject(
     projectId: string,
     subjectId: string,
-    options: ListIndividualKnowledgeOptions = {}
-  ): IndividualKnowledgeRecord[] {
-    const records = (this.selectForSubject.all(projectId, subjectId) as KnowledgeRow[]).map(row => this.hydrate(row));
+    options: ListSubjectKnowledgeOptions = {}
+  ): SubjectKnowledgeRecord[] {
+    const throughSequence = options.throughSequence ?? Number.MAX_SAFE_INTEGER;
+    const records = (this.selectForSubject.all(projectId, subjectId, throughSequence) as KnowledgeRow[])
+      .map(row => this.hydrate(row));
     return options.accessibleOnly
       ? records.filter(record => (
         record.knowledge.status === 'active'
@@ -71,7 +78,20 @@ export class IndividualKnowledgeRepository {
       : records;
   }
 
-  private hydrate(row: KnowledgeRow): IndividualKnowledgeRecord {
+  listCurrentForSubject(
+    projectId: string,
+    subjectId: string,
+    options: ListSubjectKnowledgeOptions = {}
+  ): SubjectKnowledgeRecord[] {
+    const latest = new Map<string, SubjectKnowledgeRecord>();
+    this.listForSubject(projectId, subjectId, options).forEach(record => {
+      const { proposition } = record.knowledge;
+      latest.set(`${proposition.subjectId}\u0000${proposition.predicate}`, record);
+    });
+    return [...latest.values()].filter(record => record.knowledge.status === 'active');
+  }
+
+  private hydrate(row: KnowledgeRow): SubjectKnowledgeRecord {
     const knowledge = this.parseKnowledge(row);
     if (knowledge.sourceEventId !== row.source_event_id) {
       throw new IndividualKnowledgeReadError(
@@ -114,3 +134,5 @@ export class IndividualKnowledgeRepository {
     return validation.value;
   }
 }
+
+export class IndividualKnowledgeRepository extends SubjectKnowledgeRepository {}

@@ -3,6 +3,8 @@ export * from './change-sets';
 export * from './context-planner';
 export * from './individual-knowledge';
 export * from './ledger';
+export * from './narrative-memory';
 export * from './scenes';
+export * from './subject-knowledge';
 export * from './validation';
 export * from './versioning';

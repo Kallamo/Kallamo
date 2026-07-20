@@ -12,7 +12,10 @@ export const TYPES = {
 };
 
 export const TYPE_ORDER = ['Characters', 'Locations', 'Factions', 'Items', 'Races', 'Creatures', 'Events', 'System'];
-export const ITEM_TYPES = ['Weapon', 'Armor', 'Artifact', 'Resource'];
+export const ITEM_TYPES = [
+  'Weapon', 'Armor', 'Tool', 'Consumable', 'Artifact', 'Document',
+  'Container', 'Currency', 'Material', 'Resource', 'Object',
+];
 export const RARITY = ['Unique', 'Rare', 'Uncommon', 'Common', 'Abundant'];
 export const THREAT = ['Harmless', 'Minor', 'Dangerous', 'Deadly', 'Legendary'];
 export const STATUS = {

@@ -214,4 +214,31 @@ select.wb-input option:hover {
 /* App-wide: number inputs never show the ugly native spinner arrows */
 input[type="number"]::-webkit-outer-spin-button,
 input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+.relationship-range {
+  height: 0.625rem;
+  appearance: none;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, #c34f5d 0%, #c5ced0 50%, #54a172 100%);
+  cursor: pointer;
+}
+
+.relationship-range::-webkit-slider-thumb {
+  width: 1.25rem;
+  height: 1.25rem;
+  appearance: none;
+  border: 0.125rem solid #dce3e5;
+  border-radius: 9999px;
+  background: #10232b;
+  box-shadow: 0 0.125rem 0.5rem rgb(0 0 0 / 35%);
+}
+
+.relationship-range::-moz-range-thumb {
+  width: 1rem;
+  height: 1rem;
+  border: 0.125rem solid #dce3e5;
+  border-radius: 9999px;
+  background: #10232b;
+  box-shadow: 0 0.125rem 0.5rem rgb(0 0 0 / 35%);
+}
 input[type="number"] { -moz-appearance: textfield; appearance: textfield; }

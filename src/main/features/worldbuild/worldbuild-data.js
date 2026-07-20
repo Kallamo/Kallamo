@@ -1,0 +1,481 @@
+const crypto = require('crypto');
+
+const FIELD_TYPES = new Set([
+  'short-text', 'long-text', 'number', 'range', 'boolean',
+  'single-choice', 'multiple-choice', 'entity-reference', 'entity-reference-list',
+]);
+const AI_ACCESS = new Set(['read-write', 'read-only', 'hidden']);
+const ACCESSIBILITY = new Set(['available', 'suppressed', 'inaccessible']);
+const ACQUISITION = new Set(['participant', 'witness', 'reported', 'inferred']);
+
+function createWorldbuildDataService(db) {
+  const insertEvent = db.prepare(`
+    INSERT INTO kanora_narrative_events (
+      workspace_id, event_id, proposal_id, change_set_id, contract_version,
+      event_type, description, narrative_sequence, status, version,
+      operations_json, provenance_interpreter, provenance_schema_version,
+      provenance_created_at, decided_at
+    ) VALUES (?, ?, ?, ?, '1.0', 'custom', ?, ?, 'approved', 1, ?, 'user', '1.0', ?, ?)
+  `);
+  const insertParticipant = db.prepare(`
+    INSERT INTO kanora_narrative_event_participants
+      (workspace_id, event_id, ordinal, entity_id, role)
+    VALUES (?, ?, 0, ?, 'subject')
+  `);
+  const insertEvidence = db.prepare(`
+    INSERT INTO kanora_narrative_event_evidence
+      (workspace_id, event_id, evidence_id, ordinal, origin_type, origin_id, excerpt)
+    VALUES (?, ?, ?, 0, 'world-action', ?, ?)
+  `);
+  const insertRecord = db.prepare(`
+    INSERT INTO kanora_narrative_records (
+      workspace_id, record_type, record_id, subject_id, source_event_id,
+      operation_id, payload_json, applied_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  function listFieldDefinitions(workspaceId, typeId) {
+    const rows = db.prepare(`
+      SELECT workspace_id, field_id, type_id, field_key, label, value_type,
+        options_json, constraints_json, default_value_json, has_default,
+        required, position, ai_access, ai_guidance
+      FROM worldbuild_field_definitions
+      WHERE workspace_id = ? AND type_id = ?
+      ORDER BY position, field_id
+    `).all(requireText(workspaceId, 'workspaceId'), requireText(typeId, 'typeId'));
+    return rows.map(hydrateFieldDefinition);
+  }
+
+  function saveFieldDefinition(input) {
+    const definition = normalizeFieldDefinition(input);
+    const existing = db.prepare(`
+      SELECT type_id, field_key, value_type FROM worldbuild_field_definitions
+      WHERE workspace_id = ? AND field_id = ?
+    `).get(definition.projectId, definition.id);
+    const hasTypeChange = existing && existing.value_type !== definition.valueType;
+    if (hasTypeChange && !input.clearValuesOnTypeChange) {
+      throw new Error('Changing a custom field type requires clearing its existing values.');
+    }
+    const saveDefinition = db.prepare(`
+      INSERT INTO worldbuild_field_definitions (
+        workspace_id, field_id, type_id, field_key, label, value_type,
+        options_json, constraints_json, default_value_json, has_default,
+        required, position, ai_access, ai_guidance
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (workspace_id, field_id) DO UPDATE SET
+        type_id = excluded.type_id,
+        field_key = excluded.field_key,
+        label = excluded.label,
+        value_type = excluded.value_type,
+        options_json = excluded.options_json,
+        constraints_json = excluded.constraints_json,
+        default_value_json = excluded.default_value_json,
+        has_default = excluded.has_default,
+        required = excluded.required,
+        position = excluded.position,
+        ai_access = excluded.ai_access,
+        ai_guidance = excluded.ai_guidance
+    `);
+    db.transaction(() => {
+      saveDefinition.run(
+        definition.projectId, definition.id, definition.typeId, definition.key,
+        definition.label, definition.valueType,
+        definition.options ? JSON.stringify(definition.options) : null,
+        definition.constraints ? JSON.stringify(definition.constraints) : null,
+        definition.hasDefault ? JSON.stringify(definition.defaultValue) : null,
+        definition.hasDefault ? 1 : 0, definition.required ? 1 : 0,
+        definition.position, definition.aiAccess, definition.aiGuidance || null,
+      );
+      if (hasTypeChange) clearFieldValues(definition.projectId, existing.type_id, existing.field_key);
+    })();
+    return hydrateFieldDefinition(db.prepare(`
+      SELECT workspace_id, field_id, type_id, field_key, label, value_type,
+        options_json, constraints_json, default_value_json, has_default,
+        required, position, ai_access, ai_guidance
+      FROM worldbuild_field_definitions WHERE workspace_id = ? AND field_id = ?
+    `).get(definition.projectId, definition.id));
+  }
+
+  function clearFieldValues(workspaceId, typeId, fieldKey) {
+    const entities = db.prepare('SELECT id, data FROM entities WHERE workspaceId = ? AND type = ?').all(workspaceId, typeId);
+    const updateEntity = db.prepare('UPDATE entities SET data = ?, last_modified = ? WHERE id = ?');
+    for (const entity of entities) {
+      const data = parseObject(entity.data);
+      if (!data.customFields || !Object.hasOwn(data.customFields, fieldKey)) continue;
+      const customFields = { ...data.customFields };
+      delete customFields[fieldKey];
+      if (Object.keys(customFields).length) data.customFields = customFields;
+      else delete data.customFields;
+      updateEntity.run(JSON.stringify(data), Date.now(), entity.id);
+    }
+  }
+
+  function deleteFieldDefinition(workspaceId, fieldId) {
+    const row = db.prepare(`
+      SELECT type_id, field_key FROM worldbuild_field_definitions
+      WHERE workspace_id = ? AND field_id = ?
+    `).get(workspaceId, fieldId);
+    if (!row) return false;
+    return db.transaction(() => {
+      clearFieldValues(workspaceId, row.type_id, row.field_key);
+      return db.prepare(`
+        DELETE FROM worldbuild_field_definitions WHERE workspace_id = ? AND field_id = ?
+      `).run(workspaceId, fieldId).changes > 0;
+    })();
+  }
+
+  function listEntityTemplates(workspaceId) {
+    return db.prepare(`
+      SELECT type_id, display_name, layout_json
+      FROM worldbuild_entity_templates WHERE workspace_id = ?
+      ORDER BY type_id
+    `).all(requireText(workspaceId, 'workspaceId')).map(row => ({
+      typeId: row.type_id,
+      displayName: row.display_name || '',
+      layout: parseObject(row.layout_json),
+    }));
+  }
+
+  function saveEntityTemplate(input = {}) {
+    const workspaceId = requireText(input.workspaceId, 'workspaceId');
+    const typeId = requireText(input.typeId, 'typeId');
+    const displayName = String(input.displayName || '').trim();
+    const layout = input.layout && typeof input.layout === 'object' && !Array.isArray(input.layout) ? input.layout : {};
+    db.prepare(`
+      INSERT INTO worldbuild_entity_templates (workspace_id, type_id, display_name, layout_json, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT (workspace_id, type_id) DO UPDATE SET
+        display_name = excluded.display_name,
+        layout_json = excluded.layout_json,
+        updated_at = excluded.updated_at
+    `).run(workspaceId, typeId, displayName || null, JSON.stringify(layout), Date.now());
+    return { typeId, displayName, layout };
+  }
+
+  function getSubjectKnowledge(workspaceId, subjectId) {
+    const rows = db.prepare(`
+      SELECT records.rowid AS record_order, records.record_type, records.record_id,
+        records.payload_json, records.source_event_id, records.applied_at,
+        events.narrative_sequence, events.narrative_timestamp
+      FROM kanora_narrative_records AS records
+      JOIN kanora_narrative_events AS events
+        ON events.workspace_id = records.workspace_id
+        AND events.event_id = records.source_event_id
+      WHERE records.workspace_id = ?
+        AND records.subject_id = ?
+        AND records.record_type IN ('knowledge', 'belief', 'memory')
+      ORDER BY events.narrative_sequence, records.rowid
+    `).all(requireText(workspaceId, 'workspaceId'), requireText(subjectId, 'subjectId'));
+    return projectSubjectKnowledge(workspaceId, subjectId, rows);
+  }
+
+  function getSubjectRecord(workspaceId, subjectId, kind, recordId) {
+    const row = db.prepare(`
+      SELECT record_id, payload_json FROM kanora_narrative_records
+      WHERE workspace_id = ? AND subject_id = ? AND record_type = ? AND record_id = ?
+    `).get(workspaceId, subjectId, kind, recordId);
+    return row ? { id: row.record_id, payload: JSON.parse(row.payload_json) } : null;
+  }
+
+  function saveSubjectEntry(payload) {
+    const { workspaceId, subjectId, kind, entry, existingId } = payload || {};
+    requireEntryKind(kind);
+    const current = existingId ? getSubjectRecord(workspaceId, subjectId, kind, existingId) : null;
+    if (existingId && !current) throw new Error('The Knowledge entry no longer exists.');
+    const eventId = crypto.randomUUID();
+    const evidenceId = crypto.randomUUID();
+    const createdAt = new Date().toISOString();
+    const operations = buildRevisionOperations(kind, subjectId, entry || {}, current, eventId, evidenceId);
+    persistManualEvent({ workspaceId, subjectId, eventId, evidenceId, createdAt, operations, action: current ? 'updated' : 'added' });
+    return getSubjectKnowledge(workspaceId, subjectId);
+  }
+
+  function deleteSubjectEntry(payload) {
+    const { workspaceId, subjectId, kind, entryId } = payload || {};
+    requireEntryKind(kind);
+    const current = getSubjectRecord(workspaceId, subjectId, kind, entryId);
+    if (!current) return getSubjectKnowledge(workspaceId, subjectId);
+    const eventId = crypto.randomUUID();
+    const evidenceId = crypto.randomUUID();
+    const createdAt = new Date().toISOString();
+    const operation = buildRemovalOperation(kind, current, eventId, evidenceId);
+    persistManualEvent({
+      workspaceId, subjectId, eventId, evidenceId, createdAt,
+      operations: [operation], action: 'removed',
+    });
+    return getSubjectKnowledge(workspaceId, subjectId);
+  }
+
+  function persistManualEvent({ workspaceId, subjectId, eventId, evidenceId, createdAt, operations, action }) {
+    const sequence = nextNarrativeSequence(workspaceId);
+    const description = `Worldbuild Knowledge entry ${action}.`;
+    db.transaction(() => {
+      insertEvent.run(
+        workspaceId, eventId, crypto.randomUUID(), crypto.randomUUID(), description,
+        sequence, JSON.stringify(operations), createdAt, createdAt,
+      );
+      insertParticipant.run(workspaceId, eventId, subjectId);
+      insertEvidence.run(workspaceId, eventId, evidenceId, subjectId, entryExcerpt(operations.at(-1)));
+      for (const operation of operations) {
+        const record = operationRecord(operation);
+        insertRecord.run(
+          workspaceId, record.type, record.payload.id, subjectId, eventId,
+          operation.id, JSON.stringify(record.payload), createdAt,
+        );
+      }
+    })();
+  }
+
+  function nextNarrativeSequence(workspaceId) {
+    const row = db.prepare(`
+      SELECT COALESCE(MAX(narrative_sequence), 0) + 1 AS sequence
+      FROM kanora_narrative_events WHERE workspace_id = ?
+    `).get(workspaceId);
+    return row.sequence;
+  }
+
+  return {
+    listFieldDefinitions,
+    saveFieldDefinition,
+    deleteFieldDefinition,
+    listEntityTemplates,
+    saveEntityTemplate,
+    getSubjectKnowledge,
+    saveSubjectEntry,
+    deleteSubjectEntry,
+  };
+}
+
+function normalizeFieldDefinition(input = {}) {
+  const projectId = requireText(input.projectId, 'projectId');
+  const typeId = requireText(input.typeId, 'typeId');
+  const label = requireText(input.label, 'label');
+  const valueType = FIELD_TYPES.has(input.valueType) ? input.valueType : null;
+  if (!valueType) throw new Error('Unsupported custom field type.');
+  const key = String(input.key || label)
+    .trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  if (!key) throw new Error('Custom field key is required.');
+  const isChoice = valueType === 'single-choice' || valueType === 'multiple-choice';
+  const options = isChoice ? normalizeOptions(input.options) : undefined;
+  if (isChoice && !options.length) throw new Error('Choice fields need at least one option.');
+  const aiAccess = AI_ACCESS.has(input.aiAccess) ? input.aiAccess : 'read-write';
+  const position = Number.isInteger(input.position) && input.position >= 0 ? input.position : 0;
+  const hasDefault = Object.hasOwn(input, 'defaultValue') && input.defaultValue !== undefined;
+  return {
+    id: input.id || crypto.randomUUID(), projectId, typeId, key, label, valueType,
+    options, constraints: normalizeConstraints(input.constraints, valueType),
+    defaultValue: input.defaultValue, hasDefault,
+    required: Boolean(input.required), position, aiAccess,
+    aiGuidance: String(input.aiGuidance || '').trim(),
+  };
+}
+
+function normalizeOptions(options) {
+  if (!Array.isArray(options)) return [];
+  const seen = new Set();
+  return options.flatMap(option => {
+    const label = String(option?.label ?? option ?? '').trim();
+    if (!label) return [];
+    const base = String(option?.id || label).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    let id = base || crypto.randomUUID();
+    let suffix = 2;
+    while (seen.has(id)) id = `${base}-${suffix++}`;
+    seen.add(id);
+    return [{ id, label }];
+  });
+}
+
+function normalizeConstraints(constraints, valueType) {
+  if (valueType !== 'number' && valueType !== 'range') return undefined;
+  const value = {};
+  for (const key of ['min', 'max', 'step']) {
+    const number = Number(constraints?.[key]);
+    if (Number.isFinite(number)) value[key] = number;
+  }
+  if (value.min !== undefined && value.max !== undefined && value.min > value.max) {
+    throw new Error('Minimum cannot exceed maximum.');
+  }
+  if (value.step !== undefined && value.step <= 0) throw new Error('Step must be greater than zero.');
+  return Object.keys(value).length ? value : undefined;
+}
+
+function hydrateFieldDefinition(row) {
+  const definition = {
+    id: row.field_id,
+    projectId: row.workspace_id,
+    typeId: row.type_id,
+    key: row.field_key,
+    label: row.label,
+    valueType: row.value_type,
+    required: row.required === 1,
+    position: row.position,
+    aiAccess: row.ai_access,
+    ...(row.ai_guidance ? { aiGuidance: row.ai_guidance } : {}),
+  };
+  if (row.options_json) definition.options = JSON.parse(row.options_json);
+  if (row.constraints_json) definition.constraints = JSON.parse(row.constraints_json);
+  if (row.has_default === 1) definition.defaultValue = JSON.parse(row.default_value_json);
+  return definition;
+}
+
+function projectSubjectKnowledge(projectId, subjectId, rows) {
+  const known = new Map();
+  const beliefs = new Map();
+  const memories = new Map();
+  for (const row of rows) {
+    const payload = JSON.parse(row.payload_json);
+    const record = toEntry(row, payload);
+    if (row.record_type === 'knowledge') {
+      const key = propositionKey(payload);
+      if (payload.status === 'active') known.set(key, record);
+      else known.delete(key);
+    } else if (row.record_type === 'belief') {
+      const key = propositionKey(payload);
+      if (payload.status === 'active') beliefs.set(key, record);
+      else beliefs.delete(key);
+    } else {
+      if (payload.supersedesMemoryId) memories.delete(payload.supersedesMemoryId);
+      if ((payload.status || 'active') !== 'forgotten') memories.set(payload.id, record);
+    }
+  }
+  return { projectId, subjectId, known: [...known.values()], beliefs: [...beliefs.values()], memories: [...memories.values()] };
+}
+
+function toEntry(row, payload) {
+  const common = {
+    id: payload.id,
+    subjectId: payload.subjectId,
+    accessibility: payload.accessibility || 'available',
+    sourceEventId: row.source_event_id,
+    position: {
+      sequence: row.narrative_sequence,
+      ...(row.narrative_timestamp ? { timestamp: row.narrative_timestamp } : {}),
+    },
+    appliedAt: row.applied_at,
+  };
+  if (row.record_type === 'memory') return { ...common, kind: 'memory', summary: payload.summary };
+  return {
+    ...common,
+    kind: row.record_type,
+    aboutId: payload.proposition?.subjectId,
+    statement: String(payload.proposition?.object ?? ''),
+    confidence: payload.confidence,
+    ...(row.record_type === 'knowledge' ? { acquisition: payload.acquisition } : { relationToCanon: payload.relationToCanon }),
+  };
+}
+
+function buildRevisionOperations(kind, subjectId, entry, current, eventId, evidenceId) {
+  const operations = [];
+  if (current && kind !== 'memory' && current.payload.proposition?.subjectId !== entry.aboutId) {
+    operations.push(buildRemovalOperation(kind, current, eventId, evidenceId));
+  }
+  operations.push(buildActiveOperation(kind, subjectId, entry, current, eventId, evidenceId));
+  return operations;
+}
+
+function buildActiveOperation(kind, subjectId, entry, current, eventId, evidenceId) {
+  const operationId = crypto.randomUUID();
+  if (kind === 'memory') {
+    const summary = requireText(entry.summary, 'summary');
+    return {
+      id: operationId, type: 'record-memory', evidenceIds: [evidenceId],
+      memory: {
+        id: crypto.randomUUID(), subjectId, eventId, summary,
+        accessibility: normalizeAccessibility(entry.accessibility), status: 'active',
+        ...(current ? { supersedesMemoryId: current.payload.id } : {}),
+      },
+    };
+  }
+  const statement = requireText(entry.statement, 'statement');
+  const aboutId = requireText(entry.aboutId || subjectId, 'aboutId');
+  const proposition = { subjectId: aboutId, predicate: 'worldbuild-statement', object: statement };
+  if (kind === 'knowledge') {
+    return {
+      id: operationId, type: 'grant-knowledge', evidenceIds: [evidenceId],
+      knowledge: {
+        id: crypto.randomUUID(), subjectId, proposition, sourceEventId: eventId,
+        acquisition: ACQUISITION.has(entry.acquisition) ? entry.acquisition : 'reported',
+        confidence: normalizeConfidence(entry.confidence),
+        accessibility: normalizeAccessibility(entry.accessibility), status: 'active',
+      },
+    };
+  }
+  return {
+    id: operationId, type: 'set-belief', evidenceIds: [evidenceId],
+    belief: {
+      id: crypto.randomUUID(), subjectId, proposition, sourceEventId: eventId,
+      confidence: normalizeConfidence(entry.confidence), relationToCanon: 'unknown', status: 'active',
+    },
+  };
+}
+
+function buildRemovalOperation(kind, current, eventId, evidenceId) {
+  const id = crypto.randomUUID();
+  if (kind === 'memory') {
+    return {
+      id: crypto.randomUUID(), type: 'record-memory', evidenceIds: [evidenceId],
+      memory: {
+        id, subjectId: current.payload.subjectId, eventId,
+        summary: current.payload.summary, accessibility: current.payload.accessibility,
+        status: 'forgotten', supersedesMemoryId: current.payload.id,
+      },
+    };
+  }
+  const payload = {
+    ...current.payload,
+    id,
+    sourceEventId: eventId,
+    status: kind === 'knowledge' ? 'revoked' : 'abandoned',
+  };
+  return {
+    id: crypto.randomUUID(),
+    type: kind === 'knowledge' ? 'grant-knowledge' : 'set-belief',
+    evidenceIds: [evidenceId],
+    [kind === 'knowledge' ? 'knowledge' : 'belief']: payload,
+  };
+}
+
+function operationRecord(operation) {
+  if (operation.type === 'grant-knowledge') return { type: 'knowledge', payload: operation.knowledge };
+  if (operation.type === 'set-belief') return { type: 'belief', payload: operation.belief };
+  return { type: 'memory', payload: operation.memory };
+}
+
+function entryExcerpt(operation) {
+  const record = operationRecord(operation).payload;
+  return record.summary || String(record.proposition?.object || 'Worldbuild Knowledge entry');
+}
+
+function propositionKey(payload) {
+  return `${payload.proposition?.subjectId || ''}\u0000${payload.proposition?.predicate || ''}`;
+}
+
+function normalizeConfidence(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.min(1, Math.max(0, number)) : 0.5;
+}
+
+function normalizeAccessibility(value) {
+  return ACCESSIBILITY.has(value) ? value : 'available';
+}
+
+function requireEntryKind(kind) {
+  if (!['knowledge', 'belief', 'memory'].includes(kind)) throw new Error('Unsupported Knowledge entry type.');
+}
+
+function requireText(value, label) {
+  const text = String(value || '').trim();
+  if (!text) throw new Error(`${label} is required.`);
+  return text;
+}
+
+function parseObject(raw) {
+  try {
+    const value = JSON.parse(raw || '{}');
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+module.exports = { createWorldbuildDataService };

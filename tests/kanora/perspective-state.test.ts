@@ -105,34 +105,34 @@ describe('belief and dynamic relationship persistence', () => {
   });
 
   test('projects asymmetric and multidimensional relationship state', () => {
-    apply(relationshipProposal('mara-trusts-elias', 10, 'mara', 'elias', 'trust', 0.8));
-    apply(relationshipProposal('elias-trusts-mara', 20, 'elias', 'mara', 'trust', 0.2));
-    apply(relationshipProposal('mara-fears-elias', 30, 'mara', 'elias', 'fear', 0.6));
+    apply(relationshipProposal('mara-trusts-elias', 10, 'mara', 'elias', 'trust', 80));
+    apply(relationshipProposal('elias-trusts-mara', 20, 'elias', 'mara', 'trust', 20));
+    apply(relationshipProposal('mara-fears-elias', 30, 'mara', 'elias', 'fear', -60));
 
     expect(relationships.listCurrentFrom(PROJECT_ID, 'mara')).toEqual([
-      expect.objectContaining({ relationship: expect.objectContaining({ dimension: 'trust', value: 0.8 }) }),
-      expect.objectContaining({ relationship: expect.objectContaining({ dimension: 'fear', value: 0.6 }) })
+      expect.objectContaining({ relationship: expect.objectContaining({ dimension: 'trust', value: 80 }) }),
+      expect.objectContaining({ relationship: expect.objectContaining({ dimension: 'fear', value: -60 }) })
     ]);
     expect(relationships.listCurrentFrom(PROJECT_ID, 'elias')).toEqual([
-      expect.objectContaining({ relationship: expect.objectContaining({ dimension: 'trust', value: 0.2 }) })
+      expect.objectContaining({ relationship: expect.objectContaining({ dimension: 'trust', value: 20 }) })
     ]);
   });
 
   test('preserves relationship history and projects the latest value per direction and dimension', () => {
-    apply(relationshipProposal('trust-earned', 10, 'mara', 'elias', 'trust', 0.8));
-    apply(relationshipProposal('trust-broken', 20, 'mara', 'elias', 'trust', 0.25));
+    apply(relationshipProposal('trust-earned', 10, 'mara', 'elias', 'trust', 80));
+    apply(relationshipProposal('trust-broken', 20, 'mara', 'elias', 'trust', -25));
 
     expect(relationships.listHistoryFrom(PROJECT_ID, 'mara')).toHaveLength(2);
     expect(relationships.listCurrentFrom(PROJECT_ID, 'mara')).toEqual([
-      expect.objectContaining({ relationship: expect.objectContaining({ value: 0.25 }) })
+      expect.objectContaining({ relationship: expect.objectContaining({ value: -25 }) })
     ]);
     expect(relationships.listCurrentFrom(PROJECT_ID, 'mara', { throughSequence: 10 })).toEqual([
-      expect.objectContaining({ relationship: expect.objectContaining({ value: 0.8 }) })
+      expect.objectContaining({ relationship: expect.objectContaining({ value: 80 }) })
     ]);
   });
 
-  test('rejects relationship values outside the normalized range', () => {
-    expect(() => ledger.save(relationshipProposal('invalid-trust', 10, 'mara', 'elias', 'trust', 1.1)))
+  test('rejects relationship values outside the signed range', () => {
+    expect(() => ledger.save(relationshipProposal('invalid-trust', 10, 'mara', 'elias', 'trust', 101)))
       .toThrow();
   });
 
@@ -145,13 +145,13 @@ describe('belief and dynamic relationship persistence', () => {
   });
 
   test('keeps projected perspective state isolated by workspace', () => {
-    const otherProject = relationshipProposal('other-project-trust', 10, 'mara', 'elias', 'trust', 0.1);
+    const otherProject = relationshipProposal('other-project-trust', 10, 'mara', 'elias', 'trust', 10);
     otherProject.projectId = 'project-other';
-    apply(relationshipProposal('main-project-trust', 10, 'mara', 'elias', 'trust', 0.9));
+    apply(relationshipProposal('main-project-trust', 10, 'mara', 'elias', 'trust', 90));
     apply(otherProject);
 
-    expect(relationships.listCurrentFrom(PROJECT_ID, 'mara')[0].relationship.value).toBe(0.9);
-    expect(relationships.listCurrentFrom('project-other', 'mara')[0].relationship.value).toBe(0.1);
+    expect(relationships.listCurrentFrom(PROJECT_ID, 'mara')[0].relationship.value).toBe(90);
+    expect(relationships.listCurrentFrom('project-other', 'mara')[0].relationship.value).toBe(10);
   });
 
   function apply(value: NarrativeProposal): void {

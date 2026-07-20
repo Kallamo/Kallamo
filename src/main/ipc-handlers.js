@@ -17,10 +17,12 @@ const crypto = require('crypto');
 const db = require('./database');
 const { getMessagePage } = require('./features/chat/message-pages');
 const { registerWorkspaceStateIpc } = require('./features/workspace-state/workspace-state');
+const { createWorldbuildDataService } = require('./features/worldbuild/worldbuild-data');
 const entitiesStore = require('./entities');
 const { chunkText, extractTextFromFile, extractDocxHtml, vectorizeChunks, insertChunksToDb, deleteChunksFromDb, searchKnowledgeBase, searchChatKnowledgeBase, searchChatMemories, RAG_MODEL_ID, RAG_MODEL_DIM, generateEmbeddingVector, countTokens } = require('./rag-service');
 
 registerWorkspaceStateIpc(ipcMain);
+const worldbuildData = createWorldbuildDataService(db);
 
 // Resolve the APPDATA data path
 const appDataPath = process.env.APPDATA || (process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support') : path.join(os.homedir(), '.local', 'share'));
@@ -2678,6 +2680,78 @@ ipcMain.handle('set-chunk-tags', async (event, { chunkId, keywords = [], entitie
 
 // --- WORLDBUILD: per-workspace entity registry + relations ---
 
+ipcMain.handle('list-worldbuild-field-definitions', async (event, { workspaceId, typeId } = {}) => {
+  try {
+    return { success: true, fields: worldbuildData.listFieldDefinitions(workspaceId, typeId) };
+  } catch (e) {
+    console.error('[list-worldbuild-field-definitions] failed:', e);
+    return { success: false, error: e.message, fields: [] };
+  }
+});
+
+ipcMain.handle('save-worldbuild-field-definition', async (event, definition = {}) => {
+  try {
+    return { success: true, field: worldbuildData.saveFieldDefinition(definition) };
+  } catch (e) {
+    console.error('[save-worldbuild-field-definition] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('delete-worldbuild-field-definition', async (event, { workspaceId, fieldId } = {}) => {
+  try {
+    return { success: true, deleted: worldbuildData.deleteFieldDefinition(workspaceId, fieldId) };
+  } catch (e) {
+    console.error('[delete-worldbuild-field-definition] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('list-worldbuild-entity-templates', async (event, { workspaceId } = {}) => {
+  try {
+    return { success: true, templates: worldbuildData.listEntityTemplates(workspaceId) };
+  } catch (e) {
+    console.error('[list-worldbuild-entity-templates] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('save-worldbuild-entity-template', async (event, template) => {
+  try {
+    return { success: true, template: worldbuildData.saveEntityTemplate(template) };
+  } catch (e) {
+    console.error('[save-worldbuild-entity-template] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('get-worldbuild-subject-knowledge', async (event, { workspaceId, subjectId } = {}) => {
+  try {
+    return { success: true, projection: worldbuildData.getSubjectKnowledge(workspaceId, subjectId) };
+  } catch (e) {
+    console.error('[get-worldbuild-subject-knowledge] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('save-worldbuild-subject-entry', async (event, payload = {}) => {
+  try {
+    return { success: true, projection: worldbuildData.saveSubjectEntry(payload) };
+  } catch (e) {
+    console.error('[save-worldbuild-subject-entry] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('delete-worldbuild-subject-entry', async (event, payload = {}) => {
+  try {
+    return { success: true, projection: worldbuildData.deleteSubjectEntry(payload) };
+  } catch (e) {
+    console.error('[delete-worldbuild-subject-entry] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
 ipcMain.handle('list-entities', async (event, { workspaceId, type } = {}) => {
   try {
     return { success: true, entities: entitiesStore.listEntities({ workspaceId, type: type || null }) };
@@ -3372,6 +3446,15 @@ ipcMain.handle('get-chat-messages', async (event, chatId) => {
   } catch (e) {
     console.error("Error loading chat messages:", e);
     return [];
+  }
+});
+
+ipcMain.handle('update-entity-link', async (event, { linkId, fields } = {}) => {
+  try {
+    return { success: true, ...entitiesStore.updateLink(linkId, fields || {}) };
+  } catch (e) {
+    console.error('[update-entity-link] failed:', e);
+    return { success: false, error: e.message };
   }
 });
 

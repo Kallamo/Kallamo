@@ -27,6 +27,10 @@ function parseJsonObject(raw) {
   try { const o = JSON.parse(raw); return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {}; } catch { return {}; }
 }
 
+function linkMetadata(raw) {
+  return parseJsonObject(raw);
+}
+
 function hydrate(row) {
   if (!row) return row;
   return {
@@ -92,6 +96,11 @@ function updateEntity(id, fields = {}) {
     SET type = ?, canonicalName = ?, aliases = ?, lore = ?, loreDocumentId = ?, data = ?, status = ?, last_modified = ?
     WHERE id = ?
   `).run(next.type, next.canonicalName, next.aliases, next.lore, next.loreDocumentId, next.data, next.status, Date.now(), id);
+  if (next.type === 'Items' && nextData.itemNature === 'unique') {
+    const ownedLinks = db.prepare("SELECT id, metadata_json FROM entity_links WHERE fromId = ? AND relType = 'owned_by'").all(id);
+    const updateMetadata = db.prepare('UPDATE entity_links SET metadata_json = ? WHERE id = ?');
+    for (const link of ownedLinks) updateMetadata.run(JSON.stringify({ ...parseJsonObject(link.metadata_json), quantity: 1 }), link.id);
+  }
   return getEntity(id);
 }
 
@@ -190,7 +199,11 @@ function resolveEnrichReview(id, { accept = {}, reject = {} } = {}) {
   for (const f of acceptFields) {
     if (!(f in pendingData)) continue;
     const proposal = pendingData[f];
-    nextData[f] = proposal && typeof proposal === 'object' && 'value' in proposal ? proposal.value : proposal;
+    const value = proposal && typeof proposal === 'object' && 'value' in proposal ? proposal.value : proposal;
+    if (f.startsWith('customFields.')) {
+      const key = f.slice('customFields.'.length);
+      nextData.customFields = { ...(nextData.customFields || {}), [key]: value };
+    } else nextData[f] = value;
     delete pendingData[f];
   }
   for (const f of rejectFields) delete pendingData[f];
@@ -322,44 +335,45 @@ function linkedLoreDocIds(ent) {
 // ---- Relations (entity_links) ----
 
 function summary(row) {
-  return row ? { id: row.id, canonicalName: row.canonicalName, type: row.type } : null;
+  return row ? { id: row.id, canonicalName: row.canonicalName, type: row.type, data: parseJsonObject(row.data) } : null;
 }
 
 // Outgoing edges from an entity: returns the linked target entities. relType optional.
 function getLinksFrom(fromId, relType = null) {
   const sql = `
-    SELECT l.id AS linkId, l.relType AS relType, l.label AS label, e.id AS id, e.canonicalName AS canonicalName, e.type AS type
+    SELECT l.id AS linkId, l.relType AS relType, l.label AS label, l.metadata_json AS metadataJson, e.id AS id, e.canonicalName AS canonicalName, e.type AS type, e.data AS data
     FROM entity_links l JOIN entities e ON l.toId = e.id
     WHERE l.fromId = ?${relType ? ' AND l.relType = ?' : ''}
     ORDER BY e.canonicalName`;
   const rows = relType ? db.prepare(sql).all(fromId, relType) : db.prepare(sql).all(fromId);
-  return rows.map(r => ({ linkId: r.linkId, relType: r.relType, label: r.label || null, entity: summary(r) }));
+  return rows.map(r => ({ linkId: r.linkId, relType: r.relType, label: r.label || null, metadata: linkMetadata(r.metadataJson), entity: summary(r) }));
 }
 
 // Incoming edges to an entity: returns the source entities. relType optional.
 function getLinksTo(toId, relType = null) {
   const sql = `
-    SELECT l.id AS linkId, l.relType AS relType, l.label AS label, e.id AS id, e.canonicalName AS canonicalName, e.type AS type
+    SELECT l.id AS linkId, l.relType AS relType, l.label AS label, l.metadata_json AS metadataJson, e.id AS id, e.canonicalName AS canonicalName, e.type AS type, e.data AS data
     FROM entity_links l JOIN entities e ON l.fromId = e.id
     WHERE l.toId = ?${relType ? ' AND l.relType = ?' : ''}
     ORDER BY e.canonicalName`;
   const rows = relType ? db.prepare(sql).all(toId, relType) : db.prepare(sql).all(toId);
-  return rows.map(r => ({ linkId: r.linkId, relType: r.relType, label: r.label || null, entity: summary(r) }));
+  return rows.map(r => ({ linkId: r.linkId, relType: r.relType, label: r.label || null, metadata: linkMetadata(r.metadataJson), entity: summary(r) }));
 }
 
 function listLinks({ workspaceId, relType = null } = {}) {
   const sql = `
-    SELECT id, fromId, relType, toId, label
+    SELECT id, fromId, relType, toId, label, metadata_json AS metadataJson
     FROM entity_links
     WHERE workspaceId IS ?${relType ? ' AND relType = ?' : ''}
   `;
-  return (relType ? db.prepare(sql).all(workspaceId || null, relType) : db.prepare(sql).all(workspaceId || null));
+  return (relType ? db.prepare(sql).all(workspaceId || null, relType) : db.prepare(sql).all(workspaceId || null))
+    .map(row => ({ ...row, metadata: linkMetadata(row.metadataJson), metadataJson: undefined }));
 }
 
 // Add a directed edge. `single` first clears any existing edge of (fromId, relType),
 // enforcing one-to-one relations (owner, race, parent location…). A null toId just
 // clears (used to unset a single-value relation).
-function setLink({ workspaceId, fromId, relType, toId, single = false, label = null }) {
+function setLink({ workspaceId, fromId, relType, toId, single = false, label = null, metadata = {} }) {
   if (!fromId || !relType) throw new Error('fromId and relType are required');
   const cleanLabel = label != null && String(label).trim() ? String(label).trim() : null;
   if (single) db.prepare('DELETE FROM entity_links WHERE fromId = ? AND relType = ?').run(fromId, relType);
@@ -371,8 +385,8 @@ function setLink({ workspaceId, fromId, relType, toId, single = false, label = n
     if (exists) return { id: exists.id };
   }
   const id = crypto.randomUUID();
-  db.prepare('INSERT INTO entity_links (id, workspaceId, fromId, relType, toId, label, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(id, workspaceId || null, fromId, relType, toId, cleanLabel, Date.now());
+  db.prepare('INSERT INTO entity_links (id, workspaceId, fromId, relType, toId, label, metadata_json, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, workspaceId || null, fromId, relType, toId, cleanLabel, JSON.stringify(metadata || {}), Date.now());
   return { id };
 }
 
@@ -386,6 +400,20 @@ function updateLinkLabel(linkId, label) {
   const clean = label != null && String(label).trim() ? String(label).trim() : null;
   db.prepare('UPDATE entity_links SET label = ? WHERE id = ?').run(clean, linkId);
   return { id: linkId, label: clean };
+}
+
+function updateLink(linkId, { toId, label, metadata } = {}) {
+  const current = db.prepare('SELECT toId, label, metadata_json AS metadataJson FROM entity_links WHERE id = ?').get(linkId);
+  if (!current) throw new Error('entity link not found');
+  const cleanLabel = label === undefined
+    ? current.label
+    : label != null && String(label).trim() ? String(label).trim() : null;
+  const nextMetadata = metadata === undefined ? linkMetadata(current.metadataJson) : metadata || {};
+  const nextToId = toId === undefined ? current.toId : toId;
+  if (!nextToId || !db.prepare('SELECT 1 FROM entities WHERE id = ?').get(nextToId)) throw new Error('target entity not found');
+  db.prepare('UPDATE entity_links SET toId = ?, label = ?, metadata_json = ? WHERE id = ?')
+    .run(nextToId, cleanLabel, JSON.stringify(nextMetadata), linkId);
+  return { id: linkId, toId: nextToId, label: cleanLabel, metadata: nextMetadata };
 }
 
 // Serialize a workspace's Worldbuild into a self-contained, portable package: entities
@@ -404,10 +432,10 @@ function exportWorldbuild(workspaceId) {
     data: stripInternal(parseJsonObject(r.data)),
     status: r.status || 'confirmed',
   }));
-  const linkRows = db.prepare('SELECT fromId, toId, relType, label FROM entity_links WHERE workspaceId IS ?').all(workspaceId || null);
+  const linkRows = db.prepare('SELECT fromId, toId, relType, label, metadata_json AS metadataJson FROM entity_links WHERE workspaceId IS ?').all(workspaceId || null);
   const links = linkRows
     .filter(l => ids.has(l.fromId) && ids.has(l.toId))
-    .map(l => ({ fromRef: l.fromId, toRef: l.toId, relType: l.relType, label: l.label || null }));
+    .map(l => ({ fromRef: l.fromId, toRef: l.toId, relType: l.relType, label: l.label || null, metadata: linkMetadata(l.metadataJson) }));
   return { kallamoWorldbuild: 1, exportedAt: Date.now(), entities, links };
 }
 
@@ -440,7 +468,7 @@ function importWorldbuild(workspaceId, payload) {
       const fromId = idMap.get(l.fromRef);
       const toId = idMap.get(l.toRef);
       if (!fromId || !toId || fromId === toId) continue;
-      setLink({ workspaceId, fromId, relType: l.relType, toId, single: false, label: l.label || null });
+      setLink({ workspaceId, fromId, relType: l.relType, toId, single: false, label: l.label || null, metadata: l.metadata || {} });
       linksAdded++;
     }
   })();
@@ -566,6 +594,7 @@ module.exports = {
   setLink,
   removeLink,
   updateLinkLabel,
+  updateLink,
   summarizeBulkEntities,
   bulkSetAiPolicy,
   bulkAcceptProposed,

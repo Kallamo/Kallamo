@@ -1,8 +1,11 @@
 import {
   KANORA_CONTRACT_VERSION,
   type EvidenceReference,
+  type EntityFieldDefinition,
+  type EntityReference,
   type Belief,
   type Knowledge,
+  type NarrativeMemory,
   type NarrativeEvent,
   type NarrativeOperation,
   type NarrativeProposal,
@@ -37,6 +40,10 @@ export type ValidationResult<T> =
 
 const EVENT_TYPES = new Set(['movement', 'possession-transfer', 'revelation', 'deception', 'discovery', 'relationship-change', 'custom']);
 const OPERATION_TYPES = new Set(['assert-fact', 'set-state', 'record-observation', 'grant-knowledge', 'set-belief', 'record-memory', 'set-relationship']);
+const ENTITY_KINDS = ['agent', 'group', 'object', 'location', 'species', 'event', 'concept'];
+const ENTITY_CAPABILITIES = ['appearance', 'personality', 'inventory', 'relationships', 'knowledge', 'beliefs', 'memory', 'perspective'];
+const ENTITY_FIELD_TYPES = ['short-text', 'long-text', 'number', 'range', 'boolean', 'single-choice', 'multiple-choice', 'entity-reference', 'entity-reference-list'];
+const ENTITY_FIELD_KEY = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 
 function addIssue(issues: ValidationIssue[], code: ValidationIssueCode, path: string, message: string): void {
   issues.push({ code, path, message });
@@ -58,6 +65,12 @@ function requireString(record: Record<string, unknown>, key: string, path: strin
   }
 }
 
+function optionalString(record: Record<string, unknown>, key: string, path: string, issues: ValidationIssue[]): void {
+  if (record[key] !== undefined && typeof record[key] !== 'string') {
+    addIssue(issues, VALIDATION_ISSUE_CODES.INVALID_TYPE, `${path}.${key}`, 'Expected a string.');
+  }
+}
+
 function requireStringArray(record: Record<string, unknown>, key: string, path: string, issues: ValidationIssue[]): string[] {
   const value = record[key];
   if (Array.isArray(value) && value.every(item => typeof item === 'string' && item.length > 0)) return value;
@@ -72,8 +85,91 @@ function requireConfidence(record: Record<string, unknown>, key: string, path: s
   }
 }
 
+function requireRelationshipValue(record: Record<string, unknown>, key: string, path: string, issues: ValidationIssue[]): void {
+  const value = record[key];
+  if (typeof value !== 'number' || value < -100 || value > 100) {
+    addIssue(issues, VALIDATION_ISSUE_CODES.OUT_OF_RANGE, `${path}.${key}`, 'Expected a number between -100 and 100.');
+  }
+}
+
 function requireEnum(record: Record<string, unknown>, key: string, values: string[], path: string, issues: ValidationIssue[]): void {
   if (!values.includes(String(record[key]))) addIssue(issues, VALIDATION_ISSUE_CODES.INVALID_VALUE, `${path}.${key}`, `Expected one of: ${values.join(', ')}.`);
+}
+
+function validateFieldValue(definition: Record<string, unknown>, value: unknown, path: string, issues: ValidationIssue[]): void {
+  const valueType = definition.valueType;
+  const options = Array.isArray(definition.options) ? definition.options : [];
+  const optionIds = new Set(options.flatMap(option => isRecord(option) && typeof option.id === 'string' ? [option.id] : []));
+  const isStringList = Array.isArray(value) && value.every(item => typeof item === 'string');
+  const isValid = valueType === 'boolean' ? typeof value === 'boolean'
+    : valueType === 'number' || valueType === 'range' ? typeof value === 'number' && Number.isFinite(value)
+      : valueType === 'multiple-choice' ? isStringList && value.every(item => optionIds.has(item))
+        : valueType === 'entity-reference-list' ? isStringList
+          : valueType === 'single-choice' ? typeof value === 'string' && optionIds.has(value)
+            : typeof value === 'string';
+  if (!isValid) addIssue(issues, VALIDATION_ISSUE_CODES.INVALID_VALUE, path, 'Default value does not match the field definition.');
+}
+
+function validateEntityFieldDefinitionValue(value: unknown, path: string, issues: ValidationIssue[]): void {
+  const definition = requireRecord(value, path, issues);
+  if (!definition) return;
+  requireString(definition, 'id', path, issues);
+  requireString(definition, 'projectId', path, issues);
+  requireString(definition, 'typeId', path, issues);
+  requireString(definition, 'key', path, issues);
+  requireString(definition, 'label', path, issues);
+  requireEnum(definition, 'valueType', ENTITY_FIELD_TYPES, path, issues);
+  requireEnum(definition, 'aiAccess', ['read-write', 'read-only', 'hidden'], path, issues);
+  optionalString(definition, 'aiGuidance', path, issues);
+  if (typeof definition.key === 'string' && !ENTITY_FIELD_KEY.test(definition.key)) {
+    addIssue(issues, VALIDATION_ISSUE_CODES.INVALID_VALUE, `${path}.key`, 'Expected a stable lowercase kebab-case key.');
+  }
+  if (typeof definition.required !== 'boolean') addIssue(issues, VALIDATION_ISSUE_CODES.INVALID_TYPE, `${path}.required`, 'Expected a boolean.');
+  if (!Number.isInteger(definition.position) || (definition.position as number) < 0) {
+    addIssue(issues, VALIDATION_ISSUE_CODES.OUT_OF_RANGE, `${path}.position`, 'Expected a non-negative integer.');
+  }
+
+  const isChoice = definition.valueType === 'single-choice' || definition.valueType === 'multiple-choice';
+  if (isChoice) {
+    if (!Array.isArray(definition.options) || definition.options.length === 0) {
+      addIssue(issues, VALIDATION_ISSUE_CODES.EMPTY_COLLECTION, `${path}.options`, 'Choice fields require at least one option.');
+    } else {
+      const optionIds = new Set<string>();
+      definition.options.forEach((value, index) => {
+        const optionPath = `${path}.options[${index}]`;
+        const option = requireRecord(value, optionPath, issues);
+        if (!option) return;
+        requireString(option, 'id', optionPath, issues);
+        requireString(option, 'label', optionPath, issues);
+        if (typeof option.id === 'string' && optionIds.has(option.id)) {
+          addIssue(issues, VALIDATION_ISSUE_CODES.INVALID_VALUE, `${optionPath}.id`, 'Choice option IDs must be unique.');
+        }
+        if (typeof option.id === 'string') optionIds.add(option.id);
+      });
+    }
+  } else if (definition.options !== undefined) {
+    addIssue(issues, VALIDATION_ISSUE_CODES.INVALID_VALUE, `${path}.options`, 'Only choice fields can define options.');
+  }
+
+  if (definition.constraints !== undefined) {
+    const constraints = requireRecord(definition.constraints, `${path}.constraints`, issues);
+    if (definition.valueType !== 'number' && definition.valueType !== 'range') {
+      addIssue(issues, VALIDATION_ISSUE_CODES.INVALID_VALUE, `${path}.constraints`, 'Only numeric fields can define constraints.');
+    } else if (constraints) {
+      for (const key of ['min', 'max', 'step']) {
+        if (constraints[key] !== undefined && (typeof constraints[key] !== 'number' || !Number.isFinite(constraints[key]))) {
+          addIssue(issues, VALIDATION_ISSUE_CODES.INVALID_TYPE, `${path}.constraints.${key}`, 'Expected a finite number.');
+        }
+      }
+      if (typeof constraints.min === 'number' && typeof constraints.max === 'number' && constraints.min > constraints.max) {
+        addIssue(issues, VALIDATION_ISSUE_CODES.OUT_OF_RANGE, `${path}.constraints`, 'Minimum cannot exceed maximum.');
+      }
+      if (typeof constraints.step === 'number' && constraints.step <= 0) {
+        addIssue(issues, VALIDATION_ISSUE_CODES.OUT_OF_RANGE, `${path}.constraints.step`, 'Step must be greater than zero.');
+      }
+    }
+  }
+  if (Object.hasOwn(definition, 'defaultValue')) validateFieldValue(definition, definition.defaultValue, `${path}.defaultValue`, issues);
 }
 
 function validatePosition(value: unknown, path: string, issues: ValidationIssue[]): void {
@@ -116,6 +212,18 @@ function validateBeliefValue(value: unknown, path: string, issues: ValidationIss
   requireEnum(belief, 'status', ['active', 'superseded', 'abandoned'], path, issues);
 }
 
+function validateNarrativeMemoryValue(value: unknown, path: string, issues: ValidationIssue[]): void {
+  const memory = requireRecord(value, path, issues);
+  if (!memory) return;
+  requireString(memory, 'id', path, issues);
+  requireString(memory, 'subjectId', path, issues);
+  requireString(memory, 'eventId', path, issues);
+  requireString(memory, 'summary', path, issues);
+  requireEnum(memory, 'accessibility', ['available', 'suppressed', 'inaccessible'], path, issues);
+  if (memory.status !== undefined) requireEnum(memory, 'status', ['active', 'superseded', 'forgotten'], path, issues);
+  if (memory.supersedesMemoryId !== undefined) requireString(memory, 'supersedesMemoryId', path, issues);
+}
+
 function validateRelationshipValue(value: unknown, path: string, issues: ValidationIssue[]): void {
   const relationship = requireRecord(value, path, issues);
   if (!relationship) return;
@@ -123,7 +231,10 @@ function validateRelationshipValue(value: unknown, path: string, issues: Validat
   requireString(relationship, 'sourceEntityId', path, issues);
   requireString(relationship, 'targetEntityId', path, issues);
   requireString(relationship, 'dimension', path, issues);
-  requireConfidence(relationship, 'value', path, issues);
+  requireRelationshipValue(relationship, 'value', path, issues);
+  if (relationship.description !== undefined && typeof relationship.description !== 'string') {
+    addIssue(issues, VALIDATION_ISSUE_CODES.INVALID_TYPE, `${path}.description`, 'Expected a string.');
+  }
   requireString(relationship, 'sourceEventId', path, issues);
 }
 
@@ -197,11 +308,7 @@ function validateOperationPayload(operation: Record<string, unknown>, path: stri
       validateBeliefValue(payload, payloadPath, issues);
       break;
     case 'record-memory':
-      requireString(payload, 'id', payloadPath, issues);
-      requireString(payload, 'subjectId', payloadPath, issues);
-      requireString(payload, 'eventId', payloadPath, issues);
-      requireString(payload, 'summary', payloadPath, issues);
-      requireEnum(payload, 'accessibility', ['available', 'suppressed', 'inaccessible'], payloadPath, issues);
+      validateNarrativeMemoryValue(payload, payloadPath, issues);
       break;
     case 'set-relationship':
       validateRelationshipValue(payload, payloadPath, issues);
@@ -245,6 +352,30 @@ export function validateEvidenceReference(value: unknown): ValidationResult<Evid
   return result(value, issues);
 }
 
+export function validateEntityReference(value: unknown): ValidationResult<EntityReference> {
+  const issues: ValidationIssue[] = [];
+  const entity = requireRecord(value, '$', issues);
+  if (!entity) return { success: false, issues };
+  requireString(entity, 'id', '$', issues);
+  requireString(entity, 'projectId', '$', issues);
+  requireString(entity, 'typeId', '$', issues);
+  requireString(entity, 'name', '$', issues);
+  requireStringArray(entity, 'aliases', '$', issues);
+  requireEnum(entity, 'kind', ENTITY_KINDS, '$', issues);
+  const capabilities = requireStringArray(entity, 'capabilities', '$', issues);
+  capabilities.forEach((capability, index) => {
+    if (!ENTITY_CAPABILITIES.includes(capability)) addIssue(issues, VALIDATION_ISSUE_CODES.INVALID_VALUE, `$.capabilities[${index}]`, 'Unknown entity capability.');
+  });
+  if (new Set(capabilities).size !== capabilities.length) addIssue(issues, VALIDATION_ISSUE_CODES.INVALID_VALUE, '$.capabilities', 'Entity capabilities must be unique.');
+  return result(value, issues);
+}
+
+export function validateEntityFieldDefinition(value: unknown): ValidationResult<EntityFieldDefinition> {
+  const issues: ValidationIssue[] = [];
+  validateEntityFieldDefinitionValue(value, '$', issues);
+  return result(value, issues);
+}
+
 export function validateNarrativeEvent(value: unknown): ValidationResult<NarrativeEvent> {
   const issues: ValidationIssue[] = [];
   validateEvent(value, '$', issues);
@@ -266,6 +397,12 @@ export function validateKnowledge(value: unknown): ValidationResult<Knowledge> {
 export function validateBelief(value: unknown): ValidationResult<Belief> {
   const issues: ValidationIssue[] = [];
   validateBeliefValue(value, '$', issues);
+  return result(value, issues);
+}
+
+export function validateNarrativeMemory(value: unknown): ValidationResult<NarrativeMemory> {
+  const issues: ValidationIssue[] = [];
+  validateNarrativeMemoryValue(value, '$', issues);
   return result(value, issues);
 }
 

@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 
@@ -17,6 +18,7 @@ const SIZES = {
   md: 'max-w-md',
   lg: 'max-w-lg',
   xl: 'max-w-2xl',
+  '2xl': 'max-w-5xl',
 };
 
 export default function Modal({
@@ -46,12 +48,12 @@ export default function Modal({
     return () => { document.body.style.overflow = prev; };
   }, []);
 
-  return (
+  return createPortal(
     <div
       onMouseDown={(e) => {
         if (closeOnOverlay && e.target === e.currentTarget) onClose?.();
       }}
-      className={`fixed inset-0 z-50 flex items-center justify-center titlebar-nodrag select-none p-4 ${
+      className={`fixed inset-0 z-50 flex items-center justify-center overflow-y-auto overscroll-contain titlebar-nodrag select-none p-4 ${
         isBlurEnabled ? 'bg-black/60 backdrop-blur-sm' : 'bg-[#011419]'
       }`}
     >
@@ -67,7 +69,8 @@ export default function Modal({
             {showClose && (
               <button
                 onClick={onClose}
-                className="text-gray-400 hover:text-red-500 transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5"
+                aria-label="Close dialog"
+                className="text-gray-400 hover:text-red-500 transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -76,6 +79,7 @@ export default function Modal({
         )}
         {children}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

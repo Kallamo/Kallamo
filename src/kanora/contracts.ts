@@ -5,6 +5,65 @@ export type NarrativeId = string;
 export type Confidence = number;
 export type KnowledgeAccessibility = 'available' | 'suppressed' | 'inaccessible';
 
+export type EntityKind = 'agent' | 'group' | 'object' | 'location' | 'species' | 'event' | 'concept';
+export type EntityCapability =
+  | 'appearance'
+  | 'personality'
+  | 'inventory'
+  | 'relationships'
+  | 'knowledge'
+  | 'beliefs'
+  | 'memory'
+  | 'perspective';
+
+export interface EntityReference {
+  id: NarrativeId;
+  projectId: NarrativeId;
+  kind: EntityKind;
+  typeId: string;
+  name: string;
+  aliases: string[];
+  capabilities: EntityCapability[];
+}
+
+export type EntityFieldType =
+  | 'short-text'
+  | 'long-text'
+  | 'number'
+  | 'range'
+  | 'boolean'
+  | 'single-choice'
+  | 'multiple-choice'
+  | 'entity-reference'
+  | 'entity-reference-list';
+
+export interface EntityFieldOption {
+  id: string;
+  label: string;
+}
+
+export interface EntityFieldConstraints {
+  min?: number;
+  max?: number;
+  step?: number;
+}
+
+export interface EntityFieldDefinition {
+  id: NarrativeId;
+  projectId: NarrativeId;
+  typeId: string;
+  key: string;
+  label: string;
+  valueType: EntityFieldType;
+  options?: EntityFieldOption[];
+  constraints?: EntityFieldConstraints;
+  defaultValue?: unknown;
+  required: boolean;
+  position: number;
+  aiAccess: 'read-write' | 'read-only' | 'hidden';
+  aiGuidance?: string;
+}
+
 export interface NarrativePosition {
   sequence: number;
   timestamp?: string;
@@ -79,6 +138,8 @@ export interface NarrativeMemory {
   eventId: NarrativeId;
   summary: string;
   accessibility: KnowledgeAccessibility;
+  status?: 'active' | 'superseded' | 'forgotten';
+  supersedesMemoryId?: NarrativeId;
 }
 
 export interface RelationshipState {
@@ -87,6 +148,7 @@ export interface RelationshipState {
   targetEntityId: NarrativeId;
   dimension: string;
   value: number;
+  description?: string;
   sourceEventId: NarrativeId;
 }
 

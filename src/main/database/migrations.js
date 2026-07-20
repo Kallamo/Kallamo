@@ -216,7 +216,66 @@ const MIGRATIONS = [
       CREATE INDEX IF NOT EXISTS idx_kanora_relationship_source
         ON kanora_narrative_records (workspace_id, subject_id, applied_at, record_id)
         WHERE record_type = 'relationship';
+      `)
+  },
+  {
+    id: 'worldbuild_custom_field_definitions_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS worldbuild_field_definitions (
+        workspace_id TEXT NOT NULL,
+        field_id TEXT NOT NULL,
+        type_id TEXT NOT NULL,
+        field_key TEXT NOT NULL,
+        label TEXT NOT NULL,
+        value_type TEXT NOT NULL CHECK (value_type IN (
+          'short-text', 'long-text', 'number', 'range', 'boolean',
+          'single-choice', 'multiple-choice', 'entity-reference', 'entity-reference-list'
+        )),
+        options_json TEXT,
+        constraints_json TEXT,
+        default_value_json TEXT,
+        has_default INTEGER NOT NULL CHECK (has_default IN (0, 1)),
+        required INTEGER NOT NULL CHECK (required IN (0, 1)),
+        position INTEGER NOT NULL CHECK (position >= 0),
+        ai_access TEXT NOT NULL CHECK (ai_access IN ('read-write', 'read-only', 'hidden')),
+        PRIMARY KEY (workspace_id, field_id),
+        UNIQUE (workspace_id, type_id, field_key)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_worldbuild_fields_type_order
+        ON worldbuild_field_definitions (workspace_id, type_id, position, field_id);
     `)
+  },
+  {
+    id: 'worldbuild_rich_entity_links_v1',
+    up: (db) => {
+      const columns = db.prepare('PRAGMA table_info(entity_links)').all();
+      if (columns.length && !columns.some(column => column.name === 'metadata_json')) {
+        db.exec('ALTER TABLE entity_links ADD COLUMN metadata_json TEXT');
+      }
+    }
+  },
+  {
+    id: 'worldbuild_entity_templates_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS worldbuild_entity_templates (
+        workspace_id TEXT NOT NULL,
+        type_id TEXT NOT NULL,
+        display_name TEXT,
+        layout_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, type_id)
+      );
+    `)
+  },
+  {
+    id: 'worldbuild_field_ai_guidance_v1',
+    up: (db) => {
+      const columns = db.prepare('PRAGMA table_info(worldbuild_field_definitions)').all();
+      if (columns.length && !columns.some(column => column.name === 'ai_guidance')) {
+        db.exec('ALTER TABLE worldbuild_field_definitions ADD COLUMN ai_guidance TEXT');
+      }
+    }
   }
 ];
 

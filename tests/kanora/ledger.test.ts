@@ -131,6 +131,7 @@ describe('Narrative Event Ledger SQLite repository', () => {
     const existingPath = join(directory, 'existing.db');
     db = new Database(existingPath);
     db.exec('CREATE TABLE existing_records (id TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    db.exec('CREATE TABLE entity_links (id TEXT PRIMARY KEY, label TEXT)');
     db.prepare('INSERT INTO existing_records (id, value) VALUES (?, ?)').run('legacy', 'preserved');
 
     runDatabaseMigrations(db);
@@ -142,8 +143,15 @@ describe('Narrative Event Ledger SQLite repository', () => {
       { id: 'kanora_transactional_change_sets_v1' },
       { id: 'kanora_scenes_and_individual_knowledge_v1' },
       { id: 'kanora_explicit_knowledge_accessibility_draft_v1' },
-      { id: 'kanora_beliefs_and_dynamic_relationships_v1' }
+      { id: 'kanora_beliefs_and_dynamic_relationships_v1' },
+      { id: 'worldbuild_custom_field_definitions_v1' },
+      { id: 'worldbuild_rich_entity_links_v1' },
+      { id: 'worldbuild_entity_templates_v1' },
+      { id: 'worldbuild_field_ai_guidance_v1' }
     ]);
+    expect(db.prepare('PRAGMA table_info(entity_links)').all()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'metadata_json', type: 'TEXT' })
+    ]));
     repository = new NarrativeEventLedgerRepository(db);
     expect(repository.save(possessionTransferScenario).proposal).toEqual(possessionTransferScenario);
   });

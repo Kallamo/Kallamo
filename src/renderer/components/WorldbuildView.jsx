@@ -4,7 +4,7 @@ import {
   Plus, Search, BookOpen, MapPin, Package, Users, Flag, User,
   Sparkles, Trash2, Save, X, Pencil, Check, Link2, Globe, Tag, ScrollText, Ghost, Info, Replace,
   Lock, ShieldCheck, RefreshCw, Upload, Download, CalendarClock, ChevronRight, ChevronsLeftRight,
-  AlertTriangle,
+  AlertTriangle, LayoutTemplate,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import Button from './ui/Button';
@@ -16,6 +16,10 @@ import { buildLocationTree } from '../features/worldbuild/locationTree';
 import EntityPickerButton from '../features/worldbuild/EntityPickerButton';
 import { useSidebarWidth } from '../features/worldbuild/useSidebarWidth';
 import { useWorldbuildNavigationState } from '../features/worldbuild/useWorldbuildNavigationState';
+import WorldbuildCustomFields from '../features/worldbuild/WorldbuildCustomFields';
+import WorldbuildKnowledgeTab from '../features/worldbuild/WorldbuildKnowledgeTab';
+import { WorldbuildInventory, WorldbuildRelationships } from '../features/worldbuild/WorldbuildAgentCollections';
+import WorldbuildTemplateManager from '../features/worldbuild/WorldbuildTemplateManager';
 import {
   ABUNDANCE_HELP, CREATURE_NATURES, DISPOSITION, fieldLabel, ITEM_TYPES, meta, TYPES,
   RARITY, RELATIONSHIP_LABELS, STATUS, THREAT, TYPE_ORDER,
@@ -335,6 +339,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const [mergePrompt, setMergePrompt] = useState(null); // { id, name } while choosing merge priority
   const [showExportModal, setShowExportModal] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [templates, setTemplates] = useState([]);
+  const [showTemplateManager, setShowTemplateManager] = useState(false);
   const { sidebarWidth, updateSidebarWidth, startSidebarResize, handleSidebarResizeKey } = useSidebarWidth();
   const {
     expandedLocations,
@@ -350,6 +356,25 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   });
 
   const isNew = !selected?.id;
+  const isIndividualCreature = selected?.type === 'Creatures' && (selected?.data?.scope || 'individual') !== 'group';
+  const hasKnowledgeTab = selected?.type === 'Characters' || selected?.type === 'Factions' || isIndividualCreature;
+  const activeTemplate = templates.find(template => template.typeId === selected?.type);
+  const templateSections = activeTemplate?.layout?.sections || [];
+  const sectionSetting = (id) => templateSections.find(section => section.id === id);
+  const sheetTabs = (selected?.type === 'Characters' || isIndividualCreature
+    ? ['data', 'inventory', 'connections', 'knowledge']
+    : hasKnowledgeTab ? ['data', 'knowledge'] : []).filter(tab => {
+      if (tab === 'inventory') return !sectionSetting('inv')?.hidden;
+      if (tab === 'knowledge') return !sectionSetting('knowledge')?.hidden;
+      if (tab === 'connections') return !sectionSetting('rels')?.hidden || !sectionSetting('fac')?.hidden || !sectionSetting('loc')?.hidden;
+      return true;
+    });
+  const sheetTabLabel = (tab) => tab === 'inventory' ? sectionSetting('inv')?.label || tab : tab === 'knowledge' ? sectionSetting('knowledge')?.label || tab : tab;
+  const typeMeta = (type) => {
+    const base = meta(type);
+    const displayName = templates.find(template => template.typeId === type)?.displayName;
+    return displayName ? { ...base, label: displayName } : base;
+  };
   const docTitle = (id) => documents.find(d => d.id === id)?.title;
 
   const byType = useMemo(() => {
@@ -389,6 +414,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     loadEnrichErrors();
   }, [load, loadEnrichErrors]);
   useEffect(() => { electronAPI.getWritingTree(workspaceId).then(t => setDocuments(t?.documents || [])).catch(() => setDocuments([])); }, [workspaceId, electronAPI]);
+  useEffect(() => {
+    if (!workspaceId || !electronAPI.listWorldbuildEntityTemplates) return;
+    electronAPI.listWorldbuildEntityTemplates(workspaceId).then(result => setTemplates(result?.templates || [])).catch(() => setTemplates([]));
+  }, [electronAPI, workspaceId]);
   const loadRelations = useCallback(async (ent) => {
     if (!ent?.id) { setRel({}); return; }
     const from = (r) => electronAPI.getEntityLinks(ent.id, 'from', r).then(x => x?.links || []);
@@ -397,7 +426,13 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     if (ent.type === 'Locations') { n.inside = (await from('inside'))[0] || null; n.leader = (await from('led_by'))[0] || null; }
     if (ent.type === 'Items') { n.createdBy = (await from('created_by'))[0] || null; n.ownedBy = (await from('owned_by'))[0] || null; n.foundIn = await from('found_in'); }
     if (ent.type === 'Races') n.members = await to('is_race');
-    if (ent.type === 'Creatures') n.foundIn = await from('found_in');
+    if (ent.type === 'Creatures') {
+      n.foundIn = await from('found_in');
+      if ((ent.data?.scope || 'individual') !== 'group') {
+        n.inventory = await to('owned_by');
+        n.relationships = await from('related_to');
+      }
+    }
     if (ent.type === 'Events') { n.happenedAt = await from('happened_at'); n.involved = await from('involved'); }
     if (ent.type === 'Factions') { n.operatesIn = await from('operates_in'); n.members = await to('member_of'); n.leader = (await from('led_by'))[0] || null; }
     if (ent.type === 'Characters') { n.isRace = (await from('is_race'))[0] || null; n.inventory = await to('owned_by'); n.memberOf = await from('member_of'); n.connectedTo = await from('connected_to'); n.relationships = await from('related_to'); }
@@ -426,6 +461,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const startNew = (type) => { setShowCreate(false); setEditingSection(null); setCharTab('data'); setSelected(draftFor(type)); setRel({}); };
   const patch = (f) => setSelected(p => ({ ...p, ...f }));
   const patchData = (f) => setSelected(p => ({ ...p, data: { ...p.data, ...f } }));
+  const applyIntegratedEntity = (entity) => {
+    setSelected(current => current?.id === entity.id ? { ...current, data: entity.data || {} } : current);
+    setEntities(current => current.map(item => item.id === entity.id ? { ...item, data: entity.data || {} } : item));
+  };
 
   // Linked chapters: many-valued, stored in data.loreDocumentIds. Legacy entities that
   // only have the single loreDocumentId column read through the fallback below.
@@ -782,7 +821,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       S.push({ key: 'details', title: 'Details', icon: Package, scalar: true,
         view: <>
           <div className="grid grid-cols-2 gap-4">
-            <ViewField label="Type" value={selected.data.itemType} empty="Not set" />
+            <ViewField label="Nature" value={(selected.data.itemNature || 'type') === 'unique' ? 'Unique item' : 'Item type'} />
+            <ViewField label="Category" value={selected.data.itemType} empty="Not set" />
             {isGear && <ViewField label="Owner" value={ownerLabel} empty="Not set" />}
             {isGear && <ViewField label="Creator" value={rel.createdBy?.entity?.canonicalName} empty="Unknown" />}
             {isResource && <ViewField label="Abundance" value={selected.data.abundance} empty="Not set" />}
@@ -791,7 +831,12 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           <div className="pt-1"><Prose text={selected.data.description} empty="No description." /></div>
         </>,
         edit: <>
-          <Edit label="Item type"><LSelect value={selected.data.itemType || ''} onChange={(e) => patchData({ itemType: e.target.value })}><option value="">Choose…</option>{ITEM_TYPES.map(t => <option key={t} value={t}>{t}{t === 'Resource' ? ' (natural / drops)' : ''}</option>)}</LSelect></Edit>
+          <Edit label="Item nature" hint={(selected.data.itemNature || 'type') === 'unique' ? 'A unique item exists only once.' : 'An item type can appear in quantities.'}>
+            <div className="flex w-fit rounded-lg border border-white/10 bg-white/[0.04] p-0.5">
+              {[['type', 'Item type'], ['unique', 'Unique item']].map(([value, label]) => <button key={value} type="button" onClick={() => patchData({ itemNature: value })} className={`rounded-md px-3 py-1.5 text-xs font-bold uppercase tracking-wider transition-colors ${(selected.data.itemNature || 'type') === value ? 'bg-accent text-[#011419]' : 'text-gray-400 hover:text-white'}`}>{label}</button>)}
+            </div>
+          </Edit>
+          <Edit label="Category"><LSelect value={selected.data.itemType || ''} onChange={(e) => patchData({ itemType: e.target.value })}><option value="">Choose…</option>{ITEM_TYPES.map(t => <option key={t} value={t}>{t}{t === 'Resource' ? ' (natural / drops)' : ''}</option>)}</LSelect></Edit>
           {isGear && <SingleRelation label="Creator" hint="Leave blank if unknown." disabled={unsaved} current={rel.createdBy?.entity?.id} options={byType.Characters} onSet={(id) => setSingle('created_by', id)} />}
           {isGear && <Edit label="Owner" hint={unsaved ? 'Save first to assign an owner.' : 'Who holds it. Or let the AI decide, or leave it lost.'}>
             <LSelect value={ownerVal} disabled={unsaved} onChange={(e) => setOwner(e.target.value)}>
@@ -902,31 +947,58 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           </div>
           <SingleRelation label="Race" disabled={unsaved} current={rel.isRace?.entity?.id} options={byType.Races} onSet={(id) => setSingle('is_race', id)} />
         </> },
+      { key: 'appearance', title: 'Appearance', icon: User, scalar: true, view: <Prose text={selected.data.appearance} />, edit: <Edit label="Appearance"><LTextarea rows={5} placeholder="Physical presence, clothing, and distinguishing features." value={selected.data.appearance || ''} onChange={(e) => patchData({ appearance: e.target.value })} /></Edit> },
+      { key: 'personality', title: 'Personality', icon: Users, scalar: true, view: <Prose text={selected.data.personality} />, edit: <Edit label="Personality"><LTextarea rows={5} placeholder="Temperament, habits, values, and contradictions." value={selected.data.personality || ''} onChange={(e) => patchData({ personality: e.target.value })} /></Edit> },
       { key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, view: loreView, edit: loreEdit },
     ];
     if (charTab === 'inventory') return [
-      { key: 'inv', title: 'Inventory', icon: Package, scalar: false,
-        view: <ChipList links={rel.inventory} empty="Carrying nothing yet." />,
-        edit: <MultiRelation label="Inventory" hint="Assigning here sets the item's owner to this character." disabled={unsaved} links={rel.inventory || []} options={byType.Items} onAdd={addInventory} onRemove={removeLink} /> },
+      { key: 'inv', raw: <WorldbuildInventory workspaceId={workspaceId} subject={selected} links={rel.inventory || []} options={byType.Items} api={electronAPI} showToast={showToast} onChanged={() => loadRelations(selected)} /> },
     ];
     return [
       { key: 'fac', title: 'Factions', icon: Flag, scalar: false, view: <ChipList links={rel.memberOf} empty="Belongs to no faction." />, edit: <MultiRelation label="Factions" hint="Groups this character belongs to." disabled={unsaved} links={rel.memberOf || []} options={byType.Factions} onAdd={(id) => addMulti('member_of', id)} onRemove={removeLink} /> },
       { key: 'loc', title: 'Locations', icon: MapPin, scalar: false, view: <ChipList links={rel.connectedTo} empty="Tied to no place." />, edit: <MultiRelation label="Locations" hint="Places this character is tied to." disabled={unsaved} links={rel.connectedTo || []} options={byType.Locations} onAdd={(id) => addMulti('connected_to', id)} onRemove={removeLink} /> },
-      { key: 'rels', title: 'Relationships', icon: Users, scalar: false,
-        view: (!rel.relationships || rel.relationships.length === 0)
-          ? <p className="text-sm text-gray-600 italic">No relationships yet.</p>
-          : <div className="flex flex-wrap gap-1.5">{rel.relationships.map(l => <Chip key={l.linkId}><span className="text-accent/90">{l.label || 'related'}</span> · {l.entity.canonicalName}</Chip>)}</div>,
-        edit: <LabeledRelation subjectName={selected.canonicalName} disabled={unsaved} links={rel.relationships || []} options={byType.Characters.filter(o => o.id !== selected.id)} priorLabels={(rel.relationships || []).map(l => l.label).filter(Boolean)} onAdd={addRelationship} onRemove={removeLink} /> },
+      { key: 'rels', raw: <WorldbuildRelationships workspaceId={workspaceId} subject={selected} links={rel.relationships || []} options={[...byType.Characters, ...byType.Creatures.filter(entity => (entity.data?.scope || 'individual') !== 'group')]} api={electronAPI} showToast={showToast} onChanged={() => loadRelations(selected)} /> },
     ];
   };
 
-  const sections = selected ? (selected.type === 'Characters' ? characterSections() : sectionsFor(selected.type)) : [];
-  const m = selected ? meta(selected.type) : null;
+  const individualCreatureSections = () => {
+    if (charTab === 'inventory') return [{ key: 'inv', raw: <WorldbuildInventory workspaceId={workspaceId} subject={selected} links={rel.inventory || []} options={byType.Items} api={electronAPI} showToast={showToast} onChanged={() => loadRelations(selected)} /> }];
+    if (charTab === 'connections') return [{ key: 'rels', raw: <WorldbuildRelationships workspaceId={workspaceId} subject={selected} links={rel.relationships || []} options={[...byType.Characters, ...byType.Creatures.filter(entity => (entity.data?.scope || 'individual') !== 'group')]} api={electronAPI} showToast={showToast} onChanged={() => loadRelations(selected)} /> }];
+    const base = sectionsFor('Creatures');
+    const loreIndex = base.findIndex(section => section.key === 'lore');
+    const agentFields = [
+      { key: 'appearance', title: 'Appearance', icon: User, scalar: true, view: <Prose text={selected.data.appearance} />, edit: <Edit label="Appearance"><LTextarea rows={5} placeholder="Physical presence and distinguishing features." value={selected.data.appearance || ''} onChange={(e) => patchData({ appearance: e.target.value })} /></Edit> },
+      { key: 'personality', title: 'Personality', icon: Users, scalar: true, view: <Prose text={selected.data.personality} />, edit: <Edit label="Personality"><LTextarea rows={5} placeholder="Temperament, instincts, habits, and values." value={selected.data.personality || ''} onChange={(e) => patchData({ personality: e.target.value })} /></Edit> },
+    ];
+    return loreIndex < 0 ? [...base, ...agentFields] : [...base.slice(0, loreIndex), ...agentFields, ...base.slice(loreIndex)];
+  };
+
+  const customizeSections = (source) => {
+    if (!templateSections.length) return (charTab === 'data' || !hasKnowledgeTab) ? [...source, {
+      key: 'custom-fields',
+      raw: <WorldbuildCustomFields workspaceId={workspaceId} entity={selected} entities={entities} api={electronAPI} showToast={showToast} onEntityChange={applyIntegratedEntity} sectionId="custom-fields" />,
+    }] : source;
+    const positions = new Map(templateSections.map((section, index) => [section.id, index]));
+    const custom = (charTab === 'data' || !hasKnowledgeTab) ? templateSections.filter(section => section.kind === 'custom' && !section.hidden).map(section => ({
+      key: section.id,
+      raw: <WorldbuildCustomFields workspaceId={workspaceId} entity={selected} entities={entities} api={electronAPI} showToast={showToast} onEntityChange={applyIntegratedEntity} template={activeTemplate} sectionId={section.id} />,
+    })) : [];
+    return [...source, ...custom]
+      .filter(section => !sectionSetting(section.key)?.hidden)
+      .map(section => ({ ...section, title: sectionSetting(section.key)?.label || section.title }))
+      .sort((left, right) => (positions.get(left.key) ?? 999) - (positions.get(right.key) ?? 999));
+  };
+  const sections = selected
+    ? charTab === 'knowledge' && hasKnowledgeTab
+      ? []
+      : customizeSections(selected.type === 'Characters' ? characterSections() : isIndividualCreature ? individualCreatureSections() : sectionsFor(selected.type))
+    : [];
+  const m = selected ? typeMeta(selected.type) : null;
   const nameLabel = selected?.type === 'System' ? 'Title' : 'Name';
   const showAliases = !!selected;
 
   const renderEntityButton = (en) => {
-    const t = meta(en.type);
+    const t = typeMeta(en.type);
     const Icon = t.icon;
     const active = selected?.id === en.id;
     return (
@@ -946,7 +1018,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     const { entity, children } = node;
     const hasChildren = children.length > 0;
     const isExpanded = expandedLocations[entity.id] !== false;
-    const t = meta(entity.type);
+    const t = typeMeta(entity.type);
     const Icon = t.icon;
     const active = selected?.id === entity.id;
     return (
@@ -988,6 +1060,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   };
 
   const renderSection = (s) => {
+    if (s.raw) return <React.Fragment key={s.key}>{s.raw}</React.Fragment>;
     const editing = editingSection === s.key;
     return (
       <Section key={s.key} icon={s.icon} title={s.title} editing={editing} showPencil={!s.derived} onEdit={() => setEditingSection(s.key)}>
@@ -1006,6 +1079,9 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             </div>
           </>
         ) : s.view}
+        {activeTemplate && (charTab === 'data' || !hasKnowledgeTab) && (
+          <WorldbuildCustomFields workspaceId={workspaceId} entity={selected} entities={entities} api={electronAPI} showToast={showToast} onEntityChange={applyIntegratedEntity} template={activeTemplate} sectionId={s.key} embedded />
+        )}
       </Section>
     );
   };
@@ -1054,11 +1130,21 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           onClose={() => setBulkConfirm(null)}
         />
       )}
+      {showTemplateManager && (
+        <WorldbuildTemplateManager
+          workspaceId={workspaceId}
+          api={electronAPI}
+          templates={templates}
+          showToast={showToast}
+          onClose={() => setShowTemplateManager(false)}
+          onSaved={(template) => setTemplates(current => [...current.filter(item => item.typeId !== template.typeId), template])}
+        />
+      )}
       {confirmDelete && selected && (
         <ConfirmDialog
           tone="danger"
           title="Delete entity"
-          message={<>The {meta(selected.type).label.toLowerCase()} <strong className="text-gray-200">“{selected.canonicalName}”</strong> will be permanently deleted, along with its connections and story tags. This cannot be undone.</>}
+          message={<>The {typeMeta(selected.type).label.toLowerCase()} <strong className="text-gray-200">“{selected.canonicalName}”</strong> will be permanently deleted, along with its connections and story tags. This cannot be undone.</>}
           actions={[
             { label: 'Cancel', variant: 'ghost', onClick: () => setConfirmDelete(false) },
             { label: 'Delete', variant: 'danger', autoFocus: true, loading: saving, onClick: async () => { await remove(); setConfirmDelete(false); } },
@@ -1097,7 +1183,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
                       <h3 className="font-bold text-red-100">{error.entityName}</h3>
-                      <p className="mt-0.5 text-red-200/80">{meta(error.entityType).label}</p>
+                      <p className="mt-0.5 text-red-200/80">{typeMeta(error.entityType).label}</p>
                       <p className="mt-3 leading-relaxed break-words text-red-100">{error.error}</p>
                     </div>
                   </div>
@@ -1118,6 +1204,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           <div className="flex items-center gap-2">
             <Globe className="w-4 h-4 text-accent" /><span className="text-sm font-bold text-white tracking-wide">Worldbuild</span>
             <button type="button" onClick={() => manageMode ? leaveManageMode() : setManageMode(true)} className={`ml-1 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md border transition-colors cursor-pointer ${manageMode ? 'bg-accent/20 text-accent border-accent/40' : 'text-gray-400 border-white/10 hover:text-white hover:bg-white/5'}`}>{manageMode ? 'Done' : 'Manage'}</button>
+            <button type="button" onClick={() => setShowTemplateManager(true)} aria-label="Customize entity types" data-tooltip="Entity types & templates" className="rounded-md border border-white/10 p-1 text-gray-500 transition-colors hover:bg-white/5 hover:text-accent"><LayoutTemplate className="h-3.5 w-3.5" /></button>
           </div>
           <div className="flex items-center gap-2">
             {proposedCount > 0 && <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-300 bg-amber-400/10 border border-amber-400/30 rounded-full px-2 py-0.5"><Sparkles className="w-3 h-3" />{proposedCount}</span>}
@@ -1149,7 +1236,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           <div className="relative" ref={createRef}>
             <Button fullWidth icon={Plus} onClick={() => setShowCreate(v => !v)}>Create</Button>
             <Popover anchorRef={createRef} open={showCreate} onClose={() => setShowCreate(false)} className="!bg-[#021a20] backdrop-blur-sm">
-              {TYPE_ORDER.map(key => { const t = meta(key); const Icon = t.icon; return (
+              {TYPE_ORDER.map(key => { const t = typeMeta(key); const Icon = t.icon; return (
                 <button key={key} onClick={() => startNew(key)} className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-white/5 hover:text-white transition-colors flex items-center gap-2.5 cursor-pointer font-medium rounded-lg">
                   <span className={`w-6 h-6 rounded-md border flex items-center justify-center ${t.medallion}`}><Icon className="w-3.5 h-3.5" /></span>
                   {t.label}
@@ -1165,7 +1252,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
 
           <div className="flex flex-wrap gap-1.5">
             <button onClick={() => { setFilterType(null); setReviewFilter(null); }} className={`text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md transition-colors cursor-pointer ${!filterType && !reviewFilter ? 'bg-accent text-[#011419]' : 'bg-white/5 text-gray-400 hover:text-white border border-white/10'}`}>All</button>
-            {TYPE_ORDER.map(key => <button key={key} onClick={() => setFilterType(key === filterType ? null : key)} className={`text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md transition-colors cursor-pointer ${filterType === key ? 'bg-accent text-[#011419]' : 'bg-white/5 text-gray-400 hover:text-white border border-white/10'}`}>{meta(key).label}</button>)}
+            {TYPE_ORDER.map(key => <button key={key} onClick={() => setFilterType(key === filterType ? null : key)} className={`text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md transition-colors cursor-pointer ${filterType === key ? 'bg-accent text-[#011419]' : 'bg-white/5 text-gray-400 hover:text-white border border-white/10'}`}>{typeMeta(key).label}</button>)}
             {proposedCount > 0 && <button onClick={() => setReviewFilter(reviewFilter === 'proposed' ? null : 'proposed')} className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md border transition-colors cursor-pointer ${reviewFilter === 'proposed' ? 'bg-amber-400/20 text-amber-200 border-amber-400/40' : 'bg-amber-400/[0.06] text-amber-300/80 border-amber-400/20 hover:bg-amber-400/10'}`}><Sparkles className="w-3 h-3" />Proposed</button>}
             {pendingUpdateCount > 0 && <button onClick={() => setReviewFilter(reviewFilter === 'updates' ? null : 'updates')} className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md border transition-colors cursor-pointer ${reviewFilter === 'updates' ? 'bg-sky-400/20 text-sky-100 border-sky-400/40' : 'bg-sky-400/[0.06] text-sky-300/80 border-sky-400/20 hover:bg-sky-400/10'}`}><ShieldCheck className="w-3 h-3" />AI Updates</button>}
           </div>
@@ -1306,12 +1393,13 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                   </div>
                   <div className="space-y-2">
                     {fields.map(f => {
-                      const cur = selected.data?.[f];
+                      const customFieldKey = f.startsWith('customFields.') ? f.slice('customFields.'.length) : null;
+                      const cur = customFieldKey ? selected.data?.customFields?.[customFieldKey] : selected.data?.[f];
                       const curStr = cur == null || String(cur).trim() === '' ? '(empty)' : String(cur);
                       return (
                         <div key={f} className="flex items-start gap-3 bg-black/20 border border-white/10 rounded-lg px-3 py-2">
                           <div className="min-w-0 flex-1">
-                            <span className="block text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">{fieldLabel(f)}</span>
+                            <span className="block text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">{pData[f]?.fieldLabel || fieldLabel(f)}</span>
                             <div className="flex items-center flex-wrap gap-2 text-sm">
                               <span className="text-gray-500 line-through">{curStr}</span>
                               <span className="text-gray-500">→</span>
@@ -1376,11 +1464,11 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               );
             })()}
 
-            {/* Character tab switcher */}
-            {selected.type === 'Characters' && !isNew && (
+            {/* Subject sheet tabs */}
+            {sheetTabs.length > 0 && !isNew && (
               <div className="flex bg-white/[0.04] p-0.5 rounded-lg border border-white/10 w-fit">
-                {['data', 'inventory', 'connections'].map(t => (
-                  <button key={t} onClick={() => { setCharTab(t); setEditingSection(null); }} className={`px-3.5 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-colors cursor-pointer ${charTab === t ? 'bg-accent text-[#011419]' : 'text-gray-400 hover:text-white'}`}>{t}</button>
+                {sheetTabs.map(t => (
+                  <button key={t} onClick={() => { setCharTab(t); setEditingSection(null); }} className={`px-3.5 py-1.5 rounded-md text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer ${charTab === t ? 'bg-accent text-[#011419]' : 'text-gray-400 hover:text-white'}`}>{sheetTabLabel(t)}</button>
                 ))}
               </div>
             )}
@@ -1403,12 +1491,24 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                 )}
                 <div className="flex items-center justify-between pt-1">
                   <Button variant="danger" size="sm" icon={Trash2} onClick={() => setSelected(null)}>Discard</Button>
-                  <Button icon={Save} loading={saving} onClick={() => persist()}>Create {meta(selected.type).label}</Button>
+                  <Button icon={Save} loading={saving} onClick={() => persist()}>Create {typeMeta(selected.type).label}</Button>
                 </div>
               </>
             ) : (
               <>
-                {sections.map(renderSection)}
+                {charTab === 'knowledge' && hasKnowledgeTab ? (
+                  <WorldbuildKnowledgeTab
+                    workspaceId={workspaceId}
+                    entity={selected}
+                    entities={entities}
+                    api={electronAPI}
+                    showToast={showToast}
+                  />
+                ) : (
+                  <>
+                    {sections.map(renderSection)}
+                  </>
+                )}
                 <div className="flex items-center gap-2 pt-1">
                   <Button variant="danger" size="sm" icon={Trash2} loading={saving} onClick={() => setConfirmDelete(true)}>Delete</Button>
                   {unsaved && <span className="caption flex items-center gap-1"><Link2 className="w-3 h-3" /> Save to unlock relations</span>}
