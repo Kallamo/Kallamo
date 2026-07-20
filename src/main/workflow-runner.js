@@ -471,32 +471,48 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                     // explicit notice so the main AI knows retrieval ran and found nothing, instead of hallucinating
                     // document-based facts (fail-loud degradation).
                     const noContextNotice = `--- RAG NOTICE ---\nNo relevant context was retrieved from the knowledge base or memory for this request. Answer using only the conversation and the user's instructions; do not fabricate document-based facts.`;
-                    const combinedContext = agenticResult.contextGathered
-                        ? `--- DETAILED RESEARCH CONTEXT ---\n${agenticResult.contextGathered}`
+                    const kanoraBudget = maxContextTokens
+                        - estimateTokens(compiledSystemPrompt + contextBlock)
+                        - estimateTokens(currentInput)
+                        - (profile.maxTokens || 0);
+                    const planned = includeChatContext && agenticResult.kanoraItems.length
+                        ? planKanoraContext({
+                            chatId,
+                            query: currentInput,
+                            items: agenticResult.kanoraItems,
+                            tokenBudget: kanoraBudget
+                        })
+                        : null;
+                    const approvedContext = [agenticResult.externalContextGathered, planned?.context]
+                        .filter(Boolean)
+                        .join('\n\n');
+                    const approvedChatTokens = planned?.plan.package.usedTokens || 0;
+                    const combinedContext = approvedContext
+                        ? `--- DETAILED RESEARCH CONTEXT ---\n${approvedContext}`
                         : noContextNotice;
                     contextBlock += `\n\n${combinedContext}\n`;
 
                     let agenticResponseTokens = 0;
-                    if (!agenticResult.contextGathered) {
+                    if (!approvedContext) {
                         agenticResponseTokens = estimateTokens(noContextNotice);
                     }
                     const hasProfileTokens = (agenticResult.profileKbTokens || 0) > 0;
-                    const hasChatTokens = (agenticResult.chatKbTokens || 0) > 0;
+                    const hasChatTokens = approvedChatTokens > 0;
 
                     if (hasProfileTokens && hasChatTokens) {
                         const half = Math.ceil(agenticResponseTokens / 2);
                         profileKbTokens += (agenticResult.profileKbTokens || 0) + half;
-                        chatKbTokens += (agenticResult.chatKbTokens || 0) + (agenticResponseTokens - half);
+                        chatKbTokens += approvedChatTokens + (agenticResponseTokens - half);
                     } else if (hasChatTokens) {
                         profileKbTokens += (agenticResult.profileKbTokens || 0);
-                        chatKbTokens += (agenticResult.chatKbTokens || 0) + agenticResponseTokens;
+                        chatKbTokens += approvedChatTokens + agenticResponseTokens;
                     } else {
                         profileKbTokens += (agenticResult.profileKbTokens || 0) + agenticResponseTokens;
-                        chatKbTokens += (agenticResult.chatKbTokens || 0);
+                        chatKbTokens += approvedChatTokens;
                     }
 
                     agenticRagResponse = agenticResult.agenticResponse;
-                    agenticRagContextGathered = agenticResult.contextGathered;
+                    agenticRagContextGathered = approvedContext;
                     agenticInputTokens = agenticResult.agenticInputTokens || 0;
                     agenticOutputTokens = agenticResult.agenticOutputTokens || 0;
                 }
@@ -541,10 +557,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                             .map(f => f.name);
 
                         chatKbChunks = chatKbResults
-                            .filter(r => allowedFileNames.includes(r.source))
-                            .map(r => r.text);
-                        chatKbChunks = Array.from(new Set(chatKbChunks));
-                        chatKbTokens += estimateTokens(chatKbChunks.join('\n\n'));
+                            .filter(r => allowedFileNames.includes(r.source));
                     }
                 }
 
@@ -560,21 +573,42 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                             .map(b => b.id);
 
                         chatMemories = memoryResults
-                            .filter(r => !r.blockId || allowedBlockIds.includes(r.blockId))
-                            .map(r => r.text);
-                        chatMemories = Array.from(new Set(chatMemories));
-                        chatKbTokens += estimateTokens(chatMemories.join('\n\n'));
+                            .filter(r => !r.blockId || allowedBlockIds.includes(r.blockId));
                     }
                 }
 
                 if (searchableChunks.length > 0) {
                     contextBlock += `\n\n--- PROFILE RELEVANT RETRIEVED KNOWLEDGE ---\n${searchableChunks.join('\n\n')}\n`;
                 }
-                if (chatKbChunks.length > 0) {
-                    contextBlock += `\n\n--- CHAT RELEVANT RETRIEVED KNOWLEDGE ---\n${chatKbChunks.join('\n\n')}\n`;
-                }
-                if (chatMemories.length > 0) {
-                    contextBlock += `\n\n--- CHAT PERSISTENT SUMMARIZED MEMORIES ---\n${chatMemories.join('\n\n')}\n`;
+                const kanoraItems = [
+                    ...chatKbChunks.map(r => ({
+                        id: r.id,
+                        kind: 'workspace-text',
+                        source: r.source,
+                        content: r.text,
+                        relevance: r.fusionScore ?? r.score
+                    })),
+                    ...chatMemories.map(r => ({
+                        id: r.id,
+                        kind: 'workspace-memory',
+                        source: r.source,
+                        content: r.text,
+                        relevance: r.fusionScore ?? r.score
+                    }))
+                ];
+                if (includeChatContext && kanoraItems.length > 0) {
+                    const kanoraBudget = maxContextTokens
+                        - estimateTokens(compiledSystemPrompt + contextBlock)
+                        - estimateTokens(currentInput)
+                        - (profile.maxTokens || 0);
+                    const planned = planKanoraContext({
+                        chatId,
+                        query: currentInput,
+                        items: kanoraItems,
+                        tokenBudget: kanoraBudget
+                    });
+                    if (planned.context) contextBlock += `\n\n${planned.context}\n`;
+                    chatKbTokens += planned.plan.package.usedTokens;
                 }
             }
             if (attachmentsContext) {
@@ -1643,6 +1677,25 @@ function enrichFieldsForEntity(entity) {
         return fields.filter(field => field !== 'abundance');
     }
     return fields;
+}
+
+let kanoraChatContext = null;
+function getKanoraChatContext() {
+    if (!kanoraChatContext) {
+        const { createKallamoKanoraChatContext } = require('../../dist-main/main/features/kanora/chat-context');
+        kanoraChatContext = createKallamoKanoraChatContext(db, estimateTokens);
+    }
+    return kanoraChatContext;
+}
+
+function planKanoraContext({ chatId, query, items, tokenBudget }) {
+    return getKanoraChatContext().plan({
+        requestId: crypto.randomUUID(),
+        workspaceId: chatId,
+        query,
+        items,
+        tokenBudget
+    });
 }
 
 function customFieldPromptShape(field) {
@@ -2868,14 +2921,14 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                         if (registryEntity.lore && String(registryEntity.lore).trim()) factParts.push(`Lore: ${registryEntity.lore}`);
                         const ownEdges = edgesByEntity.get(registryEntity.id);
                         if (ownEdges) factParts.push(`Relations: ${ownEdges}`);
-                        if (factParts.length) {
-                            retrievedWorldFacts.set(registryEntity.id, {
-                                text: `${registryEntity.canonicalName} (${registryEntity.type}) — ${factParts.join(' | ')}`,
-                                source: `Worldbuild — ${registryEntity.canonicalName}`,
-                                canonicalName: registryEntity.canonicalName,
-                                aliases: Array.isArray(registryEntity.aliases) ? registryEntity.aliases : []
-                            });
-                        }
+                        const detailText = factParts.length ? ` — ${factParts.join(' | ')}` : '';
+                        retrievedWorldFacts.set(registryEntity.id, {
+                            text: `${registryEntity.canonicalName} (${registryEntity.type})${detailText}`,
+                            source: `Worldbuild — ${registryEntity.canonicalName}`,
+                            canonicalName: registryEntity.canonicalName,
+                            aliases: Array.isArray(registryEntity.aliases) ? registryEntity.aliases : [],
+                            entityIds: [registryEntity.id]
+                        });
                     }
 
                     if (registryEntity) coveredEntities.add(registryEntity.canonicalName);
@@ -3064,39 +3117,43 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
         }
     }
 
-    let gatheredContextParts = [];
+    const externalContextParts = [];
 
     if (retrievedProfileChunks.size > 0) {
         const profileParts = Array.from(retrievedProfileChunks.values()).map(r => `[Result from Profile KB - ${r.source}]: ${r.text}`);
-        gatheredContextParts.push(`--- PROFILE KNOWLEDGE BASE CHUNKS ---\n${profileParts.join('\n\n')}`);
+        externalContextParts.push(`--- PROFILE KNOWLEDGE BASE CHUNKS ---\n${profileParts.join('\n\n')}`);
     }
 
     if (readFiles.size > 0) {
-        const fileParts = Array.from(readFiles.entries()).map(([filename, data]) => `[File Contents: ${filename}]:\n${data.text}`);
-        gatheredContextParts.push(`--- READ FILES CONTENT ---\n${fileParts.join('\n\n')}`);
+        const fileParts = Array.from(readFiles.entries())
+            .filter(([, data]) => data.source === 'profile')
+            .map(([filename, data]) => `[File Contents: ${filename}]:\n${data.text}`);
+        if (fileParts.length) {
+            externalContextParts.push(`--- READ FILES CONTENT ---\n${fileParts.join('\n\n')}`);
+        }
     }
 
-    if (retrievedChatChunks.size > 0) {
-        const chatParts = Array.from(retrievedChatChunks.values()).map(r => `[Result from Chat KB - ${r.source}]: ${r.text}`);
-        gatheredContextParts.push(`--- CHAT KNOWLEDGE BASE CHUNKS ---\n${chatParts.join('\n\n')}`);
-    }
-
-    if (retrievedMemories.size > 0) {
-        const memoryParts = Array.from(retrievedMemories.values()).map(r => `[Chat Memory]: ${r.text}`);
-        gatheredContextParts.push(`--- CHAT SUMMARIZED MEMORIES & SNIPPETS ---\n${memoryParts.join('\n\n')}`);
-    }
-
-    if (retrievedLore.size > 0) {
-        const loreParts = Array.from(retrievedLore.values()).map(r => `[Linked Lore - ${r.source}]: ${r.text}`);
-        gatheredContextParts.push(`--- LINKED LORE (WRITING DESK) ---\n${loreParts.join('\n\n')}`);
-    }
-
-    if (retrievedWorldFacts.size > 0) {
-        const factParts = Array.from(retrievedWorldFacts.values()).map(r => `[${r.source}]: ${r.text}`);
-        gatheredContextParts.push(`--- WORLDBUILD FACTS ---\n${factParts.join('\n\n')}`);
-    }
-
-    const finalContextGathered = gatheredContextParts.join('\n\n');
+    const kanoraItems = [
+        ...Array.from(readFiles.entries())
+            .filter(([, data]) => data.source !== 'profile')
+            .map(([filename, data]) => ({
+                id: `file:${filename}`, kind: 'workspace-text', source: filename, content: data.text
+            })),
+        ...Array.from(retrievedChatChunks.entries()).map(([id, value]) => ({
+            id, kind: 'workspace-text', source: value.source, content: value.text
+        })),
+        ...Array.from(retrievedMemories.entries()).map(([id, value]) => ({
+            id, kind: 'workspace-memory', source: value.source || 'Chat Memory', content: value.text
+        })),
+        ...Array.from(retrievedLore.entries()).map(([id, value]) => ({
+            id, kind: 'worldbuild-canon', source: value.source, content: value.text
+        })),
+        ...Array.from(retrievedWorldFacts.entries()).map(([id, value]) => ({
+            id, kind: 'worldbuild-canon', source: value.source, content: value.text,
+            entityIds: value.entityIds || [id]
+        }))
+    ];
+    const externalContextGathered = externalContextParts.join('\n\n').trim();
 
     let loopProfileKbTokens = 0;
     let loopChatKbTokens = 0;
@@ -3137,7 +3194,8 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
 
     return {
         agenticResponse: finishResponse || '[Agent passed context directly — no summary needed]',
-        contextGathered: finalContextGathered.trim(),
+        externalContextGathered,
+        kanoraItems,
         profileKbTokens: loopProfileKbTokens,
         chatKbTokens: loopChatKbTokens,
         agenticInputTokens: agenticRagInputTokens,
