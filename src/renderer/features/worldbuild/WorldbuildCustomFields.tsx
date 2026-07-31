@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Braces, Check, Pencil } from 'lucide-react';
 import type { EntityFieldDefinition, EntityFieldType } from '../../../kanora/contracts';
 import Button from '../../components/ui/Button';
+import SearchableSelect from '../../components/ui/SearchableSelect';
 import type { Toast, WorldbuildApi, WorldbuildEntity, WorldbuildEntityTemplate } from './worldbuildTypes';
 
 const INPUT = 'wb-input w-full rounded-lg border border-white/15 bg-[#06121a]/80 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:border-accent/70 focus:outline-none';
@@ -96,8 +97,17 @@ function FieldInput({ definition, value, onChange, entities }: { definition: Ent
   }
   if (type === 'entity-reference' || type === 'entity-reference-list') {
     const multiple = type === 'entity-reference-list';
-    const selected = multiple ? (Array.isArray(value) ? value.map(String) : []) : [String(value ?? '')];
-    return <select className={`${INPUT} ${multiple ? 'min-h-32' : ''}`} multiple={multiple} value={selected} onChange={event => onChange(multiple ? [...event.target.selectedOptions].map(option => option.value) : event.target.value)}>{!multiple && <option value="">Not set</option>}{entities.map(entity => <option key={entity.id} value={entity.id}>{entity.canonicalName}</option>)}</select>;
+    const entityOptions = entities.filter(entity => entity.status !== 'proposed').map(entity => ({
+      id: entity.id,
+      label: entity.canonicalName,
+      aliases: entity.aliases,
+      group: entity.type.replace(/s$/, ''),
+    }));
+    if (multiple) {
+      const selected = Array.isArray(value) ? value.map(String) : [];
+      return <SearchableSelect multiple values={selected} onChange={onChange} options={entityOptions} placeholder="Search and add entities" />;
+    }
+    return <SearchableSelect value={String(value ?? '')} onChange={onChange} options={entityOptions} placeholder="Search for an entity" />;
   }
   if (type === 'long-text') return <textarea className={`${INPUT} min-h-24 resize-y`} value={String(value ?? '')} onChange={event => onChange(event.target.value)} />;
   if (type === 'number' || type === 'range') return <input className={INPUT} type="number" value={String(value ?? '')} onChange={event => onChange(event.target.value === '' ? '' : Number(event.target.value))} />;

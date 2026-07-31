@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, Route, Tags, TextQuote } from 'lucide-react';
+import { AlertTriangle, BrainCircuit, CheckCircle2, Route, Tags, TextQuote } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { AiEngineRoleDefinition, AiEngineRoleMode, ApiConnectionSummary } from '@shared/contracts/ai-engine-roles';
 
@@ -15,7 +15,7 @@ interface AiEngineRoleCardProps {
   children?: ReactNode;
 }
 
-const ICONS = { tagger: Tags, retrievalPlanner: Route, summarizer: TextQuote } as const;
+const ICONS = { tagger: Tags, retrievalPlanner: Route, summarizer: TextQuote, narrativeState: BrainCircuit } as const;
 
 function readModels(profile?: ApiConnectionSummary): string[] {
   if (!profile?.models) return [];

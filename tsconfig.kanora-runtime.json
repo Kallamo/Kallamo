@@ -6,11 +6,15 @@
     "noEmit": false,
     "rootDir": "./src",
     "outDir": "./dist-main",
+    "resolveJsonModule": true,
     "declaration": false,
     "sourceMap": false
   },
   "include": [
     "src/kanora/**/*.ts",
-    "src/main/features/kanora/**/*.ts"
+    "src/main/features/kanora/**/*.ts",
+    "src/main/features/kanora/worldbuild-entity-discovery.js",
+    "src/main/features/worldbuild/knowledge-service.js",
+    "src/shared/retrieval-settings-runtime.ts"
   ]
 }

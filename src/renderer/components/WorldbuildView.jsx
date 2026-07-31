@@ -4,7 +4,7 @@ import {
   Plus, Search, BookOpen, MapPin, Package, Users, Flag, User,
   Sparkles, Trash2, Save, X, Pencil, Check, Link2, Globe, Tag, ScrollText, Ghost, Info, Replace,
   Lock, ShieldCheck, RefreshCw, Upload, Download, CalendarClock, ChevronRight, ChevronsLeftRight,
-  AlertTriangle, LayoutTemplate,
+  AlertTriangle, LayoutTemplate, BookCheck,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import Button from './ui/Button';
@@ -18,8 +18,14 @@ import { useSidebarWidth } from '../features/worldbuild/useSidebarWidth';
 import { useWorldbuildNavigationState } from '../features/worldbuild/useWorldbuildNavigationState';
 import WorldbuildCustomFields from '../features/worldbuild/WorldbuildCustomFields';
 import WorldbuildKnowledgeTab from '../features/worldbuild/WorldbuildKnowledgeTab';
+import WorldbuildKanoraReview from '../features/worldbuild/WorldbuildKanoraReview';
+import WorldbuildFactsRegistry from '../features/worldbuild/WorldbuildFactsRegistry';
+import WorldbuildCalendar from '../features/worldbuild/WorldbuildCalendar';
+import WorldDateInput, { formatWorldDate } from '../features/worldbuild/WorldDateInput';
 import { WorldbuildInventory, WorldbuildRelationships } from '../features/worldbuild/WorldbuildAgentCollections';
 import WorldbuildTemplateManager from '../features/worldbuild/WorldbuildTemplateManager';
+import WorldbuildRoleplayResources from '../features/worldbuild/WorldbuildRoleplayResources';
+import { displayProposalValue } from '../features/worldbuild/reviewDisplay';
 import {
   ABUNDANCE_HELP, CREATURE_NATURES, DISPOSITION, fieldLabel, ITEM_TYPES, meta, TYPES,
   RARITY, RELATIONSHIP_LABELS, STATUS, THREAT, TYPE_ORDER,
@@ -134,14 +140,15 @@ const FreeDatalist = ({ value, onChange, options, placeholder }) => {
 // A small "?" that reveals a themed legend on hover, matching the app's tooltips.
 const InfoPopover = ({ items }) => {
   const [open, setOpen] = useState(false);
+  const anchorRef = useRef(null);
   return (
-    <span className="relative inline-flex align-middle" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+    <span ref={anchorRef} className="relative inline-flex align-middle" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
       <Info className="w-3 h-3 text-gray-500 hover:text-accent cursor-help" />
-      {open && (
-        <div className="absolute z-30 top-6 left-0 w-60 rounded-lg border border-white/15 bg-[#021a20] shadow-xl p-3 space-y-1.5 normal-case tracking-normal">
+      <Popover anchorRef={anchorRef} open={open} onClose={() => setOpen(false)} matchAnchorWidth={false} scroll={false} className="w-60 border-white/15 bg-[#021a20] p-3 normal-case tracking-normal">
+        <div className="space-y-1.5">
           {items.map(([k, v]) => <div key={k} className="text-xs leading-snug"><span className="font-semibold text-gray-100">{k}</span> <span className="text-gray-400">{v}</span></div>)}
         </div>
-      )}
+      </Popover>
     </span>
   );
 };
@@ -170,7 +177,8 @@ const Chip = ({ children }) => (
 );
 
 // A sheet section: titled card with an optional pencil that flips it to edit mode.
-function Section({ icon: Icon, title, editing, onEdit, showPencil, children }) {
+function Section({ icon, title, editing, onEdit, showPencil, children }) {
+  const Icon = icon || BookOpen;
   return (
     <div className="rounded-xl border border-white/10 bg-[#0a1721]/60 backdrop-blur-md overflow-hidden">
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/[0.08]">
@@ -325,6 +333,9 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const [bulkConfirm, setBulkConfirm] = useState(null);
   const [bulkSaving, setBulkSaving] = useState(false);
   const [selected, setSelected] = useState(null);
+  const [surface, setSurface] = useState('entities');
+  const [factCount, setFactCount] = useState(0);
+  const [worldCalendar, setWorldCalendar] = useState(null);
   const [rel, setRel] = useState({});
   const [charTab, setCharTab] = useState('data');
   const [editingSection, setEditingSection] = useState(null);
@@ -340,6 +351,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const [showExportModal, setShowExportModal] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [templates, setTemplates] = useState([]);
+  const [fieldDefinitions, setFieldDefinitions] = useState([]);
+  const [reviewCounts, setReviewCounts] = useState({});
+  const [subjectReview, setSubjectReview] = useState({ proposals: [] });
+  const [reviewKind, setReviewKind] = useState('entity');
   const [showTemplateManager, setShowTemplateManager] = useState(false);
   const { sidebarWidth, updateSidebarWidth, startSidebarResize, handleSidebarResizeKey } = useSidebarWidth();
   const {
@@ -361,9 +376,15 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const activeTemplate = templates.find(template => template.typeId === selected?.type);
   const templateSections = activeTemplate?.layout?.sections || [];
   const sectionSetting = (id) => templateSections.find(section => section.id === id);
+  const selectedReviewCounts = reviewCounts[selected?.id] || { entityUpdates: selected?.data?._enrichPending ? 1 : 0, kanora: 0 };
+  const hasEntityReview = selectedReviewCounts.entityUpdates > 0;
+  const hasKanoraReview = selectedReviewCounts.kanora > 0;
+  const hasReview = hasEntityReview || hasKanoraReview;
   const sheetTabs = (selected?.type === 'Characters' || isIndividualCreature
     ? ['data', 'inventory', 'connections', 'knowledge']
-    : hasKnowledgeTab ? ['data', 'knowledge'] : []).filter(tab => {
+    : hasKnowledgeTab ? ['data', 'knowledge'] : ['data']);
+  if (hasReview && !isNew) sheetTabs.push('review');
+  const visibleSheetTabs = sheetTabs.filter(tab => {
       if (tab === 'inventory') return !sectionSetting('inv')?.hidden;
       if (tab === 'knowledge') return !sectionSetting('knowledge')?.hidden;
       if (tab === 'connections') return !sectionSetting('rels')?.hidden || !sectionSetting('fac')?.hidden || !sectionSetting('loc')?.hidden;
@@ -386,12 +407,18 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const load = useCallback(async () => {
     if (!workspaceId) return;
     try {
-      const [entityRes, linkRes] = await Promise.all([
+      const [entityRes, linkRes, reviewRes, factRes, calendarRes] = await Promise.all([
         electronAPI.listEntities(workspaceId),
         electronAPI.listEntityLinks(workspaceId, 'inside'),
+        electronAPI.listWorldbuildReviewCounts?.(workspaceId),
+        electronAPI.listWorldbuildFacts?.(workspaceId),
+        electronAPI.getWorldCalendar?.(workspaceId),
       ]);
       setEntities(entityRes?.entities || []);
       setInsideLinks(linkRes?.links || []);
+      setReviewCounts(reviewRes?.counts || {});
+      setFactCount(factRes?.facts?.length || 0);
+      setWorldCalendar(calendarRes?.calendar || null);
     } catch { setEntities([]); setInsideLinks([]); }
     finally { setLoading(false); }
   }, [workspaceId, electronAPI]);
@@ -406,6 +433,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   useEffect(() => {
     setLoading(true);
     setSelected(null);
+    setSurface('entities');
     setRel({});
     setManageMode(false);
     setSelectedIds(new Set());
@@ -418,29 +446,55 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     if (!workspaceId || !electronAPI.listWorldbuildEntityTemplates) return;
     electronAPI.listWorldbuildEntityTemplates(workspaceId).then(result => setTemplates(result?.templates || [])).catch(() => setTemplates([]));
   }, [electronAPI, workspaceId]);
+  useEffect(() => {
+    if (!workspaceId || !selected?.type || !electronAPI.listWorldbuildFieldDefinitions) { setFieldDefinitions([]); return; }
+    electronAPI.listWorldbuildFieldDefinitions(workspaceId, selected.type)
+      .then(result => setFieldDefinitions(result?.fields || []))
+      .catch(() => setFieldDefinitions([]));
+  }, [electronAPI, selected?.type, workspaceId]);
+  const loadSubjectReview = useCallback(async () => {
+    if (!workspaceId || !selected?.id || !electronAPI.getWorldbuildSubjectReview) {
+      setSubjectReview({ proposals: [] });
+      return;
+    }
+    const result = await electronAPI.getWorldbuildSubjectReview(workspaceId, selected.id).catch(() => null);
+    setSubjectReview(result?.review || { proposals: [] });
+  }, [electronAPI, selected?.id, workspaceId]);
+  useEffect(() => { loadSubjectReview(); }, [loadSubjectReview]);
+  useEffect(() => {
+    if (!hasEntityReview && hasKanoraReview) setReviewKind('kanora');
+    else if (hasEntityReview && !hasKanoraReview) setReviewKind('entity');
+  }, [hasEntityReview, hasKanoraReview, selected?.id]);
   const loadRelations = useCallback(async (ent) => {
     if (!ent?.id) { setRel({}); return; }
     const from = (r) => electronAPI.getEntityLinks(ent.id, 'from', r).then(x => x?.links || []);
     const to = (r) => electronAPI.getEntityLinks(ent.id, 'to', r).then(x => x?.links || []);
     const n = {};
     if (ent.type === 'Locations') { n.inside = (await from('inside'))[0] || null; n.leader = (await from('led_by'))[0] || null; }
-    if (ent.type === 'Items') { n.createdBy = (await from('created_by'))[0] || null; n.ownedBy = (await from('owned_by'))[0] || null; n.foundIn = await from('found_in'); }
+    if (ent.type === 'Items') {
+      n.createdBy = (await from('created_by'))[0] || null;
+      n.ownedBy = (await from('owned_by'))[0] || null;
+      n.locatedIn = (await from('located_in'))[0] || null;
+      n.foundIn = await from('found_in');
+      n.soldIn = await from('sold_in');
+    }
     if (ent.type === 'Races') n.members = await to('is_race');
     if (ent.type === 'Creatures') {
       n.foundIn = await from('found_in');
       if ((ent.data?.scope || 'individual') !== 'group') {
-        n.inventory = await to('owned_by');
+        n.inventory = [...await to('owned_by'), ...await to('carried_by')];
         n.relationships = await from('related_to');
       }
     }
     if (ent.type === 'Events') { n.happenedAt = await from('happened_at'); n.involved = await from('involved'); }
     if (ent.type === 'Factions') { n.operatesIn = await from('operates_in'); n.members = await to('member_of'); n.leader = (await from('led_by'))[0] || null; }
-    if (ent.type === 'Characters') { n.isRace = (await from('is_race'))[0] || null; n.inventory = await to('owned_by'); n.memberOf = await from('member_of'); n.connectedTo = await from('connected_to'); n.relationships = await from('related_to'); }
+    if (ent.type === 'Characters') { n.isRace = (await from('is_race'))[0] || null; n.inventory = [...await to('owned_by'), ...await to('carried_by')]; n.memberOf = await from('member_of'); n.connectedTo = await from('connected_to'); n.relationships = await from('related_to'); }
     setRel(n);
   }, [electronAPI]);
 
-  const openEntity = async (en) => {
-    setEditingSection(null); setCharTab('data'); setMergePrompt(null);
+  const openEntity = async (en, { preserveTab = false } = {}) => {
+    setSurface('entities');
+    setEditingSection(null); if (!preserveTab) setCharTab('data'); setMergePrompt(null);
     setSelected({ id: en.id, type: en.type, canonicalName: en.canonicalName || '', aliases: (en.aliases || []).join(', '), lore: en.lore || '', loreDocumentId: en.loreDocumentId || '', status: en.status || 'confirmed', data: en.data || {} });
     await loadRelations(en);
   };
@@ -454,11 +508,11 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     onFocusHandled?.();
   }, [focusEntityId, entities]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (!navigationStateReady || focusEntityId || selected || !restoredEntityId) return;
+    if (!navigationStateReady || surface !== 'entities' || focusEntityId || selected || !restoredEntityId) return;
     const en = entities.find(e => e.id === restoredEntityId);
     if (en) openEntity(en);
-  }, [navigationStateReady, focusEntityId, selected, restoredEntityId, entities]); // eslint-disable-line react-hooks/exhaustive-deps
-  const startNew = (type) => { setShowCreate(false); setEditingSection(null); setCharTab('data'); setSelected(draftFor(type)); setRel({}); };
+  }, [navigationStateReady, surface, focusEntityId, selected, restoredEntityId, entities]); // eslint-disable-line react-hooks/exhaustive-deps
+  const startNew = (type) => { setSurface('entities'); setShowCreate(false); setEditingSection(null); setCharTab('data'); setSelected(draftFor(type)); setRel({}); };
   const patch = (f) => setSelected(p => ({ ...p, ...f }));
   const patchData = (f) => setSelected(p => ({ ...p, data: { ...p.data, ...f } }));
   const applyIntegratedEntity = (entity) => {
@@ -572,12 +626,20 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       if (selected?.id) { const cur = (await electronAPI.getEntity(selected.id))?.entity; if (cur) await openEntity(cur); }
       const bits = [`${res.updated} updated`];
       if (res.staged) bits.push(`${res.staged} staged for review`);
-      if (res.upToDate) bits.push(`${res.upToDate} already up to date`);
+      if (res.upToDate) bits.push(`${res.upToDate} with no unprocessed evidence`);
       if (res.noEvidence) bits.push(`${res.noEvidence} with no matching evidence`);
       if (res.evidenceUsed) bits.push(`${res.evidenceUsed} evidence passages read`);
       if (res.taggedEvidenceRemaining) bits.push(`${res.taggedEvidenceRemaining} tagged passages pending`);
-      if (res.textMatchesSkipped) bits.push(`${res.textMatchesSkipped} lower-priority text matches skipped`);
+      if (res.textMatchesDeferred) bits.push(`${res.textMatchesDeferred} lower-priority text matches deferred`);
+      if (res.canonicalSuggestionCount) bits.push(`${res.canonicalSuggestionCount} entity suggestions`);
+      if (res.kanoraSuggestionCount) bits.push(`${res.kanoraSuggestionCount} Kanora suggestions`);
+      if (res.emptyFieldSuggestions) bits.push(`${res.emptyFieldSuggestions} empty field suggestions`);
+      if (res.emptyFieldsWithoutSupport) bits.push(`${res.emptyFieldsWithoutSupport} empty fields without supporting evidence`);
+      if (res.emptyFieldsAwaitingEvidence) bits.push(`${res.emptyFieldsAwaitingEvidence} empty fields still awaiting deferred evidence`);
+      if (res.tokenUsage?.inputTokens) bits.push(`~${res.tokenUsage.inputTokens.toLocaleString()} input tokens`);
+      if (res.tokenUsage?.outputTokens) bits.push(`~${res.tokenUsage.outputTokens.toLocaleString()} output tokens`);
       if (res.failed) bits.push(`${res.failed} failed`);
+      if (res.stoppedEarly && res.remaining) bits.push(`${res.remaining} left pending after repeated structured-output failures`);
       const summary = bits.join(', ');
       if (res.failed) {
         setShowEnrichErrors(true);
@@ -643,7 +705,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     if (!r?.success) { showToast(`Import failed: ${r?.error || 'unknown error'}`, 'error'); return; }
     await load();
     const linkBit = r.linksAdded ? ` and ${r.linksAdded} link${r.linksAdded === 1 ? '' : 's'}` : '';
-    showToast(`Imported ${r.entitiesAdded} entit${r.entitiesAdded === 1 ? 'y' : 'ies'}${linkBit} for review. Accept, merge, or dismiss each in the sidebar.`, 'success');
+    const calendarBit = r.calendarConflict ? ' The package uses a different calendar, so your current calendar was preserved.' : r.calendarImported ? ' Its calendar was imported too.' : '';
+    showToast(`Imported ${r.entitiesAdded} entit${r.entitiesAdded === 1 ? 'y' : 'ies'}${linkBit} for review. Accept, merge, or dismiss each in the sidebar.${calendarBit}`, r.calendarConflict ? 'info' : 'success');
   };
 
   // Resolve a staged 'review' enrichment proposal (data._enrichPending). Accept applies
@@ -656,7 +719,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       const r = await electronAPI.resolveEnrichReview(selected.id, accept, reject);
       if (!r?.success) { showToast(`Review failed: ${r?.error || 'unknown error'}`, 'error'); return; }
       await load();
-      if (r.entity) await openEntity(r.entity);
+      if (r.entity) await openEntity(r.entity, { preserveTab: true });
     } catch (e) { showToast(`Review failed: ${e.message}`, 'error'); }
     finally { setSaving(false); }
   };
@@ -679,22 +742,23 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     const q = search.trim().toLowerCase();
     const list = entities.filter(en =>
       (!filterType || en.type === filterType) &&
-      (!reviewFilter || (reviewFilter === 'proposed' ? en.status === 'proposed' : en.status !== 'proposed' && en.data?._enrichPending)) &&
+      (!reviewFilter || (reviewFilter === 'proposed' ? en.status === 'proposed' : en.status !== 'proposed' && ((reviewCounts[en.id]?.entityUpdates || 0) > 0 || (reviewCounts[en.id]?.kanora || 0) > 0))) &&
       (!q || [en.canonicalName, ...(en.aliases || [])].join(' ').toLowerCase().includes(q))
     );
     return list.sort((a, b) => (TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type)) || a.canonicalName.localeCompare(b.canonicalName));
-  }, [entities, search, filterType, reviewFilter]);
+  }, [entities, search, filterType, reviewFilter, reviewCounts]);
   const locationTree = useMemo(() => buildLocationTree(entities, insideLinks), [entities, insideLinks]);
   const useLocationTree = !search.trim() && !reviewFilter && (!filterType || filterType === 'Locations');
   const toggleLocation = (id) => setExpandedLocations(current => ({ ...current, [id]: current[id] === false }));
   const proposedCount = useMemo(() => entities.filter(e => e.status === 'proposed').length, [entities]);
-  const pendingUpdateCount = useMemo(() => entities.filter(e => e.status !== 'proposed' && e.data?._enrichPending).length, [entities]);
+  const pendingUpdateCount = useMemo(() => entities.filter(e => e.status !== 'proposed' && ((reviewCounts[e.id]?.entityUpdates || 0) > 0 || (reviewCounts[e.id]?.kanora || 0) > 0)).length, [entities, reviewCounts]);
   const exportableCount = useMemo(() => entities.filter(e => e.status !== 'proposed').length, [entities]);
   const selectedEntities = useMemo(() => entities.filter(entity => selectedIds.has(entity.id)), [entities, selectedIds]);
   const visibleIds = useMemo(() => new Set(filtered.map(entity => entity.id)), [filtered]);
   const hiddenSelectedCount = useMemo(() => selectedEntities.filter(entity => !visibleIds.has(entity.id)).length, [selectedEntities, visibleIds]);
   const selectedProposedCount = selectedEntities.filter(entity => entity.status === 'proposed').length;
-  const selectedUpdateCount = selectedEntities.filter(entity => entity.status !== 'proposed' && entity.data?._enrichPending).length;
+  const selectedUpdateCount = selectedEntities.filter(entity => entity.status !== 'proposed' && ((reviewCounts[entity.id]?.entityUpdates || 0) > 0 || (reviewCounts[entity.id]?.kanora || 0) > 0)).length;
+  const selectedConfirmedCount = selectedEntities.length - selectedProposedCount;
 
   useEffect(() => {
     if (reviewFilter === 'proposed' && proposedCount === 0) setReviewFilter(null);
@@ -721,9 +785,13 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       else if (action === 'accept-proposed') showToast(`Accepted ${result.accepted} proposed entit${result.accepted === 1 ? 'y' : 'ies'}.`, 'success');
       else if (action === 'accept-updates') showToast(`Accepted AI updates for ${result.accepted} entit${result.accepted === 1 ? 'y' : 'ies'}.`, 'success');
       else if (action === 'accept-all') showToast(`Accepted ${result.proposed.accepted} proposal${result.proposed.accepted === 1 ? '' : 's'} and updates for ${result.updates.accepted} entit${result.updates.accepted === 1 ? 'y' : 'ies'}.`, 'success');
+      else if (action === 'reject-proposed') showToast(`Rejected ${result.rejected} proposed entit${result.rejected === 1 ? 'y' : 'ies'}.`, 'success');
+      else if (action === 'reject-updates') showToast(`Rejected AI updates for ${result.rejected} entit${result.rejected === 1 ? 'y' : 'ies'}.`, 'success');
+      else if (action === 'reject-all') showToast(`Rejected ${result.proposed.rejected} proposal${result.proposed.rejected === 1 ? '' : 's'} and updates for ${result.updates.rejected} entit${result.updates.rejected === 1 ? 'y' : 'ies'}.`, 'success');
+      else if (action === 'reprocess') showToast(`${result.reset} entit${result.reset === 1 ? 'y is' : 'ies are'} ready to be reprocessed.`, 'success');
       else if (action === 'delete') showToast(`Deleted ${result.deleted} entit${result.deleted === 1 ? 'y' : 'ies'}.`, 'success');
       const selectedId = selected?.id;
-      if (action === 'delete' && selectedId && ids.includes(selectedId)) setSelected(null);
+      if (selectedId && ids.includes(selectedId) && (action === 'delete' || ((action === 'reject-proposed' || action === 'reject-all') && selected?.status === 'proposed'))) setSelected(null);
       setSelectedIds(new Set());
       setBulkConfirm(null);
       await load();
@@ -750,21 +818,30 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     }
   };
 
-  const isResource = selected?.type === 'Items' && (selected?.data?.itemType || '') === 'Resource';
-  const isGear = selected?.type === 'Items' && !isResource;
+  const isUniqueItem = selected?.type === 'Items' && selected?.data?.itemNature === 'unique';
+  const isItemType = selected?.type === 'Items' && !isUniqueItem;
   const unsaved = isNew;
 
   // Owner as a single 3-mode choice: the AI decides, it is deliberately lost, or a
   // character holds it. A character owner is an owned_by edge; the two ownerless modes
   // live in data.ownership. Picking a character also clears the ownerless flag.
   const ownerVal = rel.ownedBy ? rel.ownedBy.entity.id : (selected?.data?.ownership === 'lost' ? 'lost' : 'ai');
-  const setOwner = async (val) => {
-    if (val === 'ai' || val === 'lost') { patchData({ ownership: val }); await setSingle('owned_by', null); }
-    else { patchData({ ownership: 'character' }); await setSingle('owned_by', val); }
+  const ownerOptions = [...byType.Characters, ...byType.Creatures.filter(entity => (entity.data?.scope || 'individual') !== 'group')];
+  const persistItemDraft = async () => {
+    if (!selected?.id) return false;
+    return Boolean(await persist());
   };
-  // Where-found is hidden once a character owns the item (it lives in their inventory).
-  const showWhereFound = isResource || !rel.ownedBy;
+  const setOwner = async (val) => {
+    if (!await persistItemDraft()) return;
+    if (val === 'ai' || val === 'lost') { patchData({ ownership: val }); await setSingle('owned_by', null); }
+    else { patchData({ ownership: 'character' }); await setSingle('located_in', null); await setSingle('owned_by', val); }
+  };
   const ownerLabel = rel.ownedBy ? rel.ownedBy.entity.canonicalName : (selected?.data?.ownership === 'lost' ? 'Unknown / Lost' : 'AI decides');
+  const setItemLocation = async (locationId) => {
+    if (!await persistItemDraft()) return;
+    if (locationId) await setSingle('owned_by', null);
+    await setSingle('located_in', locationId || null);
+  };
 
   // Lore editor (prose + Writing Desk file link), reused by several types.
   const linkedDocs = loreDocIds();
@@ -809,9 +886,13 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     }
     if (type === 'Locations') {
       S.push({ key: 'overview', title: 'Overview', icon: MapPin, scalar: true,
-        view: <div className="grid grid-cols-2 gap-4"><ViewField label="Type" value={selected.data.locationType} empty="Not set" /><ViewField label="Inside" value={rel.inside?.entity?.canonicalName} empty="Not set" /><ViewField label="Owner / leader" value={rel.leader?.entity?.canonicalName} empty="Not set" /></div>,
+        view: <>
+          <div className="grid grid-cols-2 gap-4"><ViewField label="Type" value={selected.data.locationType} empty="Not set" /><ViewField label="Inside" value={rel.inside?.entity?.canonicalName} empty="Not set" /><ViewField label="Owner / leader" value={rel.leader?.entity?.canonicalName} empty="Not set" /></div>
+          <div className="pt-1"><Prose text={selected.data.description} empty="No description." /></div>
+        </>,
         edit: <>
           <Edit label="Type"><LInput placeholder="e.g. continent / kingdom / city / tavern" value={selected.data.locationType || ''} onChange={(e) => patchData({ locationType: e.target.value })} /></Edit>
+          <Edit label="Description"><LTextarea rows={5} placeholder="What this place looks and feels like, including its defining features." value={selected.data.description || ''} onChange={(e) => patchData({ description: e.target.value })} /></Edit>
           <SingleRelation label="Inside another place" hint="Nest this within a larger location." disabled={unsaved} current={rel.inside?.entity?.id} options={byType.Locations.filter(o => o.id !== selected.id)} onSet={(id) => setSingle('inside', id)} />
           <SingleRelation label="Owner / leader (optional)" hint="Who holds or rules this place, if anyone." disabled={unsaved} current={rel.leader?.entity?.id} options={byType.Characters} onSet={(id) => setSingle('led_by', id)} />
         </> });
@@ -823,10 +904,12 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           <div className="grid grid-cols-2 gap-4">
             <ViewField label="Nature" value={(selected.data.itemNature || 'type') === 'unique' ? 'Unique item' : 'Item type'} />
             <ViewField label="Category" value={selected.data.itemType} empty="Not set" />
-            {isGear && <ViewField label="Owner" value={ownerLabel} empty="Not set" />}
-            {isGear && <ViewField label="Creator" value={rel.createdBy?.entity?.canonicalName} empty="Unknown" />}
-            {isResource && <ViewField label="Abundance" value={selected.data.abundance} empty="Not set" />}
-            {showWhereFound && <div className="col-span-2"><div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-0.5">Where found</div><ChipList links={rel.foundIn} empty="Not set" /></div>}
+            {isUniqueItem && <ViewField label="Owner" value={ownerLabel} empty="Not set" />}
+            {isUniqueItem && <ViewField label="Current location" value={rel.locatedIn?.entity?.canonicalName} empty={rel.ownedBy ? `In ${rel.ownedBy.entity.canonicalName}'s inventory` : 'Not set'} />}
+            <ViewField label="Creator" value={rel.createdBy?.entity?.canonicalName} empty="Unknown" />
+            {isItemType && <ViewField label="Abundance" value={selected.data.abundance} empty="Not set" />}
+            {isItemType && <div className="col-span-2"><div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-0.5">Where found</div><ChipList links={rel.foundIn} empty="Not set" /></div>}
+            {isItemType && <div className="col-span-2"><div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-0.5">Where sold</div><ChipList links={rel.soldIn} empty="Not set" /></div>}
           </div>
           <div className="pt-1"><Prose text={selected.data.description} empty="No description." /></div>
         </>,
@@ -837,16 +920,19 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             </div>
           </Edit>
           <Edit label="Category"><LSelect value={selected.data.itemType || ''} onChange={(e) => patchData({ itemType: e.target.value })}><option value="">Choose…</option>{ITEM_TYPES.map(t => <option key={t} value={t}>{t}{t === 'Resource' ? ' (natural / drops)' : ''}</option>)}</LSelect></Edit>
-          {isGear && <SingleRelation label="Creator" hint="Leave blank if unknown." disabled={unsaved} current={rel.createdBy?.entity?.id} options={byType.Characters} onSet={(id) => setSingle('created_by', id)} />}
-          {isGear && <Edit label="Owner" hint={unsaved ? 'Save first to assign an owner.' : 'Who holds it. Or let the AI decide, or leave it lost.'}>
-            <LSelect value={ownerVal} disabled={unsaved} onChange={(e) => setOwner(e.target.value)}>
-              <option value="ai">AI decides</option>
-              <option value="lost">Unknown / Lost</option>
-              {byType.Characters.map(o => <option key={o.id} value={o.id}>{o.canonicalName}</option>)}
-            </LSelect>
+          <SingleRelation label="Creator" hint="Leave blank if unknown." disabled={unsaved} current={rel.createdBy?.entity?.id} options={byType.Characters} onSet={(id) => setSingle('created_by', id)} />
+          {isUniqueItem && <Edit label="Owner" hint={unsaved ? 'Save first to assign an owner.' : 'A unique item can be in one inventory or one world location.'}>
+            {!unsaved && <div className="flex items-center gap-2 flex-wrap">
+              <button type="button" onClick={() => setOwner('ai')} className={`rounded-md border px-2.5 py-1.5 text-xs transition-colors ${ownerVal === 'ai' ? 'border-accent/40 bg-accent/15 text-accent' : 'border-white/10 text-gray-400 hover:text-white'}`}>AI decides</button>
+              <button type="button" onClick={() => setOwner('lost')} className={`rounded-md border px-2.5 py-1.5 text-xs transition-colors ${ownerVal === 'lost' ? 'border-accent/40 bg-accent/15 text-accent' : 'border-white/10 text-gray-400 hover:text-white'}`}>Unknown / Lost</button>
+              {rel.ownedBy && <Chip>{rel.ownedBy.entity.canonicalName}</Chip>}
+              <EntityPickerButton icon={rel.ownedBy ? Replace : Plus} label={rel.ownedBy ? 'Change' : 'Choose entity'} title="Choose owner" options={ownerOptions} onPick={setOwner} />
+            </div>}
           </Edit>}
-          {isResource && <Edit label={<>Abundance <InfoPopover items={ABUNDANCE_HELP} /></>} hint="How much of it exists in the world."><LSelect value={selected.data.abundance || ''} onChange={(e) => patchData({ abundance: e.target.value })}><option value="">Choose…</option>{RARITY.map(r => <option key={r} value={r}>{r}</option>)}</LSelect></Edit>}
-          {showWhereFound && <MultiRelation label="Where found" hint={isResource ? 'Every place this resource can be gathered.' : 'Where it turns up when no one owns it.'} disabled={unsaved} links={rel.foundIn || []} options={byType.Locations} onAdd={(id) => addMulti('found_in', id)} onRemove={removeLink} />}
+          {isUniqueItem && <SingleRelation label="Current location" hint="Setting a location removes this item from its current inventory." disabled={unsaved} current={rel.locatedIn?.entity?.id} options={byType.Locations} onSet={setItemLocation} />}
+          {isItemType && <Edit label={<>Abundance <InfoPopover items={ABUNDANCE_HELP} /></>} hint="How common this item type is in the world."><LSelect value={selected.data.abundance || ''} onChange={(e) => patchData({ abundance: e.target.value })}><option value="">Choose…</option>{RARITY.map(r => <option key={r} value={r}>{r}</option>)}</LSelect></Edit>}
+          {isItemType && <MultiRelation label="Where found" hint="Places where this item type can be found, gathered, or obtained." disabled={unsaved} links={rel.foundIn || []} options={byType.Locations} onAdd={(id) => addMulti('found_in', id)} onRemove={removeLink} />}
+          {isItemType && <MultiRelation label="Where sold" hint="Places where this item type can normally be purchased." disabled={unsaved} links={rel.soldIn || []} options={byType.Locations} onAdd={(id) => addMulti('sold_in', id)} onRemove={removeLink} />}
           <Edit label="Description"><LTextarea rows={4} placeholder="What it looks like and does." value={selected.data.description || ''} onChange={(e) => patchData({ description: e.target.value })} /></Edit>
         </> });
       S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, view: loreView, edit: loreEdit });
@@ -872,6 +958,11 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             <ViewField label="Threat" value={selected.data.threat} empty="Not set" />
           </div>
           <div className="pt-1"><ViewField label="Abilities & traits" value={selected.data.abilities} empty="Not set" /></div>
+          {isIndividual && <div className="grid grid-cols-2 gap-4 pt-1">
+            <ViewField label="Born" value={formatWorldDate(worldCalendar, selected.data.birthDate)} empty="Not set" />
+            {selected.data.status === 'deceased' && <ViewField label="Died" value={formatWorldDate(worldCalendar, selected.data.deathDate)} empty="Not set" />}
+            {selected.data.status === 'missing' && <ViewField label="Disappeared" value={formatWorldDate(worldCalendar, selected.data.missingDate)} empty="Not set" />}
+          </div>}
           <div className="pt-1"><div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-0.5">Habitat</div><ChipList links={rel.foundIn} empty="Not set" /></div>
         </>,
         edit: <>
@@ -891,6 +982,12 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             <Edit label="Threat"><LSelect value={selected.data.threat || ''} onChange={(e) => patchData({ threat: e.target.value })}><option value="">Choose…</option>{THREAT.map(t => <option key={t} value={t}>{t}</option>)}</LSelect></Edit>
           </div>
           <Edit label="Abilities & traits" hint="Short, concrete powers the AI can use in a scene."><LTextarea rows={3} placeholder="e.g. flies, breathes fire, immune to steel." value={selected.data.abilities || ''} onChange={(e) => patchData({ abilities: e.target.value })} /></Edit>
+          {isIndividual && worldCalendar && <Edit label="Birth date">
+            <WorldDateInput calendar={worldCalendar} value={selected.data.birthDate} onChange={birthDate => patchData({ birthDate })} />
+            <label className="mt-2 flex items-center gap-2 text-xs text-gray-400"><Checkbox checked={Boolean(selected.data.showBirthday)} onChange={showBirthday => patchData({ showBirthday })} />Show birthday in Calendar</label>
+          </Edit>}
+          {isIndividual && selected.data.status === 'deceased' && worldCalendar && <Edit label="Death date"><WorldDateInput calendar={worldCalendar} value={selected.data.deathDate} onChange={deathDate => patchData({ deathDate })} /></Edit>}
+          {isIndividual && selected.data.status === 'missing' && worldCalendar && <Edit label="Disappearance date"><WorldDateInput calendar={worldCalendar} value={selected.data.missingDate} onChange={missingDate => patchData({ missingDate })} /></Edit>}
           <MultiRelation label="Habitat" hint="Where it is found or dwells." disabled={unsaved} links={rel.foundIn || []} options={byType.Locations} onAdd={(id) => addMulti('found_in', id)} onRemove={removeLink} />
         </> });
       S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, view: loreView, edit: loreEdit });
@@ -915,14 +1012,34 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     }
     if (type === 'Events') {
       const kindOpts = ['Battle', 'Festival', 'Holiday', 'Disaster', 'Ceremony', 'Discovery'];
-      S.push({ key: 'overview', title: 'Overview', icon: CalendarClock, scalar: false, relational: true,
+      S.push({ key: 'overview', title: 'Overview', icon: CalendarClock, scalar: true, relational: true,
         view: <>
+          <ViewField label="Event type" value={(selected.data.eventNature || 'one-time') === 'recurring' ? 'Recurring event' : 'One-time event'} />
           <ViewField label="Kind" value={selected.data.kind} empty="Not set" />
+          {(selected.data.eventNature || 'one-time') === 'recurring'
+            ? <ViewField label="Schedule" value={selected.data.recurrence?.anchorDate ? `${formatWorldDate(worldCalendar, selected.data.recurrence.anchorDate)} · every ${selected.data.recurrence.interval || 1} ${selected.data.recurrence.unit || 'year'}(s)` : null} empty="Not set" />
+            : <ViewField label="Date" value={selected.data.startDate ? `${formatWorldDate(worldCalendar, selected.data.startDate)}${selected.data.endDate ? ` to ${formatWorldDate(worldCalendar, selected.data.endDate)}` : ''}` : null} empty="Not set" />}
           <div className="pt-2"><div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-0.5">Where it happened</div><ChipList links={rel.happenedAt} empty="No place set." /></div>
           <div className="pt-2"><div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-0.5">Who was involved</div><ChipList links={rel.involved} empty="No one set." /></div>
         </>,
         edit: <>
+          <Edit label="Event type">
+            <div className="flex w-fit rounded-lg border border-white/10 bg-white/[0.04] p-0.5">
+              {[['one-time', 'One-time event'], ['recurring', 'Recurring event']].map(([value, label]) => <button key={value} type="button" onClick={() => patchData({ eventNature: value })} className={`rounded-md px-3 py-1.5 text-xs font-bold uppercase tracking-wider ${(selected.data.eventNature || 'one-time') === value ? 'bg-accent text-[#011419]' : 'text-gray-400 hover:text-white'}`}>{label}</button>)}
+            </div>
+          </Edit>
           <Edit label="Kind" hint="What sort of event. Type your own or reuse one."><FreeDatalist value={selected.data.kind} onChange={(e) => patchData({ kind: e.target.value })} options={kindOpts} placeholder="e.g. Battle, Festival, Holiday" /></Edit>
+          {worldCalendar && (selected.data.eventNature || 'one-time') === 'recurring' ? (
+            <>
+              <Edit label="First occurrence"><WorldDateInput calendar={worldCalendar} value={selected.data.recurrence?.anchorDate} onChange={anchorDate => patchData({ recurrence: { ...(selected.data.recurrence || {}), anchorDate } })} /></Edit>
+              <Edit label="Repeats every"><div className="grid grid-cols-[7rem_1fr] gap-2"><LInput type="number" min="1" value={selected.data.recurrence?.interval || 1} onChange={event => patchData({ recurrence: { ...(selected.data.recurrence || {}), interval: Math.max(1, Number(event.target.value) || 1) } })} /><LSelect value={selected.data.recurrence?.unit || 'year'} onChange={event => patchData({ recurrence: { ...(selected.data.recurrence || {}), unit: event.target.value } })}><option value="day">Days</option><option value="week">Weeks</option><option value="month">Months</option><option value="year">Years</option></LSelect></div></Edit>
+            </>
+          ) : worldCalendar ? (
+            <>
+              <Edit label="Start date"><WorldDateInput calendar={worldCalendar} value={selected.data.startDate} onChange={startDate => patchData({ startDate })} /></Edit>
+              <Edit label="End date" hint="Optional. Leave blank for a single-day event."><WorldDateInput calendar={worldCalendar} value={selected.data.endDate} onChange={endDate => patchData({ endDate })} /></Edit>
+            </>
+          ) : null}
           <MultiRelation label="Where it happened" hint="Places this event took place." disabled={unsaved} links={rel.happenedAt || []} options={byType.Locations} onAdd={(id) => addMulti('happened_at', id)} onRemove={removeLink} />
           <MultiRelation label="Who was involved" hint="Characters who took part." disabled={unsaved} links={rel.involved || []} options={byType.Characters} onAdd={(id) => addMulti('involved', id)} onRemove={removeLink} />
         </> });
@@ -939,6 +1056,11 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
         view: <>
           <div className="mb-3 flex items-center gap-2"><span className="text-[10px] font-bold uppercase tracking-wider text-gray-500">Status</span><StateTag map={STATUS} value={selected.data.status || 'unknown'} /></div>
           <div className="grid grid-cols-2 gap-4"><ViewField label="Age" value={selected.data.age} empty="Not set" /><ViewField label="Race" value={rel.isRace?.entity?.canonicalName} empty="Not set" /></div>
+          <div className="mt-4 grid grid-cols-2 gap-4">
+            <ViewField label="Born" value={formatWorldDate(worldCalendar, selected.data.birthDate)} empty="Not set" />
+            {selected.data.status === 'deceased' && <ViewField label="Died" value={formatWorldDate(worldCalendar, selected.data.deathDate)} empty="Not set" />}
+            {selected.data.status === 'missing' && <ViewField label="Disappeared" value={formatWorldDate(worldCalendar, selected.data.missingDate)} empty="Not set" />}
+          </div>
         </>,
         edit: <>
           <div className="grid grid-cols-2 gap-3">
@@ -946,6 +1068,12 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             <Edit label="Status"><StateSelect map={STATUS} value={selected.data.status || 'unknown'} onChange={(e) => patchData({ status: e.target.value })} /></Edit>
           </div>
           <SingleRelation label="Race" disabled={unsaved} current={rel.isRace?.entity?.id} options={byType.Races} onSet={(id) => setSingle('is_race', id)} />
+          {worldCalendar && <Edit label="Birth date">
+            <WorldDateInput calendar={worldCalendar} value={selected.data.birthDate} onChange={birthDate => patchData({ birthDate })} />
+            <label className="mt-2 flex items-center gap-2 text-xs text-gray-400"><Checkbox checked={Boolean(selected.data.showBirthday)} onChange={showBirthday => patchData({ showBirthday })} />Show birthday in Calendar</label>
+          </Edit>}
+          {selected.data.status === 'deceased' && worldCalendar && <Edit label="Death date"><WorldDateInput calendar={worldCalendar} value={selected.data.deathDate} onChange={deathDate => patchData({ deathDate })} /></Edit>}
+          {selected.data.status === 'missing' && worldCalendar && <Edit label="Disappearance date"><WorldDateInput calendar={worldCalendar} value={selected.data.missingDate} onChange={missingDate => patchData({ missingDate })} /></Edit>}
         </> },
       { key: 'appearance', title: 'Appearance', icon: User, scalar: true, view: <Prose text={selected.data.appearance} />, edit: <Edit label="Appearance"><LTextarea rows={5} placeholder="Physical presence, clothing, and distinguishing features." value={selected.data.appearance || ''} onChange={(e) => patchData({ appearance: e.target.value })} /></Edit> },
       { key: 'personality', title: 'Personality', icon: Users, scalar: true, view: <Prose text={selected.data.personality} />, edit: <Edit label="Personality"><LTextarea rows={5} placeholder="Temperament, habits, values, and contradictions." value={selected.data.personality || ''} onChange={(e) => patchData({ personality: e.target.value })} /></Edit> },
@@ -1008,7 +1136,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           <span className={`w-7 h-7 rounded-md border flex items-center justify-center shrink-0 ${t.medallion}`}><Icon className="w-3.5 h-3.5" /></span>
           <span className={`flex-1 min-w-0 truncate text-sm font-medium ${active ? 'text-accent' : 'text-gray-200'}`}>{en.canonicalName}</span>
           {en.status === 'proposed' && <Sparkles className="w-3.5 h-3.5 text-amber-300 shrink-0" data-tooltip="AI proposal, needs accept" />}
-          {en.status !== 'proposed' && en.data?._enrichPending && <ShieldCheck className="w-3.5 h-3.5 text-sky-300 shrink-0" data-tooltip="AI updates awaiting review" />}
+          {en.status !== 'proposed' && (reviewCounts[en.id]?.entityUpdates || 0) > 0 && <ShieldCheck className="w-3.5 h-3.5 text-sky-300 shrink-0" data-tooltip={`${reviewCounts[en.id].entityUpdates} entity update suggestions`} />}
+          {en.status !== 'proposed' && (reviewCounts[en.id]?.kanora || 0) > 0 && <Sparkles className="w-3.5 h-3.5 text-violet-300 shrink-0" data-tooltip={`${reviewCounts[en.id].kanora} Kanora suggestions`} />}
         </button>
       </div>
     );
@@ -1035,7 +1164,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               <span className={`w-7 h-7 rounded-md border flex items-center justify-center shrink-0 ${t.medallion}`}><Icon className="w-3.5 h-3.5" /></span>
               <span className={`flex-1 min-w-0 truncate text-sm font-medium ${active ? 'text-accent' : 'text-gray-200'}`}>{entity.canonicalName}</span>
               {entity.status === 'proposed' && <Sparkles className="w-3.5 h-3.5 text-amber-300 shrink-0" data-tooltip="AI proposal, needs accept" />}
-              {entity.status !== 'proposed' && entity.data?._enrichPending && <ShieldCheck className="w-3.5 h-3.5 text-sky-300 shrink-0" data-tooltip="AI updates awaiting review" />}
+              {entity.status !== 'proposed' && (reviewCounts[entity.id]?.entityUpdates || 0) > 0 && <ShieldCheck className="w-3.5 h-3.5 text-sky-300 shrink-0" data-tooltip={`${reviewCounts[entity.id].entityUpdates} entity update suggestions`} />}
+              {entity.status !== 'proposed' && (reviewCounts[entity.id]?.kanora || 0) > 0 && <Sparkles className="w-3.5 h-3.5 text-violet-300 shrink-0" data-tooltip={`${reviewCounts[entity.id].kanora} Kanora suggestions`} />}
             </button>
             {hasChildren && <button type="button" onClick={() => toggleLocation(entity.id)} aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${entity.canonicalName}`} className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-gray-200 hover:bg-white/5 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent">
               <ChevronRight className={`w-3.5 h-3.5 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
@@ -1104,6 +1234,22 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       tone: 'warning', title: 'Accept AI updates', confirm: 'Accept updates',
       message: `Accept all pending AI changes for ${summary.pendingUpdates} selected entities: ${updateDetails}.`,
     };
+    if (action === 'reject-proposed') return {
+      tone: 'danger', title: 'Reject proposed entities', confirm: 'Reject proposals',
+      message: `Reject and remove ${summary.proposed} selected proposed entities. Confirmed entities in the selection will not be changed.`,
+    };
+    if (action === 'reject-updates') return {
+      tone: 'danger', title: 'Reject AI updates', confirm: 'Reject updates',
+      message: `Discard all pending AI changes for ${summary.pendingUpdates} selected entities: ${updateDetails}. Current canonical data will not be changed.`,
+    };
+    if (action === 'reject-all') return {
+      tone: 'danger', title: 'Reject proposals and updates', confirm: 'Reject both',
+      message: `Remove ${summary.proposed} proposed entities and discard pending changes for ${summary.pendingUpdates} entities: ${updateDetails}. Current canonical data will not be changed.`,
+    };
+    if (action === 'reprocess') return {
+      tone: 'warning', title: 'Reprocess selected entities', confirm: 'Reset progress',
+      message: `Clear the processed-evidence status for ${summary.entities - summary.proposed} confirmed entities. Current data and pending reviews will be preserved. The next Update Entities run will read their matching evidence again.`,
+    };
     return {
       tone: 'warning', title: 'Accept proposals and updates', confirm: 'Accept both',
       message: `Confirm ${summary.proposed} proposed entities and accept pending changes for ${summary.pendingUpdates} entities: ${updateDetails}.`,
@@ -1125,7 +1271,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           message={bulkDialog.message}
           actions={[
             { label: 'Cancel', variant: 'ghost', onClick: () => setBulkConfirm(null) },
-            { label: bulkDialog.confirm, variant: bulkConfirm.action === 'delete' ? 'danger' : 'primary', autoFocus: true, loading: bulkSaving, onClick: () => runBulkAction(bulkConfirm.action) },
+            { label: bulkDialog.confirm, variant: bulkDialog.tone === 'danger' ? 'danger' : 'primary', autoFocus: true, loading: bulkSaving, onClick: () => runBulkAction(bulkConfirm.action) },
           ]}
           onClose={() => setBulkConfirm(null)}
         />
@@ -1254,9 +1400,28 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             <button onClick={() => { setFilterType(null); setReviewFilter(null); }} className={`text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md transition-colors cursor-pointer ${!filterType && !reviewFilter ? 'bg-accent text-[#011419]' : 'bg-white/5 text-gray-400 hover:text-white border border-white/10'}`}>All</button>
             {TYPE_ORDER.map(key => <button key={key} onClick={() => setFilterType(key === filterType ? null : key)} className={`text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md transition-colors cursor-pointer ${filterType === key ? 'bg-accent text-[#011419]' : 'bg-white/5 text-gray-400 hover:text-white border border-white/10'}`}>{typeMeta(key).label}</button>)}
             {proposedCount > 0 && <button onClick={() => setReviewFilter(reviewFilter === 'proposed' ? null : 'proposed')} className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md border transition-colors cursor-pointer ${reviewFilter === 'proposed' ? 'bg-amber-400/20 text-amber-200 border-amber-400/40' : 'bg-amber-400/[0.06] text-amber-300/80 border-amber-400/20 hover:bg-amber-400/10'}`}><Sparkles className="w-3 h-3" />Proposed</button>}
-            {pendingUpdateCount > 0 && <button onClick={() => setReviewFilter(reviewFilter === 'updates' ? null : 'updates')} className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md border transition-colors cursor-pointer ${reviewFilter === 'updates' ? 'bg-sky-400/20 text-sky-100 border-sky-400/40' : 'bg-sky-400/[0.06] text-sky-300/80 border-sky-400/20 hover:bg-sky-400/10'}`}><ShieldCheck className="w-3 h-3" />AI Updates</button>}
+            {pendingUpdateCount > 0 && <button onClick={() => setReviewFilter(reviewFilter === 'updates' ? null : 'updates')} className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md border transition-colors cursor-pointer ${reviewFilter === 'updates' ? 'bg-sky-400/20 text-sky-100 border-sky-400/40' : 'bg-sky-400/[0.06] text-sky-300/80 border-sky-400/20 hover:bg-sky-400/10'}`}><ShieldCheck className="w-3 h-3" />Reviews</button>}
           </div>
         </div>
+
+        {!manageMode && (
+          <div className="space-y-1.5 px-2 pb-2">
+            <button type="button" onClick={() => { setSurface('calendar'); setSelected(null); setEditingSection(null); }}
+              className={`flex w-full items-center gap-2.5 rounded-lg border px-2.5 py-2.5 text-left transition-colors ${surface === 'calendar' ? 'border-sky-300/25 bg-sky-300/[0.08] text-sky-100' : 'border-white/[0.08] bg-white/[0.025] text-gray-300 hover:border-white/15 hover:bg-white/5'}`}>
+              <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border ${surface === 'calendar' ? 'border-sky-300/25 bg-sky-300/[0.08] text-sky-200' : 'border-white/10 bg-black/10 text-gray-500'}`}><CalendarClock className="h-3.5 w-3.5" /></span>
+              <span className="min-w-0 flex-1"><span className="block text-xs font-bold uppercase tracking-wider">Calendar</span><span className="block truncate text-[11px] text-gray-500">Dates, seasons, and events</span></span>
+            </button>
+            <button type="button" onClick={() => { setSurface('facts'); setSelected(null); setEditingSection(null); }}
+              className={`flex w-full items-center gap-2.5 rounded-lg border px-2.5 py-2.5 text-left transition-colors ${surface === 'facts' ? 'border-amber-300/25 bg-amber-300/[0.08] text-amber-100' : 'border-white/[0.08] bg-white/[0.025] text-gray-300 hover:border-white/15 hover:bg-white/5'}`}>
+              <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border ${surface === 'facts' ? 'border-amber-300/25 bg-amber-300/[0.08] text-amber-200' : 'border-white/10 bg-black/10 text-gray-500'}`}><BookCheck className="h-3.5 w-3.5" /></span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-xs font-bold uppercase tracking-wider">Facts</span>
+                <span className="block truncate text-[11px] text-gray-500">Canonical world truths</span>
+              </span>
+              {factCount > 0 && <span className="rounded-full bg-white/[0.07] px-2 py-0.5 text-xs text-gray-400">{factCount}</span>}
+            </button>
+          </div>
+        )}
 
         <div className="flex-1 overflow-y-auto custom-scrollbar px-2 pb-2 space-y-0.5">
           {loading ? <p className="caption text-center py-8">Loading...</p>
@@ -1274,7 +1439,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               <div className="flex flex-wrap gap-1.5">
               <button type="button" onClick={selectVisibleEntities} disabled={!filtered.length} className="text-[10px] font-semibold px-2 py-1 rounded-md border border-white/10 text-gray-300 hover:bg-white/5 disabled:opacity-40 cursor-pointer">Select visible</button>
               {proposedCount > 0 && <button type="button" onClick={() => selectEntities(entities.filter(entity => entity.status === 'proposed'))} className="text-[10px] font-semibold px-2 py-1 rounded-md border border-amber-400/25 text-amber-300 hover:bg-amber-400/10 cursor-pointer">Proposed</button>}
-              {pendingUpdateCount > 0 && <button type="button" onClick={() => selectEntities(entities.filter(entity => entity.status !== 'proposed' && entity.data?._enrichPending))} className="text-[10px] font-semibold px-2 py-1 rounded-md border border-sky-400/25 text-sky-300 hover:bg-sky-400/10 cursor-pointer">AI updates</button>}
+              {pendingUpdateCount > 0 && <button type="button" onClick={() => selectEntities(entities.filter(entity => entity.status !== 'proposed' && ((reviewCounts[entity.id]?.entityUpdates || 0) > 0 || (reviewCounts[entity.id]?.kanora || 0) > 0)))} className="text-[10px] font-semibold px-2 py-1 rounded-md border border-sky-400/25 text-sky-300 hover:bg-sky-400/10 cursor-pointer">Reviews</button>}
               {Object.keys(AI_POLICY).map(policy => {
                 const matches = entities.filter(entity => entity.status !== 'proposed' && (entity.data?.aiPolicy || 'review') === policy);
                 return <button key={`select-${policy}`} type="button" onClick={() => selectEntities(matches)} disabled={!matches.length} data-tooltip={`Select all entities with the ${AI_POLICY[policy].label} AI policy`} className="text-[10px] font-semibold px-2 py-1 rounded-md border border-white/10 text-gray-400 hover:bg-white/5 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer">{AI_POLICY[policy].label} ({matches.length})</button>;
@@ -1288,18 +1453,39 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                 return <button key={policy} type="button" onClick={() => runBulkAction('policy', policy)} disabled={!selectedIds.size || bulkSaving} data-tooltip={config.tip} className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-md border border-white/10 text-gray-300 hover:bg-white/5 disabled:opacity-40 cursor-pointer"><Icon className="w-3 h-3" />{config.label}</button>;
               })}
             </div>
+            <button type="button" onClick={() => requestBulkConfirmation('reprocess')} disabled={!selectedConfirmedCount || bulkSaving} data-tooltip="Clear the processed-evidence history for the selected entities so Update entities reads their evidence again" className="w-full inline-flex items-center justify-center gap-1.5 text-[10px] font-semibold px-2 py-1.5 rounded-md border border-white/10 text-gray-300 hover:bg-white/5 hover:text-white disabled:opacity-40 cursor-pointer"><RefreshCw className="w-3 h-3" />Reprocess selected</button>
             <div className="grid grid-cols-2 gap-1.5">
               <button type="button" onClick={() => requestBulkConfirmation('accept-proposed')} disabled={!selectedProposedCount || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-amber-400/25 text-amber-200 hover:bg-amber-400/10 disabled:opacity-40 cursor-pointer">Accept proposals</button>
+              <button type="button" onClick={() => requestBulkConfirmation('reject-proposed')} disabled={!selectedProposedCount || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-red-400/25 text-red-300 hover:bg-red-400/10 disabled:opacity-40 cursor-pointer">Reject proposals</button>
               <button type="button" onClick={() => requestBulkConfirmation('accept-updates')} disabled={!selectedUpdateCount || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-sky-400/25 text-sky-100 hover:bg-sky-400/10 disabled:opacity-40 cursor-pointer">Accept updates</button>
-              <button type="button" onClick={() => requestBulkConfirmation('accept-all')} disabled={(!selectedProposedCount && !selectedUpdateCount) || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-accent/25 text-accent hover:bg-accent/10 disabled:opacity-40 cursor-pointer">Accept both</button>
-              <button type="button" onClick={() => requestBulkConfirmation('delete')} disabled={!selectedIds.size || bulkSaving} className="inline-flex items-center justify-center gap-1 text-[10px] font-semibold px-2 py-1.5 rounded-md border border-red-400/25 text-red-300 hover:bg-red-400/10 disabled:opacity-40 cursor-pointer"><Trash2 className="w-3 h-3" />Delete</button>
+              <button type="button" onClick={() => requestBulkConfirmation('reject-updates')} disabled={!selectedUpdateCount || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-red-400/25 text-red-300 hover:bg-red-400/10 disabled:opacity-40 cursor-pointer">Reject updates</button>
+              <button type="button" onClick={() => requestBulkConfirmation('delete')} disabled={!selectedIds.size || bulkSaving} className="col-span-2 inline-flex items-center justify-center gap-1 text-[10px] font-semibold px-2 py-1.5 rounded-md border border-red-400/25 text-red-300 hover:bg-red-400/10 disabled:opacity-40 cursor-pointer"><Trash2 className="w-3 h-3" />Delete</button>
             </div>
           </div>
         )}
       </div>
 
       <div className="flex-1 min-w-0 overflow-y-auto custom-scrollbar">
-        {!selected ? (
+        {surface === 'calendar' ? (
+          <WorldbuildCalendar
+            workspaceId={workspaceId}
+            api={electronAPI}
+            showToast={showToast}
+            onCalendarChanged={setWorldCalendar}
+            onOpenEntity={entityId => {
+              const entity = entities.find(item => item.id === entityId);
+              if (entity) openEntity(entity);
+            }}
+          />
+        ) : surface === 'facts' ? (
+          <WorldbuildFactsRegistry
+            workspaceId={workspaceId}
+            entities={entities}
+            api={electronAPI}
+            showToast={showToast}
+            onCountChanged={setFactCount}
+          />
+        ) : !selected ? (
           <div className="h-full flex flex-col items-center justify-center text-center px-8 gap-4">
             <div className="w-16 h-16 rounded-2xl border border-white/10 bg-white/[0.03] flex items-center justify-center"><Globe className="w-8 h-8 text-accent/70" /></div>
             <div>
@@ -1367,8 +1553,31 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               )}
             </div>
 
+            {!isNew && selected.status !== 'proposed' && (selected.type === 'Characters' || (selected.type === 'Creatures' && (selected.data?.scope || 'individual') !== 'group')) && (
+              <WorldbuildRoleplayResources workspaceId={workspaceId} entity={selected} api={electronAPI} showToast={showToast} />
+            )}
+
+            {/* Subject sheet tabs */}
+            {visibleSheetTabs.length > 0 && !isNew && (
+              <div className="flex bg-white/[0.04] p-0.5 rounded-lg border border-white/10 w-fit">
+                {visibleSheetTabs.map(t => (
+                  <button key={t} onClick={() => { setCharTab(t); setEditingSection(null); }} className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-md text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer ${charTab === t ? 'bg-accent text-[#011419]' : 'text-gray-400 hover:text-white'}`}>
+                    {sheetTabLabel(t)}
+                    {t === 'review' && <span className={`rounded-full px-1.5 py-0.5 text-[10px] ${charTab === t ? 'bg-black/15' : 'bg-white/[0.07]'}`}>{selectedReviewCounts.entityUpdates + selectedReviewCounts.kanora}</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {charTab === 'review' && hasEntityReview && hasKanoraReview && (
+              <div className="grid grid-cols-2 gap-1 rounded-xl border border-white/10 bg-[#0a1721]/60 p-1.5 backdrop-blur-md">
+                <button type="button" onClick={() => setReviewKind('entity')} className={`rounded-lg px-3 py-2 text-xs font-bold uppercase tracking-wider transition-colors ${reviewKind === 'entity' ? 'bg-sky-300 text-[#011419]' : 'text-gray-500 hover:bg-white/5 hover:text-gray-200'}`}>Entity updates <span className="ml-1 rounded-full bg-black/15 px-1.5 py-0.5">{selectedReviewCounts.entityUpdates}</span></button>
+                <button type="button" onClick={() => setReviewKind('kanora')} className={`rounded-lg px-3 py-2 text-xs font-bold uppercase tracking-wider transition-colors ${reviewKind === 'kanora' ? 'bg-violet-300 text-[#011419]' : 'text-gray-500 hover:bg-white/5 hover:text-gray-200'}`}>Kanora <span className="ml-1 rounded-full bg-black/15 px-1.5 py-0.5">{selectedReviewCounts.kanora}</span></button>
+              </div>
+            )}
+
             {/* Staged AI enrichment (review policy): per-field accept/reject */}
-            {!isNew && selected.status !== 'proposed' && selected.data?._enrichPending && (() => {
+            {charTab === 'review' && hasEntityReview && reviewKind === 'entity' && !isNew && selected.status !== 'proposed' && selected.data?._enrichPending && (() => {
               const pending = selected.data._enrichPending;
               const pData = (pending.data && typeof pending.data === 'object') ? pending.data : {};
               const proposalValue = proposal => proposal && typeof proposal === 'object' && 'value' in proposal ? proposal.value : proposal;
@@ -1403,7 +1612,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                             <div className="flex items-center flex-wrap gap-2 text-sm">
                               <span className="text-gray-500 line-through">{curStr}</span>
                               <span className="text-gray-500">→</span>
-                              <span className="text-sky-100 font-medium">{String(proposalValue(pData[f]))}</span>
+                              <span className="text-sky-100 font-medium">{displayProposalValue(f, pData[f], fieldDefinitions, entities)}</span>
                             </div>
                             <EvidenceReferences excerpts={proposalEvidence(pData[f])} support={proposalSupport(pData[f])} />
                           </div>
@@ -1432,9 +1641,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                         <Link2 className="w-3.5 h-3.5 text-sky-300 shrink-0" />
                         <div className="min-w-0 flex-1 text-sm">
                           <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mr-2">{l.relLabel || l.relKey}</span>
-                          <span className="text-sky-100 font-medium">{l.targetName}</span>
-                          <EvidenceReferences excerpts={proposalEvidence(l)} support={proposalSupport(l)} />
+                          <span className="text-sky-100 font-medium">{l.metadata ? `${selected.canonicalName} → ${l.targetName}` : l.targetName}</span>
                           {l.label && <span className="text-accent/90"> · {l.label}</span>}
+                          {l.metadata && <p className="mt-1 text-xs text-gray-400"><span className="font-semibold text-gray-300">How {selected.canonicalName} sees {l.targetName}:</span> {l.metadata.value}{l.metadata.description ? ` · ${l.metadata.description}` : ''}</p>}
+                          <EvidenceReferences excerpts={proposalEvidence(l)} support={proposalSupport(l)} />
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
                           <button onClick={() => resolveReview({ links: [k] }, {})} disabled={saving} data-tooltip="Accept" className="p-1.5 rounded-md text-emerald-300 hover:bg-emerald-400/15 transition-colors cursor-pointer"><Check className="w-3.5 h-3.5" /></button>
@@ -1464,15 +1674,6 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               );
             })()}
 
-            {/* Subject sheet tabs */}
-            {sheetTabs.length > 0 && !isNew && (
-              <div className="flex bg-white/[0.04] p-0.5 rounded-lg border border-white/10 w-fit">
-                {sheetTabs.map(t => (
-                  <button key={t} onClick={() => { setCharTab(t); setEditingSection(null); }} className={`px-3.5 py-1.5 rounded-md text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer ${charTab === t ? 'bg-accent text-[#011419]' : 'text-gray-400 hover:text-white'}`}>{sheetTabLabel(t)}</button>
-                ))}
-              </div>
-            )}
-
             {/* Body: create form (all sections in edit) or rendered sheet */}
             {isNew ? (
               <>
@@ -1496,7 +1697,20 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               </>
             ) : (
               <>
-                {charTab === 'knowledge' && hasKnowledgeTab ? (
+                {charTab === 'review' && hasReview ? (
+                  <div className="space-y-4">
+                    {reviewKind === 'kanora' && hasKanoraReview && (
+                      <WorldbuildKanoraReview
+                        workspaceId={workspaceId}
+                        proposals={subjectReview.proposals || []}
+                        entities={entities}
+                        api={electronAPI}
+                        showToast={showToast}
+                        onChanged={async () => { await load(); await loadSubjectReview(); }}
+                      />
+                    )}
+                  </div>
+                ) : charTab === 'knowledge' && hasKnowledgeTab ? (
                   <WorldbuildKnowledgeTab
                     workspaceId={workspaceId}
                     entity={selected}

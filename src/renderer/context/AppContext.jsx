@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { useChatSession } from '../features/chat/useChatSession';
+import { isGenerationEventForWorkspace } from '../features/chat/generation-target';
 
 const AppContext = createContext();
 const EMPTY_MESSAGE_PAGE = { messages: [], hasMore: false, oldestCursor: null };
@@ -16,7 +17,7 @@ const api = window.electronAPI || {
   getVariables: async () => [], saveVariable: async () => { }, deleteVariable: async () => { },
   getSettings: async () => ({
     interface: { fontFamily: 'sans', fontSize: 'medium', layout: 'bubbles', blur: true, accentColor: '#FBCB2D', codeTheme: 'github-dark', lineNumbers: false },
-    advanced: { chunkSize: 500, similarity: 0.3, topKKB: 5, topKMemory: 5, executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, archiveSummarization: true, embeddingEngine: 'local', embeddingApiProfileId: '', embeddingModelName: '', systemOutputLanguage: 'English', taggerMode: 'inherit-system', summarizerMode: 'inherit-system', retrievalPlannerMode: 'profile' }
+    advanced: { chunkSize: 500, similarity: 0.3, retrievalStrictness: 0.3, profileKnowledgeTopK: 5, workspaceDocumentsTopK: 5, longTermMemoryTopK: 5, worldbuildEntityLimit: 15, worldbuildBreadth: 'balanced', executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, narrativeStateDebug: false, archiveSummarization: true, embeddingEngine: 'local', embeddingApiProfileId: '', embeddingModelName: '', systemOutputLanguage: 'English', taggerMode: 'inherit-system', summarizerMode: 'inherit-system', retrievalPlannerMode: 'profile' }
   }),
   saveSettings: async () => { },
   getUiFlags: async () => ({}),
@@ -48,7 +49,7 @@ export const AppProvider = ({ children }) => {
   const [variables, setVariables] = useState([]);
   const [settings, setSettings] = useState({
     interface: { fontFamily: 'sans', fontSize: 'medium', layout: 'bubbles', blur: true, accentColor: '#FBCB2D', codeTheme: 'github-dark', lineNumbers: false },
-    advanced: { chunkSize: 500, similarity: 0.3, topKKB: 5, topKMemory: 5, executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, archiveSummarization: true, embeddingEngine: 'local', embeddingApiProfileId: '', embeddingModelName: '', systemOutputLanguage: 'English', taggerMode: 'inherit-system', summarizerMode: 'inherit-system', retrievalPlannerMode: 'profile' }
+    advanced: { chunkSize: 500, similarity: 0.3, retrievalStrictness: 0.3, profileKnowledgeTopK: 5, workspaceDocumentsTopK: 5, longTermMemoryTopK: 5, worldbuildEntityLimit: 15, worldbuildBreadth: 'balanced', executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, narrativeStateDebug: false, archiveSummarization: true, embeddingEngine: 'local', embeddingApiProfileId: '', embeddingModelName: '', systemOutputLanguage: 'English', taggerMode: 'inherit-system', summarizerMode: 'inherit-system', retrievalPlannerMode: 'profile' }
   });
 
   // One-time UI hints (coach-marks). Keyed booleans persisted in the settings
@@ -73,6 +74,13 @@ export const AppProvider = ({ children }) => {
     enqueueStreamDisplay,
     clearStreamDisplay
   } = chatSession;
+  const activeChatIdRef = useRef(activeChatId);
+
+  useEffect(() => {
+    activeChatIdRef.current = activeChatId;
+    setGenerationProgress(null);
+    clearStreamDisplay();
+  }, [activeChatId]);
 
   // --- AUTO-UPDATER STATE ---
   const [updateStatus, setUpdateStatus] = useState('idle'); // 'idle' | 'available' | 'downloaded'
@@ -110,6 +118,16 @@ export const AppProvider = ({ children }) => {
         clearTimeout(toastTimeoutRef.current);
       }
     };
+  }, []);
+
+  useEffect(() => {
+    if (!api.onRoleplayResourceChanges) return undefined;
+    return api.onRoleplayResourceChanges(({ changes = [] }) => {
+      const pending = changes.filter(change => change.status === 'pending' || change.status === 'proposed' || change.status === 'conflicting').length;
+      const applied = changes.filter(change => change.status === 'applied' || change.status === 'approved').length;
+      if (pending) showToast(`${pending} roleplay state ${pending === 1 ? 'change needs' : 'changes need'} review.`, 'info', 8000);
+      if (applied) showToast(`${applied} roleplay state ${applied === 1 ? 'change was' : 'changes were'} applied.`, 'success', 6000);
+    });
   }, []);
 
   // --- INITIALIZATION ---
@@ -161,18 +179,24 @@ export const AppProvider = ({ children }) => {
   // --- REALTIME ELECTRON EVENTS ---
   useEffect(() => {
     const unsubProgress = api.onWorkflowProgress((progress) => {
+      if (!isGenerationEventForWorkspace(progress, activeChatIdRef.current)) return;
       setGenerationProgress(progress);
     });
 
-    const unsubStreamToken = api.onStreamToken ? api.onStreamToken(enqueueStreamDisplay) : () => { };
+    const unsubStreamToken = api.onStreamToken ? api.onStreamToken((payload) => {
+      if (!isGenerationEventForWorkspace(payload, activeChatIdRef.current)) return;
+      enqueueStreamDisplay(payload);
+    }) : () => { };
 
     const unsubError = api.onWorkflowError((err) => {
+      if (!isGenerationEventForWorkspace(err, activeChatIdRef.current)) return;
       setErrorData(err);
       setShowErrorModal(true);
       setIsGenerating(false);
     });
 
     const unsubOverflow = (data) => {
+      if (!isGenerationEventForWorkspace(data, activeChatIdRef.current)) return;
       setOverflowData(data);
       setShowOverflowModal(true);
     };

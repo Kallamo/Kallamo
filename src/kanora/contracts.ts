@@ -77,7 +77,7 @@ export interface Proposition {
 
 export interface EvidenceReference {
   id: NarrativeId;
-  originType: 'chat-message' | 'writing-document' | 'world-action' | 'import';
+  originType: 'chat-message' | 'writing-document' | 'world-action' | 'worldbuild-update' | 'import';
   originId: NarrativeId;
   excerpt?: string;
 }
@@ -92,7 +92,9 @@ export interface Provenance {
 
 export interface NarrativeFact {
   id: NarrativeId;
+  referenceId?: NarrativeId;
   proposition: Proposition;
+  relatedEntityIds?: NarrativeId[];
   status: 'active' | 'superseded' | 'retracted';
   evidenceIds: NarrativeId[];
 }
@@ -109,10 +111,20 @@ export interface Observation {
   eventId: NarrativeId;
   method: 'participant' | 'witness' | 'reported' | 'inferred';
   confidence: Confidence;
+  factIds?: NarrativeId[];
+}
+
+export interface Awareness {
+  id: NarrativeId;
+  subjectId: NarrativeId;
+  targetId: NarrativeId;
+  status: 'active' | 'forgotten' | 'revoked' | 'superseded';
+  sourceEventId: NarrativeId;
 }
 
 export interface Knowledge {
   id: NarrativeId;
+  entryId?: NarrativeId;
   subjectId: NarrativeId;
   proposition: Proposition;
   sourceEventId: NarrativeId;
@@ -120,16 +132,19 @@ export interface Knowledge {
   confidence: Confidence;
   accessibility: KnowledgeAccessibility;
   status: 'active' | 'forgotten' | 'revoked' | 'superseded';
+  factIds?: NarrativeId[];
 }
 
 export interface Belief {
   id: NarrativeId;
+  entryId?: NarrativeId;
   subjectId: NarrativeId;
   proposition: Proposition;
   sourceEventId: NarrativeId;
   confidence: Confidence;
   relationToCanon: 'aligned' | 'contradicted' | 'uncertain' | 'unknown';
   status: 'active' | 'superseded' | 'abandoned';
+  factIds?: NarrativeId[];
 }
 
 export interface NarrativeMemory {
@@ -140,6 +155,7 @@ export interface NarrativeMemory {
   accessibility: KnowledgeAccessibility;
   status?: 'active' | 'superseded' | 'forgotten';
   supersedesMemoryId?: NarrativeId;
+  relatedEntityIds?: NarrativeId[];
 }
 
 export interface RelationshipState {
@@ -147,6 +163,7 @@ export interface RelationshipState {
   sourceEntityId: NarrativeId;
   targetEntityId: NarrativeId;
   dimension: string;
+  title?: string;
   value: number;
   description?: string;
   sourceEventId: NarrativeId;
@@ -204,6 +221,7 @@ export type NarrativeOperation =
   | (OperationBase & { type: 'assert-fact'; fact: NarrativeFact })
   | (OperationBase & { type: 'set-state'; state: NarrativeState })
   | (OperationBase & { type: 'record-observation'; observation: Observation })
+  | (OperationBase & { type: 'grant-awareness'; awareness: Awareness })
   | (OperationBase & { type: 'grant-knowledge'; knowledge: Knowledge })
   | (OperationBase & { type: 'set-belief'; belief: Belief })
   | (OperationBase & { type: 'record-memory'; memory: NarrativeMemory })
@@ -230,6 +248,7 @@ export interface NarrativeProjection {
   through: NarrativePosition;
   facts: NarrativeFact[];
   states: NarrativeState[];
+  awareness: Awareness[];
   knowledge: Knowledge[];
   beliefs: Belief[];
   relationships: RelationshipState[];

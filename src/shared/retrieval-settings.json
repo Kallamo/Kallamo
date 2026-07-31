@@ -1,0 +1,11 @@
+{
+  "definitions": {
+    "profileKnowledgeTopK": { "defaultValue": 5, "min": 1, "max": 30, "step": 1, "legacyKey": "topKKB" },
+    "workspaceDocumentsTopK": { "defaultValue": 5, "min": 1, "max": 30, "step": 1, "legacyKey": "topKKB" },
+    "longTermMemoryTopK": { "defaultValue": 5, "min": 1, "max": 30, "step": 1, "legacyKey": "topKMemory" },
+    "worldbuildEntityLimit": { "defaultValue": 15, "min": 1, "max": 50, "step": 1 },
+    "retrievalStrictness": { "defaultValue": 0.3, "min": 0, "max": 1, "step": 0.05, "legacyKey": "similarity" }
+  },
+  "worldbuildBreadthValues": ["focused", "balanced", "broad"],
+  "defaultWorldbuildBreadth": "balanced"
+}

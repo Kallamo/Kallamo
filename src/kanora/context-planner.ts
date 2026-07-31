@@ -1,6 +1,6 @@
 import type { KnowledgeAccessibility, NarrativePosition, Perspective } from './contracts';
 
-export type ContextSourceType = 'canon' | 'knowledge' | 'belief' | 'relationship' | 'memory' | 'text';
+export type ContextSourceType = 'canon' | 'state' | 'knowledge' | 'belief' | 'relationship' | 'memory' | 'text';
 
 export interface ContextSourceReference {
   type: ContextSourceType;

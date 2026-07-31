@@ -15,6 +15,8 @@ import ChatInput from '../features/chat/components/ChatInput';
 import MessageMarkdown from '../features/chat/components/MessageMarkdown';
 import TypingText from '../features/chat/components/TypingText';
 import { parseMessageContent } from '../features/chat/message-content';
+import RoleplayQuickPanel from '../features/roleplay/RoleplayQuickPanel';
+import { resolveActiveGenerationTarget } from '../features/chat/generation-target';
 
 const safeParseJson = (str, fallback = []) => {
   if (!str) return fallback;
@@ -35,6 +37,178 @@ const safeParseDebugNotice = (notice) => {
   } catch (e) {
     return { legacyText: notice };
   }
+};
+
+const diagnosticText = value => {
+  if (!value) return '';
+  return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+};
+
+const formatFrameDate = point => {
+  if (!point?.position) return '';
+  const { position, display } = point;
+  return `${position.day} ${display?.monthName || `Month ${position.month}`} ${position.year}${display?.eraShortName ? ` ${display.eraShortName}` : ''}`;
+};
+
+const formatFrameTime = point => point?.position
+  ? `${String(point.position.hour ?? 0).padStart(2, '0')}:${String(point.position.minute ?? 0).padStart(2, '0')}`
+  : '';
+
+const sameFrameDate = (left, right) => left?.position && right?.position
+  && left.position.eraId === right.position.eraId
+  && left.position.year === right.position.year
+  && left.position.month === right.position.month
+  && left.position.day === right.position.day;
+
+const shouldShowTimeTransition = frame => {
+  if (!frame?.advance) return false;
+  const duration = frame.advance.duration || {};
+  return !sameFrameDate(frame.start, frame.end)
+    || Number(duration.years) > 0
+    || Number(duration.months) > 0
+    || Number(duration.days) > 0
+    || Number(duration.hours) > 0
+    || Number(duration.minutes) >= 30;
+};
+
+function RoleplayMessageFrame({ frame }) {
+  if (!frame?.end) return null;
+  const locationChanged = frame.start?.locationId !== frame.end?.locationId
+    || frame.start?.locationName !== frame.end?.locationName;
+  const timeChanged = shouldShowTimeTransition(frame);
+  return (
+    <div className="mb-3 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-4 border-b border-white/[0.06] pb-2 text-[0.65rem] text-gray-500 select-none">
+      <span className="min-w-0 truncate">
+        {locationChanged
+          ? <><span>{frame.start?.locationName || 'Unknown location'}</span><span className="px-1.5 text-gray-700">→</span><span className="text-gray-400">{frame.end.locationName || 'Unknown location'}</span></>
+          : <span>{frame.end.locationName || 'No current location'}</span>}
+      </span>
+      <span className="text-right">
+        <span className="block">{sameFrameDate(frame.start, frame.end) ? formatFrameDate(frame.end) : `${formatFrameDate(frame.start)} → ${formatFrameDate(frame.end)}`}</span>
+        <span className="block font-mono text-gray-400">
+          {timeChanged ? <>{formatFrameTime(frame.start)}<span className="px-1.5 text-gray-700">→</span>{formatFrameTime(frame.end)}</> : formatFrameTime(frame.end)}
+        </span>
+      </span>
+    </div>
+  );
+}
+
+const formatSelectionFunnel = selection => {
+  if (!selection) return 'No selection funnel recorded.';
+  const counts = value => Object.entries(value || {})
+    .map(([key, count]) => `${key}: ${count}`)
+    .join(', ') || 'none';
+  return [
+    `Intent: ${selection.intent || 'general'}`,
+    ...(selection.evidence ? [
+      `Evidence: ${selection.evidence.status || 'inconclusive'} (${selection.evidence.reason || 'unspecified'})`,
+      ...(selection.evidence.source ? [`Latest source: ${selection.evidence.source}`] : [])
+    ] : []),
+    `Discovered: ${selection.discovered || 0} (${counts(selection.discoveredByKind)})`,
+    `Selected: ${selection.selected || 0} (${counts(selection.selectedByKind)})`,
+    `Excluded: ${selection.excluded || 0} (${counts(selection.excludedByReason)})`,
+    '',
+    'SELECTED SOURCES',
+    ...(selection.selectedSources?.length
+      ? selection.selectedSources.map(item => `- ${item.source || 'Unknown'} [${item.kind}]`)
+      : ['- None']),
+    '',
+    'EXCLUDED SOURCES',
+    ...(selection.excludedSources?.length
+      ? selection.excludedSources.map(item => `- ${item.source || 'Unknown'} [${item.kind}]: ${item.reason}`)
+      : ['- None'])
+  ].join('\n');
+};
+
+const formatPlannerDecisions = bundle => {
+  if (!bundle?.scopes?.length) return 'No perspective bundle.';
+  const composition = bundle.composition;
+  const summary = composition ? [
+    `Rendered roleplay context: ${composition.renderedTokens || 0}/${bundle.tokenBudget || 0} tokens`,
+    `Unique records: ${composition.uniqueRecords || 0}`,
+    `Shared records: ${composition.sharedRecords || 0}`,
+    `Scope memberships: ${composition.scopeMemberships || 0}`,
+    `Duplicate renderings avoided: ${composition.avoidedDuplicateRenderings || 0}`,
+    `Content tokens avoided: ${composition.avoidedContentTokens || 0}`,
+    ''
+  ] : [];
+  const scopeLabels = new Map(bundle.scopes.map(scope => [scope.id, scope.label || scope.id]));
+  const memberships = new Map();
+  bundle.scopes.forEach(scope => {
+    (scope.itemIds || []).forEach(candidateId => {
+      const scopeIds = memberships.get(candidateId) || new Set();
+      scopeIds.add(scope.id);
+      memberships.set(candidateId, scopeIds);
+    });
+  });
+  const scopeSummary = bundle.scopes.map(scope =>
+    `${scope.label || scope.id}: ${scope.itemIds?.length || 0} authorized records (${scope.usedTokens || 0} tokens before sharing)`);
+  const shared = [...memberships.entries()]
+    .filter(([, scopeIds]) => scopeIds.size > 1)
+    .map(([candidateId, scopeIds]) =>
+      `- ${candidateId}: ${[...scopeIds].map(scopeId => scopeLabels.get(scopeId) || scopeId).join(', ')}`);
+  const exclusive = bundle.scopes.flatMap(scope => {
+    const records = (scope.itemIds || []).filter(candidateId => memberships.get(candidateId)?.size === 1);
+    return records.length
+      ? [`${scope.label || scope.id}`, ...records.map(candidateId => `- ${candidateId}`)]
+      : [];
+  });
+  const excludedByDecision = new Map();
+  (bundle.excluded || []).forEach(decision => {
+    const key = JSON.stringify([decision.candidateId, decision.outcome, decision.reason]);
+    const grouped = excludedByDecision.get(key) || { decision, scopeIds: new Set() };
+    grouped.scopeIds.add(decision.scopeId);
+    excludedByDecision.set(key, grouped);
+  });
+  const excluded = [...excludedByDecision.values()].map(({ decision, scopeIds }) => {
+    const scopes = [...scopeIds].map(scopeId => scopeLabels.get(scopeId) || scopeId).join(', ');
+    return `- ${decision.candidateId}: ${decision.outcome} (${decision.reason}) [${scopes}]`;
+  });
+  return [
+    ...summary,
+    ...scopeSummary,
+    ...(shared.length ? ['', 'SHARED RECORDS', ...shared] : []),
+    ...(exclusive.length ? ['', 'SCOPE-ONLY RECORDS', ...exclusive] : []),
+    ...(excluded.length ? ['', 'EXCLUDED', ...excluded] : [])
+  ].join('\n');
+};
+
+const formatAgenticTrace = diagnostic => {
+  if (!diagnostic?.agentic) {
+    return `### Agentic RAG Response\n${diagnostic?.agenticRagResponse || ''}\n\n### Context Gathered\n${diagnostic?.agenticRagContextGathered || ''}`;
+  }
+  return [
+    `Stop reason: ${diagnostic.agentic.stopReason || 'unknown'}`,
+    `Degraded: ${diagnostic.agentic.degraded ? 'yes' : 'no'}`,
+    '',
+    'TOOL TRACE',
+    diagnosticText(diagnostic.agentic.turns),
+    '',
+    'FINISH',
+    diagnostic.agentic.finish || '',
+    '',
+    'FINAL CONTEXT',
+    diagnostic.agentic.contextText || ''
+  ].join('\n');
+};
+
+const formatRetrievalDiagnostics = diagnostic => {
+  const retrieval = diagnostic?.retrieval;
+  if (!retrieval) return diagnostic?.standardRagContextGathered || '';
+  return [
+    `Mode: ${retrieval.mode || 'standard'}`,
+    `Generation policy: ${diagnostic?.generation?.policyId || 'none'}`,
+    `Generation target: ${diagnostic?.generation?.profileName || 'Unknown AI Profile'}`,
+    '',
+    'SELECTION FUNNEL',
+    formatSelectionFunnel(retrieval.selection),
+    '',
+    'PLANNER DECISIONS',
+    formatPlannerDecisions(retrieval.bundle),
+    '',
+    'EXACT FINAL NARRATIVE CONTEXT',
+    retrieval.finalContextText || 'No additional narrative context was sent.'
+  ].join('\n');
 };
 
 export default function ChatWorkspaceView() {
@@ -72,11 +246,60 @@ export default function ChatWorkspaceView() {
   } = useApp();
 
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
+  const [roleplayMode, setRoleplayMode] = useState(false);
+  const [roleplayBackground, setRoleplayBackground] = useState(null);
+  const [roleplayFrames, setRoleplayFrames] = useState({});
+  const [roleplayFrameRevision, setRoleplayFrameRevision] = useState(0);
   const [selectedTargetId, setSelectedTargetId] = useState(''); // Selected profile or workflow ID
+
+  useEffect(() => {
+    let active = true;
+    setRoleplayBackground(null);
+    electronAPI.getWorkspaceExperienceMode?.(activeChat.id).then(result => {
+      if (active) setRoleplayMode(result?.mode === 'roleplay');
+    });
+    const updateMode = event => {
+      if (event.detail?.workspaceId === activeChat.id) setRoleplayMode(Boolean(event.detail.enabled));
+    };
+    window.addEventListener('roleplay-mode-change', updateMode);
+    return () => { active = false; window.removeEventListener('roleplay-mode-change', updateMode); };
+  }, [activeChat.id, electronAPI]);
+
+  useEffect(() => {
+    const refresh = event => {
+      if (!event.detail?.workspaceId || event.detail.workspaceId === activeChat.id) {
+        setRoleplayFrameRevision(value => value + 1);
+      }
+    };
+    window.addEventListener('roleplay-state-change', refresh);
+    const unsubscribe = electronAPI.onRoleplayResourceChanges?.(payload => {
+      if (payload?.workspaceId === activeChat.id) setRoleplayFrameRevision(value => value + 1);
+    });
+    return () => {
+      window.removeEventListener('roleplay-state-change', refresh);
+      unsubscribe?.();
+    };
+  }, [activeChat.id, electronAPI]);
+
+  useEffect(() => {
+    let active = true;
+    const originIds = activeMessages.filter(message => message.role !== 'user').map(message => message.id);
+    if (!originIds.length || !electronAPI.getRoleplayMessageFrames) {
+      setRoleplayFrames({});
+      return () => { active = false; };
+    }
+    electronAPI.getRoleplayMessageFrames(activeChat.id, originIds).then(result => {
+      if (!active || !result?.success) return;
+      setRoleplayFrames(Object.fromEntries((result.frames || []).map(frame => [frame.originId, frame])));
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [activeChat.id, activeMessages, electronAPI, roleplayFrameRevision]);
 
   const [expandedThinking, setExpandedThinking] = useState({});
   const [expandedAgenticRag, setExpandedAgenticRag] = useState({});
   const [expandedStandardRag, setExpandedStandardRag] = useState({});
+  const [expandedTokenUsage, setExpandedTokenUsage] = useState({});
+  const [expandedNarrativeState, setExpandedNarrativeState] = useState({});
 
   const [editingMessageId, setEditingMessageId] = useState(null);
   const [editingMessageText, setEditingMessageText] = useState('');
@@ -84,8 +307,10 @@ export default function ChatWorkspaceView() {
   const [copiedId, setCopiedId] = useState(null);
   const [copiedRagId, setCopiedRagId] = useState(null);
   const [copiedStandardRagId, setCopiedStandardRagId] = useState(null);
+  const [copiedNarrativeStateId, setCopiedNarrativeStateId] = useState(null);
 
   const [openMenuId, setOpenMenuId] = useState(null);
+  const messageMenuAnchorRef = useRef(null);
 
   const [confirmDeleteData, setConfirmDeleteData] = useState(null);
   const [deleteAttachedFiles, setDeleteAttachedFiles] = useState(true);
@@ -174,14 +399,13 @@ export default function ChatWorkspaceView() {
   };
 
   const handleCopyRagContext = (id, debugObj) => {
-    const textToCopy = `### Agentic RAG Response\n${debugObj.agenticRagResponse || ''}\n\n### Context Gathered\n${debugObj.agenticRagContextGathered || ''}`;
-    copyText(textToCopy);
+    copyText(formatAgenticTrace(debugObj));
     setCopiedRagId(id);
     setTimeout(() => setCopiedRagId(null), 2000);
   };
 
   const handleCopyStandardRag = (id, debugObj) => {
-    copyText(debugObj.standardRagContextGathered || '');
+    copyText(formatRetrievalDiagnostics(debugObj));
     setCopiedStandardRagId(id);
     setTimeout(() => setCopiedStandardRagId(null), 2000);
   };
@@ -226,6 +450,12 @@ export default function ChatWorkspaceView() {
     if (nextIsFollowingLatest) setHasCompletedResponseBelow(false);
   };
 
+  const handleCopyNarrativeState = (id, debugObj) => {
+    copyText(diagnosticText(debugObj.narrativeState));
+    setCopiedNarrativeStateId(id);
+    setTimeout(() => setCopiedNarrativeStateId(null), 2000);
+  };
+
   const scrollToLatest = () => {
     isFollowingLatestRef.current = true;
     setIsFollowingLatest(true);
@@ -237,7 +467,7 @@ export default function ChatWorkspaceView() {
     isFollowingLatestRef.current = true;
     setIsFollowingLatest(true);
     setHasCompletedResponseBelow(false);
-    return handleSendMessage(...args);
+    return handleSend(...args);
   };
 
   const handleLoadOlderMessages = async () => {
@@ -462,11 +692,27 @@ export default function ChatWorkspaceView() {
   // Readiness uses the app's canonical, provider-aware `needsSetup` flag (linked API
   // profile + model + credentials). The onboarding profiles ship needing setup.
   const profileReady = (p) => !!p && !p.needsSetup;
-  // The target a send would actually use (mirrors handleSend's fallback), and whether it
-  // can run: workflows carry their own steps, profiles must be set up.
-  const effectiveTarget = selectedTarget || displayProfiles[0] || displayWorkflows[0] || null;
+  const effectiveTarget = resolveActiveGenerationTarget({
+    selectedTargetId,
+    activeProfileIds: activeProfilesList,
+    activeWorkflowIds: activeWorkflowsList,
+    profiles: writingProfiles,
+    workflows
+  });
   const isWorkflowTarget = !!effectiveTarget && displayWorkflows.some(w => w.id === effectiveTarget.id);
   const canSend = !!effectiveTarget && (isWorkflowTarget || profileReady(effectiveTarget));
+
+  const getGenerationTargetId = () => {
+    if (!effectiveTarget) {
+      showToast('Select an active AI Profile or Workflow before generating.', 'error');
+      return null;
+    }
+    if (!isWorkflowTarget && !profileReady(effectiveTarget)) {
+      showToast('This AI Profile is not set up yet. Create an API profile in Settings, then link it to this profile in the Library.', 'error');
+      return null;
+    }
+    return effectiveTarget.id;
+  };
 
   const handleSend = (inputValue) => {
     const text = inputValue.trim();
@@ -478,30 +724,8 @@ export default function ChatWorkspaceView() {
       finalContent = `Attached files: ${attachedNames.join(', ')}`;
     }
 
-    // Fallback to a valid target ID if the current selection is invalid
-    let finalTargetId = selectedTargetId;
-    const targetExists = (writingProfiles.some(p => p.id === finalTargetId) && activeProfilesList.includes(finalTargetId)) ||
-                         (workflows.some(w => w.id === finalTargetId) && activeWorkflowsList.includes(finalTargetId));
-    if (!finalTargetId || !targetExists) {
-      const allowedProfilesList = writingProfiles.filter(p => activeProfilesList.includes(p.id));
-      const allowedWorkflowsList = workflows.filter(wf => activeWorkflowsList.includes(wf.id));
-      if (allowedProfilesList.length > 0) {
-        finalTargetId = allowedProfilesList[0].id;
-      } else if (allowedWorkflowsList.length > 0) {
-        finalTargetId = allowedWorkflowsList[0].id;
-      } else {
-        // No active targets! Prevent sending.
-        return false;
-      }
-    }
-
-    // Block a profile that still needs setup (e.g. the onboarding profiles before the user
-    // adds a key). Workflows run their own steps, so they pass through.
-    const targetProfile = writingProfiles.find(p => p.id === finalTargetId);
-    if (targetProfile && !profileReady(targetProfile)) {
-      showToast('This AI Profile is not set up yet. Create an API profile in Settings, then link it to this profile in the Library.', 'error');
-      return false;
-    }
+    const finalTargetId = getGenerationTargetId();
+    if (!finalTargetId) return false;
 
     handleSendMessage(finalContent, finalTargetId, pendingFiles);
     setPendingFiles([]);
@@ -563,7 +787,10 @@ export default function ChatWorkspaceView() {
   };
 
   // Custom visual background image resolution
-  const hasBg = activeChat.backgroundImage && activeChat.backgroundImage.trim() !== '';
+  const effectiveBackground = roleplayMode && activeSubView === 'chat' && roleplayBackground?.imagePath
+    ? roleplayBackground.imagePath
+    : activeChat.backgroundImage;
+  const hasBg = effectiveBackground && effectiveBackground.trim() !== '';
 
   const backdropStyle = {
     backgroundColor: '#011419',
@@ -571,7 +798,7 @@ export default function ChatWorkspaceView() {
   };
 
   const bgStyle = hasBg ? {
-    backgroundImage: `url("app-file:///${activeChat.backgroundImage.replace(/\\/g, '/')}")`,
+    backgroundImage: `url("app-file:///${effectiveBackground.replace(/\\/g, '/')}")`,
     backgroundSize: 'cover',
     backgroundPosition: 'center',
     backgroundRepeat: 'no-repeat'
@@ -636,7 +863,6 @@ export default function ChatWorkspaceView() {
             <h2 className="text-white font-semibold text-sm truncate">
               {activeChat.title}
             </h2>
-
           </div>
 
           {/* Segmented workspace navigation sub-view switcher tabs */}
@@ -896,9 +1122,11 @@ export default function ChatWorkspaceView() {
                                     {editingMessageText !== (isAutoGenerated ? '' : msg.content) && (
                                       <button
                                         onClick={async () => {
+                                          const targetId = getGenerationTargetId();
+                                          if (!targetId) return;
                                           setEditingMessageId(null);
                                           setEditError(null);
-                                          await handleEditUserMessage(msg.id, editingMessageText, selectedTargetId);
+                                          await handleEditUserMessage(msg.id, editingMessageText, targetId);
                                         }}
                                         className="px-4 py-1.5 text-[10px] font-bold uppercase tracking-wider bg-accent text-[#011419] rounded-lg shadow-sm hover:brightness-110 transition-all active:scale-95"
                                       >
@@ -945,6 +1173,7 @@ export default function ChatWorkspaceView() {
                               <span className="text-gray-600">|</span>
                               <div className="relative">
                                 <button
+                                  ref={openMenuId === msg.id ? messageMenuAnchorRef : null}
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     setOpenMenuId(openMenuId === msg.id ? null : msg.id);
@@ -953,8 +1182,7 @@ export default function ChatWorkspaceView() {
                                 >
                                   <MoreVertical className="w-3 h-3 transition-colors" />
                                 </button>
-                                {openMenuId === msg.id && (
-                                  <div className="absolute bottom-full right-0 mb-1 w-44 bg-[#0a161d] border border-gray-800 rounded-lg shadow-xl py-1 z-20 text-[10px] uppercase font-bold tracking-wider text-left">
+                                <Popover anchorRef={messageMenuAnchorRef} open={openMenuId === msg.id} onClose={() => setOpenMenuId(null)} matchAnchorWidth={false} align="right" maxHeight={160} scroll={false} className="w-44 py-1 text-left text-[0.625rem] font-bold uppercase tracking-wider">
                                     <button
                                       onClick={(e) => {
                                         e.stopPropagation();
@@ -977,8 +1205,7 @@ export default function ChatWorkspaceView() {
                                       <RotateCcw className="w-3.5 h-3.5 text-inherit" />
                                       <span>Revert Chat Here</span>
                                     </button>
-                                  </div>
-                                )}
+                                </Popover>
                               </div>
                             </div>
                           )}
@@ -992,89 +1219,145 @@ export default function ChatWorkspaceView() {
                           return (
                             <div className={`flex flex-col items-start ${isDocumentMode || editingMessageId === msg.id ? 'w-full' : 'max-w-[80%]'}`}>
 
-                              {/* Token Usage Debug Header */}
-                              {settings.advanced.tokenDebug && debugObj?.tokens && (
-                                <div className="inline-flex items-center flex-wrap gap-x-1.5 gap-y-0.5 text-[9px] text-gray-300 font-mono select-none mb-2 ml-1 uppercase tracking-wide bg-[#011419] backdrop-blur-[2px] rounded-lg border border-[#011419]/20 px-2.5 py-1 max-w-full">
-                                  <span>⚡ Tokens:</span>
-                                  <span className="font-bold text-accent">Input: {debugObj.tokens.totalInput + (debugObj.tokens.agenticInput || 0)}</span>
-                                  <span className="text-gray-500">(</span>
-                                  <span>Knowledge Base: {debugObj.tokens.knowledgeBase ?? ((debugObj.tokens.profileKb || 0) + (debugObj.tokens.chatKb || 0))}</span>
-                                  <span className="text-gray-500">|</span>
-                                  <span>Chat History: {debugObj.tokens.chatHistory}</span>
-                                  {debugObj.tokens.agenticInput > 0 && (
-                                    <>
-                                      <span className="text-gray-500">|</span>
-                                      <span>Agentic RAG: {debugObj.tokens.agenticInput}</span>
-                                    </>
-                                  )}
-                                  <span className="text-gray-500">)</span>
-                                  <span className="text-gray-500">|</span>
-                                  <span className="font-bold text-accent">Output: {debugObj.tokens.output + (debugObj.tokens.agenticOutput || 0)}</span>
-                                </div>
-                              )}
+                              {settings.advanced.tokenDebug && (debugObj?.usage || debugObj?.tokens) && (() => {
+                                const usage = debugObj.usage;
+                                const legacy = debugObj.tokens;
+                                const legacyUsage = legacy || {};
+                                const input = usage
+                                  ? usage.total.input
+                                  : (legacyUsage.totalInput || 0) + (legacyUsage.agenticInput || 0);
+                                const output = usage
+                                  ? usage.total.output
+                                  : (legacyUsage.output || 0) + (legacyUsage.agenticOutput || 0);
+                                const total = usage ? usage.total.total : input + output;
+                                const isExpanded = Boolean(expandedTokenUsage[msg.id]);
+                                return (
+                                  <div className="mb-2 ml-1 max-w-full font-mono text-xs text-gray-300">
+                                    <button
+                                      type="button"
+                                      aria-expanded={isExpanded}
+                                      onClick={() => setExpandedTokenUsage(previous => ({
+                                        ...previous,
+                                        [msg.id]: !previous[msg.id]
+                                      }))}
+                                      className="inline-flex max-w-full items-center gap-2 rounded-lg border border-gray-800 bg-[#011419] px-2.5 py-1 text-left uppercase tracking-wide hover:border-gray-700"
+                                    >
+                                      <span className="text-gray-500">Tokens ({usage?.accuracy || 'legacy estimate'})</span>
+                                      <span><span className="text-gray-500">Input</span> <strong className="text-accent">{input.toLocaleString()}</strong></span>
+                                      <span><span className="text-gray-500">Output</span> <strong className="text-accent">{output.toLocaleString()}</strong></span>
+                                      <span><span className="text-gray-500">Total</span> {total.toLocaleString()}</span>
+                                      <ChevronDown className={`h-3 w-3 shrink-0 text-gray-500 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                                    </button>
+                                    {isExpanded && (
+                                      <div className="mt-1 grid w-fit max-w-full grid-cols-[auto_auto_auto] gap-x-4 gap-y-1 rounded-lg border border-gray-800 bg-[#051116] px-3 py-2 text-gray-400">
+                                        <span className="font-bold text-gray-300">Lifecycle</span>
+                                        <span className="font-bold text-gray-300">Input</span>
+                                        <span className="font-bold text-gray-300">Output</span>
+                                        <span>Main generation</span>
+                                        <span>{(usage?.main.input ?? legacyUsage.totalInput ?? 0).toLocaleString()}</span>
+                                        <span>{(usage?.main.output ?? legacyUsage.output ?? 0).toLocaleString()}</span>
+                                        {(usage?.agentic.total ?? ((legacyUsage.agenticInput || 0) + (legacyUsage.agenticOutput || 0))) > 0 && (
+                                          <>
+                                            <span>Agentic retrieval</span>
+                                            <span>{(usage?.agentic.input ?? legacyUsage.agenticInput ?? 0).toLocaleString()}</span>
+                                            <span>{(usage?.agentic.output ?? legacyUsage.agenticOutput ?? 0).toLocaleString()}</span>
+                                          </>
+                                        )}
+                                        {usage?.narrativeState.total > 0 && (
+                                          <>
+                                            <span>Narrative State</span>
+                                            <span>{usage.narrativeState.input.toLocaleString()}</span>
+                                            <span>{usage.narrativeState.output.toLocaleString()}</span>
+                                          </>
+                                        )}
+                                        <span className="col-span-3 mt-1 border-t border-gray-800 pt-1 text-gray-500">
+                                          Main input: System {(usage?.main.systemInstructions ?? 0).toLocaleString()} · Context {(usage?.main.narrativeContext ?? legacyUsage.knowledgeBase ?? 0).toLocaleString()} · History {(usage?.main.chatHistory ?? legacyUsage.chatHistory ?? 0).toLocaleString()} · Message {(usage?.main.userInput ?? 0).toLocaleString()}
+                                        </span>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })()}
 
-                              {/* Agentic RAG Debug Header */}
-                              {settings.advanced.agenticDebug && debugObj?.agenticRagResponse && (
+                              {settings.advanced.agenticDebug && (debugObj?.agentic || debugObj?.agenticRagResponse) && (
                                 <div className="mb-1 ml-1.5 select-none">
                                   <div className="flex items-center space-x-2">
                                     <button
                                       onClick={() => setExpandedAgenticRag(prev => ({ ...prev, [msg.id]: !prev[msg.id] }))}
-                                      className="flex items-center space-x-1 text-[9px] text-gray-500 hover:text-accent font-bold uppercase tracking-wider cursor-pointer"
+                                      className="flex items-center space-x-1 text-xs text-gray-500 hover:text-accent font-bold uppercase tracking-wider cursor-pointer"
                                     >
-                                      <span>🔍 Agentic RAG Context</span>
-                                      <ChevronDown className={`w-2.5 h-2.5 transition-transform ${expandedAgenticRag[msg.id] ? 'rotate-180' : ''}`} />
+                                      <span>Agentic Retrieval Trace</span>
+                                      <ChevronDown className={`w-3 h-3 transition-transform ${expandedAgenticRag[msg.id] ? 'rotate-180' : ''}`} />
                                     </button>
                                     <span className="text-gray-800">|</span>
                                     <button
                                       onClick={() => handleCopyRagContext(msg.id, debugObj)}
-                                      className="flex items-center space-x-1 text-[9px] text-gray-500 hover:text-accent font-bold uppercase tracking-wider cursor-pointer"
-                                      title="Copy full RAG context to clipboard"
+                                      className="flex items-center space-x-1 text-xs text-gray-500 hover:text-accent font-bold uppercase tracking-wider cursor-pointer"
+                                      title="Copy the sanitized Agentic retrieval trace"
                                     >
-                                      <Copy className="w-2.5 h-2.5 animate-pulse-slow" />
-                                      <span>{copiedRagId === msg.id ? 'Copied!' : 'Copy Context'}</span>
+                                      <Copy className="w-3 h-3" />
+                                      <span>{copiedRagId === msg.id ? 'Copied!' : 'Copy Trace'}</span>
                                     </button>
                                   </div>
                                   {expandedAgenticRag[msg.id] && (
-                                    <div className="mt-1 p-3 bg-[#051116] border border-gray-800 rounded-lg text-[10px] font-mono text-gray-400 max-w-xl max-h-72 overflow-y-auto custom-scrollbar shadow-md animate-in fade-in duration-200 space-y-3">
-                                      <div>
-                                        <div className="text-accent font-bold uppercase tracking-wider text-[8px] mb-1">Agentic RAG Response</div>
-                                        <div className="pl-2 border-l border-accent/20 text-gray-300 whitespace-pre-wrap">{debugObj.agenticRagResponse}</div>
-                                      </div>
-                                      {debugObj.agenticRagContextGathered && (
-                                        <div>
-                                          <div className="text-gray-500 font-bold uppercase tracking-wider text-[8px] mb-1">Context Gathered</div>
-                                          <div className="pl-2 border-l border-gray-800 text-gray-500 whitespace-pre-wrap max-h-48 overflow-y-auto custom-scrollbar">{debugObj.agenticRagContextGathered}</div>
-                                        </div>
-                                      )}
+                                    <div className="mt-1 p-3 bg-[#051116] border border-gray-800 rounded-lg text-xs font-mono text-gray-400 max-w-2xl max-h-96 overflow-y-auto custom-scrollbar shadow-md animate-in fade-in duration-200">
+                                      <div className="whitespace-pre-wrap">{formatAgenticTrace(debugObj)}</div>
                                     </div>
                                   )}
                                 </div>
                               )}
 
-                              {/* RAG Retrieval Debug Panel (retrieved chunks + scores) */}
-                              {settings.advanced.ragDebug && debugObj?.standardRagContextGathered && (
+                              {settings.advanced.ragDebug && (debugObj?.retrieval || debugObj?.standardRagContextGathered) && (
                                 <div className="mb-1 ml-1.5 select-none">
                                   <div className="flex items-center space-x-2">
                                     <button
                                       onClick={() => setExpandedStandardRag(prev => ({ ...prev, [msg.id]: !prev[msg.id] }))}
-                                      className="flex items-center space-x-1 text-[9px] text-gray-500 hover:text-accent font-bold uppercase tracking-wider cursor-pointer"
+                                      className="flex items-center space-x-1 text-xs text-gray-500 hover:text-accent font-bold uppercase tracking-wider cursor-pointer"
                                     >
-                                      <span>🔬 Retrieved Chunks (RAG)</span>
-                                      <ChevronDown className={`w-2.5 h-2.5 transition-transform ${expandedStandardRag[msg.id] ? 'rotate-180' : ''}`} />
+                                      <span>Retrieval & Context Diagnostics</span>
+                                      <ChevronDown className={`w-3 h-3 transition-transform ${expandedStandardRag[msg.id] ? 'rotate-180' : ''}`} />
                                     </button>
                                     <span className="text-gray-800">|</span>
                                     <button
                                       onClick={() => handleCopyStandardRag(msg.id, debugObj)}
-                                      className="flex items-center space-x-1 text-[9px] text-gray-500 hover:text-accent font-bold uppercase tracking-wider cursor-pointer"
-                                      title="Copy retrieved chunks to clipboard"
+                                      className="flex items-center space-x-1 text-xs text-gray-500 hover:text-accent font-bold uppercase tracking-wider cursor-pointer"
+                                      title="Copy retrieval decisions and final narrative context"
                                     >
-                                      <Copy className="w-2.5 h-2.5 animate-pulse-slow" />
-                                      <span>{copiedStandardRagId === msg.id ? 'Copied!' : 'Copy Chunks'}</span>
+                                      <Copy className="w-3 h-3" />
+                                      <span>{copiedStandardRagId === msg.id ? 'Copied!' : 'Copy Report'}</span>
                                     </button>
                                   </div>
                                   {expandedStandardRag[msg.id] && (
-                                    <div className="mt-1 p-3 bg-[#051116] border border-gray-800 rounded-lg text-[10px] font-mono text-gray-400 max-w-xl max-h-72 overflow-y-auto custom-scrollbar shadow-md animate-in fade-in duration-200">
-                                      <div className="text-gray-500 whitespace-pre-wrap">{debugObj.standardRagContextGathered}</div>
+                                    <div className="mt-1 p-3 bg-[#051116] border border-gray-800 rounded-lg text-xs font-mono text-gray-400 max-w-2xl max-h-96 overflow-y-auto custom-scrollbar shadow-md animate-in fade-in duration-200">
+                                      <div className="whitespace-pre-wrap">{formatRetrievalDiagnostics(debugObj)}</div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {settings.advanced.narrativeStateDebug && debugObj?.narrativeState && (
+                                <div className="mb-1 ml-1.5 select-none">
+                                  <div className="flex items-center space-x-2">
+                                    <button
+                                      onClick={() => setExpandedNarrativeState(prev => ({ ...prev, [msg.id]: !prev[msg.id] }))}
+                                      className="flex items-center space-x-1 text-xs text-gray-500 hover:text-accent font-bold uppercase tracking-wider cursor-pointer"
+                                    >
+                                      <span>Narrative State Diagnostics · {debugObj.narrativeState.status}</span>
+                                      <ChevronDown className={`w-3 h-3 transition-transform ${expandedNarrativeState[msg.id] ? 'rotate-180' : ''}`} />
+                                    </button>
+                                    <span className="text-gray-800">|</span>
+                                    <button
+                                      onClick={() => handleCopyNarrativeState(msg.id, debugObj)}
+                                      className="flex items-center space-x-1 text-xs text-gray-500 hover:text-accent font-bold uppercase tracking-wider cursor-pointer"
+                                      title="Copy Narrative State diagnostics"
+                                    >
+                                      <Copy className="w-3 h-3" />
+                                      <span>{copiedNarrativeStateId === msg.id ? 'Copied!' : 'Copy Report'}</span>
+                                    </button>
+                                  </div>
+                                  {expandedNarrativeState[msg.id] && (
+                                    <div className="mt-1 p-3 bg-[#051116] border border-gray-800 rounded-lg text-xs font-mono text-gray-400 max-w-2xl max-h-96 overflow-y-auto custom-scrollbar shadow-md animate-in fade-in duration-200">
+                                      <div className="whitespace-pre-wrap">{diagnosticText(debugObj.narrativeState)}</div>
                                     </div>
                                   )}
                                 </div>
@@ -1123,13 +1406,14 @@ export default function ChatWorkspaceView() {
                                   </div>
                                 ) : (
                                   <>
-                                    {/* Custom Alternatives switcher at top right of bubble */}
+                                    <RoleplayMessageFrame frame={roleplayFrames[msg.id]} />
+
                                     {msg.alternatives && (() => {
                                       const alts = typeof msg.alternatives === 'string' ? JSON.parse(msg.alternatives) : msg.alternatives;
                                       if (alts.length > 1) {
                                         const currentIdx = msg.alternativeIndex || 0;
                                         return (
-                                          <div className="absolute top-2 right-2 flex items-center space-x-1.5 bg-[#011419]/70 border border-gray-800 rounded px-1.5 py-0.5 text-[8px] font-bold text-gray-400 select-none z-10">
+                                          <div className="mb-2 ml-auto flex w-fit items-center space-x-1.5 rounded border border-gray-800 bg-[#011419]/70 px-1.5 py-0.5 text-[8px] font-bold text-gray-400 select-none">
                                             <button
                                               disabled={currentIdx === 0}
                                               onClick={() => handleSwitchAIAlternative(msg.id, currentIdx - 1)}
@@ -1212,7 +1496,10 @@ export default function ChatWorkspaceView() {
                                     <>
                                       <span className="text-gray-600">|</span>
                                       <button
-                                        onClick={() => handleRegenerateMessage(msg.id, selectedTargetId)}
+                                        onClick={() => {
+                                          const targetId = getGenerationTargetId();
+                                          if (targetId) handleRegenerateMessage(msg.id, targetId);
+                                        }}
                                         className="flex items-center space-x-1 text-gray-300 hover:text-accent transition-colors cursor-pointer"
                                       >
                                         <RotateCw className="w-3 h-3 transition-colors" />
@@ -1223,6 +1510,7 @@ export default function ChatWorkspaceView() {
                                   <span className="text-gray-600">|</span>
                                   <div className="relative">
                                     <button
+                                      ref={openMenuId === msg.id ? messageMenuAnchorRef : null}
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         setOpenMenuId(openMenuId === msg.id ? null : msg.id);
@@ -1231,8 +1519,7 @@ export default function ChatWorkspaceView() {
                                     >
                                       <MoreVertical className="w-3 h-3 transition-colors" />
                                     </button>
-                                    {openMenuId === msg.id && (
-                                      <div className="absolute bottom-full right-0 mb-1 w-44 bg-[#0a161d] border border-gray-800 rounded-lg shadow-xl py-1 z-20 text-[10px] uppercase font-bold tracking-wider text-left">
+                                    <Popover anchorRef={messageMenuAnchorRef} open={openMenuId === msg.id} onClose={() => setOpenMenuId(null)} matchAnchorWidth={false} align="right" maxHeight={160} scroll={false} className="w-44 py-1 text-left text-[0.625rem] font-bold uppercase tracking-wider">
                                         <button
                                           onClick={(e) => {
                                             e.stopPropagation();
@@ -1255,8 +1542,7 @@ export default function ChatWorkspaceView() {
                                           <RotateCcw className="w-3.5 h-3.5 text-inherit" />
                                           <span>Revert Chat Here</span>
                                         </button>
-                                      </div>
-                                    )}
+                                    </Popover>
                                   </div>
                                 </div>
                               )}
@@ -1562,6 +1848,16 @@ export default function ChatWorkspaceView() {
 
       </div>
 
+      {roleplayMode && activeSubView === 'chat' && (
+        <RoleplayQuickPanel
+          workspaceId={activeChat.id}
+          api={electronAPI}
+          showToast={showToast}
+          onBackgroundChange={setRoleplayBackground}
+          onOpenConfiguration={() => setActiveSubView('configuration')}
+        />
+      )}
+
       {/* Floating Error modal for failed message edit */}
       {editError && (
         <div className="absolute bottom-28 right-6 w-80 bg-[#1a0a0d] border border-red-950/60 rounded-xl p-4 shadow-[0_0_20px_rgba(0,0,0,0.6)] z-50 animate-in fade-in slide-in-from-bottom-5 duration-300 flex flex-col space-y-3">
@@ -1593,7 +1889,9 @@ export default function ChatWorkspaceView() {
             </button>
             <button
               onClick={async () => {
-                const { msgId, editedText, targetId } = editError;
+                const { msgId, editedText } = editError;
+                const targetId = getGenerationTargetId();
+                if (!targetId) return;
                 setEditError(null);
                 await handleEditUserMessage(msgId, editedText, targetId);
               }}

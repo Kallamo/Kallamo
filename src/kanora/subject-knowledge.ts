@@ -11,10 +11,12 @@ import {
   BeliefRepository,
   type BeliefProjectionRecord
 } from './perspective-state';
+import { AwarenessRepository, type AwarenessRecord } from './awareness';
 
 export interface SubjectKnowledgeProjection {
   projectId: string;
   subjectId: string;
+  awareness: AwarenessRecord[];
   known: SubjectKnowledgeRecord[];
   beliefs: BeliefProjectionRecord[];
   memories: NarrativeMemoryRecord[];
@@ -29,11 +31,13 @@ export class SubjectKnowledgeProjectionRepository {
   private readonly knowledge: SubjectKnowledgeRepository;
   private readonly beliefs: BeliefRepository;
   private readonly memories: NarrativeMemoryRepository;
+  private readonly awareness: AwarenessRepository;
 
   constructor(db: Database.Database) {
     this.knowledge = new SubjectKnowledgeRepository(db);
     this.beliefs = new BeliefRepository(db);
     this.memories = new NarrativeMemoryRepository(db);
+    this.awareness = new AwarenessRepository(db);
   }
 
   get(
@@ -44,6 +48,7 @@ export class SubjectKnowledgeProjectionRepository {
     return {
       projectId,
       subjectId,
+      awareness: this.awareness.listCurrentForSubject(projectId, subjectId, options.throughSequence),
       known: this.knowledge.listCurrentForSubject(projectId, subjectId, options),
       beliefs: this.beliefs.listCurrentForSubject(projectId, subjectId, options),
       memories: this.memories.listCurrentForSubject(projectId, subjectId, options)

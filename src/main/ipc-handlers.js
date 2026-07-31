@@ -20,6 +20,7 @@ const { registerWorkspaceStateIpc } = require('./features/workspace-state/worksp
 const { createWorldbuildDataService } = require('./features/worldbuild/worldbuild-data');
 const entitiesStore = require('./entities');
 const { chunkText, extractTextFromFile, extractDocxHtml, vectorizeChunks, insertChunksToDb, deleteChunksFromDb, searchKnowledgeBase, searchChatKnowledgeBase, searchChatMemories, RAG_MODEL_ID, RAG_MODEL_DIM, generateEmbeddingVector, countTokens } = require('./rag-service');
+const { normalizeMaxApiPayload } = require('./features/llm/payload-budget');
 
 registerWorkspaceStateIpc(ipcMain);
 const worldbuildData = createWorldbuildDataService(db);
@@ -2875,6 +2876,10 @@ ipcMain.handle('bulk-manage-entities', async (event, { workspaceId, ids, action,
     else if (action === 'accept-proposed') result = entitiesStore.bulkAcceptProposed(workspaceId, ids);
     else if (action === 'accept-updates') result = entitiesStore.bulkAcceptEnrichUpdates(workspaceId, ids);
     else if (action === 'accept-all') result = entitiesStore.bulkAcceptAll(workspaceId, ids);
+    else if (action === 'reject-proposed') result = entitiesStore.bulkRejectProposed(workspaceId, ids);
+    else if (action === 'reject-updates') result = entitiesStore.bulkRejectEnrichUpdates(workspaceId, ids);
+    else if (action === 'reject-all') result = entitiesStore.bulkRejectAll(workspaceId, ids);
+    else if (action === 'reprocess') result = entitiesStore.resetEntityEnrichmentProgress(workspaceId, ids);
     else if (action === 'delete') result = entitiesStore.bulkDeleteEntities(workspaceId, ids);
     else throw new Error('unknown bulk entity action');
     return { success: true, ...result };
@@ -2938,6 +2943,7 @@ ipcMain.handle('export-worldbuild', async (event, { workspaceId } = {}) => {
   try {
     const win = BrowserWindow.fromWebContents(event.sender);
     const data = entitiesStore.exportWorldbuild(workspaceId);
+    data.calendar = getCalendarService().getCalendar(db, workspaceId);
     if (!data.entities.length) return { success: false, error: 'This Worldbuild is empty — nothing to export.' };
     const { filePath, canceled } = await dialog.showSaveDialog(win, {
       title: 'Export Worldbuild Package',
@@ -2974,8 +2980,23 @@ ipcMain.handle('import-worldbuild', async (event, { workspaceId } = {}) => {
     } catch (e) {
       return { success: false, error: 'Could not read the package — it is not a valid Worldbuild file.' };
     }
+    const existingEntityCount = db.prepare(
+      "SELECT COUNT(*) AS count FROM entities WHERE workspaceId = ? AND status != 'proposed'"
+    ).get(workspaceId)?.count || 0;
+    let calendarImported = false;
+    let calendarConflict = false;
+    if (payload.calendar) {
+      const currentCalendar = getCalendarService().getCalendar(db, workspaceId);
+      if (existingEntityCount === 0) {
+        const calendarResult = getCalendarService().saveCalendar(db, workspaceId, payload.calendar, []);
+        calendarImported = calendarResult.saved;
+        calendarConflict = !calendarResult.saved;
+      } else {
+        calendarConflict = JSON.stringify(currentCalendar) !== JSON.stringify(payload.calendar);
+      }
+    }
     const res = entitiesStore.importWorldbuild(workspaceId, payload);
-    return { success: true, ...res };
+    return { success: true, ...res, calendarImported, calendarConflict };
   } catch (e) {
     console.error('[import-worldbuild] failed:', e);
     return { success: false, error: e.message };
@@ -2996,7 +3017,23 @@ ipcMain.handle('get-entity-links', async (event, { id, direction, relType } = {}
 
 ipcMain.handle('set-entity-link', async (event, payload) => {
   try {
-    return { success: true, ...entitiesStore.setLink(payload || {}) };
+    const result = entitiesStore.setLink(payload || {});
+    if (result.id && payload?.workspaceId && payload?.toId) {
+      const mappings = payload.relType === 'related_to'
+        ? { ownerId: payload.fromId, targetId: payload.toId, sourceType: 'relationship' }
+        : payload.relType === 'member_of'
+          ? [
+              { ownerId: payload.fromId, targetId: payload.toId, sourceType: 'faction-membership' },
+              { ownerId: payload.toId, targetId: payload.fromId, sourceType: 'faction-membership', audienceType: 'all-members' },
+            ]
+          : payload.relType === 'owned_by'
+            ? { ownerId: payload.toId, targetId: payload.fromId, sourceType: 'inventory' }
+            : null;
+      for (const mapping of Array.isArray(mappings) ? mappings : mappings ? [mappings] : []) {
+        worldbuildData.ensureAwareness({ workspaceId: payload.workspaceId, ...mapping, sourceId: result.id });
+      }
+    }
+    return { success: true, ...result };
   } catch (e) {
     console.error('[set-entity-link] failed:', e);
     return { success: false, error: e.message };
@@ -3182,6 +3219,441 @@ ipcMain.handle('get-chats', async () => {
   }
 });
 
+ipcMain.handle('ensure-worldbuild-awareness', async (event, payload = {}) => {
+  try {
+    return { success: true, card: worldbuildData.ensureAwareness(payload) };
+  } catch (e) {
+    console.error('[ensure-worldbuild-awareness] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('set-worldbuild-known-fields', async (event, payload = {}) => {
+  try {
+    return { success: true, card: worldbuildData.setKnownFields(payload) };
+  } catch (e) {
+    console.error('[set-worldbuild-known-fields] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('mark-worldbuild-current-fields-known', async (event, payload = {}) => {
+  try {
+    return { success: true, card: worldbuildData.markCurrentFieldsKnown(payload) };
+  } catch (e) {
+    console.error('[mark-worldbuild-current-fields-known] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('set-worldbuild-known-relationships', async (event, payload = {}) => {
+  try {
+    return { success: true, card: worldbuildData.setKnownRelationships(payload) };
+  } catch (e) {
+    console.error('[set-worldbuild-known-relationships] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('remove-worldbuild-knowledge-card', async (event, payload = {}) => {
+  try {
+    worldbuildData.removeKnowledgeCard(payload);
+    return { success: true };
+  } catch (e) {
+    console.error('[remove-worldbuild-knowledge-card] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('set-worldbuild-knowledge-audience', async (event, payload = {}) => {
+  try {
+    return { success: true, card: worldbuildData.setKnowledgeAudience(payload) };
+  } catch (e) {
+    console.error('[set-worldbuild-knowledge-audience] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('list-worldbuild-facts', async (event, { workspaceId } = {}) => {
+  try {
+    return { success: true, facts: worldbuildData.listWorldFacts(workspaceId) };
+  } catch (e) {
+    console.error('[list-worldbuild-facts] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('save-worldbuild-fact', async (event, payload = {}) => {
+  try {
+    return { success: true, facts: worldbuildData.saveWorldFact(payload) };
+  } catch (e) {
+    console.error('[save-worldbuild-fact] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('delete-worldbuild-fact', async (event, payload = {}) => {
+  try {
+    return { success: true, facts: worldbuildData.deleteWorldFact(payload) };
+  } catch (e) {
+    console.error('[delete-worldbuild-fact] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('get-worldbuild-subject-review', async (event, { workspaceId, subjectId } = {}) => {
+  try {
+    return { success: true, review: worldbuildData.getSubjectReview(workspaceId, subjectId) };
+  } catch (e) {
+    console.error('[get-worldbuild-subject-review] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('list-worldbuild-review-counts', async (event, { workspaceId } = {}) => {
+  try {
+    return { success: true, counts: worldbuildData.listReviewCounts(workspaceId) };
+  } catch (e) {
+    console.error('[list-worldbuild-review-counts] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('set-inventory-item', async (event, payload) => {
+  try {
+    const result = entitiesStore.setInventoryLink(payload || {});
+    if (result.id && payload?.workspaceId && payload?.holderId && payload?.itemId) {
+      worldbuildData.ensureAwareness({
+        workspaceId: payload.workspaceId,
+        ownerId: payload.holderId,
+        targetId: payload.itemId,
+        sourceType: 'inventory',
+        sourceId: result.id,
+      });
+    }
+    return { success: true, ...result };
+  } catch (e) {
+    console.error('[set-inventory-item] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('get-workspace-experience-mode', async (event, { workspaceId } = {}) => {
+  try {
+    const { getWorkspaceExperienceMode } = require('../../dist-main/main/features/kanora/mode-orchestration');
+    return { success: true, mode: getWorkspaceExperienceMode(db, workspaceId) };
+  } catch (error) {
+    console.error('[get-workspace-experience-mode] failed:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('set-workspace-experience-mode', async (event, { workspaceId, mode } = {}) => {
+  try {
+    const { setWorkspaceExperienceMode } = require('../../dist-main/main/features/kanora/mode-orchestration');
+    return { success: true, mode: setWorkspaceExperienceMode(db, workspaceId, mode) };
+  } catch (error) {
+    console.error('[set-workspace-experience-mode] failed:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+function getRoleplaySystem() {
+  const { RoleplaySystem } = require('../../dist-main/main/features/kanora/roleplay-system');
+  return new RoleplaySystem(db);
+}
+
+function getNarrativeStateSystem() {
+  const { NarrativeStateSystem } = require('../../dist-main/main/features/kanora/narrative-state');
+  return new NarrativeStateSystem(db);
+}
+
+function getNarrativeEntitySystem() {
+  const { NarrativeEntitySystem } = require('../../dist-main/main/features/kanora/narrative-entities');
+  return new NarrativeEntitySystem(db);
+}
+
+function getCalendarService() {
+  return require('./features/worldbuild/calendar-service');
+}
+
+ipcMain.handle('get-roleplay-configuration', async (event, { workspaceId } = {}) => {
+  try {
+    const roleplay = getRoleplaySystem();
+    const calendarService = getCalendarService();
+    return {
+      success: true,
+      settings: roleplay.getSettings(workspaceId),
+      calendar: calendarService.getCalendar(db, workspaceId),
+      clock: calendarService.getRoleplayClock(db, workspaceId),
+      timeMatrix: calendarService.getTimeMatrix(db, workspaceId),
+      definitions: roleplay.listDefinitions(workspaceId),
+      assignments: roleplay.listAssignments(workspaceId),
+      scene: roleplay.getScene(workspaceId),
+      changes: roleplay.listChanges(workspaceId),
+      sceneChanges: roleplay.listSceneChanges(workspaceId),
+      inventoryChanges: roleplay.listInventoryChanges(workspaceId),
+      entityChanges: getNarrativeEntitySystem().listChanges(workspaceId),
+      narrativeEvents: getNarrativeStateSystem().listEvents(workspaceId),
+      narrativeMetrics: getNarrativeStateSystem().listMetrics(workspaceId, 50),
+      narrativeJobs: getNarrativeStateSystem().listJobs(workspaceId, 50)
+    };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-world-calendar', async (event, { workspaceId } = {}) => {
+  try {
+    const calendarService = getCalendarService();
+    return {
+      success: true,
+      calendar: calendarService.getCalendar(db, workspaceId),
+      clock: calendarService.getRoleplayClock(db, workspaceId)
+    };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('save-world-calendar', async (event, { workspaceId, calendar, resolutions } = {}) => {
+  try {
+    return { success: true, ...getCalendarService().saveCalendar(db, workspaceId, calendar, resolutions) };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-world-calendar-entries', async (event, { workspaceId, year, month, eraId } = {}) => {
+  try {
+    return {
+      success: true,
+      ...getCalendarService().getCalendarEntries(db, workspaceId, year, month, eraId)
+    };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('save-roleplay-clock', async (event, { workspaceId, position } = {}) => {
+  try {
+    const clock = getCalendarService().saveRoleplayClock(db, workspaceId, position);
+    event.sender.send('roleplay-resource-changes', { workspaceId, changes: [{ kind: 'time', clock }] });
+    return { success: true, clock };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('save-roleplay-time-matrix', async (event, { workspaceId, matrix } = {}) => {
+  try {
+    return { success: true, matrix: getCalendarService().saveTimeMatrix(db, workspaceId, matrix) };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-roleplay-message-frames', async (event, { workspaceId, originIds } = {}) => {
+  try {
+    return {
+      success: true,
+      frames: getCalendarService().getMessageFrames(db, workspaceId, originIds)
+    };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('save-roleplay-settings', async (event, { workspaceId, settings } = {}) => {
+  try { return { success: true, settings: getRoleplaySystem().saveSettings(workspaceId, settings) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('save-roleplay-resource-definition', async (event, { workspaceId, definition } = {}) => {
+  try { return { success: true, definition: getRoleplaySystem().saveDefinition(workspaceId, definition) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('delete-roleplay-resource-definition', async (event, { workspaceId, definitionId } = {}) => {
+  try { getRoleplaySystem().deleteDefinition(workspaceId, definitionId); return { success: true }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('set-roleplay-resource-value', async (event, payload = {}) => {
+  try {
+    getRoleplaySystem().setTargetValue(payload.workspaceId, payload.definitionId, payload.targetType, payload.targetId, payload.value);
+    return { success: true };
+  } catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('set-roleplay-resource-values', async (event, payload = {}) => {
+  try {
+    getRoleplaySystem().setTargetValues(payload.workspaceId, payload.definitionId, payload.targetType, payload.targetIds, payload.value);
+    return { success: true };
+  } catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('remove-roleplay-resource-value', async (event, payload = {}) => {
+  try {
+    getRoleplaySystem().removeTargetValue(payload.workspaceId, payload.definitionId, payload.targetType, payload.targetId);
+    return { success: true };
+  } catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('save-roleplay-scene', async (event, { workspaceId, patch } = {}) => {
+  try { return { success: true, scene: getRoleplaySystem().saveScene(workspaceId, patch) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('apply-roleplay-scene-change', async (event, { workspaceId, patch } = {}) => {
+  try {
+    const roleplay = getRoleplaySystem();
+    const change = roleplay.proposeSceneChange({
+      id: crypto.randomUUID(),
+      workspaceId,
+      patch,
+      source: 'manual',
+      provenanceId: 'roleplay-quick-panel'
+    });
+    return { success: true, change, scene: roleplay.getScene(workspaceId) };
+  } catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('get-roleplay-inventory', async (event, { workspaceId, entityId } = {}) => {
+  try { return { success: true, inventory: getRoleplaySystem().listInventory(workspaceId, entityId) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('set-roleplay-equipped', async (event, { workspaceId, entityId, itemId, equipped } = {}) => {
+  try {
+    return {
+      success: true,
+      inventory: getRoleplaySystem().setEquipped(workspaceId, entityId, itemId, Boolean(equipped))
+    };
+  } catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('apply-roleplay-inventory-change', async (event, { workspaceId, patch } = {}) => {
+  try {
+    const change = getRoleplaySystem().proposeInventoryChange({
+      id: crypto.randomUUID(),
+      workspaceId,
+      patch,
+      source: 'manual',
+      provenanceId: 'roleplay-quick-panel'
+    });
+    return { success: true, change };
+  } catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('get-roleplay-location-background', async (event, { workspaceId, locationId } = {}) => {
+  try {
+    if (!locationId) return { success: true, background: null };
+    return { success: true, background: getRoleplaySystem().getLocationBackground(workspaceId, locationId) };
+  } catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('set-roleplay-location-background', async (event, { workspaceId, locationId, imagePath } = {}) => {
+  try {
+    return {
+      success: true,
+      background: getRoleplaySystem().setLocationBackground(workspaceId, locationId, imagePath || null)
+    };
+  } catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('upload-roleplay-location-background', async (event, { workspaceId, locationId, filePath, fileName } = {}) => {
+  try {
+    if (!workspaceId || !locationId || !filePath || !fs.existsSync(filePath)) {
+      throw new Error('A valid Location background image is required.');
+    }
+    const workspaceKey = crypto.createHash('sha256').update(String(workspaceId)).digest('hex').slice(0, 24);
+    const locationKey = crypto.createHash('sha256').update(String(locationId)).digest('hex').slice(0, 24);
+    const backgroundDir = path.join(chatsDir, workspaceKey, 'LocationBackgrounds', locationKey);
+    fs.mkdirSync(backgroundDir, { recursive: true });
+    const extension = path.extname(String(fileName || filePath)).toLowerCase();
+    const supported = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
+    if (!supported.has(extension)) throw new Error('Choose a PNG, JPG, WEBP, or GIF image.');
+    const version = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    const destination = path.join(backgroundDir, `background-${version}${extension}`);
+    fs.copyFileSync(filePath, destination);
+    for (const entry of fs.readdirSync(backgroundDir)) {
+      const storedPath = path.join(backgroundDir, entry);
+      if (storedPath !== destination) fs.unlinkSync(storedPath);
+    }
+    const background = getRoleplaySystem().setLocationBackground(workspaceId, locationId, destination);
+    return { success: true, background };
+  } catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('link-roleplay-entity-species', async (event, payload = {}) => {
+  try { getRoleplaySystem().linkEntitySpecies(payload.workspaceId, payload.entityId, payload.speciesId); return { success: true }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('get-roleplay-entity-resources', async (event, { workspaceId, entityId } = {}) => {
+  try { return { success: true, resources: getRoleplaySystem().listEntityResources(workspaceId, entityId) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('change-roleplay-resource', async (event, payload = {}) => {
+  try { return { success: true, change: getRoleplaySystem().proposeChange(payload) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('resolve-roleplay-resource-change', async (event, { workspaceId, changeId, decision } = {}) => {
+  try { return { success: true, change: getRoleplaySystem().resolveChange(workspaceId, changeId, decision) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('resolve-roleplay-scene-change', async (event, { workspaceId, changeId, decision } = {}) => {
+  try { return { success: true, change: getRoleplaySystem().resolveSceneChange(workspaceId, changeId, decision) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('resolve-roleplay-inventory-change', async (event, { workspaceId, changeId, decision } = {}) => {
+  try { return { success: true, change: getRoleplaySystem().resolveInventoryChange(workspaceId, changeId, decision) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('resolve-roleplay-entity-change', async (event, { workspaceId, changeId, decision } = {}) => {
+  try { return { success: true, change: getNarrativeEntitySystem().resolveChange(workspaceId, changeId, decision) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('resolve-narrative-state-event', async (event, { workspaceId, eventId, decision } = {}) => {
+  try {
+    return { success: true, event: getNarrativeStateSystem().resolveEvent(workspaceId, eventId, decision) };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('resolve-narrative-state-operations', async (event, {
+  workspaceId, eventId, approvedOperationIds = [], rejectedOperationIds = [],
+} = {}) => {
+  try {
+    return {
+      success: true,
+      event: getNarrativeStateSystem().resolveEventOperations(workspaceId, eventId, {
+        approvedOperationIds,
+        rejectedOperationIds,
+      }),
+    };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('reprocess-narrative-state-turn', async (event, { workspaceId, originId } = {}) => {
+  try {
+    const { reprocessNarrativeStateTurn } = require('./workflow-runner');
+    return { success: true, changes: await reprocessNarrativeStateTurn(workspaceId, originId) };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 ipcMain.handle('save-chat', async (event, chat) => {
   try {
     const exists = db.prepare('SELECT id, knowledgeFiles, syncToCloud FROM chats WHERE id = ?').get(chat.id);
@@ -3232,7 +3704,7 @@ ipcMain.handle('save-chat', async (event, chat) => {
         chat.description || '',
         chat.updatedAt || Date.now(),
         chat.isPinned ? 1 : 0,
-        chat.maxContext ?? 128000,
+        normalizeMaxApiPayload(chat.maxContext, exists.maxContext),
         chat.archiveThreshold ?? 60000,
         chat.summarizedIndex ?? 0,
         typeof chat.activeProfiles === 'string' ? chat.activeProfiles : JSON.stringify(chat.activeProfiles || []),
@@ -3270,7 +3742,7 @@ ipcMain.handle('save-chat', async (event, chat) => {
         chat.description || '',
         chat.updatedAt || Date.now(),
         chat.isPinned ? 1 : 0,
-        chat.maxContext ?? 128000,
+        normalizeMaxApiPayload(chat.maxContext),
         chat.archiveThreshold ?? 60000,
         chat.summarizedIndex ?? 0,
         typeof chat.activeProfiles === 'string' ? chat.activeProfiles : JSON.stringify(chat.activeProfiles || []),
@@ -3295,6 +3767,7 @@ ipcMain.handle('save-chat', async (event, chat) => {
         console.error("Background chat indexing error:", e);
       });
     }
+    getCalendarService().getCalendar(db, chat.id);
 
     return { success: true };
   } catch (e) {
@@ -3305,6 +3778,15 @@ ipcMain.handle('save-chat', async (event, chat) => {
 
 ipcMain.handle('delete-chat', async (event, id) => {
   try {
+    for (const table of [
+      'roleplay_message_frames',
+      'roleplay_time_advances',
+      'roleplay_time_matrices',
+      'roleplay_time_state',
+      'worldbuild_calendars'
+    ]) {
+      db.prepare(`DELETE FROM ${table} WHERE workspace_id = ?`).run(id);
+    }
     db.prepare('DELETE FROM chats WHERE id = ?').run(id);
 
     db.prepare('DELETE FROM knowledge_chunks WHERE ownerId = ?').run(id);
@@ -3451,7 +3933,8 @@ ipcMain.handle('get-chat-messages', async (event, chatId) => {
 
 ipcMain.handle('update-entity-link', async (event, { linkId, fields } = {}) => {
   try {
-    return { success: true, ...entitiesStore.updateLink(linkId, fields || {}) };
+    const result = entitiesStore.updateLink(linkId, fields || {});
+    return { success: true, ...result };
   } catch (e) {
     console.error('[update-entity-link] failed:', e);
     return { success: false, error: e.message };
@@ -3667,6 +4150,12 @@ ipcMain.handle('save-message', async (event, message) => {
 
 ipcMain.handle('delete-message', async (event, messageId, deleteAttachedFilesFromMemory) => {
   try {
+    const narrativeOrigin = db.prepare("SELECT chatId FROM messages WHERE id = ? AND role = 'ai'").get(messageId);
+    if (narrativeOrigin) {
+      getNarrativeEntitySystem().invalidateOrigin(narrativeOrigin.chatId, messageId, 'deleted');
+      db.prepare('DELETE FROM roleplay_message_frames WHERE workspace_id = ? AND origin_id = ?')
+        .run(narrativeOrigin.chatId, messageId);
+    }
     if (deleteAttachedFilesFromMemory) {
       const msgObj = db.prepare('SELECT chatId, attachedFiles FROM messages WHERE id = ?').get(messageId);
       if (msgObj && msgObj.attachedFiles) {
@@ -3725,6 +4214,13 @@ ipcMain.handle('revert-chat-to-message', async (event, { chatId, messageId }) =>
 
     const toDelete = messages.slice(targetIndex + 1);
     if (toDelete.length > 0) {
+      const aiOrigins = db.prepare(`
+        SELECT id FROM messages WHERE chatId = ? AND id IN (${toDelete.map(() => '?').join(',')}) AND role = 'ai'
+        ORDER BY createdAt DESC
+      `).all(chatId, ...toDelete.map(message => message.id));
+      for (const origin of aiOrigins) getNarrativeEntitySystem().invalidateOrigin(chatId, origin.id, 'deleted');
+      const deleteFrame = db.prepare('DELETE FROM roleplay_message_frames WHERE workspace_id = ? AND origin_id = ?');
+      for (const origin of aiOrigins) deleteFrame.run(chatId, origin.id);
       const deleteStmt = db.prepare('DELETE FROM messages WHERE id = ?');
       const transaction = db.transaction((ids) => {
         for (const id of ids) {
@@ -4128,17 +4624,18 @@ ipcMain.handle('import-workflow', async (event) => {
 // ==========================================
 ipcMain.handle('get-settings', async () => {
   try {
+    const { withNormalizedRetrievalSettings } = require('../shared/retrieval-settings');
     const rowInterface = db.prepare("SELECT value FROM settings WHERE key = 'interface'").get();
     const rowAdvanced = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
 
     const defaultSettings = {
       interface: { fontFamily: 'sans', fontSize: 'medium', layout: 'bubbles', blur: true, accentColor: '#FBCB2D', codeTheme: 'github-dark', lineNumbers: false },
-      advanced: { chunkSize: 500, similarity: 0.3, topKKB: 5, topKMemory: 5, executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, archiveSummarization: true, systemOutputLanguage: 'English', taggerMode: 'inherit-system', summarizerMode: 'inherit-system', retrievalPlannerMode: 'profile' }
+      advanced: { chunkSize: 500, similarity: 0.3, topKKB: 5, topKMemory: 5, executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, narrativeStateDebug: false, archiveSummarization: true, systemOutputLanguage: 'English', taggerMode: 'inherit-system', summarizerMode: 'inherit-system', retrievalPlannerMode: 'profile' }
     };
 
     return {
       interface: rowInterface ? JSON.parse(rowInterface.value) : defaultSettings.interface,
-      advanced: rowAdvanced ? JSON.parse(rowAdvanced.value) : defaultSettings.advanced
+      advanced: withNormalizedRetrievalSettings(rowAdvanced ? JSON.parse(rowAdvanced.value) : defaultSettings.advanced)
     };
   } catch (e) {
     console.error("Error reading settings from SQLite:", e);
@@ -4148,9 +4645,10 @@ ipcMain.handle('get-settings', async () => {
 
 ipcMain.handle('save-settings', async (event, settingsObj) => {
   try {
+    const { withNormalizedRetrievalSettings } = require('../shared/retrieval-settings');
     const insert = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
     insert.run('interface', JSON.stringify(settingsObj.interface || {}));
-    insert.run('advanced', JSON.stringify(settingsObj.advanced || {}));
+    insert.run('advanced', JSON.stringify(withNormalizedRetrievalSettings(settingsObj.advanced || {})));
     return { success: true };
   } catch (e) {
     console.error("Error saving settings to SQLite:", e);
@@ -4426,8 +4924,8 @@ ipcMain.handle('save-chat-manual-snippet', async (event, { chatId, snippetId, ti
     const chunk = vectorData[0] || null;
     if (chunk) {
       const insertChunk = db.prepare(`
-        INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, content_hash)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, content_hash, memoryBlockId)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const insertFts = db.prepare(`
         INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text)
@@ -4435,7 +4933,8 @@ ipcMain.handle('save-chat-manual-snippet', async (event, { chatId, snippetId, ti
       `);
       db.transaction(() => {
         db.prepare('DELETE FROM entity_enrichment_chunks WHERE chunkId = ?').run(snippetId);
-        insertChunk.run(snippetId, chatId, 'chat_memory', title, content, JSON.stringify(chunk.vector), Date.now(), hashText(content));
+        db.prepare('UPDATE entity_update_evidence SET state = ?, reason = ? WHERE chunk_id = ?').run('invalidated', 'source-deleted', snippetId);
+        insertChunk.run(snippetId, chatId, 'chat_memory', title, content, JSON.stringify(chunk.vector), Date.now(), hashText(content), snippetId);
         insertFts.run(snippetId, content);
       })();
     }
@@ -4511,15 +5010,15 @@ ipcMain.handle('get-chat-kb-blocks', async (event, { chatId }) => {
               const chunk = vectorData[0] || null;
               if (chunk) {
                 const insertChunk = db.prepare(`
-                  INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, content_hash)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                  INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, content_hash, memoryBlockId)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `);
                 const insertFts = db.prepare(`
                   INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text)
                   VALUES (?, ?)
                 `);
                 db.transaction(() => {
-                  insertChunk.run(v.id, chatId, 'chat_memory', title, content, JSON.stringify(chunk.vector), Date.now(), hashText(content));
+                  insertChunk.run(v.id, chatId, 'chat_memory', title, content, JSON.stringify(chunk.vector), Date.now(), hashText(content), v.id);
                   insertFts.run(v.id, content);
                 })();
               }
@@ -4660,8 +5159,8 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
           chunk.keywords = cleanKeywords;
 
           const insertChunk = db.prepare(`
-            INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, enabled, content_hash)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, enabled, content_hash, memoryBlockId)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `);
           const insertFts = db.prepare(`
             INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text)
@@ -4669,6 +5168,7 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
           `);
           db.transaction(() => {
             db.prepare('DELETE FROM entity_enrichment_chunks WHERE chunkId = ?').run(snippetId);
+            db.prepare('UPDATE entity_update_evidence SET state = ?, reason = ? WHERE chunk_id = ?').run('invalidated', 'source-deleted', snippetId);
             insertChunk.run(
               snippetId,
               chatId,
@@ -4678,7 +5178,8 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
               JSON.stringify(chunk.vector),
               Date.now(),
               resolvedEnabled ? 1 : 0,
-              hashText(chunk.text)
+              hashText(chunk.text),
+              snippetId
             );
             insertFts.run(snippetId, chunk.text);
           })();
@@ -4750,6 +5251,7 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
       if (chunk) {
         db.transaction(() => {
           db.prepare('DELETE FROM entity_enrichment_chunks WHERE chunkId = ?').run(block.id);
+          db.prepare('UPDATE entity_update_evidence SET state = ?, reason = ? WHERE chunk_id = ?').run('invalidated', 'source-deleted', block.id);
           db.prepare('UPDATE knowledge_chunks SET text = ?, vector = ?, content_hash = ?, manuallyEdited = 1 WHERE id = ?').run(
             chunk.text,
             JSON.stringify(chunk.vector),

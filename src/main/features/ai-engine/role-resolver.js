@@ -4,12 +4,14 @@ const ROLE_IDS = Object.freeze({
     SYSTEM: 'system',
     TAGGER: 'tagger',
     SUMMARIZER: 'summarizer',
+    NARRATIVE_STATE: 'narrativeState',
     RETRIEVAL_PLANNER: 'retrievalPlanner'
 });
 
 const ROLE_DEFAULTS = Object.freeze({
     tagger: 'inherit-system',
     summarizer: 'inherit-system',
+    narrativeState: 'inherit-system',
     retrievalPlanner: 'profile'
 });
 
@@ -70,17 +72,24 @@ function resolveAiEngineRole(roleId, { profile = null } = {}) {
             mode,
             source: 'system',
             executor: system.executor,
-            error: system.error ? `${roleId === ROLE_IDS.TAGGER ? 'Tagger' : 'Summarizer'} cannot inherit System AI. ${system.error}` : null
+            error: system.error ? `${roleLabel(roleId)} cannot inherit System AI. ${system.error}` : null
         };
     }
 
-    const label = roleId === ROLE_IDS.TAGGER ? 'Tagger' : roleId === ROLE_IDS.SUMMARIZER ? 'Summarizer' : 'Retrieval Planner';
+    const label = roleLabel(roleId);
     const result = validateExecutor(
         String(settings[`${roleId}ApiProfileId`] || '').trim(),
         String(settings[`${roleId}ModelName`] || '').trim(),
         label
     );
     return { roleId, mode: 'dedicated', source: 'dedicated', ...result };
+}
+
+function roleLabel(roleId) {
+    if (roleId === ROLE_IDS.TAGGER) return 'Tagger';
+    if (roleId === ROLE_IDS.SUMMARIZER) return 'Summarizer';
+    if (roleId === ROLE_IDS.NARRATIVE_STATE) return 'Narrative State';
+    return 'Retrieval Planner';
 }
 
 module.exports = { ROLE_IDS, readAdvancedSettings, resolveAiEngineRole };

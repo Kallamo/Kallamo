@@ -25,6 +25,7 @@ export interface ApplyChangeSetOptions {
   expectedVersion: number;
   attemptedAt: string;
   attemptId?: string;
+  operationIds?: string[];
 }
 
 export interface AppliedNarrativeRecord {
@@ -87,6 +88,7 @@ export class NarrativeChangeSetRepository {
   private readonly selectAttempts;
   private readonly selectRecords;
   private readonly approveEvent;
+  private readonly insertAwareness;
 
   constructor(private readonly db: Database.Database) {
     this.ledger = new NarrativeEventLedgerRepository(db);
@@ -120,6 +122,12 @@ export class NarrativeChangeSetRepository {
       SET status = 'approved', version = version + 1, decided_at = ?
       WHERE workspace_id = ? AND event_id = ? AND status = 'proposed' AND version = ?
     `);
+    this.insertAwareness = db.prepare(`
+      INSERT INTO kanora_awareness_records (
+        workspace_id, awareness_id, subject_id, target_id, status,
+        source_event_id, operation_id, payload_json, applied_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
   }
 
   apply(workspaceId: string, eventId: string, options: ApplyChangeSetOptions): NarrativeEventLedgerRecord {
@@ -132,7 +140,12 @@ export class NarrativeChangeSetRepository {
     try {
       return this.db.transaction(() => {
         const record = this.requireApplicableEvent(workspaceId, eventId, options.expectedVersion, attemptId, options.attemptedAt);
-        for (const operation of record.proposal.changeSet.operations) {
+        const selectedIds = options.operationIds ? new Set(options.operationIds) : null;
+        const operations = selectedIds
+          ? record.proposal.changeSet.operations.filter(operation => selectedIds.has(operation.id))
+          : record.proposal.changeSet.operations;
+        if (selectedIds && operations.length !== selectedIds.size) throw new Error('One or more selected operations do not belong to this event.');
+        for (const operation of operations) {
           failedOperationId = operation.id;
           this.writeOperation(workspaceId, eventId, operation, options.attemptedAt);
         }
@@ -205,6 +218,21 @@ export class NarrativeChangeSetRepository {
   }
 
   private writeOperation(workspaceId: string, eventId: string, operation: NarrativeOperation, appliedAt: string): void {
+    if (operation.type === 'grant-awareness') {
+      const awareness = operation.awareness;
+      this.insertAwareness.run(
+        workspaceId,
+        awareness.id,
+        awareness.subjectId,
+        awareness.targetId,
+        awareness.status,
+        eventId,
+        operation.id,
+        JSON.stringify(awareness),
+        appliedAt
+      );
+      return;
+    }
     const record = getOperationRecord(operation);
     this.insertRecord.run(
       workspaceId,
@@ -290,6 +318,7 @@ function getOperationRecord(operation: NarrativeOperation): {
     case 'assert-fact': return { type: 'fact', id: operation.fact.id, subjectId: null, payload: operation.fact };
     case 'set-state': return { type: 'state', id: operation.id, subjectId: null, payload: operation.state };
     case 'record-observation': return { type: 'observation', id: operation.id, subjectId: operation.observation.subjectId, payload: operation.observation };
+    case 'grant-awareness': throw new Error('Awareness records use their dedicated temporal store.');
     case 'grant-knowledge': return { type: 'knowledge', id: operation.knowledge.id, subjectId: operation.knowledge.subjectId, payload: operation.knowledge };
     case 'set-belief': return { type: 'belief', id: operation.belief.id, subjectId: operation.belief.subjectId, payload: operation.belief };
     case 'record-memory': return { type: 'memory', id: operation.memory.id, subjectId: operation.memory.subjectId, payload: operation.memory };

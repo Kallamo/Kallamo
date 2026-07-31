@@ -139,6 +139,13 @@ describe('Worldbuild runtime data adapter', () => {
       .toEqual({ count: 3 });
   });
 
+  test('rejects new manual observations without deleting legacy support', () => {
+    expect(() => service.saveSubjectEntry({
+      workspaceId: 'workspace-one', subjectId: 'mara', kind: 'observation',
+      entry: { summary: 'Mara witnessed the northern gate collapse.', confidence: 0.9, method: 'witness', accessibility: 'available' }
+    })).toThrow('Unsupported Knowledge entry type.');
+  });
+
   test('keeps Faction knowledge separate from member knowledge', () => {
     service.saveSubjectEntry({
       workspaceId: 'workspace-one', subjectId: 'mara', kind: 'belief',
@@ -153,5 +160,89 @@ describe('Worldbuild runtime data adapter', () => {
     expect(faction.beliefs).toEqual([
       expect.objectContaining({ subjectId: 'ashen-circle', statement: 'The vault contains the crown.' })
     ]);
+  });
+
+  test('keeps the Knowledge projection limited to epistemic records', () => {
+    const projection = service.getSubjectKnowledge('workspace-one', 'elias');
+    expect(projection).toEqual(expect.objectContaining({
+      observations: [],
+      known: [],
+      beliefs: [],
+      memories: [],
+    }));
+    expect(projection).not.toHaveProperty('relationships');
+  });
+
+  test('adds, revises, and retracts workspace Facts without assigning epistemic ownership', () => {
+    const added = service.saveWorldFact({
+      workspaceId: 'workspace-one',
+      entry: {
+        title: 'Northern gate status',
+        statement: 'The northern gate collapsed during the siege.',
+        relatedEntityIds: ['northern-gate', 'mara'],
+      },
+    });
+    expect(added).toEqual([
+      expect.objectContaining({
+        title: 'Northern gate status',
+        statement: 'The northern gate collapsed during the siege.',
+        relatedEntityIds: ['northern-gate', 'mara'],
+      }),
+    ]);
+
+    const revised = service.saveWorldFact({
+      workspaceId: 'workspace-one',
+      existingId: added[0].id,
+      entry: {
+        title: 'Northern gate status',
+        statement: 'The northern gate partially collapsed during the siege.',
+        relatedEntityIds: ['northern-gate', 'mara'],
+      },
+    });
+    expect(revised).toEqual([
+      expect.objectContaining({ statement: 'The northern gate partially collapsed during the siege.' }),
+    ]);
+
+    const removed = service.deleteWorldFact({
+      workspaceId: 'workspace-one',
+      factId: revised[0].id,
+    });
+    expect(removed).toEqual([]);
+    expect(db.prepare("SELECT DISTINCT subject_id FROM kanora_narrative_records WHERE record_type = 'fact'").all())
+      .toEqual([{ subject_id: null }]);
+  });
+
+  test('keeps stable Fact references on knowledge and beliefs', () => {
+    const [fact] = service.saveWorldFact({
+      workspaceId: 'workspace-one',
+      entry: {
+        title: 'Northern gate status',
+        statement: 'The northern gate collapsed during the siege.',
+        relatedEntityIds: ['northern-gate'],
+      },
+    });
+
+    const knowledge = service.saveSubjectEntry({
+      workspaceId: 'workspace-one', subjectId: 'mara', kind: 'knowledge',
+      entry: { aboutId: 'northern-gate', statement: 'The gate collapsed.', factIds: [fact.id], confidence: 1, acquisition: 'witness', accessibility: 'available' },
+    });
+    const belief = service.saveSubjectEntry({
+      workspaceId: 'workspace-one', subjectId: 'mara', kind: 'belief',
+      entry: { aboutId: 'northern-gate', statement: 'The collapse was deliberate.', factIds: [fact.id], confidence: 0.7 },
+    });
+
+    expect(knowledge.known[0].factIds).toEqual([fact.id]);
+    expect(belief.beliefs[0].factIds).toEqual([fact.id]);
+
+    const [revisedFact] = service.saveWorldFact({
+      workspaceId: 'workspace-one',
+      existingId: fact.id,
+      entry: {
+        title: 'Northern gate status',
+        statement: 'The northern gate partially collapsed during the siege.',
+        relatedEntityIds: ['northern-gate', 'mara'],
+      },
+    });
+    expect(revisedFact.id).toBe(fact.id);
   });
 });

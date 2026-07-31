@@ -5,6 +5,7 @@ import {
   type EntityReference,
   type Belief,
   type Knowledge,
+  type Awareness,
   type NarrativeMemory,
   type NarrativeEvent,
   type NarrativeOperation,
@@ -39,7 +40,7 @@ export type ValidationResult<T> =
   | { success: false; issues: ValidationIssue[] };
 
 const EVENT_TYPES = new Set(['movement', 'possession-transfer', 'revelation', 'deception', 'discovery', 'relationship-change', 'custom']);
-const OPERATION_TYPES = new Set(['assert-fact', 'set-state', 'record-observation', 'grant-knowledge', 'set-belief', 'record-memory', 'set-relationship']);
+const OPERATION_TYPES = new Set(['assert-fact', 'set-state', 'record-observation', 'grant-awareness', 'grant-knowledge', 'set-belief', 'record-memory', 'set-relationship']);
 const ENTITY_KINDS = ['agent', 'group', 'object', 'location', 'species', 'event', 'concept'];
 const ENTITY_CAPABILITIES = ['appearance', 'personality', 'inventory', 'relationships', 'knowledge', 'beliefs', 'memory', 'perspective'];
 const ENTITY_FIELD_TYPES = ['short-text', 'long-text', 'number', 'range', 'boolean', 'single-choice', 'multiple-choice', 'entity-reference', 'entity-reference-list'];
@@ -191,6 +192,7 @@ function validateKnowledgeValue(value: unknown, path: string, issues: Validation
   const knowledge = requireRecord(value, path, issues);
   if (!knowledge) return;
   requireString(knowledge, 'id', path, issues);
+  if (knowledge.entryId !== undefined) requireString(knowledge, 'entryId', path, issues);
   requireString(knowledge, 'subjectId', path, issues);
   requireString(knowledge, 'sourceEventId', path, issues);
   validateProposition(knowledge.proposition, `${path}.proposition`, issues);
@@ -198,18 +200,31 @@ function validateKnowledgeValue(value: unknown, path: string, issues: Validation
   requireConfidence(knowledge, 'confidence', path, issues);
   requireEnum(knowledge, 'accessibility', ['available', 'suppressed', 'inaccessible'], path, issues);
   requireEnum(knowledge, 'status', ['active', 'forgotten', 'revoked', 'superseded'], path, issues);
+  if (knowledge.factIds !== undefined) requireStringArray(knowledge, 'factIds', path, issues);
+}
+
+function validateAwarenessValue(value: unknown, path: string, issues: ValidationIssue[]): void {
+  const awareness = requireRecord(value, path, issues);
+  if (!awareness) return;
+  requireString(awareness, 'id', path, issues);
+  requireString(awareness, 'subjectId', path, issues);
+  requireString(awareness, 'targetId', path, issues);
+  requireEnum(awareness, 'status', ['active', 'forgotten', 'revoked', 'superseded'], path, issues);
+  requireString(awareness, 'sourceEventId', path, issues);
 }
 
 function validateBeliefValue(value: unknown, path: string, issues: ValidationIssue[]): void {
   const belief = requireRecord(value, path, issues);
   if (!belief) return;
   requireString(belief, 'id', path, issues);
+  if (belief.entryId !== undefined) requireString(belief, 'entryId', path, issues);
   requireString(belief, 'subjectId', path, issues);
   requireString(belief, 'sourceEventId', path, issues);
   validateProposition(belief.proposition, `${path}.proposition`, issues);
   requireConfidence(belief, 'confidence', path, issues);
   requireEnum(belief, 'relationToCanon', ['aligned', 'contradicted', 'uncertain', 'unknown'], path, issues);
   requireEnum(belief, 'status', ['active', 'superseded', 'abandoned'], path, issues);
+  if (belief.factIds !== undefined) requireStringArray(belief, 'factIds', path, issues);
 }
 
 function validateNarrativeMemoryValue(value: unknown, path: string, issues: ValidationIssue[]): void {
@@ -222,6 +237,7 @@ function validateNarrativeMemoryValue(value: unknown, path: string, issues: Vali
   requireEnum(memory, 'accessibility', ['available', 'suppressed', 'inaccessible'], path, issues);
   if (memory.status !== undefined) requireEnum(memory, 'status', ['active', 'superseded', 'forgotten'], path, issues);
   if (memory.supersedesMemoryId !== undefined) requireString(memory, 'supersedesMemoryId', path, issues);
+  if (memory.relatedEntityIds !== undefined) requireStringArray(memory, 'relatedEntityIds', path, issues);
 }
 
 function validateRelationshipValue(value: unknown, path: string, issues: ValidationIssue[]): void {
@@ -231,6 +247,9 @@ function validateRelationshipValue(value: unknown, path: string, issues: Validat
   requireString(relationship, 'sourceEntityId', path, issues);
   requireString(relationship, 'targetEntityId', path, issues);
   requireString(relationship, 'dimension', path, issues);
+  if (relationship.title !== undefined && typeof relationship.title !== 'string') {
+    addIssue(issues, VALIDATION_ISSUE_CODES.INVALID_TYPE, `${path}.title`, 'Expected a string.');
+  }
   requireRelationshipValue(relationship, 'value', path, issues);
   if (relationship.description !== undefined && typeof relationship.description !== 'string') {
     addIssue(issues, VALIDATION_ISSUE_CODES.INVALID_TYPE, `${path}.description`, 'Expected a string.');
@@ -243,7 +262,7 @@ function validateEvidence(value: unknown, path: string, issues: ValidationIssue[
   if (!evidence) return;
   requireString(evidence, 'id', path, issues);
   requireString(evidence, 'originId', path, issues);
-  if (!['chat-message', 'writing-document', 'world-action', 'import'].includes(String(evidence.originType))) {
+  if (!['chat-message', 'writing-document', 'world-action', 'worldbuild-update', 'import'].includes(String(evidence.originType))) {
     addIssue(issues, VALIDATION_ISSUE_CODES.INVALID_VALUE, `${path}.originType`, 'Unknown evidence origin type.');
   }
 }
@@ -273,6 +292,7 @@ function validateOperationPayload(operation: Record<string, unknown>, path: stri
     'assert-fact': 'fact',
     'set-state': 'state',
     'record-observation': 'observation',
+    'grant-awareness': 'awareness',
     'grant-knowledge': 'knowledge',
     'set-belief': 'belief',
     'record-memory': 'memory',
@@ -300,6 +320,9 @@ function validateOperationPayload(operation: Record<string, unknown>, path: stri
       requireString(payload, 'eventId', payloadPath, issues);
       requireEnum(payload, 'method', ['participant', 'witness', 'reported', 'inferred'], payloadPath, issues);
       requireConfidence(payload, 'confidence', payloadPath, issues);
+      break;
+    case 'grant-awareness':
+      validateAwarenessValue(payload, payloadPath, issues);
       break;
     case 'grant-knowledge':
       validateKnowledgeValue(payload, payloadPath, issues);
@@ -394,6 +417,12 @@ export function validateKnowledge(value: unknown): ValidationResult<Knowledge> {
   return result(value, issues);
 }
 
+export function validateAwareness(value: unknown): ValidationResult<Awareness> {
+  const issues: ValidationIssue[] = [];
+  validateAwarenessValue(value, '$', issues);
+  return result(value as Awareness, issues);
+}
+
 export function validateBelief(value: unknown): ValidationResult<Belief> {
   const issues: ValidationIssue[] = [];
   validateBeliefValue(value, '$', issues);
@@ -441,6 +470,7 @@ export function validateNarrativeProjection(value: unknown): ValidationResult<Na
   const collections = [
     { key: 'facts', type: 'assert-fact', payloadKey: 'fact' },
     { key: 'states', type: 'set-state', payloadKey: 'state' },
+    { key: 'awareness', type: 'grant-awareness', payloadKey: 'awareness' },
     { key: 'knowledge', type: 'grant-knowledge', payloadKey: 'knowledge' },
     { key: 'beliefs', type: 'set-belief', payloadKey: 'belief' },
     { key: 'relationships', type: 'set-relationship', payloadKey: 'relationship' }

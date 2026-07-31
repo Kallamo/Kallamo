@@ -4,6 +4,10 @@ import { X, Plus, Key, Link2, Eye, EyeOff, Monitor, Settings, Layout, Layers, Ha
 import Logo, { Logotype } from '../../logo';
 import AiEngineRoleCard from '../../features/ai-engine/AiEngineRoleCard';
 import { AI_ENGINE_ROLE_DEFINITIONS, SYSTEM_AI_LANGUAGES } from '../../../shared/contracts/ai-engine-roles';
+import retrievalSettingsContract from '../../../shared/retrieval-settings.json';
+
+const RETRIEVAL_SETTING_DEFINITIONS = retrievalSettingsContract.definitions;
+const rangeProps = ({ min, max, step }) => ({ min, max, step });
 
 export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const {
@@ -75,13 +79,18 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [smartTypography, setSmartTypography] = useState(settings.interface.smartTypography ?? true);
 
   const [chunkSize, setChunkSize] = useState(settings.advanced.chunkSize || 500);
-  const [similarity, setSimilarity] = useState(settings.advanced.similarity || 0.3);
-  const [topKKB, setTopKKB] = useState(settings.advanced.topKKB || 5);
-  const [topKMemory, setTopKMemory] = useState(settings.advanced.topKMemory || 5);
+  const initialRetrievalSettings = settings.advanced;
+  const [similarity, setSimilarity] = useState(initialRetrievalSettings.retrievalStrictness);
+  const [profileKnowledgeTopK, setProfileKnowledgeTopK] = useState(initialRetrievalSettings.profileKnowledgeTopK);
+  const [workspaceDocumentsTopK, setWorkspaceDocumentsTopK] = useState(initialRetrievalSettings.workspaceDocumentsTopK);
+  const [longTermMemoryTopK, setLongTermMemoryTopK] = useState(initialRetrievalSettings.longTermMemoryTopK);
+  const [worldbuildEntityLimit, setWorldbuildEntityLimit] = useState(initialRetrievalSettings.worldbuildEntityLimit);
+  const [worldbuildBreadth, setWorldbuildBreadth] = useState(initialRetrievalSettings.worldbuildBreadth);
   const [executionDevice, setExecutionDevice] = useState(settings.advanced.executionDevice || 'cpu');
   const [ragDebug, setRagDebug] = useState(settings.advanced.ragDebug || false);
   const [agenticDebug, setAgenticDebug] = useState(settings.advanced.agenticDebug || false);
   const [tokenDebug, setTokenDebug] = useState(settings.advanced.tokenDebug || false);
+  const [narrativeStateDebug, setNarrativeStateDebug] = useState(settings.advanced.narrativeStateDebug || false);
   const [embeddingEngine, setEmbeddingEngine] = useState(settings.advanced.embeddingEngine || 'local');
   const [embeddingApiProfileId, setEmbeddingApiProfileId] = useState(settings.advanced.embeddingApiProfileId || '');
   const [embeddingModelName, setEmbeddingModelName] = useState(settings.advanced.embeddingModelName || '');
@@ -94,6 +103,9 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [summarizerMode, setSummarizerMode] = useState(settings.advanced.summarizerMode || 'inherit-system');
   const [summarizerApiProfileId, setSummarizerApiProfileId] = useState(settings.advanced.summarizerApiProfileId || '');
   const [summarizerModelName, setSummarizerModelName] = useState(settings.advanced.summarizerModelName || '');
+  const [narrativeStateMode, setNarrativeStateMode] = useState(settings.advanced.narrativeStateMode || 'inherit-system');
+  const [narrativeStateApiProfileId, setNarrativeStateApiProfileId] = useState(settings.advanced.narrativeStateApiProfileId || '');
+  const [narrativeStateModelName, setNarrativeStateModelName] = useState(settings.advanced.narrativeStateModelName || '');
   const [retrievalPlannerMode, setRetrievalPlannerMode] = useState(settings.advanced.retrievalPlannerMode || 'profile');
   const [retrievalPlannerApiProfileId, setRetrievalPlannerApiProfileId] = useState(settings.advanced.retrievalPlannerApiProfileId || '');
   const [retrievalPlannerModelName, setRetrievalPlannerModelName] = useState(settings.advanced.retrievalPlannerModelName || '');
@@ -133,21 +145,23 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   // Keep ref of settings to prevent stale closures in debounce timeout
   const settingsRef = useRef({
     accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled, writingToolbar, smartTypography, streaming: streamingEnabled,
-    chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug,
+    chunkSize, similarity, profileKnowledgeTopK, workspaceDocumentsTopK, longTermMemoryTopK, worldbuildEntityLimit, worldbuildBreadth, executionDevice, ragDebug, agenticDebug, tokenDebug, narrativeStateDebug,
     embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage,
     taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName,
+    narrativeStateMode, narrativeStateApiProfileId, narrativeStateModelName,
     retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, allowAiEntityCreation, archiveSummarization
   });
 
   useEffect(() => {
     settingsRef.current = {
       accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled, writingToolbar, smartTypography, streaming: streamingEnabled,
-      chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug,
+      chunkSize, similarity, profileKnowledgeTopK, workspaceDocumentsTopK, longTermMemoryTopK, worldbuildEntityLimit, worldbuildBreadth, executionDevice, ragDebug, agenticDebug, tokenDebug, narrativeStateDebug,
       embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage,
       taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName,
+      narrativeStateMode, narrativeStateApiProfileId, narrativeStateModelName,
       retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, allowAiEntityCreation, archiveSummarization
     };
-  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, smartTypography, streamingEnabled, chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage, taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName, retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, allowAiEntityCreation, archiveSummarization]);
+  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, smartTypography, streamingEnabled, chunkSize, similarity, profileKnowledgeTopK, workspaceDocumentsTopK, longTermMemoryTopK, worldbuildEntityLimit, worldbuildBreadth, executionDevice, ragDebug, agenticDebug, tokenDebug, narrativeStateDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage, taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName, narrativeStateMode, narrativeStateApiProfileId, narrativeStateModelName, retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, allowAiEntityCreation, archiveSummarization]);
 
   // Handle immediate save for selects and color choices
   const updateSetting = async (category, key, value) => {
@@ -167,6 +181,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       if (key === 'ragDebug') setRagDebug(value);
       if (key === 'agenticDebug') setAgenticDebug(value);
       if (key === 'tokenDebug') setTokenDebug(value);
+      if (key === 'narrativeStateDebug') setNarrativeStateDebug(value);
       if (key === 'streaming') setStreamingEnabled(value);
       if (key === 'allowAiEntityCreation') setAllowAiEntityCreation(value);
       if (key === 'archiveSummarization') setArchiveSummarization(value);
@@ -181,6 +196,9 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       if (key === 'summarizerMode') setSummarizerMode(value);
       if (key === 'summarizerApiProfileId') { setSummarizerApiProfileId(value); setSummarizerModelName(''); }
       if (key === 'summarizerModelName') setSummarizerModelName(value);
+      if (key === 'narrativeStateMode') setNarrativeStateMode(value);
+      if (key === 'narrativeStateApiProfileId') { setNarrativeStateApiProfileId(value); setNarrativeStateModelName(''); }
+      if (key === 'narrativeStateModelName') setNarrativeStateModelName(value);
       if (key === 'retrievalPlannerMode') setRetrievalPlannerMode(value);
       if (key === 'retrievalPlannerApiProfileId') { setRetrievalPlannerApiProfileId(value); setRetrievalPlannerModelName(''); }
       if (key === 'retrievalPlannerModelName') setRetrievalPlannerModelName(value);
@@ -204,12 +222,17 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         ...settings.advanced,
         chunkSize: Number(current.chunkSize),
         similarity: Number(current.similarity),
-        topKKB: Number(current.topKKB),
-        topKMemory: Number(current.topKMemory),
+        profileKnowledgeTopK: Number(current.profileKnowledgeTopK),
+        workspaceDocumentsTopK: Number(current.workspaceDocumentsTopK),
+        longTermMemoryTopK: Number(current.longTermMemoryTopK),
+        worldbuildEntityLimit: Number(current.worldbuildEntityLimit),
+        worldbuildBreadth: current.worldbuildBreadth,
+        retrievalStrictness: Number(current.similarity),
         executionDevice: key === 'executionDevice' ? value : current.executionDevice,
         ragDebug: key === 'ragDebug' ? value : current.ragDebug,
         agenticDebug: key === 'agenticDebug' ? value : current.agenticDebug,
         tokenDebug: key === 'tokenDebug' ? value : current.tokenDebug,
+        narrativeStateDebug: key === 'narrativeStateDebug' ? value : current.narrativeStateDebug,
         streaming: key === 'streaming' ? value : current.streaming,
         allowAiEntityCreation: key === 'allowAiEntityCreation' ? value : current.allowAiEntityCreation,
         archiveSummarization: key === 'archiveSummarization' ? value : current.archiveSummarization,
@@ -225,6 +248,9 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         summarizerMode: key === 'summarizerMode' ? value : current.summarizerMode,
         summarizerApiProfileId: key === 'summarizerApiProfileId' ? value : current.summarizerApiProfileId,
         summarizerModelName: key === 'summarizerModelName' ? value : (key === 'summarizerApiProfileId' ? '' : current.summarizerModelName),
+        narrativeStateMode: key === 'narrativeStateMode' ? value : current.narrativeStateMode,
+        narrativeStateApiProfileId: key === 'narrativeStateApiProfileId' ? value : current.narrativeStateApiProfileId,
+        narrativeStateModelName: key === 'narrativeStateModelName' ? value : (key === 'narrativeStateApiProfileId' ? '' : current.narrativeStateModelName),
         retrievalPlannerMode: key === 'retrievalPlannerMode' ? value : current.retrievalPlannerMode,
         retrievalPlannerApiProfileId: key === 'retrievalPlannerApiProfileId' ? value : current.retrievalPlannerApiProfileId,
         retrievalPlannerModelName: key === 'retrievalPlannerModelName' ? value : (key === 'retrievalPlannerApiProfileId' ? '' : current.retrievalPlannerModelName)
@@ -241,8 +267,11 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     // 1. Update visual state immediately for smooth rendering
     if (key === 'chunkSize') setChunkSize(value);
     if (key === 'similarity') setSimilarity(value);
-    if (key === 'topKKB') setTopKKB(value);
-    if (key === 'topKMemory') setTopKMemory(value);
+    if (key === 'profileKnowledgeTopK') setProfileKnowledgeTopK(value);
+    if (key === 'workspaceDocumentsTopK') setWorkspaceDocumentsTopK(value);
+    if (key === 'longTermMemoryTopK') setLongTermMemoryTopK(value);
+    if (key === 'worldbuildEntityLimit') setWorldbuildEntityLimit(value);
+    if (key === 'worldbuildBreadth') setWorldbuildBreadth(value);
     if (key === 'embeddingModelName') setEmbeddingModelName(value);
     if (key === 'systemModelName') setSystemModelName(value);
 
@@ -270,12 +299,17 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
           ...settings.advanced,
           chunkSize: key === 'chunkSize' ? Number(value) : Number(current.chunkSize),
           similarity: key === 'similarity' ? Number(value) : Number(current.similarity),
-          topKKB: key === 'topKKB' ? Number(value) : Number(current.topKKB),
-          topKMemory: key === 'topKMemory' ? Number(value) : Number(current.topKMemory),
+          retrievalStrictness: key === 'similarity' ? Number(value) : Number(current.similarity),
+          profileKnowledgeTopK: key === 'profileKnowledgeTopK' ? Number(value) : Number(current.profileKnowledgeTopK),
+          workspaceDocumentsTopK: key === 'workspaceDocumentsTopK' ? Number(value) : Number(current.workspaceDocumentsTopK),
+          longTermMemoryTopK: key === 'longTermMemoryTopK' ? Number(value) : Number(current.longTermMemoryTopK),
+          worldbuildEntityLimit: key === 'worldbuildEntityLimit' ? Number(value) : Number(current.worldbuildEntityLimit),
+          worldbuildBreadth: key === 'worldbuildBreadth' ? value : current.worldbuildBreadth,
           executionDevice: current.executionDevice,
           ragDebug: current.ragDebug,
           agenticDebug: current.agenticDebug,
           tokenDebug: current.tokenDebug,
+          narrativeStateDebug: current.narrativeStateDebug,
           allowAiEntityCreation: current.allowAiEntityCreation,
           archiveSummarization: current.archiveSummarization,
           embeddingEngine: current.embeddingEngine,
@@ -290,6 +324,9 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
           summarizerMode: current.summarizerMode,
           summarizerApiProfileId: current.summarizerApiProfileId,
           summarizerModelName: current.summarizerModelName,
+          narrativeStateMode: current.narrativeStateMode,
+          narrativeStateApiProfileId: current.narrativeStateApiProfileId,
+          narrativeStateModelName: current.narrativeStateModelName,
           retrievalPlannerMode: current.retrievalPlannerMode,
           retrievalPlannerApiProfileId: current.retrievalPlannerApiProfileId,
           retrievalPlannerModelName: current.retrievalPlannerModelName
@@ -1185,7 +1222,9 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           ? { mode: taggerMode, apiProfileId: taggerApiProfileId, modelName: taggerModelName }
                           : definition.id === 'summarizer'
                             ? { mode: summarizerMode, apiProfileId: summarizerApiProfileId, modelName: summarizerModelName }
-                            : { mode: retrievalPlannerMode, apiProfileId: retrievalPlannerApiProfileId, modelName: retrievalPlannerModelName };
+                            : definition.id === 'narrativeState'
+                              ? { mode: narrativeStateMode, apiProfileId: narrativeStateApiProfileId, modelName: narrativeStateModelName }
+                              : { mode: retrievalPlannerMode, apiProfileId: retrievalPlannerApiProfileId, modelName: retrievalPlannerModelName };
                         return (
                           <AiEngineRoleCard
                             key={definition.id}
@@ -1260,7 +1299,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           <span className="text-sm text-gray-200 font-bold">Retrieval Strictness</span>
                           <span className="text-xs text-accent font-mono font-bold">{Math.round(similarity * 100)}%</span>
                         </div>
-                        <p className="caption mb-2">Sets how closely retrieved content must match your query. Lower values bring in more loosely related content; higher values keep only the closest matches.</p>
+                        <p className="caption mb-2">Sets how closely semantic and lexical matches must fit your query. Explicit IDs, resolved entity mentions, linked Facts, and required dependencies are never blocked by this threshold.</p>
                         <input
                           type="range"
                           min="0"
@@ -1290,42 +1329,103 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
 
                       <div className="h-px bg-gray-800/50 w-full"></div>
 
-                      {/* Top K KB */}
                       <div>
                         <div className="flex justify-between mb-1">
-                          <span className="text-sm text-gray-200 font-bold">Knowledge Base Top-K</span>
-                          <span className="text-xs text-accent font-mono font-bold">{topKKB}</span>
+                          <span className="text-sm text-gray-200 font-bold">Profile Knowledge Top-K</span>
+                          <span className="text-xs text-accent font-mono font-bold">{profileKnowledgeTopK}</span>
                         </div>
-                        <p className="caption mb-2">The maximum number of matching text blocks fetched from the profile's knowledge base to feed the AI prompt.</p>
+                        <p className="caption mb-2">Maximum profile knowledge candidates considered before relevance, access, deduplication, and token budgeting.</p>
                         <input
                           type="range"
-                          min="1"
-                          max="50"
-                          step="1"
-                          value={topKKB}
-                          onChange={(e) => updateSettingWithDebounce('topKKB', e.target.value)}
+                          {...rangeProps(RETRIEVAL_SETTING_DEFINITIONS.profileKnowledgeTopK)}
+                          value={profileKnowledgeTopK}
+                          onChange={(e) => updateSettingWithDebounce('profileKnowledgeTopK', e.target.value)}
                           className="w-full accent-accent cursor-pointer"
+                          aria-label="Profile Knowledge Top-K"
                         />
                       </div>
 
                       <div className="h-px bg-gray-800/50 w-full"></div>
 
-                      {/* Top K Memory */}
                       <div>
                         <div className="flex justify-between mb-1">
-                          <span className="text-sm text-gray-200 font-bold">Chat Memory Top-K</span>
-                          <span className="text-xs text-accent font-mono font-bold">{topKMemory}</span>
+                          <span className="text-sm text-gray-200 font-bold">Workspace Documents Top-K</span>
+                          <span className="text-xs text-accent font-mono font-bold">{workspaceDocumentsTopK}</span>
                         </div>
-                        <p className="caption mb-2">The maximum number of semantic memory snippets recalled from past archived conversations per message.</p>
+                        <p className="caption mb-2">Maximum searchable workspace document candidates considered before final context planning.</p>
                         <input
                           type="range"
-                          min="1"
-                          max="50"
-                          step="1"
-                          value={topKMemory}
-                          onChange={(e) => updateSettingWithDebounce('topKMemory', e.target.value)}
+                          {...rangeProps(RETRIEVAL_SETTING_DEFINITIONS.workspaceDocumentsTopK)}
+                          value={workspaceDocumentsTopK}
+                          onChange={(e) => updateSettingWithDebounce('workspaceDocumentsTopK', e.target.value)}
                           className="w-full accent-accent cursor-pointer"
+                          aria-label="Workspace Documents Top-K"
                         />
+                      </div>
+
+                      <div className="h-px bg-gray-800/50 w-full"></div>
+
+                      <div>
+                        <div className="flex justify-between mb-1">
+                          <span className="text-sm text-gray-200 font-bold">Long-term Memory Top-K</span>
+                          <span className="text-xs text-accent font-mono font-bold">{longTermMemoryTopK}</span>
+                        </div>
+                        <p className="caption mb-2">Maximum archived conversation memories considered before final context planning.</p>
+                        <input
+                          type="range"
+                          {...rangeProps(RETRIEVAL_SETTING_DEFINITIONS.longTermMemoryTopK)}
+                          value={longTermMemoryTopK}
+                          onChange={(e) => updateSettingWithDebounce('longTermMemoryTopK', e.target.value)}
+                          className="w-full accent-accent cursor-pointer"
+                          aria-label="Long-term Memory Top-K"
+                        />
+                      </div>
+
+                      <div className="h-px bg-gray-800/50 w-full"></div>
+
+                      <div>
+                        <div className="flex justify-between mb-1">
+                          <span className="text-sm text-gray-200 font-bold">Worldbuild Entity Limit</span>
+                          <span className="text-xs text-accent font-mono font-bold">{worldbuildEntityLimit}</span>
+                        </div>
+                        <p className="caption mb-2">Maximum unique Worldbuild entities admitted as complete dossiers. Relationships do not count toward this limit.</p>
+                        <input
+                          type="range"
+                          {...rangeProps(RETRIEVAL_SETTING_DEFINITIONS.worldbuildEntityLimit)}
+                          value={worldbuildEntityLimit}
+                          onChange={(e) => updateSettingWithDebounce('worldbuildEntityLimit', e.target.value)}
+                          className="w-full accent-accent cursor-pointer"
+                          aria-label="Worldbuild Entity Limit"
+                        />
+                        {Number(worldbuildEntityLimit) > 30 && <p className="caption mt-1.5 text-amber-300">Higher limits can increase retrieval time and context pressure in connected worlds.</p>}
+                      </div>
+
+                      <div className="h-px bg-gray-800/50 w-full"></div>
+
+                      <div>
+                        <span className="block text-sm text-gray-200 font-bold mb-1">Worldbuild Breadth</span>
+                        <p className="caption mb-2">Controls how far entity relationships are explored to discover candidates. It does not change the final Entity Limit.</p>
+                        <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Worldbuild Breadth">
+                          {['focused', 'balanced', 'broad'].map(value => (
+                            <button
+                              key={value}
+                              type="button"
+                              role="radio"
+                              aria-checked={worldbuildBreadth === value}
+                              onClick={() => updateSettingWithDebounce('worldbuildBreadth', value)}
+                              className={`rounded-lg border px-3 py-2 text-xs font-bold capitalize transition-colors ${worldbuildBreadth === value ? 'border-accent bg-accent/10 text-accent' : 'border-gray-800 text-gray-400 hover:text-gray-200'}`}
+                            >
+                              {value}
+                            </button>
+                          ))}
+                        </div>
+                        <p className="mt-3 text-xs font-semibold leading-relaxed text-accent" aria-live="polite">
+                          {worldbuildBreadth === 'focused'
+                            ? 'Focused — Uses directly relevant entities without following relationship links.'
+                            : worldbuildBreadth === 'broad'
+                              ? 'Broad — Follows up to two relationship layers for wide, exploratory world context.'
+                              : 'Balanced — Follows one relationship layer for useful surrounding context. Recommended.'}
+                        </p>
                       </div>
 
                     </div>
@@ -1542,8 +1642,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       {/* Live RAG Debug logs toggle */}
                       <div className="p-4 flex items-center justify-between">
                         <div className="pr-4">
-                          <span className="block text-sm text-gray-200 font-bold">Show Retrieved Chunks & RAG Diagnostics</span>
-                          <span className="caption">Adds a per-message drop-down listing the exact chunks retrieved by RAG, with their source and fusion/similarity score, plus context warnings.</span>
+                          <span className="block text-sm text-gray-200 font-bold">Show Retrieval & Context Diagnostics</span>
+                          <span className="caption">Show retrieved sources, inclusion decisions, perspective scopes, and the exact narrative context sent with each response.</span>
                         </div>
                         <label className="relative inline-flex items-center cursor-pointer shrink-0">
                           <input
@@ -1559,8 +1659,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       {/* Agentic RAG Debug toggle */}
                       <div className="p-4 flex items-center justify-between">
                         <div className="pr-4">
-                          <span className="block text-sm text-gray-200 font-bold">Show Agentic RAG Responses</span>
-                          <span className="caption">Enable secondary diagnostic drop-downs mapping intermediate reasoning thoughts from RAG agents.</span>
+                          <span className="block text-sm text-gray-200 font-bold">Show Agentic Retrieval Trace</span>
+                          <span className="caption">Show sanitized tool calls, result counts, stop reason, cost, and final gathered context without exposing private model reasoning.</span>
                         </div>
                         <label className="relative inline-flex items-center cursor-pointer shrink-0">
                           <input
@@ -1573,11 +1673,27 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                         </label>
                       </div>
 
+                      <div className="p-4 flex items-center justify-between">
+                        <div className="pr-4">
+                          <span className="block text-sm text-gray-200 font-bold">Show Narrative State Diagnostics</span>
+                          <span className="caption">Show post-response triage, deep-analysis decisions, proposals, retries, timing, and token usage for Roleplay turns.</span>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                          <input
+                            type="checkbox"
+                            checked={narrativeStateDebug}
+                            onChange={(e) => updateSetting('advanced', 'narrativeStateDebug', e.target.checked)}
+                            className="sr-only peer"
+                          />
+                          <div className="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
+                        </label>
+                      </div>
+
                       {/* Token Usage Debug toggle */}
                       <div className="p-4 flex items-center justify-between">
                         <div className="pr-4">
                           <span className="block text-sm text-gray-200 font-bold">Show Token Usage Breakdown</span>
-                          <span className="caption">Render quantitative token counters in AI message headers outlining context ingestion weights.</span>
+                          <span className="caption">Show estimated model usage by main generation, Agentic retrieval, and Narrative State, with each lifecycle counted once.</span>
                         </div>
                         <label className="relative inline-flex items-center cursor-pointer shrink-0">
                           <input

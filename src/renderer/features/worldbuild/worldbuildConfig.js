@@ -41,7 +41,7 @@ export const ABUNDANCE_HELP = [
 export const RELATIONSHIP_LABELS = ['Father', 'Mother', 'Sibling', 'Child', 'Friend', 'Rival', 'Enemy', 'Mentor', 'Ally', 'Lover'];
 
 const FIELD_LABELS = {
-  status: 'Status', age: 'Age', role: 'Role', abilities: 'Abilities',
+  status: 'Status', age: 'Age', appearance: 'Appearance', personality: 'Personality', role: 'Role', abilities: 'Abilities',
   disposition: 'Disposition', nature: 'Nature', abundance: 'Abundance', threat: 'Threat',
   description: 'Description', locationType: 'Type', itemType: 'Type', content: 'Content',
 };

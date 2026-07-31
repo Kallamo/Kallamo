@@ -4,6 +4,7 @@
 // and workflow-runner; keep it free of Electron/IPC concerns.
 const db = require('./database');
 const crypto = require('crypto');
+const { discardEnrichPending, normalizeRelationshipLabel } = require('./features/worldbuild/entity-review');
 
 function parseJsonArray(raw) {
   if (!raw) return [];
@@ -225,9 +226,13 @@ function resolveEnrichReview(id, { accept = {}, reject = {} } = {}) {
     for (const l of pending.links) {
       const key = enrichLinkKey(l);
       if (acceptLinks.has(key)) {
-        const fromId = l.from === 'target' ? l.targetId : id;
-        const toId = l.from === 'target' ? id : l.targetId;
-        setLink({ workspaceId: cur.workspaceId, fromId, relType: l.relType, toId, single: !!l.single, label: l.label || null });
+        const label = l.relType === 'related_to' ? normalizeRelationshipLabel(l.label) : l.label;
+        if (l.existingLinkId) updateLink(l.existingLinkId, { label: label || null, metadata: l.metadata });
+        else {
+          const fromId = l.from === 'target' ? l.targetId : id;
+          const toId = l.from === 'target' ? id : l.targetId;
+          setLink({ workspaceId: cur.workspaceId, fromId, relType: l.relType, toId, single: !!l.single, label: label || null, metadata: l.metadata });
+        }
       } else if (!rejectLinks.has(key)) {
         keptLinks.push(l);
       }
@@ -370,11 +375,29 @@ function listLinks({ workspaceId, relType = null } = {}) {
     .map(row => ({ ...row, metadata: linkMetadata(row.metadataJson), metadataJson: undefined }));
 }
 
+function getLink(linkId) {
+  const row = db.prepare(`
+    SELECT id, workspaceId, fromId, relType, toId, label, metadata_json AS metadataJson
+    FROM entity_links WHERE id = ?
+  `).get(linkId);
+  return row ? { ...row, metadata: linkMetadata(row.metadataJson), metadataJson: undefined } : null;
+}
+
 // Add a directed edge. `single` first clears any existing edge of (fromId, relType),
 // enforcing one-to-one relations (owner, race, parent location…). A null toId just
 // clears (used to unset a single-value relation).
 function setLink({ workspaceId, fromId, relType, toId, single = false, label = null, metadata = {} }) {
   if (!fromId || !relType) throw new Error('fromId and relType are required');
+  if (relType === 'carried_by') throw new Error('Item type inventory entries must be managed from an inventory.');
+  validateItemLink(workspaceId, fromId, relType, toId);
+  if (relType === 'owned_by' || relType === 'located_in') {
+    single = true;
+    if (toId) {
+      const counterpart = relType === 'owned_by' ? 'located_in' : 'owned_by';
+      db.prepare('DELETE FROM entity_links WHERE workspaceId = ? AND fromId = ? AND relType = ?')
+        .run(workspaceId, fromId, counterpart);
+    }
+  }
   const cleanLabel = label != null && String(label).trim() ? String(label).trim() : null;
   if (single) db.prepare('DELETE FROM entity_links WHERE fromId = ? AND relType = ?').run(fromId, relType);
   if (!toId) return { cleared: true };
@@ -388,6 +411,53 @@ function setLink({ workspaceId, fromId, relType, toId, single = false, label = n
   db.prepare('INSERT INTO entity_links (id, workspaceId, fromId, relType, toId, label, metadata_json, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
     .run(id, workspaceId || null, fromId, relType, toId, cleanLabel, JSON.stringify(metadata || {}), Date.now());
   return { id };
+}
+
+function setInventoryLink({ workspaceId, itemId, holderId, metadata = {} }) {
+  const item = getEntity(itemId);
+  const holder = getEntity(holderId);
+  if (!item || item.workspaceId !== workspaceId || item.type !== 'Items') throw new Error('Inventory item was not found.');
+  if (!holder || holder.workspaceId !== workspaceId || !['Characters', 'Creatures'].includes(holder.type)) throw new Error('Inventory holder was not found.');
+  if (holder.type === 'Creatures' && (holder.data?.scope || 'individual') === 'group') throw new Error('Creature groups cannot have an inventory.');
+  const isUnique = item.data?.itemNature === 'unique';
+  const relType = isUnique ? 'owned_by' : 'carried_by';
+  const quantity = isUnique ? 1 : positiveQuantity(metadata.quantity);
+  return db.transaction(() => {
+    if (isUnique) {
+      db.prepare("DELETE FROM entity_links WHERE workspaceId = ? AND fromId = ? AND relType IN ('owned_by', 'located_in')")
+        .run(workspaceId, itemId);
+    }
+    const existing = db.prepare('SELECT id FROM entity_links WHERE workspaceId = ? AND fromId = ? AND relType = ? AND toId = ?')
+      .get(workspaceId, itemId, relType, holderId);
+    const nextMetadata = { ...metadata, quantity };
+    if (existing) {
+      db.prepare('UPDATE entity_links SET metadata_json = ? WHERE id = ?').run(JSON.stringify(nextMetadata), existing.id);
+      return { id: existing.id };
+    }
+    const id = crypto.randomUUID();
+    db.prepare('INSERT INTO entity_links (id, workspaceId, fromId, relType, toId, label, metadata_json, createdAt) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)')
+      .run(id, workspaceId, itemId, relType, holderId, JSON.stringify(nextMetadata), Date.now());
+    return { id };
+  })();
+}
+
+function validateItemLink(workspaceId, fromId, relType, toId) {
+  if (!['owned_by', 'located_in', 'found_in', 'sold_in'].includes(relType)) return;
+  const item = getEntity(fromId);
+  if (!item || item.workspaceId !== workspaceId || item.type !== 'Items') return;
+  const isUnique = item.data?.itemNature === 'unique';
+  if (relType === 'owned_by' && !isUnique) throw new Error('Item types do not have a fixed owner. Add them from a character inventory.');
+  if (relType === 'located_in' && !isUnique) throw new Error('Only unique items have one current world location.');
+  if ((relType === 'found_in' || relType === 'sold_in') && isUnique) throw new Error('Unique items use one current location instead of availability lists.');
+  if (toId && relType === 'owned_by') {
+    const holder = getEntity(toId);
+    if (!holder || !['Characters', 'Creatures'].includes(holder.type)) throw new Error('A unique item owner must be an individual character or creature.');
+  }
+}
+
+function positiveQuantity(value) {
+  const quantity = Number(value);
+  return Number.isFinite(quantity) ? Math.max(1, Math.round(quantity)) : 1;
 }
 
 function removeLink(linkId) {
@@ -468,7 +538,8 @@ function importWorldbuild(workspaceId, payload) {
       const fromId = idMap.get(l.fromRef);
       const toId = idMap.get(l.toRef);
       if (!fromId || !toId || fromId === toId) continue;
-      setLink({ workspaceId, fromId, relType: l.relType, toId, single: false, label: l.label || null, metadata: l.metadata || {} });
+      if (l.relType === 'carried_by') setInventoryLink({ workspaceId, itemId: fromId, holderId: toId, metadata: l.metadata || {} });
+      else setLink({ workspaceId, fromId, relType: l.relType, toId, single: false, label: l.label || null, metadata: l.metadata || {} });
       linksAdded++;
     }
   })();
@@ -574,6 +645,61 @@ function bulkAcceptAll(workspaceId, ids) {
   return { proposed, updates };
 }
 
+function bulkRejectProposed(workspaceId, ids) {
+  const rows = bulkEntityRows(workspaceId, ids);
+  let rejected = 0, skipped = 0;
+  db.transaction(() => {
+    for (const row of rows) {
+      if (row.status !== 'proposed') { skipped++; continue; }
+      deleteEntity(row.id);
+      rejected++;
+    }
+  })();
+  return { rejected, skipped };
+}
+
+function bulkRejectEnrichUpdates(workspaceId, ids) {
+  const rows = bulkEntityRows(workspaceId, ids);
+  let rejected = 0, fields = 0, lore = 0, links = 0, chapters = 0, skipped = 0;
+  db.transaction(() => {
+    for (const row of rows) {
+      if (row.status === 'proposed') { skipped++; continue; }
+      const result = discardEnrichPending(row.data);
+      if (!result) { skipped++; continue; }
+      updateEntity(row.id, { data: result.data });
+      fields += result.fields;
+      lore += row.type === 'System' ? 0 : result.lore;
+      links += result.links;
+      chapters += result.chapters;
+      rejected++;
+    }
+  })();
+  return { rejected, fields, lore, links, chapters, skipped };
+}
+
+function bulkRejectAll(workspaceId, ids) {
+  let proposed;
+  let updates;
+  db.transaction(() => {
+    updates = bulkRejectEnrichUpdates(workspaceId, ids);
+    proposed = bulkRejectProposed(workspaceId, ids);
+  })();
+  return { proposed, updates };
+}
+
+function resetEntityEnrichmentProgress(workspaceId, ids) {
+  const rows = bulkEntityRows(workspaceId, ids).filter(row => row.status !== 'proposed');
+  if (!rows.length) return { reset: 0 };
+  const placeholders = rows.map(() => '?').join(', ');
+  const rowIds = rows.map(row => row.id);
+  db.transaction(() => {
+    db.prepare(`DELETE FROM entity_enrichment_chunks WHERE entityId IN (${placeholders})`).run(...rowIds);
+    db.prepare(`DELETE FROM entity_update_evidence WHERE workspace_id = ? AND entity_id IN (${placeholders})`).run(workspaceId, ...rowIds);
+    db.prepare(`DELETE FROM entity_enrichment_errors WHERE workspaceId = ? AND entityId IN (${placeholders})`).run(workspaceId, ...rowIds);
+  })();
+  return { reset: rows.length };
+}
+
 module.exports = {
   listEntities,
   getEntity,
@@ -591,7 +717,9 @@ module.exports = {
   getLinksFrom,
   getLinksTo,
   listLinks,
+  getLink,
   setLink,
+  setInventoryLink,
   removeLink,
   updateLinkLabel,
   updateLink,
@@ -601,4 +729,8 @@ module.exports = {
   bulkAcceptEnrichUpdates,
   bulkDeleteEntities,
   bulkAcceptAll,
+  bulkRejectProposed,
+  bulkRejectEnrichUpdates,
+  bulkRejectAll,
+  resetEntityEnrichmentProgress,
 };

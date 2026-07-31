@@ -31,7 +31,7 @@
       "required": ["id", "originType", "originId"],
       "properties": {
         "id": { "$ref": "#/$defs/Id" },
-        "originType": { "enum": ["chat-message", "writing-document", "world-action", "import"] },
+        "originType": { "enum": ["chat-message", "writing-document", "world-action", "worldbuild-update", "import"] },
         "originId": { "$ref": "#/$defs/Id" },
         "excerpt": { "type": "string" }
       },
@@ -54,7 +54,9 @@
       "required": ["id", "proposition", "status", "evidenceIds"],
       "properties": {
         "id": { "$ref": "#/$defs/Id" },
+        "referenceId": { "$ref": "#/$defs/Id" },
         "proposition": { "$ref": "#/$defs/Proposition" },
+        "relatedEntityIds": { "type": "array", "items": { "$ref": "#/$defs/Id" }, "uniqueItems": true },
         "status": { "enum": ["active", "superseded", "retracted"] },
         "evidenceIds": { "type": "array", "items": { "$ref": "#/$defs/Id" } }
       },
@@ -78,7 +80,8 @@
         "subjectId": { "$ref": "#/$defs/Id" },
         "eventId": { "$ref": "#/$defs/Id" },
         "method": { "enum": ["participant", "witness", "reported", "inferred"] },
-        "confidence": { "$ref": "#/$defs/Confidence" }
+        "confidence": { "$ref": "#/$defs/Confidence" },
+        "factIds": { "type": "array", "items": { "$ref": "#/$defs/Id" }, "uniqueItems": true }
       },
       "additionalProperties": false
     },
@@ -87,13 +90,15 @@
       "required": ["id", "subjectId", "proposition", "sourceEventId", "acquisition", "confidence", "accessibility", "status"],
       "properties": {
         "id": { "$ref": "#/$defs/Id" },
+        "entryId": { "$ref": "#/$defs/Id" },
         "subjectId": { "$ref": "#/$defs/Id" },
         "proposition": { "$ref": "#/$defs/Proposition" },
         "sourceEventId": { "$ref": "#/$defs/Id" },
         "acquisition": { "enum": ["participant", "witness", "reported", "inferred"] },
         "confidence": { "$ref": "#/$defs/Confidence" },
         "accessibility": { "enum": ["available", "suppressed", "inaccessible"] },
-        "status": { "enum": ["active", "forgotten", "revoked", "superseded"] }
+        "status": { "enum": ["active", "forgotten", "revoked", "superseded"] },
+        "factIds": { "type": "array", "items": { "$ref": "#/$defs/Id" }, "uniqueItems": true }
       },
       "additionalProperties": false
     },
@@ -102,12 +107,14 @@
       "required": ["id", "subjectId", "proposition", "sourceEventId", "confidence", "relationToCanon", "status"],
       "properties": {
         "id": { "$ref": "#/$defs/Id" },
+        "entryId": { "$ref": "#/$defs/Id" },
         "subjectId": { "$ref": "#/$defs/Id" },
         "proposition": { "$ref": "#/$defs/Proposition" },
         "sourceEventId": { "$ref": "#/$defs/Id" },
         "confidence": { "$ref": "#/$defs/Confidence" },
         "relationToCanon": { "enum": ["aligned", "contradicted", "uncertain", "unknown"] },
-        "status": { "enum": ["active", "superseded", "abandoned"] }
+        "status": { "enum": ["active", "superseded", "abandoned"] },
+        "factIds": { "type": "array", "items": { "$ref": "#/$defs/Id" }, "uniqueItems": true }
       },
       "additionalProperties": false
     },
@@ -119,7 +126,22 @@
         "subjectId": { "$ref": "#/$defs/Id" },
         "eventId": { "$ref": "#/$defs/Id" },
         "summary": { "type": "string", "minLength": 1 },
-        "accessibility": { "enum": ["available", "suppressed", "inaccessible"] }
+        "accessibility": { "enum": ["available", "suppressed", "inaccessible"] },
+        "status": { "enum": ["active", "superseded", "forgotten"] },
+        "supersedesMemoryId": { "$ref": "#/$defs/Id" },
+        "relatedEntityIds": { "type": "array", "items": { "$ref": "#/$defs/Id" }, "uniqueItems": true }
+      },
+      "additionalProperties": false
+    },
+    "Awareness": {
+      "type": "object",
+      "required": ["id", "subjectId", "targetId", "status", "sourceEventId"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "subjectId": { "$ref": "#/$defs/Id" },
+        "targetId": { "$ref": "#/$defs/Id" },
+        "status": { "enum": ["active", "forgotten", "revoked", "superseded"] },
+        "sourceEventId": { "$ref": "#/$defs/Id" }
       },
       "additionalProperties": false
     },
@@ -131,6 +153,7 @@
         "sourceEntityId": { "$ref": "#/$defs/Id" },
         "targetEntityId": { "$ref": "#/$defs/Id" },
         "dimension": { "$ref": "#/$defs/Id" },
+        "title": { "type": "string" },
         "value": { "type": "number", "minimum": -100, "maximum": 100 },
         "description": { "type": "string" },
         "sourceEventId": { "$ref": "#/$defs/Id" }
@@ -167,7 +190,7 @@
           "type": "object",
           "required": ["originType", "originId"],
           "properties": {
-            "originType": { "enum": ["chat-message", "writing-document", "world-action", "import"] },
+            "originType": { "enum": ["chat-message", "writing-document", "world-action", "worldbuild-update", "import"] },
             "originId": { "$ref": "#/$defs/Id" }
           },
           "additionalProperties": false
@@ -204,6 +227,7 @@
         { "$ref": "#/$defs/AssertFactOperation" },
         { "$ref": "#/$defs/SetStateOperation" },
         { "$ref": "#/$defs/RecordObservationOperation" },
+        { "$ref": "#/$defs/GrantAwarenessOperation" },
         { "$ref": "#/$defs/GrantKnowledgeOperation" },
         { "$ref": "#/$defs/SetBeliefOperation" },
         { "$ref": "#/$defs/RecordMemoryOperation" },
@@ -251,6 +275,17 @@
         "type": { "const": "grant-knowledge" },
         "evidenceIds": { "type": "array", "items": { "$ref": "#/$defs/Id" } },
         "knowledge": { "$ref": "#/$defs/Knowledge" }
+      },
+      "additionalProperties": false
+    },
+    "GrantAwarenessOperation": {
+      "type": "object",
+      "required": ["id", "type", "evidenceIds", "awareness"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "type": { "const": "grant-awareness" },
+        "evidenceIds": { "type": "array", "items": { "$ref": "#/$defs/Id" } },
+        "awareness": { "$ref": "#/$defs/Awareness" }
       },
       "additionalProperties": false
     },
@@ -313,12 +348,13 @@
     },
     "Projection": {
       "type": "object",
-      "required": ["projectId", "through", "facts", "states", "knowledge", "beliefs", "relationships"],
+      "required": ["projectId", "through", "facts", "states", "awareness", "knowledge", "beliefs", "relationships"],
       "properties": {
         "projectId": { "$ref": "#/$defs/Id" },
         "through": { "$ref": "#/$defs/Position" },
         "facts": { "type": "array", "items": { "$ref": "#/$defs/Fact" } },
         "states": { "type": "array", "items": { "$ref": "#/$defs/State" } },
+        "awareness": { "type": "array", "items": { "$ref": "#/$defs/Awareness" } },
         "knowledge": { "type": "array", "items": { "$ref": "#/$defs/Knowledge" } },
         "beliefs": { "type": "array", "items": { "$ref": "#/$defs/Belief" } },
         "relationships": { "type": "array", "items": { "$ref": "#/$defs/Relationship" } }

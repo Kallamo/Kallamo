@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronDown, Package, Pencil, Plus, Search, Trash2, Users } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Check, Package, Pencil, Plus, Trash2, Users } from 'lucide-react';
 import Button from '../../components/ui/Button';
+import SearchableSelect from '../../components/ui/SearchableSelect';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import Modal from '../../components/ui/Modal';
 import type { Toast, WorldbuildEntity } from './worldbuildTypes';
@@ -17,6 +18,7 @@ export interface EntityLink {
 
 interface LinkApi {
   setEntityLink(payload: Record<string, unknown>): Promise<{ success: boolean; error?: string }>;
+  setInventoryItem(payload: Record<string, unknown>): Promise<{ success: boolean; error?: string }>;
   updateEntityLink(linkId: string, fields: Record<string, unknown>): Promise<{ success: boolean; error?: string }>;
   removeEntityLink(linkId: string): Promise<{ success: boolean; error?: string }>;
 }
@@ -186,11 +188,22 @@ function RelationshipEditor({ draft, setDraft, options, onSave, onClose, saving,
 }
 
 function EntityCombobox({ options, value, query, onChange, autoFocus }: { options: WorldbuildEntity[]; value: string; query: string; onChange(value: string, query: string): void; autoFocus?: boolean }) {
-  const [open, setOpen] = useState(false);
-  const root = useRef<HTMLDivElement>(null);
-  const filtered = options.filter(option => option.canonicalName.toLowerCase().includes(query.trim().toLowerCase()));
-  useEffect(() => { const close = (event: MouseEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); }; document.addEventListener('mousedown', close); return () => document.removeEventListener('mousedown', close); }, []);
-  return <div ref={root} className="relative"><div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-600" /><input className={`${INPUT} pl-9 pr-9`} value={query} onFocus={() => setOpen(true)} onChange={event => { onChange('', event.target.value); setOpen(true); }} placeholder="Search characters or entities…" autoFocus={autoFocus} role="combobox" aria-expanded={open} aria-autocomplete="list" /><ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-600" /></div>{open && <div role="listbox" className="absolute z-30 mt-1 max-h-52 w-full overflow-y-auto rounded-lg border border-white/15 bg-[#071820] p-1 shadow-xl shadow-black/40 custom-scrollbar">{filtered.length ? filtered.map(option => <button key={option.id} type="button" role="option" aria-selected={value === option.id} onClick={() => { onChange(option.id, option.canonicalName); setOpen(false); }} className={`flex w-full items-center rounded-md px-3 py-2 text-left text-sm transition-colors ${value === option.id ? 'bg-accent/15 text-accent' : 'text-gray-300 hover:bg-white/[0.06] hover:text-white'}`}><span className="truncate">{option.canonicalName}</span><span className="ml-auto pl-3 text-[0.65rem] font-bold uppercase tracking-wider text-gray-600">{option.type === 'Characters' ? 'Character' : 'Entity'}</span></button>) : <p className="px-3 py-3 text-sm italic text-gray-600">No matching subjects.</p>}</div>}</div>;
+  void query;
+  void autoFocus;
+  return <SearchableSelect
+    value={value}
+    onChange={(targetId: string) => {
+      const selected = options.find(option => option.id === targetId);
+      onChange(targetId, selected?.canonicalName || '');
+    }}
+    options={options.map(option => ({
+      id: option.id,
+      label: option.canonicalName,
+      aliases: option.aliases,
+      group: option.type === 'Characters' ? 'Character' : 'Entity',
+    }))}
+    placeholder="Search characters or entities"
+  />;
 }
 
 interface InventoryProps extends CommonProps { options: WorldbuildEntity[]; }
@@ -213,7 +226,7 @@ export function WorldbuildInventory({ workspaceId, subject, links, options, api,
       const metadata = { quantity: isUniqueItem(item) ? 1 : positiveQuantity(editor.quantity), condition: editor.condition.trim(), notes: editor.notes.trim() };
       const result = editor.link
         ? await api.updateEntityLink(editor.link.linkId, { metadata })
-        : await api.setEntityLink({ workspaceId, fromId: editor.itemId, relType: 'owned_by', toId: subject.id, single: true, metadata });
+        : await api.setInventoryItem({ workspaceId, itemId: editor.itemId, holderId: subject.id, metadata });
       if (!result.success) throw new Error(result.error || 'Could not save the inventory item.');
       await onChanged(); setEditor(null); showToast('Inventory updated.', 'success');
     } catch (error) { showToast(error instanceof Error ? error.message : 'Could not update the inventory.', 'error'); }
@@ -262,7 +275,7 @@ function InventoryEditor({ draft, setDraft, options, onSave, onClose, saving }: 
   return <Modal size="lg" title={draft.link ? 'Edit inventory item' : 'Add inventory item'} icon={Package} onClose={onClose} closeOnEsc={!saving} closeOnOverlay={!saving}>
     <div className="space-y-5 p-5">
       <div className={`grid gap-4 ${isUnique ? 'grid-cols-1' : 'grid-cols-[minmax(0,1fr)_8rem]'}`}>
-        <Field label="Item"><select className={INPUT} value={draft.itemId} disabled={Boolean(draft.link)} onChange={event => update({ itemId: event.target.value })}>{options.map(option => <option key={option.id} value={option.id}>{option.canonicalName}</option>)}</select></Field>
+        <Field label="Item"><SearchableSelect value={draft.itemId} disabled={Boolean(draft.link)} onChange={(itemId: string) => update({ itemId })} options={options.map(option => ({ id: option.id, label: option.canonicalName, aliases: option.aliases, group: option.type.replace(/s$/, '') }))} placeholder="Search for an item" /></Field>
         {!isUnique && <Field label="Quantity"><input className={INPUT} type="number" min="1" step="1" value={draft.quantity} onChange={event => update({ quantity: Number(event.target.value) })} /></Field>}
       </div>
       <Field label="Condition"><input className={INPUT} value={draft.condition} onChange={event => update({ condition: event.target.value })} placeholder="Worn, pristine, damaged…" /></Field>

@@ -3,6 +3,7 @@ import { possessionTransferScenario } from '../../src/kanora/scenarios';
 import {
   VALIDATION_ISSUE_CODES,
   validateEvidenceReference,
+  validateAwareness,
   validateKnowledge,
   validateNarrativeEvent,
   validateNarrativeOperation,
@@ -27,6 +28,16 @@ describe('public Contract v1 validators', () => {
       confidence: 0.8,
       accessibility: 'suppressed',
       status: 'active'
+    }).success).toBe(true);
+  });
+
+  test('validates portable awareness independently from card presentation', () => {
+    expect(validateAwareness({
+      id: 'awareness-one',
+      subjectId: 'elias',
+      targetId: 'vault',
+      status: 'active',
+      sourceEventId: 'event-discovery'
     }).success).toBe(true);
   });
 
@@ -68,6 +79,7 @@ describe('public Contract v1 validators', () => {
       through: { sequence: 12 },
       facts: [],
       states: [],
+      awareness: [],
       knowledge: [],
       beliefs: [],
       relationships: []
@@ -82,6 +94,7 @@ describe('public Contract v1 validators', () => {
       through: { sequence: 12 },
       facts: [],
       states: [{ entityId: '', property: 'ownerId', value: 'elias', effectiveFrom: { sequence: 12 } }],
+      awareness: [],
       knowledge: [],
       beliefs: [],
       relationships: []

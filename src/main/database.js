@@ -281,7 +281,8 @@ db.exec(`
     vector TEXT NOT NULL,
     createdAt INTEGER NOT NULL,
     enabled INTEGER DEFAULT 1,
-    manuallyEdited INTEGER DEFAULT 0
+    manuallyEdited INTEGER DEFAULT 0,
+    memoryBlockId TEXT
   );
 
   CREATE TABLE IF NOT EXISTS deleted_records (
@@ -743,6 +744,49 @@ try {
   if (!kcColumns.includes('ordinal')) {
     db.exec("ALTER TABLE knowledge_chunks ADD COLUMN ordinal INTEGER");
     console.log("Database Migration: Added ordinal column to knowledge_chunks table.");
+  }
+  if (!kcColumns.includes('memoryBlockId')) {
+    db.exec("ALTER TABLE knowledge_chunks ADD COLUMN memoryBlockId TEXT");
+    console.log("Database Migration: Added memoryBlockId column to knowledge_chunks table.");
+  }
+
+  const chatsWithMemory = db.prepare(
+    "SELECT id, memoryBlocks FROM chats WHERE memoryBlocks IS NOT NULL AND memoryBlocks != '[]'"
+  ).all();
+  const unlinkedMemoryChunks = db.prepare(`
+    SELECT id, ownerId, source, createdAt FROM knowledge_chunks
+    WHERE ownerType = 'chat_memory' AND memoryBlockId IS NULL
+  `).all();
+  if (chatsWithMemory.length && unlinkedMemoryChunks.length) {
+    const blocksByChat = new Map();
+    for (const chat of chatsWithMemory) {
+      try {
+        const blocks = JSON.parse(chat.memoryBlocks || '[]')
+          .filter(block => block?.id)
+          .map(block => ({
+            id: block.id,
+            timestamp: Number(String(block.id).match(/^(?:block|manual|mem)_(\d+)/)?.[1]) || Number(block.timestamp) || 0
+          }));
+        blocksByChat.set(chat.id, blocks);
+      } catch (e) { }
+    }
+    const linkMemoryChunk = db.prepare('UPDATE knowledge_chunks SET memoryBlockId = ? WHERE id = ?');
+    db.transaction(() => {
+      for (const chunk of unlinkedMemoryChunks) {
+        const blocks = blocksByChat.get(chunk.ownerId) || [];
+        const direct = blocks.find(block => block.id === chunk.id);
+        const candidates = chunk.source === 'Chat Archive'
+          ? blocks.filter(block => block.id.startsWith('block_') && block.timestamp)
+          : blocks.filter(block => block.id === chunk.id);
+        const nearest = direct || candidates.reduce((best, block) => {
+          if (!best) return block;
+          return Math.abs(block.timestamp - chunk.createdAt) < Math.abs(best.timestamp - chunk.createdAt)
+            ? block
+            : best;
+        }, null);
+        if (nearest) linkMemoryChunk.run(nearest.id, chunk.id);
+      }
+    })();
   }
 
   // manual=1 marks a tag the user pinned by hand. Used for keyword (yellow) tags on

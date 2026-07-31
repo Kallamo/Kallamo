@@ -3,6 +3,8 @@ import { useApp } from '../context/AppContext';
 import { HelpCircle, Trash2, Plus, Edit, Image as ImageIcon, Check, AlertTriangle, Cpu, Workflow, Brain, PenTool, Palette, Send } from 'lucide-react';
 import ProfileModal from './modals/ProfileModal';
 import WorkflowModal from './modals/WorkflowModal';
+import RoleplayModeSection from './RoleplayModeSection';
+import payloadBudgetContract from '../../shared/payload-budget.json';
 
 const safeParseJson = (str, fallback = []) => {
   if (!str) return fallback;
@@ -20,6 +22,7 @@ const SECTIONS = [
   { id: 'agents', label: 'Profiles & Workflows', icon: Cpu },
   { id: 'context', label: 'Context & Memory', icon: Brain },
   { id: 'writing', label: 'Writing Desk', icon: PenTool },
+  { id: 'roleplay', label: 'Roleplay Mode', icon: Brain },
   { id: 'appearance', label: 'Appearance', icon: Palette },
 ];
 
@@ -111,6 +114,17 @@ export default function ConfigurationView({ onTriggerSummarize }) {
     setActiveSection(current);
   };
 
+  useEffect(() => {
+    const openSection = event => {
+      const sectionId = event.detail?.sectionId;
+      if (!SECTIONS.some(section => section.id === sectionId)) return;
+      setActiveSection(sectionId);
+      requestAnimationFrame(() => sectionRefs.current[sectionId]?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+    };
+    window.addEventListener('configuration-open-section', openSection);
+    return () => window.removeEventListener('configuration-open-section', openSection);
+  }, []);
+
   if (!activeChat) return null;
 
   const scrollToSection = (id) => {
@@ -120,7 +134,17 @@ export default function ConfigurationView({ onTriggerSummarize }) {
   // Number fields keep numeric state; empty input falls back to 0 on save.
   const handleUpdateNumberField = async (field, value) => {
     const num = value === '' ? 0 : Number(value);
-    const updated = { ...activeChat, [field]: Number.isNaN(num) ? 0 : num };
+    const normalized = field === 'maxContext'
+      ? Math.min(
+        payloadBudgetContract.maximumMaxPayloadTokens,
+        Math.max(
+          payloadBudgetContract.minimumMaxPayloadTokens,
+          Number.isFinite(num) ? Math.floor(num) : payloadBudgetContract.defaultMaxPayloadTokens
+        )
+      )
+      : (Number.isNaN(num) ? 0 : num);
+    if (field === 'maxContext') setMaxContext(normalized);
+    const updated = { ...activeChat, [field]: normalized };
     await handleSaveChat(updated);
   };
 
@@ -370,11 +394,8 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                                 <span className="w-2.5 h-2.5 rounded-full shrink-0 opacity-40" style={{ backgroundColor: p.color }} />
                                 <span className="text-xs text-gray-500 truncate">{p.name}</span>
                               </div>
-                              <div className="relative group/warning flex items-center shrink-0">
-                                <AlertTriangle className="w-3.5 h-3.5 text-amber-500 cursor-help" />
-                                <div className="absolute top-full right-0 mt-2.5 w-56 p-3 text-[10px] leading-relaxed text-amber-200 bg-[#1a0f02] border border-amber-900/50 rounded-lg shadow-xl invisible opacity-0 pointer-events-none group-hover/warning:visible group-hover/warning:opacity-100 transition-all duration-200 z-50 select-none font-semibold text-center">
-                                  To activate: create an API profile in Settings, then link it to this profile in the Library.
-                                </div>
+                              <div className="flex shrink-0 items-center">
+                                <AlertTriangle className="w-3.5 h-3.5 text-amber-500 cursor-help" data-tooltip="To activate: create an API profile in Settings, then link it to this profile in the Library." />
                               </div>
                             </div>
                           );
@@ -450,10 +471,13 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                 <div>
                   <div className="flex items-center space-x-1.5 mb-1.5">
                     <label className={fieldLabel}>Max API Payload (Tokens)</label>
-                    <HelpCircle className="w-3.5 h-3.5 text-gray-500 cursor-help shrink-0" data-tooltip="The absolute maximum number of tokens sent to the API. If the context (Lore + Chat + Current Message) exceeds this, older chat messages are silently truncated to prevent API rejection." />
+                    <HelpCircle className="w-3.5 h-3.5 text-gray-500 cursor-help shrink-0" data-tooltip="The workspace safety limit for estimated input plus the response reserved by the active AI Profile. Older chat history is removed first. If fixed context still cannot fit, Kallamo stops before contacting the API." />
                   </div>
                   <input
                     type="number"
+                    min={payloadBudgetContract.minimumMaxPayloadTokens}
+                    max={payloadBudgetContract.maximumMaxPayloadTokens}
+                    step="1024"
                     value={maxContext}
                     onChange={(e) => setMaxContext(e.target.value)}
                     onBlur={() => handleUpdateNumberField('maxContext', maxContext)}
@@ -625,6 +649,17 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                 </label>
               </div>
             </div>
+          </section>
+
+          <section ref={registerSection('roleplay')} data-section="roleplay" className="scroll-mt-6">
+            <RoleplayModeSection
+              workspaceId={activeChat.id}
+              api={electronAPI}
+              showToast={showToast}
+              inputClass={inputClass}
+              fieldLabel={fieldLabel}
+              SectionHead={SectionHead}
+            />
           </section>
 
           {/* Appearance */}

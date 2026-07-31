@@ -44,6 +44,9 @@ export class NarrativeSceneRepository {
   private readonly selectActive;
   private readonly selectAll;
   private readonly completeScene;
+  private readonly updateScene;
+  private readonly deleteParticipants;
+  private readonly deleteObservers;
 
   constructor(private readonly db: Database.Database) {
     this.insertScene = db.prepare(`
@@ -78,6 +81,19 @@ export class NarrativeSceneRepository {
     this.completeScene = db.prepare(`
       UPDATE kanora_scenes SET status = 'completed'
       WHERE workspace_id = ? AND scene_id = ? AND status = 'active'
+    `);
+    this.updateScene = db.prepare(`
+      UPDATE kanora_scenes SET
+        location_id = ?, perspective_access = ?, focal_subject_id = ?,
+        allowed_subject_ids_json = ?, narrative_sequence = ?, narrative_timestamp = ?,
+        origin_type = ?, origin_id = ?
+      WHERE workspace_id = ? AND scene_id = ? AND status = 'active'
+    `);
+    this.deleteParticipants = db.prepare(`
+      DELETE FROM kanora_scene_participants WHERE workspace_id = ? AND scene_id = ?
+    `);
+    this.deleteObservers = db.prepare(`
+      DELETE FROM kanora_scene_possible_observers WHERE workspace_id = ? AND scene_id = ?
     `);
   }
 
@@ -126,6 +142,35 @@ export class NarrativeSceneRepository {
 
   list(projectId: string): Scene[] {
     return (this.selectAll.all(projectId) as SceneRow[]).map(row => this.hydrate(row));
+  }
+
+  updateActive(scene: Scene): Scene {
+    this.validate(scene);
+    if (scene.status !== 'active') throw new Error('Only an active scene can be updated.');
+    this.db.transaction(() => {
+      const result = this.updateScene.run(
+        scene.locationId ?? null,
+        scene.perspective.access,
+        scene.perspective.focalSubjectId ?? null,
+        scene.perspective.allowedSubjectIds ? JSON.stringify(scene.perspective.allowedSubjectIds) : null,
+        scene.position.sequence,
+        scene.position.timestamp ?? null,
+        scene.origin?.originType ?? null,
+        scene.origin?.originId ?? null,
+        scene.projectId,
+        scene.id
+      );
+      if (result.changes !== 1) throw new Error('Active scene was not found.');
+      this.deleteParticipants.run(scene.projectId, scene.id);
+      this.deleteObservers.run(scene.projectId, scene.id);
+      scene.participantIds.forEach((entityId, ordinal) => {
+        this.insertParticipant.run(scene.projectId, scene.id, ordinal, entityId);
+      });
+      scene.possibleObserverIds.forEach((entityId, ordinal) => {
+        this.insertObserver.run(scene.projectId, scene.id, ordinal, entityId);
+      });
+    })();
+    return this.get(scene.projectId, scene.id)!;
   }
 
   complete(projectId: string, sceneId: string): Scene {

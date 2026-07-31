@@ -1,4 +1,4 @@
-export type AiEngineRoleId = 'tagger' | 'summarizer' | 'retrievalPlanner';
+export type AiEngineRoleId = 'tagger' | 'summarizer' | 'retrievalPlanner' | 'narrativeState';
 
 export type GenerativeRoleMode = 'inherit-system' | 'dedicated' | 'disabled';
 export type RetrievalPlannerMode = 'profile' | 'dedicated' | 'off';
@@ -51,6 +51,16 @@ export const SYSTEM_AI_LANGUAGES = [
 ] as const;
 
 export const AI_ENGINE_ROLE_DEFINITIONS: ReadonlyArray<AiEngineRoleDefinition> = [
+  {
+    id: 'narrativeState',
+    title: 'Narrative State',
+    description: 'Extracts durable Roleplay consequences for scenes, knowledge, beliefs, memories, and dynamic relationships. It never writes the narrative.',
+    modes: [
+      { value: 'inherit-system', label: 'System AI', description: 'Share the base connection and model.' },
+      { value: 'dedicated', label: 'Dedicated', description: 'Choose a model specifically for campaign state.' },
+      { value: 'disabled', label: 'Disabled', description: 'Keep Roleplay narrative active without automatic state interpretation.' }
+    ]
+  },
   {
     id: 'tagger',
     title: 'Tagger',

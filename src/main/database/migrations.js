@@ -276,6 +276,639 @@ const MIGRATIONS = [
         db.exec('ALTER TABLE worldbuild_field_definitions ADD COLUMN ai_guidance TEXT');
       }
     }
+  },
+  {
+    id: 'kanora_awareness_temporal_records_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS kanora_awareness_records (
+        workspace_id TEXT NOT NULL,
+        awareness_id TEXT NOT NULL,
+        subject_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('active', 'forgotten', 'revoked', 'superseded')),
+        source_event_id TEXT NOT NULL,
+        operation_id TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        applied_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, awareness_id),
+        UNIQUE (workspace_id, operation_id),
+        FOREIGN KEY (workspace_id, source_event_id)
+          REFERENCES kanora_narrative_events (workspace_id, event_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_kanora_awareness_subject_target
+        ON kanora_awareness_records (workspace_id, subject_id, target_id, applied_at);
+      CREATE INDEX IF NOT EXISTS idx_kanora_awareness_target
+        ON kanora_awareness_records (workspace_id, target_id, applied_at);
+    `)
+  },
+  {
+    id: 'kallamo_workspace_experience_mode_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS workspace_experience_modes (
+        workspace_id TEXT PRIMARY KEY,
+        mode TEXT NOT NULL CHECK (mode IN ('standard', 'roleplay')),
+        updated_at INTEGER NOT NULL
+      );
+    `)
+  },
+  {
+    id: 'kallamo_roleplay_system_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS roleplay_workspace_settings (
+        workspace_id TEXT PRIMARY KEY,
+        player_entity_id TEXT,
+        location_entity_id TEXT,
+        active_scene_id TEXT,
+        scenario_name TEXT NOT NULL DEFAULT '',
+        scenario_summary TEXT NOT NULL DEFAULT '',
+        default_update_policy TEXT NOT NULL DEFAULT 'review'
+          CHECK (default_update_policy IN ('manual', 'review', 'automatic')),
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS roleplay_resource_definitions (
+        workspace_id TEXT NOT NULL,
+        definition_id TEXT NOT NULL,
+        resource_key TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        color TEXT NOT NULL,
+        minimum REAL NOT NULL,
+        maximum REAL NOT NULL,
+        initial_value REAL NOT NULL,
+        unit TEXT NOT NULL DEFAULT '',
+        applies_to_json TEXT NOT NULL,
+        update_policy TEXT NOT NULL CHECK (update_policy IN ('manual', 'review', 'automatic')),
+        position INTEGER NOT NULL DEFAULT 0,
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, definition_id),
+        UNIQUE (workspace_id, resource_key),
+        CHECK (maximum > minimum),
+        CHECK (initial_value >= minimum AND initial_value <= maximum)
+      );
+
+      CREATE TABLE IF NOT EXISTS roleplay_resource_values (
+        workspace_id TEXT NOT NULL,
+        definition_id TEXT NOT NULL,
+        target_type TEXT NOT NULL CHECK (target_type IN ('entity', 'race', 'species')),
+        target_id TEXT NOT NULL,
+        current_value REAL NOT NULL,
+        maximum_value REAL NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, definition_id, target_type, target_id),
+        FOREIGN KEY (workspace_id, definition_id)
+          REFERENCES roleplay_resource_definitions (workspace_id, definition_id)
+          ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS roleplay_species_memberships (
+        workspace_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        species_id TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, entity_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS roleplay_resource_changes (
+        workspace_id TEXT NOT NULL,
+        change_id TEXT NOT NULL,
+        definition_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        previous_value REAL NOT NULL,
+        next_value REAL NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'applied', 'rejected')),
+        source TEXT NOT NULL CHECK (source IN ('manual', 'ai')),
+        provenance_id TEXT,
+        created_at INTEGER NOT NULL,
+        resolved_at INTEGER,
+        PRIMARY KEY (workspace_id, change_id),
+        FOREIGN KEY (workspace_id, definition_id)
+          REFERENCES roleplay_resource_definitions (workspace_id, definition_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_roleplay_values_target
+        ON roleplay_resource_values (workspace_id, target_type, target_id);
+      CREATE INDEX IF NOT EXISTS idx_roleplay_changes_entity
+        ON roleplay_resource_changes (workspace_id, entity_id, created_at);
+    `)
+  },
+  {
+    id: 'kallamo_roleplay_scene_objects_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS roleplay_scene_objects (
+        workspace_id TEXT NOT NULL,
+        scene_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, scene_id, entity_id),
+        UNIQUE (workspace_id, scene_id, ordinal)
+      );
+      CREATE INDEX IF NOT EXISTS idx_roleplay_scene_objects
+        ON roleplay_scene_objects (workspace_id, scene_id, ordinal);
+
+      CREATE TABLE IF NOT EXISTS roleplay_scene_changes (
+        workspace_id TEXT NOT NULL,
+        change_id TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'applied', 'rejected')),
+        source TEXT NOT NULL CHECK (source IN ('manual', 'ai')),
+        provenance_id TEXT,
+        created_at INTEGER NOT NULL,
+        resolved_at INTEGER,
+        PRIMARY KEY (workspace_id, change_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_roleplay_scene_changes_status
+        ON roleplay_scene_changes (workspace_id, status, created_at);
+    `)
+  },
+  {
+    id: 'kanora_narrative_state_runtime_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS kanora_narrative_state_jobs (
+        workspace_id TEXT NOT NULL,
+        origin_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'skipped')),
+        event_fingerprint TEXT,
+        deep_analysis INTEGER NOT NULL DEFAULT 0 CHECK (deep_analysis IN (0, 1)),
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        error_message TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, origin_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS kanora_narrative_state_metrics (
+        workspace_id TEXT NOT NULL,
+        origin_id TEXT NOT NULL,
+        triage_input_tokens INTEGER NOT NULL DEFAULT 0,
+        triage_output_tokens INTEGER NOT NULL DEFAULT 0,
+        deep_input_tokens INTEGER NOT NULL DEFAULT 0,
+        deep_output_tokens INTEGER NOT NULL DEFAULT 0,
+        deep_analysis INTEGER NOT NULL DEFAULT 0 CHECK (deep_analysis IN (0, 1)),
+        proposal_count INTEGER NOT NULL DEFAULT 0,
+        elapsed_ms INTEGER NOT NULL DEFAULT 0,
+        recorded_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, origin_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS kanora_narrative_state_fingerprints (
+        workspace_id TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        origin_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, fingerprint),
+        UNIQUE (workspace_id, event_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_kanora_state_jobs_status
+        ON kanora_narrative_state_jobs (workspace_id, status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_kanora_state_metrics_time
+        ON kanora_narrative_state_metrics (workspace_id, recorded_at);
+    `)
+  },
+  {
+    id: 'kallamo_item_presence_v1',
+    up: (db) => db.transaction(() => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS roleplay_inventory_changes (
+          workspace_id TEXT NOT NULL,
+          change_id TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('pending', 'applied', 'rejected')),
+          source TEXT NOT NULL CHECK (source IN ('manual', 'ai')),
+          provenance_id TEXT,
+          created_at INTEGER NOT NULL,
+          resolved_at INTEGER,
+          PRIMARY KEY (workspace_id, change_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_roleplay_inventory_changes_status
+          ON roleplay_inventory_changes (workspace_id, status, created_at);
+      `);
+      const hasEntities = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'entities'").get();
+      const hasLinks = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'entity_links'").get();
+      if (!hasEntities || !hasLinks) return;
+      db.prepare(`
+        UPDATE entity_links SET relType = 'carried_by'
+        WHERE relType = 'owned_by'
+          AND fromId IN (
+            SELECT id FROM entities
+            WHERE type = 'Items' AND COALESCE(json_extract(data, '$.itemNature'), 'type') != 'unique'
+          )
+      `).run();
+      db.prepare(`
+        UPDATE entity_links SET relType = 'located_in'
+        WHERE relType = 'found_in'
+          AND fromId IN (
+            SELECT id FROM entities
+            WHERE type = 'Items' AND json_extract(data, '$.itemNature') = 'unique'
+          )
+          AND fromId NOT IN (SELECT fromId FROM entity_links WHERE relType = 'owned_by')
+          AND fromId IN (
+            SELECT fromId FROM entity_links WHERE relType = 'found_in'
+            GROUP BY fromId HAVING COUNT(*) = 1
+          )
+      `).run();
+      db.prepare(`
+        DELETE FROM entity_links
+        WHERE relType = 'owned_by' AND rowid NOT IN (
+          SELECT MAX(rowid) FROM entity_links WHERE relType = 'owned_by'
+          GROUP BY workspaceId, fromId
+        )
+      `).run();
+      db.prepare(`
+        DELETE FROM entity_links
+        WHERE relType = 'carried_by' AND rowid NOT IN (
+          SELECT MAX(rowid) FROM entity_links WHERE relType = 'carried_by'
+          GROUP BY workspaceId, fromId, toId
+        )
+      `).run();
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_item_owner
+          ON entity_links (workspaceId, fromId) WHERE relType = 'owned_by';
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_item_location
+          ON entity_links (workspaceId, fromId) WHERE relType = 'located_in';
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_item_type_inventory
+          ON entity_links (workspaceId, fromId, toId) WHERE relType = 'carried_by';
+      `);
+    })()
+  },
+  {
+    id: 'kallamo_narrative_entity_identity_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS roleplay_entity_changes (
+        workspace_id TEXT NOT NULL,
+        change_id TEXT NOT NULL,
+        entity_id TEXT,
+        created_entity INTEGER NOT NULL DEFAULT 0 CHECK (created_entity IN (0, 1)),
+        payload_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'applied', 'rejected', 'conflicting')),
+        provenance_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        resolved_at INTEGER,
+        PRIMARY KEY (workspace_id, change_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_roleplay_entity_changes_status
+        ON roleplay_entity_changes (workspace_id, status, created_at);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_roleplay_entity_origin_reference
+        ON roleplay_entity_changes (workspace_id, provenance_id, json_extract(payload_json, '$.referenceId'));
+
+      CREATE TABLE IF NOT EXISTS kanora_narrative_origin_lifecycle (
+        workspace_id TEXT NOT NULL,
+        origin_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('active', 'superseded', 'deleted')),
+        replacement_origin_id TEXT,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, origin_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_kanora_origin_lifecycle_status
+        ON kanora_narrative_origin_lifecycle (workspace_id, status, updated_at);
+
+      CREATE TABLE IF NOT EXISTS roleplay_turn_snapshots (
+        workspace_id TEXT NOT NULL,
+        origin_id TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, origin_id)
+      );
+    `)
+  },
+  {
+    id: 'remove_legacy_dynamic_relationships_v1',
+    up: (db) => db.transaction(() => {
+      const hasEvents = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'kanora_narrative_events'").get();
+      if (!hasEvents) return;
+      const events = db.prepare(`
+        SELECT workspace_id, event_id FROM kanora_narrative_events
+        WHERE description LIKE 'Worldbuild relationship updated:%'
+      `).all();
+      if (!events.length) return;
+      const removeEvent = db.prepare('DELETE FROM kanora_narrative_events WHERE workspace_id = ? AND event_id = ?');
+      for (const event of events) removeEvent.run(event.workspace_id, event.event_id);
+    })()
+  },
+  {
+    id: 'entity_update_evidence_lifecycle_v1',
+    up: (db) => {
+      db.exec(`
+      CREATE TABLE IF NOT EXISTS entity_update_runs (
+        run_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'partial', 'failed')),
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        evidence_used INTEGER NOT NULL DEFAULT 0,
+        proposals_created INTEGER NOT NULL DEFAULT 0,
+        started_at INTEGER NOT NULL,
+        completed_at INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS entity_update_jobs (
+        run_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'skipped')),
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        evidence_used INTEGER NOT NULL DEFAULT 0,
+        proposals_created INTEGER NOT NULL DEFAULT 0,
+        error TEXT,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (run_id, entity_id),
+        FOREIGN KEY (run_id) REFERENCES entity_update_runs (run_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS entity_update_evidence (
+        workspace_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        chunk_id TEXT NOT NULL,
+        signature TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN (
+          'discovered', 'queued', 'deferred', 'evaluated', 'actionable',
+          'non-actionable', 'superseded', 'invalidated'
+        )),
+        strength TEXT NOT NULL CHECK (strength IN ('tagged', 'mention')),
+        last_run_id TEXT,
+        reason TEXT,
+        discovered_at INTEGER NOT NULL,
+        evaluated_at INTEGER,
+        PRIMARY KEY (workspace_id, entity_id, chunk_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_entity_update_evidence_queue
+        ON entity_update_evidence (workspace_id, entity_id, state, discovered_at);
+      CREATE INDEX IF NOT EXISTS idx_entity_update_jobs_status
+        ON entity_update_jobs (run_id, status, updated_at);
+
+      `);
+      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_chunks'").get()) {
+        db.exec(`
+          CREATE TRIGGER IF NOT EXISTS trg_entity_update_evidence_chunk_gc
+          AFTER DELETE ON knowledge_chunks
+          FOR EACH ROW BEGIN
+            DELETE FROM entity_update_evidence WHERE chunk_id = OLD.id;
+          END;
+        `);
+      }
+      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'entities'").get()) {
+        db.exec(`
+          CREATE TRIGGER IF NOT EXISTS trg_entity_update_evidence_entity_gc
+          AFTER DELETE ON entities
+          FOR EACH ROW BEGIN
+            DELETE FROM entity_update_evidence WHERE entity_id = OLD.id;
+          END;
+        `);
+      }
+    }
+  },
+  {
+    id: 'worldbuild_awareness_knowledge_cards_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS worldbuild_knowledge_cards (
+        workspace_id TEXT NOT NULL,
+        card_id TEXT NOT NULL,
+        owner_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        known_as TEXT,
+        status TEXT NOT NULL DEFAULT 'active'
+          CHECK (status IN ('active', 'forgotten', 'revoked', 'superseded')),
+        audience_type TEXT NOT NULL DEFAULT 'all-members'
+          CHECK (audience_type IN ('all-members', 'selected-members')),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, card_id),
+        UNIQUE (workspace_id, owner_id, target_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS worldbuild_knowledge_sources (
+        workspace_id TEXT NOT NULL,
+        card_id TEXT NOT NULL,
+        source_type TEXT NOT NULL CHECK (source_type IN (
+          'manual', 'relationship', 'faction-membership', 'inventory',
+          'memory', 'narrative', 'fact', 'statement', 'import'
+        )),
+        source_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, card_id, source_type, source_id),
+        FOREIGN KEY (workspace_id, card_id)
+          REFERENCES worldbuild_knowledge_cards (workspace_id, card_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS worldbuild_known_fields (
+        workspace_id TEXT NOT NULL,
+        card_id TEXT NOT NULL,
+        field_key TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        audience_type TEXT NOT NULL DEFAULT 'inherit'
+          CHECK (audience_type IN ('inherit', 'all-members', 'selected-members')),
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, card_id, field_key),
+        FOREIGN KEY (workspace_id, card_id)
+          REFERENCES worldbuild_knowledge_cards (workspace_id, card_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS worldbuild_knowledge_audience_members (
+        workspace_id TEXT NOT NULL,
+        card_id TEXT NOT NULL,
+        entry_type TEXT NOT NULL CHECK (entry_type IN ('card', 'field', 'knowledge', 'belief')),
+        entry_id TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, card_id, entry_type, entry_id, member_id),
+        FOREIGN KEY (workspace_id, card_id)
+          REFERENCES worldbuild_knowledge_cards (workspace_id, card_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS worldbuild_knowledge_exclusions (
+        workspace_id TEXT NOT NULL,
+        owner_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, owner_id, target_id, source_type, source_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_worldbuild_knowledge_owner
+        ON worldbuild_knowledge_cards (workspace_id, owner_id, status);
+      CREATE INDEX IF NOT EXISTS idx_worldbuild_knowledge_target
+        ON worldbuild_knowledge_cards (workspace_id, target_id, status);
+      CREATE INDEX IF NOT EXISTS idx_worldbuild_knowledge_source
+        ON worldbuild_knowledge_sources (workspace_id, source_type, source_id);
+      CREATE INDEX IF NOT EXISTS idx_worldbuild_knowledge_audience
+        ON worldbuild_knowledge_audience_members (workspace_id, member_id, card_id);
+    `)
+  },
+  {
+    id: 'worldbuild_known_relationships_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS worldbuild_known_relationships (
+        workspace_id TEXT NOT NULL,
+        card_id TEXT NOT NULL,
+        relationship_id TEXT NOT NULL,
+        from_id TEXT NOT NULL,
+        from_name TEXT NOT NULL,
+        relation_type TEXT NOT NULL,
+        relation_label TEXT,
+        to_id TEXT NOT NULL,
+        to_name TEXT NOT NULL,
+        metadata_json TEXT,
+        source_type TEXT NOT NULL DEFAULT 'manual',
+        source_id TEXT NOT NULL,
+        audience_type TEXT NOT NULL DEFAULT 'inherit'
+          CHECK (audience_type IN ('inherit', 'all-members', 'selected-members')),
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, card_id, relationship_id),
+        FOREIGN KEY (workspace_id, card_id)
+          REFERENCES worldbuild_knowledge_cards (workspace_id, card_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_worldbuild_known_relationships_entities
+        ON worldbuild_known_relationships (workspace_id, from_id, to_id);
+      CREATE INDEX IF NOT EXISTS idx_worldbuild_known_relationships_card
+        ON worldbuild_known_relationships (workspace_id, card_id, created_at);
+    `)
+  },
+  {
+    id: 'kanora_operation_review_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS kanora_narrative_operation_reviews (
+        workspace_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        operation_id TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK (decision IN ('approved', 'rejected')),
+        decided_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, event_id, operation_id),
+        FOREIGN KEY (workspace_id, event_id)
+          REFERENCES kanora_narrative_events (workspace_id, event_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_kanora_operation_reviews_event
+        ON kanora_narrative_operation_reviews (workspace_id, event_id, decision);
+    `)
+  },
+  {
+    id: 'kallamo_roleplay_quick_panel_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS roleplay_scene_nearby (
+        workspace_id TEXT NOT NULL,
+        scene_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, scene_id, entity_id),
+        UNIQUE (workspace_id, scene_id, ordinal)
+      );
+
+      CREATE TABLE IF NOT EXISTS roleplay_location_backgrounds (
+        workspace_id TEXT NOT NULL,
+        location_id TEXT NOT NULL,
+        image_path TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, location_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS roleplay_equipment (
+        workspace_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        item_id TEXT NOT NULL,
+        equipped_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, entity_id, item_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS roleplay_location_inventory (
+        workspace_id TEXT NOT NULL,
+        location_id TEXT NOT NULL,
+        item_id TEXT NOT NULL,
+        quantity INTEGER NOT NULL CHECK (quantity > 0),
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, location_id, item_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_roleplay_nearby_scene
+        ON roleplay_scene_nearby (workspace_id, scene_id, ordinal);
+      CREATE INDEX IF NOT EXISTS idx_roleplay_equipment_entity
+        ON roleplay_equipment (workspace_id, entity_id, equipped_at);
+      CREATE INDEX IF NOT EXISTS idx_roleplay_location_inventory_location
+        ON roleplay_location_inventory (workspace_id, location_id, item_id);
+    `)
+  },
+  {
+    id: 'kanora_narrative_context_manifest_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS kanora_narrative_context_manifests (
+        workspace_id TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        origin_id TEXT,
+        narrative_sequence INTEGER NOT NULL,
+        scene_id TEXT,
+        player_subject_id TEXT,
+        manifest_json TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active'
+          CHECK (status IN ('active', 'invalidated')),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, request_id),
+        UNIQUE (workspace_id, origin_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_kanora_context_manifest_origin
+        ON kanora_narrative_context_manifests (workspace_id, origin_id, status);
+      CREATE INDEX IF NOT EXISTS idx_kanora_context_manifest_sequence
+        ON kanora_narrative_context_manifests (workspace_id, narrative_sequence, created_at);
+    `)
+  },
+  {
+    id: 'kallamo_world_calendar_and_roleplay_time_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS worldbuild_calendars (
+        workspace_id TEXT PRIMARY KEY,
+        definition_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS roleplay_time_state (
+        workspace_id TEXT PRIMARY KEY,
+        position_json TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS roleplay_time_matrices (
+        workspace_id TEXT PRIMARY KEY,
+        matrix_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS roleplay_time_advances (
+        workspace_id TEXT NOT NULL,
+        origin_id TEXT NOT NULL,
+        start_json TEXT NOT NULL,
+        end_json TEXT NOT NULL,
+        advance_json TEXT,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, origin_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS roleplay_message_frames (
+        workspace_id TEXT NOT NULL,
+        origin_id TEXT NOT NULL,
+        start_json TEXT NOT NULL,
+        end_json TEXT NOT NULL,
+        advance_json TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, origin_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_roleplay_time_advances_created
+        ON roleplay_time_advances (workspace_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_roleplay_message_frames_created
+        ON roleplay_message_frames (workspace_id, created_at);
+    `)
   }
 ];
 
