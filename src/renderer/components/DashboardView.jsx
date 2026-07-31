@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { Search, Library, Plus, MoreVertical, Pin, Trash2, Edit3, MessageSquare } from 'lucide-react';
 import ChatModal from './modals/ChatModal';
 import DeleteModal from './modals/DeleteModal';
 import Logo from '../logo';
+import Popover from './ui/Popover';
 
 export default function DashboardView() {
   const { 
@@ -24,16 +25,6 @@ export default function DashboardView() {
   const [chatToDelete, setChatToDelete] = useState(null);
   
   const dropdownRef = useRef(null);
-
-  useEffect(() => {
-    function handleClickOutside(event) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
-        setActiveDropdownId(null);
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
 
   const filteredChats = chats.filter(c => 
     (c.title || '').toLowerCase().includes(searchQuery.toLowerCase())
@@ -169,8 +160,7 @@ export default function DashboardView() {
                       <MoreVertical className="w-4 h-4" />
                     </button>
 
-                    {activeDropdownId === chat.id && (
-                      <div className="absolute right-0 top-8 w-36 bg-[#011419] border border-gray-800 rounded-md shadow-xl z-50 overflow-hidden py-1">
+                    <Popover anchorRef={dropdownRef} open={activeDropdownId === chat.id} onClose={() => setActiveDropdownId(null)} matchAnchorWidth={false} align="right" maxHeight={180} scroll={false} className="w-36 overflow-hidden rounded-md py-1">
                         <button 
                           onClick={(e) => togglePin(e, chat)}
                           className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-[#1a2d32] hover:text-white transition-colors flex items-center space-x-2 cursor-pointer font-medium"
@@ -193,8 +183,7 @@ export default function DashboardView() {
                           <Trash2 className="w-3 h-3" />
                           <span>Excluir</span>
                         </button>
-                      </div>
-                    )}
+                    </Popover>
                   </div>
                 </div>
 

@@ -4,6 +4,7 @@ import WritingEditor, { DEFAULT_WRITING_DESK } from './WritingEditor';
 import ExportBookModal from './ExportBookModal';
 import { importedContentToJson } from './writingExtensions';
 import ConfirmDialog from './ui/ConfirmDialog';
+import Popover from './ui/Popover';
 import WritingDirectivesPanel from './WritingDirectivesPanel';
 import WritingNotesPanel from './WritingNotesPanel';
 import {
@@ -28,6 +29,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [exportFolderTarget, setExportFolderTarget] = useState(null);
   const [moveMenuId, setMoveMenuId] = useState(null);
+  const moveAnchorRef = useRef(null);
   const [dragItem, setDragItem] = useState(null);
   const [dropInfo, setDropInfo] = useState(null); // { id, zone: 'before'|'after'|'inside' }
   const sidebarKey = `wd-sidebar-collapsed-${workspaceId}`;
@@ -385,19 +387,19 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
         ><Download className="w-3.5 h-3.5" /></button>
       )}
       <button title="Rename" onClick={(e) => { e.stopPropagation(); setEditingId(item.id); setEditValue(item.name || item.title); }} className="p-1 text-gray-500 hover:text-white"><PenLine className="w-3.5 h-3.5" /></button>
-      <button title="Move to" onClick={(e) => { e.stopPropagation(); setMoveMenuId(moveMenuId === item.id ? null : item.id); }} className="p-1 text-gray-500 hover:text-white"><FolderInput className="w-3.5 h-3.5" /></button>
+      <button ref={moveMenuId === item.id ? moveAnchorRef : null} title="Move to" onClick={(e) => { e.stopPropagation(); setMoveMenuId(moveMenuId === item.id ? null : item.id); }} className="p-1 text-gray-500 hover:text-white"><FolderInput className="w-3.5 h-3.5" /></button>
       <button title="Delete" onClick={(e) => { e.stopPropagation(); setDeleteTarget(item); }} className="p-1 text-gray-500 hover:text-red-400"><Trash2 className="w-3.5 h-3.5" /></button>
     </span>
   );
 
   const MoveMenu = ({ item }) => (
-    <div className="absolute right-2 z-20 mt-1 w-44 bg-[#0a161d] border border-gray-800 rounded-lg shadow-xl py-1 text-xs">
+    <Popover anchorRef={moveAnchorRef} open onClose={() => setMoveMenuId(null)} matchAnchorWidth={false} align="right" maxHeight={280} className="w-44 py-1 text-xs">
       <div className="px-2 py-1 text-gray-500">Move to…</div>
       <button onClick={() => doMove(item, null)} className="w-full text-left px-2 py-1 text-gray-300 hover:bg-white/5">Root</button>
       {tree.folders.filter(f => f.id !== item.id).map(f => (
         <button key={f.id} onClick={() => doMove(item, f.id)} className="w-full text-left px-2 py-1 text-gray-300 hover:bg-white/5 truncate">{f.name}</button>
       ))}
-    </div>
+    </Popover>
   );
 
   const renderFolder = (folder, depth) => {
