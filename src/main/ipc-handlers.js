@@ -2801,10 +2801,8 @@ ipcMain.handle('bulk-manage-entities', async (event, { workspaceId, ids, action,
     if (action === 'policy') result = entitiesStore.bulkSetAiPolicy(workspaceId, ids, policy);
     else if (action === 'accept-proposed') result = entitiesStore.bulkAcceptProposed(workspaceId, ids);
     else if (action === 'accept-updates') result = entitiesStore.bulkAcceptEnrichUpdates(workspaceId, ids);
-    else if (action === 'accept-all') result = entitiesStore.bulkAcceptAll(workspaceId, ids);
     else if (action === 'reject-proposed') result = entitiesStore.bulkRejectProposed(workspaceId, ids);
     else if (action === 'reject-updates') result = entitiesStore.bulkRejectEnrichUpdates(workspaceId, ids);
-    else if (action === 'reject-all') result = entitiesStore.bulkRejectAll(workspaceId, ids);
     else if (action === 'reprocess') result = entitiesStore.resetEntityEnrichmentProgress(workspaceId, ids);
     else if (action === 'delete') result = entitiesStore.bulkDeleteEntities(workspaceId, ids);
     else throw new Error('unknown bulk entity action');

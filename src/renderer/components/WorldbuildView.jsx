@@ -688,14 +688,12 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       if (action === 'policy') showToast(`AI policy changed for ${result.updated} entit${result.updated === 1 ? 'y' : 'ies'}${result.skipped ? `; ${result.skipped} proposal${result.skipped === 1 ? '' : 's'} skipped` : ''}.`, 'success');
       else if (action === 'accept-proposed') showToast(`Accepted ${result.accepted} proposed entit${result.accepted === 1 ? 'y' : 'ies'}.`, 'success');
       else if (action === 'accept-updates') showToast(`Accepted AI updates for ${result.accepted} entit${result.accepted === 1 ? 'y' : 'ies'}.`, 'success');
-      else if (action === 'accept-all') showToast(`Accepted ${result.proposed.accepted} proposal${result.proposed.accepted === 1 ? '' : 's'} and updates for ${result.updates.accepted} entit${result.updates.accepted === 1 ? 'y' : 'ies'}.`, 'success');
       else if (action === 'reject-proposed') showToast(`Rejected ${result.rejected} proposed entit${result.rejected === 1 ? 'y' : 'ies'}.`, 'success');
       else if (action === 'reject-updates') showToast(`Rejected AI updates for ${result.rejected} entit${result.rejected === 1 ? 'y' : 'ies'}.`, 'success');
-      else if (action === 'reject-all') showToast(`Rejected ${result.proposed.rejected} proposal${result.proposed.rejected === 1 ? '' : 's'} and updates for ${result.updates.rejected} entit${result.updates.rejected === 1 ? 'y' : 'ies'}.`, 'success');
       else if (action === 'reprocess') showToast(`${result.reset} entit${result.reset === 1 ? 'y is' : 'ies are'} ready to be reprocessed.`, 'success');
       else if (action === 'delete') showToast(`Deleted ${result.deleted} entit${result.deleted === 1 ? 'y' : 'ies'}.`, 'success');
       const selectedId = selected?.id;
-      if (selectedId && ids.includes(selectedId) && (action === 'delete' || ((action === 'reject-proposed' || action === 'reject-all') && selected?.status === 'proposed'))) setSelected(null);
+      if (selectedId && ids.includes(selectedId) && (action === 'delete' || (action === 'reject-proposed' && selected?.status === 'proposed'))) setSelected(null);
       setSelectedIds(new Set());
       setBulkConfirm(null);
       await load();
@@ -1073,18 +1071,11 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       tone: 'danger', title: 'Reject AI updates', confirm: 'Reject updates',
       message: `Discard all pending AI changes for ${summary.pendingUpdates} selected entities: ${updateDetails}. Current canonical data will not be changed.`,
     };
-    if (action === 'reject-all') return {
-      tone: 'danger', title: 'Reject proposals and updates', confirm: 'Reject both',
-      message: `Remove ${summary.proposed} proposed entities and discard pending changes for ${summary.pendingUpdates} entities: ${updateDetails}. Current canonical data will not be changed.`,
-    };
     if (action === 'reprocess') return {
       tone: 'warning', title: 'Reprocess selected entities', confirm: 'Reset progress',
       message: `Clear the processed-evidence status for ${summary.entities - summary.proposed} confirmed entities. Current data and pending reviews will be preserved. The next Update Entities run will read their matching evidence again.`,
     };
-    return {
-      tone: 'warning', title: 'Accept proposals and updates', confirm: 'Accept both',
-      message: `Confirm ${summary.proposed} proposed entities and accept pending changes for ${summary.pendingUpdates} entities: ${updateDetails}.`,
-    };
+    return null;
   })();
 
   return (
@@ -1232,12 +1223,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
         {manageMode && (
           <div className="shrink-0 border-t border-white/10 bg-[#03141d]/95 backdrop-blur-md p-3 space-y-2.5">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-semibold text-gray-200">{selectedIds.size} selected{hiddenSelectedCount ? ` · ${hiddenSelectedCount} hidden` : ''}</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500">Select entities <span className="normal-case tracking-normal text-gray-300">{selectedIds.size} selected{hiddenSelectedCount ? ` (${hiddenSelectedCount} hidden)` : ''}</span></span>
               <button type="button" onClick={() => setSelectedIds(new Set())} disabled={!selectedIds.size} className="text-[10px] font-bold uppercase tracking-wider text-gray-500 hover:text-white disabled:opacity-40 cursor-pointer">Clear</button>
             </div>
-            <div className="space-y-1.5">
-              <span className="block text-[10px] font-bold uppercase tracking-wider text-gray-500">Select entities</span>
-              <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap gap-1.5">
               <button type="button" onClick={selectVisibleEntities} disabled={!filtered.length} className="text-[10px] font-semibold px-2 py-1 rounded-md border border-white/10 text-gray-300 hover:bg-white/5 disabled:opacity-40 cursor-pointer">Select visible</button>
               {proposedCount > 0 && <button type="button" onClick={() => selectEntities(entities.filter(entity => entity.status === 'proposed'))} className="text-[10px] font-semibold px-2 py-1 rounded-md border border-amber-400/25 text-amber-300 hover:bg-amber-400/10 cursor-pointer">Proposed</button>}
               {pendingUpdateCount > 0 && <button type="button" onClick={() => selectEntities(entities.filter(entity => entity.status !== 'proposed' && entity.data?._enrichPending))} className="text-[10px] font-semibold px-2 py-1 rounded-md border border-sky-400/25 text-sky-300 hover:bg-sky-400/10 cursor-pointer">AI updates</button>}
@@ -1245,7 +1234,6 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                 const matches = entities.filter(entity => entity.status !== 'proposed' && (entity.data?.aiPolicy || 'review') === policy);
                 return <button key={`select-${policy}`} type="button" onClick={() => selectEntities(matches)} disabled={!matches.length} data-tooltip={`Select all entities with the ${AI_POLICY[policy].label} AI policy`} className="text-[10px] font-semibold px-2 py-1 rounded-md border border-white/10 text-gray-400 hover:bg-white/5 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer">{AI_POLICY[policy].label} ({matches.length})</button>;
               })}
-              </div>
             </div>
             <div className="flex items-center gap-1.5">
               <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mr-1">Set AI policy</span>
@@ -1260,8 +1248,6 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               <button type="button" onClick={() => requestBulkConfirmation('reject-proposed')} disabled={!selectedProposedCount || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-red-400/25 text-red-300 hover:bg-red-400/10 disabled:opacity-40 cursor-pointer">Reject proposals</button>
               <button type="button" onClick={() => requestBulkConfirmation('accept-updates')} disabled={!selectedUpdateCount || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-sky-400/25 text-sky-100 hover:bg-sky-400/10 disabled:opacity-40 cursor-pointer">Accept updates</button>
               <button type="button" onClick={() => requestBulkConfirmation('reject-updates')} disabled={!selectedUpdateCount || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-red-400/25 text-red-300 hover:bg-red-400/10 disabled:opacity-40 cursor-pointer">Reject updates</button>
-              <button type="button" onClick={() => requestBulkConfirmation('accept-all')} disabled={(!selectedProposedCount && !selectedUpdateCount) || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-accent/25 text-accent hover:bg-accent/10 disabled:opacity-40 cursor-pointer">Accept both</button>
-              <button type="button" onClick={() => requestBulkConfirmation('reject-all')} disabled={(!selectedProposedCount && !selectedUpdateCount) || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-red-400/25 text-red-300 hover:bg-red-400/10 disabled:opacity-40 cursor-pointer">Reject both</button>
               <button type="button" onClick={() => requestBulkConfirmation('delete')} disabled={!selectedIds.size || bulkSaving} className="col-span-2 inline-flex items-center justify-center gap-1 text-[10px] font-semibold px-2 py-1.5 rounded-md border border-red-400/25 text-red-300 hover:bg-red-400/10 disabled:opacity-40 cursor-pointer"><Trash2 className="w-3 h-3" />Delete</button>
             </div>
           </div>
