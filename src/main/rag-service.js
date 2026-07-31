@@ -288,8 +288,8 @@ async function vectorizeChunks(chunks, sourceFileName, progressCallback, keyword
 
 function insertChunksToDb(ownerId, ownerType, vectors) {
     const insertChunk = db.prepare(`
-        INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, tokenCount, content_hash, ordinal)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, tokenCount, content_hash, ordinal, memoryBlockId)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const deleteFts = db.prepare(`
         DELETE FROM knowledge_chunks_fts WHERE chunkId = ?
@@ -301,7 +301,10 @@ function insertChunksToDb(ownerId, ownerType, vectors) {
 
     db.transaction(() => {
         for (const v of vectors) {
-            insertChunk.run(v.id, ownerId, ownerType, v.source, v.text, JSON.stringify(v.vector), Date.now(), v.tokenCount || countTokens(v.text), v.content_hash ?? null, v.ordinal ?? null);
+            const memoryBlockId = ownerType === 'chat_memory'
+                ? (v.memoryBlockId || v.blockId || (/^(?:block|manual|mem)_/.test(v.id) ? v.id : null))
+                : null;
+            insertChunk.run(v.id, ownerId, ownerType, v.source, v.text, JSON.stringify(v.vector), Date.now(), v.tokenCount || countTokens(v.text), v.content_hash ?? null, v.ordinal ?? null, memoryBlockId);
             deleteFts.run(v.id);
             insertFts.run(v.id, v.text);
         }
@@ -408,6 +411,7 @@ function fuseAndRank(queryVector, candidates, sparseNormMap, threshold = 0.3, k 
             source: cand.source,
             text: cand.text,
             createdAt: cand.createdAt,
+            memoryBlockId: cand.memoryBlockId,
             denseScore: cosine,
             score: cosine,
             fusionScore,
@@ -557,6 +561,7 @@ function lookupEntityChunks(nameOrAlias, ownerId, ownerType) {
     try {
         rows = db.prepare(
             `SELECT DISTINCT kc.id AS id, kc.source AS source, kc.text AS text,
+                    kc.memoryBlockId AS memoryBlockId,
                     ct.tag AS tag, ct.entity AS entity,
                     e.canonicalName AS canonicalName, e.aliases AS aliases
              FROM chunk_tags ct
@@ -582,7 +587,12 @@ function lookupEntityChunks(nameOrAlias, ownerId, ownerType) {
             return nl === needle || queryMentions(needle, nl) || queryMentions(nl, needle);
         });
         if (hit) {
-            if (!out.has(r.id)) out.set(r.id, { id: r.id, source: r.source, text: r.text });
+            if (!out.has(r.id)) out.set(r.id, {
+                id: r.id,
+                source: r.source,
+                text: r.text,
+                memoryBlockId: r.memoryBlockId
+            });
             // canonicalName present => ct.entity is a real registry id worth hopping from.
             if (r.canonicalName && r.entity) entityIds.add(r.entity);
         }
@@ -600,7 +610,14 @@ function loadOwnerCandidates(ownerIds, ownerType) {
     return rows.map(row => {
         let vector = [];
         try { vector = JSON.parse(row.vector); } catch (e) { }
-        return { id: row.id, source: row.source, text: row.text, createdAt: row.createdAt, vector };
+        return {
+            id: row.id,
+            source: row.source,
+            text: row.text,
+            createdAt: row.createdAt,
+            memoryBlockId: row.memoryBlockId,
+            vector
+        };
     });
 }
 

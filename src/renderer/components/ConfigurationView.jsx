@@ -3,6 +3,7 @@ import { useApp } from '../context/AppContext';
 import { HelpCircle, Trash2, Plus, Edit, Image as ImageIcon, Check, AlertTriangle, Cpu, Workflow, Brain, PenTool, Palette, Send } from 'lucide-react';
 import ProfileModal from './modals/ProfileModal';
 import WorkflowModal from './modals/WorkflowModal';
+import payloadBudgetContract from '../../shared/payload-budget.json';
 
 const safeParseJson = (str, fallback = []) => {
   if (!str) return fallback;
@@ -120,7 +121,17 @@ export default function ConfigurationView({ onTriggerSummarize }) {
   // Number fields keep numeric state; empty input falls back to 0 on save.
   const handleUpdateNumberField = async (field, value) => {
     const num = value === '' ? 0 : Number(value);
-    const updated = { ...activeChat, [field]: Number.isNaN(num) ? 0 : num };
+    const normalized = field === 'maxContext'
+      ? Math.min(
+        payloadBudgetContract.maximumMaxPayloadTokens,
+        Math.max(
+          payloadBudgetContract.minimumMaxPayloadTokens,
+          Number.isFinite(num) ? Math.floor(num) : payloadBudgetContract.defaultMaxPayloadTokens
+        )
+      )
+      : (Number.isNaN(num) ? 0 : num);
+    if (field === 'maxContext') setMaxContext(normalized);
+    const updated = { ...activeChat, [field]: normalized };
     await handleSaveChat(updated);
   };
 
@@ -450,10 +461,13 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                 <div>
                   <div className="flex items-center space-x-1.5 mb-1.5">
                     <label className={fieldLabel}>Max API Payload (Tokens)</label>
-                    <HelpCircle className="w-3.5 h-3.5 text-gray-500 cursor-help shrink-0" data-tooltip="The absolute maximum number of tokens sent to the API. If the context (Lore + Chat + Current Message) exceeds this, older chat messages are silently truncated to prevent API rejection." />
+                    <HelpCircle className="w-3.5 h-3.5 text-gray-500 cursor-help shrink-0" data-tooltip="The workspace safety limit for estimated input plus the response reserved by the active AI Profile. Older chat history is removed first. If fixed context still cannot fit, Kallamo stops before contacting the API." />
                   </div>
                   <input
                     type="number"
+                    min={payloadBudgetContract.minimumMaxPayloadTokens}
+                    max={payloadBudgetContract.maximumMaxPayloadTokens}
+                    step="1024"
                     value={maxContext}
                     onChange={(e) => setMaxContext(e.target.value)}
                     onBlur={() => handleUpdateNumberField('maxContext', maxContext)}

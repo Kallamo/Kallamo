@@ -395,7 +395,13 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     const to = (r) => electronAPI.getEntityLinks(ent.id, 'to', r).then(x => x?.links || []);
     const n = {};
     if (ent.type === 'Locations') { n.inside = (await from('inside'))[0] || null; n.leader = (await from('led_by'))[0] || null; }
-    if (ent.type === 'Items') { n.createdBy = (await from('created_by'))[0] || null; n.ownedBy = (await from('owned_by'))[0] || null; n.foundIn = await from('found_in'); }
+    if (ent.type === 'Items') {
+      n.createdBy = (await from('created_by'))[0] || null;
+      n.ownedBy = (await from('owned_by'))[0] || null;
+      n.locatedIn = (await from('located_in'))[0] || null;
+      n.foundIn = await from('found_in');
+      n.soldIn = await from('sold_in');
+    }
     if (ent.type === 'Races') n.members = await to('is_race');
     if (ent.type === 'Creatures') n.foundIn = await from('found_in');
     if (ent.type === 'Events') { n.happenedAt = await from('happened_at'); n.involved = await from('involved'); }
@@ -656,6 +662,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const hiddenSelectedCount = useMemo(() => selectedEntities.filter(entity => !visibleIds.has(entity.id)).length, [selectedEntities, visibleIds]);
   const selectedProposedCount = selectedEntities.filter(entity => entity.status === 'proposed').length;
   const selectedUpdateCount = selectedEntities.filter(entity => entity.status !== 'proposed' && entity.data?._enrichPending).length;
+  const selectedConfirmedCount = selectedEntities.length - selectedProposedCount;
 
   useEffect(() => {
     if (reviewFilter === 'proposed' && proposedCount === 0) setReviewFilter(null);
@@ -682,9 +689,13 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       else if (action === 'accept-proposed') showToast(`Accepted ${result.accepted} proposed entit${result.accepted === 1 ? 'y' : 'ies'}.`, 'success');
       else if (action === 'accept-updates') showToast(`Accepted AI updates for ${result.accepted} entit${result.accepted === 1 ? 'y' : 'ies'}.`, 'success');
       else if (action === 'accept-all') showToast(`Accepted ${result.proposed.accepted} proposal${result.proposed.accepted === 1 ? '' : 's'} and updates for ${result.updates.accepted} entit${result.updates.accepted === 1 ? 'y' : 'ies'}.`, 'success');
+      else if (action === 'reject-proposed') showToast(`Rejected ${result.rejected} proposed entit${result.rejected === 1 ? 'y' : 'ies'}.`, 'success');
+      else if (action === 'reject-updates') showToast(`Rejected AI updates for ${result.rejected} entit${result.rejected === 1 ? 'y' : 'ies'}.`, 'success');
+      else if (action === 'reject-all') showToast(`Rejected ${result.proposed.rejected} proposal${result.proposed.rejected === 1 ? '' : 's'} and updates for ${result.updates.rejected} entit${result.updates.rejected === 1 ? 'y' : 'ies'}.`, 'success');
+      else if (action === 'reprocess') showToast(`${result.reset} entit${result.reset === 1 ? 'y is' : 'ies are'} ready to be reprocessed.`, 'success');
       else if (action === 'delete') showToast(`Deleted ${result.deleted} entit${result.deleted === 1 ? 'y' : 'ies'}.`, 'success');
       const selectedId = selected?.id;
-      if (action === 'delete' && selectedId && ids.includes(selectedId)) setSelected(null);
+      if (selectedId && ids.includes(selectedId) && (action === 'delete' || ((action === 'reject-proposed' || action === 'reject-all') && selected?.status === 'proposed'))) setSelected(null);
       setSelectedIds(new Set());
       setBulkConfirm(null);
       await load();
@@ -711,21 +722,30 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     }
   };
 
-  const isResource = selected?.type === 'Items' && (selected?.data?.itemType || '') === 'Resource';
-  const isGear = selected?.type === 'Items' && !isResource;
+  const isUniqueItem = selected?.type === 'Items' && selected?.data?.itemNature === 'unique';
+  const isItemType = selected?.type === 'Items' && !isUniqueItem;
   const unsaved = isNew;
 
   // Owner as a single 3-mode choice: the AI decides, it is deliberately lost, or a
   // character holds it. A character owner is an owned_by edge; the two ownerless modes
   // live in data.ownership. Picking a character also clears the ownerless flag.
   const ownerVal = rel.ownedBy ? rel.ownedBy.entity.id : (selected?.data?.ownership === 'lost' ? 'lost' : 'ai');
-  const setOwner = async (val) => {
-    if (val === 'ai' || val === 'lost') { patchData({ ownership: val }); await setSingle('owned_by', null); }
-    else { patchData({ ownership: 'character' }); await setSingle('owned_by', val); }
+  const ownerOptions = [...byType.Characters, ...byType.Creatures.filter(entity => (entity.data?.scope || 'individual') !== 'group')];
+  const persistItemDraft = async () => {
+    if (!selected?.id) return false;
+    return Boolean(await persist());
   };
-  // Where-found is hidden once a character owns the item (it lives in their inventory).
-  const showWhereFound = isResource || !rel.ownedBy;
+  const setOwner = async (val) => {
+    if (!await persistItemDraft()) return;
+    if (val === 'ai' || val === 'lost') { patchData({ ownership: val }); await setSingle('owned_by', null); }
+    else { patchData({ ownership: 'character' }); await setSingle('located_in', null); await setSingle('owned_by', val); }
+  };
   const ownerLabel = rel.ownedBy ? rel.ownedBy.entity.canonicalName : (selected?.data?.ownership === 'lost' ? 'Unknown / Lost' : 'AI decides');
+  const setItemLocation = async (locationId) => {
+    if (!await persistItemDraft()) return;
+    if (locationId) await setSingle('owned_by', null);
+    await setSingle('located_in', locationId || null);
+  };
 
   // Lore editor (prose + Writing Desk file link), reused by several types.
   const linkedDocs = loreDocIds();
@@ -770,9 +790,13 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     }
     if (type === 'Locations') {
       S.push({ key: 'overview', title: 'Overview', icon: MapPin, scalar: true,
-        view: <div className="grid grid-cols-2 gap-4"><ViewField label="Type" value={selected.data.locationType} empty="Not set" /><ViewField label="Inside" value={rel.inside?.entity?.canonicalName} empty="Not set" /><ViewField label="Owner / leader" value={rel.leader?.entity?.canonicalName} empty="Not set" /></div>,
+        view: <>
+          <div className="grid grid-cols-2 gap-4"><ViewField label="Type" value={selected.data.locationType} empty="Not set" /><ViewField label="Inside" value={rel.inside?.entity?.canonicalName} empty="Not set" /><ViewField label="Owner / leader" value={rel.leader?.entity?.canonicalName} empty="Not set" /></div>
+          <div className="pt-1"><Prose text={selected.data.description} empty="No description." /></div>
+        </>,
         edit: <>
           <Edit label="Type"><LInput placeholder="e.g. continent / kingdom / city / tavern" value={selected.data.locationType || ''} onChange={(e) => patchData({ locationType: e.target.value })} /></Edit>
+          <Edit label="Description"><LTextarea rows={5} placeholder="What this place looks and feels like, including its defining features." value={selected.data.description || ''} onChange={(e) => patchData({ description: e.target.value })} /></Edit>
           <SingleRelation label="Inside another place" hint="Nest this within a larger location." disabled={unsaved} current={rel.inside?.entity?.id} options={byType.Locations.filter(o => o.id !== selected.id)} onSet={(id) => setSingle('inside', id)} />
           <SingleRelation label="Owner / leader (optional)" hint="Who holds or rules this place, if anyone." disabled={unsaved} current={rel.leader?.entity?.id} options={byType.Characters} onSet={(id) => setSingle('led_by', id)} />
         </> });
@@ -782,26 +806,37 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       S.push({ key: 'details', title: 'Details', icon: Package, scalar: true,
         view: <>
           <div className="grid grid-cols-2 gap-4">
-            <ViewField label="Type" value={selected.data.itemType} empty="Not set" />
-            {isGear && <ViewField label="Owner" value={ownerLabel} empty="Not set" />}
-            {isGear && <ViewField label="Creator" value={rel.createdBy?.entity?.canonicalName} empty="Unknown" />}
-            {isResource && <ViewField label="Abundance" value={selected.data.abundance} empty="Not set" />}
-            {showWhereFound && <div className="col-span-2"><div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-0.5">Where found</div><ChipList links={rel.foundIn} empty="Not set" /></div>}
+            <ViewField label="Nature" value={(selected.data.itemNature || 'type') === 'unique' ? 'Unique item' : 'Item type'} />
+            <ViewField label="Category" value={selected.data.itemType} empty="Not set" />
+            {isUniqueItem && <ViewField label="Owner" value={ownerLabel} empty="Not set" />}
+            {isUniqueItem && <ViewField label="Current location" value={rel.locatedIn?.entity?.canonicalName} empty={rel.ownedBy ? `In ${rel.ownedBy.entity.canonicalName}'s inventory` : 'Not set'} />}
+            <ViewField label="Creator" value={rel.createdBy?.entity?.canonicalName} empty="Unknown" />
+            {isItemType && <ViewField label="Abundance" value={selected.data.abundance} empty="Not set" />}
+            {isItemType && <div className="col-span-2"><div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-0.5">Where found</div><ChipList links={rel.foundIn} empty="Not set" /></div>}
+            {isItemType && <div className="col-span-2"><div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-0.5">Where sold</div><ChipList links={rel.soldIn} empty="Not set" /></div>}
           </div>
           <div className="pt-1"><Prose text={selected.data.description} empty="No description." /></div>
         </>,
         edit: <>
-          <Edit label="Item type"><LSelect value={selected.data.itemType || ''} onChange={(e) => patchData({ itemType: e.target.value })}><option value="">Choose…</option>{ITEM_TYPES.map(t => <option key={t} value={t}>{t}{t === 'Resource' ? ' (natural / drops)' : ''}</option>)}</LSelect></Edit>
-          {isGear && <SingleRelation label="Creator" hint="Leave blank if unknown." disabled={unsaved} current={rel.createdBy?.entity?.id} options={byType.Characters} onSet={(id) => setSingle('created_by', id)} />}
-          {isGear && <Edit label="Owner" hint={unsaved ? 'Save first to assign an owner.' : 'Who holds it. Or let the AI decide, or leave it lost.'}>
-            <LSelect value={ownerVal} disabled={unsaved} onChange={(e) => setOwner(e.target.value)}>
-              <option value="ai">AI decides</option>
-              <option value="lost">Unknown / Lost</option>
-              {byType.Characters.map(o => <option key={o.id} value={o.id}>{o.canonicalName}</option>)}
-            </LSelect>
+          <Edit label="Item nature" hint={(selected.data.itemNature || 'type') === 'unique' ? 'A unique item exists only once.' : 'An item type can appear in quantities.'}>
+            <div className="flex w-fit rounded-lg border border-white/10 bg-white/[0.04] p-0.5">
+              {[['type', 'Item type'], ['unique', 'Unique item']].map(([value, label]) => <button key={value} type="button" onClick={() => patchData({ itemNature: value })} className={`rounded-md px-3 py-1.5 text-xs font-bold uppercase tracking-wider transition-colors ${(selected.data.itemNature || 'type') === value ? 'bg-accent text-[#011419]' : 'text-gray-400 hover:text-white'}`}>{label}</button>)}
+            </div>
+          </Edit>
+          <Edit label="Category"><LSelect value={selected.data.itemType || ''} onChange={(e) => patchData({ itemType: e.target.value })}><option value="">Choose…</option>{ITEM_TYPES.map(t => <option key={t} value={t}>{t}{t === 'Resource' ? ' (natural / drops)' : ''}</option>)}</LSelect></Edit>
+          <SingleRelation label="Creator" hint="Leave blank if unknown." disabled={unsaved} current={rel.createdBy?.entity?.id} options={byType.Characters} onSet={(id) => setSingle('created_by', id)} />
+          {isUniqueItem && <Edit label="Owner" hint={unsaved ? 'Save first to assign an owner.' : 'A unique item can be in one inventory or one world location.'}>
+            {!unsaved && <div className="flex items-center gap-2 flex-wrap">
+              <button type="button" onClick={() => setOwner('ai')} className={`rounded-md border px-2.5 py-1.5 text-xs transition-colors ${ownerVal === 'ai' ? 'border-accent/40 bg-accent/15 text-accent' : 'border-white/10 text-gray-400 hover:text-white'}`}>AI decides</button>
+              <button type="button" onClick={() => setOwner('lost')} className={`rounded-md border px-2.5 py-1.5 text-xs transition-colors ${ownerVal === 'lost' ? 'border-accent/40 bg-accent/15 text-accent' : 'border-white/10 text-gray-400 hover:text-white'}`}>Unknown / Lost</button>
+              {rel.ownedBy && <Chip>{rel.ownedBy.entity.canonicalName}</Chip>}
+              <EntityPickerButton icon={rel.ownedBy ? Replace : Plus} label={rel.ownedBy ? 'Change' : 'Choose entity'} title="Choose owner" options={ownerOptions} onPick={setOwner} />
+            </div>}
           </Edit>}
-          {isResource && <Edit label={<>Abundance <InfoPopover items={ABUNDANCE_HELP} /></>} hint="How much of it exists in the world."><LSelect value={selected.data.abundance || ''} onChange={(e) => patchData({ abundance: e.target.value })}><option value="">Choose…</option>{RARITY.map(r => <option key={r} value={r}>{r}</option>)}</LSelect></Edit>}
-          {showWhereFound && <MultiRelation label="Where found" hint={isResource ? 'Every place this resource can be gathered.' : 'Where it turns up when no one owns it.'} disabled={unsaved} links={rel.foundIn || []} options={byType.Locations} onAdd={(id) => addMulti('found_in', id)} onRemove={removeLink} />}
+          {isUniqueItem && <SingleRelation label="Current location" hint="Setting a location removes this item from its current inventory." disabled={unsaved} current={rel.locatedIn?.entity?.id} options={byType.Locations} onSet={setItemLocation} />}
+          {isItemType && <Edit label={<>Abundance <InfoPopover items={ABUNDANCE_HELP} /></>} hint="How common this item type is in the world."><LSelect value={selected.data.abundance || ''} onChange={(e) => patchData({ abundance: e.target.value })}><option value="">Choose…</option>{RARITY.map(r => <option key={r} value={r}>{r}</option>)}</LSelect></Edit>}
+          {isItemType && <MultiRelation label="Where found" hint="Places where this item type can be found, gathered, or obtained." disabled={unsaved} links={rel.foundIn || []} options={byType.Locations} onAdd={(id) => addMulti('found_in', id)} onRemove={removeLink} />}
+          {isItemType && <MultiRelation label="Where sold" hint="Places where this item type can normally be purchased." disabled={unsaved} links={rel.soldIn || []} options={byType.Locations} onAdd={(id) => addMulti('sold_in', id)} onRemove={removeLink} />}
           <Edit label="Description"><LTextarea rows={4} placeholder="What it looks like and does." value={selected.data.description || ''} onChange={(e) => patchData({ description: e.target.value })} /></Edit>
         </> });
       S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, view: loreView, edit: loreEdit });
@@ -848,6 +883,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           <Edit label="Abilities & traits" hint="Short, concrete powers the AI can use in a scene."><LTextarea rows={3} placeholder="e.g. flies, breathes fire, immune to steel." value={selected.data.abilities || ''} onChange={(e) => patchData({ abilities: e.target.value })} /></Edit>
           <MultiRelation label="Habitat" hint="Where it is found or dwells." disabled={unsaved} links={rel.foundIn || []} options={byType.Locations} onAdd={(id) => addMulti('found_in', id)} onRemove={removeLink} />
         </> });
+      S.push({ key: 'appearance', title: 'Appearance', icon: User, scalar: true, view: <Prose text={selected.data.appearance} />, edit: <Edit label="Appearance"><LTextarea rows={5} placeholder="Physical presence and distinguishing features." value={selected.data.appearance || ''} onChange={(e) => patchData({ appearance: e.target.value })} /></Edit> });
+      S.push({ key: 'personality', title: 'Personality', icon: Users, scalar: true, view: <Prose text={selected.data.personality} />, edit: <Edit label="Personality"><LTextarea rows={5} placeholder="Temperament, instincts, habits, and values." value={selected.data.personality || ''} onChange={(e) => patchData({ personality: e.target.value })} /></Edit> });
       S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, view: loreView, edit: loreEdit });
     }
     if (type === 'Factions') {
@@ -1028,6 +1065,22 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       tone: 'warning', title: 'Accept AI updates', confirm: 'Accept updates',
       message: `Accept all pending AI changes for ${summary.pendingUpdates} selected entities: ${updateDetails}.`,
     };
+    if (action === 'reject-proposed') return {
+      tone: 'danger', title: 'Reject proposed entities', confirm: 'Reject proposals',
+      message: `Reject and remove ${summary.proposed} selected proposed entities. Confirmed entities in the selection will not be changed.`,
+    };
+    if (action === 'reject-updates') return {
+      tone: 'danger', title: 'Reject AI updates', confirm: 'Reject updates',
+      message: `Discard all pending AI changes for ${summary.pendingUpdates} selected entities: ${updateDetails}. Current canonical data will not be changed.`,
+    };
+    if (action === 'reject-all') return {
+      tone: 'danger', title: 'Reject proposals and updates', confirm: 'Reject both',
+      message: `Remove ${summary.proposed} proposed entities and discard pending changes for ${summary.pendingUpdates} entities: ${updateDetails}. Current canonical data will not be changed.`,
+    };
+    if (action === 'reprocess') return {
+      tone: 'warning', title: 'Reprocess selected entities', confirm: 'Reset progress',
+      message: `Clear the processed-evidence status for ${summary.entities - summary.proposed} confirmed entities. Current data and pending reviews will be preserved. The next Update Entities run will read their matching evidence again.`,
+    };
     return {
       tone: 'warning', title: 'Accept proposals and updates', confirm: 'Accept both',
       message: `Confirm ${summary.proposed} proposed entities and accept pending changes for ${summary.pendingUpdates} entities: ${updateDetails}.`,
@@ -1049,7 +1102,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           message={bulkDialog.message}
           actions={[
             { label: 'Cancel', variant: 'ghost', onClick: () => setBulkConfirm(null) },
-            { label: bulkDialog.confirm, variant: bulkConfirm.action === 'delete' ? 'danger' : 'primary', autoFocus: true, loading: bulkSaving, onClick: () => runBulkAction(bulkConfirm.action) },
+            { label: bulkDialog.confirm, variant: bulkDialog.tone === 'danger' ? 'danger' : 'primary', autoFocus: true, loading: bulkSaving, onClick: () => runBulkAction(bulkConfirm.action) },
           ]}
           onClose={() => setBulkConfirm(null)}
         />
@@ -1201,11 +1254,15 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                 return <button key={policy} type="button" onClick={() => runBulkAction('policy', policy)} disabled={!selectedIds.size || bulkSaving} data-tooltip={config.tip} className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-md border border-white/10 text-gray-300 hover:bg-white/5 disabled:opacity-40 cursor-pointer"><Icon className="w-3 h-3" />{config.label}</button>;
               })}
             </div>
+            <button type="button" onClick={() => requestBulkConfirmation('reprocess')} disabled={!selectedConfirmedCount || bulkSaving} data-tooltip="Clear the processed-evidence history for the selected entities so Update entities reads their evidence again" className="w-full inline-flex items-center justify-center gap-1.5 text-[10px] font-semibold px-2 py-1.5 rounded-md border border-white/10 text-gray-300 hover:bg-white/5 hover:text-white disabled:opacity-40 cursor-pointer"><RefreshCw className="w-3 h-3" />Reprocess selected</button>
             <div className="grid grid-cols-2 gap-1.5">
               <button type="button" onClick={() => requestBulkConfirmation('accept-proposed')} disabled={!selectedProposedCount || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-amber-400/25 text-amber-200 hover:bg-amber-400/10 disabled:opacity-40 cursor-pointer">Accept proposals</button>
+              <button type="button" onClick={() => requestBulkConfirmation('reject-proposed')} disabled={!selectedProposedCount || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-red-400/25 text-red-300 hover:bg-red-400/10 disabled:opacity-40 cursor-pointer">Reject proposals</button>
               <button type="button" onClick={() => requestBulkConfirmation('accept-updates')} disabled={!selectedUpdateCount || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-sky-400/25 text-sky-100 hover:bg-sky-400/10 disabled:opacity-40 cursor-pointer">Accept updates</button>
+              <button type="button" onClick={() => requestBulkConfirmation('reject-updates')} disabled={!selectedUpdateCount || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-red-400/25 text-red-300 hover:bg-red-400/10 disabled:opacity-40 cursor-pointer">Reject updates</button>
               <button type="button" onClick={() => requestBulkConfirmation('accept-all')} disabled={(!selectedProposedCount && !selectedUpdateCount) || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-accent/25 text-accent hover:bg-accent/10 disabled:opacity-40 cursor-pointer">Accept both</button>
-              <button type="button" onClick={() => requestBulkConfirmation('delete')} disabled={!selectedIds.size || bulkSaving} className="inline-flex items-center justify-center gap-1 text-[10px] font-semibold px-2 py-1.5 rounded-md border border-red-400/25 text-red-300 hover:bg-red-400/10 disabled:opacity-40 cursor-pointer"><Trash2 className="w-3 h-3" />Delete</button>
+              <button type="button" onClick={() => requestBulkConfirmation('reject-all')} disabled={(!selectedProposedCount && !selectedUpdateCount) || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-red-400/25 text-red-300 hover:bg-red-400/10 disabled:opacity-40 cursor-pointer">Reject both</button>
+              <button type="button" onClick={() => requestBulkConfirmation('delete')} disabled={!selectedIds.size || bulkSaving} className="col-span-2 inline-flex items-center justify-center gap-1 text-[10px] font-semibold px-2 py-1.5 rounded-md border border-red-400/25 text-red-300 hover:bg-red-400/10 disabled:opacity-40 cursor-pointer"><Trash2 className="w-3 h-3" />Delete</button>
             </div>
           </div>
         )}
