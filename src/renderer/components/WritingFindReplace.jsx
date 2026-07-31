@@ -21,11 +21,25 @@ export default function WritingFindReplace({ editor, locked, onClose }) {
     editor.view.dispatch(editor.state.tr.setMeta(searchKey, { matches: list, current: idx }));
   }, [editor]);
 
-  // Move the editor's selection/viewport to a match without stealing DOM focus
-  // from the find input (no .focus() in the chain).
+  // Keep the find input focused while centering the active match in the Writing Desk
+  // viewport. ProseMirror's transaction scroll flag alone does not reliably move the
+  // outer chapter scroller when focus remains in the overlay.
   const scrollTo = useCallback((match) => {
     if (!editor || !match) return;
-    editor.chain().setTextSelection({ from: match.from, to: match.to }).scrollIntoView().run();
+    editor.commands.setTextSelection({ from: match.from, to: match.to });
+
+    requestAnimationFrame(() => {
+      const scroller = editor.view.dom.closest('[data-writing-scroll-container]');
+      if (!scroller) return;
+
+      const start = editor.view.coordsAtPos(match.from);
+      const end = editor.view.coordsAtPos(match.to);
+      const scrollerRect = scroller.getBoundingClientRect();
+      const matchCenter = (start.top + end.bottom) / 2;
+      const viewportCenter = scrollerRect.top + scrollerRect.height / 2;
+
+      scroller.scrollBy({ top: matchCenter - viewportCenter, behavior: 'smooth' });
+    });
   }, [editor]);
 
   // Recompute against the live doc; keep the current index near where it was so a
