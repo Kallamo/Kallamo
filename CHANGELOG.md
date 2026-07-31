@@ -2,6 +2,24 @@
 
 All notable changes to Kallamo are documented in this file. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.4]
+
+### Added
+- **AI Engine Roles**: Tagger, Retrieval Planner, and Summarizer can now use the global System AI, a dedicated connection and model, or a role-specific alternative such as the active AI Profile or Hybrid RAG. Roles that are not needed can be disabled independently.
+- **System AI output language**: choose the language used by internal AI analysis, tags, plans, titles, and summaries without changing the application language. Proper nouns, canonical names, identifiers, structured values, and quoted evidence remain in their original form.
+- **Expanded language choices**: System AI output supports a broader language list, including Brazilian Portuguese and European Portuguese as distinct options.
+- **Gradual TypeScript foundation**: the project now includes TypeScript configuration, type checking, shared AI Engine contracts, and the first typed renderer component to support an incremental migration.
+
+### Changed
+- Engine & Memory is now organized as a manager for System AI, AI Engine Roles, retrieval and chunking, the Embedding Engine, and runtime behavior, with each responsibility presented in its own section.
+- Role strategy controls now compare the available behaviors directly inside each role card. Explanations stay attached to the selected option, and dedicated connection settings appear only when they are relevant.
+- World Index tagging, agentic retrieval planning, and chat archive summarization now resolve their own configured AI role instead of sharing one implicit execution path.
+- Chat archive summarization and World Index tagging now run as separate operations, allowing each task to use its own model and instructions.
+- The Embedding Engine is presented separately from generative AI roles to clarify that it powers vector search rather than generated responses.
+
+### Fixed
+- Internal AI output no longer drifts unpredictably between the languages found in source documents when a System AI output language is selected.
+
 ## [1.1.3] - 2026-07-17
 
 ### Added
