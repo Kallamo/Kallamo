@@ -4161,9 +4161,9 @@ ipcMain.on('open-workspace-folder', () => {
 // ==========================================
 const { runWorkflow, cancelGeneration, resolveErrorDeferred, resolveOverflowDeferred } = require('./workflow-runner');
 
-ipcMain.handle('send-message', async (event, { chatId, messageContent, targetId, attachedFiles }) => {
+ipcMain.handle('send-message', async (event, { chatId, messageContent, targetId, attachedFiles, historyEdit }) => {
   try {
-    return await runWorkflow({ chatId, messageContent, targetId, attachedFiles, webContents: event.sender });
+    return await runWorkflow({ chatId, messageContent, targetId, attachedFiles, historyEdit, webContents: event.sender });
   } catch (error) {
     console.error("Error in send-message IPC handler:", error);
     throw error;

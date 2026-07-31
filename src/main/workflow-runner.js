@@ -167,7 +167,7 @@ function isStreamingEnabled() {
 }
 
 // Orchestrate workflow linear chain execution
-async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, webContents }) {
+async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, historyEdit, webContents }) {
     let resolvedTarget;
     try {
         resolvedTarget = resolveWorkspaceGenerationTarget(db, chatId, targetId);
@@ -339,7 +339,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
 
         try {
             const userMsg = db.prepare("SELECT * FROM messages WHERE chatId = ? AND role = 'user' ORDER BY createdAt DESC LIMIT 1").get(chatId);
-            if (userMsg && updatedAttachedFiles.length > 0) {
+            if (!historyEdit && userMsg && updatedAttachedFiles.length > 0) {
                 db.prepare('UPDATE messages SET attachedFiles = ? WHERE id = ?').run(JSON.stringify(updatedAttachedFiles), userMsg.id);
             }
         } catch (e) {
@@ -349,7 +349,22 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
         const maxContextTokens = normalizeMaxApiPayload(chat?.maxContext);
         const summarizedIndex = chat ? (chat.summarizedIndex || 0) : 0;
 
-        const messages = db.prepare('SELECT * FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
+        let messages = db.prepare('SELECT * FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
+        if (historyEdit) {
+            if (typeof historyEdit.messageId !== 'string' || typeof historyEdit.content !== 'string') {
+                throw new Error('Invalid edited message history.');
+            }
+            const editedMessageIndex = messages.findIndex(message => message.id === historyEdit.messageId);
+            const editedMessage = messages[editedMessageIndex];
+            if (editedMessageIndex < 0 || editedMessage.role !== 'user') {
+                throw new Error('Edited user message was not found in this workspace.');
+            }
+            messages = messages.slice(0, editedMessageIndex + 1);
+            messages[editedMessageIndex] = {
+                ...editedMessage,
+                content: historyEdit.content
+            };
+        }
         const activeMessages = messages.slice(summarizedIndex);
 
         let currentInput = messageContent;
