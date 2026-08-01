@@ -2,6 +2,33 @@
 
 All notable changes to Kallamo are documented in this file. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.4] - 2026-07-29
+
+### Added
+- **Configurable internal AI roles**: Engine & Memory can assign dedicated executors for background tasks such as retrieval planning, summarization, and World Index tagging.
+- **System AI output language**: choose the language used by background AI tasks from an expanded language list.
+- **Max API Payload protection**: each workspace now has a validated payload ceiling. Kallamo reserves response space, trims chat history first, and stops oversized fixed context before contacting the provider.
+- **Durable Update Entities runs**: entity update runs, jobs, evidence state, retries, and estimated token usage are tracked so deferred evidence remains eligible and changed evidence can be processed again.
+
+### Changed
+- Direct generation now requires the selected AI Profile or Workflow to be active in the current workspace. Workflow-owned profiles remain available to their workflow without becoming direct targets.
+- Standard and Agentic retrieval now apply the executed profile's file and Memory Scope consistently, including full-file reads and entity-based memory lookup.
+- Structured AI tasks use provider-compatible JSON controls where supported, with shared schema handling for World Index tagging and Update Entities.
+- World Index tagging now uses bounded batches, tolerant JSON parsing, one repair attempt, deterministic rejection of generic Proposed Entities, and a valid distinction between empty results and failed output. Tagging failures remain visible without discarding completed embeddings.
+- Update Entities now prioritizes bounded evidence, covers empty writable fields, rejects relative numeric deltas, recovers common JSON errors, stops repeated malformed runs with a circuit breaker, and keeps Lore in a separate cumulative response protected against destructive compression.
+- Update Entities review now uses readable native field labels and supports bulk rejection or reprocessing. Rejecting a review removes only staged suggestions and leaves canonical data unchanged.
+- Items now distinguish reusable Item Types from Unique Items. Availability lists apply to Item Types, while ownership and one current location apply to Unique Items.
+
+### Fixed
+- Progress, streaming, errors, overflow decisions, cancellation, and late completions are scoped to the correct workspace and generation.
+- Provider responses that stop because of an output limit are reported as truncated instead of being treated as complete.
+- Dismissing an automatic Archive Chat Memory prompt now suppresses repeated prompts until summarization is opened manually.
+- Finishing a streamed response no longer jumps readers to the end after they have scrolled away from the latest message.
+- Edit & Regenerate now sends the post-edit conversation to the provider without including the replaced user text or discarded AI replies.
+- Clicking the Writing Desk paper margin no longer moves the cursor to the end, Find & Replace centers the active result, text selection keeps a natural I-beam cursor, and the AI Profile picker is searchable.
+- Popovers, tooltips, color controls, and anchored menus stay within the viewport more reliably.
+- Location descriptions and creature appearance or personality fields are visible and editable, matching the fields Update Entities can review.
+
 ## [1.1.3] - 2026-07-17
 
 ### Added
