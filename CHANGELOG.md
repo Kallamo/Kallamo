@@ -7,7 +7,7 @@ All notable changes to Kallamo are documented in this file. This project follows
 ### Added
 - **AI Engine Roles**: Tagger, Retrieval Planner, and Summarizer can now use the global System AI, a dedicated connection and model, or a role-specific alternative such as the active AI Profile or Hybrid RAG. Roles that are not needed can be disabled independently.
 - **System AI output language**: choose the language used by internal AI analysis, tags, plans, titles, and summaries without changing the application language. Proper nouns, canonical names, identifiers, structured values, and quoted evidence remain in their original form.
-- **Expanded language choices**: System AI output supports a broader language list, including Brazilian Portuguese and European Portuguese as distinct options.
+- **Expanded language choices**: System AI output supports a broader language list.
 - **Gradual TypeScript foundation**: the project now includes TypeScript configuration, type checking, shared AI Engine contracts, and the first typed renderer component to support an incremental migration.
 
 ### Changed
