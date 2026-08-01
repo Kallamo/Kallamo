@@ -29,11 +29,18 @@ describe('workspace API payload budget', () => {
   });
 
   it('blocks oversized requests before a provider call', () => {
-    expect(() => assertPayloadWithinLimit({
-      maxPayloadTokens: 4096,
-      systemPrompt: 'lore '.repeat(5000),
-      newPrompt: 'Continue',
-      outputTokens: 1000
-    })).toThrow(/stopped before contacting the API/);
+    try {
+      assertPayloadWithinLimit({
+        maxPayloadTokens: 4096,
+        systemPrompt: 'lore '.repeat(5000),
+        newPrompt: 'Continue',
+        outputTokens: 1000
+      });
+      throw new Error('Expected the payload guard to reject the request.');
+    } catch (error: any) {
+      expect(error.code).toBe('MAX_API_PAYLOAD_EXCEEDED');
+      expect(error.payloadEstimate.totalTokens).toBeGreaterThan(error.payloadEstimate.maxPayloadTokens);
+      expect(error.message).toMatch(/stopped before contacting the API/);
+    }
   });
 });

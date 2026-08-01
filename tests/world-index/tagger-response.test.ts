@@ -1,16 +1,35 @@
+import Ajv from 'ajv';
 import { describe, expect, it } from 'vitest';
 
 const { TAGGER_RESPONSE_SCHEMA, createTaggerBatches, parseTaggerResponse, proposalDataForMention } = require('../../src/main/features/world-index/tagger-response');
 
 describe('Tagger structured response parser', () => {
-  it('exposes a provider-compatible object schema', () => {
-    expect(TAGGER_RESPONSE_SCHEMA.required).toEqual(['items']);
-    expect(TAGGER_RESPONSE_SCHEMA.properties.items.type).toBe('array');
+  it('accepts complete mentions and rejects incomplete provider output', () => {
+    const validate = new Ajv({ strict: false }).compile(TAGGER_RESPONSE_SCHEMA);
+    const mention = {
+      text: 'Arden',
+      canonicalName: 'Arden Vale',
+      type: 'Characters',
+      proposalKind: 'named',
+      evidence: 'Arden entered the hall.'
+    };
+
+    expect(validate({ items: [{ chunk: 0, mentions: [mention] }] })).toBe(true);
+    expect(validate({ items: [{ chunk: 0, mentions: [{ ...mention, proposalKind: undefined }] }] })).toBe(false);
   });
 
   it('accepts the current object contract', () => {
     const result = parseTaggerResponse(JSON.stringify({
-      items: [{ chunk: 0, mentions: [{ canonicalName: 'Arden Vale', type: 'Characters', evidence: 'Arden Vale' }] }]
+      items: [{
+        chunk: 0,
+        mentions: [{
+          text: 'Arden',
+          canonicalName: 'Arden Vale',
+          type: 'Characters',
+          proposalKind: 'named',
+          evidence: 'Arden Vale'
+        }]
+      }]
     }));
     expect(result.valid).toBe(true);
     expect(result.items).toHaveLength(1);
