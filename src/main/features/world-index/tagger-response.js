@@ -24,7 +24,6 @@ function extractJsonValue(text) {
     try {
       return JSON.parse(candidate);
     } catch {
-      // Continue with the next tolerant extraction.
     }
   }
   return null;

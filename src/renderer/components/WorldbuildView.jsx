@@ -301,12 +301,8 @@ function MemberRoles({ links, options, onAdd, onSetRole, onRemove, disabled }) {
 
 export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFocusHandled }) {
   const { showToast, settings, openSettings } = useApp();
-  // Entity enrichment (and world tagging) run on the dedicated System AI only. Without one
-  // the "Update entities" button stays visible but disabled, with a tooltip pointing here.
-  const taggerMode = settings?.advanced?.taggerMode || 'inherit-system';
-  const hasSystemAi = taggerMode === 'dedicated'
-    ? !!settings?.advanced?.taggerApiProfileId && !!settings?.advanced?.taggerModelName
-    : taggerMode !== 'disabled' && !!settings?.advanced?.systemApiProfileId && !!settings?.advanced?.systemModelName;
+  // Update Entities always uses System AI, independently of the Tagger executor.
+  const hasSystemAi = !!settings?.advanced?.systemApiProfileId && !!settings?.advanced?.systemModelName;
   const workspaceId = chat?.id;
 
   const [entities, setEntities] = useState([]);

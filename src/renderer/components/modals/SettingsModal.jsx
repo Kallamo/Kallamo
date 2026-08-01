@@ -1454,7 +1454,6 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                     </div>
                   </div>
 
-                  {/* Embedding engine maintenance */}
                   <div className="space-y-3">
                     <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
                       <Cpu className="w-3.5 h-3.5" />
