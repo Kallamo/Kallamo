@@ -15,6 +15,7 @@
     "src/main/features/kanora/**/*.ts",
     "src/main/features/kanora/worldbuild-entity-discovery.js",
     "src/main/features/worldbuild/knowledge-service.js",
+    "src/main/features/worldbuild/event-occurrences.ts",
     "src/shared/retrieval-settings-runtime.ts"
   ]
 }

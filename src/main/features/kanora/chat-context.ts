@@ -19,6 +19,7 @@ import { RoleplaySystem } from './roleplay-system';
 import { createWorldbuildKnowledgeService, type WorldbuildKnowledgeService } from '../worldbuild/knowledge-service';
 import { normalizeRetrievalSettings } from '../../../shared/retrieval-settings-runtime';
 import { EpistemicResolver } from './epistemic-resolver';
+import { canSubjectAccessOccurrence, isFactionOccurrenceMemoryShared } from '../worldbuild/event-occurrences';
 import { NarrativeContextManifestRepository, type NarrativeContextManifest } from './context-manifest';
 import { RoleplayContextOrchestrator } from './roleplay-context-orchestrator';
 import {
@@ -656,6 +657,13 @@ export class KallamoKanoraChatContext {
       const isFactRelevant = row.record_type === 'fact'
         && (requiredFactIds.has(row.record_id) || hasMeaningfulOverlap(queryTerms, JSON.stringify(payload)));
       if ((!includeEntityRecords || !isEntityRelevant) && !isFactRelevant) return [];
+      if (
+        row.record_type === 'fact'
+        && (payload.proposition as Record<string, unknown> | undefined)?.predicate === 'recorded-occurrence'
+        && perspective.access === 'subjective'
+        && perspective.focalSubjectId
+        && !canSubjectAccessOccurrence(this.db, workspaceId, row.source_event_id, perspective.focalSubjectId)
+      ) return [];
       const normalized = normalizeRecord(row, payload);
       if (!normalized) return [];
       if (
@@ -668,6 +676,25 @@ export class KallamoKanoraChatContext {
         normalized.epistemic = row.record_type === 'knowledge'
           ? { kind: 'knowledge', subjectId: perspective.focalSubjectId, accessibility: accessibility(payload.accessibility) }
           : { kind: 'belief', subjectId: perspective.focalSubjectId, relationToCanon: beliefRelation(payload.relationToCanon) };
+      }
+      if (
+        perspective.access === 'subjective'
+        && perspective.focalSubjectId
+        && row.record_type === 'memory'
+        && row.subject_id !== perspective.focalSubjectId
+        && isFactionOccurrenceMemoryShared(
+          this.db,
+          workspaceId,
+          row.source_event_id,
+          row.subject_id,
+          perspective.focalSubjectId
+        )
+      ) {
+        normalized.epistemic = {
+          kind: 'memory',
+          subjectId: perspective.focalSubjectId,
+          accessibility: accessibility(payload.accessibility)
+        };
       }
       return [this.candidate({
         id: `${row.record_type}:${row.record_id}`,

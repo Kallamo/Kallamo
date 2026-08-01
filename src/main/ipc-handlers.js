@@ -3301,6 +3301,29 @@ ipcMain.handle('delete-worldbuild-fact', async (event, payload = {}) => {
   }
 });
 
+function getEventOccurrenceService() {
+  const { EventOccurrenceService } = require('../../dist-main/main/features/worldbuild/event-occurrences');
+  return new EventOccurrenceService(db);
+}
+
+ipcMain.handle('list-worldbuild-event-occurrences', async (event, { workspaceId, eventEntityId } = {}) => {
+  try {
+    return { success: true, occurrences: getEventOccurrenceService().list(workspaceId, eventEntityId) };
+  } catch (e) {
+    console.error('[list-worldbuild-event-occurrences] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('create-worldbuild-event-occurrence', async (event, payload = {}) => {
+  try {
+    return { success: true, occurrence: getEventOccurrenceService().createManual(payload) };
+  } catch (e) {
+    console.error('[create-worldbuild-event-occurrence] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
 ipcMain.handle('get-worldbuild-subject-review', async (event, { workspaceId, subjectId } = {}) => {
   try {
     return { success: true, review: worldbuildData.getSubjectReview(workspaceId, subjectId) };

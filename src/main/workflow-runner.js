@@ -2128,9 +2128,11 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     const { NarrativeStateSystem } = require('../../dist-main/main/features/kanora/narrative-state');
     const { NarrativeEntitySystem } = require('../../dist-main/main/features/kanora/narrative-entities');
     const { NarrativeContextManifestRepository } = require('../../dist-main/main/features/kanora/context-manifest');
+    const { EventOccurrenceService } = require('../../dist-main/main/features/worldbuild/event-occurrences');
     const narrativeState = new NarrativeStateSystem(db);
     const narrativeEntities = new NarrativeEntitySystem(db);
     const contextManifests = new NarrativeContextManifestRepository(db);
+    const eventOccurrences = new EventOccurrenceService(db);
     if (narrativeState.beginJob(workspaceId, provenanceId) === 'complete') {
         const existingMetric = narrativeState.listMetrics(workspaceId, 100)
             .find(metric => metric.originId === provenanceId);
@@ -2155,7 +2157,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     const allEntities = db.prepare(`
         SELECT id, type, canonicalName, aliases, lore, data FROM entities
         WHERE workspaceId = ? AND status != 'proposed'
-          AND type IN ('Characters', 'Creatures', 'Locations', 'Items')
+          AND type IN ('Characters', 'Creatures', 'Locations', 'Items', 'Factions', 'Events')
         ORDER BY type, canonicalName COLLATE NOCASE
     `).all(workspaceId);
     const roleplaySettings = roleplay.getSettings(workspaceId);
@@ -2198,6 +2200,11 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         aliases: entity.aliases,
         ...(entity.type === 'Items' ? {
             itemNature: entity.data.itemNature === 'unique' ? 'unique' : 'type'
+        } : {}),
+        ...(entity.type === 'Events' ? {
+            eventNature: entity.data.eventNature === 'recurring' ? 'recurring' : 'one-time',
+            kind: entity.data.kind || '',
+            recurrence: entity.data.recurrence || null
         } : {})
     }));
     const allowedEntityIds = new Set(allEntities.map(entity => entity.id));
@@ -2465,6 +2472,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
                     sceneId: scene?.id,
                     locationId: scene?.locationId,
                     interpreterId: role.executor.model,
+                    updatePolicy: roleplaySettings.defaultUpdatePolicy,
                     allowedEntityIds,
                     event: {
                         type: 'custom',
@@ -2552,9 +2560,12 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     for (const batch of eventBatches) {
         for (const event of batch) {
             try {
-                const result = narrativeState.createEvent({ workspaceId, originId: provenanceId, sceneId: scene?.id, locationId: scene?.locationId, interpreterId: role.executor.model, event, allowedEntityIds });
+                const result = narrativeState.createEvent({ workspaceId, originId: provenanceId, sceneId: scene?.id, locationId: scene?.locationId, interpreterId: role.executor.model, event, allowedEntityIds, updatePolicy: roleplaySettings.defaultUpdatePolicy });
                 if (result.record) {
                     narrativeProposalCount += 1;
+                    if (event.worldbuildEventId) {
+                        eventOccurrences.linkNarrative({ workspaceId, originId: provenanceId, record: result.record, event, startDate: startClock });
+                    }
                     changes.push({ kind: 'narrative', eventId: result.record.proposal.changeSet.event.id, status: result.record.status, decision: result.decision, description: result.record.proposal.changeSet.event.description });
                 }
             } catch (error) {
@@ -2803,7 +2814,7 @@ const NARRATIVE_TRIAGE_SYSTEM_PROMPT = `You route Roleplay turns to durable-stat
 Return JSON only with {"consequential":boolean,"types":["entity","scene","resource","inventory","awareness","knowledge","belief","memory","relationship","fact"],"entityIds":["existing-id"],"confidence":0.0,"evidence":["short verbatim excerpt"],"requiresFullAnalysis":boolean,"reason":"brief","timeAdvance":null}.
 Always evaluate elapsed time, even when no other durable domain is consequential. For an in-world action, timeAdvance is {"actionType":"short_snake_case","basis":"explicit|matrix","duration":{"years":0,"months":0,"days":0,"hours":0,"minutes":0},"confidence":0.0,"evidence":"short verbatim excerpt"}. Use null for out-of-character instructions, corrections, hypothetical actions, or when no in-world time passed.
 Explicit duration in the final narrative wins over the matrix. Otherwise choose a reasonable value within the supplied matrix: Micro for dialogue lines, combat rounds, lockpicking, and quick scans; Local for same-district walking, wound care, and careful room inspection; Transit for cross-district travel, crowds, minor repairs, and setting camp; Macro for crafting, deep study, rest, and inter-city travel. Do not advance hours during line-by-line dialogue. Do not use a tiny advance for substantial travel. A jump of one day or more must be explicitly supported by the final narrative. Return calendar units directly instead of assuming a 24-hour day.
-Mark inventory for explicit pickup, drop, transfer, gift, theft, loss, consumption, equip, unequip, drawing, sheathing, or quantity change. Mark scene for explicit arrival, departure, movement, participation, observer, nearby, object, or location change. Mark epistemic domains only for information actually communicated, perceived, discovered, remembered, believed, or relationally consequential. Mark resource for an actual value change, not a price mention or hypothetical.
+Mark inventory for explicit pickup, drop, transfer, gift, theft, loss, consumption, equip, unequip, drawing, sheathing, or quantity change. Mark scene for explicit arrival, departure, movement, participation, observer, nearby, object, or location change. Mark epistemic domains only for information actually communicated, perceived, discovered, remembered, believed, or relationally consequential. Mark resource for an actual value change, not a price mention or hypothetical. A concrete edition of a supplied recurring Event is consequential when it actually takes place, even if the tradition itself is already known.
 A newly introduced persistent named character, stably identifiable individual creature, named location, or narratively important unique item is consequential even without an existing ID. An unnamed person distinguished only by appearance, ancestry, clothing, age, expression, or scene position may be routed as a sparse entity candidate, but is not yet a Worldbuild identity. Mark false for crowds, atmosphere, repetition, casual dialogue, hypotheticals, offers not completed, item mentions without possession changes, and events without durable consequences. Presence alone never grants awareness or knowledge. Set requiresFullAnalysis only when four or more domains interact or the consequence cannot be safely isolated.`;
 const NARRATIVE_REPAIR_SYSTEM_PROMPT = 'Repair the supplied response into one valid JSON object that follows the required schema. Preserve supported values. Return JSON only.';
 
@@ -2814,7 +2825,7 @@ preTurnContext is the exact compact epistemic manifest used for generation. Use 
 When the final narrative clearly introduces a persistent Character, individual Creature, named Location, or narratively important Item that is absent from availableEntities, add {"referenceId":"new:stable-local-key","name":"canonical name or concise sparse label","type":"Characters|Creatures|Locations|Items","aliases":[],"description":"only explicit introduction facts","excerpt":"short verbatim evidence","confidence":0.0,"decision":"new|ambiguous|conflicting","identityEstablished":true|false,"reason":"brief","itemNature":"unique|type"}. Use its referenceId everywhere else in this response. Set identityEstablished true only when a proper name, stable title, number, designation, unmistakable continuity identity, or explicit registration establishes who the individual is. Appearance, ancestry, clothing, age, expression, or scene position alone never establishes identity. An individually described but anonymous person may be retained with a concise sparse label and identityEstablished false; it remains reviewable and must not become a Worldbuild entity automatically. Characters and individual Creatures may be created automatically only when identityEstablished is true and the identity is unequivocal. Locations and Items are reviewable. Do not create generic crowds, ordinary item mentions, aliases of existing entities, transformations, disguises, or duplicates. Mark ambiguous identity or possible duplication as ambiguous. Mark an invention that contradicts supplied canon as conflicting.
 Scene patch may contain locationId, participantIds, possibleObserverIds, nearbyIds, and objectIds. Participants are directly involved, possible observers can witness the scene, and nearby entities are present in the broader location without necessarily witnessing it. When inventory also changes, keep objectIds consistent with unique items explicitly dropped, picked up, consumed, destroyed, or removed. Change location only when movement is explicit and use only reachableLocationIds; never jump to an unrelated branch of the location hierarchy. Presence is not ownership. A possible observer is only a candidate and does not automatically observe or learn.
 Inventory changes must be explicit and use currentInventoryState plus currentLocationInventoryState. Track pickup, drop, placement, gift, transfer, theft, loss, consumption, destruction, equip, unequip, drawing, sheathing, and quantities. For a unique item move return {"itemId":"id","fromHolderId":"id-or-null","toHolderId":"id-or-null","locationId":"id-or-null","equipped":boolean-when-explicit}. For an item type transfer return {"itemId":"id","fromHolderId":"id-or-null","fromLocationId":"id-or-null","toHolderId":"id-or-null","locationId":"id-or-null","quantity":1,"equipped":boolean-when-explicit}. locationId means deliberately dropped or stored; fromLocationId means picked up. Removal, consumption, or loss may have no destination. For equipment only return {"itemId":"id","holderId":"id","equipped":boolean}. Drawing, wielding, or wearing normally equips; sheathing, stowing, or taking off normally unequips. Never mutate inventory from a mere mention, observation, price, request, offer, temporary use, or speculation.
-Each event must contain: type, description, a short verbatim excerpt, participantIds, confidence from 0 to 1, and operations.
+Each event must contain: type, description, a short verbatim excerpt, participantIds, confidence from 0 to 1, and operations. When the narrative depicts a concrete edition of a supplied Worldbuild Event, also return worldbuildEventId, occurrenceTitle, worldDate using the supplied calendar position, and participants as [{"entityId":"id","role":"role","audienceType":"all-members|selected-members","selectedMemberIds":[]}]. Record a memory for each directly participating Character, individual Creature, or institutionally involved Faction. Locations and Items are related participants but never memory owners. Use selected-members for a Faction only when the occurrence was communicated to a specific supplied subset; otherwise use all-members for an official collective record. Set worldbuildEventId only when that edition actually happens, never for planning, recollection, comparison, or a passing mention.
 Allowed operations:
 {"type":"fact","proposition":{"subjectId":"id","predicate":"stable-key","object":any},"confidence":0.0}
 {"type":"awareness","subjectId":"id","targetId":"id","confidence":0.0}
@@ -2840,7 +2851,7 @@ For equipment only return {"itemId":"id","holderId":"id","equipped":boolean}. Dr
 Do not mutate inventory from seeing, discussing, pricing, offering, requesting, touching, or temporary use unless possession, placement, quantity, or equipped state explicitly changes. Never invent an item ID.`;
 
 const NARRATIVE_EPISTEMIC_SCOPED_PROMPT = `EPISTEMIC DOMAINS: preTurnContext is the scoped epistemic manifest used for generation. "undetermined" is not ignorance. "derived" and "evidence-candidate" are not automatically canon. currentKnowledgeCards groups Awareness and known fields by card. currentPerspectiveState contains relevant current records.
-Each event contains type, description, a short verbatim excerpt, participantIds, confidence from 0 to 1, and operations. Allowed operations:
+Each event contains type, description, a short verbatim excerpt, participantIds, confidence from 0 to 1, and operations. When a concrete edition of a supplied recurring Worldbuild Event actually happens, also return worldbuildEventId, occurrenceTitle, worldDate, and participants with roles plus Faction audience. Record memories for directly participating Characters, individual Creatures, and institutionally involved Factions, never for Locations or Items. Do not link plans, recollections, comparisons, or passing mentions as new occurrences. Allowed operations:
 {"type":"fact","proposition":{"subjectId":"id","predicate":"stable-key","object":any},"confidence":0.0}
 {"type":"awareness","subjectId":"id","targetId":"id","confidence":0.0}
 {"type":"knowledge","subjectId":"id","proposition":{"subjectId":"id","predicate":"stable-key","object":any},"acquisition":"participant|witness|reported|inferred","confidence":0.0,"accessibility":"available|suppressed|inaccessible"}

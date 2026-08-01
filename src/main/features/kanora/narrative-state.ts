@@ -4,12 +4,22 @@ import { KANORA_CONTRACT_VERSION, type NarrativeOperation, type NarrativeProposa
 import { NarrativeChangeSetRepository } from '../../../kanora/change-sets';
 import { NarrativeEventLedgerRepository, type NarrativeEventLedgerRecord } from '../../../kanora/ledger';
 import { createWorldbuildKnowledgeService, type WorldbuildKnowledgeService } from '../worldbuild/knowledge-service';
+import type { RoleplayUpdatePolicy } from './roleplay-system';
 
 export interface ExtractedNarrativeEvent {
   type: 'movement' | 'possession-transfer' | 'revelation' | 'deception' | 'discovery' | 'relationship-change' | 'custom';
   description: string;
   excerpt: string;
   participantIds: string[];
+  participants?: Array<{
+    entityId: string;
+    role: string;
+    audienceType?: 'all-members' | 'selected-members';
+    selectedMemberIds?: string[];
+  }>;
+  worldbuildEventId?: string;
+  occurrenceTitle?: string;
+  worldDate?: Record<string, unknown>;
   confidence: number;
   operations: ExtractedNarrativeOperation[];
 }
@@ -19,10 +29,10 @@ export type ExtractedNarrativeOperation =
   | { type: 'awareness'; subjectId: string; targetId: string; confidence: number }
   | { type: 'knowledge'; subjectId: string; proposition: Proposition; acquisition: 'participant' | 'witness' | 'reported' | 'inferred'; confidence: number; accessibility?: 'available' | 'suppressed' | 'inaccessible' }
   | { type: 'belief'; subjectId: string; proposition: Proposition; confidence: number }
-  | { type: 'memory'; subjectId: string; summary: string; salience: number; accessibility?: 'available' | 'suppressed' | 'inaccessible' }
+  | { type: 'memory'; subjectId: string; summary: string; salience: number; accessibility?: 'available' | 'suppressed' | 'inaccessible'; relatedEntityIds?: string[] }
   | { type: 'relationship'; sourceEntityId: string; targetEntityId: string; dimension: string; title?: string; value: number; description?: string };
 
-interface CreateEventInput {
+export interface CreateEventInput {
   workspaceId: string;
   originId: string;
   sceneId?: string;
@@ -33,6 +43,8 @@ interface CreateEventInput {
   originType?: 'chat-message' | 'writing-document' | 'world-action' | 'worldbuild-update' | 'import';
   promptVersion?: string;
   forceReview?: boolean;
+  updatePolicy?: RoleplayUpdatePolicy;
+  provenanceInterpreter?: 'model' | 'user';
 }
 
 export interface NarrativeStateMetric {
@@ -97,6 +109,9 @@ export class NarrativeStateSystem {
   }
 
   createEvent(input: CreateEventInput): { record?: NarrativeEventLedgerRecord; decision?: 'automatic' | 'review'; skipped?: string } {
+    if ((input.provenanceInterpreter ?? 'model') === 'model' && input.updatePolicy === 'manual') {
+      return { skipped: 'manual-policy' };
+    }
     const fingerprint = fingerprintEvent(input.workspaceId, input.originId, input.event);
     if (this.hasFingerprint(input.workspaceId, fingerprint)) return { skipped: 'duplicate' };
     const operations = buildOperations(input, fingerprint, (sourceId, targetId, dimension) => this.currentRelationshipValue(input.workspaceId, sourceId, targetId, dimension))
@@ -107,7 +122,9 @@ export class NarrativeStateSystem {
     const participants = unique(input.event.participantIds).filter(id => input.allowedEntityIds.has(id));
     if (!participants.length) return { skipped: 'no-valid-participants' };
 
-    const decision = input.forceReview || requiresReview(input.event) ? 'review' : 'automatic';
+    const decision = input.forceReview || input.updatePolicy === 'review' || (input.updatePolicy !== 'automatic' && requiresReview(input.event))
+      ? 'review'
+      : 'automatic';
     const existing = this.ledger.get(input.workspaceId, eventId);
     if (existing) {
       if (existing.status !== 'proposed' || decision === 'review') return { record: existing, decision };
@@ -128,7 +145,10 @@ export class NarrativeStateSystem {
           id: eventId,
           type: input.event.type,
           description: input.event.description.trim(),
-          participants: participants.map(entityId => ({ entityId, role: 'involved' })),
+          participants: participants.map(entityId => ({
+            entityId,
+            role: input.event.participants?.find(participant => participant.entityId === entityId)?.role?.trim() || 'involved'
+          })),
           position: { sequence: this.nextSequence(input.workspaceId), timestamp: new Date().toISOString() },
           evidenceIds: [evidenceId],
           ...(input.sceneId ? { sceneId: input.sceneId } : {}),
@@ -137,7 +157,7 @@ export class NarrativeStateSystem {
         operations
       },
       evidence: [{ id: evidenceId, originType: input.originType ?? 'chat-message', originId: input.originId, excerpt: input.event.excerpt.trim().slice(0, 500) }],
-      provenance: { interpreter: 'model', interpreterId: input.interpreterId, promptVersion: input.promptVersion ?? 'narrative-state-v1', schemaVersion: KANORA_CONTRACT_VERSION, createdAt: new Date().toISOString() }
+      provenance: { interpreter: input.provenanceInterpreter ?? 'model', interpreterId: input.interpreterId, promptVersion: input.promptVersion ?? 'narrative-state-v1', schemaVersion: KANORA_CONTRACT_VERSION, createdAt: new Date().toISOString() }
     };
     const record = this.ledger.save(proposal);
     if (decision === 'automatic') {
@@ -433,7 +453,7 @@ function buildOperations(input: CreateEventInput, fingerprint: string, currentRe
       return [{ id: `op_${suffix}`, type: 'grant-knowledge', evidenceIds, knowledge: { id: `knowledge_${suffix}`, entryId: `entry_${suffix}`, subjectId: operation.subjectId, proposition: operation.proposition, sourceEventId: eventId, acquisition: operation.acquisition, confidence: confidence(operation.confidence), accessibility: operation.accessibility ?? 'available', status: 'active' } }];
     }
     if (operation.type === 'belief') return [{ id: `op_${suffix}`, type: 'set-belief', evidenceIds, belief: { id: `belief_${suffix}`, entryId: `entry_${suffix}`, subjectId: operation.subjectId, proposition: operation.proposition, sourceEventId: eventId, confidence: confidence(operation.confidence), relationToCanon: 'unknown', status: 'active' } }];
-    if (operation.type === 'memory') return [{ id: `op_${suffix}`, type: 'record-memory', evidenceIds, memory: { id: `memory_${suffix}`, subjectId: operation.subjectId, eventId, summary: operation.summary.trim(), accessibility: operation.accessibility ?? 'available', status: 'active' } }];
+    if (operation.type === 'memory') return [{ id: `op_${suffix}`, type: 'record-memory', evidenceIds, memory: { id: `memory_${suffix}`, subjectId: operation.subjectId, eventId, summary: operation.summary.trim(), accessibility: operation.accessibility ?? 'available', status: 'active', relatedEntityIds: unique(operation.relatedEntityIds ?? []).filter(id => input.allowedEntityIds.has(id)) } }];
     if (Math.abs(operation.value - currentRelationshipValue(operation.sourceEntityId, operation.targetEntityId, operation.dimension)) < MIN_RELATIONSHIP_VALUE) return [];
     return [
       {

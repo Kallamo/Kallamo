@@ -90,6 +90,35 @@ export interface WorldbuildFact {
   appliedAt: string;
 }
 
+export interface WorldbuildEventOccurrenceParticipant {
+  entityId: string;
+  role: string;
+  remember: boolean;
+  memoryAccessibility: 'available' | 'suppressed' | 'inaccessible';
+  audienceType: 'all-members' | 'selected-members';
+  selectedMemberIds: string[];
+}
+
+export interface WorldbuildEventOccurrence {
+  id: string;
+  workspaceId: string;
+  eventEntityId: string;
+  narrativeEventId: string;
+  title: string;
+  summary: string;
+  startDate: Record<string, unknown> | null;
+  endDate: Record<string, unknown> | null;
+  participants: WorldbuildEventOccurrenceParticipant[];
+  locationIds: string[];
+  relatedEntityIds: string[];
+  consequences: Record<string, unknown>;
+  source: 'user' | 'narrative-state';
+  originId: string | null;
+  status: 'proposed' | 'approved' | 'rejected';
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface WorldbuildApi {
   listWorldbuildFieldDefinitions(workspaceId: string, typeId: string): Promise<{
     success: boolean;
@@ -135,6 +164,21 @@ export interface WorldbuildApi {
   listWorldbuildFacts(workspaceId: string): Promise<{ success: boolean; facts?: WorldbuildFact[]; error?: string }>;
   saveWorldbuildFact(payload: Record<string, unknown>): Promise<{ success: boolean; facts?: WorldbuildFact[]; error?: string }>;
   deleteWorldbuildFact(payload: Record<string, unknown>): Promise<{ success: boolean; facts?: WorldbuildFact[]; error?: string }>;
+  listWorldbuildEventOccurrences(workspaceId: string, eventEntityId: string): Promise<{
+    success: boolean;
+    occurrences?: WorldbuildEventOccurrence[];
+    error?: string;
+  }>;
+  createWorldbuildEventOccurrence(payload: Record<string, unknown>): Promise<{
+    success: boolean;
+    occurrence?: WorldbuildEventOccurrence;
+    error?: string;
+  }>;
+  listEntityLinks(workspaceId: string, relType?: string): Promise<{
+    success: boolean;
+    links?: Array<{ id: string; fromId: string; toId: string; relType: string }>;
+    error?: string;
+  }>;
   getWorldbuildSubjectReview(workspaceId: string, subjectId: string): Promise<{
     success: boolean;
     review?: { subjectId: string; proposals: Array<Record<string, unknown>> };

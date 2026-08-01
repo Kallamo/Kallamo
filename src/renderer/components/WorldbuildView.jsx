@@ -21,6 +21,7 @@ import WorldbuildKnowledgeTab from '../features/worldbuild/WorldbuildKnowledgeTa
 import WorldbuildKanoraReview from '../features/worldbuild/WorldbuildKanoraReview';
 import WorldbuildFactsRegistry from '../features/worldbuild/WorldbuildFactsRegistry';
 import WorldbuildCalendar from '../features/worldbuild/WorldbuildCalendar';
+import WorldbuildEventOccurrences from '../features/worldbuild/WorldbuildEventOccurrences';
 import WorldDateInput, { formatWorldDate } from '../features/worldbuild/WorldDateInput';
 import { WorldbuildInventory, WorldbuildRelationships } from '../features/worldbuild/WorldbuildAgentCollections';
 import WorldbuildTemplateManager from '../features/worldbuild/WorldbuildTemplateManager';
@@ -373,6 +374,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const isNew = !selected?.id;
   const isIndividualCreature = selected?.type === 'Creatures' && (selected?.data?.scope || 'individual') !== 'group';
   const hasKnowledgeTab = selected?.type === 'Characters' || selected?.type === 'Factions' || isIndividualCreature;
+  const hasOccurrencesTab = selected?.type === 'Events';
   const activeTemplate = templates.find(template => template.typeId === selected?.type);
   const templateSections = activeTemplate?.layout?.sections || [];
   const sectionSetting = (id) => templateSections.find(section => section.id === id);
@@ -382,7 +384,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const hasReview = hasEntityReview || hasKanoraReview;
   const sheetTabs = (selected?.type === 'Characters' || isIndividualCreature
     ? ['data', 'inventory', 'connections', 'knowledge']
-    : hasKnowledgeTab ? ['data', 'knowledge'] : ['data']);
+    : hasKnowledgeTab ? ['data', 'knowledge'] : hasOccurrencesTab ? ['data', 'occurrences'] : ['data']);
   if (hasReview && !isNew) sheetTabs.push('review');
   const visibleSheetTabs = sheetTabs.filter(tab => {
       if (tab === 'inventory') return !sectionSetting('inv')?.hidden;
@@ -1117,7 +1119,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       .sort((left, right) => (positions.get(left.key) ?? 999) - (positions.get(right.key) ?? 999));
   };
   const sections = selected
-    ? charTab === 'knowledge' && hasKnowledgeTab
+    ? (charTab === 'knowledge' && hasKnowledgeTab) || (charTab === 'occurrences' && hasOccurrencesTab)
       ? []
       : customizeSections(selected.type === 'Characters' ? characterSections() : isIndividualCreature ? individualCreatureSections() : sectionsFor(selected.type))
     : [];
@@ -1715,6 +1717,15 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                     workspaceId={workspaceId}
                     entity={selected}
                     entities={entities}
+                    api={electronAPI}
+                    showToast={showToast}
+                  />
+                ) : charTab === 'occurrences' && hasOccurrencesTab ? (
+                  <WorldbuildEventOccurrences
+                    workspaceId={workspaceId}
+                    eventEntity={selected}
+                    entities={entities}
+                    calendar={worldCalendar}
                     api={electronAPI}
                     showToast={showToast}
                   />

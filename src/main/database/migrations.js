@@ -909,6 +909,40 @@ const MIGRATIONS = [
       CREATE INDEX IF NOT EXISTS idx_roleplay_message_frames_created
         ON roleplay_message_frames (workspace_id, created_at);
     `)
+  },
+  {
+    id: 'kallamo_worldbuild_event_occurrences_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS worldbuild_event_occurrences (
+        workspace_id TEXT NOT NULL,
+        occurrence_id TEXT NOT NULL,
+        event_entity_id TEXT NOT NULL,
+        narrative_event_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        start_date_json TEXT,
+        end_date_json TEXT,
+        participants_json TEXT NOT NULL DEFAULT '[]',
+        location_ids_json TEXT NOT NULL DEFAULT '[]',
+        related_entity_ids_json TEXT NOT NULL DEFAULT '[]',
+        consequences_json TEXT NOT NULL DEFAULT '{}',
+        source TEXT NOT NULL CHECK (source IN ('user', 'narrative-state')),
+        origin_id TEXT,
+        archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, occurrence_id),
+        UNIQUE (workspace_id, narrative_event_id),
+        FOREIGN KEY (workspace_id, narrative_event_id)
+          REFERENCES kanora_narrative_events (workspace_id, event_id)
+          ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_worldbuild_occurrences_event
+        ON worldbuild_event_occurrences (workspace_id, event_entity_id, archived, created_at);
+      CREATE INDEX IF NOT EXISTS idx_worldbuild_occurrences_origin
+        ON worldbuild_event_occurrences (workspace_id, origin_id);
+    `)
   }
 ];
 

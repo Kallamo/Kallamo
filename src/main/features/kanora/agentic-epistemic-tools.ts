@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { EpistemicResolver } from './epistemic-resolver';
 import { RoleplaySystem } from './roleplay-system';
+import { isFactionOccurrenceMemoryShared } from '../worldbuild/event-occurrences';
 import { loadCurrentNarrativeRecords } from './narrative-record-projection';
 
 interface EntityRow {
@@ -174,9 +175,14 @@ export class AgenticEpistemicTools {
     const rows = loadCurrentNarrativeRecords(this.db, {
       workspaceId,
       recordTypes: ['memory'],
-      subjectIds: [subject.id],
       throughSequence: this.latestSequence(workspaceId)
-    });
+    }).filter(({ row }) => row.subject_id === subject.id || isFactionOccurrenceMemoryShared(
+      this.db,
+      workspaceId,
+      row.source_event_id,
+      row.subject_id,
+      subject.id
+    ));
     const normalizedTopic = topic.toLocaleLowerCase();
     const memories = rows
       .map(({ payload }) => accessibility(payload.accessibility) === 'available'
