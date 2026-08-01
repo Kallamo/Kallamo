@@ -42,7 +42,7 @@ export const RELATIONSHIP_LABELS = ['Father', 'Mother', 'Sibling', 'Child', 'Fri
 
 const FIELD_LABELS = {
   status: 'Status', age: 'Age', appearance: 'Appearance', personality: 'Personality', role: 'Role', abilities: 'Abilities',
-  disposition: 'Disposition', nature: 'Nature', abundance: 'Abundance', threat: 'Threat',
+  disposition: 'Disposition', nature: 'Nature', abundance: 'Abundance', threat: 'Threat', kind: 'Kind',
   description: 'Description', locationType: 'Type', itemType: 'Type', content: 'Content',
 };
 

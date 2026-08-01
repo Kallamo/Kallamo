@@ -41,7 +41,7 @@ const {
     hasEpistemicDomain,
     resolveNarrativeRouting
 } = require('./features/kanora/narrative-state-routing');
-const { parseTaggerResponse, createTaggerBatches, proposalDataForMention } = require('./features/world-index/tagger-response');
+const { TAGGER_RESPONSE_SCHEMA, parseTaggerResponse, createTaggerBatches, proposalDataForMention } = require('./features/world-index/tagger-response');
 const {
     PAYLOAD_BUDGET_CONTRACT,
     assertPayloadWithinLimit,
@@ -86,6 +86,20 @@ function createCancellationError() {
 function throwIfRunCancelled(run) {
     if (run?.isCancelled || run?.controller?.signal.aborted) {
         throw createCancellationError();
+    }
+}
+
+function cancelRun(run) {
+    if (!run) return;
+    run.isCancelled = true;
+    run.controller?.abort();
+    if (errorDeferred?.runId === run.id) {
+        errorDeferred.resolve('interrupt');
+        errorDeferred = null;
+    }
+    if (overflowDeferred?.runId === run.id) {
+        overflowDeferred.resolve({ decision: 'interrupt', editedText: '' });
+        overflowDeferred = null;
     }
 }
 
@@ -236,7 +250,7 @@ function isStreamingEnabled() {
 }
 
 // Orchestrate workflow linear chain execution
-async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, webContents }) {
+async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, historyEdit, webContents }) {
     let resolvedTarget;
     try {
         resolvedTarget = resolveWorkspaceGenerationTarget(db, chatId, targetId);
@@ -252,12 +266,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
         });
         return { success: false, error: error.message, errorCode: error.code };
     }
-    if (activeRun) {
-        activeRun.isCancelled = true;
-        if (activeRun.controller) {
-            activeRun.controller.abort();
-        }
-    }
+    cancelRun(activeRun);
 
     const controller = new AbortController();
     const currentRun = {
@@ -411,7 +420,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
 
         try {
             const userMsg = db.prepare("SELECT * FROM messages WHERE chatId = ? AND role = 'user' ORDER BY createdAt DESC LIMIT 1").get(chatId);
-            if (userMsg && updatedAttachedFiles.length > 0) {
+            if (!historyEdit && userMsg && updatedAttachedFiles.length > 0) {
                 db.prepare('UPDATE messages SET attachedFiles = ? WHERE id = ?').run(JSON.stringify(updatedAttachedFiles), userMsg.id);
             }
         } catch (e) {
@@ -421,7 +430,22 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
         const maxContextTokens = normalizeMaxApiPayload(chat?.maxContext);
         const summarizedIndex = chat ? (chat.summarizedIndex || 0) : 0;
 
-        const messages = db.prepare('SELECT * FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
+        let messages = db.prepare('SELECT * FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
+        if (historyEdit) {
+            if (typeof historyEdit.messageId !== 'string' || typeof historyEdit.content !== 'string') {
+                throw new Error('Invalid edited message history.');
+            }
+            const editedMessageIndex = messages.findIndex(message => message.id === historyEdit.messageId);
+            const editedMessage = messages[editedMessageIndex];
+            if (editedMessageIndex < 0 || editedMessage.role !== 'user') {
+                throw new Error('Edited user message was not found in this workspace.');
+            }
+            messages = messages.slice(0, editedMessageIndex + 1);
+            messages[editedMessageIndex] = {
+                ...editedMessage,
+                content: historyEdit.content
+            };
+        }
         const activeMessages = messages.slice(summarizedIndex);
 
         let currentInput = messageContent;
@@ -952,7 +976,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                     });
 
                     const decision = await new Promise((resolve) => {
-                        errorDeferred = { resolve };
+                        errorDeferred = { runId: currentRun.id, resolve };
                     });
 
                     if (decision === 'interrupt') {
@@ -994,7 +1018,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                 });
 
                 const overflowResponse = await new Promise((resolve) => {
-                    overflowDeferred = { resolve };
+                    overflowDeferred = { runId: currentRun.id, resolve };
                 });
 
                 if (overflowResponse.decision === 'send_edited') {
@@ -1186,32 +1210,25 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
         });
         return { success: false, error: e.message };
     } finally {
-        if (activeRun === currentRun) {
-            activeRun = null;
-            errorDeferred = null;
-            overflowDeferred = null;
-        }
+        if (activeRun === currentRun) activeRun = null;
+        if (errorDeferred?.runId === currentRun.id) errorDeferred = null;
+        if (overflowDeferred?.runId === currentRun.id) overflowDeferred = null;
     }
 }
 
 function cancelGeneration() {
-    if (activeRun) {
-        activeRun.isCancelled = true;
-        if (activeRun.controller) {
-            activeRun.controller.abort();
-        }
-    }
+    cancelRun(activeRun);
 }
 
-function resolveErrorDeferred(decision) {
-    if (errorDeferred) {
+function resolveErrorDeferred(decision, runId = null) {
+    if (errorDeferred && (!runId || errorDeferred.runId === runId)) {
         errorDeferred.resolve(decision);
         errorDeferred = null;
     }
 }
 
-function resolveOverflowDeferred(decision, editedText) {
-    if (overflowDeferred) {
+function resolveOverflowDeferred(decision, editedText, runId = null) {
+    if (overflowDeferred && (!runId || overflowDeferred.runId === runId)) {
         overflowDeferred.resolve({ decision, editedText });
         overflowDeferred = null;
     }
@@ -1515,7 +1532,8 @@ async function classifyAndTagSegment(chunkRecords, profile, workspaceId = null) 
             temperature: repair ? 0 : 0.1,
             maxTokens,
             manualMode, manualJson,
-            jsonMode: true
+            jsonMode: true,
+            jsonSchema: TAGGER_RESPONSE_SCHEMA
         });
         let response = await request(numbered);
         let structured = parseTaggerResponse(response);

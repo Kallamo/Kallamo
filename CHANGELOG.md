@@ -2,23 +2,32 @@
 
 All notable changes to Kallamo are documented in this file. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.4]
+## [1.1.4] - 2026-08-01
 
 ### Added
-- **AI Engine Roles**: Tagger, Retrieval Planner, and Summarizer can now use the global System AI, a dedicated connection and model, or a role-specific alternative such as the active AI Profile or Hybrid RAG. Roles that are not needed can be disabled independently.
-- **System AI output language**: choose the language used by internal AI analysis, tags, plans, titles, and summaries without changing the application language. Proper nouns, canonical names, identifiers, structured values, and quoted evidence remain in their original form.
-- **Expanded language choices**: System AI output supports a broader language list.
-- **Gradual TypeScript foundation**: the project now includes TypeScript configuration, type checking, shared AI Engine contracts, and the first typed renderer component to support an incremental migration.
+- **Configurable internal AI roles**: Engine & Memory can assign dedicated executors for background tasks such as retrieval planning, summarization, and World Index tagging.
+- **System AI output language**: choose the language used by background AI tasks from an expanded language list.
+- **Max API Payload protection**: each workspace now has a validated payload ceiling. Kallamo reserves response space, trims chat history first, and stops oversized fixed context before contacting the provider.
+- **Durable Update Entities runs**: entity update runs, jobs, evidence state, retries, and estimated token usage are tracked so deferred evidence remains eligible and changed evidence can be processed again.
 
 ### Changed
-- Engine & Memory is now organized as a manager for System AI, AI Engine Roles, retrieval and chunking, the Embedding Engine, and runtime behavior, with each responsibility presented in its own section.
-- Role strategy controls now compare the available behaviors directly inside each role card. Explanations stay attached to the selected option, and dedicated connection settings appear only when they are relevant.
-- World Index tagging, agentic retrieval planning, and chat archive summarization now resolve their own configured AI role instead of sharing one implicit execution path.
-- Chat archive summarization and World Index tagging now run as separate operations, allowing each task to use its own model and instructions.
-- The Embedding Engine is presented separately from generative AI roles to clarify that it powers vector search rather than generated responses.
+- Direct generation now requires the selected AI Profile or Workflow to be active in the current workspace. Workflow-owned profiles remain available to their workflow without becoming direct targets.
+- Standard and Agentic retrieval now apply the executed profile's file and Memory Scope consistently, including full-file reads and entity-based memory lookup.
+- Structured AI tasks use provider-compatible JSON controls where supported, with shared schema handling for World Index tagging and Update Entities.
+- World Index tagging now uses bounded batches, tolerant JSON parsing, one repair attempt, deterministic rejection of generic Proposed Entities, and a valid distinction between empty results and failed output. Tagging failures remain visible without discarding completed embeddings.
+- Update Entities now prioritizes bounded evidence, covers empty writable fields, rejects relative numeric deltas, recovers common JSON errors, stops repeated malformed runs with a circuit breaker, and keeps Lore in a separate cumulative response protected against destructive compression.
+- Update Entities review now uses readable native field labels and supports bulk rejection or reprocessing. Rejecting a review removes only staged suggestions and leaves canonical data unchanged.
+- Items now distinguish reusable Item Types from Unique Items. Availability lists apply to Item Types, while ownership and one current location apply to Unique Items.
 
 ### Fixed
-- Internal AI output no longer drifts unpredictably between the languages found in source documents when a System AI output language is selected.
+- Progress, streaming, errors, overflow decisions, cancellation, and late completions are scoped to the correct workspace and generation.
+- Provider responses that stop because of an output limit are reported as truncated instead of being treated as complete.
+- Dismissing an automatic Archive Chat Memory prompt now suppresses repeated prompts until summarization is opened manually.
+- Finishing a streamed response no longer jumps readers to the end after they have scrolled away from the latest message.
+- Edit & Regenerate now sends the post-edit conversation to the provider without including the replaced user text or discarded AI replies.
+- Clicking the Writing Desk paper margin no longer moves the cursor to the end, Find & Replace centers the active result, text selection keeps a natural I-beam cursor, and the AI Profile picker is searchable.
+- Popovers, tooltips, color controls, and anchored menus stay within the viewport more reliably.
+- Location descriptions and creature appearance or personality fields are visible and editable, matching the fields Update Entities can review.
 
 ## [1.1.3] - 2026-07-17
 

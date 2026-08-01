@@ -323,6 +323,7 @@ export default function ChatWorkspaceView() {
   const [summarizeModalOpen, setSummarizeModalOpen] = useState(false);
   const [isVectorizing, setIsVectorizing] = useState(false);
   const [archiveMessages, setArchiveMessages] = useState([]);
+  const dismissedAutoSummarizeChatsRef = useRef(new Set());
 
   const activeSubView = activeWorkspaceView;
   const setActiveSubView = setActiveWorkspaceView;
@@ -526,7 +527,7 @@ export default function ChatWorkspaceView() {
   useEffect(() => {
     if (!electronAPI.onTriggerAutoSummarize) return;
     const unsubscribe = electronAPI.onTriggerAutoSummarize(({ chatId }) => {
-      if (activeChat && activeChat.id === chatId) {
+      if (activeChat && activeChat.id === chatId && !dismissedAutoSummarizeChatsRef.current.has(chatId)) {
         setSummarizeModalOpen(true);
       }
     });
@@ -537,7 +538,13 @@ export default function ChatWorkspaceView() {
 
   // Token threshold auto-trigger monitor (runs on frontend when token usage is exceeded)
   useEffect(() => {
-    if (activeChat && activeChat.autoSummarize === 1 && archiveMessages.length > 0 && !summarizeModalOpen) {
+    if (
+      activeChat
+      && activeChat.autoSummarize === 1
+      && archiveMessages.length > 0
+      && !summarizeModalOpen
+      && !dismissedAutoSummarizeChatsRef.current.has(activeChat.id)
+    ) {
       const archiveThreshold = activeChat.archiveThreshold || 60000;
       const startIndex = activeChat.summarizedIndex || 0;
       const activeMsgs = archiveMessages.slice(startIndex);
@@ -579,6 +586,7 @@ export default function ChatWorkspaceView() {
         // Backend already saved to DB – just refresh the frontend state
         // to pick up the complete memoryBlocks (with messages and type).
         await refreshChats(activeChat.id);
+        dismissedAutoSummarizeChatsRef.current.delete(activeChat.id);
         setSummarizeModalOpen(false);
       } else {
         showToast(result?.message || "Failed to execute summarization.", 'error');
@@ -1833,7 +1841,10 @@ export default function ChatWorkspaceView() {
           />
         ) : activeSubView === 'configuration' ? (
           <ConfigurationView
-            onTriggerSummarize={() => setSummarizeModalOpen(true)}
+            onTriggerSummarize={() => {
+              dismissedAutoSummarizeChatsRef.current.delete(activeChat.id);
+              setSummarizeModalOpen(true);
+            }}
           />
         ) : (
           <ChatFilesView
@@ -1905,7 +1916,10 @@ export default function ChatWorkspaceView() {
 
       <SummarizeModal
         isOpen={summarizeModalOpen}
-        onClose={() => setSummarizeModalOpen(false)}
+        onClose={() => {
+          dismissedAutoSummarizeChatsRef.current.add(activeChat.id);
+          setSummarizeModalOpen(false);
+        }}
         messages={archiveMessages}
         currentSummarizedIndex={activeChat.summarizedIndex || 0}
         memoryBlocksCount={activeChat.memoryBlocks ? (typeof activeChat.memoryBlocks === 'string' ? JSON.parse(activeChat.memoryBlocks) : activeChat.memoryBlocks).length : 0}

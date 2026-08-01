@@ -635,16 +635,6 @@ function bulkDeleteEntities(workspaceId, ids) {
   return { deleted: rows.length, ...summary };
 }
 
-function bulkAcceptAll(workspaceId, ids) {
-  let proposed;
-  let updates;
-  db.transaction(() => {
-    updates = bulkAcceptEnrichUpdates(workspaceId, ids);
-    proposed = bulkAcceptProposed(workspaceId, ids);
-  })();
-  return { proposed, updates };
-}
-
 function bulkRejectProposed(workspaceId, ids) {
   const rows = bulkEntityRows(workspaceId, ids);
   let rejected = 0, skipped = 0;
@@ -675,16 +665,6 @@ function bulkRejectEnrichUpdates(workspaceId, ids) {
     }
   })();
   return { rejected, fields, lore, links, chapters, skipped };
-}
-
-function bulkRejectAll(workspaceId, ids) {
-  let proposed;
-  let updates;
-  db.transaction(() => {
-    updates = bulkRejectEnrichUpdates(workspaceId, ids);
-    proposed = bulkRejectProposed(workspaceId, ids);
-  })();
-  return { proposed, updates };
 }
 
 function resetEntityEnrichmentProgress(workspaceId, ids) {
@@ -728,9 +708,7 @@ module.exports = {
   bulkAcceptProposed,
   bulkAcceptEnrichUpdates,
   bulkDeleteEntities,
-  bulkAcceptAll,
   bulkRejectProposed,
   bulkRejectEnrichUpdates,
-  bulkRejectAll,
   resetEntityEnrichmentProgress,
 };

@@ -69,4 +69,44 @@ function proposalDataForMention(type, proposalKind) {
   return null;
 }
 
-module.exports = { extractJsonValue, parseTaggerResponse, createTaggerBatches, proposalDataForMention };
+const TAGGER_RESPONSE_SCHEMA = {
+  type: 'object',
+  properties: {
+    items: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          chunk: { type: 'number' },
+          mentions: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                text: { type: 'string' },
+                canonicalName: { type: 'string' },
+                type: { type: 'string' },
+                proposalKind: { type: 'string', enum: ['known', 'named', 'world_specific_type'] },
+                evidence: { type: 'string' }
+              },
+              required: ['text', 'canonicalName', 'type', 'proposalKind', 'evidence'],
+              additionalProperties: false
+            }
+          }
+        },
+        required: ['chunk', 'mentions'],
+        additionalProperties: false
+      }
+    }
+  },
+  required: ['items'],
+  additionalProperties: false
+};
+
+module.exports = {
+  TAGGER_RESPONSE_SCHEMA,
+  extractJsonValue,
+  parseTaggerResponse,
+  createTaggerBatches,
+  proposalDataForMention
+};

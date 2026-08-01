@@ -1,4 +1,3 @@
-const db = require('../../database');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -6,6 +5,10 @@ const { fetch: undiciFetch, Agent } = require('undici');
 const { getResponseMetadata } = require('./response-metadata');
 const { openAiResponseFormat, applyBedrockStructuredOutput } = require('./structured-output');
 const { assertPayloadWithinLimit } = require('./payload-budget');
+
+function getDatabase() {
+    return require('../../database');
+}
 
 // undici's default 300s headersTimeout aborts slow local generations
 // (stream:false sends headers only when generation finishes). 30 min ceiling.
@@ -231,7 +234,8 @@ function parseStreamChunk(obj, provider) {
 
 // --- CORE API REQUESTS ---
 
-async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistory = [], newPrompt = '', temperature, maxTokens, maxPayloadTokens, manualMode, manualJson, attachedImages, stream = false, jsonMode = false, jsonSchema = null }) {
+async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistory = [], newPrompt = '', temperature, maxTokens, maxPayloadTokens, manualMode, manualJson, attachedImages, stream = false, jsonMode = false, jsonSchema = null }, dependencies = {}) {
+    const db = dependencies.database || getDatabase();
     try {
         const variables = db.prepare('SELECT key, value FROM variables').all();
         for (const variable of variables) {
@@ -652,6 +656,7 @@ async function sendApiRequest(params) {
 // --- EMBEDDINGS ---
 
 async function getEmbeddings(text, apiProfileId, modelName) {
+    const db = getDatabase();
     if (!apiProfileId) {
         throw new Error("No API Profile selected for external embeddings.");
     }

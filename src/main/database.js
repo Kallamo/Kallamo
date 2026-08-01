@@ -768,7 +768,9 @@ try {
             timestamp: Number(String(block.id).match(/^(?:block|manual|mem)_(\d+)/)?.[1]) || Number(block.timestamp) || 0
           }));
         blocksByChat.set(chat.id, blocks);
-      } catch (e) { }
+      } catch {
+        blocksByChat.set(chat.id, []);
+      }
     }
     const linkMemoryChunk = db.prepare('UPDATE knowledge_chunks SET memoryBlockId = ? WHERE id = ?');
     db.transaction(() => {

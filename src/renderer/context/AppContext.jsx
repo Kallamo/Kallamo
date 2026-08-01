@@ -399,7 +399,7 @@ export const AppProvider = ({ children }) => {
   };
 
   const handleRespondToError = (decision) => {
-    api.respondToError(decision);
+    api.respondToError(decision, errorData?.runId);
     setShowErrorModal(false);
     setErrorData(null);
     if (decision === 'interrupt') {
@@ -411,7 +411,7 @@ export const AppProvider = ({ children }) => {
   };
 
   const handleRespondToOverflow = (decision, editedText) => {
-    api.respondToOverflow(decision, editedText);
+    api.respondToOverflow(decision, editedText, overflowData?.runId);
     setShowOverflowModal(false);
     setOverflowData(null);
   };

@@ -19,6 +19,37 @@ const RELEASE_1_1_2 = {
   },
 };
 
+const RELEASE_1_1_4 = {
+  title: 'More control over the AI behind your work',
+  sections: {
+    Added: [
+      'Choose dedicated AI executors for background Engine and Memory tasks such as retrieval planning, summaries, and World Index tagging.',
+      'Choose the language Kallamo uses for background AI tasks from an expanded language list.',
+      'Set a maximum API payload for each workspace. Kallamo protects room for the response, trims older chat history first, and stops requests that still cannot fit before contacting the provider.',
+      'Update Entities now keeps track of runs, evidence, retries, and estimated token use, so deferred or changed evidence remains available for a later pass.',
+    ],
+    Changed: [
+      'Direct generation now uses only AI Profiles and Workflows active in the current workspace, while profiles assigned to a Workflow remain available inside that Workflow.',
+      'Standard and Agentic retrieval now follow the active profile\'s file access and Memory Scope consistently, including full-file and entity-based memory searches.',
+      'World Index tagging and Update Entities now use structured output controls suited to each supported AI provider for more reliable results.',
+      'World Index tagging now handles large workloads in bounded groups, repairs common response issues once, avoids generic Proposed Entities, and clearly distinguishes an empty result from a failed attempt.',
+      'Update Entities now focuses on the strongest evidence, can fill empty valid fields, rejects vague numeric changes, recovers common response errors, and protects cumulative Lore from destructive rewrites.',
+      'Entity update reviews now use readable field names and let you reject or reprocess suggestions in bulk without changing canonical data.',
+      'Items now distinguish reusable Item Types from Unique Items, with availability for types and ownership plus one current location for unique objects.',
+    ],
+    Fixed: [
+      'Progress, streaming, errors, cancellation, and completed replies now stay attached to the correct workspace and generation.',
+      'Responses stopped by an AI provider\'s output limit are now reported as truncated instead of appearing complete.',
+      'Dismissing an automatic Archive Chat Memory prompt now keeps it dismissed until you open summarization yourself.',
+      'A finished streamed reply no longer pulls you to the end after you have scrolled up to read.',
+      'Edit & Regenerate now sends the conversation exactly as edited, without the replaced user message or discarded AI replies.',
+      'Writing Desk keeps the cursor where you expect, centers the active Find & Replace result, preserves the natural text-selection cursor, and makes the AI Profile picker searchable.',
+      'Popovers, tooltips, color controls, and anchored menus now stay inside the visible window more reliably.',
+      'Location descriptions and creature appearance or personality fields are now visible and editable wherever Update Entities can review them.',
+    ],
+  },
+};
+
 const RELEASE_1_1_3 = {
   title: 'More control over memory and your world',
   sections: {
@@ -77,6 +108,10 @@ export const GLOBAL_WHATS_NEW = {
   ],
   releases: [
     {
+      version: '1.1.4',
+      ...RELEASE_1_1_4,
+    },
+    {
       version: '1.1.3',
       ...RELEASE_1_1_3,
     },
@@ -134,6 +169,27 @@ export const GLOBAL_WHATS_NEW = {
 };
 
 export const PATCH_WHATS_NEW = {
+  '1.1.4': {
+    ...RELEASE_1_1_4,
+    intro: 'This update gives you more control over Kallamo\'s background AI work while making retrieval, Worldbuild updates, chat, and writing more dependable.',
+    highlights: [
+      {
+        icon: 'Brain',
+        title: 'Put the right AI on each task',
+        text: 'In Settings > Engine & Memory, choose dedicated executors for background tasks and the language they use.',
+      },
+      {
+        icon: 'Globe2',
+        title: 'Worldbuild updates that keep their place',
+        text: 'Update Entities keeps track of evidence and retries, handles common AI response issues, and protects your canonical data while suggestions remain under review.',
+      },
+      {
+        icon: 'PenLine',
+        title: 'A steadier writing and chat flow',
+        text: 'Edit & Regenerate now follows the edited conversation, completed replies respect where you are reading, and everyday Writing Desk controls behave more naturally.',
+      },
+    ],
+  },
   '1.1.3': {
     ...RELEASE_1_1_3,
     intro: 'This update makes Worldbuild and memory easier to review, manage, and trust as your project grows.',

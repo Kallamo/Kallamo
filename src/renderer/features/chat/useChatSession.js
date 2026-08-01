@@ -182,10 +182,16 @@ export function useChatSession({ api, setChats, setCurrentView }) {
   };
 
   const refreshGeneratedChat = async (chatId, response) => {
-    const messages = await loadLatestChatMessages(chatId);
+    const page = await api.getChatMessagePage({ chatId });
+    const chats = await api.getChats();
+    setActiveMessages(page.messages);
+    setHasOlderMessages(page.hasMore);
+    setOldestMessageCursor(page.oldestCursor);
     if (response.aiMsgId && !response.streamed) setLastGeneratedMessageId(response.aiMsgId);
-    setChats(await api.getChats());
-    return messages;
+    setChats(chats);
+    setIsGenerating(false);
+    setGenerationProgress(null);
+    return page.messages;
   };
 
   const saveAlternative = async (oldAlternative, messages) => {
@@ -297,7 +303,11 @@ export function useChatSession({ api, setChats, setCurrentView }) {
         chatId: activeChatId,
         messageContent: newText,
         targetId: selectedProfileOrWorkflowId,
-        attachedFiles
+        attachedFiles,
+        historyEdit: {
+          messageId: msgId,
+          content: newText
+        }
       });
       if (!response?.success) throw new Error('Generation was not successful.');
 

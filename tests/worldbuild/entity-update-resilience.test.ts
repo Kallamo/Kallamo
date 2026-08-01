@@ -5,11 +5,7 @@ const require = createRequire(import.meta.url);
 const { shouldStopEntityUpdates } = require('../../src/main/features/worldbuild/entity-update-resilience');
 
 describe('entity update circuit breaker', () => {
-  test('allows isolated structured failures', () => {
-    expect(shouldStopEntityUpdates(2)).toBe(false);
-  });
-
-  test('stops before spending tokens after the third consecutive failure', () => {
-    expect(shouldStopEntityUpdates(3)).toBe(true);
+  test('stops at the third consecutive structured failure and remains stopped', () => {
+    expect([0, 2, 3, 4].map(shouldStopEntityUpdates)).toEqual([false, false, true, true]);
   });
 });

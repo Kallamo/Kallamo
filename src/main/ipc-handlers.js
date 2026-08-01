@@ -2875,10 +2875,8 @@ ipcMain.handle('bulk-manage-entities', async (event, { workspaceId, ids, action,
     if (action === 'policy') result = entitiesStore.bulkSetAiPolicy(workspaceId, ids, policy);
     else if (action === 'accept-proposed') result = entitiesStore.bulkAcceptProposed(workspaceId, ids);
     else if (action === 'accept-updates') result = entitiesStore.bulkAcceptEnrichUpdates(workspaceId, ids);
-    else if (action === 'accept-all') result = entitiesStore.bulkAcceptAll(workspaceId, ids);
     else if (action === 'reject-proposed') result = entitiesStore.bulkRejectProposed(workspaceId, ids);
     else if (action === 'reject-updates') result = entitiesStore.bulkRejectEnrichUpdates(workspaceId, ids);
-    else if (action === 'reject-all') result = entitiesStore.bulkRejectAll(workspaceId, ids);
     else if (action === 'reprocess') result = entitiesStore.resetEntityEnrichmentProgress(workspaceId, ids);
     else if (action === 'delete') result = entitiesStore.bulkDeleteEntities(workspaceId, ids);
     else throw new Error('unknown bulk entity action');
@@ -4760,9 +4758,9 @@ ipcMain.on('open-workspace-folder', () => {
 // ==========================================
 const { runWorkflow, cancelGeneration, resolveErrorDeferred, resolveOverflowDeferred } = require('./workflow-runner');
 
-ipcMain.handle('send-message', async (event, { chatId, messageContent, targetId, attachedFiles }) => {
+ipcMain.handle('send-message', async (event, { chatId, messageContent, targetId, attachedFiles, historyEdit }) => {
   try {
-    return await runWorkflow({ chatId, messageContent, targetId, attachedFiles, webContents: event.sender });
+    return await runWorkflow({ chatId, messageContent, targetId, attachedFiles, historyEdit, webContents: event.sender });
   } catch (error) {
     console.error("Error in send-message IPC handler:", error);
     throw error;
@@ -4773,12 +4771,13 @@ ipcMain.on('cancel-generation', () => {
   cancelGeneration();
 });
 
-ipcMain.on('respond-to-error', (event, decision) => {
-  resolveErrorDeferred(decision);
+ipcMain.on('respond-to-error', (event, payload) => {
+  const decision = typeof payload === 'string' ? payload : payload?.decision;
+  resolveErrorDeferred(decision, payload?.runId);
 });
 
-ipcMain.on('respond-to-overflow', (event, { decision, editedText }) => {
-  resolveOverflowDeferred(decision, editedText);
+ipcMain.on('respond-to-overflow', (event, { decision, editedText, runId } = {}) => {
+  resolveOverflowDeferred(decision, editedText, runId);
 });
 
 // ==========================================

@@ -314,12 +314,8 @@ function MemberRoles({ links, options, onAdd, onSetRole, onRemove, disabled }) {
 
 export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFocusHandled }) {
   const { showToast, settings, openSettings } = useApp();
-  // Entity enrichment (and world tagging) run on the dedicated System AI only. Without one
-  // the "Update entities" button stays visible but disabled, with a tooltip pointing here.
-  const taggerMode = settings?.advanced?.taggerMode || 'inherit-system';
-  const hasSystemAi = taggerMode === 'dedicated'
-    ? !!settings?.advanced?.taggerApiProfileId && !!settings?.advanced?.taggerModelName
-    : taggerMode !== 'disabled' && !!settings?.advanced?.systemApiProfileId && !!settings?.advanced?.systemModelName;
+  // Update Entities always uses System AI, independently of the Tagger executor.
+  const hasSystemAi = !!settings?.advanced?.systemApiProfileId && !!settings?.advanced?.systemModelName;
   const workspaceId = chat?.id;
 
   const [entities, setEntities] = useState([]);
@@ -786,14 +782,12 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       if (action === 'policy') showToast(`AI policy changed for ${result.updated} entit${result.updated === 1 ? 'y' : 'ies'}${result.skipped ? `; ${result.skipped} proposal${result.skipped === 1 ? '' : 's'} skipped` : ''}.`, 'success');
       else if (action === 'accept-proposed') showToast(`Accepted ${result.accepted} proposed entit${result.accepted === 1 ? 'y' : 'ies'}.`, 'success');
       else if (action === 'accept-updates') showToast(`Accepted AI updates for ${result.accepted} entit${result.accepted === 1 ? 'y' : 'ies'}.`, 'success');
-      else if (action === 'accept-all') showToast(`Accepted ${result.proposed.accepted} proposal${result.proposed.accepted === 1 ? '' : 's'} and updates for ${result.updates.accepted} entit${result.updates.accepted === 1 ? 'y' : 'ies'}.`, 'success');
       else if (action === 'reject-proposed') showToast(`Rejected ${result.rejected} proposed entit${result.rejected === 1 ? 'y' : 'ies'}.`, 'success');
       else if (action === 'reject-updates') showToast(`Rejected AI updates for ${result.rejected} entit${result.rejected === 1 ? 'y' : 'ies'}.`, 'success');
-      else if (action === 'reject-all') showToast(`Rejected ${result.proposed.rejected} proposal${result.proposed.rejected === 1 ? '' : 's'} and updates for ${result.updates.rejected} entit${result.updates.rejected === 1 ? 'y' : 'ies'}.`, 'success');
       else if (action === 'reprocess') showToast(`${result.reset} entit${result.reset === 1 ? 'y is' : 'ies are'} ready to be reprocessed.`, 'success');
       else if (action === 'delete') showToast(`Deleted ${result.deleted} entit${result.deleted === 1 ? 'y' : 'ies'}.`, 'success');
       const selectedId = selected?.id;
-      if (selectedId && ids.includes(selectedId) && (action === 'delete' || ((action === 'reject-proposed' || action === 'reject-all') && selected?.status === 'proposed'))) setSelected(null);
+      if (selectedId && ids.includes(selectedId) && (action === 'delete' || (action === 'reject-proposed' && selected?.status === 'proposed'))) setSelected(null);
       setSelectedIds(new Set());
       setBulkConfirm(null);
       await load();
@@ -1244,18 +1238,11 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       tone: 'danger', title: 'Reject AI updates', confirm: 'Reject updates',
       message: `Discard all pending AI changes for ${summary.pendingUpdates} selected entities: ${updateDetails}. Current canonical data will not be changed.`,
     };
-    if (action === 'reject-all') return {
-      tone: 'danger', title: 'Reject proposals and updates', confirm: 'Reject both',
-      message: `Remove ${summary.proposed} proposed entities and discard pending changes for ${summary.pendingUpdates} entities: ${updateDetails}. Current canonical data will not be changed.`,
-    };
     if (action === 'reprocess') return {
       tone: 'warning', title: 'Reprocess selected entities', confirm: 'Reset progress',
       message: `Clear the processed-evidence status for ${summary.entities - summary.proposed} confirmed entities. Current data and pending reviews will be preserved. The next Update Entities run will read their matching evidence again.`,
     };
-    return {
-      tone: 'warning', title: 'Accept proposals and updates', confirm: 'Accept both',
-      message: `Confirm ${summary.proposed} proposed entities and accept pending changes for ${summary.pendingUpdates} entities: ${updateDetails}.`,
-    };
+    return null;
   })();
 
   return (
