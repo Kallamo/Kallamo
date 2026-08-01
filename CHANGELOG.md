@@ -2,7 +2,7 @@
 
 All notable changes to Kallamo are documented in this file. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.4] - 2026-07-29
+## [1.1.4] - 2026-08-01
 
 ### Added
 - **Configurable internal AI roles**: Engine & Memory can assign dedicated executors for background tasks such as retrieval planning, summarization, and World Index tagging.
