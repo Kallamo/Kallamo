@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { useChatSession } from '../features/chat/useChatSession';
+import { isGenerationEventForWorkspace } from '../features/chat/generation-target';
 
 const AppContext = createContext();
 const EMPTY_MESSAGE_PAGE = { messages: [], hasMore: false, oldestCursor: null };
@@ -73,6 +74,13 @@ export const AppProvider = ({ children }) => {
     enqueueStreamDisplay,
     clearStreamDisplay
   } = chatSession;
+  const activeChatIdRef = useRef(activeChatId);
+
+  useEffect(() => {
+    activeChatIdRef.current = activeChatId;
+    setGenerationProgress(null);
+    clearStreamDisplay();
+  }, [activeChatId]);
 
   // --- AUTO-UPDATER STATE ---
   const [updateStatus, setUpdateStatus] = useState('idle'); // 'idle' | 'available' | 'downloaded'
@@ -161,18 +169,24 @@ export const AppProvider = ({ children }) => {
   // --- REALTIME ELECTRON EVENTS ---
   useEffect(() => {
     const unsubProgress = api.onWorkflowProgress((progress) => {
+      if (!isGenerationEventForWorkspace(progress, activeChatIdRef.current)) return;
       setGenerationProgress(progress);
     });
 
-    const unsubStreamToken = api.onStreamToken ? api.onStreamToken(enqueueStreamDisplay) : () => { };
+    const unsubStreamToken = api.onStreamToken ? api.onStreamToken((payload) => {
+      if (!isGenerationEventForWorkspace(payload, activeChatIdRef.current)) return;
+      enqueueStreamDisplay(payload);
+    }) : () => { };
 
     const unsubError = api.onWorkflowError((err) => {
+      if (!isGenerationEventForWorkspace(err, activeChatIdRef.current)) return;
       setErrorData(err);
       setShowErrorModal(true);
       setIsGenerating(false);
     });
 
     const unsubOverflow = (data) => {
+      if (!isGenerationEventForWorkspace(data, activeChatIdRef.current)) return;
       setOverflowData(data);
       setShowOverflowModal(true);
     };
@@ -375,7 +389,7 @@ export const AppProvider = ({ children }) => {
   };
 
   const handleRespondToError = (decision) => {
-    api.respondToError(decision);
+    api.respondToError(decision, errorData?.runId);
     setShowErrorModal(false);
     setErrorData(null);
     if (decision === 'interrupt') {
@@ -387,7 +401,7 @@ export const AppProvider = ({ children }) => {
   };
 
   const handleRespondToOverflow = (decision, editedText) => {
-    api.respondToOverflow(decision, editedText);
+    api.respondToOverflow(decision, editedText, overflowData?.runId);
     setShowOverflowModal(false);
     setOverflowData(null);
   };

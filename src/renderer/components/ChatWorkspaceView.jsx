@@ -15,6 +15,7 @@ import ChatInput from '../features/chat/components/ChatInput';
 import MessageMarkdown from '../features/chat/components/MessageMarkdown';
 import TypingText from '../features/chat/components/TypingText';
 import { parseMessageContent } from '../features/chat/message-content';
+import { resolveActiveGenerationTarget } from '../features/chat/generation-target';
 
 const safeParseJson = (str, fallback = []) => {
   if (!str) return fallback;
@@ -98,6 +99,7 @@ export default function ChatWorkspaceView() {
   const [summarizeModalOpen, setSummarizeModalOpen] = useState(false);
   const [isVectorizing, setIsVectorizing] = useState(false);
   const [archiveMessages, setArchiveMessages] = useState([]);
+  const dismissedAutoSummarizeChatsRef = useRef(new Set());
 
   const activeSubView = activeWorkspaceView;
   const setActiveSubView = setActiveWorkspaceView;
@@ -296,7 +298,7 @@ export default function ChatWorkspaceView() {
   useEffect(() => {
     if (!electronAPI.onTriggerAutoSummarize) return;
     const unsubscribe = electronAPI.onTriggerAutoSummarize(({ chatId }) => {
-      if (activeChat && activeChat.id === chatId) {
+      if (activeChat && activeChat.id === chatId && !dismissedAutoSummarizeChatsRef.current.has(chatId)) {
         setSummarizeModalOpen(true);
       }
     });
@@ -307,7 +309,13 @@ export default function ChatWorkspaceView() {
 
   // Token threshold auto-trigger monitor (runs on frontend when token usage is exceeded)
   useEffect(() => {
-    if (activeChat && activeChat.autoSummarize === 1 && archiveMessages.length > 0 && !summarizeModalOpen) {
+    if (
+      activeChat
+      && activeChat.autoSummarize === 1
+      && archiveMessages.length > 0
+      && !summarizeModalOpen
+      && !dismissedAutoSummarizeChatsRef.current.has(activeChat.id)
+    ) {
       const archiveThreshold = activeChat.archiveThreshold || 60000;
       const startIndex = activeChat.summarizedIndex || 0;
       const activeMsgs = archiveMessages.slice(startIndex);
@@ -349,6 +357,7 @@ export default function ChatWorkspaceView() {
         // Backend already saved to DB – just refresh the frontend state
         // to pick up the complete memoryBlocks (with messages and type).
         await refreshChats(activeChat.id);
+        dismissedAutoSummarizeChatsRef.current.delete(activeChat.id);
         setSummarizeModalOpen(false);
       } else {
         showToast(result?.message || "Failed to execute summarization.", 'error');
@@ -464,9 +473,27 @@ export default function ChatWorkspaceView() {
   const profileReady = (p) => !!p && !p.needsSetup;
   // The target a send would actually use (mirrors handleSend's fallback), and whether it
   // can run: workflows carry their own steps, profiles must be set up.
-  const effectiveTarget = selectedTarget || displayProfiles[0] || displayWorkflows[0] || null;
+  const effectiveTarget = resolveActiveGenerationTarget({
+    selectedTargetId,
+    activeProfileIds: activeProfilesList,
+    activeWorkflowIds: activeWorkflowsList,
+    profiles: writingProfiles,
+    workflows
+  });
   const isWorkflowTarget = !!effectiveTarget && displayWorkflows.some(w => w.id === effectiveTarget.id);
   const canSend = !!effectiveTarget && (isWorkflowTarget || profileReady(effectiveTarget));
+
+  const getGenerationTargetId = () => {
+    if (!effectiveTarget) {
+      showToast('Activate an AI Profile or Workflow in Workspace Configuration before generating.', 'error');
+      return null;
+    }
+    if (!isWorkflowTarget && !profileReady(effectiveTarget)) {
+      showToast('This AI Profile is not set up yet. Create an API profile in Settings, then link it to this profile in the Library.', 'error');
+      return null;
+    }
+    return effectiveTarget.id;
+  };
 
   const handleSend = (inputValue) => {
     const text = inputValue.trim();
@@ -478,30 +505,8 @@ export default function ChatWorkspaceView() {
       finalContent = `Attached files: ${attachedNames.join(', ')}`;
     }
 
-    // Fallback to a valid target ID if the current selection is invalid
-    let finalTargetId = selectedTargetId;
-    const targetExists = (writingProfiles.some(p => p.id === finalTargetId) && activeProfilesList.includes(finalTargetId)) ||
-                         (workflows.some(w => w.id === finalTargetId) && activeWorkflowsList.includes(finalTargetId));
-    if (!finalTargetId || !targetExists) {
-      const allowedProfilesList = writingProfiles.filter(p => activeProfilesList.includes(p.id));
-      const allowedWorkflowsList = workflows.filter(wf => activeWorkflowsList.includes(wf.id));
-      if (allowedProfilesList.length > 0) {
-        finalTargetId = allowedProfilesList[0].id;
-      } else if (allowedWorkflowsList.length > 0) {
-        finalTargetId = allowedWorkflowsList[0].id;
-      } else {
-        // No active targets! Prevent sending.
-        return false;
-      }
-    }
-
-    // Block a profile that still needs setup (e.g. the onboarding profiles before the user
-    // adds a key). Workflows run their own steps, so they pass through.
-    const targetProfile = writingProfiles.find(p => p.id === finalTargetId);
-    if (targetProfile && !profileReady(targetProfile)) {
-      showToast('This AI Profile is not set up yet. Create an API profile in Settings, then link it to this profile in the Library.', 'error');
-      return false;
-    }
+    const finalTargetId = getGenerationTargetId();
+    if (!finalTargetId) return false;
 
     handleSendMessage(finalContent, finalTargetId, pendingFiles);
     setPendingFiles([]);
@@ -896,9 +901,11 @@ export default function ChatWorkspaceView() {
                                     {editingMessageText !== (isAutoGenerated ? '' : msg.content) && (
                                       <button
                                         onClick={async () => {
+                                          const targetId = getGenerationTargetId();
+                                          if (!targetId) return;
                                           setEditingMessageId(null);
                                           setEditError(null);
-                                          await handleEditUserMessage(msg.id, editingMessageText, selectedTargetId);
+                                          await handleEditUserMessage(msg.id, editingMessageText, targetId);
                                         }}
                                         className="px-4 py-1.5 text-[10px] font-bold uppercase tracking-wider bg-accent text-[#011419] rounded-lg shadow-sm hover:brightness-110 transition-all active:scale-95"
                                       >
@@ -1212,7 +1219,10 @@ export default function ChatWorkspaceView() {
                                     <>
                                       <span className="text-gray-600">|</span>
                                       <button
-                                        onClick={() => handleRegenerateMessage(msg.id, selectedTargetId)}
+                                        onClick={() => {
+                                          const targetId = getGenerationTargetId();
+                                          if (targetId) handleRegenerateMessage(msg.id, targetId);
+                                        }}
                                         className="flex items-center space-x-1 text-gray-300 hover:text-accent transition-colors cursor-pointer"
                                       >
                                         <RotateCw className="w-3 h-3 transition-colors" />
@@ -1547,7 +1557,10 @@ export default function ChatWorkspaceView() {
           />
         ) : activeSubView === 'configuration' ? (
           <ConfigurationView
-            onTriggerSummarize={() => setSummarizeModalOpen(true)}
+            onTriggerSummarize={() => {
+              dismissedAutoSummarizeChatsRef.current.delete(activeChat.id);
+              setSummarizeModalOpen(true);
+            }}
           />
         ) : (
           <ChatFilesView
@@ -1593,7 +1606,9 @@ export default function ChatWorkspaceView() {
             </button>
             <button
               onClick={async () => {
-                const { msgId, editedText, targetId } = editError;
+                const { msgId, editedText } = editError;
+                const targetId = getGenerationTargetId();
+                if (!targetId) return;
                 setEditError(null);
                 await handleEditUserMessage(msgId, editedText, targetId);
               }}
@@ -1607,7 +1622,10 @@ export default function ChatWorkspaceView() {
 
       <SummarizeModal
         isOpen={summarizeModalOpen}
-        onClose={() => setSummarizeModalOpen(false)}
+        onClose={() => {
+          dismissedAutoSummarizeChatsRef.current.add(activeChat.id);
+          setSummarizeModalOpen(false);
+        }}
         messages={archiveMessages}
         currentSummarizedIndex={activeChat.summarizedIndex || 0}
         memoryBlocksCount={activeChat.memoryBlocks ? (typeof activeChat.memoryBlocks === 'string' ? JSON.parse(activeChat.memoryBlocks) : activeChat.memoryBlocks).length : 0}

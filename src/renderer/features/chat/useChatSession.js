@@ -59,6 +59,7 @@ export function useChatSession({ api, setChats, setCurrentView }) {
   const streamContentQueueRef = useRef('');
   const streamReasoningQueueRef = useRef('');
   const streamDisplayTimerRef = useRef(null);
+  const generationRequestRef = useRef(0);
 
   const flushStreamDisplay = () => {
     const contentDelta = streamContentQueueRef.current.slice(0, STREAM_DISPLAY_CHARACTERS_PER_TICK);
@@ -181,10 +182,16 @@ export function useChatSession({ api, setChats, setCurrentView }) {
   };
 
   const refreshGeneratedChat = async (chatId, response) => {
-    const messages = await loadLatestChatMessages(chatId);
+    const page = await api.getChatMessagePage({ chatId });
+    const chats = await api.getChats();
+    setActiveMessages(page.messages);
+    setHasOlderMessages(page.hasMore);
+    setOldestMessageCursor(page.oldestCursor);
     if (response.aiMsgId && !response.streamed) setLastGeneratedMessageId(response.aiMsgId);
-    setChats(await api.getChats());
-    return messages;
+    setChats(chats);
+    setIsGenerating(false);
+    setGenerationProgress(null);
+    return page.messages;
   };
 
   const saveAlternative = async (oldAlternative, messages) => {
@@ -199,6 +206,7 @@ export function useChatSession({ api, setChats, setCurrentView }) {
 
   const handleSendMessage = async (content, selectedProfileOrWorkflowId, attachedFiles = []) => {
     if (!activeChatId || (!content.trim() && attachedFiles.length === 0)) return;
+    const requestId = ++generationRequestRef.current;
 
     const userMsg = {
       id: `msg_${Math.random().toString(36).substr(2, 9)}`,
@@ -215,7 +223,7 @@ export function useChatSession({ api, setChats, setCurrentView }) {
     await api.saveMessage(userMsg);
     setActiveMessages(previous => [...previous, userMsg]);
     setIsGenerating(true);
-    setGenerationProgress({ step: 1, totalSteps: 1, profileName: 'System', status: 'Thinking...' });
+    setGenerationProgress({ chatId: activeChatId, step: 1, totalSteps: 1, profileName: 'System', status: 'Thinking...' });
 
     try {
       const response = await api.sendMessage({
@@ -228,8 +236,10 @@ export function useChatSession({ api, setChats, setCurrentView }) {
     } catch (error) {
       console.error('SendMessage error:', error);
     } finally {
-      setIsGenerating(false);
-      setGenerationProgress(null);
+      if (generationRequestRef.current === requestId) {
+        setIsGenerating(false);
+        setGenerationProgress(null);
+      }
     }
   };
 
@@ -238,6 +248,7 @@ export function useChatSession({ api, setChats, setCurrentView }) {
 
     const lastUserMessage = activeMessages.filter(message => message.role === 'user').at(-1);
     if (!lastUserMessage) return;
+    const requestId = ++generationRequestRef.current;
 
     const lastMessage = activeMessages.find(message => message.id === messageId) || activeMessages.at(-1);
     const oldAlternative = getAlternativeData(lastMessage);
@@ -247,7 +258,7 @@ export function useChatSession({ api, setChats, setCurrentView }) {
     }
 
     setIsGenerating(true);
-    setGenerationProgress({ step: 1, totalSteps: 1, profileName: 'System', status: 'Thinking...' });
+    setGenerationProgress({ chatId: activeChatId, step: 1, totalSteps: 1, profileName: 'System', status: 'Thinking...' });
 
     try {
       const response = await api.sendMessage({
@@ -262,8 +273,10 @@ export function useChatSession({ api, setChats, setCurrentView }) {
     } catch (error) {
       console.error('RegenerateMessage error:', error);
     } finally {
-      setIsGenerating(false);
-      setGenerationProgress(null);
+      if (generationRequestRef.current === requestId) {
+        setIsGenerating(false);
+        setGenerationProgress(null);
+      }
     }
   };
 
@@ -272,6 +285,7 @@ export function useChatSession({ api, setChats, setCurrentView }) {
 
     const userMessageIndex = activeMessages.findIndex(message => message.id === messageId);
     if (userMessageIndex < 0) return;
+    const requestId = ++generationRequestRef.current;
     const nextMessage = activeMessages[userMessageIndex + 1];
     const oldAlternative = getAlternativeData(nextMessage);
     const currentMessage = activeMessages[userMessageIndex];
@@ -282,14 +296,18 @@ export function useChatSession({ api, setChats, setCurrentView }) {
 
     setActiveMessages(updatedMessages.slice(0, userMessageIndex + 1));
     setIsGenerating(true);
-    setGenerationProgress({ step: 1, totalSteps: 1, profileName: 'System', status: 'Thinking...' });
+    setGenerationProgress({ chatId: activeChatId, step: 1, totalSteps: 1, profileName: 'System', status: 'Thinking...' });
 
     try {
       const response = await api.sendMessage({
         chatId: activeChatId,
         messageContent: newText,
         targetId: selectedProfileOrWorkflowId,
-        attachedFiles
+        attachedFiles,
+        historyEdit: {
+          messageId: msgId,
+          content: newText
+        }
       });
       if (!response?.success) throw new Error('Generation was not successful.');
 
@@ -310,8 +328,10 @@ export function useChatSession({ api, setChats, setCurrentView }) {
         errorMessage: error.message || 'Request failed'
       });
     } finally {
-      setIsGenerating(false);
-      setGenerationProgress(null);
+      if (generationRequestRef.current === requestId) {
+        setIsGenerating(false);
+        setGenerationProgress(null);
+      }
     }
   };
 
@@ -342,6 +362,7 @@ export function useChatSession({ api, setChats, setCurrentView }) {
   };
 
   const handleCancelGeneration = () => {
+    generationRequestRef.current++;
     api.cancelGeneration();
     setIsGenerating(false);
     setGenerationProgress(null);

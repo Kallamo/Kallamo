@@ -19,6 +19,7 @@ const { getMessagePage } = require('./features/chat/message-pages');
 const { registerWorkspaceStateIpc } = require('./features/workspace-state/workspace-state');
 const entitiesStore = require('./entities');
 const { chunkText, extractTextFromFile, extractDocxHtml, vectorizeChunks, insertChunksToDb, deleteChunksFromDb, searchKnowledgeBase, searchChatKnowledgeBase, searchChatMemories, RAG_MODEL_ID, RAG_MODEL_DIM, generateEmbeddingVector, countTokens } = require('./rag-service');
+const { normalizeMaxApiPayload } = require('./features/llm/payload-budget');
 
 registerWorkspaceStateIpc(ipcMain);
 
@@ -2800,7 +2801,9 @@ ipcMain.handle('bulk-manage-entities', async (event, { workspaceId, ids, action,
     if (action === 'policy') result = entitiesStore.bulkSetAiPolicy(workspaceId, ids, policy);
     else if (action === 'accept-proposed') result = entitiesStore.bulkAcceptProposed(workspaceId, ids);
     else if (action === 'accept-updates') result = entitiesStore.bulkAcceptEnrichUpdates(workspaceId, ids);
-    else if (action === 'accept-all') result = entitiesStore.bulkAcceptAll(workspaceId, ids);
+    else if (action === 'reject-proposed') result = entitiesStore.bulkRejectProposed(workspaceId, ids);
+    else if (action === 'reject-updates') result = entitiesStore.bulkRejectEnrichUpdates(workspaceId, ids);
+    else if (action === 'reprocess') result = entitiesStore.resetEntityEnrichmentProgress(workspaceId, ids);
     else if (action === 'delete') result = entitiesStore.bulkDeleteEntities(workspaceId, ids);
     else throw new Error('unknown bulk entity action');
     return { success: true, ...result };
@@ -3110,7 +3113,7 @@ ipcMain.handle('get-chats', async () => {
 
 ipcMain.handle('save-chat', async (event, chat) => {
   try {
-    const exists = db.prepare('SELECT id, knowledgeFiles, syncToCloud FROM chats WHERE id = ?').get(chat.id);
+    const exists = db.prepare('SELECT id, knowledgeFiles, syncToCloud, maxContext FROM chats WHERE id = ?').get(chat.id);
     const backdropOpacityDefault = chat.backdropOpacity ?? 75;
 
     // Preserve server-managed index metadata (lastIndexedMtime) that the renderer doesn't
@@ -3158,7 +3161,7 @@ ipcMain.handle('save-chat', async (event, chat) => {
         chat.description || '',
         chat.updatedAt || Date.now(),
         chat.isPinned ? 1 : 0,
-        chat.maxContext ?? 128000,
+        normalizeMaxApiPayload(chat.maxContext, exists.maxContext),
         chat.archiveThreshold ?? 60000,
         chat.summarizedIndex ?? 0,
         typeof chat.activeProfiles === 'string' ? chat.activeProfiles : JSON.stringify(chat.activeProfiles || []),
@@ -3196,7 +3199,7 @@ ipcMain.handle('save-chat', async (event, chat) => {
         chat.description || '',
         chat.updatedAt || Date.now(),
         chat.isPinned ? 1 : 0,
-        chat.maxContext ?? 128000,
+        normalizeMaxApiPayload(chat.maxContext),
         chat.archiveThreshold ?? 60000,
         chat.summarizedIndex ?? 0,
         typeof chat.activeProfiles === 'string' ? chat.activeProfiles : JSON.stringify(chat.activeProfiles || []),
@@ -4156,9 +4159,9 @@ ipcMain.on('open-workspace-folder', () => {
 // ==========================================
 const { runWorkflow, cancelGeneration, resolveErrorDeferred, resolveOverflowDeferred } = require('./workflow-runner');
 
-ipcMain.handle('send-message', async (event, { chatId, messageContent, targetId, attachedFiles }) => {
+ipcMain.handle('send-message', async (event, { chatId, messageContent, targetId, attachedFiles, historyEdit }) => {
   try {
-    return await runWorkflow({ chatId, messageContent, targetId, attachedFiles, webContents: event.sender });
+    return await runWorkflow({ chatId, messageContent, targetId, attachedFiles, historyEdit, webContents: event.sender });
   } catch (error) {
     console.error("Error in send-message IPC handler:", error);
     throw error;
@@ -4169,12 +4172,13 @@ ipcMain.on('cancel-generation', () => {
   cancelGeneration();
 });
 
-ipcMain.on('respond-to-error', (event, decision) => {
-  resolveErrorDeferred(decision);
+ipcMain.on('respond-to-error', (event, payload) => {
+  const decision = typeof payload === 'string' ? payload : payload?.decision;
+  resolveErrorDeferred(decision, payload?.runId);
 });
 
-ipcMain.on('respond-to-overflow', (event, { decision, editedText }) => {
-  resolveOverflowDeferred(decision, editedText);
+ipcMain.on('respond-to-overflow', (event, { decision, editedText, runId } = {}) => {
+  resolveOverflowDeferred(decision, editedText, runId);
 });
 
 // ==========================================
@@ -4343,16 +4347,17 @@ ipcMain.handle('save-chat-manual-snippet', async (event, { chatId, snippetId, ti
     const chunk = vectorData[0] || null;
     if (chunk) {
       const insertChunk = db.prepare(`
-        INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, content_hash)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, content_hash, memoryBlockId)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const insertFts = db.prepare(`
         INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text)
         VALUES (?, ?)
       `);
-      db.transaction(() => {
-        db.prepare('DELETE FROM entity_enrichment_chunks WHERE chunkId = ?').run(snippetId);
-        insertChunk.run(snippetId, chatId, 'chat_memory', title, content, JSON.stringify(chunk.vector), Date.now(), hashText(content));
+        db.transaction(() => {
+          db.prepare('DELETE FROM entity_enrichment_chunks WHERE chunkId = ?').run(snippetId);
+          db.prepare('UPDATE entity_update_evidence SET state = ?, reason = ? WHERE chunk_id = ?').run('invalidated', 'source-changed', snippetId);
+        insertChunk.run(snippetId, chatId, 'chat_memory', title, content, JSON.stringify(chunk.vector), Date.now(), hashText(content), snippetId);
         insertFts.run(snippetId, content);
       })();
     }
@@ -4428,15 +4433,15 @@ ipcMain.handle('get-chat-kb-blocks', async (event, { chatId }) => {
               const chunk = vectorData[0] || null;
               if (chunk) {
                 const insertChunk = db.prepare(`
-                  INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, content_hash)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                  INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, content_hash, memoryBlockId)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `);
                 const insertFts = db.prepare(`
                   INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text)
                   VALUES (?, ?)
                 `);
                 db.transaction(() => {
-                  insertChunk.run(v.id, chatId, 'chat_memory', title, content, JSON.stringify(chunk.vector), Date.now(), hashText(content));
+                  insertChunk.run(v.id, chatId, 'chat_memory', title, content, JSON.stringify(chunk.vector), Date.now(), hashText(content), v.id);
                   insertFts.run(v.id, content);
                 })();
               }
@@ -4577,15 +4582,16 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
           chunk.keywords = cleanKeywords;
 
           const insertChunk = db.prepare(`
-            INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, enabled, content_hash)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, enabled, content_hash, memoryBlockId)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `);
           const insertFts = db.prepare(`
             INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text)
             VALUES (?, ?)
           `);
-          db.transaction(() => {
-            db.prepare('DELETE FROM entity_enrichment_chunks WHERE chunkId = ?').run(snippetId);
+            db.transaction(() => {
+              db.prepare('DELETE FROM entity_enrichment_chunks WHERE chunkId = ?').run(snippetId);
+              db.prepare('UPDATE entity_update_evidence SET state = ?, reason = ? WHERE chunk_id = ?').run('invalidated', 'source-changed', snippetId);
             insertChunk.run(
               snippetId,
               chatId,
@@ -4595,7 +4601,8 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
               JSON.stringify(chunk.vector),
               Date.now(),
               resolvedEnabled ? 1 : 0,
-              hashText(chunk.text)
+              hashText(chunk.text),
+              snippetId
             );
             insertFts.run(snippetId, chunk.text);
           })();
@@ -4665,8 +4672,9 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
       const vectorData = await vectorizeChunks([block.text], block.source);
       const chunk = vectorData[0] || null;
       if (chunk) {
-        db.transaction(() => {
-          db.prepare('DELETE FROM entity_enrichment_chunks WHERE chunkId = ?').run(block.id);
+          db.transaction(() => {
+            db.prepare('DELETE FROM entity_enrichment_chunks WHERE chunkId = ?').run(block.id);
+            db.prepare('UPDATE entity_update_evidence SET state = ?, reason = ? WHERE chunk_id = ?').run('invalidated', 'source-changed', block.id);
           db.prepare('UPDATE knowledge_chunks SET text = ?, vector = ?, content_hash = ?, manuallyEdited = 1 WHERE id = ?').run(
             chunk.text,
             JSON.stringify(chunk.vector),

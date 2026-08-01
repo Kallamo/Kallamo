@@ -2,7 +2,31 @@ const db = require('./database');
 const entitiesStore = require('./entities');
 const { sendApiRequest } = require('./features/llm/llm.service');
 const { sendApiRequestStream } = require('./features/llm/llm.stream');
+const { resolveWorkspaceGenerationTarget } = require('./features/chat/generation-target');
+const {
+    filterWorkspaceKnowledgeResults,
+    filterWorkspaceMemoryResults
+} = require('./features/chat/workspace-context-scope');
 const { ROLE_IDS, readAdvancedSettings, resolveAiEngineRole } = require('./features/ai-engine/role-resolver');
+const { parseEntityUpdateObject } = require('./features/worldbuild/entity-update-json');
+const {
+    filterUpdateFields,
+    filterUpdateRelations,
+    buildFieldCoverage,
+    isUnsupportedNumericDelta
+} = require('./features/worldbuild/entity-update-contract');
+const { buildEntityUpdateSchema, buildEntityLoreSchema } = require('./features/worldbuild/entity-update-schema');
+const { decodeEntityUpdate, isEntityUpdateShape: isStructuredEntityUpdate } = require('./features/worldbuild/entity-update-protocol');
+const { buildLorePrompt, validateEntityLore } = require('./features/worldbuild/entity-lore');
+const { createEntityUpdateState } = require('./features/worldbuild/entity-update-state');
+const { shouldStopEntityUpdates } = require('./features/worldbuild/entity-update-resilience');
+const { TAGGER_RESPONSE_SCHEMA, parseTaggerResponse, createTaggerBatches, proposalDataForMention } = require('./features/world-index/tagger-response');
+const {
+    PAYLOAD_BUDGET_CONTRACT,
+    assertPayloadWithinLimit,
+    getAvailableHistoryTokens,
+    normalizeMaxApiPayload
+} = require('./features/llm/payload-budget');
 const { encode } = require('gpt-tokenizer/encoding/o200k_base');
 const fs = require('fs');
 const path = require('path');
@@ -30,6 +54,41 @@ const {
 let activeRun = null;
 let errorDeferred = null;
 let overflowDeferred = null;
+
+function createCancellationError() {
+    const error = new Error('Generation cancelled.');
+    error.name = 'AbortError';
+    return error;
+}
+
+function throwIfRunCancelled(run) {
+    if (run?.isCancelled || run?.controller?.signal.aborted) {
+        throw createCancellationError();
+    }
+}
+
+function sendRunEvent(webContents, channel, run, payload) {
+    if (!webContents || run?.isCancelled) return;
+    webContents.send(channel, {
+        ...payload,
+        chatId: run?.chatId ?? payload.chatId,
+        runId: run?.id ?? payload.runId
+    });
+}
+
+function cancelRun(run) {
+    if (!run) return;
+    run.isCancelled = true;
+    run.controller?.abort();
+    if (errorDeferred?.runId === run.id) {
+        errorDeferred.resolve('interrupt');
+        errorDeferred = null;
+    }
+    if (overflowDeferred?.runId === run.id) {
+        overflowDeferred.resolve({ decision: 'interrupt', editedText: '' });
+        overflowDeferred = null;
+    }
+}
 
 // Formats a retrieved result set for the RAG debug panel: source + fusion/similarity
 // score + the full chunk text.
@@ -83,7 +142,7 @@ function formatActiveHistory(messages, maxTokensAllowed) {
             }
         }
 
-        const msgTokens = estimateTokens(content);
+        const msgTokens = estimateTokens(content) + PAYLOAD_BUDGET_CONTRACT.messageOverheadTokens;
         if (tokensUsed + msgTokens <= maxTokensAllowed) {
             history.unshift({ role: msg.role, content: content });
             tokensUsed += msgTokens;
@@ -108,16 +167,30 @@ function isStreamingEnabled() {
 }
 
 // Orchestrate workflow linear chain execution
-async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, webContents }) {
+async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, historyEdit, webContents }) {
+    let resolvedTarget;
+    try {
+        resolvedTarget = resolveWorkspaceGenerationTarget(db, chatId, targetId);
+    } catch (error) {
+        webContents?.send('workflow-error', {
+            chatId,
+            runId: crypto.randomUUID(),
+            step: 0,
+            profileName: 'Generation',
+            errorMessage: error.message,
+            errorCode: error.code || 'invalid-generation-target',
+            isWorkflow: false
+        });
+        return { success: false, error: error.message, errorCode: error.code };
+    }
     if (activeRun) {
-        activeRun.isCancelled = true;
-        if (activeRun.controller) {
-            activeRun.controller.abort();
-        }
+        cancelRun(activeRun);
     }
 
     const controller = new AbortController();
     const currentRun = {
+        id: crypto.randomUUID(),
+        chatId,
         isCancelled: false,
         controller: controller
     };
@@ -125,6 +198,22 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
     let isWorkflow = false;
 
     try {
+        const chat = resolvedTarget.chat;
+        let steps = [];
+        let totalSteps = 1;
+
+        if (resolvedTarget.kind === 'workflow') {
+            steps = JSON.parse(resolvedTarget.target.steps || '[]');
+            totalSteps = steps.length;
+            isWorkflow = true;
+        } else {
+            steps = [{ profileId: resolvedTarget.target.id, prompt: '', includeContext: true }];
+        }
+
+        if (steps.length === 0) {
+            throw new Error("Target workflow contains no steps.");
+        }
+
         const mediaExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.mp4', '.webm', '.mov', '.mp3', '.wav', '.ogg', '.flac'];
         const imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp'];
 
@@ -250,50 +339,32 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
 
         try {
             const userMsg = db.prepare("SELECT * FROM messages WHERE chatId = ? AND role = 'user' ORDER BY createdAt DESC LIMIT 1").get(chatId);
-            if (userMsg && updatedAttachedFiles.length > 0) {
+            if (!historyEdit && userMsg && updatedAttachedFiles.length > 0) {
                 db.prepare('UPDATE messages SET attachedFiles = ? WHERE id = ?').run(JSON.stringify(updatedAttachedFiles), userMsg.id);
             }
         } catch (e) {
             console.error("Error updating user message attachedFiles:", e);
         }
 
-        let steps = [];
-        let totalSteps = 1;
-        isWorkflow = false;
-
-        // Fall back to the first available profile if targetId is empty or undefined
-        let resolvedTargetId = targetId;
-        if (!resolvedTargetId) {
-            const firstProfile = db.prepare('SELECT id FROM writing_profiles LIMIT 1').get();
-            if (firstProfile) {
-                resolvedTargetId = firstProfile.id;
-            }
-        }
-
-        const workflow = db.prepare('SELECT * FROM workflows WHERE id = ?').get(resolvedTargetId);
-        if (workflow) {
-            steps = JSON.parse(workflow.steps || '[]');
-            totalSteps = steps.length;
-            isWorkflow = true;
-        } else {
-            const profile = db.prepare('SELECT * FROM writing_profiles WHERE id = ?').get(resolvedTargetId);
-            if (profile) {
-                steps = [{ profileId: resolvedTargetId, prompt: '', includeContext: true }];
-                totalSteps = 1;
-            } else {
-                throw new Error(`Profile or Workflow target not found: ${resolvedTargetId}`);
-            }
-        }
-
-        if (steps.length === 0) {
-            throw new Error("Target workflow contains no steps.");
-        }
-
-        const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
-        const maxContextTokens = chat ? (chat.maxContext || 128000) : 128000;
+        const maxContextTokens = normalizeMaxApiPayload(chat?.maxContext);
         const summarizedIndex = chat ? (chat.summarizedIndex || 0) : 0;
 
-        const messages = db.prepare('SELECT * FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
+        let messages = db.prepare('SELECT * FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
+        if (historyEdit) {
+            if (typeof historyEdit.messageId !== 'string' || typeof historyEdit.content !== 'string') {
+                throw new Error('Invalid edited message history.');
+            }
+            const editedMessageIndex = messages.findIndex(message => message.id === historyEdit.messageId);
+            const editedMessage = messages[editedMessageIndex];
+            if (editedMessageIndex < 0 || editedMessage.role !== 'user') {
+                throw new Error('Edited user message was not found in this workspace.');
+            }
+            messages = messages.slice(0, editedMessageIndex + 1);
+            messages[editedMessageIndex] = {
+                ...editedMessage,
+                content: historyEdit.content
+            };
+        }
         const activeMessages = messages.slice(summarizedIndex);
 
         let currentInput = messageContent;
@@ -336,7 +407,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
             let agenticInputTokens = 0;
             let agenticOutputTokens = 0;
 
-            webContents.send('workflow-progress', {
+            sendRunEvent(webContents, 'workflow-progress', currentRun, {
                 step: i + 1,
                 totalSteps,
                 profileName: profile.name,
@@ -441,22 +512,26 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                 contextBlock += `\n\n--- CONSTANT CONTEXT SYSTEM BACKGROUND ---\n${constantKnowledge}\n`;
             }
 
-            // Fail fast when constant / full-context knowledge alone already exceeds the
-            // context window. Uses the token counts already accumulated while building the
-            // context (no re-tokenization of the huge block), so it both prevents a doomed
-            // "prompt too long" API call (wasted tokens) and avoids the UI freeze caused by
-            // repeatedly tokenizing oversized constant context and running the agentic loop.
-            const constantKnowledgeTokens = profileKbTokens + chatKbTokens;
-            const projectedConstantTokens = constantKnowledgeTokens + estimateTokens(compiledSystemPrompt) + estimateTokens(currentInput);
-            if (projectedConstantTokens >= maxContextTokens) {
-                throw new Error(`Profile "${profile.name}": its constant / full-context knowledge is ~${projectedConstantTokens.toLocaleString()} tokens, which exceeds this chat's context window of ${maxContextTokens.toLocaleString()} tokens. Reduce the constant knowledge or switch those knowledge files to RAG search strategy.`);
-            }
+            const attachmentsPayloadContext = attachmentsContext
+                ? `\n\n--- ATTACHED FILES FOR CURRENT MESSAGE ---\n${attachmentsContext}\n`
+                : '';
+            assertPayloadWithinLimit({
+                maxPayloadTokens: maxContextTokens,
+                systemPrompt: compiledSystemPrompt + contextBlock + attachmentsPayloadContext,
+                newPrompt: currentInput,
+                attachedImageCount: i === 0 ? attachedImages.length : 0,
+                outputTokens: profile.maxTokens ?? 1000
+            });
 
             const retrievalPlanner = getRoleExecutor(ROLE_IDS.RETRIEVAL_PLANNER, profile);
             if (profile.isAgentic === 1 && retrievalPlanner.executor) {
-                const initialInputTokens = estimateTokens(currentInput);
-                const initialSystemTokens = estimateTokens(compiledSystemPrompt + contextBlock);
-                const initialRemainingTokens = maxContextTokens - initialInputTokens - initialSystemTokens;
+                const initialRemainingTokens = getAvailableHistoryTokens({
+                    maxPayloadTokens: maxContextTokens,
+                    systemPrompt: compiledSystemPrompt + contextBlock + attachmentsPayloadContext,
+                    newPrompt: currentInput,
+                    attachedImageCount: i === 0 ? attachedImages.length : 0,
+                    outputTokens: profile.maxTokens ?? 1000
+                });
                 const ragActiveMessages = activeMessages.slice(-10);
 
                 let ragChatHistory = [];
@@ -464,7 +539,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                     ragChatHistory = formatActiveHistory(ragActiveMessages, initialRemainingTokens);
                 }
 
-                const agenticResult = await executeAgenticRagLoop(profile, chatId, currentInput, ragChatHistory, webContents, includeChatContext, retrievalPlanner.executor);
+                const agenticResult = await executeAgenticRagLoop(profile, chatId, currentInput, ragChatHistory, webContents, includeChatContext, retrievalPlanner.executor, currentRun);
                 if (agenticResult) {
                     // If detailed research context was gathered, include only it (prevents duplicate token recitation).
                     // If NOTHING was retrieved, do NOT pass the agent's 1-sentence summary off as facts, emit an
@@ -531,40 +606,38 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
 
                 if (includeChatContext && chat) {
                     const chatKbResults = await searchChatKnowledgeBase(currentInput, chatId);
-                    standardRagDebug += formatRagDebugSection('CHAT KB', chatKbResults);
                     if (chatKbResults && chatKbResults.length > 0) {
                         const chatKbFiles = typeof chat.knowledgeFiles === 'string'
                             ? JSON.parse(chat.knowledgeFiles)
                             : (chat.knowledgeFiles || []);
-                        const allowedFileNames = chatKbFiles
-                            .filter(f => (!f.profiles || f.profiles.length === 0 || f.profiles.includes(profile.id)) && f.strategy !== 'constant' && f.strategy !== 'full_context')
-                            .map(f => f.name);
-
-                        chatKbChunks = chatKbResults
-                            .filter(r => allowedFileNames.includes(r.source))
+                        chatKbChunks = filterWorkspaceKnowledgeResults(
+                            chatKbResults,
+                            chatKbFiles,
+                            profile.id
+                        )
                             .map(r => r.text);
                         chatKbChunks = Array.from(new Set(chatKbChunks));
                         chatKbTokens += estimateTokens(chatKbChunks.join('\n\n'));
                     }
+                    standardRagDebug += formatRagDebugSection('CHAT KB', chatKbResults);
                 }
 
                 if (includeChatContext && chat) {
                     const memoryResults = await searchChatMemories(currentInput, chatId);
-                    standardRagDebug += formatRagDebugSection('CHAT MEMORY', memoryResults);
                     if (memoryResults && memoryResults.length > 0) {
                         const blocksList = typeof chat.memoryBlocks === 'string'
                             ? JSON.parse(chat.memoryBlocks)
                             : (chat.memoryBlocks || []);
-                        const allowedBlockIds = blocksList
-                            .filter(b => (!b.profiles || b.profiles.length === 0 || b.profiles.includes(profile.id)) && b.strategy !== 'constant')
-                            .map(b => b.id);
-
-                        chatMemories = memoryResults
-                            .filter(r => !r.blockId || allowedBlockIds.includes(r.blockId))
+                        chatMemories = filterWorkspaceMemoryResults(
+                            memoryResults,
+                            blocksList,
+                            profile.id
+                        )
                             .map(r => r.text);
                         chatMemories = Array.from(new Set(chatMemories));
                         chatKbTokens += estimateTokens(chatMemories.join('\n\n'));
                     }
+                    standardRagDebug += formatRagDebugSection('CHAT MEMORY', memoryResults);
                 }
 
                 if (searchableChunks.length > 0) {
@@ -587,7 +660,13 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
 
             const inputTokens = estimateTokens(currentInput);
             const systemTokens = estimateTokens(compiledSystemPrompt);
-            const remainingTokens = maxContextTokens - inputTokens - systemTokens;
+            const remainingTokens = getAvailableHistoryTokens({
+                maxPayloadTokens: maxContextTokens,
+                systemPrompt: compiledSystemPrompt,
+                newPrompt: currentInput,
+                attachedImageCount: i === 0 ? attachedImages.length : 0,
+                outputTokens: profile.maxTokens ?? 1000
+            });
 
             let chatHistory = [];
             if (i === 0 || includeChatHistory) {
@@ -616,7 +695,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                     return { success: false, cancelled: true };
                 }
 
-                webContents.send('workflow-progress', {
+                sendRunEvent(webContents, 'workflow-progress', currentRun, {
                     step: i + 1,
                     totalSteps,
                     profileName: profile.name,
@@ -632,6 +711,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                         newPrompt: currentInput,
                         temperature: profile.temperature,
                         maxTokens: profile.maxTokens,
+                        maxPayloadTokens: maxContextTokens,
                         manualMode: profile.manualMode === 1,
                         manualJson: profile.manualJson,
                         abortSignal: currentRun.controller.signal,
@@ -644,8 +724,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                         stepOutput = await sendApiRequestStream(
                             genParams,
                             (delta) => {
-                                webContents.send('stream:token', {
-                                    chatId,
+                                sendRunEvent(webContents, 'stream:token', currentRun, {
                                     contentDelta: delta.contentDelta || '',
                                     reasoningDelta: delta.reasoningDelta || ''
                                 });
@@ -666,7 +745,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                     }
                     console.error(`API Error in step ${i + 1} (${profile.name}):`, apiError);
 
-                    webContents.send('workflow-error', {
+                    sendRunEvent(webContents, 'workflow-error', currentRun, {
                         step: i + 1,
                         profileName: profile.name,
                         errorMessage: apiError.message || 'API request failed.',
@@ -674,7 +753,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
                     });
 
                     const decision = await new Promise((resolve) => {
-                        errorDeferred = { resolve };
+                        errorDeferred = { runId: currentRun.id, resolve };
                     });
 
                     if (decision === 'interrupt') {
@@ -709,14 +788,14 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
             // A threshold of 16,000 characters (roughly 4,000 tokens) checks for large outputs
             const isLastStep = (i === steps.length - 1);
             if (estimateTokens(stepOutput) > 4000 && !isLastStep) {
-                webContents.send('workflow-context-overflow', {
+                sendRunEvent(webContents, 'workflow-context-overflow', currentRun, {
                     step: i + 1,
                     profileName: profile.name,
                     outputText: stepOutput
                 });
 
                 const overflowResponse = await new Promise((resolve) => {
-                    overflowDeferred = { resolve };
+                    overflowDeferred = { runId: currentRun.id, resolve };
                 });
 
                 if (overflowResponse.decision === 'send_edited') {
@@ -740,6 +819,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
             totalOutputTokens += estimateTokens(stepOutput);
         }
 
+        throwIfRunCancelled(currentRun);
         if (finalOutput && lastProfileUsed) {
             const aiMsgId = 'msg_' + Math.random().toString(36).substr(2, 9);
 
@@ -787,8 +867,11 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
         return { success: true };
 
     } catch (e) {
+        if (e.name === 'AbortError' || currentRun.isCancelled) {
+            return { success: false, cancelled: true };
+        }
         console.error("Workflow Execution Failure:", e);
-        webContents.send('workflow-error', {
+        sendRunEvent(webContents, 'workflow-error', currentRun, {
             step: 0,
             profileName: 'Workflow Engine',
             errorMessage: e.message || 'Fatal error during workflow execution.',
@@ -796,32 +879,25 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, we
         });
         return { success: false, error: e.message };
     } finally {
-        if (activeRun === currentRun) {
-            activeRun = null;
-        }
-        errorDeferred = null;
-        overflowDeferred = null;
+        if (activeRun === currentRun) activeRun = null;
+        if (errorDeferred?.runId === currentRun.id) errorDeferred = null;
+        if (overflowDeferred?.runId === currentRun.id) overflowDeferred = null;
     }
 }
 
 function cancelGeneration() {
-    if (activeRun) {
-        activeRun.isCancelled = true;
-        if (activeRun.controller) {
-            activeRun.controller.abort();
-        }
-    }
+    cancelRun(activeRun);
 }
 
-function resolveErrorDeferred(decision) {
-    if (errorDeferred) {
+function resolveErrorDeferred(decision, runId = null) {
+    if (errorDeferred && (!runId || errorDeferred.runId === runId)) {
         errorDeferred.resolve(decision);
         errorDeferred = null;
     }
 }
 
-function resolveOverflowDeferred(decision, editedText) {
-    if (overflowDeferred) {
+function resolveOverflowDeferred(decision, editedText, runId = null) {
+    if (overflowDeferred && (!runId || overflowDeferred.runId === runId)) {
         overflowDeferred.resolve({ decision, editedText });
         overflowDeferred = null;
     }
@@ -866,7 +942,8 @@ function validateChunkTags(arr, categories, chunkRecords) {
             const value = String(mention && (mention.canonicalName || mention.value || mention.text) || '').trim();
             const evidence = String(mention && evidenceText(mention.evidence) || '').trim();
             if (!name || !value || !evidence || !chunkContainsEvidence(chunkText, evidence)) continue;
-            tags.push({ tag: name, value, evidence });
+            const proposalKind = String(mention && mention.proposalKind || '').trim().toLowerCase();
+            tags.push({ tag: name, value, evidence, proposalKind });
         }
         for (const rt of (Array.isArray(entry.tags) ? entry.tags : [])) {
             const name = byName.get(String(rt && rt.tag || '').toLowerCase());
@@ -1102,7 +1179,6 @@ async function classifyAndTagSegment(chunkRecords, profile, workspaceId = null) 
     const catLines = categories.length
         ? categories.map(c => `- ${c.name}: ${c.description}`).join('\n')
         : '- Characters: People, beings, or named agents present in the scene.';
-    const fence = buildItemsFence();
     const vocab = buildEntityVocab(workspaceId, numbered);
     const systemPrompt =
         getSystemLanguageInstruction() + "\n" +
@@ -1110,28 +1186,47 @@ async function classifyAndTagSegment(chunkRecords, profile, workspaceId = null) 
         "For EACH chunk, identify the specific persistent story entities explicitly named in the text. A persistent entity is something a user would reasonably find and reuse in a world bible.\n" +
         catLines + "\n" +
         (vocab ? vocab + "\n" : "") +
-        "Resolve titles, shortened names, and aliases to the supplied canonical name when the text supports that match. Never propose a name already present in Known entities, even under another category. Do not turn generic nouns, unnamed roles, pronouns, descriptive phrases, or one-off concepts into entities. When identity or category is ambiguous, omit the mention. Every mention must include a short verbatim evidence excerpt copied from that chunk. " +
+        "Resolve titles, shortened names, and aliases to the supplied canonical name when the text supports that match. Never propose a name already present in Known entities, even under another category. Do not turn generic nouns, unnamed roles, pronouns, descriptive phrases, or ordinary objects into entities. A role alone (for example captain, duke, guard, blacksmith), a generic organization word (order, guild, army), or an ordinary object (sword, spear, cane, coat) is not an entity. Distinctive reusable world-specific items or materials (for example Dragon Mead or Salamander Leather) are valid item types even when they are not unique objects. When identity or category is ambiguous, omit the mention. Every mention must include a short verbatim evidence excerpt copied from that chunk. " +
         "Use ONLY these category names; skip a chunk when it has no qualifying named entity. " +
-        "Output a JSON array wrapped exactly once in " + fence.open + " and " + fence.close + ", " +
-        "one element per chunk that has any entity: {\"chunk\": <number>, \"mentions\": [{\"text\": \"<surface text>\", \"canonicalName\": \"<existing canonical name or exact explicit name>\", \"type\": \"<Category>\", \"evidence\": \"<verbatim excerpt>\"}]}. " +
-        "Write nothing after the closing marker.";
+        "Return one valid JSON object and nothing else. Its exact shape is " +
+        "{\"items\": [{\"chunk\": <number>, \"mentions\": [{\"text\": \"<surface text>\", \"canonicalName\": \"<existing canonical name or exact explicit name>\", \"type\": \"<Category>\", \"proposalKind\": \"known|named|world_specific_type\", \"evidence\": \"<verbatim excerpt>\"}]}]}. " +
+        "Use proposalKind=known only for a supplied Known entity, named for a specific proper entity or unique named artifact, and world_specific_type only for a distinctive reusable Items type or material. Never use named for a generic role, category, or ordinary object. " +
+        "Use {\"items\": []} only when none of the chunks contains a qualifying named entity.";
     try {
-        const response = await sendApiRequest({
+        const maxTokens = 4096;
+        const request = (prompt, repair = false) => sendApiRequest({
             apiProfileId, model, systemPrompt,
             chatHistory: [],
-            newPrompt: numbered,
-            temperature: 0.1,
-            maxTokens: 1200,
-            manualMode, manualJson
+            newPrompt: prompt,
+            temperature: repair ? 0 : 0.1,
+            maxTokens,
+            manualMode, manualJson,
+            jsonMode: true,
+            jsonSchema: TAGGER_RESPONSE_SCHEMA
         });
-        const head = splitHeadAndBody(response, fence);
-        chunkTags = validateChunkTags(safeParseArray(head.body), categories, chunkRecords);
+        let response = await request(numbered);
+        let structured = parseTaggerResponse(response);
+        let validated = structured.valid ? validateChunkTags(structured.items, categories, chunkRecords) : [];
+        const needsRepair = !structured.valid || (structured.items.length > 0 && validated.length === 0);
+        if (needsRepair) {
+            response = await request(
+                `Repair the response below to the exact required JSON shape. Preserve only mentions supported by the original numbered chunks.\n\nORIGINAL CHUNKS:\n${numbered}\n\nINVALID RESPONSE:\n${String(response || '').slice(0, 12000)}`,
+                true
+            );
+            structured = parseTaggerResponse(response);
+            validated = structured.valid ? validateChunkTags(structured.items, categories, chunkRecords) : [];
+        }
+        if (!structured.valid) throw new Error('The Tagger returned invalid structured JSON after one repair attempt.');
+        if (structured.items.length > 0 && validated.length === 0) {
+            throw new Error('The Tagger response contained mentions, but none passed category and evidence validation.');
+        }
+        chunkTags = validated;
     } catch (e) {
         console.error("[World Index] classify+tag failed:", e);
         // Only surface when a System AI is configured: without one, tagging is
         // intentionally off and this path only produced a title/summary.
         notifyTaggingFailure(e);
-        return { title, summary, chunkTags, failed: true };
+        return { title, summary, chunkTags, failed: true, error: cleanErrorMessage(e) };
     }
     return { title, summary, chunkTags };
 }
@@ -1197,21 +1292,25 @@ function applyChunkTags(chunkTags, chunkRecords, workspaceId = null) {
                 let entityRef = resolveEntity(ws, t.tag, t.value);
                 if (!entityRef) entityRef = resolveEntity(ws, null, t.value);
                 if (!entityRef && allowCreate) {
+                    const proposalData = proposalDataForMention(t.tag, t.proposalKind);
+                    if (!proposalData) continue;
                     const key = `${ws || ''}|${t.tag}|${entitiesStore.normalizeName(t.value)}`;
                     if (proposedCache.has(key)) {
                         entityRef = proposedCache.get(key);
                     } else {
-                        try {
-                            const ent = entitiesStore.createEntity({
-                                workspaceId: ws,
-                                type: t.tag,
-                                canonicalName: t.value,
-                                status: 'proposed',
-                                data: { proposalEvidence: t.evidence ? [{ chunkId: rec.id, excerpt: t.evidence }] : [] }
-                            });
-                            entityRef = ent && ent.id;
-                            if (entityRef) proposedCache.set(key, entityRef);
-                        } catch (e) { entityRef = null; }
+                        const ent = entitiesStore.createEntity({
+                            workspaceId: ws,
+                            type: t.tag,
+                            canonicalName: t.value,
+                            status: 'proposed',
+                            data: {
+                                ...proposalData,
+                                proposalEvidence: t.evidence ? [{ chunkId: rec.id, excerpt: t.evidence }] : []
+                            }
+                        });
+                        entityRef = ent && ent.id;
+                        if (!entityRef) throw new Error(`Could not create proposed entity: ${t.value}`);
+                        proposedCache.set(key, entityRef);
                     }
                 }
                 if (!entityRef) continue;
@@ -1487,18 +1586,22 @@ async function vectorizeDocument(documentId, progressCallback = null) {
         // without one, indexing only vectorizes and this whole pass is skipped.
         // Best-effort: a failed pass just leaves the new chunks untagged.
         if (getRoleExecutor(ROLE_IDS.TAGGER).executor) {
-            try {
-                const records = vectors.map(v => ({ id: v.id, text: v.text, ownerId: doc.workspaceId }));
-                const BATCH = 12;
-                for (let i = 0; i < records.length; i += BATCH) {
-                    if (progressCallback) progressCallback({ phase: 'tagging', done: Math.min(i + BATCH, records.length), total: records.length });
-                    const batch = records.slice(i, i + BATCH);
-                    const cls = await classifyAndTagSegment(batch, null, doc.workspaceId);
-                    applyChunkTags(cls.chunkTags, batch, doc.workspaceId);
+                try {
+                    const records = vectors.map(v => ({ id: v.id, text: v.text, ownerId: doc.workspaceId }));
+                    const batches = createTaggerBatches(records);
+                    let processed = 0;
+                    for (const batch of batches) {
+                        const cls = await classifyAndTagSegment(batch, null, doc.workspaceId);
+                        if (cls.failed) throw new Error(cls.error || 'Tagger failed.');
+                        applyChunkTags(cls.chunkTags, batch, doc.workspaceId);
+                        processed += batch.length;
+                        if (progressCallback) progressCallback({ phase: 'tagging', done: processed, total: records.length });
+                    }
+                } catch (e) {
+                    console.error('[Vectorize Document] tagging failed (vectorization continues):', e.message);
+                    db.prepare('UPDATE documents SET vectorized = 1 WHERE id = ?').run(documentId);
+                    throw new Error(`Entity tagging failed: ${e.message}. Text embeddings were preserved.`);
                 }
-            } catch (e) {
-                console.error('[Vectorize Document] tagging failed (vectorization continues):', e.message);
-            }
         }
     }
 
@@ -1530,30 +1633,21 @@ async function retagDocumentChunks(documentId, progressCallback = null) {
     const profile = db.prepare('SELECT * FROM writing_profiles LIMIT 1').get();
     const records = rows.map(r => ({ id: r.id, text: r.text, ownerId: doc.workspaceId }));
     let tagged = 0;
-    const BATCH = 12;
-    for (let i = 0; i < records.length; i += BATCH) {
-        if (progressCallback) progressCallback({ phase: 'tagging', done: Math.min(i + BATCH, records.length), total: records.length });
-        const batch = records.slice(i, i + BATCH);
+    const batches = createTaggerBatches(records);
+    let processed = 0;
+    for (const batch of batches) {
         try {
             const cls = await classifyAndTagSegment(batch, profile, doc.workspaceId);
+            if (cls.failed) throw new Error(cls.error || 'Tagger failed.');
             tagged += applyChunkTags(cls.chunkTags, batch, doc.workspaceId);
+            processed += batch.length;
+            if (progressCallback) progressCallback({ phase: 'tagging', done: processed, total: records.length });
         } catch (e) {
-            console.error('[Retag Document] batch failed (continues):', e.message);
+            console.error('[Retag Document] batch failed:', e.message);
+            throw new Error(`Entity tagging failed: ${e.message}`);
         }
     }
     return { tagged, chunks: rows.length };
-}
-
-// Tolerant object parse: grab the first {...} block and JSON.parse it. null on failure.
-function safeParseObject(body) {
-    if (!body) return null;
-    try {
-        const start = body.indexOf('{');
-        const end = body.lastIndexOf('}');
-        if (start === -1 || end === -1 || end < start) return null;
-        const o = JSON.parse(body.slice(start, end + 1));
-        return (o && typeof o === 'object' && !Array.isArray(o)) ? o : null;
-    } catch (e) { return null; }
 }
 
 // Which data fields the enrichment may set per type, and the closed vocabularies for
@@ -1572,9 +1666,9 @@ const ENRICH_ENUMS = {
 // "description"). Relational fields (owner, race, faction, habitat…) and chapter links
 // are edges, not data, and are handled separately.
 const ENRICH_FIELDS = {
-    Characters: ['status', 'age'],
-    Creatures: ['status', 'disposition', 'nature', 'abundance', 'threat', 'abilities'],
-    Locations: ['locationType'],
+    Characters: ['status', 'age', 'appearance', 'personality'],
+    Creatures: ['status', 'disposition', 'nature', 'abundance', 'threat', 'abilities', 'appearance', 'personality'],
+    Locations: ['locationType', 'description'],
     Items: ['itemType', 'abundance', 'description'],
     Factions: ['description'],
     Races: ['description'],
@@ -1596,6 +1690,8 @@ const ENRICH_TYPE_GUIDANCE = {
 const ENRICH_FIELD_GUIDANCE = {
     status: 'Current state only. alive requires explicit survival or a current direct action that cannot be posthumous. deceased requires explicit confirmation of death or a canonically defined irreversible equivalent. Surrender, defeat, disappearance, transformation, assimilation, imprisonment, incapacitation, or leaving a role are not death. missing means whereabouts are explicitly unknown; unknown means the evidence cannot establish a state.',
     age: 'A literal current age explicitly stated for this character. Never calculate it from dates, elapsed time, appearance, or life stage.',
+    appearance: 'Stable physical appearance explicitly described for this individual. Do not include temporary clothing, injuries, posture, or scene lighting unless canonically persistent.',
+    personality: 'Stable personality traits directly demonstrated across evidence or explicitly stated. Do not convert one emotional reaction into a permanent trait.',
     disposition: 'A stable default attitude toward relevant people, not a momentary emotional reaction in one scene.',
     nature: 'The explicitly established creature category or nature, such as Beast, Spirit, or Deity. Do not infer it from appearance or abilities.',
     abundance: 'World-level prevalence of a resource or creature group, not the quantity present in one scene.',
@@ -1618,8 +1714,11 @@ const ENRICH_RELATION_GUIDANCE = {
     'Locations.leader': 'Only explicit ownership, leadership, or governance of the location.',
     'Items.creator': 'Only the explicitly established creator or maker.',
     'Items.owner': 'Only current explicit ownership; use, custody, discovery, or theft alone does not prove ownership.',
+    'Items.currentLocation': 'Only the current explicit physical location of a unique item.',
     'Items.foundIn': 'Only an explicit place where the item or resource is found, stored, produced, or gathered.',
+    'Items.soldIn': 'Only an explicit place where this item type is regularly sold or traded.',
     'Creatures.habitat': 'Only an explicitly established natural or habitual location, not a single encounter site.',
+    'Creatures.relationships': 'Only an explicitly established personal relationship for an individual creature; the label must state the supported role.',
     'Factions.leader': 'Only an explicitly established current leader.',
     'Factions.operatesIn': 'Only an established area of operation, base, territory, or sustained activity.',
     'Factions.members': 'Only explicit membership; the label must state the supported role when available.',
@@ -1627,50 +1726,14 @@ const ENRICH_RELATION_GUIDANCE = {
     'Events.involved': 'Only a character explicitly participating in or materially affected by the event, not merely mentioned nearby.',
 };
 
-const ENTITY_ENRICHMENT_SCHEMA_VERSION = 'semantic-v2';
+const ENTITY_ENRICHMENT_SCHEMA_VERSION = 'semantic-v8-general';
 
-function entityEnrichmentSignature(chunk) {
-    return `${ENTITY_ENRICHMENT_SCHEMA_VERSION}:${chunk.isTagged ? 'tagged' : 'text'}:${chunk.contentHash}`;
+function entityEnrichmentSignature(chunk, fieldCoverageSignature = '') {
+    return `${ENTITY_ENRICHMENT_SCHEMA_VERSION}:${fieldCoverageSignature}:${chunk.isTagged ? 'tagged' : 'text'}:${chunk.contentHash}`;
 }
 
 function enrichFieldsForEntity(entity) {
-    const fields = [...(ENRICH_FIELDS[entity.type] || [])];
-    if (entity.type === 'Creatures') {
-        const isGroup = entity.data?.scope === 'group';
-        return fields.filter(field => isGroup ? field !== 'status' : field !== 'abundance');
-    }
-    if (entity.type === 'Items' && entity.data?.itemType !== 'Resource') {
-        return fields.filter(field => field !== 'abundance');
-    }
-    return fields;
-}
-
-function describeStructuredObjectFailure(response, fence) {
-    const raw = String(response || '').trim();
-    if (!raw) return 'The System AI returned an empty response.';
-    const hasOpenFence = raw.includes(fence.open);
-    const hasCloseFence = raw.includes(fence.close);
-    const firstBrace = raw.indexOf('{');
-    const lastBrace = raw.lastIndexOf('}');
-    if (firstBrace === -1) return 'The System AI response did not contain a JSON object.';
-    if (lastBrace < firstBrace) return 'The System AI response was truncated before the JSON object was complete.';
-    try {
-        JSON.parse(raw.slice(firstBrace, lastBrace + 1));
-    } catch (error) {
-        return `The System AI returned invalid JSON: ${cleanErrorMessage(error)}`;
-    }
-    if (hasOpenFence && !hasCloseFence) return 'The System AI response was truncated before the structured update was closed.';
-    return 'The System AI response used an unsupported structured update shape.';
-}
-
-function isEntityUpdateShape(value, allowLore = true) {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-    const isObject = candidate => candidate && typeof candidate === 'object' && !Array.isArray(candidate);
-    if (!allowLore && 'lore' in value) return false;
-    if ('lore' in value && value.lore !== null && !isObject(value.lore)) return false;
-    if ('data' in value && !isObject(value.data)) return false;
-    if ('links' in value && !isObject(value.links)) return false;
-    return true;
+    return filterUpdateFields(entity, ENRICH_FIELDS[entity.type] || []);
 }
 
 function entityEnrichmentMaxTokens(entity) {
@@ -1692,8 +1755,7 @@ const ENRICH_RELATIONS = {
         { key: 'race',          label: 'Race',         relType: 'is_race',      targetType: 'Races',      from: 'self',   single: true },
         { key: 'factions',      label: 'Faction',      relType: 'member_of',    targetType: 'Factions',   from: 'self',   single: false },
         { key: 'locations',     label: 'Location',     relType: 'connected_to', targetType: 'Locations',  from: 'self',   single: false },
-        { key: 'relationships', label: 'Relationship', relType: 'related_to',   targetType: 'Characters', from: 'self',   single: false, labeled: true },
-        { key: 'inventory',     label: 'Item held',    relType: 'owned_by',     targetType: 'Items',      from: 'target', single: true },
+        { key: 'relationships', label: 'Relationship', relType: 'related_to', targetTypes: ['Characters', 'Creatures'], from: 'self', single: false, labeled: true },
     ],
     Locations: [
         { key: 'inside', label: 'Inside',         relType: 'inside', targetType: 'Locations',  from: 'self', single: true },
@@ -1701,11 +1763,14 @@ const ENRICH_RELATIONS = {
     ],
     Items: [
         { key: 'creator', label: 'Creator',     relType: 'created_by', targetType: 'Characters', from: 'self', single: true },
-        { key: 'owner',   label: 'Owner',       relType: 'owned_by',   targetType: 'Characters', from: 'self', single: true },
-        { key: 'foundIn', label: 'Where found', relType: 'found_in',   targetType: 'Locations',  from: 'self', single: false },
+        { key: 'owner', label: 'Owner', relType: 'owned_by', targetTypes: ['Characters', 'Creatures'], from: 'self', single: true, itemNature: 'unique' },
+        { key: 'currentLocation', label: 'Current location', relType: 'located_in', targetType: 'Locations', from: 'self', single: true, itemNature: 'unique' },
+        { key: 'foundIn', label: 'Where found', relType: 'found_in', targetType: 'Locations', from: 'self', single: false, itemNature: 'type' },
+        { key: 'soldIn', label: 'Where sold', relType: 'sold_in', targetType: 'Locations', from: 'self', single: false, itemNature: 'type' },
     ],
     Creatures: [
         { key: 'habitat', label: 'Habitat', relType: 'found_in', targetType: 'Locations', from: 'self', single: false },
+        { key: 'relationships', label: 'Relationship', relType: 'related_to', targetTypes: ['Characters', 'Creatures'], from: 'self', single: false, labeled: true, individualOnly: true },
     ],
     Factions: [
         { key: 'leader',     label: 'Leader',            relType: 'led_by',      targetType: 'Characters', from: 'self',   single: true },
@@ -1719,6 +1784,10 @@ const ENRICH_RELATIONS = {
     ],
     System: [],
 };
+
+function enrichRelationsForEntity(entity) {
+    return filterUpdateRelations(entity, ENRICH_RELATIONS[entity.type] || []);
+}
 
 // The set of target ids this entity already links to for a given relation spec, so the
 // enrichment never re-proposes an edge that already exists.
@@ -1771,28 +1840,29 @@ function textMentionsEntity(text, names) {
 }
 
 function chronologicalSlice(entries, budget) {
-    const total = entries.reduce((sum, entry) => sum + entry.prompt.length + 2, 0);
+    const cost = entry => estimateTokens(entry.prompt) + 4;
+    const total = entries.reduce((sum, entry) => sum + cost(entry), 0);
     if (total <= budget) return entries;
     const selected = [];
     const selectedIds = new Set();
     let used = 0;
     const headBudget = Math.floor(budget * 0.4);
     for (const entry of entries) {
-        if (used + entry.prompt.length > headBudget) break;
-        selected.push(entry); selectedIds.add(entry.id); used += entry.prompt.length + 2;
+        if (used + cost(entry) > headBudget) break;
+        selected.push(entry); selectedIds.add(entry.id); used += cost(entry);
     }
     for (let index = entries.length - 1; index >= 0; index--) {
         const entry = entries[index];
         if (selectedIds.has(entry.id)) continue;
-        if (used + entry.prompt.length > budget) break;
-        selected.push(entry); selectedIds.add(entry.id); used += entry.prompt.length + 2;
+        if (used + cost(entry) > budget) break;
+        selected.push(entry); selectedIds.add(entry.id); used += cost(entry);
     }
     return selected.sort((a, b) => a.order - b.order);
 }
 
-function selectEntityEvidence(entries, budget = 16000) {
+function selectEntityEvidence(entries, budget = 6000) {
     const tagged = chronologicalSlice(entries.filter(entry => entry.chunk.isTagged), budget);
-    const used = tagged.reduce((sum, entry) => sum + entry.prompt.length + 2, 0);
+    const used = tagged.reduce((sum, entry) => sum + estimateTokens(entry.prompt) + 4, 0);
     if (used >= budget) return tagged;
     const untagged = chronologicalSlice(entries.filter(entry => !entry.chunk.isTagged), budget - used);
     return [...tagged, ...untagged].sort((a, b) => a.order - b.order);
@@ -1846,6 +1916,9 @@ async function enrichEntities(workspaceId, progressCallback = null) {
 
     const all = entitiesStore.listEntities({ workspaceId });
     const targets = all.filter(e => e.status !== 'proposed' && (e.data?.aiPolicy || 'review') !== 'locked');
+    const updateState = createEntityUpdateState(db);
+    const runId = updateState.startRun(workspaceId, targets.map(entity => entity.id));
+    let consecutiveStructuredFailures = 0;
     const taggedWritingChunks = db.prepare(`
         SELECT DISTINCT kc.id, kc.text, kc.source, kc.createdAt,
           COALESCE(kc.content_hash, '') AS contentHash, 'Writing Desk' AS evidenceSource, 1 AS isTagged
@@ -1867,7 +1940,6 @@ async function enrichEntities(workspaceId, progressCallback = null) {
         JOIN knowledge_chunks kc ON kc.id = ct.chunkId
         WHERE ct.entity = ? AND kc.ownerId = ? AND kc.ownerType IN ('chat_kb', 'chat_memory')
     `);
-    const processedChunks = db.prepare('SELECT chunkId, contentHash FROM entity_enrichment_chunks WHERE entityId = ?');
     const markChunkProcessed = db.prepare(`
         INSERT INTO entity_enrichment_chunks (entityId, chunkId, contentHash, processedAt)
         VALUES (?, ?, ?, ?)
@@ -1897,7 +1969,17 @@ async function enrichEntities(workspaceId, progressCallback = null) {
     let updated = 0, staged = 0, upToDate = 0, noEvidence = 0, failed = 0;
     let evidenceUsed = 0, taggedEvidenceRemaining = 0, textMatchesSkipped = 0;
     for (let i = 0; i < targets.length; i++) {
+        if (shouldStopEntityUpdates(consecutiveStructuredFailures)) {
+            for (let pendingIndex = i; pendingIndex < targets.length; pendingIndex++) {
+                updateState.updateJob(runId, targets[pendingIndex].id, {
+                    status: 'skipped',
+                    error: 'Circuit breaker stopped the run after repeated structured-output failures.'
+                });
+            }
+            break;
+        }
         const ent = targets[i];
+        updateState.updateJob(runId, ent.id, { status: 'processing' });
         if (ent.type === 'System' && ent.data?._enrichPending?.lore != null) {
             const pending = { ...ent.data._enrichPending };
             delete pending.lore;
@@ -1926,22 +2008,34 @@ async function enrichEntities(workspaceId, progressCallback = null) {
         for (const chunk of constantMemoryChunks) {
             if (chunk.text && textMentionsEntity(chunk.text, mentionNames)) candidates.set(chunk.id, chunk);
         }
-        if (!candidates.size) { noEvidence++; continue; }
-        const processed = new Map(processedChunks.all(ent.id).map(row => [row.chunkId, row.contentHash]));
-        const chunks = [...candidates.values()]
-            .filter(chunk => processed.get(chunk.id) !== entityEnrichmentSignature(chunk))
-            .sort((a, b) => (a.createdAt - b.createdAt) || String(a.id).localeCompare(String(b.id)));
-        if (!chunks.length) { upToDate++; continue; }
-
+        if (!candidates.size) {
+            noEvidence++;
+            updateState.updateJob(runId, ent.id, { status: 'skipped' });
+            continue;
+        }
         const allowed = enrichFieldsForEntity(ent);
+        const fieldCoverage = buildFieldCoverage(ent, allowed);
+        const discoveredEntries = [...candidates.values()].map(chunk => ({
+            chunk,
+            signature: entityEnrichmentSignature(chunk, fieldCoverage.signature)
+        }));
+        const evidenceStates = updateState.discover(workspaceId, ent.id, discoveredEntries);
+        const chunks = [...candidates.values()]
+            .filter(chunk => ['discovered', 'queued', 'deferred'].includes(evidenceStates.get(chunk.id)?.state))
+            .sort((a, b) => (a.createdAt - b.createdAt) || String(a.id).localeCompare(String(b.id)));
+        if (!chunks.length) {
+            upToDate++;
+            updateState.updateJob(runId, ent.id, { status: 'skipped' });
+            continue;
+        }
+
         const fieldLines = allowed.map(field => {
             const shape = ENRICH_ENUMS[field]
                 ? `one of [${ENRICH_ENUMS[field].join(', ')}]`
                 : 'a concise literal value';
             return `- ${field}: ${shape}. ${ENRICH_FIELD_GUIDANCE[field]}`;
         }).join('\n');
-        const relSpecs = ENRICH_RELATIONS[ent.type] || [];
-        const fence = buildItemsFence();
+        const relSpecs = enrichRelationsForEntity(ent);
         const currentData = {};
         for (const f of allowed) if (ent.data && ent.data[f] != null) currentData[f] = ent.data[f];
 
@@ -1952,7 +2046,8 @@ async function enrichEntities(workspaceId, progressCallback = null) {
         const evidenceExample = `E_${evidencePrefix}_1`;
         const relBlocks = [];
         for (const spec of relSpecs) {
-            const names = (namesByType[spec.targetType] || []).filter(n => n !== ent.canonicalName);
+            const targetTypes = spec.targetTypes || [spec.targetType];
+            const names = targetTypes.flatMap(type => namesByType[type] || []).filter(n => n !== ent.canonicalName);
             if (!names.length) continue;
             const base = `{"name": "<one name>", "certainty": "explicit", "support": "<why the evidence directly proves this relation>", "evidence": ["${evidenceExample}"]`;
             const item = spec.labeled ? `${base}, "label": "<short supported role/relation>"}` : `${base}}`;
@@ -1968,6 +2063,10 @@ async function enrichEntities(workspaceId, progressCallback = null) {
             prompt: `[E_${evidencePrefix}_${index + 1} | ${chunk.evidenceSource}: ${chunk.source || 'Untitled'} | ${chunk.isTagged ? 'indexed entity match' : 'name or alias match'} | chunk ${chunk.id}]\n${chunk.text}`
         }));
         const includedEvidence = selectEntityEvidence(evidenceEntries);
+        const includedIds = new Set(includedEvidence.map(entry => entry.id));
+        const deferredEvidence = evidenceEntries.filter(entry => !includedIds.has(entry.id));
+        updateState.transition(workspaceId, ent.id, includedEvidence, 'queued', runId);
+        updateState.transition(workspaceId, ent.id, deferredEvidence, 'deferred', runId, 'token-budget');
         const evidenceWindow = includedEvidence.map(entry => entry.prompt).join('\n\n');
         const chunkIds = includedEvidence.map(entry => entry.chunk.id);
         let relevantSystems = [];
@@ -1995,85 +2094,122 @@ async function enrichEntities(workspaceId, progressCallback = null) {
         }).filter(Boolean).join('\n\n');
 
         const allowLore = ent.type !== 'System';
-        const responseShape = allowLore ? `{"lore": null, "data": {}, "links": {}}` : `{"data": {}, "links": {}}`;
+        const responseShape = `{"data": {}, "links": {}}`;
         const systemPrompt =
             getSystemLanguageInstruction() + "\n" +
             `You maintain a story's world bible. Update the record for one ${ent.type.replace(/s$/, '')} named "${ent.canonicalName}" ` +
             (allowLore
                 ? `using the CURRENT RECORD plus ONLY the NEW STORY EVIDENCE provided. Preserve established lore unless new evidence explicitly changes or contradicts it.\n`
                 : `using the CURRENT CONCEPT plus ONLY the NEW STORY EVIDENCE provided. Preserve established concept content unless new evidence explicitly changes or contradicts it.\n`) +
-            `Return one valid JSON object wrapped exactly once in ${fence.open} and ${fence.close}. The complete top-level shape is:\n${responseShape}\n` +
-            (allowLore ? `Use null for unchanged lore, {} for no data changes, and {} for no link changes. A changed lore or data field must use ` : `This entity type has no Lore field. Never return a lore key. Use {} for no data or link changes. A changed data field must use `) +
+            `Return one valid JSON object and nothing else. The complete top-level shape is:\n${responseShape}\n` +
+            `Lore is composed separately. Never return a lore key here. Use {} for no data or link changes. A changed data field must use ` +
             `{"value":"<value>","certainty":"explicit","support":"<direct support>","evidence":["${evidenceExample}"]}. ` +
             `A link entry must use the exact valid JSON shape shown in ALLOWED LINKS below. Never output angle-bracket placeholders.\n` +
             `ENTITY TYPE CONTRACT:\n${ENRICH_TYPE_GUIDANCE[ent.type] || 'A persistent canonical world entity.'}\n` +
             (fieldLines ? `Allowed data fields:\n${fieldLines}\n` : '') +
+            (fieldCoverage.emptyFields.length ? `Empty writable fields that deserve explicit coverage when evidence supports them: ${fieldCoverage.emptyFields.join(', ')}\n` : '') +
             (relBlocks.length ? `Allowed links (use the exact candidate names, never invent a name):\n${relBlocks.map(b => b.line).join('\n')}\n` : '') +
             `STRICT RULES:\n` +
             `- Fill a field or propose a link ONLY when the passages state it explicitly and unambiguously. When unsure, omit it — returning few or no fields is correct and expected.\n` +
             `- Every proposed change must cite one or more supplied evidence IDs. Never cite an ID that does not support the exact change.\n` +
             `- Set certainty to "explicit" only when the evidence directly entails the exact value or relation. Inference, implication, symbolism, genre convention, probability, and interpretation are not explicit. Omit anything that is not explicit.\n` +
-            (allowLore ? `- Do not return unchanged fields, unchanged links, or unchanged lore. An empty object is correct when the new evidence changes nothing.\n` : `- Do not return unchanged concept content or unchanged links. An empty object is correct when the new evidence changes nothing.\n`) +
+            `- Do not return unchanged fields or unchanged links. Empty data and links objects are correct when the new evidence changes nothing.\n` +
             `- Existing values are canonical context, not protected blanks. When new explicit evidence changes an existing value, propose the replacement and explain the direct support. Never replace a value merely to rephrase it.\n` +
             `- Never infer, estimate, or compute a value. Do not write reasoning, ranges, or hedged phrases ("about", "at least", "since ...") as a value; give the concrete literal value or omit the field entirely.\n` +
             `- Only link two entities when the text directly establishes that exact relation. In particular, only nest a location inside another when the passages explicitly say one place is physically within the other — never by mere association or proximity.\n` +
-            (allowLore ? `- Lore may synthesise the current record with new evidence; field and link VALUES must be literal and drawn straight from the evidence.\n` : '') +
-            (allowLore ? `- Canonical lore contains established facts and grounded chronology only. Never attribute thoughts, motives, understanding, philosophy, intention, causation, or moral meaning unless the evidence explicitly attributes it to the entity. Never turn metaphor into fact, consequence into intent, absence into death, transformation into death, or association into a relationship.\n` : '') +
+            `- Field and link VALUES must be literal and drawn straight from the evidence.\n` +
             `- CANONICAL SYSTEM / CONCEPT CONTEXT defines setting-specific terms. Use it to interpret evidence, but do not copy a concept's facts into this entity unless the evidence explicitly connects them.\n` +
-            `Do not invent facts, names, or fields absent from the passages. Write nothing outside the fence.`;
+            `Do not invent facts, names, or fields absent from the passages.`;
         const userPromptPrefix =
             `${allowLore ? 'CURRENT RECORD' : 'CURRENT CONCEPT'}:\nName: ${ent.canonicalName}\nAliases: ${ent.aliases?.join(', ') || '(none)'}\n` +
             (allowLore ? `Lore: ${ent.lore ? ent.lore : '(no lore yet)'}\n` : '') +
             (Object.keys(currentData).length ? `Current fields: ${JSON.stringify(currentData)}\n` : '') +
             (systemContext ? `\nCANONICAL SYSTEM / CONCEPT CONTEXT:\n${systemContext}\n` : '');
 
+        let entityInputTokens = 0;
+        let entityOutputTokens = 0;
         try {
             const maxTokens = entityEnrichmentMaxTokens(ent);
-            const requestUpdate = (evidence, retry = false, outputTokens = maxTokens) => sendApiRequest({
-                apiProfileId,
-                model,
-                systemPrompt: retry
-                    ? `${systemPrompt}\nCORRECTION: Your previous reply could not be parsed. Return only the fenced, valid JSON object. Keep unchanged sections empty and make the response as concise as the evidence permits.`
-                    : systemPrompt,
-                chatHistory: [],
-                newPrompt: `${userPromptPrefix}\nNEW STORY EVIDENCE (chronological):\n${evidence.map(entry => entry.prompt).join('\n\n')}`,
-                temperature: 0.1,
-                maxTokens: outputTokens,
-                manualMode,
-                manualJson,
-                includeResponseMetadata: true
-            });
+            const requestUpdate = async (evidence, retry = false, outputTokens = maxTokens) => {
+                const requestSystemPrompt = retry
+                    ? `${systemPrompt}\nCORRECTION: Your previous reply could not be parsed. Return only the valid JSON object. Keep unchanged sections empty and make the response as concise as the evidence permits.`
+                    : systemPrompt;
+                const requestPrompt = `${userPromptPrefix}\nNEW STORY EVIDENCE (chronological):\n${evidence.map(entry => entry.prompt).join('\n\n')}`;
+                entityInputTokens += estimateTokens(requestSystemPrompt) + estimateTokens(requestPrompt);
+                const requestResult = await sendApiRequest({
+                    apiProfileId,
+                    model,
+                    systemPrompt: requestSystemPrompt,
+                    chatHistory: [],
+                    newPrompt: requestPrompt,
+                    temperature: 0.1,
+                    maxTokens: outputTokens,
+                    manualMode,
+                    manualJson,
+                    jsonMode: true,
+                    jsonSchema: buildEntityUpdateSchema(),
+                    includeResponseMetadata: true
+                });
+                entityOutputTokens += estimateTokens(requestResult.content);
+                return requestResult;
+            };
             let activeEvidence = includedEvidence;
+            let retryCount = 0;
             let result = await requestUpdate(activeEvidence);
             let response = result.content;
-            let head = splitHeadAndBody(response, fence);
-            let parsed = safeParseObject(head.body) || safeParseObject(response);
-            if (!isEntityUpdateShape(parsed, allowLore)) {
+            let parsedResult = parseEntityUpdateObject(response);
+            let parsed = parsedResult.value;
+            if (!isStructuredEntityUpdate(parsed)) {
                 const firstFailure = result.truncated
                     ? 'The System AI response reached its output limit before the entity update was complete.'
                     : parsed
                     ? 'The System AI returned JSON using an unsupported entity update shape.'
-                    : describeStructuredObjectFailure(response, fence);
-                if (result.truncated) activeEvidence = selectEntityEvidence(evidenceEntries, 8000);
+                    : 'The System AI returned invalid structured JSON.';
+                if (result.truncated) {
+                    const previousActive = activeEvidence;
+                    activeEvidence = selectEntityEvidence(evidenceEntries, 3000);
+                    const retainedIds = new Set(activeEvidence.map(entry => entry.id));
+                    updateState.transition(
+                        workspaceId,
+                        ent.id,
+                        previousActive.filter(entry => !retainedIds.has(entry.id)),
+                        'deferred',
+                        runId,
+                        'token-budget'
+                    );
+                }
                 const retryTokens = result.truncated ? Math.min(8000, Math.ceil(maxTokens * 1.5)) : maxTokens;
+                retryCount++;
                 result = await requestUpdate(activeEvidence, true, retryTokens);
                 response = result.content;
-                head = splitHeadAndBody(response, fence);
-                parsed = safeParseObject(head.body) || safeParseObject(response);
-                if (!isEntityUpdateShape(parsed, allowLore)) {
+                parsedResult = parseEntityUpdateObject(response);
+                parsed = parsedResult.value;
+                if (!isStructuredEntityUpdate(parsed)) {
                     failed++;
+                    consecutiveStructuredFailures++;
                     const retryFailure = result.truncated
                         ? 'The System AI response reached its output limit before the entity update was complete.'
                         : parsed
                         ? 'The System AI returned JSON using an unsupported entity update shape.'
-                        : describeStructuredObjectFailure(response, fence);
+                        : 'The System AI returned invalid structured JSON.';
                     rememberFailure(ent, `${retryFailure} Automatic retry also failed. First response: ${firstFailure}`);
+                    updateState.transition(workspaceId, ent.id, activeEvidence, 'deferred', runId, 'structured-output-failure');
+                    updateState.updateJob(runId, ent.id, {
+                        status: 'failed',
+                        input_tokens: entityInputTokens,
+                        output_tokens: entityOutputTokens,
+                        retry_count: retryCount,
+                        evidence_used: activeEvidence.length,
+                        error: retryFailure
+                    });
                     continue;
                 }
             }
 
+            consecutiveStructuredFailures = 0;
+            parsed = decodeEntityUpdate(parsed);
             const policy = ent.data?.aiPolicy || 'review';
-            const incoming = (parsed.data && typeof parsed.data === 'object') ? parsed.data : {};
+            const incoming = parsed.data;
             const activeEvidenceIds = new Set(activeEvidence.map(entry => entry.id));
             const skippedTextualEvidence = evidenceEntries.filter(entry => !entry.chunk.isTagged && !activeEvidenceIds.has(entry.id));
             const pendingTaggedEvidence = evidenceEntries.filter(entry => entry.chunk.isTagged && !activeEvidenceIds.has(entry.id));
@@ -2097,6 +2233,7 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                 const proposal = readProposal(incoming[f]);
                 if (!proposal) continue;
                 let v = proposal.value;
+                if (isUnsupportedNumericDelta(v, proposal.support)) continue;
                 if (ENRICH_ENUMS[f]) {
                     const match = ENRICH_ENUMS[f].find(o => o.toLowerCase() === v.toLowerCase());
                     if (!match) continue;
@@ -2105,9 +2242,7 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                 const cur = ent.data?.[f] == null ? '' : String(ent.data[f]).trim();
                 if (v !== cur) proposedData[f] = { value: v, evidence: proposal.evidence, support: proposal.support };
             }
-            const loreProposal = allowLore ? readProposal(parsed.lore) : null;
-            const incomingLore = loreProposal?.value || '';
-            const loreChanged = !!incomingLore && incomingLore !== (ent.lore || '').trim();
+            let loreProposal = null;
 
             // Resolve the AI's link proposals: only listed candidate names, resolved to real
             // ids of the right type, excluding self and edges that already exist.
@@ -2131,7 +2266,9 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                     const name = String(item.name || '').trim();
                     if (!name) continue;
                     const label = (spec.labeled && item && typeof item === 'object' && item.label != null) ? String(item.label).trim() : null;
-                    const targetId = entitiesStore.resolveMention(name, spec.targetType, workspaceId);
+                    const targetId = (spec.targetTypes || [spec.targetType])
+                        .map(type => entitiesStore.resolveMention(name, type, workspaceId))
+                        .find(Boolean);
                     if (!targetId || targetId === ent.id || existing.has(targetId)) continue;
                     const dedupe = `${targetId}:${label || ''}`;
                     if (seen.has(dedupe)) continue;
@@ -2141,6 +2278,40 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                 }
             }
 
+            if (allowLore) {
+                const loreEvidence = activeEvidence.map(entry => entry.prompt).join('\n\n');
+                const loreSystemPrompt = `${getSystemLanguageInstruction()}\nCompose cumulative canonical Lore from validated findings and cited evidence. Return only the requested JSON object.`;
+                const lorePrompt = buildLorePrompt({
+                    entityName: ent.canonicalName,
+                    entityType: ent.type,
+                    currentLore: ent.lore,
+                    findings: { data: proposedData, links: proposedLinks },
+                    evidence: loreEvidence
+                });
+                entityInputTokens += estimateTokens(loreSystemPrompt) + estimateTokens(lorePrompt);
+                const loreResponse = await sendApiRequest({
+                    apiProfileId,
+                    model,
+                    systemPrompt: loreSystemPrompt,
+                    chatHistory: [],
+                    newPrompt: lorePrompt,
+                    temperature: 0.1,
+                    maxTokens: entityEnrichmentMaxTokens(ent),
+                    manualMode,
+                    manualJson,
+                    jsonMode: true,
+                    jsonSchema: buildEntityLoreSchema()
+                });
+                entityOutputTokens += estimateTokens(loreResponse);
+                const loreObject = parseEntityUpdateObject(loreResponse).value;
+                loreProposal = validateEntityLore(
+                    loreObject,
+                    ent.lore,
+                    new Set(activeEvidence.map(entry => entry.id))
+                );
+            }
+            const incomingLore = loreProposal?.value || '';
+            const loreChanged = Boolean(loreProposal);
             const hasChange = Object.keys(proposedData).length || loreChanged || proposedLinks.length;
             evidenceUsed += activeEvidence.length;
             taggedEvidenceRemaining += pendingTaggedEvidence.length;
@@ -2148,12 +2319,25 @@ async function enrichEntities(workspaceId, progressCallback = null) {
             const markIncludedProcessed = () => {
                 const processedAt = Date.now();
                 db.transaction(() => {
-                    for (const entry of [...activeEvidence, ...skippedTextualEvidence]) {
-                        markChunkProcessed.run(ent.id, entry.chunk.id, entityEnrichmentSignature(entry.chunk), processedAt);
+                    for (const entry of activeEvidence) {
+                        markChunkProcessed.run(ent.id, entry.chunk.id, entityEnrichmentSignature(entry.chunk, fieldCoverage.signature), processedAt);
                     }
                 })();
             };
-            if (!hasChange) { markIncludedProcessed(); clearEnrichmentError.run(workspaceId, ent.id); continue; }
+            if (!hasChange) {
+                markIncludedProcessed();
+                updateState.transition(workspaceId, ent.id, activeEvidence, 'non-actionable', runId);
+                updateState.updateJob(runId, ent.id, {
+                    status: 'completed',
+                    input_tokens: entityInputTokens,
+                    output_tokens: entityOutputTokens,
+                    retry_count: retryCount,
+                    evidence_used: activeEvidence.length,
+                    proposals_created: 0
+                });
+                clearEnrichmentError.run(workspaceId, ent.id);
+                continue;
+            }
 
             if (policy === 'open') {
                 // Apply everything directly. Only touch what changed, and clear any staged
@@ -2192,15 +2376,33 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                 staged++;
             }
             markIncludedProcessed();
+            updateState.transition(workspaceId, ent.id, activeEvidence, 'actionable', runId);
+            updateState.updateJob(runId, ent.id, {
+                status: 'completed',
+                input_tokens: entityInputTokens,
+                output_tokens: entityOutputTokens,
+                retry_count: retryCount,
+                evidence_used: activeEvidence.length,
+                proposals_created: Object.keys(proposedData).length + proposedLinks.length + (loreChanged ? 1 : 0)
+            });
             clearEnrichmentError.run(workspaceId, ent.id);
         } catch (e) {
             console.error(`[Enrich] ${ent.canonicalName} failed (continues):`, e.message);
             failed++;
             rememberFailure(ent, e);
+            updateState.transition(workspaceId, ent.id, includedEvidence, 'deferred', runId, 'processing-failure');
+            updateState.updateJob(runId, ent.id, {
+                status: 'failed',
+                input_tokens: entityInputTokens,
+                output_tokens: entityOutputTokens,
+                error: cleanErrorMessage(e)
+            });
         }
     }
     if (progressCallback) progressCallback({ phase: 'enriching', done: targets.length, total: targets.length });
-    return { entities: targets.length, updated, staged, upToDate, noEvidence, failed, failures, evidenceUsed, taggedEvidenceRemaining, textMatchesSkipped };
+    const runStatus = failed || shouldStopEntityUpdates(consecutiveStructuredFailures) ? 'partial' : 'completed';
+    const runTotals = updateState.finishRun(runId, runStatus);
+    return { entities: targets.length, updated, staged, upToDate, noEvidence, failed, failures, evidenceUsed, taggedEvidenceRemaining, textMatchesSkipped, runId, runStatus, runTotals };
 }
 
 async function executeSummarizationInternal({ chatId, selectedMessages, newSummarizedIndex, customTitle, profileId }) {
@@ -2306,7 +2508,7 @@ function readEntireKbFile(ownerId, fileName) {
 
 // --- AGENTIC RAG SYSTEM ---
 
-async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory = [], webContents = null, includeChatContext = true, executor = profile) {
+async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory = [], webContents = null, includeChatContext = true, executor = profile, run = null) {
     console.log(`[Agentic RAG] Starting autonomous retrieval loop for: ${profile.name}`);
     const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
 
@@ -2437,9 +2639,10 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
     let agenticRagOutputTokens = 0;
 
     while (currentTurn <= maxTurns && !finished) {
+        throwIfRunCancelled(run);
         console.log(`[Agentic RAG] Turn ${currentTurn}/${maxTurns}`);
         if (webContents) {
-            webContents.send('workflow-progress', {
+            sendRunEvent(webContents, 'workflow-progress', run, {
                 profileName: profile.name,
                 status: `Agentic RAG: Investigating... (Turn ${currentTurn}/${maxTurns})`
             });
@@ -2458,9 +2661,10 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                 newPrompt: messagesText,
                 temperature: 0.1,
                 maxTokens: 4000,
+                maxPayloadTokens: normalizeMaxApiPayload(chat?.maxContext),
                 manualMode: false,
                 manualJson: '',
-                abortSignal: activeRun?.controller?.signal
+                abortSignal: run?.controller?.signal
             });
 
             agenticRagOutputTokens += estimateTokens(agentOutput);
@@ -2659,13 +2863,11 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                                 : (chat.knowledgeFiles || []);
                         } catch (e) { }
                     }
-                    const chatKbResults = rawChatKbResults.filter(r => {
-                        const fileMatch = chatKbFiles.find(f => f.name.toLowerCase() === r.source.toLowerCase());
-                        if (fileMatch && (fileMatch.strategy === 'constant' || fileMatch.strategy === 'full_context')) {
-                            return false;
-                        }
-                        return true;
-                    });
+                    const chatKbResults = filterWorkspaceKnowledgeResults(
+                        rawChatKbResults,
+                        chatKbFiles,
+                        profile.id
+                    );
 
                     profileResults.forEach(r => {
                         retrievedProfileChunks.set(r.id, { text: r.text, source: r.source });
@@ -2698,13 +2900,11 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                                 : (chat.memoryBlocks || []);
                         } catch (e) { }
                     }
-                    const memResults = rawMemResults.filter(r => {
-                        const snippetMatch = chatMemoryBlocks.find(b => b.id === r.blockId || (b.title && b.title.toLowerCase() === r.source.toLowerCase()));
-                        if (snippetMatch && snippetMatch.strategy === 'constant') {
-                            return false;
-                        }
-                        return true;
-                    });
+                    const memResults = filterWorkspaceMemoryResults(
+                        rawMemResults,
+                        chatMemoryBlocks,
+                        profile.id
+                    );
 
                     if (includeChatContext) {
                         memResults.forEach(r => {
@@ -2730,7 +2930,11 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                     let entityChunks = [], entityIds = [];
                     if (includeChatContext) {
                         const looked = lookupEntityChunks(call.arg, chatId, 'chat_memory');
-                        entityChunks = looked.chunks || [];
+                        entityChunks = filterWorkspaceMemoryResults(
+                            looked.chunks || [],
+                            chat?.memoryBlocks || [],
+                            profile.id
+                        );
                         entityIds = Array.isArray(looked.entityIds) ? [...looked.entityIds] : [];
                     }
                     let registryEntity = null;
@@ -2860,7 +3064,8 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                                 ? JSON.parse(chat.knowledgeFiles)
                                 : chat.knowledgeFiles;
                             const fileMatch = chatKbFiles.find(f => f.name.toLowerCase() === call.arg.toLowerCase());
-                            if (fileMatch && (!fileMatch.strategy || fileMatch.strategy === 'constant' || fileMatch.strategy === 'full_context')) {
+                            if (fileMatch && (!fileMatch.profiles || fileMatch.profiles.length === 0 || fileMatch.profiles.includes(profile.id))
+                                && (!fileMatch.strategy || fileMatch.strategy === 'constant' || fileMatch.strategy === 'full_context')) {
                                 isConstant = true;
                             }
                         } catch (e) { }
@@ -2881,7 +3086,10 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                             const snippets = typeof chat.memoryBlocks === 'string'
                                 ? JSON.parse(chat.memoryBlocks)
                                 : chat.memoryBlocks;
-                            const snippetMatch = snippets.find(s => s.type === 'manual' && (s.title || s.source || '').toLowerCase() === call.arg.toLowerCase() && s.strategy === 'constant');
+                            const snippetMatch = snippets.find(s => s.type === 'manual'
+                                && (s.title || s.source || '').toLowerCase() === call.arg.toLowerCase()
+                                && (!s.profiles || s.profiles.length === 0 || s.profiles.includes(profile.id))
+                                && s.strategy === 'constant');
                             if (snippetMatch) {
                                 isConstant = true;
                             }
@@ -2894,8 +3102,18 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                         let fileText = readEntireKbFile(profile.id, call.arg);
                         let fileSource = 'profile';
                         if (fileText.startsWith("[System: File not found") && includeChatContext) {
-                            fileText = readEntireKbFile(chatId, call.arg);
-                            fileSource = 'chat';
+                            const chatFiles = typeof chat?.knowledgeFiles === 'string'
+                                ? JSON.parse(chat.knowledgeFiles || '[]')
+                                : (chat?.knowledgeFiles || []);
+                            const allowed = chatFiles.some(file =>
+                                String(file.name || '').toLowerCase() === call.arg.toLowerCase()
+                                && file.enabled !== false
+                                && (!file.profiles || file.profiles.length === 0 || file.profiles.includes(profile.id))
+                            );
+                            if (allowed) {
+                                fileText = readEntireKbFile(chatId, call.arg);
+                                fileSource = 'chat';
+                            }
                         }
 
                         if (!fileText.startsWith("[System: File not found")) {
@@ -2965,7 +3183,7 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
             console.error(`[Agentic RAG] Loop error at turn ${currentTurn}:`, err);
             loopDegraded = true;
             if (webContents) {
-                webContents.send('workflow-progress', {
+                sendRunEvent(webContents, 'workflow-progress', run, {
                     profileName: profile.name,
                     status: 'Agentic RAG: retrieval error, continuing with partial context'
                 });

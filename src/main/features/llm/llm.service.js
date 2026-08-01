@@ -4,6 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const { fetch: undiciFetch, Agent } = require('undici');
 const { getResponseMetadata } = require('./response-metadata');
+const { openAiResponseFormat, applyBedrockStructuredOutput } = require('./structured-output');
+const { assertPayloadWithinLimit } = require('./payload-budget');
 
 // undici's default 300s headersTimeout aborts slow local generations
 // (stream:false sends headers only when generation finishes). 30 min ceiling.
@@ -229,7 +231,7 @@ function parseStreamChunk(obj, provider) {
 
 // --- CORE API REQUESTS ---
 
-async function buildRequest({ apiProfileId, model, systemPrompt, chatHistory, newPrompt, temperature, maxTokens, manualMode, manualJson, attachedImages, stream = false }) {
+async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistory = [], newPrompt = '', temperature, maxTokens, maxPayloadTokens, manualMode, manualJson, attachedImages, stream = false, jsonMode = false, jsonSchema = null }) {
     try {
         const variables = db.prepare('SELECT key, value FROM variables').all();
         for (const variable of variables) {
@@ -269,6 +271,14 @@ async function buildRequest({ apiProfileId, model, systemPrompt, chatHistory, ne
         role: msg.role === 'ai' ? 'assistant' : msg.role,
         content: msg.content
     }));
+    assertPayloadWithinLimit({
+        maxPayloadTokens,
+        systemPrompt,
+        chatHistory: cleanHistory,
+        newPrompt,
+        attachedImageCount: attachedImages?.length || 0,
+        outputTokens: maxTokens ?? 1000
+    });
 
     switch (provider) {
         case 'openai':
@@ -321,6 +331,7 @@ async function buildRequest({ apiProfileId, model, systemPrompt, chatHistory, ne
                 temperature: temperature ?? 0.7,
                 stream: false
             };
+            if (jsonMode && provider !== 'local') requestBody.response_format = openAiResponseFormat(jsonSchema);
             if (needsMaxCompletionTokens(model)) {
                 requestBody.max_completion_tokens = maxTokens ?? 1000;
             } else {
@@ -410,7 +421,8 @@ async function buildRequest({ apiProfileId, model, systemPrompt, chatHistory, ne
                 contents: geminiContents,
                 generationConfig: {
                     temperature: temperature ?? 0.7,
-                    maxOutputTokens: maxTokens ?? 1000
+                    maxOutputTokens: maxTokens ?? 1000,
+                    ...(jsonMode ? { responseMimeType: 'application/json' } : {})
                 }
             };
             break;
@@ -462,7 +474,8 @@ async function buildRequest({ apiProfileId, model, systemPrompt, chatHistory, ne
                 contents: vertexContents,
                 generationConfig: {
                     temperature: temperature ?? 0.7,
-                    maxOutputTokens: maxTokens ?? 1000
+                    maxOutputTokens: maxTokens ?? 1000,
+                    ...(jsonMode ? { responseMimeType: 'application/json' } : {})
                 }
             };
             break;
@@ -512,6 +525,7 @@ async function buildRequest({ apiProfileId, model, systemPrompt, chatHistory, ne
                     messages: bedrockMessages,
                     temperature: temperature ?? 0.7
                 };
+                requestBody = applyBedrockStructuredOutput(requestBody, jsonSchema);
             } else if (model.toLowerCase().includes("meta") || model.toLowerCase().includes("llama")) {
                 let bedrockPrompt = newPrompt;
                 if (attachedImages && attachedImages.length > 0) {

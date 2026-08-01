@@ -211,8 +211,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('workflow-context-overflow', listener);
     return () => ipcRenderer.off('workflow-context-overflow', listener);
   },
-  respondToError: (decision) => ipcRenderer.send('respond-to-error', decision),
-  respondToOverflow: (decision, editedText) => ipcRenderer.send('respond-to-overflow', { decision, editedText }),
+  respondToError: (decision, runId) => ipcRenderer.send('respond-to-error', { decision, runId }),
+  respondToOverflow: (decision, editedText, runId) => ipcRenderer.send('respond-to-overflow', { decision, editedText, runId }),
 
   // --- UTILITIES ---
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),

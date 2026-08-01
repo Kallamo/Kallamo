@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Sparkles, ChevronDown, X, AlertTriangle } from 'lucide-react';
+import { Sparkles, X, AlertTriangle } from 'lucide-react';
 import Button from './ui/Button';
+import SearchableSelect from './ui/SearchableSelect';
 
 // The invocation modal: highlighted span + Profile dropdown (swap on the spot) +
 // intermediate prompt (the per-invocation instruction). The result review happens
@@ -10,7 +11,6 @@ const CHANNELS = ['replacement', 'insertion', 'analysis'];
 export function InvokeModal({ selection, profiles, initialChannel, onSubmit, onClose }) {
   const [profileId, setProfileId] = useState(profiles[0]?.id || '');
   const [prompt, setPrompt] = useState('');
-  const [open, setOpen] = useState(false);
   const [channel, setChannel] = useState(CHANNELS.includes(initialChannel) ? initialChannel : 'replacement');
   const selected = profiles.find(p => p.id === profileId);
 
@@ -32,25 +32,9 @@ export function InvokeModal({ selection, profiles, initialChannel, onSubmit, onC
         {profiles.length === 0 ? (
           <p className="text-sm text-amber-400/90 mb-4">No active writing profiles in this workspace. Activate one in the Chat tab to invoke the AI here.</p>
         ) : (
-          <div className="relative mb-3">
+          <div className="mb-3">
             <label className="block text-[11px] uppercase tracking-wide text-gray-500 mb-1">Profile</label>
-            <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between gap-2 bg-[#011419] border border-gray-800 rounded-lg px-3 py-2 text-sm text-gray-200 hover:border-gray-700">
-              <span className="flex items-center gap-2 min-w-0">
-                {selected?.color && <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: selected.color }} />}
-                <span className="truncate">{selected?.name || 'Select profile'}</span>
-              </span>
-              <ChevronDown className="w-4 h-4 text-gray-500 shrink-0" />
-            </button>
-            {open && (
-              <div className="absolute z-10 mt-1 w-full max-h-56 overflow-y-auto custom-scrollbar bg-[#0a161d] border border-gray-800 rounded-lg shadow-xl py-1">
-                {profiles.map(p => (
-                  <button key={p.id} onClick={() => { setProfileId(p.id); setOpen(false); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-300 hover:bg-white/5 text-left">
-                    {p.color && <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: p.color }} />}
-                    <span className="truncate">{p.name}</span>
-                  </button>
-                ))}
-              </div>
-            )}
+            <SearchableSelect value={profileId} onChange={setProfileId} options={profiles.map(profile => ({ id: profile.id, label: profile.name, color: profile.color }))} placeholder="Search for a profile" />
           </div>
         )}
 

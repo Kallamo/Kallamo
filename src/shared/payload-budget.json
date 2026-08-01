@@ -1,0 +1,9 @@
+{
+  "defaultMaxPayloadTokens": 128000,
+  "minimumMaxPayloadTokens": 4096,
+  "maximumMaxPayloadTokens": 2000000,
+  "safetyMarginTokens": 256,
+  "messageOverheadTokens": 4,
+  "requestOverheadTokens": 2,
+  "imageReserveTokens": 4096
+}

@@ -4,6 +4,7 @@
 // and workflow-runner; keep it free of Electron/IPC concerns.
 const db = require('./database');
 const crypto = require('crypto');
+const { discardEnrichPending } = require('./features/worldbuild/entity-review');
 
 function parseJsonArray(raw) {
   if (!raw) return [];
@@ -536,14 +537,58 @@ function bulkDeleteEntities(workspaceId, ids) {
   return { deleted: rows.length, ...summary };
 }
 
-function bulkAcceptAll(workspaceId, ids) {
-  let proposed;
-  let updates;
+function bulkRejectProposed(workspaceId, ids) {
+  const rows = bulkEntityRows(workspaceId, ids);
+  let rejected = 0, skipped = 0;
   db.transaction(() => {
-    updates = bulkAcceptEnrichUpdates(workspaceId, ids);
-    proposed = bulkAcceptProposed(workspaceId, ids);
+    for (const row of rows) {
+      if (row.status !== 'proposed') {
+        skipped++;
+        continue;
+      }
+      deleteEntity(row.id);
+      rejected++;
+    }
   })();
-  return { proposed, updates };
+  return { rejected, skipped };
+}
+
+function bulkRejectEnrichUpdates(workspaceId, ids) {
+  const rows = bulkEntityRows(workspaceId, ids);
+  let rejected = 0, fields = 0, lore = 0, links = 0, chapters = 0, skipped = 0;
+  db.transaction(() => {
+    for (const row of rows) {
+      if (row.status === 'proposed') {
+        skipped++;
+        continue;
+      }
+      const result = discardEnrichPending(row.data);
+      if (!result) {
+        skipped++;
+        continue;
+      }
+      updateEntity(row.id, { data: result.data });
+      fields += result.fields;
+      lore += row.type === 'System' ? 0 : result.lore;
+      links += result.links;
+      chapters += result.chapters;
+      rejected++;
+    }
+  })();
+  return { rejected, fields, lore, links, chapters, skipped };
+}
+
+function resetEntityEnrichmentProgress(workspaceId, ids) {
+  const rows = bulkEntityRows(workspaceId, ids).filter(row => row.status !== 'proposed');
+  if (!rows.length) return { reset: 0 };
+  const placeholders = rows.map(() => '?').join(', ');
+  const rowIds = rows.map(row => row.id);
+  db.transaction(() => {
+    db.prepare(`DELETE FROM entity_enrichment_chunks WHERE entityId IN (${placeholders})`).run(...rowIds);
+    db.prepare(`DELETE FROM entity_update_evidence WHERE workspace_id = ? AND entity_id IN (${placeholders})`).run(workspaceId, ...rowIds);
+    db.prepare(`DELETE FROM entity_enrichment_errors WHERE workspaceId = ? AND entityId IN (${placeholders})`).run(workspaceId, ...rowIds);
+  })();
+  return { reset: rows.length };
 }
 
 module.exports = {
@@ -571,5 +616,7 @@ module.exports = {
   bulkAcceptProposed,
   bulkAcceptEnrichUpdates,
   bulkDeleteEntities,
-  bulkAcceptAll,
+  bulkRejectProposed,
+  bulkRejectEnrichUpdates,
+  resetEntityEnrichmentProgress,
 };

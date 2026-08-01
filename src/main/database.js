@@ -278,7 +278,8 @@ db.exec(`
     vector TEXT NOT NULL,
     createdAt INTEGER NOT NULL,
     enabled INTEGER DEFAULT 1,
-    manuallyEdited INTEGER DEFAULT 0
+    manuallyEdited INTEGER DEFAULT 0,
+    memoryBlockId TEXT
   );
 
   CREATE TABLE IF NOT EXISTS deleted_records (
@@ -741,6 +742,51 @@ try {
     db.exec("ALTER TABLE knowledge_chunks ADD COLUMN ordinal INTEGER");
     console.log("Database Migration: Added ordinal column to knowledge_chunks table.");
   }
+  if (!kcColumns.includes('memoryBlockId')) {
+    db.exec("ALTER TABLE knowledge_chunks ADD COLUMN memoryBlockId TEXT");
+    console.log("Database Migration: Added memoryBlockId column to knowledge_chunks table.");
+  }
+
+  const chatsWithMemory = db.prepare(
+    "SELECT id, memoryBlocks FROM chats WHERE memoryBlocks IS NOT NULL AND memoryBlocks != '[]'"
+  ).all();
+  const unlinkedMemoryChunks = db.prepare(`
+    SELECT id, ownerId, source, createdAt FROM knowledge_chunks
+    WHERE ownerType = 'chat_memory' AND memoryBlockId IS NULL
+  `).all();
+  if (chatsWithMemory.length && unlinkedMemoryChunks.length) {
+    const blocksByChat = new Map();
+    for (const chat of chatsWithMemory) {
+      try {
+        const blocks = JSON.parse(chat.memoryBlocks || '[]')
+          .filter(block => block?.id)
+          .map(block => ({
+            id: block.id,
+            timestamp: Number(String(block.id).match(/^(?:block|manual|mem)_(\d+)/)?.[1]) || Number(block.timestamp) || 0
+          }));
+        blocksByChat.set(chat.id, blocks);
+      } catch {
+        blocksByChat.set(chat.id, []);
+      }
+    }
+    const linkMemoryChunk = db.prepare('UPDATE knowledge_chunks SET memoryBlockId = ? WHERE id = ?');
+    db.transaction(() => {
+      for (const chunk of unlinkedMemoryChunks) {
+        const blocks = blocksByChat.get(chunk.ownerId) || [];
+        const direct = blocks.find(block => block.id === chunk.id);
+        const candidates = chunk.source === 'Chat Archive'
+          ? blocks.filter(block => block.id.startsWith('block_') && block.timestamp)
+          : blocks.filter(block => block.id === chunk.id);
+        const nearest = direct || candidates.reduce((best, block) => {
+          if (!best) return block;
+          return Math.abs(block.timestamp - chunk.createdAt) < Math.abs(best.timestamp - chunk.createdAt)
+            ? block
+            : best;
+        }, null);
+        if (nearest) linkMemoryChunk.run(nearest.id, chunk.id);
+      }
+    })();
+  }
 
   // manual=1 marks a tag the user pinned by hand. Used for keyword (yellow) tags on
   // file chunks, which have no per-chunk JSON store, so re-tag must preserve them.
@@ -810,6 +856,66 @@ try {
       UNIQUE(workspaceId, entityId)
     );
     CREATE INDEX IF NOT EXISTS idx_entity_enrichment_errors_workspace ON entity_enrichment_errors(workspaceId, createdAt DESC);
+
+    CREATE TABLE IF NOT EXISTS entity_update_runs (
+      run_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'partial', 'failed')),
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      evidence_used INTEGER NOT NULL DEFAULT 0,
+      proposals_created INTEGER NOT NULL DEFAULT 0,
+      started_at INTEGER NOT NULL,
+      completed_at INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS entity_update_jobs (
+      run_id TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'skipped')),
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      evidence_used INTEGER NOT NULL DEFAULT 0,
+      proposals_created INTEGER NOT NULL DEFAULT 0,
+      error TEXT,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (run_id, entity_id),
+      FOREIGN KEY (run_id) REFERENCES entity_update_runs (run_id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS entity_update_evidence (
+      workspace_id TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      chunk_id TEXT NOT NULL,
+      signature TEXT NOT NULL,
+      state TEXT NOT NULL CHECK (state IN (
+        'discovered', 'queued', 'deferred', 'evaluated', 'actionable',
+        'non-actionable', 'superseded', 'invalidated'
+      )),
+      strength TEXT NOT NULL CHECK (strength IN ('tagged', 'mention')),
+      last_run_id TEXT,
+      reason TEXT,
+      discovered_at INTEGER NOT NULL,
+      evaluated_at INTEGER,
+      PRIMARY KEY (workspace_id, entity_id, chunk_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_entity_update_evidence_queue
+      ON entity_update_evidence (workspace_id, entity_id, state, discovered_at);
+    CREATE INDEX IF NOT EXISTS idx_entity_update_jobs_status
+      ON entity_update_jobs (run_id, status, updated_at);
+
+    CREATE TRIGGER IF NOT EXISTS trg_entity_update_evidence_chunk_gc
+    AFTER DELETE ON knowledge_chunks
+    FOR EACH ROW BEGIN
+      DELETE FROM entity_update_evidence WHERE chunk_id = OLD.id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_entity_update_evidence_entity_gc
+    AFTER DELETE ON entities
+    FOR EACH ROW BEGIN
+      DELETE FROM entity_update_evidence WHERE entity_id = OLD.id;
+    END;
 
     CREATE TRIGGER IF NOT EXISTS trg_entity_enrichment_chunks_chunk_gc
     AFTER DELETE ON knowledge_chunks

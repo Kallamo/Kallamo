@@ -464,7 +464,7 @@ function ColorPopover({ editor }) {
         )}
 
         {showPicker && (
-          <div className="absolute left-full top-0 ml-2 w-52 p-3 bg-[#0a161d] border border-gray-800 rounded-lg shadow-2xl">
+          <div className="mt-3 border-t border-gray-800 pt-3">
             <ColorPicker value={draft} onChange={setDraft} />
             <div className="flex justify-end gap-2 mt-3">
               <Button variant="ghost" size="sm" onMouseDown={(e) => { e.preventDefault(); setShowPicker(false); }}>Cancel</Button>
@@ -706,18 +706,6 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     });
     return off;
   }, [electronAPI, doc.id]);
-
-  // Clicking the paper's empty margins (outside the ProseMirror content box) doesn't
-  // focus the editor on its own. Treat such a click as "start writing": place the
-  // cursor at the end of the text. Clicks landing on actual content fall through so
-  // ProseMirror positions the cursor where the user clicked.
-  const onPaperMouseDown = (e) => {
-    if (locked || !editor) return;
-    const pm = editor.view?.dom;
-    if (pm && pm.contains(e.target)) return;
-    e.preventDefault();
-    editor.commands.focus('end');
-  };
 
   // Re-read the authoritative status from the backend (content-vs-index hash compare),
   // so the pill always tells the truth after an operation instead of guessing. Retag
@@ -1407,11 +1395,10 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto custom-scrollbar py-8 px-4">
+      <div data-writing-scroll-container className="flex-1 overflow-y-auto custom-scrollbar py-8 px-4">
         <div
           className={`mx-auto relative rounded-xl shadow-xl ring-1 ring-black/10 ${locked ? 'wd-sheet-locked' : ''}`}
           style={sheetStyle}
-          onMouseDown={onPaperMouseDown}
         >
           <EditorContent editor={editor} />
 

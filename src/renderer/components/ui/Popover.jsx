@@ -44,11 +44,12 @@ export default function Popover({
     const next = {
       position: 'fixed',
       zIndex: 9999,
+      maxWidth: 'calc(100vw - 16px)',
     };
     if (scroll) next.maxHeight = Math.max(120, Math.min(maxHeight, (flipUp ? spaceAbove : spaceBelow) - gap));
-    if (align === 'right') next.right = window.innerWidth - rect.right;
-    else next.left = rect.left;
-    if (matchAnchorWidth) next.width = rect.width;
+    if (align === 'right') next.right = Math.max(8, window.innerWidth - rect.right);
+    else next.left = Math.max(8, Math.min(rect.left, window.innerWidth - (matchAnchorWidth ? rect.width : 240) - 8));
+    if (matchAnchorWidth) next.width = Math.min(rect.width, window.innerWidth - 16);
     if (flipUp) next.bottom = window.innerHeight - rect.top + gap;
     else next.top = rect.bottom + gap;
 
