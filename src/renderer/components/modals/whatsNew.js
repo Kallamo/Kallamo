@@ -19,6 +19,19 @@ const RELEASE_1_1_2 = {
   },
 };
 
+const RELEASE_1_1_5 = {
+  title: 'Local AI and chat hotfixes',
+  sections: {
+    Fixed: [
+      'Chat now keeps the selected AI Profile or Workflow and any pending attachments when sending, so valid local requests are no longer stopped before reaching the provider.',
+      'Local and OpenAI-compatible connections now accept either a base URL or a full endpoint, require an explicit Local URL, avoid empty authorization headers, and show the provider\'s error details more clearly.',
+      'Edit & Regenerate now uses the conversation exactly as edited and keeps the previous AI response safe if the replacement cannot be generated.',
+      'Retry and Skip are shown only when a failed generation can actually resume.',
+      'Workspaces with an empty or legacy zero MAX API Payload now return to the 128000-token default.',
+    ],
+  },
+};
+
 const RELEASE_1_1_4 = {
   title: 'More control over the AI behind your work',
   sections: {
@@ -108,6 +121,10 @@ export const GLOBAL_WHATS_NEW = {
   ],
   releases: [
     {
+      version: '1.1.5',
+      ...RELEASE_1_1_5,
+    },
+    {
       version: '1.1.4',
       ...RELEASE_1_1_4,
     },
@@ -169,6 +186,27 @@ export const GLOBAL_WHATS_NEW = {
 };
 
 export const PATCH_WHATS_NEW = {
+  '1.1.5': {
+    ...RELEASE_1_1_5,
+    intro: 'This hotfix restores dependable local AI connections and corrects the chat paths around sending, retrying, editing, and regenerating.',
+    highlights: [
+      {
+        icon: 'Brain',
+        title: 'Local AI requests reach the provider',
+        text: 'Kallamo now keeps your active AI target and attachments through the send flow, while handling local base URLs and complete endpoints consistently.',
+      },
+      {
+        icon: 'PenLine',
+        title: 'Safer editing and regeneration',
+        text: 'Edited history reaches the model correctly, and your previous response remains available if regeneration fails.',
+      },
+      {
+        icon: 'Sparkles',
+        title: 'Clearer recovery from errors',
+        text: 'Provider details remain visible, and recovery controls appear only when the interrupted generation can continue.',
+      },
+    ],
+  },
   '1.1.4': {
     ...RELEASE_1_1_4,
     intro: 'This update gives you more control over Kallamo\'s background AI work while making retrieval, Worldbuild updates, chat, and writing more dependable.',

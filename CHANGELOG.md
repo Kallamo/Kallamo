@@ -2,6 +2,15 @@
 
 All notable changes to Kallamo are documented in this file. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.5] - 2026-08-03
+
+### Fixed
+- Chat submissions now preserve the selected AI Profile or Workflow and pending attachments, fixing a regression that stopped valid local API requests before they reached the provider.
+- Local and OpenAI-compatible connections now resolve base URLs and full endpoints consistently, require an explicit URL for Local providers, omit empty authorization headers, and preserve plain-text HTTP error details.
+- Edit & Regenerate now sends the edited conversation without replaced user text or discarded AI replies, and keeps the previous AI response intact if regeneration fails.
+- Generation error dialogs now offer Retry and Skip only while the failed provider call is actually resumable.
+- Empty or legacy zero MAX API Payload values now restore the workspace default of 128000 tokens instead of being reduced to the minimum limit.
+
 ## [1.1.4] - 2026-08-01
 
 ### Added
