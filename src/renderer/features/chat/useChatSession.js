@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createHistoryEdit } from './generation-target';
 
 const STREAM_DISPLAY_INTERVAL_MS = 32;
 const STREAM_DISPLAY_CHARACTERS_PER_TICK = 16;
@@ -205,7 +206,7 @@ export function useChatSession({ api, setChats, setCurrentView }) {
   };
 
   const handleSendMessage = async (content, selectedProfileOrWorkflowId, attachedFiles = []) => {
-    if (!activeChatId || (!content.trim() && attachedFiles.length === 0)) return;
+    if (!activeChatId || !selectedProfileOrWorkflowId || (!content.trim() && attachedFiles.length === 0)) return;
     const requestId = ++generationRequestRef.current;
 
     const userMsg = {
@@ -252,11 +253,6 @@ export function useChatSession({ api, setChats, setCurrentView }) {
 
     const lastMessage = activeMessages.find(message => message.id === messageId) || activeMessages.at(-1);
     const oldAlternative = getAlternativeData(lastMessage);
-    if (oldAlternative) {
-      await api.deleteMessage(lastMessage.id);
-      setActiveMessages(previous => previous.filter(message => message.id !== lastMessage.id));
-    }
-
     setIsGenerating(true);
     setGenerationProgress({ chatId: activeChatId, step: 1, totalSteps: 1, profileName: 'System', status: 'Thinking...' });
 
@@ -264,9 +260,11 @@ export function useChatSession({ api, setChats, setCurrentView }) {
       const response = await api.sendMessage({
         chatId: activeChatId,
         messageContent: lastUserMessage.content,
-        targetId: selectedProfileOrWorkflowId
+        targetId: selectedProfileOrWorkflowId,
+        regenerateMessageId: oldAlternative ? lastMessage.id : null
       });
       if (response?.success) {
+        if (oldAlternative) await api.deleteMessage(lastMessage.id);
         const messages = await refreshGeneratedChat(activeChatId, response);
         await saveAlternative(oldAlternative, messages);
       }
@@ -304,10 +302,7 @@ export function useChatSession({ api, setChats, setCurrentView }) {
         messageContent: newText,
         targetId: selectedProfileOrWorkflowId,
         attachedFiles,
-        historyEdit: {
-          messageId: msgId,
-          content: newText
-        }
+        historyEdit: createHistoryEdit(messageId, newText)
       });
       if (!response?.success) throw new Error('Generation was not successful.');
 

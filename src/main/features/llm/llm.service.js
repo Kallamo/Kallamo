@@ -52,6 +52,43 @@ function resolveEndpoint(baseUrl, kind) {
     return trimmed + want;
 }
 
+function resolveOpenAiCompatibleEndpoint(baseUrl, provider, kind) {
+    const normalizedProvider = String(provider || '').toLowerCase();
+    const customEndpoint = resolveEndpoint(String(baseUrl || '').trim(), kind);
+    if (customEndpoint) return customEndpoint;
+    if (normalizedProvider === 'local') {
+        throw new Error("Local API connections require a Base URL, such as http://127.0.0.1:5001/v1.");
+    }
+    if (normalizedProvider === 'openrouter') {
+        return `https://openrouter.ai/api/v1/${kind === 'embeddings' ? 'embeddings' : 'chat/completions'}`;
+    }
+    return `https://api.openai.com/v1/${kind === 'embeddings' ? 'embeddings' : 'chat/completions'}`;
+}
+
+function buildOpenAiCompatibleHeaders(apiKey) {
+    const headers = { "Content-Type": "application/json" };
+    const normalizedKey = String(apiKey || '').trim();
+    if (normalizedKey) headers.Authorization = `Bearer ${normalizedKey}`;
+    return headers;
+}
+
+async function readHttpErrorMessage(response) {
+    const fallback = response.statusText || `HTTP ${response.status}`;
+    let body = '';
+    try {
+        body = (await response.text()).trim();
+    } catch {
+        return fallback;
+    }
+    if (!body) return fallback;
+    try {
+        const data = JSON.parse(body);
+        return data?.error?.message || data?.message || body;
+    } catch {
+        return body;
+    }
+}
+
 // --- AUTHENTICATION & SIGNING HELPERS ---
 
 async function getGcpAccessToken(serviceAccountJsonStr) {
@@ -288,11 +325,8 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
         case 'openai':
         case 'openrouter':
         case 'local': {
-            endpoint = resolveEndpoint(baseUrl, 'chat') || (provider === 'openrouter' ? "https://openrouter.ai/api/v1/chat/completions" : "https://api.openai.com/v1/chat/completions");
-            requestHeaders = {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${apiKey}`
-            };
+            endpoint = resolveOpenAiCompatibleEndpoint(baseUrl, provider, 'chat');
+            requestHeaders = buildOpenAiCompatibleHeaders(apiKey);
             if (provider === 'openrouter') {
                 requestHeaders["HTTP-Referer"] = "https://github.com/Kallamo/Kallamo";
                 requestHeaders["X-Title"] = "Kallamo";
@@ -634,12 +668,7 @@ async function sendApiRequest(params) {
         });
 
         if (!response.ok) {
-            let errorMsg = response.statusText;
-            try {
-                const errorData = await response.json();
-                errorMsg = errorData.error?.message || JSON.stringify(errorData);
-            } catch (e) { }
-            throw new Error(errorMsg);
+            throw new Error(await readHttpErrorMessage(response));
         }
 
         const data = await response.json();
@@ -678,11 +707,8 @@ async function getEmbeddings(text, apiProfileId, modelName) {
         case 'openai':
         case 'openrouter':
         case 'local':
-            endpoint = resolveEndpoint(baseUrl, 'embeddings') || (provider === 'openrouter' ? "https://openrouter.ai/api/v1/embeddings" : "https://api.openai.com/v1/embeddings");
-            requestHeaders = {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${apiKey}`
-            };
+            endpoint = resolveOpenAiCompatibleEndpoint(baseUrl, provider, 'embeddings');
+            requestHeaders = buildOpenAiCompatibleHeaders(apiKey);
             requestBody = {
                 input: text,
                 model: modelName || "text-embedding-3-small"
@@ -717,12 +743,7 @@ async function getEmbeddings(text, apiProfileId, modelName) {
         });
 
         if (!response.ok) {
-            let errorMsg = response.statusText;
-            try {
-                const errorData = await response.json();
-                errorMsg = errorData.error?.message || JSON.stringify(errorData);
-            } catch (e) { }
-            throw new Error(errorMsg);
+            throw new Error(await readHttpErrorMessage(response));
         }
 
         const data = await response.json();
@@ -744,4 +765,14 @@ async function getEmbeddings(text, apiProfileId, modelName) {
     }
 }
 
-module.exports = { sendApiRequest, getEmbeddings, buildRequest, parseStreamChunk, generationDispatcher };
+module.exports = {
+    sendApiRequest,
+    getEmbeddings,
+    buildRequest,
+    parseStreamChunk,
+    generationDispatcher,
+    buildOpenAiCompatibleHeaders,
+    readHttpErrorMessage,
+    resolveEndpoint,
+    resolveOpenAiCompatibleEndpoint
+};

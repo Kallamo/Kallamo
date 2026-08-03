@@ -2,7 +2,7 @@ const db = require('./database');
 const entitiesStore = require('./entities');
 const { sendApiRequest } = require('./features/llm/llm.service');
 const { sendApiRequestStream } = require('./features/llm/llm.stream');
-const { resolveWorkspaceGenerationTarget } = require('./features/chat/generation-target');
+const { applyGenerationHistory, resolveWorkspaceGenerationTarget } = require('./features/chat/generation-target');
 const {
     filterWorkspaceKnowledgeResults,
     filterWorkspaceMemoryResults
@@ -167,7 +167,7 @@ function isStreamingEnabled() {
 }
 
 // Orchestrate workflow linear chain execution
-async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, historyEdit, webContents }) {
+async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, historyEdit, regenerateMessageId, webContents }) {
     let resolvedTarget;
     try {
         resolvedTarget = resolveWorkspaceGenerationTarget(db, chatId, targetId);
@@ -179,6 +179,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             profileName: 'Generation',
             errorMessage: error.message,
             errorCode: error.code || 'invalid-generation-target',
+            retryable: false,
             isWorkflow: false
         });
         return { success: false, error: error.message, errorCode: error.code };
@@ -349,22 +350,8 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
         const maxContextTokens = normalizeMaxApiPayload(chat?.maxContext);
         const summarizedIndex = chat ? (chat.summarizedIndex || 0) : 0;
 
-        let messages = db.prepare('SELECT * FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
-        if (historyEdit) {
-            if (typeof historyEdit.messageId !== 'string' || typeof historyEdit.content !== 'string') {
-                throw new Error('Invalid edited message history.');
-            }
-            const editedMessageIndex = messages.findIndex(message => message.id === historyEdit.messageId);
-            const editedMessage = messages[editedMessageIndex];
-            if (editedMessageIndex < 0 || editedMessage.role !== 'user') {
-                throw new Error('Edited user message was not found in this workspace.');
-            }
-            messages = messages.slice(0, editedMessageIndex + 1);
-            messages[editedMessageIndex] = {
-                ...editedMessage,
-                content: historyEdit.content
-            };
-        }
+        const persistedMessages = db.prepare('SELECT * FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
+        const messages = applyGenerationHistory(persistedMessages, { historyEdit, regenerateMessageId });
         const activeMessages = messages.slice(summarizedIndex);
 
         let currentInput = messageContent;
@@ -749,6 +736,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                         step: i + 1,
                         profileName: profile.name,
                         errorMessage: apiError.message || 'API request failed.',
+                        retryable: true,
                         isWorkflow: isWorkflow
                     });
 
@@ -875,6 +863,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             step: 0,
             profileName: 'Workflow Engine',
             errorMessage: e.message || 'Fatal error during workflow execution.',
+            retryable: false,
             isWorkflow: isWorkflow
         });
         return { success: false, error: e.message };

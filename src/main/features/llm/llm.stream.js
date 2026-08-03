@@ -1,5 +1,5 @@
 const { fetch: undiciFetch } = require('undici');
-const { buildRequest, parseStreamChunk, sendApiRequest, generationDispatcher } = require('./llm.service');
+const { buildRequest, parseStreamChunk, sendApiRequest, generationDispatcher, readHttpErrorMessage } = require('./llm.service');
 
 // Providers with no text-SSE stream fall back to the non-streaming path.
 const STREAM_UNSUPPORTED = new Set(['aws bedrock']);
@@ -30,12 +30,7 @@ async function sendApiRequestStream(params, onDelta, onStreamStart) {
         });
 
         if (!response.ok) {
-            let errorMsg = response.statusText;
-            try {
-                const errorData = await response.json();
-                errorMsg = errorData.error?.message || JSON.stringify(errorData);
-            } catch (e) { }
-            throw new Error(errorMsg);
+            throw new Error(await readHttpErrorMessage(response));
         }
 
         const reader = response.body.getReader();

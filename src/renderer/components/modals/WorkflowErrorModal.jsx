@@ -1,6 +1,7 @@
 import React from 'react';
 import { useApp } from '../../context/AppContext';
 import { AlertCircle, Play, SkipForward, XCircle } from 'lucide-react';
+import { isRetryableGenerationError } from '../../features/chat/generation-target';
 
 export default function WorkflowErrorModal() {
   const { errorData, handleRespondToError, settings } = useApp();
@@ -9,6 +10,7 @@ export default function WorkflowErrorModal() {
 
   const stepName = errorData.profileName || 'Unknown AI Profile';
   const errorMessage = errorData.errorMessage || errorData.message || 'An unexpected connection or API error occurred during execution.';
+  const canResume = isRetryableGenerationError(errorData);
 
   return (
     <div className={`fixed inset-0 z-50 flex items-center justify-center titlebar-nodrag select-none ${(settings?.interface?.blur ?? true) ? 'bg-black/70 backdrop-blur-sm' : 'bg-[#011419]'}`}>
@@ -34,40 +36,43 @@ export default function WorkflowErrorModal() {
 
         {/* Instructions */}
         <p className="text-xs text-gray-400 leading-normal">
-          An error occurred in the execution chain. Choose how you would like to proceed with the workflow sequence:
+          {canResume
+            ? 'An error occurred in the execution chain. Choose how you would like to proceed with the workflow sequence:'
+            : 'The workflow stopped outside a resumable step. Close this message, review the error, and start it again after correcting it.'}
         </p>
 
         {/* Actions grid */}
-        <div className="grid grid-cols-3 gap-3 pt-2">
+        <div className={`grid ${canResume ? 'grid-cols-3' : 'grid-cols-1'} gap-3 pt-2`}>
           {/* Interrupt */}
           <button 
             onClick={() => handleRespondToError('interrupt')}
             className="flex flex-col items-center justify-center p-3 bg-red-950/10 hover:bg-red-950/30 border border-red-900/50 hover:border-red-500/50 rounded-xl transition-all cursor-pointer group"
           >
             <XCircle className="w-5 h-5 text-red-500 mb-1 group-hover:scale-110 transition-transform" />
-            <span className="text-[10px] font-bold text-red-400 uppercase tracking-wider">Interrupt</span>
-            <span className="text-[8px] text-gray-500 text-center mt-0.5 leading-tight">Stop chain & save messages</span>
+            <span className="text-[10px] font-bold text-red-400 uppercase tracking-wider">{canResume ? 'Interrupt' : 'Close'}</span>
+            <span className="text-[8px] text-gray-500 text-center mt-0.5 leading-tight">{canResume ? 'Stop chain & save messages' : 'Dismiss this error'}</span>
           </button>
 
-          {/* Skip */}
-          <button 
-            onClick={() => handleRespondToError('skip')}
-            className="flex flex-col items-center justify-center p-3 bg-[#0a161d] hover:bg-[#1a2d32] border border-gray-800 hover:border-gray-500 rounded-xl transition-all cursor-pointer group"
-          >
-            <SkipForward className="w-5 h-5 text-gray-400 group-hover:text-white mb-1 group-hover:scale-110 transition-transform" />
-            <span className="text-[10px] font-bold text-gray-300 uppercase tracking-wider">Skip Step</span>
-            <span className="text-[8px] text-gray-500 text-center mt-0.5 leading-tight">Pass prev output to next step</span>
-          </button>
-
-          {/* Retry */}
-          <button 
-            onClick={() => handleRespondToError('retry')}
-            className="flex flex-col items-center justify-center p-3 bg-accent/5 hover:bg-accent/15 border border-accent/20 hover:border-accent rounded-xl transition-all cursor-pointer group"
-          >
-            <Play className="w-5 h-5 text-accent mb-1 group-hover:scale-110 transition-transform" fill="currentColor" />
-            <span className="text-[10px] font-bold text-accent uppercase tracking-wider">Retry Step</span>
-            <span className="text-[8px] text-gray-500 text-center mt-0.5 leading-tight">Re-execute call to errored AI</span>
-          </button>
+          {canResume && (
+            <>
+              <button
+                onClick={() => handleRespondToError('skip')}
+                className="flex flex-col items-center justify-center p-3 bg-[#0a161d] hover:bg-[#1a2d32] border border-gray-800 hover:border-gray-500 rounded-xl transition-all cursor-pointer group"
+              >
+                <SkipForward className="w-5 h-5 text-gray-400 group-hover:text-white mb-1 group-hover:scale-110 transition-transform" />
+                <span className="text-[10px] font-bold text-gray-300 uppercase tracking-wider">Skip Step</span>
+                <span className="text-[8px] text-gray-500 text-center mt-0.5 leading-tight">Pass prev output to next step</span>
+              </button>
+              <button
+                onClick={() => handleRespondToError('retry')}
+                className="flex flex-col items-center justify-center p-3 bg-accent/5 hover:bg-accent/15 border border-accent/20 hover:border-accent rounded-xl transition-all cursor-pointer group"
+              >
+                <Play className="w-5 h-5 text-accent mb-1 group-hover:scale-110 transition-transform" fill="currentColor" />
+                <span className="text-[10px] font-bold text-accent uppercase tracking-wider">Retry Step</span>
+                <span className="text-[8px] text-gray-500 text-center mt-0.5 leading-tight">Re-execute call to errored AI</span>
+              </button>
+            </>
+          )}
         </div>
 
       </div>

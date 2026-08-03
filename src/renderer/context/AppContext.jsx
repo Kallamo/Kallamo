@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { useChatSession } from '../features/chat/useChatSession';
-import { isGenerationEventForWorkspace } from '../features/chat/generation-target';
+import { isGenerationEventForWorkspace, isRetryableGenerationError } from '../features/chat/generation-target';
 
 const AppContext = createContext();
 const EMPTY_MESSAGE_PAGE = { messages: [], hasMore: false, oldestCursor: null };
@@ -389,13 +389,14 @@ export const AppProvider = ({ children }) => {
   };
 
   const handleRespondToError = (decision) => {
+    if (decision !== 'interrupt' && !isRetryableGenerationError(errorData)) return;
     api.respondToError(decision, errorData?.runId);
     setShowErrorModal(false);
     setErrorData(null);
     if (decision === 'interrupt') {
       setIsGenerating(false);
       setGenerationProgress(null);
-    } else {
+    } else if (isRetryableGenerationError(errorData)) {
       setIsGenerating(true);
     }
   };

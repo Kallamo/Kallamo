@@ -3161,7 +3161,9 @@ ipcMain.handle('save-chat', async (event, chat) => {
         chat.description || '',
         chat.updatedAt || Date.now(),
         chat.isPinned ? 1 : 0,
-        normalizeMaxApiPayload(chat.maxContext, exists.maxContext),
+        chat.maxContext == null
+          ? normalizeMaxApiPayload(exists.maxContext)
+          : normalizeMaxApiPayload(chat.maxContext),
         chat.archiveThreshold ?? 60000,
         chat.summarizedIndex ?? 0,
         typeof chat.activeProfiles === 'string' ? chat.activeProfiles : JSON.stringify(chat.activeProfiles || []),
@@ -4159,9 +4161,9 @@ ipcMain.on('open-workspace-folder', () => {
 // ==========================================
 const { runWorkflow, cancelGeneration, resolveErrorDeferred, resolveOverflowDeferred } = require('./workflow-runner');
 
-ipcMain.handle('send-message', async (event, { chatId, messageContent, targetId, attachedFiles, historyEdit }) => {
+ipcMain.handle('send-message', async (event, { chatId, messageContent, targetId, attachedFiles, historyEdit, regenerateMessageId }) => {
   try {
-    return await runWorkflow({ chatId, messageContent, targetId, attachedFiles, historyEdit, webContents: event.sender });
+    return await runWorkflow({ chatId, messageContent, targetId, attachedFiles, historyEdit, regenerateMessageId, webContents: event.sender });
   } catch (error) {
     console.error("Error in send-message IPC handler:", error);
     throw error;

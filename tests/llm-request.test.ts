@@ -2,18 +2,24 @@ import { createRequire } from 'node:module';
 import { describe, expect, test } from 'vitest';
 
 const require = createRequire(import.meta.url);
-const { buildRequest } = require('../src/main/features/llm/llm.service');
+const {
+  buildRequest,
+  readHttpErrorMessage,
+  resolveOpenAiCompatibleEndpoint
+} = require('../src/main/features/llm/llm.service');
 
-function createDatabase({ provider, variables = [], customConfig = null }: {
+function createDatabase({ provider, variables = [], customConfig = null, baseUrl, apiKey = 'api-key' }: {
   provider: string;
   variables?: Array<{ key: string; value: string }>;
   customConfig?: Record<string, string> | null;
+  baseUrl?: string;
+  apiKey?: string;
 }) {
   const profile = {
     id: 'api-profile',
     provider,
     apiKey: 'encrypted-api-key',
-    baseUrl: provider === 'OpenAI' ? 'https://example.test/v1' : '',
+    baseUrl: baseUrl ?? (provider === 'OpenAI' ? 'https://example.test/v1' : ''),
     customConfig: customConfig ? JSON.stringify(customConfig) : null
   };
 
@@ -26,7 +32,7 @@ function createDatabase({ provider, variables = [], customConfig = null }: {
       throw new Error(`Unexpected query: ${query}`);
     },
     decryptApiKey(value: string) {
-      return value === profile.apiKey ? 'api-key' : value;
+      return value === profile.apiKey ? apiKey : value;
     }
   };
 }
@@ -123,5 +129,40 @@ describe('LLM request composition', () => {
     }, { database })).rejects.toMatchObject({
       code: 'MAX_API_PAYLOAD_EXCEEDED'
     });
+  });
+
+  test('resolves local base URLs and full endpoints without cloud fallback', async () => {
+    const database = createDatabase({
+      provider: 'Local',
+      baseUrl: 'http://127.0.0.1:5001/v1',
+      apiKey: ''
+    });
+    const request = await buildRequest({
+      apiProfileId: 'api-profile',
+      model: 'local-model',
+      newPrompt: 'Hello'
+    }, { database });
+
+    expect(request.endpoint).toBe('http://127.0.0.1:5001/v1/chat/completions');
+    expect(request.requestHeaders).not.toHaveProperty('Authorization');
+    expect(resolveOpenAiCompatibleEndpoint(
+      'http://127.0.0.1:5001/v1/chat/completions',
+      'local',
+      'chat'
+    )).toBe('http://127.0.0.1:5001/v1/chat/completions');
+    expect(() => resolveOpenAiCompatibleEndpoint('', 'local', 'chat')).toThrow(/require a Base URL/);
+  });
+
+  test('preserves structured and plain-text HTTP error details', async () => {
+    await expect(readHttpErrorMessage({
+      status: 400,
+      statusText: 'Bad Request',
+      text: async () => JSON.stringify({ error: { message: 'Model is unavailable' } })
+    })).resolves.toBe('Model is unavailable');
+    await expect(readHttpErrorMessage({
+      status: 502,
+      statusText: 'Bad Gateway',
+      text: async () => 'koboldcpp is not ready'
+    })).resolves.toBe('koboldcpp is not ready');
   });
 });

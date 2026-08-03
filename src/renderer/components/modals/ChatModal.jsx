@@ -119,7 +119,7 @@ export default function ChatModal({ chat, onClose }) {
       description: description.trim(),
       updatedAt: Date.now(),
       isPinned: chat?.isPinned ?? 0,
-      maxContext: chat?.maxContext ?? 128000,
+      maxContext: Number(chat?.maxContext) > 0 ? chat.maxContext : 128000,
       archiveThreshold: chat?.archiveThreshold ?? 60000,
       summarizedIndex: chat?.summarizedIndex ?? 0,
       activeProfiles: JSON.stringify(activeProfiles),

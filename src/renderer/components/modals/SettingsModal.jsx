@@ -322,7 +322,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     setApiName(apiProf.name);
     setApiProvider(apiProf.provider);
     setApiBaseUrl(apiProf.baseUrl || '');
-    setShowBaseUrl(!!apiProf.baseUrl);
+    setShowBaseUrl(apiProf.provider === 'Local' || !!apiProf.baseUrl);
     setApiKey(apiProf.apiKey || '');
 
     let cfg = {};
@@ -360,6 +360,21 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const handleSaveApi = async () => {
     if (!apiName.trim()) return;
 
+    const normalizedBaseUrl = apiBaseUrl.trim();
+    if (apiProvider === 'Local' && !normalizedBaseUrl) {
+      showToast('Local API connections require a Base URL.', 'error');
+      return;
+    }
+    if (normalizedBaseUrl) {
+      try {
+        const parsedUrl = new URL(normalizedBaseUrl);
+        if (!['http:', 'https:'].includes(parsedUrl.protocol)) throw new Error();
+      } catch {
+        showToast('Base URL must be a valid HTTP or HTTPS URL.', 'error');
+        return;
+      }
+    }
+
     const targetId = editingApiId || 'api_' + Math.random().toString(36).substr(2, 9);
     const customConfigObj = {
       gcpProjectId: gcpProjectId.trim(),
@@ -374,7 +389,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       id: targetId,
       name: apiName.trim(),
       provider: apiProvider,
-      baseUrl: apiBaseUrl.trim(),
+      baseUrl: normalizedBaseUrl,
       apiKey: apiKey.trim(),
       customConfig: JSON.stringify(customConfigObj),
       models: JSON.stringify(modelsList)
@@ -629,7 +644,11 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                         <p className="caption mb-1.5">The cloud gateway or local interface hosting the target models.</p>
                         <select
                           value={apiProvider}
-                          onChange={(e) => setApiProvider(e.target.value)}
+                          onChange={(e) => {
+                            const provider = e.target.value;
+                            setApiProvider(provider);
+                            if (provider === 'Local') setShowBaseUrl(true);
+                          }}
                           className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 focus:outline-none focus:border-accent cursor-pointer"
                         >
                           <option value="OpenRouter">OpenRouter</option>
@@ -728,20 +747,25 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           {/* Custom Base URL Toggle */}
                           <div>
                             <button
-                              onClick={() => setShowBaseUrl(!showBaseUrl)}
+                              type="button"
+                              onClick={() => apiProvider !== 'Local' && setShowBaseUrl(!showBaseUrl)}
                               className="flex items-center text-xs text-gray-400 mb-1.5 space-x-1 cursor-pointer hover:text-gray-300"
                             >
                               <Link2 className="w-3.5 h-3.5 text-accent" />
-                              <span>Custom Base URL (optional)</span>
+                              <span>{apiProvider === 'Local' ? 'Base URL (required)' : 'Custom Base URL (optional)'}</span>
                             </button>
-                            {showBaseUrl && (
+                            {(apiProvider === 'Local' || showBaseUrl) && (
                               <>
-                                <p className="caption mb-1.5">The base URL of a local server or OpenAI-compatible provider, ending in <code>/v1</code>. Kallamo adds the right path for chat and embeddings.</p>
+                                <p className="caption mb-1.5">
+                                  {['Local', 'OpenAI', 'OpenRouter'].includes(apiProvider)
+                                    ? <>Enter an OpenAI-compatible base ending in <code>/v1</code>, or a full chat or embeddings endpoint. Kallamo resolves the required path for each request.</>
+                                    : <>Enter the provider's complete request endpoint. Kallamo uses this URL exactly as entered.</>}
+                                </p>
                                 <input
                                   type="text"
                                   value={apiBaseUrl}
                                   onChange={(e) => setApiBaseUrl(e.target.value)}
-                                  placeholder="e.g. http://localhost:11434/v1"
+                                  placeholder={apiProvider === 'Local' ? 'e.g. http://127.0.0.1:5001/v1' : 'Enter a custom HTTP or HTTPS endpoint'}
                                   className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 focus:outline-none focus:border-accent animate-in slide-in-from-top duration-200"
                                 />
                               </>

@@ -1,6 +1,7 @@
 import React from 'react';
 import { useApp } from '../../context/AppContext';
 import { AlertCircle, Play, XCircle } from 'lucide-react';
+import { isRetryableGenerationError } from '../../features/chat/generation-target';
 
 export default function ProfileErrorModal() {
   const { errorData, handleRespondToError, settings } = useApp();
@@ -9,6 +10,7 @@ export default function ProfileErrorModal() {
 
   const profileName = errorData.profileName || 'Unknown AI Profile';
   const errorMessage = errorData.errorMessage || errorData.message || 'An unexpected connection or API error occurred during execution.';
+  const canRetry = isRetryableGenerationError(errorData);
 
   return (
     <div className={`fixed inset-0 z-50 flex items-center justify-center titlebar-nodrag select-none ${(settings?.interface?.blur ?? true) ? 'bg-black/70 backdrop-blur-sm' : 'bg-[#011419]'}`}>
@@ -34,30 +36,33 @@ export default function ProfileErrorModal() {
 
         {/* Instructions */}
         <p className="text-xs text-gray-400 leading-normal">
-          An error occurred during generation. Choose how you would like to proceed:
+          {canRetry
+            ? 'An error occurred during generation. Choose how you would like to proceed:'
+            : 'Generation stopped before an API call could be retried. Close this message, review the error, and try again after correcting it.'}
         </p>
 
         {/* Actions grid */}
-        <div className="grid grid-cols-2 gap-3 pt-2">
+        <div className={`grid ${canRetry ? 'grid-cols-2' : 'grid-cols-1'} gap-3 pt-2`}>
           {/* Interrupt */}
           <button 
             onClick={() => handleRespondToError('interrupt')}
             className="flex flex-col items-center justify-center p-3 bg-red-950/10 hover:bg-red-950/30 border border-red-900/50 hover:border-red-500/50 rounded-xl transition-all cursor-pointer group"
           >
             <XCircle className="w-5 h-5 text-red-500 mb-1 group-hover:scale-110 transition-transform" />
-            <span className="text-[10px] font-bold text-red-400 uppercase tracking-wider">Interrupt</span>
-            <span className="text-[8px] text-gray-500 text-center mt-0.5 leading-tight">Stop execution & save messages</span>
+            <span className="text-[10px] font-bold text-red-400 uppercase tracking-wider">{canRetry ? 'Interrupt' : 'Close'}</span>
+            <span className="text-[8px] text-gray-500 text-center mt-0.5 leading-tight">{canRetry ? 'Stop execution & save messages' : 'Dismiss this error'}</span>
           </button>
 
-          {/* Retry */}
-          <button 
-            onClick={() => handleRespondToError('retry')}
-            className="flex flex-col items-center justify-center p-3 bg-accent/5 hover:bg-accent/15 border border-accent/20 hover:border-accent rounded-xl transition-all cursor-pointer group"
-          >
-            <Play className="w-5 h-5 text-accent mb-1 group-hover:scale-110 transition-transform" fill="currentColor" />
-            <span className="text-[10px] font-bold text-accent uppercase tracking-wider">Retry</span>
-            <span className="text-[8px] text-gray-500 text-center mt-0.5 leading-tight">Re-execute call to AI Profile</span>
-          </button>
+          {canRetry && (
+            <button
+              onClick={() => handleRespondToError('retry')}
+              className="flex flex-col items-center justify-center p-3 bg-accent/5 hover:bg-accent/15 border border-accent/20 hover:border-accent rounded-xl transition-all cursor-pointer group"
+            >
+              <Play className="w-5 h-5 text-accent mb-1 group-hover:scale-110 transition-transform" fill="currentColor" />
+              <span className="text-[10px] font-bold text-accent uppercase tracking-wider">Retry</span>
+              <span className="text-[8px] text-gray-500 text-center mt-0.5 leading-tight">Re-execute call to AI Profile</span>
+            </button>
+          )}
         </div>
 
       </div>

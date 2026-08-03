@@ -62,7 +62,9 @@ export default function ConfigurationView({ onTriggerSummarize }) {
 
   useEffect(() => {
     if (activeChat) {
-      setMaxContext(activeChat.maxContext ?? 128000);
+      setMaxContext(Number(activeChat.maxContext) > 0
+        ? activeChat.maxContext
+        : payloadBudgetContract.defaultMaxPayloadTokens);
       setWdContextWindow(activeChat.wdContextWindow ?? 8192);
       setWdUseChatHistory(activeChat.wdUseChatHistory !== 0);
       setArchiveThreshold(activeChat.archiveThreshold ?? 60000);
@@ -118,15 +120,15 @@ export default function ConfigurationView({ onTriggerSummarize }) {
     sectionRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
-  // Number fields keep numeric state; empty input falls back to 0 on save.
+  // Number fields keep numeric state; an unset payload limit restores the workspace default.
   const handleUpdateNumberField = async (field, value) => {
     const num = value === '' ? 0 : Number(value);
     const normalized = field === 'maxContext'
-      ? Math.min(
-        payloadBudgetContract.maximumMaxPayloadTokens,
-        Math.max(
-          payloadBudgetContract.minimumMaxPayloadTokens,
-          Number.isFinite(num) ? Math.floor(num) : payloadBudgetContract.defaultMaxPayloadTokens
+      ? (num === 0 || !Number.isFinite(num)
+        ? payloadBudgetContract.defaultMaxPayloadTokens
+        : Math.min(
+          payloadBudgetContract.maximumMaxPayloadTokens,
+          Math.max(payloadBudgetContract.minimumMaxPayloadTokens, Math.floor(num))
         )
       )
       : (Number.isNaN(num) ? 0 : num);

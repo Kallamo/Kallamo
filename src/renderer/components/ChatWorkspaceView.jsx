@@ -15,7 +15,7 @@ import ChatInput from '../features/chat/components/ChatInput';
 import MessageMarkdown from '../features/chat/components/MessageMarkdown';
 import TypingText from '../features/chat/components/TypingText';
 import { parseMessageContent } from '../features/chat/message-content';
-import { resolveActiveGenerationTarget } from '../features/chat/generation-target';
+import { prepareGenerationSubmission, resolveActiveGenerationTarget } from '../features/chat/generation-target';
 
 const safeParseJson = (str, fallback = []) => {
   if (!str) return fallback;
@@ -235,11 +235,10 @@ export default function ChatWorkspaceView() {
     messageContainerRef.current?.scrollTo({ top: messageContainerRef.current.scrollHeight, behavior: 'smooth' });
   };
 
-  const handleSendWithLatestFollow = (...args) => {
+  const followLatestResponse = () => {
     isFollowingLatestRef.current = true;
     setIsFollowingLatest(true);
     setHasCompletedResponseBelow(false);
-    return handleSendMessage(...args);
   };
 
   const handleLoadOlderMessages = async () => {
@@ -496,19 +495,16 @@ export default function ChatWorkspaceView() {
   };
 
   const handleSend = (inputValue) => {
-    const text = inputValue.trim();
-    if (!text && pendingFiles.length === 0) return false;
-
-    const attachedNames = pendingFiles.map(f => f.name);
-    let finalContent = text;
-    if (!text && attachedNames.length > 0) {
-      finalContent = `Attached files: ${attachedNames.join(', ')}`;
-    }
-
     const finalTargetId = getGenerationTargetId();
-    if (!finalTargetId) return false;
+    const submission = prepareGenerationSubmission({
+      inputValue,
+      pendingFiles,
+      targetId: finalTargetId
+    });
+    if (!submission) return false;
 
-    handleSendMessage(finalContent, finalTargetId, pendingFiles);
+    followLatestResponse();
+    handleSendMessage(submission.content, submission.targetId, submission.attachedFiles);
     setPendingFiles([]);
     return true;
   };
@@ -1526,7 +1522,7 @@ export default function ChatWorkspaceView() {
                     hasTargets={displayProfiles.length > 0 || displayWorkflows.length > 0}
                     isGenerating={isGenerating}
                     onCancel={handleCancelGeneration}
-                    onSend={handleSendWithLatestFollow}
+                    onSend={handleSend}
                     pendingFileCount={pendingFiles.length}
                     placeholder={activeMessages.length > 0 ? "Write a message..." : "Write a message or drag and drop files..."}
                   />
