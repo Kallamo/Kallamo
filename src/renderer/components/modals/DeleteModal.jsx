@@ -1,6 +1,7 @@
 import React from 'react';
 import { AlertTriangle, Check } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import Button from '../ui/Button';
 
 export default function DeleteModal({ 
   title, 
@@ -15,12 +16,12 @@ export default function DeleteModal({
 }) {
   const { settings } = useApp();
   return (
-    <div className={`fixed inset-0 z-50 flex items-center justify-center titlebar-nodrag select-none ${(settings?.interface?.blur ?? true) ? 'bg-black/60 backdrop-blur-sm' : 'bg-[#011419]'}`}>
-      <div className="w-[380px] bg-[#011419] border border-gray-800 rounded-xl shadow-2xl p-6 flex flex-col space-y-4 animate-in fade-in zoom-in duration-200">
+    <div className={`fixed inset-0 z-[80] flex items-center justify-center titlebar-nodrag select-none ${(settings?.interface?.blur ?? true) ? 'bg-surface-overlay backdrop-blur-sm' : 'bg-surface-canvas'}`}>
+      <div className="w-[380px] bg-surface-canvas border border-border-default rounded-xl shadow-2xl p-6 flex flex-col space-y-4 animate-in fade-in zoom-in duration-200">
         
         {/* Warning Icon and Title */}
         <div className="flex items-center space-x-3">
-          <div className="p-2 bg-red-500/10 rounded-lg text-red-500">
+          <div className="rounded-lg bg-status-danger/10 p-2 text-status-danger">
             <AlertTriangle className="w-5 h-5" />
           </div>
           <h3 className="text-white font-bold text-lg">{title || 'Confirm Deletion'}</h3>
@@ -52,18 +53,8 @@ export default function DeleteModal({
 
         {/* Buttons */}
         <div className="flex items-center justify-end space-x-3 pt-2">
-          <button 
-            onClick={onClose}
-            className="px-4 py-2 bg-[#0a161d] hover:bg-[#1a2d32] border border-gray-800 text-gray-300 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
-          >
-            Cancel
-          </button>
-          <button 
-            onClick={() => onConfirm(checkboxValue)}
-            className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer"
-          >
-            {confirmText || 'Delete'}
-          </button>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button variant="danger" onClick={() => onConfirm(checkboxValue)}>{confirmText || 'Delete'}</Button>
         </div>
 
       </div>

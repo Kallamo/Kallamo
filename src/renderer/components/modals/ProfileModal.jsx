@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { X, Cpu, Palette, SlidersHorizontal, Wand2 } from 'lucide-react';
 import { parseMarkdown, escapeHTML } from '../../utils/markdown';
+import Popover from '../ui/Popover';
 
 export default function ProfileModal({ profile, onClose, onSave }) {
   const {
@@ -159,8 +160,9 @@ export default function ProfileModal({ profile, onClose, onSave }) {
     if (filteredVariables.length === 0) return null;
 
     return (
-      <div className="absolute left-4 right-4 bottom-4 z-40 bg-[#071419] border border-gray-800 rounded-lg shadow-2xl p-2 flex flex-col space-y-1 select-none animate-in slide-in-from-bottom-2 duration-150 max-h-[140px] overflow-y-auto custom-scrollbar">
-        <div className="text-[9px] text-gray-500 px-2 pb-1 border-b border-gray-800/60 font-semibold tracking-wider uppercase flex justify-between select-none">
+      <Popover anchorRef={systemTextareaRef} open={acState.isOpen} onClose={closeAc} maxHeight={180} scroll={false} className="border-border-default bg-surface-panel-muted p-2">
+        <div className="max-h-44 overflow-y-auto custom-scrollbar">
+        <div className="text-xs text-text-muted px-2 pb-1 border-b border-border-subtle font-semibold tracking-wider uppercase flex justify-between select-none">
           <span>Variables matching: "{acState.search}"</span>
           <span>⇅ Navigate · ↵ Select</span>
         </div>
@@ -176,12 +178,13 @@ export default function ProfileModal({ profile, onClose, onSave }) {
           >
             <div className="flex items-center space-x-2 truncate">
               <span className="font-mono font-bold">&#123;&#123;{v.key}&#125;&#125;</span>
-              <span className={`text-[10px] truncate ${idx === acIndex ? 'text-[#011419]/70' : 'text-gray-500'}`}>{v.name}</span>
+              <span className={`text-xs truncate ${idx === acIndex ? 'text-on-accent/70' : 'text-text-muted'}`}>{v.name}</span>
             </div>
-            <span className={`text-[9px] font-mono truncate ml-4 ${idx === acIndex ? 'text-[#011419]/60' : 'text-gray-500'}`}>{v.description || 'No description'}</span>
+            <span className={`text-xs font-mono truncate ml-4 ${idx === acIndex ? 'text-on-accent/60' : 'text-text-muted'}`}>{v.description || 'No description'}</span>
           </button>
         ))}
-      </div>
+        </div>
+      </Popover>
     );
   };
 
@@ -229,9 +232,9 @@ export default function ProfileModal({ profile, onClose, onSave }) {
 
   // Shared visual language, aligned with the Configuration view:
   // breathing cards + accent-medallion section heads instead of underlined titles.
-  const cardCls = "bg-[#0a161d]/50 border border-gray-800/60 rounded-2xl p-5";
-  const labelCls = "block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5";
-  const fieldCls = "w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-lg px-3 py-2.5 focus:outline-none focus:border-accent transition-colors";
+  const cardCls = "bg-surface-panel/50 border border-border-subtle rounded-2xl p-5";
+  const labelCls = "block text-xs font-semibold text-text-muted uppercase tracking-wider mb-1.5";
+  const fieldCls = "min-h-10 w-full bg-surface-input border border-border-default text-text-secondary text-sm rounded-lg px-3 py-2.5 focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-colors";
   const Head = ({ icon: Icon, title, right }) => (
     <div className="flex items-center justify-between mb-4">
       <div className="flex items-center gap-2.5">
@@ -245,16 +248,17 @@ export default function ProfileModal({ profile, onClose, onSave }) {
   );
 
   return (
-    <div className={`fixed inset-0 z-50 flex items-center justify-center titlebar-nodrag select-none p-8 ${isBlurEnabled ? 'bg-black/60 backdrop-blur-sm' : 'bg-[#011419]'}`}>
-      <div className="w-full max-w-6xl h-full max-h-[880px] bg-[#000D11] rounded-xl shadow-2xl border border-gray-800/60 flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
+    <div className={`fixed inset-0 z-50 flex items-center justify-center titlebar-nodrag select-none p-4 lg:p-8 ${isBlurEnabled ? 'bg-surface-overlay backdrop-blur-sm' : 'bg-surface-canvas'}`}>
+      <div role="dialog" aria-modal="true" aria-labelledby="profile-dialog-title" className="w-full max-w-6xl h-full max-h-[880px] bg-surface-sidebar rounded-xl shadow-2xl border border-border-default flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
 
         {/* Header */}
         <div className="shrink-0 flex justify-between items-center h-14 w-full px-6 bg-[#011419] border-b border-gray-800/50">
-          <h2 className="text-lg font-bold text-white tracking-wide">
+          <h2 id="profile-dialog-title" className="text-lg font-bold text-text-primary tracking-wide">
             {isEditing ? 'Edit AI Profile' : 'Create AI Profile'}
           </h2>
           <button
             onClick={onClose}
+            aria-label="Close profile editor"
             className="text-gray-400 hover:text-red-500 transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5"
           >
             <X className="w-5 h-5" />
@@ -263,10 +267,10 @@ export default function ProfileModal({ profile, onClose, onSave }) {
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-6 relative custom-scrollbar">
-          <div className="grid grid-cols-12 gap-6 h-full min-h-0">
+          <div className="grid grid-cols-1 gap-6 min-h-0 xl:grid-cols-12 xl:h-full">
 
             {/* Left Column (Inputs) */}
-            <div className="col-span-5 space-y-4 flex flex-col">
+            <div className="space-y-4 flex flex-col xl:col-span-5">
               {/* Identity */}
               <div className={cardCls}>
                 <Head icon={Palette} title="Identity" />
@@ -298,6 +302,8 @@ export default function ProfileModal({ profile, onClose, onSave }) {
                         <button
                           key={c}
                           onClick={() => setColor(c)}
+                          aria-label={`Use theme color ${c}`}
+                          aria-pressed={color === c}
                           style={{ backgroundColor: c }}
                           className={`w-6 h-6 rounded-full border-2 focus:outline-none cursor-pointer transition-all ${color === c ? 'border-white scale-110 shadow-md' : 'border-transparent hover:border-white/50'
                             }`}
@@ -415,7 +421,7 @@ export default function ProfileModal({ profile, onClose, onSave }) {
             </div>
 
             {/* Right Column (System Prompt) */}
-            <div className="col-span-7 flex flex-col h-full min-h-0 overflow-hidden">
+            <div className="flex min-h-[32rem] flex-col overflow-hidden xl:col-span-7 xl:h-full xl:min-h-0">
               <div className={`${cardCls} flex flex-col h-full min-h-0`}>
                 <Head icon={Wand2} title="Behavior & Rules" right={
                   <div className="flex bg-[#011419] p-0.5 rounded-lg border border-gray-800 text-[10px] font-bold uppercase tracking-wider select-none shrink-0 z-10 space-x-0.5">
@@ -466,7 +472,7 @@ export default function ProfileModal({ profile, onClose, onSave }) {
         </div>
 
         {/* Footer Actions */}
-        <div className="shrink-0 flex justify-between items-center h-16 px-6 bg-[#011419] border-t border-gray-800/50">
+        <div className="shrink-0 flex justify-between items-center h-16 px-6 bg-surface-canvas border-t border-border-subtle">
           <button
             onClick={onClose}
             className="px-4 py-2 text-sm font-medium text-gray-400 hover:text-white transition-colors cursor-pointer"
@@ -477,7 +483,7 @@ export default function ProfileModal({ profile, onClose, onSave }) {
           <button
             onClick={handleSave}
             disabled={!name.trim()}
-            className="px-5 py-2 text-sm font-medium bg-accent hover:brightness-110 text-[#011419] rounded transition-colors shadow-md font-bold cursor-pointer disabled:opacity-50"
+            className="px-5 py-2 text-sm font-medium bg-accent hover:brightness-110 text-on-accent rounded-lg transition-colors shadow-md font-bold cursor-pointer disabled:opacity-50"
           >
             Save Profile
           </button>

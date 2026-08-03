@@ -1,66 +1,204 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Search, X } from 'lucide-react';
 import Popover from './Popover';
 
 /**
- * @param {{
- *   value?: string;
- *   values?: string[];
- *   onChange: (value: any) => void;
- *   options: Array<{ id: string; label: string; aliases?: string[]; group?: string; color?: string; description?: string }>;
- *   placeholder: string;
- *   multiple?: boolean;
- *   disabled?: boolean;
- * }} props
+ * Search-first selector for any option set that can grow. Options may include
+ * aliases, keywords, a group, an icon and a short description.
  */
-export default function SearchableSelect({ value = '', values = [], onChange, options, placeholder, multiple = false, disabled = false }) {
+export default function SearchableSelect({
+  value = '',
+  values = [],
+  onChange,
+  options = [],
+  placeholder = 'Choose an option',
+  searchPlaceholder = 'Type to filter…',
+  emptyMessage = 'No matching options.',
+  multiple = false,
+  disabled = false,
+  clearable = true,
+  autoOpen = false,
+  ariaLabel,
+  className = '',
+}) {
   const rootRef = useRef(null);
-  const [isOpen, setIsOpen] = useState(false);
+  const inputRef = useRef(null);
+  const listboxId = useId();
+  const [isOpen, setIsOpen] = useState(autoOpen);
   const [query, setQuery] = useState('');
-  const selectedIds = multiple ? values ?? [] : value ? [value] : [];
-  const selected = options.filter(option => selectedIds.includes(option.id));
+  const [activeIndex, setActiveIndex] = useState(0);
+  const selectedIds = multiple ? (values ?? []) : value ? [value] : [];
+  const optionMap = useMemo(() => new Map(options.map(option => [option.id, option])), [options]);
+  const selected = selectedIds.map(id => optionMap.get(id)).filter(Boolean);
+  const SelectedIcon = !multiple ? selected[0]?.icon : null;
+
   const filtered = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     if (!needle) return options;
-    return options.filter(option => [option.label, option.group, ...(option.aliases ?? [])]
-      .some(text => String(text ?? '').toLocaleLowerCase().includes(needle)));
+    return options.filter(option => [
+      option.label,
+      option.group,
+      option.description,
+      ...(option.aliases ?? []),
+      ...(option.keywords ?? []),
+    ].some(text => String(text ?? '').toLocaleLowerCase().includes(needle)));
   }, [options, query]);
 
-  const select = id => {
+  useEffect(() => {
+    setActiveIndex(current => Math.min(current, Math.max(0, filtered.length - 1)));
+  }, [filtered.length]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const frame = window.requestAnimationFrame(() => inputRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [isOpen]);
+
+  const close = () => {
+    setIsOpen(false);
+    setQuery('');
+    setActiveIndex(0);
+  };
+
+  const select = (id) => {
     if (!multiple) {
       onChange(id);
-      setIsOpen(false);
-      setQuery('');
+      close();
       return;
     }
     onChange(selectedIds.includes(id) ? selectedIds.filter(item => item !== id) : [...selectedIds, id]);
   };
 
-  return <div ref={rootRef} className="relative">
-    <button type="button" disabled={disabled} onClick={() => setIsOpen(current => !current)} aria-haspopup="listbox" aria-expanded={isOpen} className="flex min-h-11 w-full items-center gap-2 rounded-lg border border-white/10 bg-[#06151b] px-3 text-left text-sm text-gray-200 transition-colors hover:border-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50">
-      <span className={`min-w-0 flex-1 truncate ${selected.length ? '' : 'text-gray-600'}`}>
-        {multiple ? selected.length ? `${selected.length} selected` : placeholder : selected[0]?.label ?? placeholder}
-      </span>
-      {selected.length > 0 && !multiple && <span role="button" tabIndex={0} aria-label="Clear selection" onClick={event => { event.stopPropagation(); onChange(''); }} onKeyDown={event => event.key === 'Enter' && onChange('')} className="rounded p-1 text-gray-600 hover:text-gray-300"><X className="h-3.5 w-3.5" /></span>}
-      <ChevronDown className={`h-4 w-4 shrink-0 text-gray-600 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
-    </button>
+  const moveActive = (amount) => {
+    if (!filtered.length) return;
+    setActiveIndex(current => (current + amount + filtered.length) % filtered.length);
+  };
 
-    {multiple && selected.length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">{selected.map(option => <button key={option.id} type="button" onClick={() => select(option.id)} className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs text-gray-300 hover:border-red-400/30 hover:text-red-300">{option.label}<X className="h-3 w-3" /></button>)}</div>}
+  const handleMenuKeyDown = (event) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      moveActive(1);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      moveActive(-1);
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      setActiveIndex(0);
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      setActiveIndex(Math.max(0, filtered.length - 1));
+    } else if (event.key === 'Enter' && filtered[activeIndex]) {
+      event.preventDefault();
+      select(filtered[activeIndex].id);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      close();
+    }
+  };
 
-    <Popover anchorRef={rootRef} open={isOpen} onClose={() => setIsOpen(false)} maxHeight={288} className="border-white/15 bg-[#071820] p-0 shadow-black/50">
-      <div className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#071820]"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-600" /><input autoFocus value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => event.key === 'Escape' && setIsOpen(false)} placeholder="Type to filter…" aria-label="Filter options" className="h-11 w-full bg-transparent pl-10 pr-3 text-sm text-gray-200 outline-none placeholder:text-gray-600 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40" /></div>
-      <div role="listbox" aria-multiselectable={multiple || undefined} className="max-h-60 overflow-y-auto p-1.5 custom-scrollbar">
-        {filtered.map(option => {
-          const isSelected = selectedIds.includes(option.id);
-          return <button key={option.id} type="button" role="option" aria-selected={isSelected} onClick={() => select(option.id)} className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors ${isSelected ? 'bg-accent/12 text-accent' : 'text-gray-300 hover:bg-white/[0.06] hover:text-white'}`}>
-            {option.color && <span className="h-6 w-1 rounded-full" style={{ backgroundColor: option.color }} />}
-            <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{option.label}</span>{option.description && <span className="mt-0.5 block truncate text-xs text-gray-600">{option.description}</span>}</span>
-            {option.group && <span className="text-[0.65rem] font-bold uppercase tracking-wider text-gray-600">{option.group}</span>}
-            {isSelected && <Check className="h-4 w-4 shrink-0" />}
-          </button>;
-        })}
-        {!filtered.length && <p className="px-3 py-5 text-center text-sm italic text-gray-600">No matching options.</p>}
+  return (
+    <div ref={rootRef} className={`relative ${className}`}>
+      <div className="relative">
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => setIsOpen(current => !current)}
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault();
+              setIsOpen(true);
+              setActiveIndex(event.key === 'ArrowDown' ? 0 : Math.max(0, filtered.length - 1));
+            }
+          }}
+          aria-label={ariaLabel}
+          aria-haspopup="listbox"
+          aria-controls={isOpen ? listboxId : undefined}
+          aria-expanded={isOpen}
+          className={`flex min-h-10 w-full items-center gap-2 rounded-lg border border-border-default bg-surface-input px-3 text-left text-sm text-text-secondary transition-colors
+            hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50
+            ${clearable && selected.length > 0 && !multiple ? 'pr-16' : 'pr-9'}`}
+        >
+          {SelectedIcon ? <SelectedIcon className="h-4 w-4 shrink-0 text-accent" aria-hidden="true" /> : null}
+          <span className={`min-w-0 flex-1 truncate ${selected.length ? '' : 'text-text-subtle'}`}>
+            {multiple
+              ? selected.length ? `${selected.length} selected` : placeholder
+              : selected[0]?.label ?? placeholder}
+          </span>
+        </button>
+        {clearable && selected.length > 0 && !multiple ? (
+          <button
+            type="button"
+            aria-label="Clear selection"
+            onClick={() => onChange('')}
+            className="absolute right-8 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-text-subtle hover:bg-white/[0.06] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
+        <ChevronDown className={`pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-subtle transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </div>
-    </Popover>
-  </div>;
+
+      {multiple && selected.length > 0 ? (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {selected.map(option => (
+            <button
+              key={option.id}
+              type="button"
+              onClick={() => select(option.id)}
+              className="inline-flex min-h-8 items-center gap-1 rounded-full border border-border-default bg-white/[0.04] px-2.5 py-1 text-xs text-text-secondary hover:border-status-danger/30 hover:text-status-danger"
+            >
+              {option.label}<X className="h-3 w-3" />
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      <Popover anchorRef={rootRef} open={isOpen} onClose={close} maxHeight={320} scroll={false} className="border-border-default bg-surface-panel-muted p-0 shadow-black/50">
+        <div className="relative border-b border-border-subtle bg-surface-panel-muted">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-subtle" />
+          <input
+            ref={inputRef}
+            value={query}
+            onChange={(event) => { setQuery(event.target.value); setActiveIndex(0); }}
+            onKeyDown={handleMenuKeyDown}
+            placeholder={searchPlaceholder}
+            aria-label="Filter options"
+            aria-controls={listboxId}
+            aria-activedescendant={filtered[activeIndex] ? `${listboxId}-${filtered[activeIndex].id}` : undefined}
+            className="h-11 w-full bg-transparent pl-10 pr-3 text-sm text-text-secondary outline-none placeholder:text-text-subtle focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+          />
+        </div>
+        <div id={listboxId} role="listbox" aria-multiselectable={multiple || undefined} className="max-h-64 overflow-y-auto overscroll-contain p-1.5 custom-scrollbar">
+          {filtered.map((option, index) => {
+            const isSelected = selectedIds.includes(option.id);
+            const isActive = index === activeIndex;
+            const Icon = option.icon;
+            return (
+              <button
+                id={`${listboxId}-${option.id}`}
+                key={option.id}
+                type="button"
+                role="option"
+                aria-selected={isSelected}
+                onMouseEnter={() => setActiveIndex(index)}
+                onClick={() => select(option.id)}
+                className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors [content-visibility:auto] [contain-intrinsic-size:0_44px]
+                  ${isSelected ? 'bg-accent/12 text-accent' : isActive ? 'bg-white/[0.06] text-text-primary' : 'text-text-secondary hover:bg-white/[0.06] hover:text-text-primary'}`}
+              >
+                {Icon ? <Icon className="h-4 w-4 shrink-0" aria-hidden="true" /> : null}
+                {option.color ? <span className="h-6 w-1 rounded-full" style={{ backgroundColor: option.color }} /> : null}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">{option.label}</span>
+                  {option.description ? <span className="mt-0.5 block truncate text-xs text-text-subtle">{option.description}</span> : null}
+                </span>
+                {option.group ? <span className="text-xs font-semibold uppercase tracking-wider text-text-subtle">{option.group}</span> : null}
+                {isSelected ? <Check className="h-4 w-4 shrink-0" /> : null}
+              </button>
+            );
+          })}
+          {!filtered.length ? <p className="px-3 py-5 text-center text-sm italic text-text-subtle">{emptyMessage}</p> : null}
+        </div>
+      </Popover>
+    </div>
+  );
 }

@@ -4,9 +4,10 @@ import Button from '../../components/ui/Button';
 import SearchableSelect from '../../components/ui/SearchableSelect';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import Modal from '../../components/ui/Modal';
+import { itemMeta } from './worldbuildConfig';
 import type { Toast, WorldbuildEntity } from './worldbuildTypes';
 
-const INPUT = 'wb-input w-full rounded-lg border border-white/15 bg-[#06121a]/90 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:border-accent/70 focus:outline-none';
+const INPUT = 'wb-input min-h-10 w-full rounded-lg border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary placeholder:text-text-subtle focus:border-accent/70 focus:outline-none focus:ring-2 focus:ring-accent/20';
 
 export interface EntityLink {
   linkId: string;
@@ -137,7 +138,7 @@ function RelationshipCard({ link, api, showToast, onChanged, onEdit, onDelete }:
             <span className="text-xs font-semibold text-accent/85">{link.label || 'Unlabeled relationship'}</span>
           </div>
           <RelationshipScale value={value} onChange={setValue} onCommit={persist} />
-          <textarea aria-label={`Relationship description for ${link.entity.canonicalName}`} className="mt-3 min-h-20 w-full resize-y rounded-lg border border-white/[0.07] bg-[#06121a]/65 px-3 py-2.5 text-sm leading-relaxed text-gray-300 placeholder:italic placeholder:text-gray-600 focus:border-accent/45 focus:outline-none" value={description} onChange={event => setDescription(event.target.value)} onBlur={() => persist()} placeholder="Describe this relationship from this subject’s perspective." />
+          <textarea aria-label={`Relationship description for ${link.entity.canonicalName}`} className="mt-3 min-h-20 w-full resize-y rounded-lg border border-border-subtle bg-surface-input/85 px-3 py-2.5 text-sm leading-relaxed text-text-secondary placeholder:italic placeholder:text-text-subtle focus:border-accent/45 focus:outline-none focus:ring-2 focus:ring-accent/15" value={description} onChange={event => setDescription(event.target.value)} onBlur={() => persist()} placeholder="Describe this relationship from this subject’s perspective." />
         </div>
         <RowActions onEdit={onEdit} onDelete={onDelete} />
       </div>
@@ -258,8 +259,9 @@ function InventoryCard({ link, onEdit, onDelete }: { link: EntityLink; onEdit():
   const isUnique = isUniqueItem(link.entity);
   const condition = String(link.metadata?.condition ?? '');
   const notes = String(link.metadata?.notes ?? '');
+  const ItemIcon = itemMeta(link.entity.data?.itemType).icon;
   return <article className="group flex items-start gap-3 rounded-xl border border-white/[0.09] bg-black/15 px-3.5 py-3">
-    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-accent/15 bg-accent/[0.06] text-accent"><Package className="h-4 w-4" /></div>
+    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-entity-item/20 bg-entity-item/[0.06] text-entity-item"><ItemIcon className="h-4 w-4" /></div>
     <div className="min-w-0 flex-1">
       <div className="flex flex-wrap items-center gap-2"><h4 className="truncate text-sm font-semibold text-gray-100">{link.entity.canonicalName}</h4>{!isUnique && <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-xs font-semibold tabular-nums text-gray-300">×{quantity}</span>}{isUnique && <span className="text-xs font-medium text-accent/70">Unique</span>}</div>
       {condition && <p className="mt-1 text-xs font-medium text-accent/75">{condition}</p>}
@@ -275,7 +277,7 @@ function InventoryEditor({ draft, setDraft, options, onSave, onClose, saving }: 
   return <Modal size="lg" title={draft.link ? 'Edit inventory item' : 'Add inventory item'} icon={Package} onClose={onClose} closeOnEsc={!saving} closeOnOverlay={!saving}>
     <div className="space-y-5 p-5">
       <div className={`grid gap-4 ${isUnique ? 'grid-cols-1' : 'grid-cols-[minmax(0,1fr)_8rem]'}`}>
-        <Field label="Item"><SearchableSelect value={draft.itemId} disabled={Boolean(draft.link)} onChange={(itemId: string) => update({ itemId })} options={options.map(option => ({ id: option.id, label: option.canonicalName, aliases: option.aliases, group: option.type.replace(/s$/, '') }))} placeholder="Search for an item" /></Field>
+        <Field label="Item"><SearchableSelect value={draft.itemId} disabled={Boolean(draft.link)} onChange={(itemId: string) => update({ itemId })} options={options.map(option => ({ id: option.id, label: option.canonicalName, aliases: option.aliases, group: itemMeta(option.data?.itemType).label, icon: itemMeta(option.data?.itemType).icon }))} placeholder="Search for an item" /></Field>
         {!isUnique && <Field label="Quantity"><input className={INPUT} type="number" min="1" step="1" value={draft.quantity} onChange={event => update({ quantity: Number(event.target.value) })} /></Field>}
       </div>
       <Field label="Condition"><input className={INPUT} value={draft.condition} onChange={event => update({ condition: event.target.value })} placeholder="Worn, pristine, damaged…" /></Field>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
-import { HelpCircle, Trash2, Plus, Edit, Image as ImageIcon, Check, AlertTriangle, Cpu, Workflow, Brain, PenTool, Palette, Send } from 'lucide-react';
+import { HelpCircle, Trash2, Plus, Edit, Image as ImageIcon, Check, AlertTriangle, Cpu, Workflow, Brain, PenTool, Palette, Send, Drama } from 'lucide-react';
 import ProfileModal from './modals/ProfileModal';
 import WorkflowModal from './modals/WorkflowModal';
 import RoleplayModeSection from './RoleplayModeSection';
@@ -22,7 +22,7 @@ const SECTIONS = [
   { id: 'agents', label: 'Profiles & Workflows', icon: Cpu },
   { id: 'context', label: 'Context & Memory', icon: Brain },
   { id: 'writing', label: 'Writing Desk', icon: PenTool },
-  { id: 'roleplay', label: 'Roleplay Mode', icon: Brain },
+  { id: 'roleplay', label: 'Roleplay Mode', icon: Drama },
   { id: 'appearance', label: 'Appearance', icon: Palette },
 ];
 
@@ -305,7 +305,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
   const newButton = (onClick) => (
     <button
       onClick={onClick}
-      className="text-[9px] font-bold text-accent hover:bg-accent/10 uppercase flex items-center space-x-1 cursor-pointer bg-[#011419] px-2.5 py-1.5 rounded-lg border border-accent/20 transition-colors"
+      className="min-h-8 text-xs font-semibold text-accent hover:bg-accent/10 uppercase flex items-center space-x-1 cursor-pointer bg-surface-canvas px-2.5 py-1.5 rounded-lg border border-accent/20 transition-colors"
     >
       <Plus className="w-2.5 h-2.5" />
       <span>New</span>
@@ -313,10 +313,10 @@ export default function ConfigurationView({ onTriggerSummarize }) {
   );
 
   return (
-    <div className="flex w-full h-full bg-[#011419] overflow-hidden">
+    <div className="flex w-full h-full bg-surface-canvas overflow-hidden">
       {/* Scroll-spy navigation column */}
-      <nav className="w-56 shrink-0 border-r border-gray-800/50 py-8 px-4 bg-[#040d12]/50 flex flex-col select-none">
-        <span className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest px-3 mb-4">Configuration</span>
+      <nav className="w-56 shrink-0 border-r border-border-subtle py-8 px-4 bg-surface-sidebar/50 flex flex-col select-none">
+        <span className="block text-xs font-semibold text-text-subtle uppercase tracking-widest px-3 mb-4">Configuration</span>
         <div className="space-y-0.5">
           {SECTIONS.map(sec => {
             const isActive = activeSection === sec.id;

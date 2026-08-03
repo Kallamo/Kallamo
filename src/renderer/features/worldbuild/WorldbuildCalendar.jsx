@@ -1,8 +1,64 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { CalendarDays, ChevronLeft, ChevronRight, List, Plus, RotateCcw, Save, Settings2, Trash2 } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, Flag, List, Plus, RotateCcw, Save, Settings2, Trash2 } from 'lucide-react';
+import ColorField from '../../components/ui/ColorField';
+import SelectMenu from '../../components/ui/SelectMenu';
 import WorldDateInput, { formatWorldDate } from './WorldDateInput';
 
-const INPUT = 'w-full rounded-lg border border-white/10 bg-[#06151c] px-3 py-2 text-sm text-gray-200 outline-none transition-colors focus:border-accent/60';
+const INPUT = 'w-full rounded-lg border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent/60 focus:ring-2 focus:ring-accent/15';
+
+const ENTRY_COLORS = {
+  birthday: 'var(--theme-calendar-birthday)',
+  birth: 'var(--theme-calendar-history)',
+  death: 'var(--theme-status-danger)',
+  missing: 'var(--theme-status-warning)',
+  festival: 'var(--theme-calendar-festival)',
+  event: 'var(--theme-calendar-event)',
+};
+
+function dateOrdinal(calendar, date) {
+  return calendar.months.slice(0, Math.max(0, Number(date.month) - 1))
+    .reduce((total, month) => total + Number(month.days || 0), 0) + Number(date.day || 1);
+}
+
+function seasonForDate(calendar, date) {
+  const target = dateOrdinal(calendar, date);
+  return (calendar.seasons || []).find(season => {
+    const start = dateOrdinal(calendar, season.start);
+    const end = dateOrdinal(calendar, season.end);
+    return start <= end ? target >= start && target <= end : target >= start || target <= end;
+  }) || null;
+}
+
+function seasonsForMonth(calendar, month) {
+  const days = Number(calendar.months[month - 1]?.days || 0);
+  return (calendar.seasons || []).filter(season => Array.from({ length: days }, (_, index) => index + 1)
+    .some(day => {
+      const target = dateOrdinal(calendar, { month, day });
+      const start = dateOrdinal(calendar, season.start);
+      const end = dateOrdinal(calendar, season.end);
+      return start <= end ? target >= start && target <= end : target >= start || target <= end;
+    }));
+}
+
+function sameDate(left, right) {
+  return Boolean(left && right
+    && left.eraId === right.eraId
+    && Number(left.year) === Number(right.year)
+    && Number(left.month) === Number(right.month)
+    && Number(left.day) === Number(right.day));
+}
+
+function entryVisual(entry) {
+  const category = String(entry.category || '').toLowerCase();
+  const title = String(entry.title || '').toLowerCase();
+  const isFestival = ['festival', 'holiday', 'celebration', 'feast'].some(term => category.includes(term) || title.includes(term));
+  const key = isFestival ? 'festival' : ENTRY_COLORS[entry.kind] ? entry.kind : 'event';
+  const labels = {
+    birthday: 'Birthday', birth: 'Birth', death: 'Death', missing: 'Missing',
+    festival: 'Festival', event: entry.kind === 'recurring-event' ? 'Recurring' : 'Event'
+  };
+  return { color: ENTRY_COLORS[key], label: labels[key] };
+}
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -34,12 +90,14 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
   const [invalid, setInvalid] = useState([]);
   const [resolutionDraft, setResolutionDraft] = useState({});
   const [saving, setSaving] = useState(false);
+  const [storyClock, setStoryClock] = useState(null);
 
   const loadCalendar = useCallback(async () => {
     const result = await api.getWorldCalendar(workspaceId);
     if (!result?.success) throw new Error(result?.error || 'Could not load the calendar.');
     setCalendar(result.calendar);
     setDraft(clone(result.calendar));
+    setStoryClock(result.clock || null);
     setCursor(current => current || {
       eraId: result.clock?.eraId || result.calendar.defaultEraId,
       year: result.clock?.year || 1,
@@ -68,6 +126,27 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
     const absoluteYear = Math.floor(absoluteMonth / count);
     const month = ((absoluteMonth % count) + count) % count + 1;
     setCursor({ ...displayYearFor(calendar, absoluteYear, cursor.eraId), month });
+  };
+
+  const goToStoryDay = () => {
+    if (!storyClock) return;
+    setCursor({ eraId: storyClock.eraId, year: storyClock.year, month: storyClock.month });
+  };
+
+  const setStoryDay = async day => {
+    const result = await api.saveRoleplayClock(workspaceId, {
+      ...storyClock,
+      eraId: cursor.eraId,
+      year: cursor.year,
+      month: cursor.month,
+      day,
+    });
+    if (!result?.success) {
+      showToast(result?.error || 'Could not set the current story day.', 'error');
+      return;
+    }
+    setStoryClock(result.clock);
+    showToast('Current story day updated.', 'success');
   };
 
   const updateList = (key, index, patch) => {
@@ -128,6 +207,8 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
 
   if (!calendar || !draft || !cursor) return <div className="p-8 text-sm text-gray-500">Loading calendar…</div>;
   const monthName = calendar.months[cursor.month - 1]?.name;
+  const monthSeasons = seasonsForMonth(calendar, cursor.month);
+  const seasonColor = monthSeasons[0]?.color || 'var(--app-accent)';
 
   return (
     <div className="mx-auto max-w-6xl space-y-5 p-6">
@@ -137,9 +218,9 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
           <h2 className="mt-1 text-2xl font-semibold text-white">{calendar.name}</h2>
           <p className="mt-1 text-sm text-gray-500">Canonical dates are stored by day. Hours and minutes belong to each RP history.</p>
         </div>
-        <div className="flex rounded-lg border border-white/10 bg-black/20 p-1">
+        <div className="flex rounded-full border border-border-subtle bg-surface-panel/70 p-1">
           {[['month', CalendarDays, 'Calendar'], ['timeline', List, 'Timeline'], ['settings', Settings2, 'Customize']].map(([key, Icon, label]) => (
-            <button key={key} type="button" onClick={() => setView(key)} className={`inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-xs font-semibold ${view === key ? 'bg-accent text-[#011419]' : 'text-gray-400 hover:text-white'}`}>
+            <button key={key} type="button" onClick={() => setView(key)} className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${view === key ? 'bg-accent/15 text-accent' : 'text-text-muted hover:bg-white/[0.04] hover:text-text-primary'}`}>
               <Icon className="h-3.5 w-3.5" />{label}
             </button>
           ))}
@@ -147,32 +228,52 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
       </header>
 
       {view !== 'settings' && (
-        <section className="overflow-hidden rounded-2xl border border-white/10 bg-[#07151b]/90">
-          <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+        <section className="calendar-season-surface overflow-hidden rounded-2xl border border-border-default" style={{ '--calendar-season-color': seasonColor }}>
+          <div className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
             <button type="button" onClick={() => moveMonth(-1)} className="rounded-lg p-2 text-gray-400 hover:bg-white/5 hover:text-white"><ChevronLeft className="h-4 w-4" /></button>
-            <div className="flex items-center gap-2">
-              <select className={INPUT} value={cursor.eraId} onChange={event => setCursor({ ...cursor, eraId: event.target.value })}>{calendar.eras.map(era => <option key={era.id} value={era.id}>{era.shortName}</option>)}</select>
-              <input className={`${INPUT} w-24`} type="number" min="1" value={cursor.year} onChange={event => setCursor({ ...cursor, year: Math.max(1, Number(event.target.value) || 1) })} />
-              <span className="min-w-32 text-center text-sm font-semibold text-gray-100">{monthName}</span>
+            <div className="flex min-w-0 items-center justify-center gap-2">
+              <input className={`${INPUT} !w-20 !py-1.5`} type="number" min="1" value={cursor.year} onChange={event => setCursor({ ...cursor, year: Math.max(1, Number(event.target.value) || 1) })} />
+              <SelectMenu ariaLabel="Calendar era" className="w-24" unboxed value={cursor.eraId} onChange={eraId => setCursor({ ...cursor, eraId })} options={calendar.eras.map(era => ({ value: era.id, label: era.shortName }))} />
+              <div className="min-w-40 text-center">
+                <span className="block text-sm font-semibold text-text-primary">{monthName}</span>
+                {monthSeasons.length > 0 && <span className="mt-0.5 flex flex-wrap items-center justify-center gap-x-2 gap-y-0.5 text-[0.6875rem] font-medium text-text-muted">{monthSeasons.map(season => <span key={season.id} className="inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: season.color }} />{season.name}</span>)}</span>}
+              </div>
             </div>
-            <button type="button" onClick={() => moveMonth(1)} className="rounded-lg p-2 text-gray-400 hover:bg-white/5 hover:text-white"><ChevronRight className="h-4 w-4" /></button>
+            <div className="flex items-center gap-1">
+              <button type="button" onClick={goToStoryDay} disabled={!storyClock} className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-semibold text-text-muted hover:bg-white/5 hover:text-text-primary disabled:opacity-40" title={storyClock ? `Go to ${formatWorldDate(calendar, storyClock)}` : undefined}><Flag className="h-3.5 w-3.5" />Story day</button>
+              <button type="button" onClick={() => moveMonth(1)} className="rounded-lg p-2 text-gray-400 hover:bg-white/5 hover:text-white"><ChevronRight className="h-4 w-4" /></button>
+            </div>
           </div>
 
           {view === 'month' ? (
             <>
-              <div className="grid border-b border-white/[0.07]" style={{ gridTemplateColumns: `repeat(${calendar.weekdays.length}, minmax(0, 1fr))` }}>
+              {monthSeasons.some(season => season.description) && <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-1 border-b border-border-subtle px-4 py-2 text-xs text-text-muted">{monthSeasons.filter(season => season.description).map(season => <span key={season.id} className="inline-flex items-baseline gap-1.5"><strong className="font-semibold" style={{ color: season.color }}>{season.name}</strong><span>{season.description}</span></span>)}</div>}
+              <div className="grid border-b border-border-subtle bg-black/[0.08]" style={{ gridTemplateColumns: `repeat(${calendar.weekdays.length}, minmax(0, 1fr))` }}>
                 {calendar.weekdays.map(day => <div key={day} className="px-2 py-2 text-center text-[0.65rem] font-bold uppercase tracking-wider text-gray-500">{day}</div>)}
               </div>
               <div className="grid" style={{ gridTemplateColumns: `repeat(${calendar.weekdays.length}, minmax(0, 1fr))` }}>
-                {Array.from({ length: monthData?.firstWeekday || 0 }, (_, index) => <div key={`empty-${index}`} className="min-h-28 border-b border-r border-white/[0.05] bg-black/10" />)}
+                {Array.from({ length: monthData?.firstWeekday || 0 }, (_, index) => <div key={`empty-${index}`} className="min-h-28 border-b border-r border-border-subtle bg-black/[0.08]" />)}
                 {Array.from({ length: monthData?.daysInMonth || 0 }, (_, index) => {
                   const day = index + 1;
-                  return <div key={day} className="min-h-28 border-b border-r border-white/[0.05] p-2">
-                    <span className="text-xs font-semibold text-gray-400">{day}</span>
-                    <div className="mt-2 space-y-1">
-                      {(entriesByDay.get(day) || []).slice(0, 4).map(entry => (
-                        <button key={entry.id} type="button" onClick={() => onOpenEntity(entry.entityId)} className="block w-full truncate rounded-md border border-accent/15 bg-accent/[0.06] px-1.5 py-1 text-left text-[0.65rem] text-accent hover:bg-accent/10" title={entry.title}>{entry.title}</button>
-                      ))}
+                  const dayEntries = entriesByDay.get(day) || [];
+                  const daySeason = seasonForDate(calendar, { month: cursor.month, day });
+                  const isStoryDay = sameDate(storyClock, { eraId: cursor.eraId, year: cursor.year, month: cursor.month, day });
+                  return <div key={day} className="calendar-day group min-h-28 border-b border-r border-border-subtle p-2" style={{ '--calendar-day-season': daySeason?.color || seasonColor }}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={`inline-flex items-center gap-1 text-xs font-semibold ${isStoryDay ? 'text-accent' : 'text-text-secondary'}`}>{day}{isStoryDay && <Flag className="h-3 w-3 fill-current" aria-label="Current story day" />}</span>
+                      <span className="flex items-center gap-1.5">
+                        {!isStoryDay && <button type="button" onClick={() => setStoryDay(day)} className="opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100" aria-label={`Set day ${day} as current story day`} title="Set as current story day"><Flag className="h-3 w-3 text-text-subtle hover:text-accent" /></button>}
+                        {daySeason && <span className="h-1.5 w-1.5 rounded-full opacity-70" style={{ backgroundColor: daySeason.color }} title={daySeason.name} />}
+                      </span>
+                    </div>
+                    <div className="mt-1.5 space-y-1">
+                      {dayEntries.slice(0, 3).map(entry => {
+                        const visual = entryVisual(entry);
+                        return <button key={entry.id} type="button" onClick={() => onOpenEntity(entry.entityId)} className="calendar-entry block w-full rounded-md px-1.5 py-1 text-left text-[0.65rem] leading-tight transition-colors" style={{ '--calendar-entry-color': visual.color }} title={`${visual.label}: ${entry.title}`}>
+                          <span className="line-clamp-2">{entry.title}</span>
+                        </button>;
+                      })}
+                      {dayEntries.length > 3 && <span className="block px-1 text-[0.625rem] font-medium text-text-subtle">+{dayEntries.length - 3} more</span>}
                     </div>
                   </div>;
                 })}
@@ -180,13 +281,14 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
             </>
           ) : (
             <div className="divide-y divide-white/[0.06]">
-              {(monthData?.entries || []).map(entry => (
-                <button key={entry.id} type="button" onClick={() => onOpenEntity(entry.entityId)} className="flex w-full items-center gap-4 px-5 py-3 text-left hover:bg-white/[0.03]">
-                  <span className="w-10 font-mono text-sm text-accent">{entry.date.day}</span>
-                  <span className="flex-1 text-sm text-gray-200">{entry.title}</span>
-                  <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-gray-600">{entry.kind.replaceAll('-', ' ')}</span>
-                </button>
-              ))}
+              {(monthData?.entries || []).map(entry => {
+                const visual = entryVisual(entry);
+                return <button key={entry.id} type="button" onClick={() => onOpenEntity(entry.entityId)} className="flex w-full items-center gap-4 px-5 py-3 text-left hover:bg-white/[0.03]">
+                  <span className="w-10 font-mono text-sm" style={{ color: visual.color }}>{entry.date.day}</span>
+                  <span className="min-w-0 flex-1 text-sm text-text-secondary">{entry.title}</span>
+                  <span className="calendar-entry rounded-full px-2 py-0.5 text-[0.625rem] font-semibold tracking-wide" style={{ '--calendar-entry-color': visual.color }}>{visual.label}</span>
+                </button>;
+              })}
               {!monthData?.entries?.length && <p className="px-5 py-10 text-center text-sm text-gray-600">No entries in this month.</p>}
             </div>
           )}
@@ -219,8 +321,8 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
           </SettingsPanel>
 
           <SettingsPanel title="Seasons (optional)" action={<AddButton onClick={() => setDraft({ ...draft, seasons: [...draft.seasons, { id: crypto.randomUUID(), name: `Season ${draft.seasons.length + 1}`, color: '#6ee7b7', description: '', start: { month: 1, day: 1 }, end: { month: draft.months.length, day: draft.months.at(-1).days } }] })} />}>
-            <div className="space-y-3">{draft.seasons.map((season, index) => <div key={season.id} className="rounded-xl border border-white/10 p-3">
-              <div className="grid gap-2 sm:grid-cols-[1fr_3rem_2rem]"><input className={INPUT} value={season.name} onChange={event => updateList('seasons', index, { name: event.target.value })} /><input className={`${INPUT} h-10 p-1`} type="color" value={season.color} onChange={event => updateList('seasons', index, { color: event.target.value })} /><DeleteButton onClick={() => setDraft({ ...draft, seasons: draft.seasons.filter((_, itemIndex) => itemIndex !== index) })} /></div>
+            <div className="space-y-3">{draft.seasons.map((season, index) => <div key={season.id} className="calendar-season-card rounded-xl border p-3" style={{ '--calendar-season-color': season.color }}>
+                <div className="grid gap-2 sm:grid-cols-[1fr_8.5rem_2rem]"><input className={INPUT} value={season.name} onChange={event => updateList('seasons', index, { name: event.target.value })} /><ColorField ariaLabel={`Choose color for ${season.name}`} value={season.color} onChange={color => updateList('seasons', index, { color })} /><DeleteButton onClick={() => setDraft({ ...draft, seasons: draft.seasons.filter((_, itemIndex) => itemIndex !== index) })} /></div>
               <input className={`${INPUT} mt-2`} value={season.description || ''} onChange={event => updateList('seasons', index, { description: event.target.value })} placeholder="Optional narrative description" />
               <div className="mt-2 grid gap-3 sm:grid-cols-2"><SeasonBoundary label="Starts" calendar={draft} value={season.start} onChange={start => updateList('seasons', index, { start })} /><SeasonBoundary label="Ends" calendar={draft} value={season.end} onChange={end => updateList('seasons', index, { end })} /></div>
             </div>)}</div>

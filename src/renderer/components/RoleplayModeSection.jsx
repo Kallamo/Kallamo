@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Activity, Check, Clock3, Eye, Gauge, MapPin, Pencil, Plus, RefreshCw, Shield, Trash2, Users, X } from 'lucide-react';
+import { Activity, Check, ChevronDown, Clock3, Eye, Gauge, MapPin, Pencil, Plus, RefreshCw, Shield, Trash2, Users, X } from 'lucide-react';
+import ColorField from './ui/ColorField';
 import SearchableSelect from './ui/SearchableSelect';
 
 const EMPTY_SETTINGS = { playerEntityId: null, locationEntityId: null, activeSceneId: null, scenarioName: '', scenarioSummary: '', defaultUpdatePolicy: 'review' };
@@ -172,16 +173,25 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
   const delayedJobs = narrativeJobs.filter(job => job.status === 'failed' || (job.status === 'processing' && Date.now() - job.updatedAt > 120000));
   const recentEntities = entityChanges.filter(change => change.status === 'applied').slice(-5).reverse();
   const recentEvents = narrativeEvents.filter(event => event.status === 'approved').slice(-5).reverse();
+  const pendingCount = pendingResources.length + pendingScenes.length + pendingInventory.length + pendingEntities.length + pendingNarrative.length;
+  const playerName = names.get(settings.playerEntityId) || 'Not selected';
+  const locationName = names.get(scene.locationId) || 'No location';
 
   return <div className="rounded-2xl border border-gray-800/60 bg-[#0a161d]/50 p-6">
-    <SectionHead icon={Shield} title="Roleplay Mode" desc="Run this workspace as a perspective-aware campaign powered by Kanora." />
+    <SectionHead icon={Shield} title="Roleplay Mode" desc="Set the active scene first. Open campaign systems only when you need deeper control." />
     <div className="flex min-w-0 items-center justify-between gap-6 rounded-xl border border-gray-800 bg-[#011419] p-5">
       <div className="min-w-0"><span className="text-sm font-semibold text-gray-100">Enable Roleplay Mode</span><p className="caption mt-1">Turning it off preserves every scene, resource, value, and history entry.</p></div>
       <button type="button" role="switch" aria-label="Enable Roleplay Mode" aria-checked={enabled} onClick={toggle} className={'relative h-7 w-12 shrink-0 overflow-hidden rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ' + (enabled ? 'border-accent/50 bg-accent' : 'border-gray-600 bg-gray-700')}><span className={'absolute left-1 top-1 h-[1.125rem] w-[1.125rem] rounded-full bg-[#011419] transition-transform ' + (enabled ? 'translate-x-5' : '')} /></button>
     </div>
 
     {enabled && <div className="mt-5 space-y-5">
-      <Panel icon={MapPin} title="Current Scene" description="Kanora uses this roster to understand who is participating, who is nearby, and which perspective controls the response.">
+      <div className="grid gap-2 sm:grid-cols-3">
+        <Overview label="Playing as" value={playerName} />
+        <Overview label="Current location" value={locationName} />
+        <Overview label="Pending review" value={String(pendingCount)} accent={pendingCount > 0} />
+      </div>
+
+      <Panel icon={MapPin} title="Current Scene" summary={`${playerName} · ${locationName}`} description="Choose the active perspective, location, and who is present. These are the details used on the next roleplay turn." defaultOpen>
         <div className="grid gap-4 lg:grid-cols-2">
           <Field label="Player character" hint="The focal perspective used for roleplay context." fieldLabel={fieldLabel}><SearchableSelect value={settings.playerEntityId || ''} onChange={value => saveSettings({ playerEntityId: value || null })} options={entityOptions(groups.actors)} placeholder="Select a character" /></Field>
           <Field label="Current location" hint="Where the active scene is happening." fieldLabel={fieldLabel}><SearchableSelect value={scene.locationId || ''} onChange={value => saveScene({ locationId: value || null })} options={entityOptions(groups.locations)} placeholder="Select a location" /></Field>
@@ -196,7 +206,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
         </div>
       </Panel>
 
-      <Panel icon={Clock3} title="Time Cost Matrix" description="Narrative State estimates elapsed time from these ranges. Explicitly narrated time always wins, and one or more days must be explicit.">
+      <Panel icon={Clock3} title="Time Cost Matrix" summary={`${timeMatrix.categories.length} action ranges`} description="Optional timing rules for actions that do not state an exact duration. Explicit time in the narrative always takes priority.">
         <div className="space-y-3">
           {timeMatrix.categories.map(category => (
             <article key={category.id} className="rounded-xl border border-white/10 bg-[#07151b] p-4">
@@ -212,14 +222,14 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
         <div className="mt-4 flex justify-end"><button type="button" onClick={saveTimeMatrix} className="rounded-lg bg-accent px-4 py-2 text-xs font-bold text-[#011419]">Save time matrix</button></div>
       </Panel>
 
-      <Panel icon={Gauge} title="Tracked Resources" description="Define reusable numeric states. Each resource explains what it measures and how the AI may update it.">
+      <Panel icon={Gauge} title="Tracked Resources" summary={`${definitions.length} configured`} description="Create reusable values such as Health, Stamina, or Mana, including how each value may change.">
         <div className="grid gap-3 md:grid-cols-2">{definitions.map(definition => <DefinitionCard key={definition.id} definition={definition} count={assignments.filter(item => item.definitionId === definition.id).length} onEdit={() => setResourceDraft({ ...definition })} onDelete={() => deleteResource(definition.id)} />)}</div>
         {!definitions.length && <Empty text="No tracked resources yet. Add Health, Stamina, Mana, or another numeric state." />}
         <button type="button" onClick={() => setResourceDraft({ ...EMPTY_RESOURCE, updatePolicy: settings.defaultUpdatePolicy })} className="mt-4 inline-flex items-center gap-2 text-xs font-semibold text-accent"><Plus className="h-4 w-4" />Add resource</button>
         {resourceDraft && <ResourceEditor draft={resourceDraft} setDraft={setResourceDraft} onSave={saveResource} onCancel={() => setResourceDraft(null)} inputClass={inputClass} fieldLabel={fieldLabel} />}
       </Panel>
 
-      <Panel icon={Users} title="Resource Assignments" description="Apply one value to several entities, or define inherited defaults for a Race or species. Individual values always take priority.">
+      <Panel icon={Users} title="Resource Assignments" summary={`${assignments.length} assignments`} description="Apply tracked resources to characters, Races, or species. Individual values take priority over inherited defaults.">
         <div className="rounded-xl border border-white/10 bg-white/[0.025] p-4">
           <div className="grid gap-3 lg:grid-cols-3">
             <Field label="Resource" fieldLabel={fieldLabel}><SearchableSelect value={assignment.definitionId} onChange={definitionId => { const definition = definitions.find(item => item.id === definitionId); setAssignment(current => ({ ...current, definitionId, current: definition?.initialValue ?? 0, maximum: definition?.maximum ?? 100 })); }} options={definitionOptions} placeholder="Select a resource" /></Field>
@@ -235,12 +245,12 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
         <AssignmentList assignments={assignments} definitions={definitions} names={names} onRemove={removeAssignment} />
       </Panel>
 
-      <Panel icon={Eye} title="Entity State" description="Inspect effective values and see whether each one is a default, inherited value, or individual override.">
+      <Panel icon={Eye} title="Entity State" summary="Inspect effective values" description="Check a character's current resources and whether each value is individual, inherited, or using its default.">
         <SearchableSelect value={inspectId} onChange={inspect} options={entityOptions(groups.actors)} placeholder="Search for an entity" />
         <div className="mt-4 grid gap-3 md:grid-cols-2">{resources.map(resource => <ResourceBar key={resource.definitionId} resource={resource} sourceName={names.get(resource.inheritedFrom)} onChange={value => changeValue(resource, value)} onRemove={resource.inheritedFromType === 'entity' ? () => removeAssignment({ definitionId: resource.definitionId, targetType: 'entity', targetId: inspectId }) : null} />)}</div>
       </Panel>
 
-      {(pendingResources.length > 0 || pendingScenes.length > 0 || pendingInventory.length > 0 || pendingEntities.length > 0 || pendingNarrative.length > 0) && <Panel icon={Activity} title="Pending AI Changes" description="Review consequential state changes before Kanora applies them atomically.">
+      {pendingCount > 0 && <Panel icon={Activity} title="Pending AI Changes" summary={`${pendingCount} waiting`} description="Review changes that require your approval before they become part of the campaign state." defaultOpen>
         <div className="space-y-2">
           {pendingEntities.map(change => <Pending key={change.id} label={`${change.proposal.type.replace(/s$/, '')}: ${change.proposal.name}`} detail={change.status === 'conflicting' ? `Conflict: ${change.proposal.reason || change.proposal.description}` : change.proposal.description || change.proposal.reason} onApprove={() => resolve('entity', change.id, 'approved')} onReject={() => resolve('entity', change.id, 'rejected')} />)}
           {pendingNarrative.map(item => <Pending key={item.proposal.changeSet.event.id} label={item.proposal.changeSet.event.description} detail={describeNarrativeEvent(item, names)} onApprove={() => resolve('narrative', item.proposal.changeSet.event.id, 'approved')} onReject={() => resolve('narrative', item.proposal.changeSet.event.id, 'rejected')} />)}
@@ -250,7 +260,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
         </div>
       </Panel>}
 
-      <Panel icon={Activity} title="Narrative State Activity" description="Local diagnostics for evaluating cost and intervention during long campaigns.">
+      <Panel icon={Activity} title="Narrative State Activity" summary="Diagnostics and recovery" description="Advanced local diagnostics for recent analysis, interrupted updates, and recovery tools.">
         <div className="grid gap-3 sm:grid-cols-3">
           <Metric label="Recent turns" value={metricTotals.turns} />
           <Metric label="Deep analyses" value={metricTotals.deep} />
@@ -266,9 +276,11 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
   </div>;
 }
 
-function Panel({ icon: Icon, title, description, children }) {
-  return <section className="rounded-xl border border-gray-800 bg-[#011419] p-5"><div className="mb-5 flex items-start gap-3"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-accent/20 bg-accent/[0.07]"><Icon className="h-4 w-4 text-accent" /></span><div><h4 className="text-xs font-bold uppercase tracking-wider text-gray-200">{title}</h4><p className="caption mt-1 max-w-3xl">{description}</p></div></div>{children}</section>;
+function Panel({ icon: Icon, title, summary, description, defaultOpen = false, children }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return <section className={`overflow-hidden rounded-xl border bg-[#011419] transition-colors ${open ? 'border-gray-700/80' : 'border-gray-800'}`}><button type="button" onClick={() => setOpen(current => !current)} aria-expanded={open} className="flex w-full items-center gap-3 p-4 text-left hover:bg-white/[0.025]"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-accent/20 bg-accent/[0.07]"><Icon className="h-4 w-4 text-accent" /></span><span className="min-w-0 flex-1"><span className="block text-xs font-bold uppercase tracking-wider text-gray-200">{title}</span><span className="mt-1 block truncate text-xs text-text-subtle">{open ? description : summary || description}</span></span><ChevronDown className={`h-4 w-4 shrink-0 text-text-subtle transition-transform ${open ? 'rotate-180' : ''}`} /></button>{open && <div className="border-t border-border-subtle px-5 pb-5 pt-4">{children}</div>}</section>;
 }
+function Overview({ label, value, accent = false }) { return <div className="rounded-xl border border-border-subtle bg-surface-panel-muted px-3.5 py-3"><span className="block text-[0.65rem] font-bold uppercase tracking-wider text-text-subtle">{label}</span><strong className={`mt-1 block truncate text-sm ${accent ? 'text-accent' : 'text-text-secondary'}`}>{value}</strong></div>; }
 function Field({ label, hint, fieldLabel, children }) {
   return <label className="block"><span className={fieldLabel + ' mb-1.5'}>{label}</span>{children}{hint && <span className="mt-1.5 block text-[0.7rem] leading-relaxed text-gray-600">{hint}</span>}</label>;
 }
@@ -278,7 +290,7 @@ function DefinitionCard({ definition, count, onEdit, onDelete }) {
 }
 function ResourceEditor({ draft, setDraft, onSave, onCancel, inputClass, fieldLabel }) {
   const toggleType = type => setDraft({ ...draft, appliesTo: draft.appliesTo.includes(type) ? draft.appliesTo.filter(item => item !== type) : [...draft.appliesTo, type] });
-  return <div className="mt-4 rounded-xl border border-accent/20 bg-accent/[0.025] p-4"><div className="grid gap-3 md:grid-cols-3"><Field label="Name" fieldLabel={fieldLabel}><input className={inputClass} value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} /></Field><Field label="Color" fieldLabel={fieldLabel}><input className={inputClass + ' h-[2.65rem]'} type="color" value={draft.color} onChange={event => setDraft({ ...draft, color: event.target.value })} /></Field><Field label="AI updates" hint={POLICY[draft.updatePolicy]} fieldLabel={fieldLabel}><select className={inputClass} value={draft.updatePolicy} onChange={event => setDraft({ ...draft, updatePolicy: event.target.value })}><option value="manual">Manual only</option><option value="review">Review changes</option><option value="automatic">Automatic</option></select></Field><Field label="Minimum" fieldLabel={fieldLabel}><input className={inputClass} type="number" value={draft.minimum} onChange={event => setDraft({ ...draft, minimum: event.target.value })} /></Field><Field label="Maximum" fieldLabel={fieldLabel}><input className={inputClass} type="number" value={draft.maximum} onChange={event => setDraft({ ...draft, maximum: event.target.value })} /></Field><Field label="Initial value" fieldLabel={fieldLabel}><input className={inputClass} type="number" value={draft.initialValue} onChange={event => setDraft({ ...draft, initialValue: event.target.value })} /></Field></div><div className="mt-4"><span className={fieldLabel}>Applies to</span><div className="mt-2 flex gap-2">{['Characters', 'Creatures'].map(type => <button key={type} type="button" onClick={() => toggleType(type)} className={'rounded-lg border px-3 py-2 text-xs ' + (draft.appliesTo.includes(type) ? 'border-accent/50 bg-accent/10 text-accent' : 'border-gray-800 text-gray-500')}>{type}</button>)}</div></div><div className="mt-4"><Field label="Purpose and AI guidance" hint="Explain what this value means and when a narrative event should change it." fieldLabel={fieldLabel}><textarea className={inputClass + ' min-h-20 resize-y'} value={draft.description || ''} onChange={event => setDraft({ ...draft, description: event.target.value })} /></Field></div><div className="mt-4 flex justify-end gap-2"><button type="button" onClick={onCancel} className="px-3 py-2 text-xs text-gray-500">Cancel</button><button type="button" onClick={onSave} className="rounded-lg bg-accent px-4 py-2 text-xs font-bold text-[#011419]">Save resource</button></div></div>;
+  return <div className="mt-4 rounded-xl border border-accent/20 bg-accent/[0.025] p-4"><div className="grid gap-3 md:grid-cols-3"><Field label="Name" fieldLabel={fieldLabel}><input className={inputClass} value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} /></Field><Field label="Color" fieldLabel={fieldLabel}><ColorField value={draft.color} onChange={color => setDraft({ ...draft, color })} /></Field><Field label="AI updates" hint={POLICY[draft.updatePolicy]} fieldLabel={fieldLabel}><select className={inputClass} value={draft.updatePolicy} onChange={event => setDraft({ ...draft, updatePolicy: event.target.value })}><option value="manual">Manual only</option><option value="review">Review changes</option><option value="automatic">Automatic</option></select></Field><Field label="Minimum" fieldLabel={fieldLabel}><input className={inputClass} type="number" value={draft.minimum} onChange={event => setDraft({ ...draft, minimum: event.target.value })} /></Field><Field label="Maximum" fieldLabel={fieldLabel}><input className={inputClass} type="number" value={draft.maximum} onChange={event => setDraft({ ...draft, maximum: event.target.value })} /></Field><Field label="Initial value" fieldLabel={fieldLabel}><input className={inputClass} type="number" value={draft.initialValue} onChange={event => setDraft({ ...draft, initialValue: event.target.value })} /></Field></div><div className="mt-4"><span className={fieldLabel}>Applies to</span><div className="mt-2 flex gap-2">{['Characters', 'Creatures'].map(type => <button key={type} type="button" onClick={() => toggleType(type)} className={'rounded-lg border px-3 py-2 text-xs ' + (draft.appliesTo.includes(type) ? 'border-accent/50 bg-accent/10 text-accent' : 'border-gray-800 text-gray-500')}>{type}</button>)}</div></div><div className="mt-4"><Field label="Purpose and AI guidance" hint="Explain what this value means and when a narrative event should change it." fieldLabel={fieldLabel}><textarea className={inputClass + ' min-h-20 resize-y'} value={draft.description || ''} onChange={event => setDraft({ ...draft, description: event.target.value })} /></Field></div><div className="mt-4 flex justify-end gap-2"><button type="button" onClick={onCancel} className="px-3 py-2 text-xs text-gray-500">Cancel</button><button type="button" onClick={onSave} className="rounded-lg bg-accent px-4 py-2 text-xs font-bold text-[#011419]">Save resource</button></div></div>;
 }
 function AssignmentList({ assignments, definitions, names, onRemove }) {
   if (!assignments.length) return <div className="mt-4"><Empty text="No explicit assignments. Resources currently use their default initial values." /></div>;

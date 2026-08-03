@@ -3,8 +3,10 @@ import { useApp } from '../context/AppContext';
 import { Search, Library, Plus, MoreVertical, Pin, Trash2, Edit3, MessageSquare } from 'lucide-react';
 import ChatModal from './modals/ChatModal';
 import DeleteModal from './modals/DeleteModal';
-import Logo from '../logo';
 import Popover from './ui/Popover';
+import Button from './ui/Button';
+import EmptyState from './ui/EmptyState';
+import TextInput from './ui/TextInput';
 
 export default function DashboardView() {
   const { 
@@ -76,47 +78,42 @@ export default function DashboardView() {
         
         <div className="flex items-center space-x-4">
           {/* Search bar */}
-          <div className="relative w-64">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 w-4 h-4" />
-            <input 
-              type="text" 
+          <div className="w-64">
+            <TextInput
+              icon={Search}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search workspaces..." 
-              className="w-full bg-[#0a161d] border border-gray-800 text-gray-200 text-sm rounded-lg pl-9 pr-3 py-2 focus:outline-none focus:border-accent transition-colors"
+              placeholder="Search workspaces…"
+              aria-label="Search workspaces"
             />
           </div>
 
           {/* Library Link */}
-          <button
-            onClick={() => setCurrentView('library')}
-            className="flex items-center space-x-2 px-4 py-2 bg-[#0a161d] hover:bg-[#1a2d32] border border-gray-800 rounded-lg text-gray-300 hover:text-white transition-colors text-sm font-medium cursor-pointer"
-          >
-            <Library className="w-4 h-4" />
-            <span>Library</span>
-          </button>
+          <Button variant="ghost" icon={Library} onClick={() => setCurrentView('library')}>Library</Button>
 
           {/* New Chat Button */}
-          <button 
+          <Button
+            icon={Plus}
             onClick={() => {
               setChatToEdit(null);
               setShowChatModal(true);
             }}
-            className="flex items-center space-x-2 bg-accent hover:brightness-110 text-[#011419] font-bold px-4 py-2 rounded-lg transition-all shadow-sm active:scale-95 text-sm cursor-pointer"
           >
-            <Plus className="w-4 h-4" strokeWidth={2.5} />
-            <span>New Chat</span>
-          </button>
+            New Workspace
+          </Button>
         </div>
       </div>
 
       {/* Grid Area */}
       <div className="w-full max-w-7xl mx-auto flex-1 overflow-y-auto custom-scrollbar pr-2 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 content-start pb-8">
         {sortedChats.length === 0 ? (
-          <div className="col-span-full flex flex-col items-center justify-center text-gray-500 py-24 animate-in fade-in duration-300 group">
-            <Logo size={128} className="logo-hover mb-6 animate-pulse group-hover:animate-none hover:scale-105 transition-transform duration-300" />
-            <p className="text-sm font-medium transition-colors duration-300 group-hover:text-gray-300">No workspaces found.</p>
-          </div>
+          <EmptyState
+            className="col-span-full mt-6"
+            icon={MessageSquare}
+            title={searchQuery ? 'No matching workspaces' : 'Create your first workspace'}
+            subtitle={searchQuery ? 'Try a different title or clear the search.' : 'Keep a story, its Worldbuild, memory, files, and writing tools together.'}
+            action={!searchQuery ? <Button icon={Plus} onClick={() => { setChatToEdit(null); setShowChatModal(true); }}>New Workspace</Button> : null}
+          />
         ) : (
           sortedChats.map(chat => {
             // Background image resolution

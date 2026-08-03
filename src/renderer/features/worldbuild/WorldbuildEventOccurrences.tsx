@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Activity, Brain, CalendarClock, ChevronDown, Link2, Package, Plus, Sparkles, Users, X } from 'lucide-react';
 import Button from '../../components/ui/Button';
+import Checkbox from '../../components/ui/Checkbox';
+import Field from '../../components/ui/Field';
 import Modal from '../../components/ui/Modal';
 import SearchableSelect from '../../components/ui/SearchableSelect';
+import { entityMeta } from './worldbuildConfig';
 import WorldDateInput, { formatWorldDate } from './WorldDateInput';
 import type {
   Toast,
@@ -12,7 +15,7 @@ import type {
   WorldbuildEventOccurrenceParticipant,
 } from './worldbuildTypes';
 
-const INPUT = 'w-full rounded-lg border border-white/10 bg-[#06151c] px-3 py-2 text-sm text-gray-200 outline-none transition-colors placeholder:text-gray-600 focus:border-accent/60';
+const INPUT = 'min-h-10 w-full rounded-lg border border-border-default bg-surface-input px-3 py-2 text-sm text-text-secondary outline-none transition-colors placeholder:text-text-subtle focus:border-accent/60 focus:ring-2 focus:ring-accent/20';
 
 interface RoleplayDefinition {
   id: string;
@@ -259,7 +262,7 @@ export default function WorldbuildEventOccurrences({
                                   <option value="inaccessible">Inaccessible</option>
                                 </select>
                               </Field>
-                              <label className="flex min-h-10 items-center gap-2 text-xs text-gray-400"><input type="checkbox" checked={participant.remember} onChange={event => patchParticipant(id, { remember: event.target.checked })} />Create Memory</label>
+                              <div className="flex min-h-10 items-center"><Checkbox checked={participant.remember} onChange={remember => patchParticipant(id, { remember })} label="Create Memory" /></div>
                             </div>
                             {isFaction && participant.remember && (
                               <div className="mt-3 grid gap-2 lg:grid-cols-2">
@@ -330,9 +333,9 @@ function ResourceConsequences({ editor, setEditor, definitions, entities }: { ed
       const entityType = entities.find(entity => entity.id === change.entityId)?.type;
       const availableDefinitions = entityType ? definitions.filter(definition => definition.appliesTo.includes(entityType)) : definitions;
       return <ConsequenceRow key={index} onRemove={() => setEditor({ ...editor, resourceChanges: editor.resourceChanges.filter((_, itemIndex) => itemIndex !== index) })}>
-      <select className={INPUT} value={change.entityId} onChange={event => replaceAt(editor.resourceChanges, index, { ...change, entityId: event.target.value }, resourceChanges => setEditor({ ...editor, resourceChanges }))}><option value="">Entity</option>{entities.map(entity => <option key={entity.id} value={entity.id}>{entity.canonicalName}</option>)}</select>
-      <select className={INPUT} value={change.definitionId} onChange={event => replaceAt(editor.resourceChanges, index, { ...change, definitionId: event.target.value }, resourceChanges => setEditor({ ...editor, resourceChanges }))}><option value="">State</option>{availableDefinitions.map(definition => <option key={definition.id} value={definition.id}>{definition.name}</option>)}</select>
-      <input className={INPUT} type="number" value={change.value} onChange={event => replaceAt(editor.resourceChanges, index, { ...change, value: Number(event.target.value) }, resourceChanges => setEditor({ ...editor, resourceChanges }))} aria-label="Resulting state value" />
+      <ConsequenceField label="Subject"><SearchableSelect value={change.entityId} onChange={(entityId: string) => replaceAt(editor.resourceChanges, index, { ...change, entityId, definitionId: '' }, resourceChanges => setEditor({ ...editor, resourceChanges }))} options={options(entities)} placeholder="Choose entity…" searchPlaceholder="Filter entities…" /></ConsequenceField>
+      <ConsequenceField label="State"><SearchableSelect value={change.definitionId} onChange={(definitionId: string) => replaceAt(editor.resourceChanges, index, { ...change, definitionId }, resourceChanges => setEditor({ ...editor, resourceChanges }))} options={availableDefinitions.map(definition => ({ id: definition.id, label: definition.name, group: definition.appliesTo.join(', ') }))} placeholder="Choose state…" searchPlaceholder="Filter states…" /></ConsequenceField>
+      <ConsequenceField label="Result"><input className={INPUT} type="number" value={change.value} onChange={event => replaceAt(editor.resourceChanges, index, { ...change, value: Number(event.target.value) }, resourceChanges => setEditor({ ...editor, resourceChanges }))} aria-label="Resulting state value" /></ConsequenceField>
     </ConsequenceRow>;
     })}
   </DetailSection>;
@@ -340,15 +343,24 @@ function ResourceConsequences({ editor, setEditor, definitions, entities }: { ed
 
 function InventoryConsequences({ editor, setEditor, items, actors, locations }: { editor: EditorState; setEditor(value: EditorState): void; items: WorldbuildEntity[]; actors: WorldbuildEntity[]; locations: WorldbuildEntity[] }) {
   const add = () => setEditor({ ...editor, inventoryChanges: [...editor.inventoryChanges, { itemId: '', fromHolderId: '', toHolderId: '', locationId: '', quantity: 1 }] });
+  const destinationOptions = [
+    ...actors.map(entity => ({ ...option(entity), id: `holder:${entity.id}`, group: 'Inventory' })),
+    ...locations.map(entity => ({ ...option(entity), id: `location:${entity.id}`, group: 'Location' })),
+  ];
   return <DetailSection icon={Package} title="Inventory consequences" action={<Button variant="ghost" size="sm" icon={Plus} onClick={add}>Add inventory</Button>}>
     {!editor.inventoryChanges.length && <EmptyDetail text="No inventory changes recorded." />}
-    {editor.inventoryChanges.map((change, index) => <ConsequenceRow key={index} onRemove={() => setEditor({ ...editor, inventoryChanges: editor.inventoryChanges.filter((_, itemIndex) => itemIndex !== index) })}>
-      <select className={INPUT} value={String(change.itemId || '')} onChange={event => replaceAt(editor.inventoryChanges, index, { ...change, itemId: event.target.value }, inventoryChanges => setEditor({ ...editor, inventoryChanges }))}><option value="">Item</option>{items.map(item => <option key={item.id} value={item.id}>{item.canonicalName}</option>)}</select>
-      <select className={INPUT} value={String(change.fromHolderId || '')} onChange={event => replaceAt(editor.inventoryChanges, index, { ...change, fromHolderId: event.target.value || null }, inventoryChanges => setEditor({ ...editor, inventoryChanges }))}><option value="">No previous holder</option>{actors.map(entity => <option key={entity.id} value={entity.id}>From {entity.canonicalName}</option>)}</select>
-      <select className={INPUT} value={String(change.toHolderId || '')} onChange={event => replaceAt(editor.inventoryChanges, index, { ...change, toHolderId: event.target.value || null, locationId: null }, inventoryChanges => setEditor({ ...editor, inventoryChanges }))}><option value="">No new holder</option>{actors.map(entity => <option key={entity.id} value={entity.id}>To {entity.canonicalName}</option>)}</select>
-      <select className={INPUT} value={String(change.locationId || '')} onChange={event => replaceAt(editor.inventoryChanges, index, { ...change, locationId: event.target.value || null, toHolderId: null }, inventoryChanges => setEditor({ ...editor, inventoryChanges }))}><option value="">No destination location</option>{locations.map(location => <option key={location.id} value={location.id}>{location.canonicalName}</option>)}</select>
-      <input className={INPUT} type="number" min="1" value={Number(change.quantity || 1)} onChange={event => replaceAt(editor.inventoryChanges, index, { ...change, quantity: Math.max(1, Number(event.target.value) || 1) }, inventoryChanges => setEditor({ ...editor, inventoryChanges }))} aria-label="Quantity" />
-    </ConsequenceRow>)}
+    {editor.inventoryChanges.map((change, index) => {
+      const destination = change.toHolderId ? `holder:${change.toHolderId}` : change.locationId ? `location:${change.locationId}` : '';
+      return <ConsequenceRow key={index} onRemove={() => setEditor({ ...editor, inventoryChanges: editor.inventoryChanges.filter((_, itemIndex) => itemIndex !== index) })}>
+      <ConsequenceField label="Item"><SearchableSelect value={String(change.itemId || '')} onChange={(itemId: string) => replaceAt(editor.inventoryChanges, index, { ...change, itemId }, inventoryChanges => setEditor({ ...editor, inventoryChanges }))} options={options(items)} placeholder="Choose item…" searchPlaceholder="Filter items…" /></ConsequenceField>
+      <ConsequenceField label="From"><SearchableSelect value={String(change.fromHolderId || '')} onChange={(fromHolderId: string) => replaceAt(editor.inventoryChanges, index, { ...change, fromHolderId: fromHolderId || null }, inventoryChanges => setEditor({ ...editor, inventoryChanges }))} options={options(actors)} placeholder="No previous holder" searchPlaceholder="Filter holders…" /></ConsequenceField>
+      <ConsequenceField label="New placement"><SearchableSelect value={destination} onChange={(next: string) => {
+        const [kind, id] = next.split(':');
+        replaceAt(editor.inventoryChanges, index, { ...change, toHolderId: kind === 'holder' ? id : null, locationId: kind === 'location' ? id : null }, inventoryChanges => setEditor({ ...editor, inventoryChanges }));
+      }} options={destinationOptions} placeholder="No destination set" searchPlaceholder="Filter inventories and locations…" /></ConsequenceField>
+      <ConsequenceField label="Quantity"><input className={INPUT} type="number" min="1" value={Number(change.quantity || 1)} onChange={event => replaceAt(editor.inventoryChanges, index, { ...change, quantity: Math.max(1, Number(event.target.value) || 1) }, inventoryChanges => setEditor({ ...editor, inventoryChanges }))} aria-label="Quantity" /></ConsequenceField>
+      </ConsequenceRow>;
+    })}
   </DetailSection>;
 }
 
@@ -357,29 +369,29 @@ function RelationshipConsequences({ editor, setEditor, subjects }: { editor: Edi
   return <DetailSection icon={Link2} title="Relationship consequences" action={<Button variant="ghost" size="sm" icon={Plus} onClick={add}>Add relationship</Button>}>
     {!editor.relationshipChanges.length && <EmptyDetail text="No relationship changes recorded." />}
     {editor.relationshipChanges.map((change, index) => <ConsequenceRow key={index} onRemove={() => setEditor({ ...editor, relationshipChanges: editor.relationshipChanges.filter((_, itemIndex) => itemIndex !== index) })}>
-      <select className={INPUT} value={change.sourceEntityId} onChange={event => replaceAt(editor.relationshipChanges, index, { ...change, sourceEntityId: event.target.value }, relationshipChanges => setEditor({ ...editor, relationshipChanges }))}><option value="">From</option>{subjects.map(entity => <option key={entity.id} value={entity.id}>{entity.canonicalName}</option>)}</select>
-      <select className={INPUT} value={change.targetEntityId} onChange={event => replaceAt(editor.relationshipChanges, index, { ...change, targetEntityId: event.target.value }, relationshipChanges => setEditor({ ...editor, relationshipChanges }))}><option value="">Toward</option>{subjects.map(entity => <option key={entity.id} value={entity.id}>{entity.canonicalName}</option>)}</select>
-      <input className={INPUT} value={change.dimension} onChange={event => replaceAt(editor.relationshipChanges, index, { ...change, dimension: event.target.value }, relationshipChanges => setEditor({ ...editor, relationshipChanges }))} placeholder="Dimension" />
-      <input className={INPUT} type="number" value={change.value} onChange={event => replaceAt(editor.relationshipChanges, index, { ...change, value: Number(event.target.value) }, relationshipChanges => setEditor({ ...editor, relationshipChanges }))} aria-label="Resulting relationship value" />
-      <input className={INPUT} value={change.description} onChange={event => replaceAt(editor.relationshipChanges, index, { ...change, description: event.target.value }, relationshipChanges => setEditor({ ...editor, relationshipChanges }))} placeholder="What changed" />
+      <ConsequenceField label="Source"><SearchableSelect value={change.sourceEntityId} onChange={(sourceEntityId: string) => replaceAt(editor.relationshipChanges, index, { ...change, sourceEntityId }, relationshipChanges => setEditor({ ...editor, relationshipChanges }))} options={options(subjects)} placeholder="Choose source…" searchPlaceholder="Filter entities…" /></ConsequenceField>
+      <ConsequenceField label="Target"><SearchableSelect value={change.targetEntityId} onChange={(targetEntityId: string) => replaceAt(editor.relationshipChanges, index, { ...change, targetEntityId }, relationshipChanges => setEditor({ ...editor, relationshipChanges }))} options={options(subjects.filter(entity => entity.id !== change.sourceEntityId))} placeholder="Choose target…" searchPlaceholder="Filter entities…" /></ConsequenceField>
+      <ConsequenceField label="Dimension"><input className={INPUT} value={change.dimension} onChange={event => replaceAt(editor.relationshipChanges, index, { ...change, dimension: event.target.value }, relationshipChanges => setEditor({ ...editor, relationshipChanges }))} placeholder="e.g. Trust" /></ConsequenceField>
+      <ConsequenceField label="Result"><input className={INPUT} type="number" value={change.value} onChange={event => replaceAt(editor.relationshipChanges, index, { ...change, value: Number(event.target.value) }, relationshipChanges => setEditor({ ...editor, relationshipChanges }))} aria-label="Resulting relationship value" /></ConsequenceField>
+      <ConsequenceField label="Context"><input className={INPUT} value={change.description} onChange={event => replaceAt(editor.relationshipChanges, index, { ...change, description: event.target.value }, relationshipChanges => setEditor({ ...editor, relationshipChanges }))} placeholder="What changed" /></ConsequenceField>
     </ConsequenceRow>)}
   </DetailSection>;
 }
 
 function DetailSection({ icon: Icon, title, action, children }: { icon: typeof Brain; title: string; action?: React.ReactNode; children: React.ReactNode }) {
-  return <section><header className="mb-2 flex items-center justify-between gap-3"><div className="flex items-center gap-2 text-xs font-semibold text-gray-300"><Icon className="h-4 w-4 text-violet-200" />{title}</div>{action}</header>{children}</section>;
+  return <section><header className="mb-2 flex items-center justify-between gap-3"><div className="flex items-center gap-2 text-sm font-semibold text-text-secondary"><Icon className="h-4 w-4 text-accent" />{title}</div>{action}</header>{children}</section>;
 }
 
 function ConsequenceRow({ onRemove, children }: { onRemove(): void; children: React.ReactNode }) {
-  return <div className="mb-2 grid gap-2 rounded-lg border border-white/[0.08] bg-[#07151e]/60 p-3 lg:grid-cols-[repeat(auto-fit,minmax(8rem,1fr))_auto] lg:items-center">{children}<button type="button" onClick={onRemove} aria-label="Remove consequence" className="rounded-md p-2 text-gray-500 hover:bg-red-400/10 hover:text-red-300"><X className="h-4 w-4" /></button></div>;
+  return <div className="mb-2 grid gap-3 rounded-xl border border-border-subtle bg-surface-panel-muted/60 p-3 lg:grid-cols-[repeat(auto-fit,minmax(9rem,1fr))_auto] lg:items-end">{children}<button type="button" onClick={onRemove} aria-label="Remove consequence" title="Remove consequence" className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-text-subtle hover:bg-status-danger/10 hover:text-status-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><X className="h-4 w-4" /></button></div>;
+}
+
+function ConsequenceField({ label, children }: { label: string; children: React.ReactNode }) {
+  return <div className="min-w-0"><span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-subtle">{label}</span>{children}</div>;
 }
 
 function EmptyDetail({ text }: { text: string }) {
-  return <p className="rounded-lg border border-dashed border-white/[0.08] px-3 py-4 text-center text-xs text-gray-600">{text}</p>;
-}
-
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return <label className="block"><span className="mb-1 block text-xs font-semibold text-gray-400">{label}</span>{children}{hint && <span className="mt-1 block text-xs leading-relaxed text-gray-500">{hint}</span>}</label>;
+  return <p className="rounded-lg border border-dashed border-border-subtle px-3 py-4 text-center text-sm text-text-disabled">{text}</p>;
 }
 
 function canOwnMemory(entity: WorldbuildEntity): boolean {
@@ -391,7 +403,12 @@ function defaultParticipant(entityId: string): WorldbuildEventOccurrenceParticip
 }
 
 function options(entities: WorldbuildEntity[]) {
-  return entities.map(entity => ({ id: entity.id, label: entity.canonicalName, aliases: entity.aliases, group: entity.type.replace(/s$/, '') }));
+  return entities.map(option);
+}
+
+function option(entity: WorldbuildEntity) {
+  const metadata = entityMeta(entity);
+  return { id: entity.id, label: entity.canonicalName, aliases: entity.aliases, group: metadata.label, icon: metadata.icon };
 }
 
 function replaceAt<T>(values: T[], index: number, value: T, set: (values: T[]) => void) {

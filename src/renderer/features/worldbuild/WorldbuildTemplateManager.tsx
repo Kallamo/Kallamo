@@ -7,7 +7,7 @@ import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import Modal from '../../components/ui/Modal';
 import type { Toast, WorldbuildApi, WorldbuildEntityTemplate, WorldbuildTemplateSection } from './worldbuildTypes';
 
-const INPUT = 'wb-input w-full rounded-lg border border-white/15 bg-[#06121a]/90 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:border-accent/70 focus:outline-none';
+const INPUT = 'wb-input w-full rounded-lg border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary placeholder:text-text-subtle focus:border-accent/70 focus:outline-none focus:ring-2 focus:ring-accent/15';
 const TYPE_IDS = ['System', 'Locations', 'Items', 'Races', 'Factions', 'Characters', 'Creatures', 'Events'];
 const NATIVE_SECTIONS: Record<string, Array<[string, string]>> = {
   System: [['content', 'Content']],

@@ -226,6 +226,7 @@ db.exec(`
     aiBubbleOpacity INTEGER DEFAULT 0,
     memoryBlocks TEXT,
     knowledgeFiles TEXT,
+    pinnedFiles TEXT DEFAULT '[]',
     autoSummarize INTEGER DEFAULT 0,
     showContextBar INTEGER DEFAULT 0,
     wdContextWindow INTEGER DEFAULT 8192,
@@ -616,6 +617,10 @@ try {
   if (!columns.includes('knowledgeFiles')) {
     db.exec("ALTER TABLE chats ADD COLUMN knowledgeFiles TEXT");
     console.log("Database Migration: Added knowledgeFiles column to chats table.");
+  }
+  if (!columns.includes('pinnedFiles')) {
+    db.exec("ALTER TABLE chats ADD COLUMN pinnedFiles TEXT DEFAULT '[]'");
+    console.log("Database Migration: Added pinnedFiles column to chats table.");
   }
   if (!columns.includes('backgroundImage')) {
     db.exec("ALTER TABLE chats ADD COLUMN backgroundImage TEXT");

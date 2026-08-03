@@ -14,12 +14,7 @@ const NATIVE_FIELDS = {
   Events: ['kind', 'description'],
   System: ['content'],
 };
-const KNOWABLE_RELATION_TYPES = new Set([
-  'inside', 'led_by', 'member_of', 'operates_in',
-  'owned_by', 'located_in', 'carried_by', 'created_by',
-  'found_in', 'sold_in', 'is_race', 'connected_to',
-  'adjacent_to', 'related_to',
-]);
+const KNOWABLE_RELATION_TYPES = new Set(['related_to']);
 
 function createWorldbuildKnowledgeService(db) {
   const insertCard = db.prepare(`
@@ -200,8 +195,8 @@ function createWorldbuildKnowledgeService(db) {
         if (!row) continue;
         insert.run(
           card.workspaceId, card.cardId, row.id,
-          row.fromId, row.fromName, row.relType, row.label,
-          row.toId, row.toName, row.metadataJson,
+          row.fromId, row.fromName, row.relType, null,
+          row.toId, row.toName, null,
           row.id, now,
         );
         const counterpartId = row.fromId === card.targetId ? row.toId : row.fromId;
@@ -337,7 +332,7 @@ function createWorldbuildKnowledgeService(db) {
         to_id AS toId, to_name AS toName, metadata_json AS metadataJson,
         created_at AS createdAt
       FROM worldbuild_known_relationships
-      WHERE workspace_id = ? AND card_id = ?
+      WHERE workspace_id = ? AND card_id = ? AND relation_type = 'related_to'
       ORDER BY created_at, from_name, to_name
     `).all(row.workspace_id, row.card_id).map(hydrateRelationship);
     const availableRelationships = hasTable(db, 'entity_links') && hasTable(db, 'entities')

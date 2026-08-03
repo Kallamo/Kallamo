@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
-import { X, Plus, Key, Link2, Eye, EyeOff, Monitor, Settings, Layout, Layers, HardDrive, Trash2, FolderOpen, RefreshCw, Cpu, Database, Palette, Type, PenLine, AlertTriangle, Sparkles, SlidersHorizontal, Languages } from 'lucide-react';
+import { X, Plus, Key, Link2, Eye, EyeOff, Monitor, Settings, Layout, Layers, HardDrive, Trash2, FolderOpen, RefreshCw, Cpu, Database, Palette, Type, PenLine, AlertTriangle, Sparkles, SlidersHorizontal, Languages, ChevronDown } from 'lucide-react';
 import Logo, { Logotype } from '../../logo';
 import AiEngineRoleCard from '../../features/ai-engine/AiEngineRoleCard';
 import { AI_ENGINE_ROLE_DEFINITIONS, SYSTEM_AI_LANGUAGES } from '../../../shared/contracts/ai-engine-roles';
@@ -1138,6 +1138,19 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                     <span>Engine &amp; Memory</span>
                   </h3>
                   <p className="caption mt-1">The machinery behind memory and retrieval: chunking and RAG, the vector embedding engine, and the System AI that summarizes and classifies your history.</p>
+                  <nav aria-label="Engine settings sections" className="mt-4 flex flex-wrap gap-2">
+                    {[
+                      ['system-ai-config', 'System AI'],
+                      ['ai-engine-roles-config', 'AI Roles'],
+                      ['retrieval-config', 'Retrieval'],
+                      ['embedding-config', 'Embeddings'],
+                      ['embedding-runtime-config', 'Runtime'],
+                    ].map(([id, label]) => (
+                      <button key={id} type="button" onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })} className="min-h-8 rounded-lg border border-border-default bg-surface-panel px-3 py-1.5 text-xs font-semibold text-text-muted transition-colors hover:border-border-strong hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                        {label}
+                      </button>
+                    ))}
+                  </nav>
                 </div>
 
                 <div className="space-y-6">
@@ -1266,13 +1279,13 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                     </div>
                   </div>
 
-                  {/* SECTION 1: CHUNKS & RAG */}
-                  <div className="space-y-3">
-                    <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
-                      <Database className="w-3.5 h-3.5" />
-                      <span>RAG & Chunking Config</span>
-                    </h4>
-                    <div className="bg-[#051116] p-5 rounded-xl border border-gray-800/80 space-y-5">
+                  <details id="retrieval-config" className="group scroll-mt-6 space-y-3">
+                    <summary className="flex cursor-pointer list-none items-center gap-3 rounded-xl border border-border-default bg-surface-panel px-4 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                      <Database className="h-4 w-4 shrink-0 text-accent" />
+                      <span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-text-secondary">Retrieval &amp; Chunking</span><span className="mt-0.5 block text-xs text-text-muted">Candidate limits, relevance strictness, chunk size, and Worldbuild breadth.</span></span>
+                      <ChevronDown className="h-4 w-4 shrink-0 text-text-subtle transition-transform group-open:rotate-180" />
+                    </summary>
+                    <div className="bg-surface-editor p-5 rounded-xl border border-border-default space-y-5">
                       {/* Chunk Size */}
                       <div>
                         <div className="flex justify-between mb-1">
@@ -1429,14 +1442,15 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       </div>
 
                     </div>
-                  </div>
+                  </details>
 
-                  <div id="embedding-config" className="space-y-3 scroll-mt-6">
-                    <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
-                      <Layers className="w-3.5 h-3.5" />
-                      <span>Embedding Engine</span>
-                    </h4>
-                    <div className="bg-[#051116] p-5 rounded-xl border border-gray-800/80 space-y-5">
+                  <details id="embedding-config" defaultOpen={initialSection === 'embedding'} className="group scroll-mt-6 space-y-3">
+                    <summary className="flex cursor-pointer list-none items-center gap-3 rounded-xl border border-border-default bg-surface-panel px-4 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                      <Layers className="h-4 w-4 shrink-0 text-accent" />
+                      <span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-text-secondary">Embedding Engine</span><span className="mt-0.5 block text-xs text-text-muted">{embeddingEngine === 'local' ? 'Local, private embedding generation' : 'External embedding API'}</span></span>
+                      <ChevronDown className="h-4 w-4 shrink-0 text-text-subtle transition-transform group-open:rotate-180" />
+                    </summary>
+                    <div className="bg-surface-editor p-5 rounded-xl border border-border-default space-y-5">
                       <div>
                         <span className="block text-sm text-gray-200 font-bold mb-1">Vector Embedding Engine</span>
                         <p className="caption mb-3">
@@ -1552,14 +1566,15 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                         </div>
                       )}
                     </div>
-                  </div>
+                  </details>
 
-                  <div className="space-y-3">
-                    <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
-                      <Cpu className="w-3.5 h-3.5" />
-                      <span>Embedding Runtime &amp; Cache</span>
-                    </h4>
-                    <div className="bg-[#051116] rounded-xl border border-gray-800/80 divide-y divide-gray-800/80 overflow-hidden">
+                  <details id="embedding-runtime-config" className="group scroll-mt-6 space-y-3">
+                    <summary className="flex cursor-pointer list-none items-center gap-3 rounded-xl border border-border-default bg-surface-panel px-4 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                      <Cpu className="h-4 w-4 shrink-0 text-accent" />
+                      <span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-text-secondary">Embedding Runtime &amp; Cache</span><span className="mt-0.5 block text-xs text-text-muted">Execution device and local model cache maintenance.</span></span>
+                      <ChevronDown className="h-4 w-4 shrink-0 text-text-subtle transition-transform group-open:rotate-180" />
+                    </summary>
+                    <div className="bg-surface-editor rounded-xl border border-border-default divide-y divide-border-subtle overflow-hidden">
                       <div className="p-4 flex items-center justify-between">
                         <div className="pr-4">
                           <span className="block text-sm text-gray-200 font-bold mb-1">Embedding Execution Device</span>
@@ -1589,7 +1604,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                         </button>
                       </div>
                     </div>
-                  </div>
+                  </details>
 
                 </div>
               </div>

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { copyText } from '../utils/clipboard';
-import { ArrowLeft, Plus, Cpu, Trash2, Edit3, Database, Workflow, Play, Code, Copy, AlertTriangle, Download, UploadCloud } from 'lucide-react';
+import { ArrowLeft, Plus, Bot, Trash2, Edit3, Database, Workflow, Play, Code, Copy, AlertTriangle, Download, UploadCloud } from 'lucide-react';
 import ProfileModal from './modals/ProfileModal';
 import WorkflowModal from './modals/WorkflowModal';
 import DeleteModal from './modals/DeleteModal';
@@ -10,6 +10,8 @@ import VariableModal from './modals/VariableModal';
 import ExportProfileModal from './modals/ExportProfileModal';
 import ExportWorkflowModal from './modals/ExportWorkflowModal';
 import ImportProgressModal from './modals/ImportProgressModal';
+import Button from './ui/Button';
+import EmptyState from './ui/EmptyState';
 
 export default function LibraryView() {
   const { 
@@ -316,11 +318,7 @@ export default function LibraryView() {
             
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 overflow-y-auto custom-scrollbar pb-8 pr-2">
               {writingProfiles.length === 0 ? (
-                <div className="col-span-full flex flex-col items-center justify-center text-gray-500 py-24 border border-dashed border-gray-800/80 rounded-xl bg-[#0a161d]/30">
-                  <Cpu className="w-10 h-10 opacity-30 mb-3" />
-                  <p className="text-sm font-medium">No AI profiles created yet.</p>
-                  <p className="text-xs mt-1 opacity-70">Click "New Profile" to get started.</p>
-                </div>
+                <EmptyState className="col-span-full" icon={Bot} title="No AI profiles yet" subtitle="Create a reusable voice, model connection, and behavior rule set." action={<Button icon={Plus} onClick={openNewProfile}>New Profile</Button>} />
               ) : (
                 writingProfiles.map(profile => {
                   const linkedApi = apiProfiles.find(ap => ap.id === profile.apiProfileId);
@@ -425,11 +423,7 @@ export default function LibraryView() {
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 overflow-y-auto custom-scrollbar pb-8 pr-2">
               {workflows.length === 0 ? (
-                <div className="col-span-full flex flex-col items-center justify-center text-gray-500 py-24 border border-dashed border-gray-800/80 rounded-xl bg-[#0a161d]/30">
-                  <Workflow className="w-10 h-10 opacity-30 mb-3" />
-                  <p className="text-sm font-medium">No workflows created yet.</p>
-                  <p className="text-xs mt-1 opacity-70">Click "New Workflow" to get started.</p>
-                </div>
+                <EmptyState className="col-span-full" icon={Workflow} title="No workflows yet" subtitle="Chain AI Profiles into a repeatable generation process." action={<Button icon={Plus} onClick={openNewWorkflow}>New Workflow</Button>} />
               ) : (
                 workflows.map(wf => {
                   // Parse steps count
@@ -533,11 +527,7 @@ export default function LibraryView() {
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 overflow-y-auto custom-scrollbar pb-8 pr-2">
               {variables.length === 0 ? (
-                <div className="col-span-full flex flex-col items-center justify-center text-gray-500 py-24 border border-dashed border-gray-800/80 rounded-xl bg-[#0a161d]/30">
-                  <Code className="w-10 h-10 opacity-30 mb-3" />
-                  <p className="text-sm font-medium">No variables created yet.</p>
-                  <p className="text-xs mt-1 opacity-70">Click "New Variable" to get started.</p>
-                </div>
+                <EmptyState className="col-span-full" icon={Code} title="No variables yet" subtitle="Create reusable values for prompts and workflow steps." action={<Button icon={Plus} onClick={openNewVariable}>New Variable</Button>} />
               ) : (
                 variables.map(v => (
                   <div 

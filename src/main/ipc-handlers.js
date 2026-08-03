@@ -245,6 +245,7 @@ async function indexChatKnowledgeBase(sender, chatId, knowledgeFilesInput) {
   } catch (e) { }
 
   let modified = false;
+  let indexedAny = false;
 
   const ragFiles = knowledgeFiles.filter(file => file.strategy === 'rag_search');
 
@@ -332,6 +333,7 @@ async function indexChatKnowledgeBase(sender, chatId, knowledgeFilesInput) {
       insertChunksToDb(chatId, 'chat_kb', vectors);
 
       file.lastIndexedMtime = currentMtime;
+      indexedAny = true;
       modified = true;
       console.log(`[Chat RAG Indexer] Indexed ${chunks.length} chunks for ${file.name}`);
     } catch (err) {
@@ -352,7 +354,7 @@ async function indexChatKnowledgeBase(sender, chatId, knowledgeFilesInput) {
     db.prepare('UPDATE chats SET knowledgeFiles = ? WHERE id = ?').run(JSON.stringify(knowledgeFiles), chatId);
   }
 
-  if (sender) {
+  if (sender && indexedAny) {
     sender.send('vectorization-progress', {
       type: 'chat',
       id: chatId,
@@ -3687,10 +3689,11 @@ ipcMain.handle('save-chat', async (event, chat) => {
     let incomingKb = typeof chat.knowledgeFiles === 'string'
       ? JSON.parse(chat.knowledgeFiles || '[]')
       : (chat.knowledgeFiles || []);
+    let previousKb = [];
     if (exists && exists.knowledgeFiles) {
       try {
-        const oldKb = JSON.parse(exists.knowledgeFiles);
-        const oldByKey = new Map(oldKb.map(f => [f.internalPath || f.name, f]));
+        previousKb = JSON.parse(exists.knowledgeFiles);
+        const oldByKey = new Map(previousKb.map(f => [f.internalPath || f.name, f]));
         incomingKb = incomingKb.map(f => {
           const old = oldByKey.get(f.internalPath || f.name);
           if (old && old.lastIndexedMtime != null && f.lastIndexedMtime == null) {
@@ -3701,10 +3704,11 @@ ipcMain.handle('save-chat', async (event, chat) => {
       } catch (e) { }
     }
     const newKbStr = JSON.stringify(incomingKb);
-    let kbChanged = true;
-    if (exists) {
-      kbChanged = (exists.knowledgeFiles !== newKbStr);
-    }
+    const ragIndexSignature = files => JSON.stringify(files
+      .filter(file => file.strategy === 'rag_search')
+      .map(file => ({ name: file.name, internalPath: file.internalPath, lastIndexedMtime: file.lastIndexedMtime ?? null }))
+      .sort((left, right) => `${left.internalPath || ''}:${left.name}`.localeCompare(`${right.internalPath || ''}:${right.name}`)));
+    const ragIndexChanged = !exists || ragIndexSignature(previousKb) !== ragIndexSignature(incomingKb);
 
     if (exists) {
       const oldSyncToCloud = exists.syncToCloud ?? 0;
@@ -3715,7 +3719,7 @@ ipcMain.handle('save-chat', async (event, chat) => {
           title = ?, description = ?, updatedAt = ?, isPinned = ?, maxContext = ?,
           archiveThreshold = ?, summarizedIndex = ?, activeProfiles = ?, activeWorkflows = ?,
           backgroundImage = ?, backdropOpacity = ?, userBubbleOpacity = ?, aiBubbleOpacity = ?,
-          memoryBlocks = ?, knowledgeFiles = ?, autoSummarize = ?, showContextBar = ?,
+          memoryBlocks = ?, knowledgeFiles = ?, pinnedFiles = ?, autoSummarize = ?, showContextBar = ?,
           wdContextWindow = ?, wdLastChannel = ?, wdUseChatHistory = ?, syncToCloud = ?
         WHERE id = ?
       `);
@@ -3736,6 +3740,7 @@ ipcMain.handle('save-chat', async (event, chat) => {
         chat.aiBubbleOpacity ?? 0,
         typeof chat.memoryBlocks === 'string' ? chat.memoryBlocks : JSON.stringify(chat.memoryBlocks || []),
         newKbStr,
+        typeof chat.pinnedFiles === 'string' ? chat.pinnedFiles : JSON.stringify(chat.pinnedFiles || []),
         chat.autoSummarize ?? 0,
         chat.showContextBar ?? 0,
         chat.wdContextWindow ?? 8192,
@@ -3753,8 +3758,8 @@ ipcMain.handle('save-chat', async (event, chat) => {
       const insert = db.prepare(`
         INSERT INTO chats (
           id, title, description, updatedAt, isPinned, maxContext, archiveThreshold, summarizedIndex,
-          activeProfiles, activeWorkflows, backgroundImage, backdropOpacity, userBubbleOpacity, aiBubbleOpacity, memoryBlocks, knowledgeFiles, autoSummarize, showContextBar, wdContextWindow, wdLastChannel, wdUseChatHistory, syncToCloud
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          activeProfiles, activeWorkflows, backgroundImage, backdropOpacity, userBubbleOpacity, aiBubbleOpacity, memoryBlocks, knowledgeFiles, pinnedFiles, autoSummarize, showContextBar, wdContextWindow, wdLastChannel, wdUseChatHistory, syncToCloud
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       insert.run(
@@ -3774,6 +3779,7 @@ ipcMain.handle('save-chat', async (event, chat) => {
         chat.aiBubbleOpacity ?? 0,
         typeof chat.memoryBlocks === 'string' ? chat.memoryBlocks : JSON.stringify(chat.memoryBlocks || []),
         newKbStr,
+        typeof chat.pinnedFiles === 'string' ? chat.pinnedFiles : JSON.stringify(chat.pinnedFiles || []),
         chat.autoSummarize ?? 0,
         chat.showContextBar ?? 0,
         chat.wdContextWindow ?? 8192,
@@ -3783,7 +3789,7 @@ ipcMain.handle('save-chat', async (event, chat) => {
       );
     }
 
-    if (kbChanged && incomingKb.length > 0) {
+    if (ragIndexChanged) {
       indexChatKnowledgeBase(event.sender, chat.id, incomingKb).catch(e => {
         console.error("Background chat indexing error:", e);
       });

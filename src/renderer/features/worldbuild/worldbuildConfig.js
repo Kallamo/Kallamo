@@ -1,14 +1,17 @@
-import { BookOpen, CalendarClock, Flag, Ghost, Globe, MapPin, Package, User, Users } from 'lucide-react';
+import {
+  Anvil, BookOpen, Box, CalendarClock, Coins, FileText, Flag, FlaskConical,
+  Gem, Ghost, Globe, Hammer, MapPin, Package, Pickaxe, Shield, Sword, User, Users,
+} from 'lucide-react';
 
 export const TYPES = {
-  System: { label: 'System / Concept', icon: BookOpen, medallion: 'bg-slate-400/15 text-slate-200 border-slate-400/30', ring: 'border-slate-400/30', soft: 'text-slate-300' },
-  Locations: { label: 'Location', icon: MapPin, medallion: 'bg-emerald-400/15 text-emerald-200 border-emerald-400/30', ring: 'border-emerald-400/25', soft: 'text-emerald-300' },
-  Items: { label: 'Item', icon: Package, medallion: 'bg-amber-400/15 text-amber-200 border-amber-400/30', ring: 'border-amber-400/25', soft: 'text-amber-300' },
-  Races: { label: 'Race', icon: Users, medallion: 'bg-sky-400/15 text-sky-200 border-sky-400/30', ring: 'border-sky-400/25', soft: 'text-sky-300' },
-  Factions: { label: 'Faction', icon: Flag, medallion: 'bg-rose-400/15 text-rose-200 border-rose-400/30', ring: 'border-rose-400/25', soft: 'text-rose-300' },
-  Characters: { label: 'Character', icon: User, medallion: 'bg-accent/15 text-accent border-accent/30', ring: 'border-accent/25', soft: 'text-accent' },
-  Creatures: { label: 'Creature / Entity', icon: Ghost, medallion: 'bg-violet-400/15 text-violet-200 border-violet-400/30', ring: 'border-violet-400/25', soft: 'text-violet-300' },
-  Events: { label: 'Event', icon: CalendarClock, medallion: 'bg-orange-400/15 text-orange-200 border-orange-400/30', ring: 'border-orange-400/25', soft: 'text-orange-300' },
+  System: { label: 'System / Concept', icon: BookOpen, medallion: 'bg-entity-concept/15 text-entity-concept border-entity-concept/30', ring: 'border-entity-concept/25', soft: 'text-entity-concept' },
+  Locations: { label: 'Location', icon: MapPin, medallion: 'bg-entity-location/15 text-entity-location border-entity-location/30', ring: 'border-entity-location/25', soft: 'text-entity-location' },
+  Items: { label: 'Item', icon: Package, medallion: 'bg-entity-item/15 text-entity-item border-entity-item/30', ring: 'border-entity-item/25', soft: 'text-entity-item' },
+  Races: { label: 'Race', icon: Users, medallion: 'bg-entity-race/15 text-entity-race border-entity-race/30', ring: 'border-entity-race/25', soft: 'text-entity-race' },
+  Factions: { label: 'Faction', icon: Flag, medallion: 'bg-entity-faction/15 text-entity-faction border-entity-faction/30', ring: 'border-entity-faction/25', soft: 'text-entity-faction' },
+  Characters: { label: 'Character', icon: User, medallion: 'bg-entity-character/15 text-entity-character border-entity-character/30', ring: 'border-entity-character/25', soft: 'text-entity-character' },
+  Creatures: { label: 'Creature / Entity', icon: Ghost, medallion: 'bg-entity-creature/15 text-entity-creature border-entity-creature/30', ring: 'border-entity-creature/25', soft: 'text-entity-creature' },
+  Events: { label: 'Event', icon: CalendarClock, medallion: 'bg-entity-event/15 text-entity-event border-entity-event/30', ring: 'border-entity-event/25', soft: 'text-entity-event' },
 };
 
 export const TYPE_ORDER = ['Characters', 'Locations', 'Factions', 'Items', 'Races', 'Creatures', 'Events', 'System'];
@@ -16,19 +19,40 @@ export const ITEM_TYPES = [
   'Weapon', 'Armor', 'Tool', 'Consumable', 'Artifact', 'Document',
   'Container', 'Currency', 'Material', 'Resource', 'Object',
 ];
+
+export const ITEM_TYPE_META = {
+  Weapon: { icon: Sword, label: 'Weapon' },
+  Armor: { icon: Shield, label: 'Armor' },
+  Tool: { icon: Hammer, label: 'Tool' },
+  Consumable: { icon: FlaskConical, label: 'Consumable' },
+  Artifact: { icon: Gem, label: 'Artifact' },
+  Document: { icon: FileText, label: 'Document' },
+  Container: { icon: Box, label: 'Container' },
+  Currency: { icon: Coins, label: 'Currency' },
+  Material: { icon: Anvil, label: 'Material' },
+  Resource: { icon: Pickaxe, label: 'Resource' },
+  Object: { icon: Package, label: 'Object' },
+};
+
+export const itemMeta = (itemType) => ITEM_TYPE_META[itemType] || { icon: Package, label: itemType || 'Item' };
+export const entityMeta = (entity) => {
+  const base = meta(entity?.type);
+  if (entity?.type !== 'Items') return base;
+  return { ...base, icon: itemMeta(entity.data?.itemType).icon };
+};
 export const RARITY = ['Unique', 'Rare', 'Uncommon', 'Common', 'Abundant'];
 export const THREAT = ['Harmless', 'Minor', 'Dangerous', 'Deadly', 'Legendary'];
 export const STATUS = {
-  alive: { label: 'Alive', cls: 'bg-emerald-400/15 text-emerald-200 border-emerald-400/30' },
-  deceased: { label: 'Deceased', cls: 'bg-rose-400/15 text-rose-200 border-rose-400/30' },
-  missing: { label: 'Missing', cls: 'bg-amber-400/15 text-amber-200 border-amber-400/30' },
-  unknown: { label: 'Unknown', cls: 'bg-slate-400/15 text-slate-300 border-slate-400/30' },
+  alive: { label: 'Alive', cls: 'bg-status-success/15 text-status-success border-status-success/30' },
+  deceased: { label: 'Deceased', cls: 'bg-status-danger/15 text-status-danger border-status-danger/30' },
+  missing: { label: 'Missing', cls: 'bg-status-warning/15 text-status-warning border-status-warning/30' },
+  unknown: { label: 'Unknown', cls: 'bg-white/[0.05] text-text-muted border-border-default' },
 };
 export const DISPOSITION = {
-  hostile: { label: 'Hostile', cls: 'bg-rose-400/15 text-rose-200 border-rose-400/30' },
-  neutral: { label: 'Neutral', cls: 'bg-slate-400/15 text-slate-300 border-slate-400/30' },
-  friendly: { label: 'Friendly', cls: 'bg-emerald-400/15 text-emerald-200 border-emerald-400/30' },
-  unknown: { label: 'Unknown', cls: 'bg-slate-400/15 text-slate-300 border-slate-400/30' },
+  hostile: { label: 'Hostile', cls: 'bg-status-danger/15 text-status-danger border-status-danger/30' },
+  neutral: { label: 'Neutral', cls: 'bg-white/[0.05] text-text-muted border-border-default' },
+  friendly: { label: 'Friendly', cls: 'bg-status-success/15 text-status-success border-status-success/30' },
+  unknown: { label: 'Unknown', cls: 'bg-white/[0.05] text-text-muted border-border-default' },
 };
 export const CREATURE_NATURES = ['Beast', 'Monster', 'Spirit', 'Undead', 'Construct', 'Elemental', 'Deity', 'Aberration'];
 export const ABUNDANCE_HELP = [
@@ -46,5 +70,5 @@ const FIELD_LABELS = {
   description: 'Description', locationType: 'Type', itemType: 'Type', content: 'Content',
 };
 
-export const meta = (type) => TYPES[type] || { label: type, icon: Globe, medallion: 'bg-white/10 text-gray-300 border-white/20', ring: 'border-white/15', soft: 'text-gray-300' };
+export const meta = (type) => TYPES[type] || { label: type, icon: Globe, medallion: 'bg-entity-concept/15 text-entity-concept border-entity-concept/30', ring: 'border-entity-concept/25', soft: 'text-entity-concept' };
 export const fieldLabel = (field) => FIELD_LABELS[field] || field;

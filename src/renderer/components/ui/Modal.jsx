@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
@@ -34,6 +34,9 @@ export default function Modal({
 }) {
   const { settings } = useApp();
   const isBlurEnabled = settings?.interface?.blur ?? true;
+  const dialogRef = useRef(null);
+  const restoreFocusRef = useRef(null);
+  const generatedTitleId = useId();
 
   useEffect(() => {
     if (!closeOnEsc) return;
@@ -43,34 +46,70 @@ export default function Modal({
   }, [closeOnEsc, onClose]);
 
   useEffect(() => {
+    restoreFocusRef.current = document.activeElement;
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = prev; };
+    const frame = window.requestAnimationFrame(() => {
+      const dialog = dialogRef.current;
+      const target = dialog?.querySelector('[autofocus], button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])');
+      (target || dialog)?.focus();
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.body.style.overflow = prev;
+      restoreFocusRef.current?.focus?.();
+    };
   }, []);
+
+  const keepFocusInside = (event) => {
+    if (event.key !== 'Tab') return;
+    const focusable = [...(dialogRef.current?.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [href], [tabindex]:not([tabindex="-1"])') || [])];
+    if (!focusable.length) {
+      event.preventDefault();
+      dialogRef.current?.focus();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
 
   return createPortal(
     <div
       onMouseDown={(e) => {
         if (closeOnOverlay && e.target === e.currentTarget) onClose?.();
       }}
-      className={`fixed inset-0 z-50 flex items-center justify-center overflow-y-auto overscroll-contain titlebar-nodrag select-none p-4 ${
-        isBlurEnabled ? 'bg-black/60 backdrop-blur-sm' : 'bg-[#011419]'
+      className={`fixed inset-0 z-[80] flex items-center justify-center overflow-y-auto overscroll-contain titlebar-nodrag select-none p-4 ${
+        isBlurEnabled ? 'bg-surface-overlay backdrop-blur-sm' : 'bg-surface-canvas'
       }`}
     >
       <div
-        className={`w-full ${SIZES[size] || SIZES.sm} bg-[#011419] border border-gray-800/60 rounded-xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200 ${className}`}
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={title ? generatedTitleId : undefined}
+        tabIndex={-1}
+        onKeyDown={keepFocusInside}
+        className={`w-full ${SIZES[size] || SIZES.sm} bg-surface-canvas border border-border-default rounded-xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200 ${className}`}
       >
         {title && (
-          <div className="shrink-0 flex items-center justify-between gap-3 h-14 px-5 bg-[#0a161d]/40 border-b border-gray-800/50">
+          <div className="relative z-10 shrink-0 flex items-center justify-between gap-3 min-h-14 px-5 bg-surface-panel/60 border-b border-border-subtle">
             <div className="flex items-center gap-2.5 min-w-0">
               {Icon && <Icon className="w-4 h-4 text-accent shrink-0" />}
-              <h2 className="text-sm font-bold text-white uppercase tracking-wider truncate">{title}</h2>
+              <h2 id={generatedTitleId} className="text-sm font-bold text-text-primary uppercase tracking-wider truncate">{title}</h2>
             </div>
             {showClose && (
               <button
+                type="button"
                 onClick={onClose}
                 aria-label="Close dialog"
-                className="text-gray-400 hover:text-red-500 transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                className="titlebar-nodrag relative z-10 min-h-8 min-w-8 inline-flex items-center justify-center text-text-muted hover:text-status-danger transition-colors cursor-pointer rounded-md hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
               >
                 <X className="w-4 h-4" />
               </button>

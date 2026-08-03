@@ -17,14 +17,14 @@ export default function SectionCard({
   const hasHeader = title || description || action;
 
   return (
-    <div className={`bg-[#0a161d] border border-gray-800/80 rounded-xl p-5 ${className}`}>
+    <section className={`bg-surface-panel border border-border-subtle rounded-xl p-5 ${className}`}>
       {hasHeader && (
         <div className="flex items-start justify-between gap-4 mb-4">
           <div className="min-w-0">
             {title && (
               <div className="flex items-center gap-2">
                 {Icon && <Icon className="w-4 h-4 text-accent shrink-0" />}
-                <h3 className="text-sm font-bold text-gray-200">{title}</h3>
+                <h3 className="text-sm font-bold text-text-secondary">{title}</h3>
               </div>
             )}
             {description && (
@@ -35,6 +35,6 @@ export default function SectionCard({
         </div>
       )}
       <div className={bodyClassName}>{children}</div>
-    </div>
+    </section>
   );
 }

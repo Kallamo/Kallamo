@@ -9,15 +9,16 @@ export default function EmptyState({
   title,
   subtitle = null,
   action = null,
+  compact = false,
   className = '',
 }) {
   return (
     <div
-      className={`w-full flex flex-col items-center justify-center text-center py-16 px-6
-        border border-dashed border-gray-800/80 rounded-xl bg-[#011419]/20 ${className}`}
+      className={`w-full flex flex-col items-center justify-center text-center ${compact ? 'py-6' : 'py-9'} px-6
+        border border-dashed border-border-default rounded-xl bg-surface-canvas/20 ${className}`}
     >
-      {Icon && <Icon className="w-10 h-10 text-gray-600 opacity-40 mb-3" />}
-      <span className="text-xs font-semibold text-gray-400">{title}</span>
+      {Icon && <Icon className={`${compact ? 'w-5 h-5' : 'w-7 h-7'} text-text-subtle mb-3`} />}
+      <span className="text-sm font-semibold text-text-secondary">{title}</span>
       {subtitle && (
         <span className="caption mt-1 max-w-md">{subtitle}</span>
       )}

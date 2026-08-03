@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useId } from 'react';
 import { Check } from 'lucide-react';
 
 /**
@@ -14,40 +14,42 @@ export default function Checkbox({
   className = '',
   ariaLabel,
 }) {
+  const inputId = useId();
   const box = size === 'sm' ? 'w-4 h-4' : 'w-5 h-5';
   const tick = size === 'sm' ? 'w-3 h-3' : 'w-3.5 h-3.5';
 
-  const handle = () => { if (!disabled) onChange?.(!checked); };
-
-  const control = (
-    <button
-      type="button"
-      role="checkbox"
-      aria-checked={checked}
-      aria-label={ariaLabel}
+  const control = <>
+    <input
+      id={inputId}
+      type="checkbox"
+      checked={checked}
       disabled={disabled}
-      onClick={handle}
-      className={`${box} rounded-md border flex items-center justify-center shrink-0 transition-all duration-200
-        focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40
-        active:scale-95 disabled:opacity-50 disabled:pointer-events-none ${
+      aria-label={label ? undefined : ariaLabel}
+      onChange={(event) => onChange?.(event.target.checked)}
+      className="peer sr-only"
+    />
+    <span
+      aria-hidden="true"
+      className={`${box} rounded-md border flex items-center justify-center shrink-0 transition-[color,background-color,border-color,box-shadow,transform] duration-150
+        peer-focus-visible:ring-2 peer-focus-visible:ring-accent/40 peer-active:scale-95 ${
         checked
-          ? 'bg-accent border-accent text-[#011419] shadow-[0_0_8px_rgba(251,203,45,0.4)]'
-          : 'border-gray-700 bg-[#00080B]/90 hover:border-accent/50 cursor-pointer'
+          ? 'bg-accent border-accent text-on-accent shadow-sm'
+          : 'border-border-default bg-surface-input group-hover:border-accent/50'
       } ${className}`}
     >
       {checked && <Check className={`${tick} stroke-[3.5]`} />}
-    </button>
-  );
+    </span>
+  </>;
 
-  if (!label) return control;
+  if (!label) return <label className={`group inline-flex ${disabled ? 'opacity-50' : 'cursor-pointer'}`}>{control}</label>;
 
   return (
     <label
-      className={`flex items-center gap-2.5 select-none ${disabled ? 'opacity-50' : 'cursor-pointer'}`}
-      onClick={handle}
+      htmlFor={inputId}
+      className={`group flex items-center gap-2.5 select-none ${disabled ? 'opacity-50' : 'cursor-pointer'}`}
     >
       {control}
-      <span className="text-xs text-gray-300">{label}</span>
+      <span className="text-sm text-text-secondary">{label}</span>
     </label>
   );
 }

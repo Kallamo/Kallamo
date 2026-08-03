@@ -14,7 +14,7 @@ import type {
 } from './worldbuildTypes';
 import { meta } from './worldbuildConfig';
 
-const INPUT = 'wb-input w-full rounded-lg border border-white/15 bg-[#06121a]/80 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:border-accent/70 focus:outline-none';
+const INPUT = 'wb-input w-full rounded-lg border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary placeholder:text-text-subtle focus:border-accent/70 focus:outline-none focus:ring-2 focus:ring-accent/15';
 type Surface = 'knowledge' | 'memories';
 type MemoryAccessibility = WorldbuildKnowledgeEntry['accessibility'];
 const MEMORY_STATES: Record<MemoryAccessibility, {
@@ -170,7 +170,7 @@ export default function WorldbuildKnowledgeTab({ workspaceId, entity, entities, 
                 value={cardSearch}
                 onChange={event => setCardSearch(event.target.value)}
                 placeholder="Search known subjects…"
-                className="wb-input w-full rounded-lg border border-white/10 bg-[#06121a]/70 py-2 pl-9 pr-9 text-sm text-gray-200 placeholder-gray-600 focus:border-accent/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 [&::-webkit-search-cancel-button]:hidden"
+                className="wb-input w-full rounded-lg border border-border-default bg-surface-input py-2 pl-9 pr-9 text-sm text-text-secondary placeholder:text-text-subtle focus:border-accent/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 [&::-webkit-search-cancel-button]:hidden"
               />
               {cardSearch && (
                 <button
@@ -209,7 +209,7 @@ export default function WorldbuildKnowledgeTab({ workspaceId, entity, entities, 
                     </div>
                     <div className="grid shrink-0 grid-cols-4 gap-1.5">
                       <CardMetric value={card.knownFieldKeys.length} label="Fields known" />
-                      <CardMetric value={card.knownRelationships.length} label="Relations" />
+                      <CardMetric value={card.knownRelationships.length} label="Connections" />
                       <CardMetric value={known} label="Known" />
                       <CardMetric value={beliefs} label="Believed" />
                     </div>
@@ -430,8 +430,8 @@ function KnowledgeCardModal({ workspaceId, owner, card, entity, entities, projec
         </section>
         <section>
           <div className="mb-3">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-gray-300">Relationships</h4>
-            <p className="mt-1 text-xs text-gray-600">Choose which current or previously known connections this perspective can access.</p>
+            <h4 className="text-xs font-bold uppercase tracking-wider text-gray-300">Known connections</h4>
+            <p className="mt-1 text-xs text-gray-600">Choose which connections this perspective knows exist. Private feelings and relationship details remain hidden.</p>
           </div>
           {!relationships.length && <p className="text-xs text-gray-600">No eligible relationships are currently available.</p>}
           <div className="grid gap-2">
@@ -531,13 +531,7 @@ function mergeRelationships(current: WorldbuildKnownRelationship[], known: World
 }
 
 function formatRelationship(relationship: WorldbuildKnownRelationship) {
-  const label = relationship.relationLabel
-    || RELATION_LABELS[relationship.relationType]
-    || relationship.relationType.replaceAll('_', ' ');
-  const role = typeof relationship.metadata.role === 'string' && relationship.metadata.role.trim()
-    ? ` (${relationship.metadata.role.trim()})`
-    : '';
-  return `${relationship.fromName} / ${label}${role} / ${relationship.toName}`;
+  return `${relationship.fromName} knows ${relationship.toName}`;
 }
 
 function Memories({ workspaceId, owner, projection, api, reload, showToast }: {

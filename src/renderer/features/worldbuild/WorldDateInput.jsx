@@ -1,6 +1,7 @@
 import React from 'react';
+import SelectMenu from '../../components/ui/SelectMenu';
 
-const INPUT = 'w-full rounded-lg border border-white/10 bg-[#06151c] px-2.5 py-2 text-xs text-gray-200 outline-none transition-colors focus:border-accent/60';
+const INPUT = 'w-full rounded-lg border border-border-default bg-surface-input px-2.5 py-2 text-xs text-text-secondary outline-none transition-colors focus:border-accent/60 focus:ring-2 focus:ring-accent/15';
 
 export function formatWorldDate(calendar, value, includeTime = false) {
   if (!calendar || !value) return '';
@@ -43,13 +44,9 @@ export default function WorldDateInput({
   return (
     <div className={`grid gap-2 ${compact ? 'grid-cols-[minmax(3.5rem,0.55fr)_minmax(7rem,1.4fr)_minmax(4rem,0.7fr)_minmax(4.5rem,0.75fr)]' : 'grid-cols-2 sm:grid-cols-4'}`}>
       <input className={INPUT} aria-label="Day" type="number" min="1" max={maxDay} value={date.day} onChange={event => set({ day: Math.max(1, Math.min(maxDay, Number(event.target.value) || 1)) })} />
-      <select className={INPUT} aria-label="Month" value={date.month} onChange={event => set({ month: Number(event.target.value), day: Math.min(date.day, calendar.months[Number(event.target.value) - 1]?.days || 1) })}>
-        {calendar.months.map((month, index) => <option key={month.id} value={index + 1}>{month.name}</option>)}
-      </select>
+      <SelectMenu ariaLabel="Month" value={date.month} onChange={month => set({ month: Number(month), day: Math.min(date.day, calendar.months[Number(month) - 1]?.days || 1) })} options={calendar.months.map((month, index) => ({ value: index + 1, label: month.name }))} />
       <input className={INPUT} aria-label="Year" type="number" min="1" value={date.year} onChange={event => set({ year: Math.max(1, Number(event.target.value) || 1) })} />
-      <select className={INPUT} aria-label="Era" value={date.eraId} onChange={event => set({ eraId: event.target.value })}>
-        {calendar.eras.map(era => <option key={era.id} value={era.id}>{era.shortName || era.name}</option>)}
-      </select>
+      <SelectMenu ariaLabel="Era" value={date.eraId} onChange={eraId => set({ eraId })} options={calendar.eras.map(era => ({ value: era.id, label: era.shortName || era.name }))} />
       {includeTime && <>
         <input className={INPUT} aria-label="Hour" type="number" min="0" max={calendar.hoursPerDay - 1} value={date.hour ?? 0} onChange={event => set({ hour: Math.max(0, Math.min(calendar.hoursPerDay - 1, Number(event.target.value) || 0)) })} />
         <input className={INPUT} aria-label="Minute" type="number" min="0" max="59" value={date.minute ?? 0} onChange={event => set({ minute: Math.max(0, Math.min(59, Number(event.target.value) || 0)) })} />

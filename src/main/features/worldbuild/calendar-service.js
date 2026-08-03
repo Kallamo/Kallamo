@@ -742,17 +742,21 @@ function getCalendarEntries(db, workspaceId, year, month, eraId) {
   const occurrenceRows = db.prepare(`
     SELECT occurrences.occurrence_id AS id, occurrences.event_entity_id AS eventEntityId,
       occurrences.title, occurrences.start_date_json AS startDateJson,
-      occurrences.end_date_json AS endDateJson
+      occurrences.end_date_json AS endDateJson, event_entities.data AS eventData
     FROM worldbuild_event_occurrences occurrences
     JOIN kanora_narrative_events events
       ON events.workspace_id = occurrences.workspace_id
       AND events.event_id = occurrences.narrative_event_id
+    LEFT JOIN entities event_entities
+      ON event_entities.workspaceId = occurrences.workspace_id
+      AND event_entities.id = occurrences.event_entity_id
     WHERE occurrences.workspace_id = ? AND occurrences.archived = 0 AND events.status = 'approved'
   `).all(workspaceId).flatMap(row => {
     const startDate = parseObject(row.startDateJson, null);
     if (!startDate || !validateDate(calendar, startDate)) return [];
     const endDate = parseObject(row.endDateJson, null);
-    return [{ ...row, startDate, endDate: endDate && validateDate(calendar, endDate) ? endDate : startDate }];
+    const eventData = parseObject(row.eventData, {});
+    return [{ ...row, category: eventData.category || eventData.eventCategory || null, startDate, endDate: endDate && validateDate(calendar, endDate) ? endDate : startDate }];
   });
   const entries = [];
   for (let day = 1; day <= length; day += 1) {
@@ -767,12 +771,12 @@ function getCalendarEntries(db, workspaceId, year, month, eraId) {
         if (nature === 'recurring') {
           const anchor = data.recurrence?.anchorDate || data.startDate;
           if (!hasRecordedOccurrence && anchor && validateDate(calendar, anchor) && recurrenceMatches(calendar, anchor, data.recurrence || {}, date)) {
-            entries.push({ id: `${row.id}:${toOrdinal(calendar, date)}`, entityId: row.id, date, title: row.canonicalName, kind: 'recurring-event', entityType: row.type });
+            entries.push({ id: `${row.id}:${toOrdinal(calendar, date)}`, entityId: row.id, date, title: row.canonicalName, kind: 'recurring-event', category: data.category || data.eventCategory || null, entityType: row.type });
           }
         } else if (!hasRecordedOccurrence && data.startDate && validateDate(calendar, data.startDate)) {
           const endDate = data.endDate && validateDate(calendar, data.endDate) ? data.endDate : data.startDate;
           if (compareDates(calendar, date, data.startDate) >= 0 && compareDates(calendar, date, endDate) <= 0) {
-            entries.push({ id: `${row.id}:${toOrdinal(calendar, date)}`, entityId: row.id, date, title: row.canonicalName, kind: 'event', entityType: row.type });
+            entries.push({ id: `${row.id}:${toOrdinal(calendar, date)}`, entityId: row.id, date, title: row.canonicalName, kind: 'event', category: data.category || data.eventCategory || null, entityType: row.type });
           }
         }
         continue;
@@ -806,6 +810,7 @@ function getCalendarEntries(db, workspaceId, year, month, eraId) {
         date,
         title: occurrence.title,
         kind: 'event-occurrence',
+        category: occurrence.category,
         entityType: 'Events'
       });
     }

@@ -769,9 +769,10 @@ export default function KbManagerModal({ profile, onClose }) {
     if (filteredVariables.length === 0) return null;
 
     return (
-      <div className="absolute left-4 right-4 bottom-4 z-40 bg-[#071419] border border-gray-800 rounded-lg shadow-2xl p-2 flex flex-col space-y-1 select-none animate-in slide-in-from-bottom-2 duration-150 max-h-[140px] overflow-y-auto custom-scrollbar">
-        <div className="text-[9px] text-gray-500 px-2 pb-1 border-b border-gray-800/60 font-semibold tracking-wider uppercase flex justify-between select-none">
-          <span>Variables matching: "${acState.search}"</span>
+      <Popover anchorRef={agenticTextareaRef} open={acState.isOpen} onClose={closeAc} maxHeight={180} scroll={false} className="border-border-default bg-surface-panel-muted p-2">
+        <div className="max-h-44 overflow-y-auto custom-scrollbar">
+        <div className="text-xs text-text-muted px-2 pb-1 border-b border-border-subtle font-semibold tracking-wider uppercase flex justify-between select-none">
+          <span>Variables matching: "{acState.search}"</span>
           <span>⇅ Navigate · ↵ Select</span>
         </div>
         {filteredVariables.map((v, idx) => (
@@ -786,12 +787,13 @@ export default function KbManagerModal({ profile, onClose }) {
           >
             <div className="flex items-center space-x-2 truncate">
               <span className="font-mono font-bold">&#123;&#123;{v.key}&#125;&#125;</span>
-              <span className={`text-[10px] truncate ${idx === acIndex ? 'text-[#011419]/70' : 'text-gray-500'}`}>{v.name}</span>
+              <span className={`text-xs truncate ${idx === acIndex ? 'text-on-accent/70' : 'text-text-muted'}`}>{v.name}</span>
             </div>
-            <span className={`text-[9px] font-mono truncate ml-4 ${idx === acIndex ? 'text-[#011419]/60' : 'text-gray-500'}`}>{v.description || 'No description'}</span>
+            <span className={`text-xs font-mono truncate ml-4 ${idx === acIndex ? 'text-on-accent/60' : 'text-text-muted'}`}>{v.description || 'No description'}</span>
           </button>
         ))}
-      </div>
+        </div>
+      </Popover>
     );
   };
 

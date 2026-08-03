@@ -873,94 +873,43 @@ export default function ChatWorkspaceView() {
             </h2>
           </div>
 
-          {/* Segmented workspace navigation sub-view switcher tabs */}
-          <div className="flex bg-[#000d11]/80 p-0.5 rounded-lg border border-gray-800/60 select-none shrink-0 z-10 space-x-0.5">
-            {/* Workspace Tab */}
-            <button
-              onClick={() => setActiveSubView('chat')}
-              className={`group flex items-center h-8 rounded-md transition-all duration-300 ease-out cursor-pointer overflow-hidden ${activeSubView === 'chat'
-                ? 'bg-accent text-[#011419] font-extrabold shadow-sm max-w-[130px] px-3'
-                : 'text-gray-400 hover:text-white hover:bg-white/5 max-w-[32px] px-1.5 hover:max-w-[130px] hover:px-3'
-                }`}
-            >
-              <MessageSquare className="w-4.5 h-4.5 shrink-0" />
-              <span className={`text-[10px] font-bold uppercase tracking-wider transition-all duration-300 ml-0 opacity-0 group-hover:opacity-100 ${activeSubView === 'chat' ? 'opacity-100 ml-1.5 max-w-[80px]' : 'max-w-0 group-hover:ml-1.5 group-hover:max-w-[80px]'
-                } overflow-hidden whitespace-nowrap`}>
-                Workspace
-              </span>
-            </button>
-
-            {/* Writing Desk Tab */}
-            <button
-              onClick={() => setActiveSubView('writing')}
-              className={`group flex items-center h-8 rounded-md transition-all duration-300 ease-out cursor-pointer overflow-hidden ${activeSubView === 'writing'
-                ? 'bg-accent text-[#011419] font-extrabold shadow-sm max-w-[130px] px-3'
-                : 'text-gray-400 hover:text-white hover:bg-white/5 max-w-[32px] px-1.5 hover:max-w-[130px] hover:px-3'
-                }`}
-            >
-              <PenTool className="w-4.5 h-4.5 shrink-0" />
-              <span className={`text-[10px] font-bold uppercase tracking-wider transition-all duration-300 ml-0 opacity-0 group-hover:opacity-100 ${activeSubView === 'writing' ? 'opacity-100 ml-1.5 max-w-[80px]' : 'max-w-0 group-hover:ml-1.5 group-hover:max-w-[80px]'
-                } overflow-hidden whitespace-nowrap`}>
-                Writing
-              </span>
-            </button>
-
-            {/* Worldbuild Tab */}
-            <button
-              onClick={() => setActiveSubView('worldbuild')}
-              className={`group flex items-center h-8 rounded-md transition-all duration-300 ease-out cursor-pointer overflow-hidden ${activeSubView === 'worldbuild'
-                ? 'bg-accent text-[#011419] font-extrabold shadow-sm max-w-[130px] px-3'
-                : 'text-gray-400 hover:text-white hover:bg-white/5 max-w-[32px] px-1.5 hover:max-w-[130px] hover:px-3'
-                }`}
-            >
-              <Globe className="w-4.5 h-4.5 shrink-0" />
-              <span className={`text-[10px] font-bold uppercase tracking-wider transition-all duration-300 ml-0 opacity-0 group-hover:opacity-100 ${activeSubView === 'worldbuild' ? 'opacity-100 ml-1.5 max-w-[80px]' : 'max-w-0 group-hover:ml-1.5 group-hover:max-w-[80px]'
-                } overflow-hidden whitespace-nowrap`}>
-                Worldbuild
-              </span>
-            </button>
-
-            {/* Memory Tab */}
-            <button
-              onClick={() => setActiveSubView('memory')}
-              className={`group flex items-center h-8 rounded-md transition-all duration-300 ease-out cursor-pointer overflow-hidden ${activeSubView === 'memory'
-                ? 'bg-accent text-[#011419] font-extrabold shadow-sm max-w-[130px] px-3'
-                : 'text-gray-400 hover:text-white hover:bg-white/5 max-w-[32px] px-1.5 hover:max-w-[130px] hover:px-3'
-                }`}
-            >
-              <Brain className="w-4.5 h-4.5 shrink-0" />
-              <span className={`text-[10px] font-bold uppercase tracking-wider transition-all duration-300 ml-0 opacity-0 group-hover:opacity-100 ${activeSubView === 'memory' ? 'opacity-100 ml-1.5 max-w-[80px]' : 'max-w-0 group-hover:ml-1.5 group-hover:max-w-[80px]'
-                } overflow-hidden whitespace-nowrap`}>
-                Memory
-              </span>
-            </button>
-
-            {/* Files Tab */}
-            <button
-              onClick={() => setActiveSubView('files')}
-              className={`group flex items-center h-8 rounded-md transition-all duration-300 ease-out cursor-pointer overflow-hidden ${activeSubView === 'files'
-                ? 'bg-accent text-[#011419] font-extrabold shadow-sm max-w-[130px] px-3'
-                : 'text-gray-400 hover:text-white hover:bg-white/5 max-w-[32px] px-1.5 hover:max-w-[130px] hover:px-3'
-                }`}
-            >
-              <Folder className="w-4.5 h-4.5 shrink-0" />
-              <span className={`text-[10px] font-bold uppercase tracking-wider transition-all duration-300 ml-0 opacity-0 group-hover:opacity-100 ${activeSubView === 'files' ? 'opacity-100 ml-1.5 max-w-[80px]' : 'max-w-0 group-hover:ml-1.5 group-hover:max-w-[80px]'
-                } overflow-hidden whitespace-nowrap`}>
-                Files
-              </span>
-            </button>
-          </div>
+          <nav aria-label="Workspace areas" className="flex min-w-0 items-center gap-0.5 rounded-lg border border-border-subtle bg-surface-input/80 p-1 select-none z-10">
+            {[
+              ['chat', 'Workspace', MessageSquare],
+              ['writing', 'Writing', PenTool],
+              ['worldbuild', 'Worldbuild', Globe],
+              ['memory', 'Memory', Brain],
+              ['files', 'Files', Folder],
+            ].map(([id, label, Icon]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setActiveSubView(id)}
+                aria-current={activeSubView === id ? 'page' : undefined}
+                className={`group inline-flex h-8 shrink-0 items-center overflow-hidden rounded-md text-xs font-semibold transition-[max-width,padding,background-color,color,box-shadow] duration-300 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${activeSubView === id
+                  ? 'max-w-36 bg-accent px-3 text-on-accent shadow-sm'
+                  : 'max-w-8 px-2 text-text-muted hover:max-w-36 hover:bg-white/5 hover:px-3 hover:text-text-primary'
+                  }`}
+              >
+                <Icon className="h-4 w-4 shrink-0" />
+                <span className={`whitespace-nowrap transition-[max-width,margin,opacity] duration-300 ease-out ${activeSubView === id
+                  ? 'ml-1.5 max-w-24 opacity-100'
+                  : 'ml-0 max-w-0 opacity-0 group-hover:ml-1.5 group-hover:max-w-24 group-hover:opacity-100'
+                  }`}>{label}</span>
+              </button>
+            ))}
+          </nav>
 
           <div className="flex-1 flex justify-end ml-4">
             <button
               onClick={() => setActiveSubView('configuration')}
-              className={`p-1.5 rounded-md transition-colors cursor-pointer shrink-0 ${activeSubView === 'configuration'
-                ? 'text-accent bg-white/5'
-                : 'text-gray-500 hover:text-white hover:bg-white/5'
+              className={`inline-flex min-h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-semibold transition-colors cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${activeSubView === 'configuration'
+                ? 'text-accent bg-accent/10'
+                : 'text-text-muted hover:text-text-primary hover:bg-white/5'
                 }`}
-              title="Configuration"
             >
-              <Sliders className="w-4.5 h-4.5" />
+              <Sliders className="h-4 w-4" />
+              <span>Configuration</span>
             </button>
           </div>
         </div>
@@ -982,7 +931,7 @@ export default function ChatWorkspaceView() {
               ref={messageContainerRef}
               onClick={handleContainerClick}
               onScroll={updateFollowingLatest}
-              className="flex-1 overflow-y-auto pt-6 pb-28 px-12 md:px-24 xl:px-48 custom-scrollbar space-y-6"
+              className={`flex-1 overflow-y-auto pt-6 pb-28 px-12 md:px-24 custom-scrollbar space-y-6 ${roleplayMode ? 'xl:px-20 2xl:px-28' : 'xl:px-48'}`}
             >
               <div className="flex flex-wrap items-center justify-center gap-2">
                 {hasOlderMessages && (

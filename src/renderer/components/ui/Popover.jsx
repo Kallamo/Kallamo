@@ -28,14 +28,20 @@ export default function Popover({
   align = 'left',
   scroll = true,
   className = '',
+  role = undefined,
   children,
 }) {
   const panelRef = useRef(null);
+  const onCloseRef = useRef(onClose);
   const [style, setStyle] = useState(null);
+  onCloseRef.current = onClose;
 
   const reposition = useCallback(() => {
     const el = anchorRef?.current;
-    if (!el) return;
+    if (!el || !el.isConnected) {
+      onCloseRef.current?.();
+      return;
+    }
     const rect = el.getBoundingClientRect();
     const spaceBelow = window.innerHeight - rect.bottom;
     const spaceAbove = rect.top;
@@ -65,9 +71,9 @@ export default function Popover({
       const panel = panelRef.current;
       if (anchor && anchor.contains(e.target)) return;
       if (panel && panel.contains(e.target)) return;
-      onClose?.();
+      onCloseRef.current?.();
     };
-    const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
+    const onKey = (e) => { if (e.key === 'Escape') onCloseRef.current?.(); };
 
     window.addEventListener('scroll', reposition, true);
     window.addEventListener('resize', reposition);
@@ -79,15 +85,17 @@ export default function Popover({
       document.removeEventListener('mousedown', onDown);
       document.removeEventListener('keydown', onKey);
     };
-  }, [open, reposition, anchorRef, onClose]);
+  }, [open, reposition, anchorRef]);
 
   if (!open || !style) return null;
 
   return createPortal(
     <div
       ref={panelRef}
+      role={role}
+      data-floating-layer="popover"
       style={style}
-      className={`${scroll ? 'overflow-y-auto custom-scrollbar' : ''} bg-[#0a161d] border border-gray-800 rounded-xl shadow-2xl p-1 animate-in fade-in duration-150 ${className}`}
+      className={`${scroll ? 'overflow-y-auto overscroll-contain custom-scrollbar' : ''} bg-surface-panel border border-border-default rounded-xl shadow-2xl p-1 animate-in fade-in duration-150 ${className}`}
     >
       {children}
     </div>,

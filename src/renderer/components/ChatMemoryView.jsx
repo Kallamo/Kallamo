@@ -20,6 +20,8 @@ import Toggle from './ui/Toggle';
 import RenameFilesModal from './ui/RenameFilesModal';
 import Popover from './ui/Popover';
 import CoachMark from './ui/CoachMark';
+import Button from './ui/Button';
+import SegmentedControl from './ui/SegmentedControl';
 
 export default function ChatMemoryView({
   chat,
@@ -127,6 +129,7 @@ export default function ChatMemoryView({
   const scopeAnchorRef = useRef(null);
   const [editorStrategy, setEditorStrategy] = useState('rag_search');
   const [viewingFileBlock, setViewingFileBlock] = useState(null);
+  const [viewingTextBlock, setViewingTextBlock] = useState(null);
 
   // Per-chunk tags in the file chunk viewer: { [chunkId]: { keywords, entities } }.
   const [fileChunkTags, setFileChunkTags] = useState({});
@@ -350,9 +353,6 @@ export default function ChatMemoryView({
   const [simQuery, setSimQuery] = useState('');
   const [simResults, setSimResults] = useState(null);
   const [simLoading, setSimLoading] = useState(false);
-
-  const [renamingId, setRenamingId] = useState(null);
-  const [renameTitle, setRenameTitle] = useState('');
 
   const [deleteTarget, setDeleteTarget] = useState(null); // normalized block object
 
@@ -1057,21 +1057,28 @@ export default function ChatMemoryView({
     }
   };
 
-  const executeRename = async (block) => {
-    if (!renameTitle.trim()) return;
-    try {
-      if (block.type === 'snippet') {
-        // Title-only change: the chunk text is untouched, so use the lightweight
-        // rename path that just updates the stored title. Avoids re-embedding and
-        // re-running the world-index tagger (which would also cost an API call).
-        await electronAPI.renameChatKbBlock(chat.id, block.id, renameTitle.trim());
-        await refreshChats(chat.id);
-        loadBlocks();
-      }
-      setRenamingId(null);
-    } catch (e) {
-      console.error(e);
-    }
+  const openSnippetEditor = (block) => {
+    setEditingBlock(block);
+    setEditorTitle(block.title);
+    setEditorText(block.summary);
+    setEditorKeywords(block.keywords || []);
+    const entityTags = (memoryTags[block.id] || [])
+      .filter(tag => tag.entity)
+      .map(tag => ({ entity: tag.entity, name: tag.value }));
+    setEditorEntityTags(entityTags);
+    setEditorEntityTagsOriginal(entityTags);
+    setEntityCandidates([]);
+    setEditorStrategy(block.strategy || 'rag_search');
+    setTagInput('');
+    setEditorError('');
+    setEditorOpen(true);
+  };
+
+  const openMemoryBlock = (block) => {
+    if (block.type === 'rag_file') setViewingFileBlock(block);
+    else if (block.type === 'summarized') setSelectedSummaryBlock(block);
+    else if (block.type === 'snippet') openSnippetEditor(block);
+    else setViewingTextBlock(block);
   };
 
   const handleTestSearch = async () => {
@@ -1119,69 +1126,26 @@ export default function ChatMemoryView({
       {/* Main Memory List Pane */}
       <div className="flex-1 flex flex-col h-full overflow-hidden border-r border-gray-800/40">
 
-        {/* Controls bar */}
-        <div className="shrink-0 p-5 border-b border-gray-800/80 bg-[#011419]/35 flex flex-col md:flex-row md:items-center justify-between gap-4">
-          {/* Tabs Filter */}
-          <div className="flex flex-wrap gap-1.5">
-            {['all', 'constants', 'rag', 'snippets', 'summarized'].map(category => (
-              <button
-                key={category}
-                onClick={() => setActiveFilter(category)}
-                className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded-lg border transition-all cursor-pointer ${activeFilter === category
-                  ? 'bg-accent/20 border-accent/40 text-accent shadow-md shadow-accent/5'
-                  : 'bg-transparent border-gray-800 text-gray-400 hover:text-white hover:border-gray-700'
-                  }`}
-              >
-                {category === 'summarized' ? 'History' : category === 'snippets' ? 'Custom Memory' : category}
-              </button>
-            ))}
-          </div>
-
-          {/* Context budget for this chat */}
-          <div className="flex flex-col gap-1 text-[10px] text-gray-500">
-            <span className="flex items-center gap-1.5" title="Always-on context is injected into every prompt. Amber/red means it is approaching or exceeding this chat's context window.">
-              <span className="uppercase tracking-wider w-16">Always-on</span>
-              <TokenBadge tokens={tokenTotals.alwaysOn} max={chat?.maxContext || 128000} />
-            </span>
-            <span className="flex items-center gap-1.5" title="Searchable knowledge is retrieved on demand, not injected into every prompt.">
-              <span className="uppercase tracking-wider w-16">Searchable</span>
-              <TokenBadge tokens={tokenTotals.searchable} severity="neutral" />
-            </span>
-          </div>
-
-          {/* Search & Unified +Add Dropdown */}
-          <div className="flex items-center space-x-3">
-            <div className="relative w-full md:w-56">
-              <Search className="absolute left-2.5 top-1/2 transform -translate-y-1/2 text-gray-500 w-3.5 h-3.5" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search memories..."
-                className="w-full bg-[#011419] border border-gray-800/80 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-accent transition-colors"
-              />
+        {/* Page header and controls */}
+        <div className="shrink-0 border-b border-border-subtle bg-surface-canvas/35 p-5">
+          <div className="flex min-w-0 items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h2 className="text-base font-semibold text-text-primary">Memory & Knowledge</h2>
+              <p className="mt-1 max-w-xl text-sm text-text-muted">Control what is always available, what is retrieved when relevant, and what remains in conversation history.</p>
             </div>
 
-            {/* Export KB Button */}
-            <button
-              onClick={handleExportChatKb}
-              className="px-3.5 py-1.5 bg-[#0a161d] hover:bg-[#1a2d32] border border-gray-800 text-gray-300 hover:text-white text-[10px] font-bold uppercase tracking-wider rounded-lg transition-all cursor-pointer flex items-center space-x-1.5"
-              title="Export Workspace Knowledge Base"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>Export KB</span>
-            </button>
-
-            {/* Unified +Add Dropdown */}
-            <div className="relative" ref={addDropdownAnchorRef}>
-              <button
-                onClick={() => setAddDropdownOpen(!addDropdownOpen)}
-                className="px-3.5 py-1.5 bg-accent hover:brightness-110 active:scale-98 text-[#011419] text-[10px] font-bold uppercase tracking-wider rounded-lg shadow-md transition-all cursor-pointer flex items-center space-x-1.5"
-              >
-                <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-                <span>Add</span>
-                <ChevronDown className={`w-3 h-3 transition-transform ${addDropdownOpen ? 'rotate-180' : ''}`} />
-              </button>
+            <div className="flex shrink-0 flex-nowrap items-center gap-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-lg border border-border-subtle bg-surface-panel/60 px-3 py-2 text-xs text-text-muted">
+                <span title="Always-on context is injected into every prompt.">Always-on</span>
+                <TokenBadge tokens={tokenTotals.alwaysOn} max={chat?.maxContext || 128000} />
+                <span title="Searchable knowledge is retrieved only when relevant.">Searchable</span>
+                <TokenBadge tokens={tokenTotals.searchable} severity="neutral" />
+              </div>
+              <Button variant="ghost" size="sm" icon={Download} onClick={handleExportChatKb} title="Export Workspace Knowledge Base">Export KB</Button>
+              <div className="relative" ref={addDropdownAnchorRef}>
+                <Button size="sm" icon={Plus} onClick={() => setAddDropdownOpen(!addDropdownOpen)} aria-expanded={addDropdownOpen} aria-haspopup="menu">
+                  Add <ChevronDown className={`h-3 w-3 transition-transform ${addDropdownOpen ? 'rotate-180' : ''}`} />
+                </Button>
 
               <Popover anchorRef={addDropdownAnchorRef} open={addDropdownOpen} onClose={() => setAddDropdownOpen(false)} matchAnchorWidth={false} align="right" className="w-48 !p-2">
                     <button
@@ -1237,17 +1201,35 @@ export default function ChatMemoryView({
                       <span>Import KB Package</span>
                     </button>
               </Popover>
+              </div>
             </div>
+          </div>
 
-            <input
-              type="file"
-              ref={fileInputRef}
-              multiple
-              accept=".pdf,.docx,.txt,.md"
-              onChange={handleDirectFileUpload}
-              className="hidden"
+          <div className="mt-4 flex min-w-0 flex-nowrap items-center justify-between gap-3 border-t border-border-subtle pt-4">
+            <SegmentedControl
+              label="Memory category"
+              value={activeFilter}
+              onChange={setActiveFilter}
+              options={[
+                { value: 'all', label: 'All' },
+                { value: 'constants', label: 'Always-on' },
+                { value: 'rag', label: 'Searchable' },
+                { value: 'snippets', label: 'Custom' },
+                { value: 'summarized', label: 'History' },
+              ]}
+              className="shrink-0 !flex-nowrap"
+            />
+            <TextInput
+              icon={Search}
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search memories…"
+              aria-label="Search memories"
+              containerClassName="w-72 shrink-0"
             />
           </div>
+
+          <input type="file" ref={fileInputRef} multiple accept=".pdf,.docx,.txt,.md" onChange={handleDirectFileUpload} className="hidden" />
         </div>
 
         {/* Ingest Progress bar */}
@@ -1287,35 +1269,21 @@ export default function ChatMemoryView({
             </div>
           ) : (
             filteredBlocks.map((block) => {
-              const isRenameActive = renamingId === block.id;
-
               return (
                 <div
                   key={block.id}
                   onClick={() => {
-                    if (block.type === 'rag_file') {
-                      setViewingFileBlock(block);
-                    } else if (block.type === 'summarized') {
-                      setSelectedSummaryBlock(block);
-                    }
+                    if (block.type === 'rag_file' || block.type === 'summarized') openMemoryBlock(block);
                   }}
-                  className={`group relative bg-[#0a161d]/45 border rounded-xl p-4 transition-all flex items-start space-x-3.5 ${
-                    block.type === 'rag_file' ? 'cursor-pointer hover:border-blue-500/50' : ''
+                  className={`group relative flex min-w-0 items-start gap-3.5 rounded-xl border bg-surface-panel/45 p-4 transition-colors ${
+                    block.type === 'rag_file' || block.type === 'summarized' ? 'cursor-pointer hover:border-blue-500/50' : ''
                   } ${selectedBlockIds.includes(block.id) ? 'border-accent/40 bg-accent/5' : 'border-gray-800/80 hover:border-gray-800'
                     } ${block.enabled === false ? 'opacity-50' : ''}`}
                 >
                   {/* Selection Checkbox */}
                   {block.type !== 'summarized' && (
                     <div className="pt-1.5 shrink-0 select-none" onClick={(e) => e.stopPropagation()}>
-                      <div
-                        onClick={() => handleToggleSelectBlock(block.id)}
-                        className={`w-4 h-4 rounded-sm border flex items-center justify-center cursor-pointer transition-all duration-200 hover:scale-105 active:scale-95 ${selectedBlockIds.includes(block.id)
-                          ? 'bg-accent border-accent text-[#011419] shadow-[0_0_8px_rgba(221,186,110,0.4)]'
-                          : 'border-gray-800 bg-[#011419]/90 hover:border-accent/50'
-                          }`}
-                      >
-                        {selectedBlockIds.includes(block.id) && <Check className="w-3 h-3 stroke-[3.5]" />}
-                      </div>
+                      <Checkbox size="sm" checked={selectedBlockIds.includes(block.id)} onChange={() => handleToggleSelectBlock(block.id)} ariaLabel={`Select ${block.title}`} />
                     </div>
                   )}
 
@@ -1325,68 +1293,18 @@ export default function ChatMemoryView({
                     </div>
                   )}
 
-                  <div className="flex-1 flex flex-col justify-between min-w-0">
-                    <div className="flex items-start justify-between pr-44">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between">
 
-                      <div className="flex-1 min-w-0 mr-4">
-                        {/* Badge and Title */}
-                        <div className="flex items-center space-x-2 mb-2 select-none">
-                          <span className={`text-[7px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${getBadgeStyle(block)}`}>
+                      <div className="min-w-0 flex-1">
+                        <div className="mb-2 flex min-w-0 flex-nowrap items-center gap-2 select-none">
+                          <h4 onClick={event => { event.stopPropagation(); openMemoryBlock(block); }} className={`min-w-0 cursor-pointer truncate text-sm font-semibold tracking-wide text-text-primary hover:text-accent ${block.type === 'summarized' ? 'text-accent' : ''}`} title={`Open ${block.title}`}>
+                            {block.title}
+                          </h4>
+                          <TokenBadge tokens={block.tokenCount || 0} className="shrink-0" />
+                          <span className={`shrink-0 rounded-md border px-2 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wider ${getBadgeStyle(block)}`}>
                             {getBadgeLabel(block)}
                           </span>
-
-                          <TokenBadge tokens={block.tokenCount || 0} className="shrink-0" />
-
-                          {isRenameActive ? (
-                            <div className="flex items-center space-x-1.5 min-w-0">
-                              <input
-                                type="text"
-                                value={renameTitle}
-                                onChange={(e) => setRenameTitle(e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') executeRename(block);
-                                  else if (e.key === 'Escape') setRenamingId(null);
-                                }}
-                                onBlur={() => executeRename(block)}
-                                autoFocus
-                                className="bg-[#011419] border border-gray-800 text-[11px] font-bold text-accent rounded px-2.5 py-0.5 focus:outline-none focus:border-accent"
-                              />
-                              <button
-                                onMouseDown={(e) => e.preventDefault()}
-                                onClick={() => executeRename(block)}
-                                title="Confirm rename"
-                                className="shrink-0 flex items-center justify-center w-5 h-5 rounded bg-accent/15 text-accent hover:bg-accent/25 transition-colors"
-                              >
-                                <Check size={12} strokeWidth={3} />
-                              </button>
-                            </div>
-                          ) : (
-                            <div className="flex items-center space-x-1.5 min-w-0">
-                              <h4
-                                onClick={() => {
-                                  if (block.type === 'snippet') {
-                                    setRenamingId(block.id);
-                                    setRenameTitle(block.title);
-                                  } else if (block.type === 'summarized') {
-                                    setSelectedSummaryBlock(block);
-                                  }
-                                }}
-                                className={`text-xs font-bold text-white uppercase tracking-wide truncate cursor-pointer hover:underline ${block.type === 'summarized' ? 'text-accent' : ''
-                                  }`}
-                                title={block.type === 'snippet' ? "Click to rename title" : "Click to view archived messages"}
-                              >
-                                {block.title}
-                              </h4>
-                              {block.type === 'summarized' && (
-                                <span
-                                  className="text-[8px] text-gray-500 font-sans italic cursor-pointer shrink-0 hover:text-accent transition-colors"
-                                  onClick={() => setSelectedSummaryBlock(block)}
-                                >
-                                  (Click to inspect messages)
-                                </span>
-                              )}
-                            </div>
-                          )}
                         </div>
 
                         {/* Body snippet text */}
@@ -1400,7 +1318,7 @@ export default function ChatMemoryView({
                             {block.keywords.map((tag, tagIdx) => (
                               <span
                                 key={tagIdx}
-                                className="px-1.5 py-0.5 bg-accent/10 border border-accent/20 text-accent text-[9px] font-bold uppercase tracking-wider rounded"
+                                className="px-2 py-0.5 bg-accent/10 border border-accent/20 text-accent text-xs font-semibold uppercase tracking-wider rounded-full"
                               >
                                 {tag}
                               </span>
@@ -1414,7 +1332,7 @@ export default function ChatMemoryView({
                             {memoryTags[block.id].map((t, i) => (
                               <span
                                 key={i}
-                                className="px-1.5 py-0.5 bg-sky-500/10 border border-sky-500/25 text-sky-300 text-[9px] font-bold rounded flex items-center gap-1"
+                                className="px-2 py-0.5 bg-status-info/10 border border-status-info/25 text-status-info text-xs font-semibold rounded-full flex items-center gap-1"
                               >
                                 <Sparkles className="w-2.5 h-2.5" />{t.value}
                               </span>
@@ -1425,8 +1343,9 @@ export default function ChatMemoryView({
                     </div>
                   </div>
 
-                  {/* Actions overlay panel right side */}
-                  <div className="absolute top-4 right-4 flex items-center space-x-2 select-none" onClick={(e) => e.stopPropagation()}>
+                  {/* Contextual actions stay in document flow, so long titles and
+                      narrow windows never collide with a fixed overlay. */}
+                  <div className="flex max-w-[24rem] shrink-0 flex-nowrap items-center justify-end gap-2 select-none" onClick={(e) => e.stopPropagation()}>
 
                     {/* Enable/disable switch (everything except history summaries) */}
                     {block.type !== 'summarized' && (
@@ -1442,7 +1361,7 @@ export default function ChatMemoryView({
                       <button
                         onClick={() => handleToggleIngestion(block)}
                         title={`Strategy: ${block.type === 'constant' ? 'Constant (always loaded)' : 'RAG (semantic search)'}`}
-                        className={`text-[9px] font-bold tracking-wider px-2 py-1 border rounded-lg transition-colors cursor-pointer ${block.type === 'constant'
+                        className={`text-xs font-semibold tracking-wider px-2 py-1 border rounded-lg transition-colors cursor-pointer ${block.type === 'constant'
                           ? 'bg-[#FBCB2D]/20 text-[#FBCB2D] border-[#FBCB2D]/40 hover:bg-[#FBCB2D]/30'
                           : 'bg-[#3b82f6]/10 text-[#3b82f6] border-[#3b82f6]/30 hover:bg-[#3b82f6]/20'
                           }`}
@@ -1460,7 +1379,7 @@ export default function ChatMemoryView({
                             scopeAnchorRef.current = nextBlockId ? event.currentTarget : null;
                             setActiveScopingBlockId(nextBlockId);
                           }}
-                          className={`flex items-center space-x-1 px-2.5 py-1 border rounded-lg text-[9px] font-bold uppercase transition-colors cursor-pointer ${block.profiles.length > 0
+                          className={`flex items-center space-x-1 px-2.5 py-1 border rounded-lg text-xs font-semibold transition-colors cursor-pointer ${block.profiles.length > 0
                             ? 'bg-teal-500/10 border-teal-500/35 text-teal-400 hover:bg-teal-500/25'
                             : 'bg-transparent border-gray-800 text-gray-400 hover:text-white hover:border-gray-700'
                             }`}
@@ -1541,24 +1460,7 @@ export default function ChatMemoryView({
                     {/* Edit block */}
                     {block.type === 'snippet' && (
                       <button
-                        onClick={() => {
-                          setEditingBlock(block);
-                          setEditorTitle(block.title);
-                          setEditorText(block.summary);
-                          setEditorKeywords(block.keywords || []);
-                          {
-                            const ents = (memoryTags[block.id] || [])
-                              .filter(t => t.entity)
-                              .map(t => ({ entity: t.entity, name: t.value }));
-                            setEditorEntityTags(ents);
-                            setEditorEntityTagsOriginal(ents);
-                          }
-                          setEntityCandidates([]);
-                          setEditorStrategy(block.strategy || 'rag_search');
-                          setTagInput('');
-                          setEditorError('');
-                          setEditorOpen(true);
-                        }}
+                        onClick={() => openSnippetEditor(block)}
                         title="Edit memory block text content"
                         className="p-1.5 hover:bg-white/5 text-gray-500 hover:text-white rounded-lg transition-colors cursor-pointer border border-transparent hover:border-gray-800"
                       >
@@ -2282,6 +2184,23 @@ export default function ChatMemoryView({
             <Trash2 className="w-3.5 h-3.5" />
             <span>Delete</span>
           </button>
+        </div>
+      )}
+
+      {viewingTextBlock && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6 backdrop-blur-sm" onClick={() => setViewingTextBlock(null)}>
+          <div className="flex max-h-[80vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border-default bg-surface-editor shadow-2xl" onClick={event => event.stopPropagation()}>
+            <div className="flex items-center justify-between gap-4 border-b border-border-subtle px-5 py-4">
+              <div className="min-w-0">
+                <h3 className="truncate text-base font-semibold text-text-primary">{viewingTextBlock.title}</h3>
+                <p className="mt-1 text-xs text-text-muted">{getBadgeLabel(viewingTextBlock)}</p>
+              </div>
+              <button type="button" onClick={() => setViewingTextBlock(null)} aria-label="Close memory" className="rounded-lg p-1.5 text-text-muted hover:bg-white/5 hover:text-text-primary"><XIcon className="h-4 w-4" /></button>
+            </div>
+            <div className="overflow-y-auto p-5 custom-scrollbar">
+              <p className="whitespace-pre-wrap text-sm leading-relaxed text-text-secondary">{viewingTextBlock.summary}</p>
+            </div>
+          </div>
         </div>
       )}
 

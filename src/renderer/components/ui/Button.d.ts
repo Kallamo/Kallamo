@@ -2,7 +2,7 @@ import type { ButtonHTMLAttributes, ComponentType, ReactNode } from 'react';
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'danger' | 'ghost' | 'subtle';
-  size?: 'sm' | 'md';
+  size?: 'sm' | 'md' | 'lg';
   loading?: boolean;
   icon?: ComponentType<{ className?: string; strokeWidth?: number }> | null;
   fullWidth?: boolean;

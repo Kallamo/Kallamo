@@ -1,4 +1,5 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { X, ChevronUp, ChevronDown, CaseSensitive, Replace, ReplaceAll } from 'lucide-react';
 import { searchKey, collectSearchMatches } from './writingExtensions';
 
@@ -13,6 +14,27 @@ export default function WritingFindReplace({ editor, locked, onClose }) {
   const [matches, setMatches] = useState([]);
   const [current, setCurrent] = useState(0);
   const findRef = useRef(null);
+  const [panelStyle, setPanelStyle] = useState(null);
+
+  useLayoutEffect(() => {
+    const position = () => {
+      const scroller = editor?.view?.dom?.closest('[data-writing-scroll-container]');
+      const rect = scroller?.getBoundingClientRect();
+      setPanelStyle({
+        position: 'fixed',
+        top: Math.max(48, (rect?.top || 40) + 8),
+        right: Math.max(16, window.innerWidth - (rect?.right || window.innerWidth) + 16),
+        zIndex: 80,
+      });
+    };
+    position();
+    window.addEventListener('resize', position);
+    window.addEventListener('scroll', position, true);
+    return () => {
+      window.removeEventListener('resize', position);
+      window.removeEventListener('scroll', position, true);
+    };
+  }, [editor]);
 
   useEffect(() => { findRef.current?.focus(); findRef.current?.select(); }, []);
 
@@ -92,8 +114,10 @@ export default function WritingFindReplace({ editor, locked, onClose }) {
     if (e.key === 'Escape') { e.preventDefault(); onClose(); }
   };
 
-  return (
-    <div className="absolute top-2 right-4 z-30 w-80 bg-[#0a161d]/97 border border-gray-800 rounded-lg shadow-2xl p-2.5 flex flex-col gap-2">
+  if (!panelStyle) return null;
+
+  return createPortal(
+    <div role="dialog" aria-label="Find and replace" style={panelStyle} className="w-80 max-w-[calc(100vw-2rem)] bg-surface-panel/97 border border-border-default rounded-lg shadow-2xl p-2.5 flex flex-col gap-2">
       <div className="flex items-center gap-1.5">
         <input
           ref={findRef}
@@ -101,9 +125,9 @@ export default function WritingFindReplace({ editor, locked, onClose }) {
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={onFindKey}
           placeholder="Find"
-          className="flex-1 min-w-0 bg-[#00080B] border border-gray-800 text-gray-200 text-xs rounded-md px-2 py-1.5 focus:outline-none focus:border-accent"
+          className="flex-1 min-w-0 bg-surface-input border border-border-default text-text-secondary text-sm rounded-md px-2 py-1.5 focus:outline-none focus:border-accent"
         />
-        <span className="text-[11px] tabular-nums text-gray-500 w-12 text-center shrink-0">
+        <span className="text-xs tabular-nums text-text-muted w-12 text-center shrink-0">
           {matches.length ? `${current + 1}/${matches.length}` : '0/0'}
         </span>
         <button title="Match case" onClick={() => setCaseSensitive(v => !v)}
@@ -125,13 +149,14 @@ export default function WritingFindReplace({ editor, locked, onClose }) {
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); replaceCurrent(); } if (e.key === 'Escape') onClose(); }}
           placeholder={locked ? 'Replace (locked while AI is reviewing)' : 'Replace with'}
           disabled={locked}
-          className="flex-1 min-w-0 bg-[#00080B] border border-gray-800 text-gray-200 text-xs rounded-md px-2 py-1.5 focus:outline-none focus:border-accent disabled:opacity-50"
+          className="flex-1 min-w-0 bg-surface-input border border-border-default text-text-secondary text-sm rounded-md px-2 py-1.5 focus:outline-none focus:border-accent disabled:opacity-50"
         />
         <button title="Replace" onClick={replaceCurrent} disabled={locked || !matches.length}
           className="p-1.5 rounded-md text-gray-400 hover:text-white hover:bg-white/5 disabled:opacity-30 shrink-0"><Replace className="w-4 h-4" /></button>
         <button title="Replace all" onClick={replaceAll} disabled={locked || !matches.length}
           className="p-1.5 rounded-md text-gray-400 hover:text-white hover:bg-white/5 disabled:opacity-30 shrink-0"><ReplaceAll className="w-4 h-4" /></button>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

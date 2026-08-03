@@ -123,16 +123,15 @@ function MainLayout() {
     }
   }, [settings?.interface?.codeTheme]);
 
-  // Apply global scaling via root font-size (REM)
+  // Scale typography without scaling every rem-based width, gap and control.
+  // This keeps the app composition stable across the interface size setting.
   useEffect(() => {
     const root = document.documentElement;
-    if (settings?.interface?.fontSize === 'small') {
-      root.style.fontSize = '16px';
-    } else if (settings?.interface?.fontSize === 'large') {
-      root.style.fontSize = '20px';
-    } else {
-      root.style.fontSize = '18px';
-    }
+    root.style.fontSize = '100%';
+    const scale = settings?.interface?.fontSize === 'large'
+      ? 1.25
+      : settings?.interface?.fontSize === 'small' ? 1 : 1.125;
+    root.style.setProperty('--interface-font-scale', String(scale));
   }, [settings?.interface?.fontSize]);
 
   // Global Tooltip Engine

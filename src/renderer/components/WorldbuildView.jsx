@@ -4,12 +4,13 @@ import {
   Plus, Search, BookOpen, MapPin, Package, Users, Flag, User,
   Sparkles, Trash2, Save, X, Pencil, Check, Link2, Globe, Tag, ScrollText, Ghost, Info, Replace,
   Lock, ShieldCheck, RefreshCw, Upload, Download, CalendarClock, ChevronRight, ChevronsLeftRight,
-  AlertTriangle, LayoutTemplate, BookCheck,
+  AlertTriangle, LayoutTemplate, BookCheck, Bot, CircleHelp, ChevronLeft,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import Button from './ui/Button';
 import Checkbox from './ui/Checkbox';
 import Popover from './ui/Popover';
+import SearchableSelect from './ui/SearchableSelect';
 import ConfirmDialog from './ui/ConfirmDialog';
 import ExportWorldbuildModal from './modals/ExportWorldbuildModal';
 import { buildLocationTree } from '../features/worldbuild/locationTree';
@@ -28,13 +29,13 @@ import WorldbuildTemplateManager from '../features/worldbuild/WorldbuildTemplate
 import WorldbuildRoleplayResources from '../features/worldbuild/WorldbuildRoleplayResources';
 import { displayProposalValue } from '../features/worldbuild/reviewDisplay';
 import {
-  ABUNDANCE_HELP, CREATURE_NATURES, DISPOSITION, fieldLabel, ITEM_TYPES, meta, TYPES,
+  ABUNDANCE_HELP, CREATURE_NATURES, DISPOSITION, entityMeta, fieldLabel, ITEM_TYPES, itemMeta, meta, TYPES,
   RARITY, RELATIONSHIP_LABELS, STATUS, THREAT, TYPE_ORDER,
 } from '../features/worldbuild/worldbuildConfig';
 
 // Frosted dark inputs: their own dark backing guarantees legible text over BOTH
 // light and dark workspace backgrounds, while the blur keeps the background alive.
-const FIELD = 'wb-input w-full bg-[#06121a]/75 backdrop-blur-md border border-white/15 text-gray-100 text-sm rounded-lg px-3 py-2 placeholder-gray-400/70 focus:outline-none focus:border-accent/70 focus:bg-[#06121a]/90 transition-colors';
+const FIELD = 'wb-input min-h-10 w-full bg-surface-input/90 backdrop-blur-md border border-border-default text-text-primary text-sm rounded-lg px-3 py-2 placeholder:text-text-subtle focus:outline-none focus:border-accent/70 focus:ring-2 focus:ring-accent/20 transition-colors';
 const LInput = (p) => <input {...p} className={`${FIELD} ${p.className || ''}`} />;
 const LTextarea = (p) => <textarea {...p} className={`${FIELD} resize-none leading-relaxed custom-scrollbar ${p.className || ''}`} />;
 const LSelect = ({ children, ...p }) => <select {...p} className={`${FIELD} cursor-pointer ${p.className || ''}`}>{children}</select>;
@@ -42,7 +43,7 @@ const LSelect = ({ children, ...p }) => <select {...p} className={`${FIELD} curs
 // A colored state pill (life status, disposition…). `map` is one of STATUS/DISPOSITION.
 const StateTag = ({ map, value }) => {
   const s = map[value]; if (!s) return null;
-  return <span className={`inline-flex items-center text-[10px] font-bold uppercase tracking-wider border rounded-full px-2 py-0.5 ${s.cls}`}>{s.label}</span>;
+  return <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[0.6875rem] font-medium tracking-wide ${s.cls}`}>{s.label}</span>;
 };
 
 const EvidenceReferences = ({ excerpts, support = '' }) => {
@@ -105,35 +106,21 @@ const StateSelect = ({ map, value, onChange }) => (
 // object so callers read e.target.value uniformly.
 const FreeDatalist = ({ value, onChange, options, placeholder }) => {
   const [open, setOpen] = useState(false);
-  const [rect, setRect] = useState(null);
   const wrapRef = useRef(null);
-  const menuRef = useRef(null);
   const opts = [...new Set(options.filter(Boolean))];
   const q = (value || '').toLowerCase();
   const filtered = opts.filter(o => o.toLowerCase().includes(q));
-  const openMenu = () => { if (wrapRef.current) setRect(wrapRef.current.getBoundingClientRect()); setOpen(true); };
-  useEffect(() => {
-    if (!open) return;
-    const close = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
-    // Close when the panel scrolls (the fixed menu would detach), but not when the
-    // scroll happens inside the menu itself.
-    const drop = (e) => { if (menuRef.current && menuRef.current.contains(e.target)) return; setOpen(false); };
-    document.addEventListener('mousedown', close);
-    window.addEventListener('scroll', drop, true);
-    window.addEventListener('resize', drop);
-    return () => { document.removeEventListener('mousedown', close); window.removeEventListener('scroll', drop, true); window.removeEventListener('resize', drop); };
-  }, [open]);
   return (
     <div className="relative" ref={wrapRef}>
-      <LInput placeholder={placeholder} value={value || ''} onFocus={openMenu} onChange={(e) => { onChange(e); openMenu(); }} />
-      {open && filtered.length > 0 && rect && createPortal(
-        <div ref={menuRef} style={{ position: 'fixed', top: rect.bottom + 4, left: rect.left, width: rect.width, zIndex: 60 }}
-          className="max-h-44 overflow-y-auto custom-scrollbar rounded-lg border border-white/15 bg-[#021a20] shadow-xl py-1">
+      <LInput placeholder={placeholder} value={value || ''} onFocus={() => setOpen(true)} onChange={(e) => { onChange(e); setOpen(true); }} />
+      <Popover anchorRef={wrapRef} open={open && filtered.length > 0} onClose={() => setOpen(false)} maxHeight={176} scroll={false} className="border-border-default bg-surface-panel-muted p-1">
+        <div className="max-h-44 overflow-y-auto custom-scrollbar">
           {filtered.map(o => (
             <button key={o} type="button" onMouseDown={(e) => { e.preventDefault(); onChange({ target: { value: o } }); setOpen(false); }}
-              className="w-full text-left px-3 py-1.5 text-sm text-gray-200 hover:bg-accent/15 hover:text-white cursor-pointer transition-colors">{o}</button>
+              className="w-full rounded-md px-3 py-2 text-left text-sm text-text-secondary transition-colors hover:bg-accent/15 hover:text-text-primary">{o}</button>
           ))}
-        </div>, document.body)}
+        </div>
+      </Popover>
     </div>
   );
 };
@@ -154,7 +141,7 @@ const InfoPopover = ({ items }) => {
   );
 };
 
-const FieldLabel = ({ children }) => <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">{children}</label>;
+const FieldLabel = ({ children }) => <label className="block text-xs font-semibold text-text-muted uppercase tracking-wider mb-1">{children}</label>;
 const Hint = ({ children }) => <span className="caption mt-1 block">{children}</span>;
 const Edit = ({ label, hint, children }) => (
   <div>{label && <FieldLabel>{label}</FieldLabel>}{children}{hint && <Hint>{hint}</Hint>}</div>
@@ -163,29 +150,29 @@ const Edit = ({ label, hint, children }) => (
 // Read-only field in the rendered sheet.
 const ViewField = ({ label, value, empty = 'Not set' }) => (
   <div>
-    <div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-0.5">{label}</div>
-    {value ? <div className="text-sm text-gray-100">{value}</div> : <div className="text-sm text-gray-600 italic">{empty}</div>}
+    <div className="text-xs font-semibold uppercase tracking-wider text-text-subtle mb-0.5">{label}</div>
+    {value ? <div className="text-sm text-text-primary">{value}</div> : <div className="text-sm text-text-disabled italic">{empty}</div>}
   </div>
 );
 
 const Prose = ({ text, empty = 'Nothing written yet.' }) =>
   text && text.trim()
     ? <p className="text-sm text-gray-200 leading-relaxed whitespace-pre-wrap">{text}</p>
-    : <p className="text-sm text-gray-600 italic">{empty}</p>;
+    : <p className="text-sm text-text-disabled italic">{empty}</p>;
 
 const Chip = ({ children }) => (
-  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-200 bg-white/[0.06] border border-white/10 rounded-full px-2.5 py-0.5">{children}</span>
+  <span className="inline-flex items-center gap-1 rounded-full border border-border-subtle bg-white/[0.035] px-2 py-0.5 text-[0.6875rem] font-medium text-text-secondary">{children}</span>
 );
 
 // A sheet section: titled card with an optional pencil that flips it to edit mode.
 function Section({ icon, title, editing, onEdit, showPencil, children }) {
   const Icon = icon || BookOpen;
   return (
-    <div className="rounded-xl border border-white/10 bg-[#0a1721]/60 backdrop-blur-md overflow-hidden">
+    <div className="rounded-xl border border-border-default bg-surface-panel-muted/60 backdrop-blur-md overflow-hidden">
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/[0.08]">
         <div className="flex items-center gap-2">
           <Icon className="w-3.5 h-3.5 text-accent" />
-          <span className="text-[11px] font-bold uppercase tracking-wider text-gray-300">{title}</span>
+          <span className="text-xs font-semibold uppercase tracking-wider text-text-secondary">{title}</span>
         </div>
         {showPencil && !editing && (
           <button onClick={onEdit} data-tooltip="Edit this section"
@@ -211,11 +198,11 @@ function SingleRelation({ label, hint, current, options, onSet, disabled }) {
     <Edit label={label} hint={hint}>
       <div className="flex items-center gap-2 flex-wrap">
         {currentName
-          ? <span className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-100 bg-white/[0.08] border border-white/15 rounded-full pl-2.5 pr-1 py-0.5">
-              {currentName}
-              <button onClick={() => onSet(null)} className="text-gray-400 hover:text-rose-300 cursor-pointer p-0.5"><X className="w-3 h-3" /></button>
-            </span>
-          : <span className="caption">None set.</span>}
+          ? <div className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-border-default bg-surface-input/70 pl-3 pr-1.5 text-sm font-medium text-text-primary">
+              <span>{currentName}</span>
+              <button type="button" aria-label={`Clear ${label}`} onClick={() => onSet(null)} className="inline-flex h-7 w-7 items-center justify-center rounded-md text-text-muted hover:bg-status-danger/10 hover:text-status-danger"><X className="w-3.5 h-3.5" /></button>
+            </div>
+          : <span className="inline-flex min-h-9 items-center rounded-lg border border-dashed border-border-default px-3 text-sm text-text-subtle">None set</span>}
         <EntityPickerButton icon={currentName ? Replace : Plus} label={currentName ? 'Change' : 'Set'} title={label} options={options} onPick={(id) => onSet(id)} />
       </div>
     </Edit>
@@ -290,7 +277,7 @@ function MemberRole({ link, onSetRole, onRemove }) {
       <span className="text-sm text-gray-100 flex-1 min-w-0 truncate">{link.entity.canonicalName}</span>
       <input value={role} onChange={(e) => setRole(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
         placeholder="role (optional)"
-        className="wb-input w-36 bg-[#06121a]/75 border border-white/15 text-gray-100 text-xs rounded-md px-2 py-1 placeholder-gray-500 focus:outline-none focus:border-accent/70" />
+        className="wb-input w-36 rounded-md border border-border-default bg-surface-input/90 px-2 py-1 text-xs text-text-primary placeholder:text-text-subtle focus:border-accent/70 focus:outline-none" />
       <button onClick={() => onRemove(link.linkId)} className="text-gray-400 hover:text-rose-300 cursor-pointer p-1"><X className="w-3.5 h-3.5" /></button>
     </div>
   );
@@ -327,6 +314,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const [reviewFilter, setReviewFilter] = useState(null);
   const [manageMode, setManageMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const filterStripRef = useRef(null);
   const [bulkConfirm, setBulkConfirm] = useState(null);
   const [bulkSaving, setBulkSaving] = useState(false);
   const [selected, setSelected] = useState(null);
@@ -392,6 +380,11 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const typeMeta = (type) => {
     const base = meta(type);
     const displayName = templates.find(template => template.typeId === type)?.displayName;
+    return displayName ? { ...base, label: displayName } : base;
+  };
+  const concreteEntityMeta = (entity) => {
+    const base = entityMeta(entity);
+    const displayName = templates.find(template => template.typeId === entity?.type)?.displayName;
     return displayName ? { ...base, label: displayName } : base;
   };
   const docTitle = (id) => documents.find(d => d.id === id)?.title;
@@ -771,6 +764,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const selectEntities = list => setSelectedIds(new Set(list.map(entity => entity.id)));
   const selectVisibleEntities = () => setSelectedIds(current => new Set([...current, ...filtered.map(entity => entity.id)]));
   const leaveManageMode = () => { setManageMode(false); setSelectedIds(new Set()); };
+  const moveFilterStrip = direction => filterStripRef.current?.scrollBy({ left: direction * 180, behavior: 'smooth' });
 
   const runBulkAction = async (action, policy = null) => {
     const ids = [...selectedIds];
@@ -895,7 +889,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, view: loreView, edit: loreEdit });
     }
     if (type === 'Items') {
-      S.push({ key: 'details', title: 'Details', icon: Package, scalar: true,
+      S.push({ key: 'details', title: 'Details', icon: itemMeta(selected.data.itemType).icon, scalar: true,
         view: <>
           <div className="grid grid-cols-2 gap-4">
             <ViewField label="Nature" value={(selected.data.itemNature || 'type') === 'unique' ? 'Unique item' : 'Item type'} />
@@ -915,13 +909,27 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               {[['type', 'Item type'], ['unique', 'Unique item']].map(([value, label]) => <button key={value} type="button" onClick={() => patchData({ itemNature: value })} className={`rounded-md px-3 py-1.5 text-xs font-bold uppercase tracking-wider transition-colors ${(selected.data.itemNature || 'type') === value ? 'bg-accent text-[#011419]' : 'text-gray-400 hover:text-white'}`}>{label}</button>)}
             </div>
           </Edit>
-          <Edit label="Category"><LSelect value={selected.data.itemType || ''} onChange={(e) => patchData({ itemType: e.target.value })}><option value="">Choose…</option>{ITEM_TYPES.map(t => <option key={t} value={t}>{t}{t === 'Resource' ? ' (natural / drops)' : ''}</option>)}</LSelect></Edit>
+          <Edit label="Category">
+            <SearchableSelect
+              value={selected.data.itemType || ''}
+              onChange={(itemType) => patchData({ itemType })}
+              options={ITEM_TYPES.map(itemType => ({
+                id: itemType,
+                label: itemType,
+                icon: itemMeta(itemType).icon,
+                description: itemType === 'Resource' ? 'Natural resources and creature drops' : undefined,
+              }))}
+              placeholder="Choose a category…"
+              searchPlaceholder="Filter item categories…"
+              ariaLabel="Item category"
+            />
+          </Edit>
           <SingleRelation label="Creator" hint="Leave blank if unknown." disabled={unsaved} current={rel.createdBy?.entity?.id} options={byType.Characters} onSet={(id) => setSingle('created_by', id)} />
           {isUniqueItem && <Edit label="Owner" hint={unsaved ? 'Save first to assign an owner.' : 'A unique item can be in one inventory or one world location.'}>
             {!unsaved && <div className="flex items-center gap-2 flex-wrap">
-              <button type="button" onClick={() => setOwner('ai')} className={`rounded-md border px-2.5 py-1.5 text-xs transition-colors ${ownerVal === 'ai' ? 'border-accent/40 bg-accent/15 text-accent' : 'border-white/10 text-gray-400 hover:text-white'}`}>AI decides</button>
-              <button type="button" onClick={() => setOwner('lost')} className={`rounded-md border px-2.5 py-1.5 text-xs transition-colors ${ownerVal === 'lost' ? 'border-accent/40 bg-accent/15 text-accent' : 'border-white/10 text-gray-400 hover:text-white'}`}>Unknown / Lost</button>
-              {rel.ownedBy && <Chip>{rel.ownedBy.entity.canonicalName}</Chip>}
+              <button type="button" onClick={() => setOwner('ai')} aria-pressed={ownerVal === 'ai'} className={`inline-flex min-h-9 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors ${ownerVal === 'ai' ? 'border-accent/40 bg-accent/15 text-accent' : 'border-border-default bg-surface-input/70 text-text-muted hover:border-border-strong hover:text-text-primary'}`}><Bot className="h-3.5 w-3.5" />AI decides</button>
+              <button type="button" onClick={() => setOwner('lost')} aria-pressed={ownerVal === 'lost'} className={`inline-flex min-h-9 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors ${ownerVal === 'lost' ? 'border-accent/40 bg-accent/15 text-accent' : 'border-border-default bg-surface-input/70 text-text-muted hover:border-border-strong hover:text-text-primary'}`}><CircleHelp className="h-3.5 w-3.5" />Unknown / Lost</button>
+              {rel.ownedBy && <div className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-accent/40 bg-accent/15 px-3 py-2 text-xs font-semibold text-accent"><User className="h-3.5 w-3.5" />{rel.ownedBy.entity.canonicalName}</div>}
               <EntityPickerButton icon={rel.ownedBy ? Replace : Plus} label={rel.ownedBy ? 'Change' : 'Choose entity'} title="Choose owner" options={ownerOptions} onPick={setOwner} />
             </div>}
           </Edit>}
@@ -980,7 +988,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           <Edit label="Abilities & traits" hint="Short, concrete powers the AI can use in a scene."><LTextarea rows={3} placeholder="e.g. flies, breathes fire, immune to steel." value={selected.data.abilities || ''} onChange={(e) => patchData({ abilities: e.target.value })} /></Edit>
           {isIndividual && worldCalendar && <Edit label="Birth date">
             <WorldDateInput calendar={worldCalendar} value={selected.data.birthDate} onChange={birthDate => patchData({ birthDate })} />
-            <label className="mt-2 flex items-center gap-2 text-xs text-gray-400"><Checkbox checked={Boolean(selected.data.showBirthday)} onChange={showBirthday => patchData({ showBirthday })} />Show birthday in Calendar</label>
+            <div className="mt-2"><Checkbox checked={Boolean(selected.data.showBirthday)} onChange={showBirthday => patchData({ showBirthday })} label="Show birthday in Calendar" /></div>
           </Edit>}
           {isIndividual && selected.data.status === 'deceased' && worldCalendar && <Edit label="Death date"><WorldDateInput calendar={worldCalendar} value={selected.data.deathDate} onChange={deathDate => patchData({ deathDate })} /></Edit>}
           {isIndividual && selected.data.status === 'missing' && worldCalendar && <Edit label="Disappearance date"><WorldDateInput calendar={worldCalendar} value={selected.data.missingDate} onChange={missingDate => patchData({ missingDate })} /></Edit>}
@@ -1066,7 +1074,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           <SingleRelation label="Race" disabled={unsaved} current={rel.isRace?.entity?.id} options={byType.Races} onSet={(id) => setSingle('is_race', id)} />
           {worldCalendar && <Edit label="Birth date">
             <WorldDateInput calendar={worldCalendar} value={selected.data.birthDate} onChange={birthDate => patchData({ birthDate })} />
-            <label className="mt-2 flex items-center gap-2 text-xs text-gray-400"><Checkbox checked={Boolean(selected.data.showBirthday)} onChange={showBirthday => patchData({ showBirthday })} />Show birthday in Calendar</label>
+            <div className="mt-2"><Checkbox checked={Boolean(selected.data.showBirthday)} onChange={showBirthday => patchData({ showBirthday })} label="Show birthday in Calendar" /></div>
           </Edit>}
           {selected.data.status === 'deceased' && worldCalendar && <Edit label="Death date"><WorldDateInput calendar={worldCalendar} value={selected.data.deathDate} onChange={deathDate => patchData({ deathDate })} /></Edit>}
           {selected.data.status === 'missing' && worldCalendar && <Edit label="Disappearance date"><WorldDateInput calendar={worldCalendar} value={selected.data.missingDate} onChange={missingDate => patchData({ missingDate })} /></Edit>}
@@ -1117,19 +1125,19 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       ? []
       : customizeSections(selected.type === 'Characters' ? characterSections() : isIndividualCreature ? individualCreatureSections() : sectionsFor(selected.type))
     : [];
-  const m = selected ? typeMeta(selected.type) : null;
+  const m = selected ? concreteEntityMeta(selected) : null;
   const nameLabel = selected?.type === 'System' ? 'Title' : 'Name';
   const showAliases = !!selected;
 
   const renderEntityButton = (en) => {
-    const t = typeMeta(en.type);
+    const t = concreteEntityMeta(en);
     const Icon = t.icon;
     const active = selected?.id === en.id;
     return (
       <div key={en.id} className="relative">
         {manageMode && <Checkbox size="sm" checked={selectedIds.has(en.id)} onChange={() => toggleEntitySelection(en.id)} ariaLabel={`Select ${en.canonicalName}`} className="absolute z-10 left-2.5 top-1/2 -translate-y-1/2" />}
-        <button onClick={() => openEntity(en)} className={`w-full text-left pr-2.5 py-2 rounded-lg flex items-center gap-2.5 transition-colors cursor-pointer group ${manageMode ? 'pl-9' : 'pl-2.5'} ${active ? 'bg-accent/15' : 'hover:bg-white/5'}`}>
-          <span className={`w-7 h-7 rounded-md border flex items-center justify-center shrink-0 ${t.medallion}`}><Icon className="w-3.5 h-3.5" /></span>
+        <button onClick={() => openEntity(en)} className={`w-full rounded-lg pr-2.5 text-left flex items-center transition-colors cursor-pointer group ${manageMode ? 'gap-2 py-1.5 pl-9' : 'gap-2.5 py-2 pl-2.5'} ${active ? 'bg-accent/15' : 'hover:bg-white/5'}`}>
+          <span className={`${manageMode ? 'h-6 w-6' : 'h-7 w-7'} rounded-md border flex items-center justify-center shrink-0 ${t.medallion}`}><Icon className="w-3.5 h-3.5" /></span>
           <span className={`flex-1 min-w-0 truncate text-sm font-medium ${active ? 'text-accent' : 'text-gray-200'}`}>{en.canonicalName}</span>
           {en.status === 'proposed' && <Sparkles className="w-3.5 h-3.5 text-amber-300 shrink-0" data-tooltip="AI proposal, needs accept" />}
           {en.status !== 'proposed' && (reviewCounts[en.id]?.entityUpdates || 0) > 0 && <ShieldCheck className="w-3.5 h-3.5 text-sky-300 shrink-0" data-tooltip={`${reviewCounts[en.id].entityUpdates} entity update suggestions`} />}
@@ -1143,7 +1151,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     const { entity, children } = node;
     const hasChildren = children.length > 0;
     const isExpanded = expandedLocations[entity.id] !== false;
-    const t = typeMeta(entity.type);
+    const t = concreteEntityMeta(entity);
     const Icon = t.icon;
     const active = selected?.id === entity.id;
     return (
@@ -1156,8 +1164,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             </>)}
         <div className="relative">
             {manageMode && <Checkbox size="sm" checked={selectedIds.has(entity.id)} onChange={() => toggleEntitySelection(entity.id)} ariaLabel={`Select ${entity.canonicalName}`} className="absolute z-10 left-2.5 top-1/2 -translate-y-1/2" />}
-            <button onClick={() => openEntity(entity)} className={`w-full text-left pr-2.5 py-2 rounded-lg flex items-center gap-2.5 transition-colors cursor-pointer group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent ${manageMode ? 'pl-9' : 'pl-2.5'} ${hasChildren ? 'pr-9' : ''} ${active ? 'bg-accent/15' : 'hover:bg-white/5'}`}>
-              <span className={`w-7 h-7 rounded-md border flex items-center justify-center shrink-0 ${t.medallion}`}><Icon className="w-3.5 h-3.5" /></span>
+            <button onClick={() => openEntity(entity)} className={`w-full rounded-lg pr-2.5 text-left flex items-center transition-colors cursor-pointer group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent ${manageMode ? 'gap-2 py-1.5 pl-9' : 'gap-2.5 py-2 pl-2.5'} ${hasChildren ? 'pr-9' : ''} ${active ? 'bg-accent/15' : 'hover:bg-white/5'}`}>
+              <span className={`${manageMode ? 'h-6 w-6' : 'h-7 w-7'} rounded-md border flex items-center justify-center shrink-0 ${t.medallion}`}><Icon className="w-3.5 h-3.5" /></span>
               <span className={`flex-1 min-w-0 truncate text-sm font-medium ${active ? 'text-accent' : 'text-gray-200'}`}>{entity.canonicalName}</span>
               {entity.status === 'proposed' && <Sparkles className="w-3.5 h-3.5 text-amber-300 shrink-0" data-tooltip="AI proposal, needs accept" />}
               {entity.status !== 'proposed' && (reviewCounts[entity.id]?.entityUpdates || 0) > 0 && <ShieldCheck className="w-3.5 h-3.5 text-sky-300 shrink-0" data-tooltip={`${reviewCounts[entity.id].entityUpdates} entity update suggestions`} />}
@@ -1369,7 +1377,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           </div>
 
           <div className="relative" ref={createRef}>
-            <Button fullWidth icon={Plus} onClick={() => setShowCreate(v => !v)}>Create</Button>
+            <Button fullWidth icon={Plus} onClick={() => setShowCreate(v => !v)} className="!border !border-accent/25 !bg-accent/10 !text-accent hover:!bg-accent/15">Create</Button>
             <Popover anchorRef={createRef} open={showCreate} onClose={() => setShowCreate(false)} className="!bg-[#021a20] backdrop-blur-sm">
               {TYPE_ORDER.map(key => { const t = typeMeta(key); const Icon = t.icon; return (
                 <button key={key} onClick={() => startNew(key)} className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-white/5 hover:text-white transition-colors flex items-center gap-2.5 cursor-pointer font-medium rounded-lg">
@@ -1385,12 +1393,21 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search the world..." className={`${FIELD} pl-9`} />
           </div>
 
-          <div className="flex flex-wrap gap-1.5">
-            <button onClick={() => { setFilterType(null); setReviewFilter(null); }} className={`text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md transition-colors cursor-pointer ${!filterType && !reviewFilter ? 'bg-accent text-[#011419]' : 'bg-white/5 text-gray-400 hover:text-white border border-white/10'}`}>All</button>
-            {TYPE_ORDER.map(key => <button key={key} onClick={() => setFilterType(key === filterType ? null : key)} className={`text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md transition-colors cursor-pointer ${filterType === key ? 'bg-accent text-[#011419]' : 'bg-white/5 text-gray-400 hover:text-white border border-white/10'}`}>{typeMeta(key).label}</button>)}
-            {proposedCount > 0 && <button onClick={() => setReviewFilter(reviewFilter === 'proposed' ? null : 'proposed')} className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md border transition-colors cursor-pointer ${reviewFilter === 'proposed' ? 'bg-amber-400/20 text-amber-200 border-amber-400/40' : 'bg-amber-400/[0.06] text-amber-300/80 border-amber-400/20 hover:bg-amber-400/10'}`}><Sparkles className="w-3 h-3" />Proposed</button>}
-            {pendingUpdateCount > 0 && <button onClick={() => setReviewFilter(reviewFilter === 'updates' ? null : 'updates')} className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md border transition-colors cursor-pointer ${reviewFilter === 'updates' ? 'bg-sky-400/20 text-sky-100 border-sky-400/40' : 'bg-sky-400/[0.06] text-sky-300/80 border-sky-400/20 hover:bg-sky-400/10'}`}><ShieldCheck className="w-3 h-3" />Reviews</button>}
+          <div className="flex items-center gap-1.5">
+            <button type="button" onClick={() => moveFilterStrip(-1)} aria-label="Move entity filters left" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border-subtle bg-surface-panel/80 text-text-muted hover:text-text-primary"><ChevronLeft className="h-3.5 w-3.5" /></button>
+            <div ref={filterStripRef} className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              <button onClick={() => { setFilterType(null); setReviewFilter(null); }} className={`shrink-0 rounded-full border px-2.5 py-1 text-[0.6875rem] font-semibold tracking-wide transition-colors cursor-pointer ${!filterType && !reviewFilter ? 'border-accent/30 bg-accent/15 text-accent' : 'border-border-subtle bg-white/[0.035] text-text-muted hover:bg-white/[0.06] hover:text-text-primary'}`}>All</button>
+              {TYPE_ORDER.map(key => <button key={key} onClick={() => setFilterType(key === filterType ? null : key)} className={`shrink-0 rounded-full border px-2.5 py-1 text-[0.6875rem] font-semibold tracking-wide transition-colors cursor-pointer ${filterType === key ? 'border-accent/30 bg-accent/15 text-accent' : 'border-border-subtle bg-white/[0.035] text-text-muted hover:bg-white/[0.06] hover:text-text-primary'}`}>{typeMeta(key).label}</button>)}
+            </div>
+            <button type="button" onClick={() => moveFilterStrip(1)} aria-label="Move entity filters right" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border-subtle bg-surface-panel/80 text-text-muted hover:text-text-primary"><ChevronRight className="h-3.5 w-3.5" /></button>
           </div>
+          {(proposedCount > 0 || pendingUpdateCount > 0) && (
+            <div className="flex items-center gap-1.5 border-t border-border-subtle pt-2">
+              <span className="mr-1 shrink-0 text-[0.625rem] font-bold uppercase tracking-wider text-text-subtle">AI review</span>
+              {proposedCount > 0 && <button onClick={() => setReviewFilter(reviewFilter === 'proposed' ? null : 'proposed')} className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[0.6875rem] font-semibold tracking-wide transition-colors cursor-pointer ${reviewFilter === 'proposed' ? 'bg-amber-400/15 text-amber-200 border-amber-400/35' : 'bg-amber-400/[0.05] text-amber-300/80 border-amber-400/20 hover:bg-amber-400/10'}`}><Sparkles className="w-3 h-3" />Proposed</button>}
+              {pendingUpdateCount > 0 && <button onClick={() => setReviewFilter(reviewFilter === 'updates' ? null : 'updates')} className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[0.6875rem] font-semibold tracking-wide transition-colors cursor-pointer ${reviewFilter === 'updates' ? 'bg-sky-400/15 text-sky-100 border-sky-400/35' : 'bg-sky-400/[0.05] text-sky-300/80 border-sky-400/20 hover:bg-sky-400/10'}`}><ShieldCheck className="w-3 h-3" />Reviews</button>}
+            </div>
+          )}
         </div>
 
         {!manageMode && (
@@ -1418,13 +1435,17 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             : renderSidebarEntities()}
         </div>
         {manageMode && (
-          <div className="shrink-0 border-t border-white/10 bg-[#03141d]/95 backdrop-blur-md p-3 space-y-2.5">
+          <div className="shrink-0 space-y-2 border-t border-border-subtle bg-surface-panel/95 p-3 backdrop-blur-md">
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs font-semibold text-gray-200">{selectedIds.size} selected{hiddenSelectedCount ? ` · ${hiddenSelectedCount} hidden` : ''}</span>
               <button type="button" onClick={() => setSelectedIds(new Set())} disabled={!selectedIds.size} className="text-[10px] font-bold uppercase tracking-wider text-gray-500 hover:text-white disabled:opacity-40 cursor-pointer">Clear</button>
             </div>
-            <div className="space-y-1.5">
-              <span className="block text-[10px] font-bold uppercase tracking-wider text-gray-500">Select entities</span>
+            <details className="group rounded-lg border border-border-subtle bg-white/[0.02]">
+              <summary className="flex cursor-pointer list-none items-center justify-between px-2.5 py-1.5 text-[0.6875rem] font-semibold text-text-muted hover:text-text-primary [&::-webkit-details-marker]:hidden">
+                Selection tools
+                <ChevronRight className="h-3.5 w-3.5 transition-transform group-open:rotate-90" />
+              </summary>
+              <div className="space-y-2 border-t border-border-subtle px-2.5 py-2">
               <div className="flex flex-wrap gap-1.5">
               <button type="button" onClick={selectVisibleEntities} disabled={!filtered.length} className="text-[10px] font-semibold px-2 py-1 rounded-md border border-white/10 text-gray-300 hover:bg-white/5 disabled:opacity-40 cursor-pointer">Select visible</button>
               {proposedCount > 0 && <button type="button" onClick={() => selectEntities(entities.filter(entity => entity.status === 'proposed'))} className="text-[10px] font-semibold px-2 py-1 rounded-md border border-amber-400/25 text-amber-300 hover:bg-amber-400/10 cursor-pointer">Proposed</button>}
@@ -1434,21 +1455,22 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                 return <button key={`select-${policy}`} type="button" onClick={() => selectEntities(matches)} disabled={!matches.length} data-tooltip={`Select all entities with the ${AI_POLICY[policy].label} AI policy`} className="text-[10px] font-semibold px-2 py-1 rounded-md border border-white/10 text-gray-400 hover:bg-white/5 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer">{AI_POLICY[policy].label} ({matches.length})</button>;
               })}
               </div>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mr-1">Set AI policy</span>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="mr-1 text-[0.6875rem] font-medium text-text-subtle">Set AI policy</span>
               {Object.entries(AI_POLICY).map(([policy, config]) => {
                 const Icon = config.icon;
                 return <button key={policy} type="button" onClick={() => runBulkAction('policy', policy)} disabled={!selectedIds.size || bulkSaving} data-tooltip={config.tip} className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-md border border-white/10 text-gray-300 hover:bg-white/5 disabled:opacity-40 cursor-pointer"><Icon className="w-3 h-3" />{config.label}</button>;
               })}
             </div>
-            <button type="button" onClick={() => requestBulkConfirmation('reprocess')} disabled={!selectedConfirmedCount || bulkSaving} data-tooltip="Clear the processed-evidence history for the selected entities so Update entities reads their evidence again" className="w-full inline-flex items-center justify-center gap-1.5 text-[10px] font-semibold px-2 py-1.5 rounded-md border border-white/10 text-gray-300 hover:bg-white/5 hover:text-white disabled:opacity-40 cursor-pointer"><RefreshCw className="w-3 h-3" />Reprocess selected</button>
+              </div>
+            </details>
             <div className="grid grid-cols-2 gap-1.5">
               <button type="button" onClick={() => requestBulkConfirmation('accept-proposed')} disabled={!selectedProposedCount || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-amber-400/25 text-amber-200 hover:bg-amber-400/10 disabled:opacity-40 cursor-pointer">Accept proposals</button>
               <button type="button" onClick={() => requestBulkConfirmation('reject-proposed')} disabled={!selectedProposedCount || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-red-400/25 text-red-300 hover:bg-red-400/10 disabled:opacity-40 cursor-pointer">Reject proposals</button>
               <button type="button" onClick={() => requestBulkConfirmation('accept-updates')} disabled={!selectedUpdateCount || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-sky-400/25 text-sky-100 hover:bg-sky-400/10 disabled:opacity-40 cursor-pointer">Accept updates</button>
               <button type="button" onClick={() => requestBulkConfirmation('reject-updates')} disabled={!selectedUpdateCount || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-red-400/25 text-red-300 hover:bg-red-400/10 disabled:opacity-40 cursor-pointer">Reject updates</button>
-              <button type="button" onClick={() => requestBulkConfirmation('delete')} disabled={!selectedIds.size || bulkSaving} className="col-span-2 inline-flex items-center justify-center gap-1 text-[10px] font-semibold px-2 py-1.5 rounded-md border border-red-400/25 text-red-300 hover:bg-red-400/10 disabled:opacity-40 cursor-pointer"><Trash2 className="w-3 h-3" />Delete</button>
+              <button type="button" onClick={() => requestBulkConfirmation('reprocess')} disabled={!selectedConfirmedCount || bulkSaving} data-tooltip="Clear the processed-evidence history for the selected entities so Update entities reads their evidence again" className="inline-flex items-center justify-center gap-1 text-[10px] font-semibold px-2 py-1.5 rounded-md border border-border-subtle text-text-muted hover:bg-white/5 hover:text-text-primary disabled:opacity-40 cursor-pointer"><RefreshCw className="w-3 h-3" />Reprocess</button>
+              <button type="button" onClick={() => requestBulkConfirmation('delete')} disabled={!selectedIds.size || bulkSaving} className="inline-flex items-center justify-center gap-1 text-[10px] font-semibold px-2 py-1.5 rounded-md border border-status-danger/25 text-status-danger hover:bg-status-danger/10 disabled:opacity-40 cursor-pointer"><Trash2 className="w-3 h-3" />Delete</button>
             </div>
           </div>
         )}
@@ -1548,11 +1570,11 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
 
             {/* Subject sheet tabs */}
             {visibleSheetTabs.length > 0 && !isNew && (
-              <div className="flex bg-white/[0.04] p-0.5 rounded-lg border border-white/10 w-fit">
+              <div className="flex w-fit rounded-full border border-border-default bg-surface-input/95 p-0.5 shadow-sm">
                 {visibleSheetTabs.map(t => (
-                  <button key={t} onClick={() => { setCharTab(t); setEditingSection(null); }} className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-md text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer ${charTab === t ? 'bg-accent text-[#011419]' : 'text-gray-400 hover:text-white'}`}>
+                  <button key={t} onClick={() => { setCharTab(t); setEditingSection(null); }} className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[0.6875rem] font-semibold tracking-wide transition-colors cursor-pointer ${charTab === t ? 'bg-accent/20 text-accent shadow-sm' : 'text-text-muted hover:bg-surface-hover hover:text-text-primary'}`}>
                     {sheetTabLabel(t)}
-                    {t === 'review' && <span className={`rounded-full px-1.5 py-0.5 text-[10px] ${charTab === t ? 'bg-black/15' : 'bg-white/[0.07]'}`}>{selectedReviewCounts.entityUpdates + selectedReviewCounts.kanora}</span>}
+                    {t === 'review' && <span className={`rounded-full px-1.5 py-0.5 text-[0.625rem] ${charTab === t ? 'bg-accent/10' : 'bg-white/[0.07]'}`}>{selectedReviewCounts.entityUpdates + selectedReviewCounts.kanora}</span>}
                   </button>
                 ))}
               </div>

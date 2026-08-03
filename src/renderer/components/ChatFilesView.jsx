@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Folder, Pin, Trash2, Eye, Paperclip, FileText, Image as ImageIcon, Video, Music, Code } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import ConfirmDialog from './ui/ConfirmDialog';
 
 export default function ChatFilesView({
   chat,
@@ -19,6 +20,9 @@ export default function ChatFilesView({
 
   const kbFiles = chat?.knowledgeFiles
     ? (typeof chat.knowledgeFiles === 'string' ? JSON.parse(chat.knowledgeFiles) : chat.knowledgeFiles)
+    : [];
+  const pinnedFiles = chat?.pinnedFiles
+    ? (typeof chat.pinnedFiles === 'string' ? JSON.parse(chat.pinnedFiles) : chat.pinnedFiles)
     : [];
 
   useEffect(() => {
@@ -95,38 +99,15 @@ export default function ChatFilesView({
 
   const handlePinToggle = async (file) => {
     try {
-      const updatedKbFiles = [...kbFiles];
-      const index = updatedKbFiles.findIndex(f => f.name.toLowerCase() === file.name.toLowerCase());
-
-      if (index >= 0) {
-        // Toggle strategy: if constant/full_context -> change to rag_search, else change to full_context
-        const currentStrategy = updatedKbFiles[index].strategy;
-        const isCurrentConstant = !currentStrategy || currentStrategy === 'full_context' || currentStrategy === 'constant';
-        const newStrategy = isCurrentConstant ? 'rag_search' : 'full_context';
-        updatedKbFiles[index].strategy = newStrategy;
-      } else {
-        // Not in knowledge files yet: upload it and register as constant
-        const savedFile = await electronAPI.uploadChatKbFile(chat.id, {
-          name: file.name,
-          path: file.path || '',
-          size: file.size || 0
-        });
-
-        if (savedFile) {
-          updatedKbFiles.push({
-            name: savedFile.name,
-            originalPath: savedFile.originalPath,
-            internalPath: savedFile.internalPath,
-            size: savedFile.size,
-            strategy: 'full_context',
-            profiles: []
-          });
-        }
-      }
+      const normalizedName = file.name.toLocaleLowerCase();
+      const isPinned = pinnedFiles.some(name => name.toLocaleLowerCase() === normalizedName);
+      const updatedPinnedFiles = isPinned
+        ? pinnedFiles.filter(name => name.toLocaleLowerCase() !== normalizedName)
+        : [...pinnedFiles, file.name];
 
       await onSaveChat({
         ...chat,
-        knowledgeFiles: JSON.stringify(updatedKbFiles)
+        pinnedFiles: JSON.stringify(updatedPinnedFiles)
       });
     } catch (err) {
       console.error("Error toggling pin status for file:", err);
@@ -142,9 +123,11 @@ export default function ChatFilesView({
 
       // Update local settings if it was inside knowledgeFiles
       const updatedKbFiles = kbFiles.filter(f => f.name.toLowerCase() !== deleteTarget.name.toLowerCase());
+      const updatedPinnedFiles = pinnedFiles.filter(name => name.toLocaleLowerCase() !== deleteTarget.name.toLocaleLowerCase());
       await onSaveChat({
         ...chat,
-        knowledgeFiles: JSON.stringify(updatedKbFiles)
+        knowledgeFiles: JSON.stringify(updatedKbFiles),
+        pinnedFiles: JSON.stringify(updatedPinnedFiles)
       });
 
       setDeleteTarget(null);
@@ -173,8 +156,7 @@ export default function ChatFilesView({
   });
 
   const isFilePinned = (fileName) => {
-    const kbRecord = kbFiles.find(f => f.name.toLowerCase() === fileName.toLowerCase());
-    return !!(kbRecord && (!kbRecord.strategy || kbRecord.strategy === 'full_context' || kbRecord.strategy === 'constant'));
+    return pinnedFiles.some(name => name.toLocaleLowerCase() === fileName.toLocaleLowerCase());
   };
 
   const sortedFiles = [...filteredFiles].sort((a, b) => {
@@ -256,8 +238,7 @@ export default function ChatFilesView({
               const fileType = getFileType(file.name);
               const fileUrl = file.path ? `app-file:///${encodeURI(file.path.replace(/\\/g, '/'))}` : '';
 
-              const kbRecord = kbFiles.find(f => f.name.toLowerCase() === file.name.toLowerCase());
-              const isPinned = kbRecord && (!kbRecord.strategy || kbRecord.strategy === 'full_context' || kbRecord.strategy === 'constant');
+              const isPinned = isFilePinned(file.name);
 
               return (
                 <div
@@ -318,7 +299,7 @@ export default function ChatFilesView({
                       {!file.isAiGenerated && (
                         <button
                           onClick={(e) => { e.stopPropagation(); handlePinToggle(file); }}
-                          title={isPinned ? "Unpin file" : "Pin file to context"}
+                          title={isPinned ? "Unpin file" : "Pin file"}
                           className={`p-2 rounded-lg transition-colors border ${isPinned
                             ? 'bg-[#FBCB2D] text-[#011419] border-[#FBCB2D]'
                             : 'bg-[#1a2d32] hover:bg-[#FBCB2D]/20 text-gray-400 hover:text-white border-[#FBCB2D]/20'
@@ -358,31 +339,17 @@ export default function ChatFilesView({
         )}
       </div>
 
-      {/* Elegant Glassmorphism Delete Confirmation Dialog */}
       {deleteTarget && (
-        <div className="absolute inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center animate-in fade-in duration-200">
-          <div className="bg-[#051116] border border-red-900/30 rounded-2xl p-6 max-w-sm w-full mx-4 shadow-2xl animate-in zoom-in-95 duration-200">
-            <h4 className="text-xs font-bold text-white uppercase tracking-wider">Delete File</h4>
-            <p className="caption mt-2">
-              Are you sure you want to delete <strong className="text-gray-200">{deleteTarget.name}</strong>?
-              This will remove the file permanently from the disk and clear any associated RAG vector memory chunks.
-            </p>
-            <div className="flex justify-end space-x-3 mt-5">
-              <button
-                onClick={() => setDeleteTarget(null)}
-                className="px-3.5 py-1.5 text-[10px] uppercase font-bold text-gray-400 hover:text-white transition-colors cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleDeleteFile}
-                className="px-4 py-1.5 bg-red-600 hover:bg-red-500 text-white text-[10px] uppercase font-bold rounded-lg transition-colors shadow-lg shadow-red-950/20 cursor-pointer"
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          tone="danger"
+          title="Delete file"
+          message={`Delete ${deleteTarget.name}? This permanently removes the file from disk and clears its associated searchable memory chunks.`}
+          actions={[
+            { label: 'Cancel', variant: 'ghost', onClick: () => setDeleteTarget(null) },
+            { label: 'Delete', variant: 'danger', onClick: handleDeleteFile, autoFocus: true },
+          ]}
+          onClose={() => setDeleteTarget(null)}
+        />
       )}
 
     </div>

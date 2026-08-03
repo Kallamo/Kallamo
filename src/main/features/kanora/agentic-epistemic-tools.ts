@@ -95,16 +95,14 @@ export class AgenticEpistemicTools {
       SELECT from_name AS fromName, relation_type AS relationType,
         relation_label AS relationLabel, to_name AS toName, metadata_json AS metadataJson
       FROM worldbuild_known_relationships
-      WHERE workspace_id = ? AND card_id = ?
+      WHERE workspace_id = ? AND card_id = ? AND relation_type = 'related_to'
       ORDER BY created_at, from_name, to_name
     `).all(workspaceId, card.cardId).map(row => {
       const relationship = row as {
         fromName: string; relationType: string; relationLabel: string | null;
         toName: string; metadataJson: string | null;
       };
-      const metadata = parseObject(relationship.metadataJson);
-      const role = String(metadata.role ?? '').trim();
-      return `${relationship.fromName} / ${relationship.relationLabel || relationship.relationType} / ${relationship.toName}${role ? `; role: ${role}` : ''}`;
+      return `${relationship.fromName} knows ${relationship.toName}`;
     })));
     const records = loadCurrentNarrativeRecords(this.db, {
       workspaceId,

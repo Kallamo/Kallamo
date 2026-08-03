@@ -851,6 +851,7 @@ export class KallamoKanoraChatContext {
         AND audience.entry_id = cards.card_id
         AND audience.member_id = members.fromId
       WHERE relationships.workspace_id = ?
+        AND relationships.relation_type = 'related_to'
         AND cards.status = 'active'
         AND (relationships.from_id IN (${entityPlaceholders}) OR relationships.to_id IN (${entityPlaceholders}))
         AND (
@@ -870,19 +871,12 @@ export class KallamoKanoraChatContext {
       cardId: string; sourceOwnerId: string; effectiveOwnerId: string;
     }>;
     return rows.filter(row => Boolean(row.effectiveOwnerId)).map(row => {
-      const metadata = parseObject(row.metadataJson);
-      const role = String(metadata.role ?? '').trim();
-      const relation = row.relationLabel || humanizeRelation(row.relationType);
       return this.candidate({
         id: `known-relationship:${row.effectiveOwnerId}:${row.cardId}:${row.relationshipId}`,
         workspaceId,
         sourceType: 'knowledge',
         sourceId: row.relationshipId,
-        content: [
-          `Known relationship: ${row.fromName} / ${relation} / ${row.toName}`,
-          ...(role ? [`Role: ${role}`] : []),
-          `Relationship type: ${row.relationType}`
-        ].join('\n'),
+        content: `Known connection: ${row.fromName} knows ${row.toName}.`,
         relevance: 1,
         epistemic: { kind: 'knowledge', subjectId: row.effectiveOwnerId, accessibility: 'available' },
         provenanceIds: [row.cardId, row.relationshipId, row.fromId, row.toId, row.sourceOwnerId]
@@ -1205,26 +1199,6 @@ function formatValue(value: unknown): string {
 
 function humanizeKey(key: string): string {
   return key.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[-_]+/g, ' ').replace(/^./, letter => letter.toUpperCase());
-}
-
-function humanizeRelation(relationType: string): string {
-  const labels: Record<string, string> = {
-    inside: 'inside',
-    led_by: 'led by',
-    member_of: 'member of',
-    operates_in: 'operates in',
-    owned_by: 'owned by',
-    located_in: 'located in',
-    carried_by: 'carried by',
-    created_by: 'created by',
-    found_in: 'found in',
-    sold_in: 'sold in',
-    is_race: 'race or species',
-    connected_to: 'connected to',
-    adjacent_to: 'adjacent to',
-    related_to: 'related to'
-  };
-  return labels[relationType] ?? relationType.replace(/[-_]+/g, ' ');
 }
 
 function uniqueIds(values: Array<string | null | undefined>): string[] {

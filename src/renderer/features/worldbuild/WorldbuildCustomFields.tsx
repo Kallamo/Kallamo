@@ -5,7 +5,7 @@ import Button from '../../components/ui/Button';
 import SearchableSelect from '../../components/ui/SearchableSelect';
 import type { Toast, WorldbuildApi, WorldbuildEntity, WorldbuildEntityTemplate } from './worldbuildTypes';
 
-const INPUT = 'wb-input w-full rounded-lg border border-white/15 bg-[#06121a]/80 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:border-accent/70 focus:outline-none';
+const INPUT = 'wb-input min-h-10 w-full rounded-lg border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary placeholder:text-text-subtle focus:border-accent/70 focus:outline-none focus:ring-2 focus:ring-accent/20';
 
 interface Props {
   workspaceId: string;
@@ -90,10 +90,10 @@ function FieldInput({ definition, value, onChange, entities }: { definition: Ent
   const options = definition.options ?? [];
   const type = definition.valueType;
   if (type === 'boolean') return <select className={INPUT} value={String(Boolean(value))} onChange={event => onChange(event.target.value === 'true')}><option value="false">No</option><option value="true">Yes</option></select>;
-  if (type === 'single-choice') return <select className={INPUT} value={String(value ?? '')} onChange={event => onChange(event.target.value)}><option value="">Not set</option>{options.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}</select>;
+  if (type === 'single-choice') return <SearchableSelect value={String(value ?? '')} onChange={onChange} options={options.map(option => ({ id: option.id, label: option.label }))} placeholder="Not set" searchPlaceholder="Filter optionsâ€¦" />;
   if (type === 'multiple-choice') {
     const selected = Array.isArray(value) ? value.map(String) : [];
-    return <div className="flex flex-wrap gap-2">{options.map(option => <label key={option.id} className={`cursor-pointer rounded-full border px-3 py-1.5 text-xs transition-colors ${selected.includes(option.id) ? 'border-accent/40 bg-accent/15 text-accent' : 'border-white/10 text-gray-400 hover:text-gray-200'}`}><input type="checkbox" className="sr-only" checked={selected.includes(option.id)} onChange={() => onChange(selected.includes(option.id) ? selected.filter(item => item !== option.id) : [...selected, option.id])} />{option.label}</label>)}</div>;
+    return <SearchableSelect multiple values={selected} onChange={onChange} options={options.map(option => ({ id: option.id, label: option.label }))} placeholder="Search and add options" searchPlaceholder="Filter optionsâ€¦" />;
   }
   if (type === 'entity-reference' || type === 'entity-reference-list') {
     const multiple = type === 'entity-reference-list';

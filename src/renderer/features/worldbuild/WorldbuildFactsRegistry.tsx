@@ -6,7 +6,7 @@ import Modal from '../../components/ui/Modal';
 import SearchableSelect from '../../components/ui/SearchableSelect';
 import type { Toast, WorldbuildApi, WorldbuildEntity, WorldbuildFact } from './worldbuildTypes';
 
-const INPUT = 'wb-input w-full rounded-lg border border-white/15 bg-[#06121a]/80 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:border-accent/70 focus:outline-none';
+const INPUT = 'wb-input w-full rounded-lg border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary placeholder:text-text-subtle focus:border-accent/70 focus:outline-none focus:ring-2 focus:ring-accent/15';
 
 export default function WorldbuildFactsRegistry({
   workspaceId, entities, api, showToast, onCountChanged,
