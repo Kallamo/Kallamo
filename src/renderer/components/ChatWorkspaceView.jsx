@@ -1,6 +1,6 @@
-import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { useCallback, useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
-import { ArrowDown, ArrowLeft, Sliders, Paperclip, Cpu, Workflow, X, MoreVertical, Copy, Edit, RotateCw, Play, ChevronDown, Plus, ChevronLeft, ChevronRight, Brain, Folder, MessageSquare, Trash2, RotateCcw, PenTool, Globe, AlertTriangle } from 'lucide-react';
+import { ArrowDown, ArrowLeft, Sliders, Paperclip, Cpu, Workflow, X, MoreVertical, Copy, Edit, RotateCw, Play, ChevronDown, Plus, ChevronLeft, ChevronRight, Brain, Folder, MessageSquare, Trash2, RotateCcw, PenTool, Globe, AlertTriangle, CalendarDays, Clock3, MapPin } from 'lucide-react';
 import ConfigurationView from './ConfigurationView';
 import SummarizeModal from './modals/SummarizeModal';
 import ChatFilesView from './ChatFilesView';
@@ -10,13 +10,15 @@ import WorldbuildView from './WorldbuildView';
 import FilePreviewModal from './modals/FilePreviewModal';
 import DeleteModal from './modals/DeleteModal';
 import Popover from './ui/Popover';
-import { parseMarkdown } from '../utils/markdown';
 import ChatInput from '../features/chat/components/ChatInput';
 import MessageMarkdown from '../features/chat/components/MessageMarkdown';
 import TypingText from '../features/chat/components/TypingText';
 import { parseMessageContent } from '../features/chat/message-content';
 import RoleplayQuickPanel from '../features/roleplay/RoleplayQuickPanel';
 import { resolveActiveGenerationTarget } from '../features/chat/generation-target';
+
+const roleplayPresentationCache = new Map();
+const roleplayBackgroundCache = new Map();
 
 const safeParseJson = (str, fallback = []) => {
   if (!str) return fallback;
@@ -54,6 +56,8 @@ const formatFrameTime = point => point?.position
   ? `${String(point.position.hour ?? 0).padStart(2, '0')}:${String(point.position.minute ?? 0).padStart(2, '0')}`
   : '';
 
+const formatFrameWeekday = point => point?.display?.weekdayName || '';
+
 const sameFrameDate = (left, right) => left?.position && right?.position
   && left.position.eraId === right.position.eraId
   && left.position.year === right.position.year
@@ -77,18 +81,97 @@ function RoleplayMessageFrame({ frame }) {
     || frame.start?.locationName !== frame.end?.locationName;
   const timeChanged = shouldShowTimeTransition(frame);
   return (
-    <div className="mb-3 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-4 border-b border-white/[0.06] pb-2 text-[0.65rem] text-gray-500 select-none">
-      <span className="min-w-0 truncate">
-        {locationChanged
-          ? <><span>{frame.start?.locationName || 'Unknown location'}</span><span className="px-1.5 text-gray-700">→</span><span className="text-gray-400">{frame.end.locationName || 'Unknown location'}</span></>
-          : <span>{frame.end.locationName || 'No current location'}</span>}
-      </span>
-      <span className="text-right">
-        <span className="block">{sameFrameDate(frame.start, frame.end) ? formatFrameDate(frame.end) : `${formatFrameDate(frame.start)} → ${formatFrameDate(frame.end)}`}</span>
-        <span className="block font-mono text-gray-400">
-          {timeChanged ? <>{formatFrameTime(frame.start)}<span className="px-1.5 text-gray-700">→</span>{formatFrameTime(frame.end)}</> : formatFrameTime(frame.end)}
+    <div className="mb-3 grid min-h-14 grid-cols-[minmax(0,1fr)_auto] items-center gap-5 border-b border-white/[0.07] pb-3 text-gray-500 select-none">
+      <span className="flex min-w-0 items-center gap-2 text-xs">
+        <MapPin className="h-3.5 w-3.5 shrink-0 text-emerald-300/80" />
+        <span className="min-w-0 truncate font-medium text-gray-400">
+          {locationChanged
+            ? <><span>{frame.start?.locationName || 'Unknown location'}</span><span className="px-1.5 text-gray-700">→</span><span className="text-gray-300">{frame.end.locationName || 'Unknown location'}</span></>
+            : <span>{frame.end.locationName || 'No current location'}</span>}
         </span>
       </span>
+      <span className="flex shrink-0 items-center gap-4 text-right">
+        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
+          <CalendarDays className="h-3.5 w-3.5 text-sky-300/80" />
+          {sameFrameDate(frame.start, frame.end) ? formatFrameDate(frame.end) : `${formatFrameDate(frame.start)} → ${formatFrameDate(frame.end)}`}
+        </span>
+        <span className="inline-flex items-center gap-1.5 font-mono text-[0.6875rem] text-gray-500">
+          <Clock3 className="h-3.5 w-3.5 text-amber-300/80" />
+          {timeChanged ? <>{formatFrameTime(frame.start)}<span className="px-1 text-gray-700">→</span>{formatFrameTime(frame.end)}</> : formatFrameTime(frame.end)}
+          {formatFrameWeekday(frame.end) && <span className="font-sans text-gray-500">· {formatFrameWeekday(frame.end)}</span>}
+        </span>
+      </span>
+    </div>
+  );
+}
+
+function MessageDiagnostics({
+  messageId,
+  settings,
+  debug,
+  activeKey,
+  onToggle,
+  onCopyAgentic,
+  onCopyRetrieval,
+  onCopyNarrative,
+  copiedAgentic,
+  copiedRetrieval,
+  copiedNarrative
+}) {
+  const diagnostics = [
+    settings.advanced.agenticDebug && (debug?.agentic || debug?.agenticRagResponse) && {
+      key: 'agentic',
+      label: 'Agentic Retrieval Trace',
+      title: 'Copy the sanitized Agentic retrieval trace',
+      content: formatAgenticTrace(debug),
+      copied: copiedAgentic,
+      copyLabel: 'Copy Trace',
+      onCopy: onCopyAgentic
+    },
+    settings.advanced.ragDebug && (debug?.retrieval || debug?.standardRagContextGathered) && {
+      key: 'retrieval',
+      label: 'Retrieval & Context',
+      title: 'Copy retrieval decisions and final narrative context',
+      content: formatRetrievalDiagnostics(debug),
+      copied: copiedRetrieval,
+      copyLabel: 'Copy Report',
+      onCopy: onCopyRetrieval
+    },
+    settings.advanced.narrativeStateDebug && debug?.narrativeState && {
+      key: 'narrative',
+      label: `Narrative State · ${debug.narrativeState.status}`,
+      title: 'Copy Narrative State diagnostics',
+      content: diagnosticText(debug.narrativeState),
+      copied: copiedNarrative,
+      copyLabel: 'Copy Report',
+      onCopy: onCopyNarrative
+    }
+  ].filter(Boolean);
+  if (!diagnostics.length) return null;
+  const active = diagnostics.find(item => item.key === activeKey);
+  return (
+    <div className="mb-2 ml-1 max-w-full select-none">
+      <div className="flex max-w-full flex-nowrap items-center gap-1.5 overflow-x-auto pb-0.5 custom-scrollbar">
+        {diagnostics.map(item => (
+          <span key={item.key} className={`inline-flex shrink-0 items-center rounded-md border text-[0.625rem] font-semibold uppercase tracking-[0.08em] transition-colors ${activeKey === item.key ? 'border-accent/25 bg-accent/[0.07] text-accent' : 'border-white/[0.07] bg-black/20 text-gray-500 hover:border-white/15 hover:text-gray-300'}`}>
+            <button type="button" aria-expanded={activeKey === item.key} onClick={() => onToggle(item.key)} className="inline-flex items-center gap-1 px-2 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              <span>{item.label}</span>
+              <ChevronDown className={`h-2.5 w-2.5 transition-transform ${activeKey === item.key ? 'rotate-180' : ''}`} />
+            </button>
+            {activeKey === item.key && (
+              <button type="button" onClick={() => item.onCopy(messageId, debug)} className="inline-flex items-center gap-1 border-l border-white/10 px-2 py-1 text-gray-400 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" title={item.title}>
+                <Copy className="h-2.5 w-2.5" />
+                <span>{item.copied ? 'Copied!' : item.copyLabel}</span>
+              </button>
+            )}
+          </span>
+        ))}
+      </div>
+      {active && (
+        <div className="mt-1 max-h-96 max-w-2xl overflow-y-auto rounded-lg border border-gray-800 bg-[#051116] p-3 font-mono text-xs text-gray-400 shadow-md custom-scrollbar animate-in fade-in duration-200">
+          <div className="whitespace-pre-wrap">{active.content}</div>
+        </div>
+      )}
     </div>
   );
 }
@@ -247,23 +330,76 @@ export default function ChatWorkspaceView() {
 
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const [roleplayMode, setRoleplayMode] = useState(false);
-  const [roleplayBackground, setRoleplayBackground] = useState(null);
+  const [roleplayPanelCollapsed, setRoleplayPanelCollapsed] = useState(false);
+  const [roleplayWorkspaceId, setRoleplayWorkspaceId] = useState(null);
+  const [roleplayBackground, setRoleplayBackground] = useState(() => roleplayBackgroundCache.get(activeChat?.id) || null);
+  const roleplayBackgroundRequestRef = useRef(0);
   const [roleplayFrames, setRoleplayFrames] = useState({});
   const [roleplayFrameRevision, setRoleplayFrameRevision] = useState(0);
   const [selectedTargetId, setSelectedTargetId] = useState(''); // Selected profile or workflow ID
 
   useEffect(() => {
     let active = true;
-    setRoleplayBackground(null);
-    electronAPI.getWorkspaceExperienceMode?.(activeChat.id).then(result => {
-      if (active) setRoleplayMode(result?.mode === 'roleplay');
-    });
+    const workspaceId = activeChat.id;
+    roleplayBackgroundRequestRef.current += 1;
+    const cachedPresentation = roleplayPresentationCache.get(workspaceId);
+    setRoleplayBackground(roleplayBackgroundCache.get(workspaceId) || null);
+    if (cachedPresentation) {
+      setRoleplayMode(cachedPresentation.mode);
+      setRoleplayPanelCollapsed(cachedPresentation.collapsed);
+      setRoleplayWorkspaceId(workspaceId);
+    } else {
+      setRoleplayWorkspaceId(null);
+      Promise.all([
+        electronAPI.getWorkspaceExperienceMode?.(workspaceId),
+        electronAPI.getWorkspaceUiState?.(workspaceId, 'roleplay-quick-panel')
+      ]).then(([modeResult, uiState]) => {
+        if (!active) return;
+        const presentation = {
+          mode: modeResult?.mode === 'roleplay',
+          collapsed: typeof uiState?.value?.collapsed === 'boolean' ? uiState.value.collapsed : false
+        };
+        roleplayPresentationCache.set(workspaceId, presentation);
+        setRoleplayMode(presentation.mode);
+        setRoleplayPanelCollapsed(presentation.collapsed);
+        setRoleplayWorkspaceId(workspaceId);
+      }).catch(() => {
+        if (!active) return;
+        setRoleplayMode(false);
+        setRoleplayWorkspaceId(workspaceId);
+      });
+    }
     const updateMode = event => {
-      if (event.detail?.workspaceId === activeChat.id) setRoleplayMode(Boolean(event.detail.enabled));
+      if (event.detail?.workspaceId !== workspaceId) return;
+      const mode = Boolean(event.detail.enabled);
+      roleplayPresentationCache.set(workspaceId, {
+        mode,
+        collapsed: roleplayPresentationCache.get(workspaceId)?.collapsed ?? false
+      });
+      setRoleplayMode(mode);
+      setRoleplayWorkspaceId(workspaceId);
     };
     window.addEventListener('roleplay-mode-change', updateMode);
     return () => { active = false; window.removeEventListener('roleplay-mode-change', updateMode); };
   }, [activeChat.id, electronAPI]);
+
+  const handleRoleplayBackgroundChange = useCallback(background => {
+    if (background) roleplayBackgroundCache.set(activeChat.id, background);
+    else roleplayBackgroundCache.delete(activeChat.id);
+    const requestId = ++roleplayBackgroundRequestRef.current;
+    if (!background?.imagePath) {
+      setRoleplayBackground(background);
+      return;
+    }
+    const image = new Image();
+    const applyBackground = () => {
+      if (roleplayBackgroundRequestRef.current === requestId) setRoleplayBackground(background);
+    };
+    image.addEventListener('load', applyBackground, { once: true });
+    image.addEventListener('error', applyBackground, { once: true });
+    image.src = `app-file:///${background.imagePath.replace(/\\/g, '/')}`;
+    if (image.complete) applyBackground();
+  }, [activeChat.id]);
 
   useEffect(() => {
     const refresh = event => {
@@ -281,25 +417,44 @@ export default function ChatWorkspaceView() {
     };
   }, [activeChat.id, electronAPI]);
 
+  const roleplayFrameRequestRef = useRef({ workspaceId: null, revision: -1, requestedIds: new Set() });
+
   useEffect(() => {
-    let active = true;
+    const requestState = roleplayFrameRequestRef.current;
+    if (requestState.workspaceId !== activeChat.id || requestState.revision !== roleplayFrameRevision) {
+      requestState.workspaceId = activeChat.id;
+      requestState.revision = roleplayFrameRevision;
+      requestState.requestedIds = new Set();
+      setRoleplayFrames({});
+    }
     const originIds = activeMessages.filter(message => message.role !== 'user').map(message => message.id);
     if (!originIds.length || !electronAPI.getRoleplayMessageFrames) {
       setRoleplayFrames({});
-      return () => { active = false; };
+      return;
     }
-    electronAPI.getRoleplayMessageFrames(activeChat.id, originIds).then(result => {
-      if (!active || !result?.success) return;
-      setRoleplayFrames(Object.fromEntries((result.frames || []).map(frame => [frame.originId, frame])));
-    }).catch(() => {});
-    return () => { active = false; };
+    const missingOriginIds = originIds.filter(originId => !requestState.requestedIds.has(originId));
+    if (!missingOriginIds.length) return;
+    missingOriginIds.forEach(originId => requestState.requestedIds.add(originId));
+    const requestWorkspaceId = activeChat.id;
+    const requestRevision = roleplayFrameRevision;
+    electronAPI.getRoleplayMessageFrames(activeChat.id, missingOriginIds).then(result => {
+      const currentRequest = roleplayFrameRequestRef.current;
+      if (currentRequest.workspaceId !== requestWorkspaceId || currentRequest.revision !== requestRevision || !result?.success) return;
+      setRoleplayFrames(previous => ({
+        ...previous,
+        ...Object.fromEntries((result.frames || []).map(frame => [frame.originId, frame]))
+      }));
+    }).catch(() => {
+      const currentRequest = roleplayFrameRequestRef.current;
+      if (currentRequest.workspaceId === requestWorkspaceId && currentRequest.revision === requestRevision) {
+        missingOriginIds.forEach(originId => currentRequest.requestedIds.delete(originId));
+      }
+    });
   }, [activeChat.id, activeMessages, electronAPI, roleplayFrameRevision]);
 
   const [expandedThinking, setExpandedThinking] = useState({});
-  const [expandedAgenticRag, setExpandedAgenticRag] = useState({});
-  const [expandedStandardRag, setExpandedStandardRag] = useState({});
+  const [expandedDiagnostic, setExpandedDiagnostic] = useState({});
   const [expandedTokenUsage, setExpandedTokenUsage] = useState({});
-  const [expandedNarrativeState, setExpandedNarrativeState] = useState({});
 
   const [editingMessageId, setEditingMessageId] = useState(null);
   const [editingMessageText, setEditingMessageText] = useState('');
@@ -354,6 +509,8 @@ export default function ChatWorkspaceView() {
   const skipAutoScrollRef = useRef(false);
   const isFollowingLatestRef = useRef(true);
   const wasGeneratingRef = useRef(false);
+  const layoutAnchorRef = useRef(null);
+  const autoScrollFrameRef = useRef(null);
   const dropdownRef = useRef(null);
   const fileInputRef = useRef(null);
   const [isFollowingLatest, setIsFollowingLatest] = useState(true);
@@ -366,6 +523,25 @@ export default function ChatWorkspaceView() {
     setHasCompletedResponseBelow(false);
     messageContainerRef.current.scrollTop = messageContainerRef.current.scrollHeight;
   }, [activeSubView]);
+
+  useLayoutEffect(() => {
+    const snapshot = layoutAnchorRef.current;
+    const container = messageContainerRef.current;
+    if (!snapshot || !container) return;
+    layoutAnchorRef.current = null;
+
+    if (snapshot.type === 'bottom') {
+      container.scrollTop = container.scrollHeight - container.clientHeight - snapshot.distance;
+      return;
+    }
+
+    const anchor = Array.from(container.querySelectorAll('[data-chat-message-id]'))
+      .find(element => element.dataset.chatMessageId === snapshot.messageId);
+    if (anchor) {
+      const containerTop = container.getBoundingClientRect().top;
+      container.scrollTop += anchor.getBoundingClientRect().top - containerTop - snapshot.offset;
+    }
+  }, [roleplayPanelCollapsed]);
 
   // Helper filters for message actions
   const userMessages = activeMessages.filter(m => m.role === 'user');
@@ -427,8 +603,17 @@ export default function ChatWorkspaceView() {
       return;
     }
     if (!isFollowingLatestRef.current) return;
-    messagesEndRef.current?.scrollIntoView({ behavior: isGenerating || streamingContent ? 'smooth' : 'auto' });
-  }, [activeMessages, generationProgress, isGenerating, streamingContent]);
+    if (autoScrollFrameRef.current) cancelAnimationFrame(autoScrollFrameRef.current);
+    autoScrollFrameRef.current = requestAnimationFrame(() => {
+      autoScrollFrameRef.current = null;
+      const container = messageContainerRef.current;
+      if (container) container.scrollTop = container.scrollHeight;
+    });
+    return () => {
+      if (autoScrollFrameRef.current) cancelAnimationFrame(autoScrollFrameRef.current);
+      autoScrollFrameRef.current = null;
+    };
+  }, [activeMessages, isGenerating, streamingContent, streamingReasoning]);
 
   useEffect(() => {
     if (isGenerating) {
@@ -463,6 +648,33 @@ export default function ChatWorkspaceView() {
     setHasCompletedResponseBelow(false);
     messageContainerRef.current?.scrollTo({ top: messageContainerRef.current.scrollHeight, behavior: 'smooth' });
   };
+
+  const handleRoleplayPanelCollapsedChange = useCallback(nextCollapsed => {
+    const container = messageContainerRef.current;
+    if (container) {
+      const distance = Math.max(0, container.scrollHeight - container.scrollTop - container.clientHeight);
+      if (isFollowingLatestRef.current) {
+        layoutAnchorRef.current = { type: 'bottom', distance };
+      } else {
+        const containerTop = container.getBoundingClientRect().top;
+        const anchor = Array.from(container.querySelectorAll('[data-chat-message-id]'))
+          .find(element => element.getBoundingClientRect().bottom >= containerTop);
+        layoutAnchorRef.current = anchor
+          ? {
+              type: 'message',
+              messageId: anchor.dataset.chatMessageId,
+              offset: anchor.getBoundingClientRect().top - containerTop
+            }
+          : { type: 'bottom', distance };
+      }
+    }
+    roleplayPresentationCache.set(activeChat.id, { mode: roleplayMode, collapsed: nextCollapsed });
+    setRoleplayPanelCollapsed(nextCollapsed);
+  }, [activeChat.id, roleplayMode]);
+
+  const openRoleplayConfiguration = useCallback(() => {
+    setActiveSubView('configuration');
+  }, [setActiveSubView]);
 
   const handleSendWithLatestFollow = (...args) => {
     isFollowingLatestRef.current = true;
@@ -795,7 +1007,8 @@ export default function ChatWorkspaceView() {
   };
 
   // Custom visual background image resolution
-  const effectiveBackground = roleplayMode && activeSubView === 'chat' && roleplayBackground?.imagePath
+  const isCurrentRoleplayMode = roleplayWorkspaceId === activeChat.id && roleplayMode;
+  const effectiveBackground = isCurrentRoleplayMode && activeSubView === 'chat' && roleplayBackground?.imagePath
     ? roleplayBackground.imagePath
     : activeChat.backgroundImage;
   const hasBg = effectiveBackground && effectiveBackground.trim() !== '';
@@ -844,8 +1057,8 @@ export default function ChatWorkspaceView() {
       className="flex w-full h-full relative overflow-hidden bg-[#011419]"
     >
       {/* Visual Background Layers */}
-      {hasBg && <div style={bgStyle} className="absolute inset-0 z-0 transition-all duration-300" />}
-      <div style={backdropStyle} className="absolute inset-0 z-0 transition-all duration-300" />
+      {hasBg && <div style={bgStyle} className="absolute inset-0 z-0" />}
+      <div style={backdropStyle} className="absolute inset-0 z-0" />
 
       {/* Chat Space Column */}
       <div className="flex-1 flex flex-col h-full relative z-10 overflow-hidden">
@@ -931,7 +1144,7 @@ export default function ChatWorkspaceView() {
               ref={messageContainerRef}
               onClick={handleContainerClick}
               onScroll={updateFollowingLatest}
-              className={`flex-1 overflow-y-auto pt-6 pb-28 px-12 md:px-24 custom-scrollbar space-y-6 ${roleplayMode ? 'xl:px-20 2xl:px-28' : 'xl:px-48'}`}
+              className={`flex-1 overflow-y-auto pt-6 pb-28 px-12 md:px-24 custom-scrollbar space-y-6 ${isCurrentRoleplayMode && !roleplayPanelCollapsed ? 'xl:px-20 2xl:px-28' : isCurrentRoleplayMode ? 'xl:px-40 2xl:px-72' : 'xl:px-48'}`}
             >
               <div className="flex flex-wrap items-center justify-center gap-2">
                 {hasOlderMessages && (
@@ -1008,6 +1221,7 @@ export default function ChatWorkspaceView() {
                 return (
                   <div
                     key={msg.id}
+                    data-chat-message-id={msg.id}
                     className={`flex flex-col ${isUser && !isDocumentMode ? 'items-end' : 'items-start'} w-full`}
                   >
                     <div className={`flex w-full ${isUser && !isDocumentMode ? 'justify-end' : 'justify-start'}`}>
@@ -1189,7 +1403,7 @@ export default function ChatWorkspaceView() {
                                 const total = usage ? usage.total.total : input + output;
                                 const isExpanded = Boolean(expandedTokenUsage[msg.id]);
                                 return (
-                                  <div className="mb-2 ml-1 max-w-full font-mono text-xs text-gray-300">
+                                  <div className="mb-1.5 ml-1 max-w-full font-mono text-[0.625rem] text-gray-400">
                                     <button
                                       type="button"
                                       aria-expanded={isExpanded}
@@ -1197,16 +1411,16 @@ export default function ChatWorkspaceView() {
                                         ...previous,
                                         [msg.id]: !previous[msg.id]
                                       }))}
-                                      className="inline-flex max-w-full items-center gap-2 rounded-lg border border-gray-800 bg-[#011419] px-2.5 py-1 text-left uppercase tracking-wide hover:border-gray-700"
+                                      className="inline-flex max-w-full items-center gap-2.5 rounded-md border border-white/[0.07] bg-black/25 px-2 py-0.5 text-left tracking-[0.06em] hover:border-white/15"
                                     >
-                                      <span className="text-gray-500">Tokens ({usage?.accuracy || 'legacy estimate'})</span>
-                                      <span><span className="text-gray-500">Input</span> <strong className="text-accent">{input.toLocaleString()}</strong></span>
-                                      <span><span className="text-gray-500">Output</span> <strong className="text-accent">{output.toLocaleString()}</strong></span>
-                                      <span><span className="text-gray-500">Total</span> {total.toLocaleString()}</span>
-                                      <ChevronDown className={`h-3 w-3 shrink-0 text-gray-500 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                                      <span className="uppercase text-gray-600">Tokens · {usage?.accuracy || 'legacy estimate'}</span>
+                                      <span><span className="text-gray-600">In</span> <strong className="font-semibold text-accent/90">{input.toLocaleString()}</strong></span>
+                                      <span><span className="text-gray-600">Out</span> <strong className="font-semibold text-accent/90">{output.toLocaleString()}</strong></span>
+                                      <span><span className="text-gray-600">Total</span> {total.toLocaleString()}</span>
+                                      <ChevronDown className={`h-2.5 w-2.5 shrink-0 text-gray-600 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
                                     </button>
                                     {isExpanded && (
-                                      <div className="mt-1 grid w-fit max-w-full grid-cols-[auto_auto_auto] gap-x-4 gap-y-1 rounded-lg border border-gray-800 bg-[#051116] px-3 py-2 text-gray-400">
+                                      <div className="mt-1 grid w-fit max-w-full grid-cols-[auto_auto_auto] gap-x-4 gap-y-1 rounded-lg border border-gray-800 bg-[#051116] px-3 py-2 text-[0.625rem] text-gray-400">
                                         <span className="font-bold text-gray-300">Lifecycle</span>
                                         <span className="font-bold text-gray-300">Input</span>
                                         <span className="font-bold text-gray-300">Output</span>
@@ -1236,89 +1450,22 @@ export default function ChatWorkspaceView() {
                                 );
                               })()}
 
-                              {settings.advanced.agenticDebug && (debugObj?.agentic || debugObj?.agenticRagResponse) && (
-                                <div className="mb-1 ml-1.5 select-none">
-                                  <div className="flex items-center space-x-2">
-                                    <button
-                                      onClick={() => setExpandedAgenticRag(prev => ({ ...prev, [msg.id]: !prev[msg.id] }))}
-                                      className="flex items-center space-x-1 text-xs text-gray-500 hover:text-accent font-bold uppercase tracking-wider cursor-pointer"
-                                    >
-                                      <span>Agentic Retrieval Trace</span>
-                                      <ChevronDown className={`w-3 h-3 transition-transform ${expandedAgenticRag[msg.id] ? 'rotate-180' : ''}`} />
-                                    </button>
-                                    <span className="text-gray-800">|</span>
-                                    <button
-                                      onClick={() => handleCopyRagContext(msg.id, debugObj)}
-                                      className="flex items-center space-x-1 text-xs text-gray-500 hover:text-accent font-bold uppercase tracking-wider cursor-pointer"
-                                      title="Copy the sanitized Agentic retrieval trace"
-                                    >
-                                      <Copy className="w-3 h-3" />
-                                      <span>{copiedRagId === msg.id ? 'Copied!' : 'Copy Trace'}</span>
-                                    </button>
-                                  </div>
-                                  {expandedAgenticRag[msg.id] && (
-                                    <div className="mt-1 p-3 bg-[#051116] border border-gray-800 rounded-lg text-xs font-mono text-gray-400 max-w-2xl max-h-96 overflow-y-auto custom-scrollbar shadow-md animate-in fade-in duration-200">
-                                      <div className="whitespace-pre-wrap">{formatAgenticTrace(debugObj)}</div>
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-
-                              {settings.advanced.ragDebug && (debugObj?.retrieval || debugObj?.standardRagContextGathered) && (
-                                <div className="mb-1 ml-1.5 select-none">
-                                  <div className="flex items-center space-x-2">
-                                    <button
-                                      onClick={() => setExpandedStandardRag(prev => ({ ...prev, [msg.id]: !prev[msg.id] }))}
-                                      className="flex items-center space-x-1 text-xs text-gray-500 hover:text-accent font-bold uppercase tracking-wider cursor-pointer"
-                                    >
-                                      <span>Retrieval & Context Diagnostics</span>
-                                      <ChevronDown className={`w-3 h-3 transition-transform ${expandedStandardRag[msg.id] ? 'rotate-180' : ''}`} />
-                                    </button>
-                                    <span className="text-gray-800">|</span>
-                                    <button
-                                      onClick={() => handleCopyStandardRag(msg.id, debugObj)}
-                                      className="flex items-center space-x-1 text-xs text-gray-500 hover:text-accent font-bold uppercase tracking-wider cursor-pointer"
-                                      title="Copy retrieval decisions and final narrative context"
-                                    >
-                                      <Copy className="w-3 h-3" />
-                                      <span>{copiedStandardRagId === msg.id ? 'Copied!' : 'Copy Report'}</span>
-                                    </button>
-                                  </div>
-                                  {expandedStandardRag[msg.id] && (
-                                    <div className="mt-1 p-3 bg-[#051116] border border-gray-800 rounded-lg text-xs font-mono text-gray-400 max-w-2xl max-h-96 overflow-y-auto custom-scrollbar shadow-md animate-in fade-in duration-200">
-                                      <div className="whitespace-pre-wrap">{formatRetrievalDiagnostics(debugObj)}</div>
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-
-                              {settings.advanced.narrativeStateDebug && debugObj?.narrativeState && (
-                                <div className="mb-1 ml-1.5 select-none">
-                                  <div className="flex items-center space-x-2">
-                                    <button
-                                      onClick={() => setExpandedNarrativeState(prev => ({ ...prev, [msg.id]: !prev[msg.id] }))}
-                                      className="flex items-center space-x-1 text-xs text-gray-500 hover:text-accent font-bold uppercase tracking-wider cursor-pointer"
-                                    >
-                                      <span>Narrative State Diagnostics · {debugObj.narrativeState.status}</span>
-                                      <ChevronDown className={`w-3 h-3 transition-transform ${expandedNarrativeState[msg.id] ? 'rotate-180' : ''}`} />
-                                    </button>
-                                    <span className="text-gray-800">|</span>
-                                    <button
-                                      onClick={() => handleCopyNarrativeState(msg.id, debugObj)}
-                                      className="flex items-center space-x-1 text-xs text-gray-500 hover:text-accent font-bold uppercase tracking-wider cursor-pointer"
-                                      title="Copy Narrative State diagnostics"
-                                    >
-                                      <Copy className="w-3 h-3" />
-                                      <span>{copiedNarrativeStateId === msg.id ? 'Copied!' : 'Copy Report'}</span>
-                                    </button>
-                                  </div>
-                                  {expandedNarrativeState[msg.id] && (
-                                    <div className="mt-1 p-3 bg-[#051116] border border-gray-800 rounded-lg text-xs font-mono text-gray-400 max-w-2xl max-h-96 overflow-y-auto custom-scrollbar shadow-md animate-in fade-in duration-200">
-                                      <div className="whitespace-pre-wrap">{diagnosticText(debugObj.narrativeState)}</div>
-                                    </div>
-                                  )}
-                                </div>
-                              )}
+                              <MessageDiagnostics
+                                messageId={msg.id}
+                                settings={settings}
+                                debug={debugObj}
+                                activeKey={expandedDiagnostic[msg.id]}
+                                onToggle={key => setExpandedDiagnostic(previous => ({
+                                  ...previous,
+                                  [msg.id]: previous[msg.id] === key ? null : key
+                                }))}
+                                onCopyAgentic={handleCopyRagContext}
+                                onCopyRetrieval={handleCopyStandardRag}
+                                onCopyNarrative={handleCopyNarrativeState}
+                                copiedAgentic={copiedRagId === msg.id}
+                                copiedRetrieval={copiedStandardRagId === msg.id}
+                                copiedNarrative={copiedNarrativeStateId === msg.id}
+                              />
 
                               {/* Legacy RAG Context Warning Header */}
                               {settings.advanced.ragDebug && (debugObj?.legacyText || debugObj?.workflowStatus) && (
@@ -1548,10 +1695,7 @@ export default function ChatWorkspaceView() {
                         )}
                         {streamingContent && (
                           <div className="relative">
-                            <div
-                              className="leading-relaxed markdown-content"
-                              dangerouslySetInnerHTML={{ __html: parseMarkdown(streamingContent) }}
-                            />
+                            <div className="whitespace-pre-wrap leading-relaxed">{streamingContent}</div>
                             <span className="inline-block w-1.5 h-4 -mb-0.5 bg-accent/70 animate-pulse rounded-sm" />
                           </div>
                         )}
@@ -1755,6 +1899,7 @@ export default function ChatWorkspaceView() {
                   </div>
 
                   <ChatInput
+                    key={activeChat.id}
                     canSend={canSend}
                     hasTargets={displayProfiles.length > 0 || displayWorkflows.length > 0}
                     isGenerating={isGenerating}
@@ -1762,6 +1907,7 @@ export default function ChatWorkspaceView() {
                     onSend={handleSendWithLatestFollow}
                     pendingFileCount={pendingFiles.length}
                     placeholder={activeMessages.length > 0 ? "Write a message..." : "Write a message or drag and drop files..."}
+                    workspaceId={activeChat.id}
                   />
 
                 </div>
@@ -1808,13 +1954,16 @@ export default function ChatWorkspaceView() {
 
       </div>
 
-      {roleplayMode && activeSubView === 'chat' && (
+      {isCurrentRoleplayMode && activeSubView === 'chat' && (
         <RoleplayQuickPanel
+          key={activeChat.id}
           workspaceId={activeChat.id}
           api={electronAPI}
           showToast={showToast}
-          onBackgroundChange={setRoleplayBackground}
-          onOpenConfiguration={() => setActiveSubView('configuration')}
+          initialCollapsed={roleplayPanelCollapsed}
+          onBackgroundChange={handleRoleplayBackgroundChange}
+          onCollapsedChange={handleRoleplayPanelCollapsedChange}
+          onOpenConfiguration={openRoleplayConfiguration}
         />
       )}
 

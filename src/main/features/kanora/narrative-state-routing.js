@@ -88,6 +88,12 @@ const SIGNAL_PATTERNS = [
     pattern: /\b(betray(?:s|ed)?|forgive[sn]?|swear(?:s)? loyalty|owes? (?:him|her|them)|romance[sd]?|betrayal|tra(?:i|iu)|perdo(?:a|ei|ou)|jur(?:a|ei|ou) lealdade|deve (?:a|ao|[àa])|romance|noiv(?:a|ei|ou)|cas(?:a|ei|ou))\b/i,
   },
   {
+    domain: 'relationship',
+    action: 'interaction',
+    strong: false,
+    pattern: /\b(speak(?:s|ing)? to|spoke to|talk(?:s|ed|ing)? to|address(?:es|ed)?|convers(?:e[sd]?|ing)|listen(?:s|ed|ing)? to|overhear(?:s|d|ing)?|hear(?:s|d|ing)? .*\b(?:say|speak|talk)|fal(?:a|ou|ando) com|convers(?:a|ou|ando) com|dirig(?:e|iu)-se a|escut(?:a|ou|ando)|ouv(?:e|iu|indo)|ouve por acaso)\b/i,
+  },
+  {
     domain: 'entity',
     action: 'introduction',
     strong: true,
@@ -174,6 +180,18 @@ function resolveNarrativeRouting({ triage, signals }) {
     if (!selectedDomains.has(domain)) {
       selectedDomains.add(domain);
       forceReasons.push(`explicit-${domain}-signal`);
+    }
+  }
+
+  const hasIntroduction = (signals.signals || []).some(signal => signal.domain === 'entity' && signal.action === 'introduction');
+  if (selectedDomains.has('entity') && hasIntroduction) {
+    if (!selectedDomains.has('scene')) {
+      selectedDomains.add('scene');
+      forceReasons.push('entity-presence-signal');
+    }
+    if (!selectedDomains.has('relationship')) {
+      selectedDomains.add('relationship');
+      forceReasons.push('entity-first-contact-signal');
     }
   }
 

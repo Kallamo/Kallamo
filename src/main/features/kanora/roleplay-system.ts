@@ -67,6 +67,8 @@ export interface RoleplaySceneChange {
   status: 'pending' | 'applied' | 'rejected';
   source: 'manual' | 'ai';
   provenanceId: string | null;
+  createdAt: number;
+  resolvedAt: number | null;
 }
 
 export interface RoleplayInventoryPatch {
@@ -103,6 +105,8 @@ export interface RoleplayInventoryChange {
   status: 'pending' | 'applied' | 'rejected';
   source: 'manual' | 'ai';
   provenanceId: string | null;
+  createdAt: number;
+  resolvedAt: number | null;
 }
 
 export interface RoleplayResourceAssignment {
@@ -126,7 +130,7 @@ export interface ResourceChangeInput {
 export interface RoleplayResourceChange {
   id: string; workspaceId: string; definitionId: string; entityId: string;
   previousValue: number; nextValue: number; status: 'pending' | 'applied' | 'rejected';
-  source: 'manual' | 'ai'; provenanceId: string | null;
+  source: 'manual' | 'ai'; provenanceId: string | null; createdAt: number; resolvedAt: number | null;
 }
 
 interface DefinitionRow {
@@ -569,7 +573,8 @@ export class RoleplaySystem {
   }): RoleplayInventoryChange {
     const existing = this.getInventoryChange(input.workspaceId, input.id);
     if (existing) return existing;
-    this.validateInventoryPatch(input.workspaceId, input.patch);
+    const patch = this.normalizeInventoryPatch(input.workspaceId, input.patch);
+    this.validateInventoryPatch(input.workspaceId, patch);
     const policy = this.getSettings(input.workspaceId).defaultUpdatePolicy;
     if (input.source === 'ai' && policy === 'manual') throw new Error('Inventory updates are manual-only.');
     const status = input.source === 'manual' || policy === 'automatic' ? 'applied' : 'pending';
@@ -578,9 +583,9 @@ export class RoleplaySystem {
         INSERT INTO roleplay_inventory_changes (
           workspace_id, change_id, payload_json, status, source, provenance_id, created_at, resolved_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(input.workspaceId, input.id, JSON.stringify(input.patch), status, input.source,
+      `).run(input.workspaceId, input.id, JSON.stringify(patch), status, input.source,
         input.provenanceId ?? null, Date.now(), status === 'applied' ? Date.now() : null);
-      if (status === 'applied') this.applyInventoryPatch(input.workspaceId, input.patch);
+      if (status === 'applied') this.applyInventoryPatch(input.workspaceId, patch);
     })();
     return this.getInventoryChange(input.workspaceId, input.id)!;
   }
@@ -693,6 +698,28 @@ export class RoleplaySystem {
     return row ? hydrateInventoryChange(row) : undefined;
   }
 
+  private normalizeInventoryPatch(workspaceId: string, patch: RoleplayInventoryPatch): RoleplayInventoryPatch {
+    const normalized: RoleplayInventoryPatch = { ...patch };
+    const equippedValue: unknown = normalized.equipped;
+    if (typeof equippedValue === 'string') {
+      const value = equippedValue.trim().toLowerCase();
+      if (value === 'true' || value === 'false') normalized.equipped = value === 'true';
+      else delete normalized.equipped;
+    } else if (equippedValue !== undefined) {
+      normalized.equipped = Boolean(equippedValue);
+    }
+    if (normalized.quantity !== undefined) normalized.quantity = Math.round(Number(normalized.quantity));
+    if (normalized.fromHolderId && normalized.equipped === undefined) {
+      const equipment = this.db.prepare(`
+        SELECT 1 FROM roleplay_equipment
+        WHERE workspace_id = ? AND entity_id = ? AND item_id = ?
+        LIMIT 1
+      `).get(workspaceId, normalized.fromHolderId, normalized.itemId);
+      if (equipment) normalized.equipped = false;
+    }
+    return normalized;
+  }
+
   private validateInventoryPatch(workspaceId: string, patch: RoleplayInventoryPatch): void {
     const item = this.requireEntityData(workspaceId, patch.itemId);
     if (item.type !== 'Items') throw new Error('Inventory changes require an item.');
@@ -722,7 +749,7 @@ export class RoleplaySystem {
       return;
     }
     if (isUnique) {
-      this.db.prepare("DELETE FROM entity_links WHERE workspaceId = ? AND fromId = ? AND relType IN ('owned_by', 'located_in')")
+      this.db.prepare("DELETE FROM entity_links WHERE workspaceId = ? AND fromId = ? AND relType IN ('owned_by', 'carried_by', 'located_in')")
         .run(workspaceId, patch.itemId);
       const targetId = patch.toHolderId || patch.locationId;
       if (!targetId) {
@@ -744,7 +771,7 @@ export class RoleplaySystem {
     if (patch.fromLocationId) this.adjustLocationQuantity(workspaceId, patch.itemId, patch.fromLocationId, -quantity);
     if (patch.toHolderId) this.adjustCarriedQuantity(workspaceId, patch.itemId, patch.toHolderId, quantity);
     if (patch.locationId) this.adjustLocationQuantity(workspaceId, patch.itemId, patch.locationId, quantity);
-    if (patch.fromHolderId && patch.equipped === false) {
+    if (patch.fromHolderId) {
       this.db.prepare(`
         DELETE FROM roleplay_equipment
         WHERE workspace_id = ? AND entity_id = ? AND item_id = ?
@@ -778,7 +805,9 @@ export class RoleplaySystem {
   private adjustCarriedQuantity(workspaceId: string, itemId: string, holderId: string, delta: number): void {
     const row = this.db.prepare(`
       SELECT id, metadata_json AS metadataJson FROM entity_links
-      WHERE workspaceId = ? AND fromId = ? AND relType = 'carried_by' AND toId = ?
+      WHERE workspaceId = ? AND fromId = ? AND relType IN ('carried_by', 'owned_by') AND toId = ?
+      ORDER BY CASE relType WHEN 'carried_by' THEN 0 ELSE 1 END
+      LIMIT 1
     `).get(workspaceId, itemId, holderId) as { id: string; metadataJson: string | null } | undefined;
     const current = row ? Number((JSON.parse(row.metadataJson || '{}') as { quantity?: number }).quantity ?? 1) : 0;
     const next = current + delta;
@@ -887,7 +916,9 @@ function hydrateChange(row: Record<string, unknown>): RoleplayResourceChange {
     previousValue: Number(row.previous_value), nextValue: Number(row.next_value),
     status: String(row.status) as 'pending' | 'applied' | 'rejected',
     source: String(row.source) as 'manual' | 'ai',
-    provenanceId: row.provenance_id ? String(row.provenance_id) : null
+    provenanceId: row.provenance_id ? String(row.provenance_id) : null,
+    createdAt: Number(row.created_at),
+    resolvedAt: row.resolved_at === null ? null : Number(row.resolved_at)
   };
 }
 
@@ -898,7 +929,9 @@ function hydrateSceneChange(row: Record<string, unknown>): RoleplaySceneChange {
     patch: JSON.parse(String(row.payload_json)) as RoleplayScenePatch,
     status: String(row.status) as RoleplaySceneChange['status'],
     source: String(row.source) as RoleplaySceneChange['source'],
-    provenanceId: row.provenance_id ? String(row.provenance_id) : null
+    provenanceId: row.provenance_id ? String(row.provenance_id) : null,
+    createdAt: Number(row.created_at),
+    resolvedAt: row.resolved_at === null ? null : Number(row.resolved_at)
   };
 }
 
@@ -909,7 +942,9 @@ function hydrateInventoryChange(row: Record<string, unknown>): RoleplayInventory
     patch: JSON.parse(String(row.payload_json)) as RoleplayInventoryPatch,
     status: String(row.status) as RoleplayInventoryChange['status'],
     source: String(row.source) as RoleplayInventoryChange['source'],
-    provenanceId: row.provenance_id ? String(row.provenance_id) : null
+    provenanceId: row.provenance_id ? String(row.provenance_id) : null,
+    createdAt: Number(row.created_at),
+    resolvedAt: row.resolved_at === null ? null : Number(row.resolved_at)
   };
 }
 

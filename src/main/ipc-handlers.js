@@ -3418,6 +3418,7 @@ ipcMain.handle('get-roleplay-configuration', async (event, { workspaceId } = {})
       inventoryChanges: roleplay.listInventoryChanges(workspaceId),
       entityChanges: getNarrativeEntitySystem().listChanges(workspaceId),
       narrativeEvents: getNarrativeStateSystem().listEvents(workspaceId),
+      recentTurnFrames: calendarService.listRecentMessageFrames(db, workspaceId, 50),
       narrativeMetrics: getNarrativeStateSystem().listMetrics(workspaceId, 50),
       narrativeJobs: getNarrativeStateSystem().listJobs(workspaceId, 50)
     };
@@ -3549,9 +3550,19 @@ ipcMain.handle('get-roleplay-inventory', async (event, { workspaceId, entityId }
 
 ipcMain.handle('set-roleplay-equipped', async (event, { workspaceId, entityId, itemId, equipped } = {}) => {
   try {
+    const roleplay = getRoleplaySystem();
+    const change = roleplay.proposeInventoryChange({
+      id: crypto.randomUUID(),
+      workspaceId,
+      patch: { itemId, holderId: entityId, equipped: Boolean(equipped) },
+      source: 'manual',
+      provenanceId: 'roleplay-quick-panel'
+    });
+    event.sender.send('roleplay-resource-changes', { workspaceId, changes: [{ kind: 'inventory', ...change }] });
     return {
       success: true,
-      inventory: getRoleplaySystem().setEquipped(workspaceId, entityId, itemId, Boolean(equipped))
+      change,
+      inventory: roleplay.listInventory(workspaceId, entityId)
     };
   } catch (error) { return { success: false, error: error.message }; }
 });
@@ -3565,6 +3576,7 @@ ipcMain.handle('apply-roleplay-inventory-change', async (event, { workspaceId, p
       source: 'manual',
       provenanceId: 'roleplay-quick-panel'
     });
+    event.sender.send('roleplay-resource-changes', { workspaceId, changes: [{ kind: 'inventory', ...change }] });
     return { success: true, change };
   } catch (error) { return { success: false, error: error.message }; }
 });

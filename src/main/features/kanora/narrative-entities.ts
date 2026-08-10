@@ -16,6 +16,23 @@ export interface NarrativeEntityProposal {
   identityEstablished: boolean;
   reason?: string;
   itemNature?: 'unique' | 'type';
+  scenePresence?: 'participant' | 'observer' | 'nearby' | 'absent';
+}
+
+export interface NarrativeEntityIdentityUpdate {
+  referenceId: string;
+  entityId: string;
+  canonicalName?: string;
+  aliases?: string[];
+  excerpt: string;
+  confidence: number;
+  identityEstablished: boolean;
+  reason?: string;
+}
+
+interface StoredNarrativeEntityIdentityUpdate extends NarrativeEntityIdentityUpdate {
+  previousCanonicalName: string;
+  previousAliases: string[];
 }
 
 export interface NarrativeEntityChange {
@@ -23,6 +40,7 @@ export interface NarrativeEntityChange {
   entityId: string | null;
   createdEntity: boolean;
   proposal: NarrativeEntityProposal;
+  identityUpdate?: StoredNarrativeEntityIdentityUpdate;
   status: 'pending' | 'applied' | 'rejected' | 'conflicting';
   provenanceId: string;
   createdAt: number;
@@ -34,6 +52,7 @@ interface EntityRow {
   type: string;
   canonicalName: string;
   aliases: string;
+  data?: string;
 }
 
 const AUTO_TYPES = new Set<NarrativeEntityType>(['Characters', 'Creatures']);
@@ -67,6 +86,60 @@ export class NarrativeEntitySystem {
     return this.saveChange(workspaceId, changeId, entityId, true, proposal, 'applied', provenanceId);
   }
 
+  resolveIdentityUpdate(
+    workspaceId: string,
+    provenanceId: string,
+    input: NarrativeEntityIdentityUpdate,
+    updatePolicy: 'manual' | 'review' | 'automatic'
+  ): NarrativeEntityChange | undefined {
+    if (updatePolicy === 'manual') return undefined;
+    const update = normalizeIdentityUpdate(input);
+    const changeId = `${provenanceId}:entity-identity:${update.referenceId}`;
+    const previous = this.getChange(workspaceId, changeId);
+    if (previous) return previous;
+
+    const entity = this.getIdentityTarget(workspaceId, update.entityId);
+    if (!entity || !AUTO_TYPES.has(entity.type as NarrativeEntityType)) return undefined;
+    if (entity.type === 'Creatures' && parseObject(entity.data).scope === 'group') return undefined;
+    if (!update.identityEstablished) return undefined;
+
+    const desiredCanonicalName = String(update.canonicalName ?? '').trim();
+    const canonicalChanged = Boolean(desiredCanonicalName)
+      && normalizeIdentity(desiredCanonicalName) !== normalizeIdentity(entity.canonicalName);
+    const existingAliases = parseAliases(entity.aliases);
+    const aliases = uniqueIdentityValues(update.aliases ?? [])
+      .filter(alias => normalizeIdentity(alias) !== normalizeIdentity(desiredCanonicalName || entity.canonicalName))
+      .filter(alias => ![entity.canonicalName, ...existingAliases].some(existing => normalizeIdentity(existing) === normalizeIdentity(alias)));
+    if (!canonicalChanged && !aliases.length) return undefined;
+
+    const requestedNames = [canonicalChanged ? desiredCanonicalName : '', ...aliases].filter(Boolean);
+    const conflict = this.findIdentityCollision(workspaceId, entity.id, requestedNames);
+    if (updatePolicy === 'automatic' && conflict) return undefined;
+    const storedUpdate: StoredNarrativeEntityIdentityUpdate = {
+      ...update,
+      ...(canonicalChanged ? { canonicalName: desiredCanonicalName } : {}),
+      aliases,
+      previousCanonicalName: entity.canonicalName,
+      previousAliases: existingAliases,
+      ...(conflict ? { reason: update.reason || `Identity overlaps with ${conflict.canonicalName}.` } : {})
+    };
+    const proposal = identityUpdateProposal(entity, storedUpdate, Boolean(conflict));
+    const canApply = updatePolicy === 'automatic'
+      && update.confidence >= AUTO_CONFIDENCE
+      && !conflict;
+    if (canApply) this.applyIdentityUpdate(workspaceId, storedUpdate);
+    return this.saveChange(
+      workspaceId,
+      changeId,
+      entity.id,
+      false,
+      proposal,
+      canApply ? 'applied' : conflict ? 'conflicting' : 'pending',
+      provenanceId,
+      storedUpdate
+    );
+  }
+
   listChanges(workspaceId: string): NarrativeEntityChange[] {
     return (this.db.prepare(`
       SELECT changes.* FROM roleplay_entity_changes changes
@@ -84,6 +157,12 @@ export class NarrativeEntitySystem {
 
     if (decision === 'rejected') {
       this.updateStatus(workspaceId, changeId, 'rejected', null);
+      return this.getChange(workspaceId, changeId)!;
+    }
+
+    if (change.identityUpdate) {
+      this.applyIdentityUpdate(workspaceId, change.identityUpdate);
+      this.updateStatus(workspaceId, changeId, 'applied', change.identityUpdate.entityId);
       return this.getChange(workspaceId, changeId)!;
     }
 
@@ -138,6 +217,9 @@ export class NarrativeEntitySystem {
       timeAdvances: this.hasTable('roleplay_time_advances') ? this.rows('roleplay_time_advances', workspaceId) : [],
       links: (this.db.prepare(`
         SELECT * FROM entity_links WHERE workspaceId = ? AND relType IN ('owned_by', 'carried_by', 'located_in', 'related_to')
+      `).all(workspaceId) as Array<Record<string, unknown>>),
+      entityIdentities: (this.db.prepare(`
+        SELECT id, canonicalName, aliases, last_modified FROM entities WHERE workspaceId = ?
       `).all(workspaceId) as Array<Record<string, unknown>>)
     };
     this.db.prepare(`
@@ -200,6 +282,12 @@ export class NarrativeEntitySystem {
       }
       this.db.prepare("DELETE FROM entity_links WHERE workspaceId = ? AND relType IN ('owned_by', 'carried_by', 'located_in', 'related_to')").run(workspaceId);
       this.insertRows('entity_links', snapshot.links ?? []);
+      for (const identity of snapshot.entityIdentities ?? []) {
+        this.db.prepare(`
+          UPDATE entities SET canonicalName = ?, aliases = ?, last_modified = ?
+          WHERE workspaceId = ? AND id = ?
+        `).run(identity.canonicalName, identity.aliases, identity.last_modified, workspaceId, identity.id);
+      }
     })();
     return true;
   }
@@ -240,6 +328,40 @@ export class NarrativeEntitySystem {
     });
   }
 
+  private getIdentityTarget(workspaceId: string, entityId: string): EntityRow | undefined {
+    return this.db.prepare(`
+      SELECT id, type, canonicalName, aliases, data FROM entities
+      WHERE workspaceId = ? AND id = ? AND status != 'proposed'
+    `).get(workspaceId, entityId) as EntityRow | undefined;
+  }
+
+  private findIdentityCollision(workspaceId: string, entityId: string, names: string[]): EntityRow | undefined {
+    const wanted = new Set(names.map(normalizeIdentity).filter(Boolean));
+    if (!wanted.size) return undefined;
+    const rows = this.db.prepare(`
+      SELECT id, type, canonicalName, aliases FROM entities
+      WHERE workspaceId = ? AND id != ? AND status != 'proposed'
+    `).all(workspaceId, entityId) as EntityRow[];
+    return rows.find(row => [row.canonicalName, ...parseAliases(row.aliases)]
+      .some(name => wanted.has(normalizeIdentity(name))));
+  }
+
+  private applyIdentityUpdate(workspaceId: string, update: StoredNarrativeEntityIdentityUpdate): void {
+    const current = this.getIdentityTarget(workspaceId, update.entityId);
+    if (!current) throw new Error('Narrative entity identity target was not found.');
+    const canonicalName = String(update.canonicalName ?? '').trim() || current.canonicalName;
+    const renamed = normalizeIdentity(canonicalName) !== normalizeIdentity(current.canonicalName);
+    const aliases = uniqueIdentityValues([
+      ...parseAliases(current.aliases),
+      ...(update.aliases ?? []),
+      ...(renamed ? [current.canonicalName] : [])
+    ]).filter(alias => normalizeIdentity(alias) !== normalizeIdentity(canonicalName));
+    this.db.prepare(`
+      UPDATE entities SET canonicalName = ?, aliases = ?, last_modified = ?
+      WHERE workspaceId = ? AND id = ?
+    `).run(canonicalName, JSON.stringify(aliases), Date.now(), workspaceId, current.id);
+  }
+
   private insertEntity(workspaceId: string, entityId: string, proposal: NarrativeEntityProposal, provenanceId: string): void {
     const now = Date.now();
     const data = {
@@ -262,14 +384,15 @@ export class NarrativeEntitySystem {
     createdEntity: boolean,
     proposal: NarrativeEntityProposal,
     status: NarrativeEntityChange['status'],
-    provenanceId: string
+    provenanceId: string,
+    identityUpdate?: StoredNarrativeEntityIdentityUpdate
   ): NarrativeEntityChange {
     const now = Date.now();
     this.db.prepare(`
       INSERT INTO roleplay_entity_changes
         (workspace_id, change_id, entity_id, created_entity, payload_json, status, provenance_id, created_at, resolved_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(workspaceId, changeId, entityId, createdEntity ? 1 : 0, JSON.stringify(proposal), status, provenanceId, now, status === 'pending' || status === 'conflicting' ? null : now);
+    `).run(workspaceId, changeId, entityId, createdEntity ? 1 : 0, JSON.stringify(identityUpdate ? { ...proposal, changeKind: 'identity-update', identityUpdate } : proposal), status, provenanceId, now, status === 'pending' || status === 'conflicting' ? null : now);
     return this.getChange(workspaceId, changeId)!;
   }
 
@@ -305,16 +428,62 @@ function normalizeProposal(input: NarrativeEntityProposal): NarrativeEntityPropo
     decision: ['new', 'ambiguous', 'conflicting'].includes(input.decision) ? input.decision : 'ambiguous',
     identityEstablished: input.identityEstablished === true,
     reason: String(input.reason ?? '').trim(),
+    ...(
+      input.type === 'Characters' || input.type === 'Creatures'
+        ? { scenePresence: ['participant', 'observer', 'nearby', 'absent'].includes(String(input.scenePresence))
+            ? input.scenePresence
+            : 'absent' }
+        : {}
+    ),
     ...(input.type === 'Items' ? { itemNature: input.itemNature === 'type' ? 'type' : 'unique' } : {})
   };
 }
 
+function normalizeIdentityUpdate(input: NarrativeEntityIdentityUpdate): NarrativeEntityIdentityUpdate {
+  const referenceId = String(input.referenceId ?? '').trim();
+  const entityId = String(input.entityId ?? '').trim();
+  if (!referenceId || !entityId) throw new Error('Narrative identity update reference and entity are required.');
+  return {
+    referenceId,
+    entityId,
+    canonicalName: String(input.canonicalName ?? '').trim() || undefined,
+    aliases: uniqueIdentityValues(input.aliases ?? []),
+    excerpt: String(input.excerpt ?? '').trim().slice(0, 500),
+    confidence: Math.max(0, Math.min(1, Number(input.confidence) || 0)),
+    identityEstablished: input.identityEstablished === true,
+    reason: String(input.reason ?? '').trim()
+  };
+}
+
+function identityUpdateProposal(entity: EntityRow, update: StoredNarrativeEntityIdentityUpdate, conflicting: boolean): NarrativeEntityProposal {
+  const canonicalName = update.canonicalName || entity.canonicalName;
+  return {
+    referenceId: update.referenceId,
+    name: canonicalName,
+    type: entity.type as NarrativeEntityType,
+    aliases: update.aliases ?? [],
+    description: update.reason || (update.canonicalName
+      ? `${entity.canonicalName} is identified as ${canonicalName}.`
+      : `${entity.canonicalName} gains a new alias.`),
+    excerpt: update.excerpt,
+    confidence: update.confidence,
+    decision: conflicting ? 'conflicting' : 'new',
+    identityEstablished: update.identityEstablished,
+    reason: update.reason
+  };
+}
+
 function hydrateChange(row: Record<string, unknown>): NarrativeEntityChange {
+  const payload = JSON.parse(String(row.payload_json)) as NarrativeEntityProposal & {
+    changeKind?: string;
+    identityUpdate?: StoredNarrativeEntityIdentityUpdate;
+  };
   return {
     id: String(row.change_id),
     entityId: row.entity_id ? String(row.entity_id) : null,
     createdEntity: Boolean(row.created_entity),
-    proposal: JSON.parse(String(row.payload_json)) as NarrativeEntityProposal,
+    proposal: payload,
+    ...(payload.changeKind === 'identity-update' && payload.identityUpdate ? { identityUpdate: payload.identityUpdate } : {}),
     status: String(row.status) as NarrativeEntityChange['status'],
     provenanceId: String(row.provenance_id),
     createdAt: Number(row.created_at),
@@ -329,6 +498,28 @@ function parseAliases(value: string): string[] {
   } catch {
     return [];
   }
+}
+
+function parseObject(value?: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function uniqueIdentityValues(values: unknown[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const text = String(value ?? '').trim();
+    const normalized = normalizeIdentity(text);
+    if (!text || !normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(text);
+  }
+  return result;
 }
 
 function normalizeIdentity(value: string): string {

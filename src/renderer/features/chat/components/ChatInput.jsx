@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { RotateCw, Send, Square } from 'lucide-react';
 
+const sessionDrafts = new Map();
+
 export default function ChatInput({
   canSend,
   hasTargets,
@@ -8,9 +10,10 @@ export default function ChatInput({
   onCancel,
   onSend,
   pendingFileCount,
-  placeholder
+  placeholder,
+  workspaceId
 }) {
-  const [inputValue, setInputValue] = useState('');
+  const [inputValue, setInputValue] = useState(() => sessionDrafts.get(workspaceId) || '');
   const [isHoveringSend, setIsHoveringSend] = useState(false);
   const inputRef = useRef(null);
 
@@ -20,8 +23,18 @@ export default function ChatInput({
     inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 108)}px`;
   }, [inputValue]);
 
+  useEffect(() => {
+    setInputValue(sessionDrafts.get(workspaceId) || '');
+  }, [workspaceId]);
+
+  const updateInputValue = (value) => {
+    setInputValue(value);
+    if (value) sessionDrafts.set(workspaceId, value);
+    else sessionDrafts.delete(workspaceId);
+  };
+
   const submit = () => {
-    if (onSend(inputValue)) setInputValue('');
+    if (onSend(inputValue)) updateInputValue('');
   };
 
   const handleKeyDown = (event) => {
@@ -38,7 +51,7 @@ export default function ChatInput({
       <textarea
         ref={inputRef}
         value={inputValue}
-        onChange={(event) => setInputValue(event.target.value)}
+        onChange={(event) => updateInputValue(event.target.value)}
         onKeyDown={handleKeyDown}
         rows={1}
         aria-label="Message"

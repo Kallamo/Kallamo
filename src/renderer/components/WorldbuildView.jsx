@@ -227,10 +227,9 @@ function MultiRelation({ label, hint, links, options, onAdd, onRemove, disabled 
   );
 }
 
-// Character↔character relationships: a labeled edge from the open sheet's point of
-// view. You pick another character and name how they relate to this one (e.g. their
-// father, their rival). The role is free text and self-completing; it is optional so
-// Add never silently blocks. Reads naturally: "{role} · {name}".
+// Character↔character relationships are directional. Outgoing edges can be edited
+// from the open sheet's point of view; incoming edges are shown as the other
+// character's perspective and remain read-only here.
 function LabeledRelation({ subjectName, links, options, priorLabels, onAdd, onRemove, disabled }) {
   const [toId, setToId] = useState('');
   const [role, setRole] = useState('');
@@ -474,12 +473,26 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       n.foundIn = await from('found_in');
       if ((ent.data?.scope || 'individual') !== 'group') {
         n.inventory = [...await to('owned_by'), ...await to('carried_by')];
-        n.relationships = await from('related_to');
+        const [outgoingRelationships, incomingRelationships] = await Promise.all([from('related_to'), to('related_to')]);
+        n.relationships = [
+          ...outgoingRelationships.map(link => ({ ...link, direction: 'outgoing' })),
+          ...incomingRelationships.map(link => ({ ...link, direction: 'incoming' }))
+        ];
       }
     }
     if (ent.type === 'Events') { n.happenedAt = await from('happened_at'); n.involved = await from('involved'); }
     if (ent.type === 'Factions') { n.operatesIn = await from('operates_in'); n.members = await to('member_of'); n.leader = (await from('led_by'))[0] || null; }
-    if (ent.type === 'Characters') { n.isRace = (await from('is_race'))[0] || null; n.inventory = [...await to('owned_by'), ...await to('carried_by')]; n.memberOf = await from('member_of'); n.connectedTo = await from('connected_to'); n.relationships = await from('related_to'); }
+    if (ent.type === 'Characters') {
+      n.isRace = (await from('is_race'))[0] || null;
+      n.inventory = [...await to('owned_by'), ...await to('carried_by')];
+      n.memberOf = await from('member_of');
+      n.connectedTo = await from('connected_to');
+      const [outgoingRelationships, incomingRelationships] = await Promise.all([from('related_to'), to('related_to')]);
+      n.relationships = [
+        ...outgoingRelationships.map(link => ({ ...link, direction: 'outgoing' })),
+        ...incomingRelationships.map(link => ({ ...link, direction: 'incoming' }))
+      ];
+    }
     setRel(n);
   }, [electronAPI]);
 

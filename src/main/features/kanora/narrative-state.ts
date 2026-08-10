@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { KANORA_CONTRACT_VERSION, type NarrativeOperation, type NarrativeProposal, type Proposition } from '../../../kanora/contracts';
+import { validateNarrativeOperation } from '../../../kanora/validation';
 import { NarrativeChangeSetRepository } from '../../../kanora/change-sets';
 import { NarrativeEventLedgerRepository, type NarrativeEventLedgerRecord } from '../../../kanora/ledger';
 import { createWorldbuildKnowledgeService, type WorldbuildKnowledgeService } from '../worldbuild/knowledge-service';
@@ -30,7 +31,7 @@ export type ExtractedNarrativeOperation =
   | { type: 'knowledge'; subjectId: string; proposition: Proposition; acquisition: 'participant' | 'witness' | 'reported' | 'inferred'; confidence: number; accessibility?: 'available' | 'suppressed' | 'inaccessible' }
   | { type: 'belief'; subjectId: string; proposition: Proposition; confidence: number }
   | { type: 'memory'; subjectId: string; summary: string; salience: number; accessibility?: 'available' | 'suppressed' | 'inaccessible'; relatedEntityIds?: string[] }
-  | { type: 'relationship'; sourceEntityId: string; targetEntityId: string; dimension: string; title?: string; value: number; description?: string };
+  | { type: 'relationship'; sourceEntityId: string; targetEntityId: string; dimension: string; value: number; impact?: 'meaningful' | 'significant' | 'drastic'; title?: string; description?: string };
 
 export interface CreateEventInput {
   workspaceId: string;
@@ -45,6 +46,7 @@ export interface CreateEventInput {
   forceReview?: boolean;
   updatePolicy?: RoleplayUpdatePolicy;
   provenanceInterpreter?: 'model' | 'user';
+  excludedRelationshipSourceIds?: Set<string>;
 }
 
 export interface NarrativeStateMetric {
@@ -70,7 +72,11 @@ export interface NarrativeStateJob {
 
 const AUTO_CONFIDENCE = 0.9;
 const AUTO_MEMORY_SALIENCE = 0.85;
+const MIN_KNOWLEDGE_CONFIDENCE = 0.8;
 const MIN_RELATIONSHIP_VALUE = 5;
+const RELATIONSHIP_IMPACT_LIMITS = { meaningful: 5, significant: 15, drastic: 50 } as const;
+const INITIAL_RELATIONSHIP_LIMITS = { meaningful: 25, significant: 50, drastic: 100 } as const;
+interface RelationshipBaseline { exists: boolean; value: number }
 
 export class NarrativeStateSystem {
   private readonly ledger: NarrativeEventLedgerRepository;
@@ -114,7 +120,13 @@ export class NarrativeStateSystem {
     }
     const fingerprint = fingerprintEvent(input.workspaceId, input.originId, input.event);
     if (this.hasFingerprint(input.workspaceId, fingerprint)) return { skipped: 'duplicate' };
-    const operations = buildOperations(input, fingerprint, (sourceId, targetId, dimension) => this.currentRelationshipValue(input.workspaceId, sourceId, targetId, dimension))
+    const operations = buildOperations(
+      input,
+      fingerprint,
+      (sourceId, targetId, dimension) => this.currentRelationshipBaseline(input.workspaceId, sourceId, targetId, dimension),
+      (subjectId, targetId) => this.hasAwareness(input.workspaceId, subjectId, targetId)
+    )
+      .filter(isValidNarrativeOperation)
       .filter(operation => !this.isDuplicateOperation(input.workspaceId, operation));
     if (!operations.length) return { skipped: 'no-valid-operations' };
     const eventId = `evt_${fingerprint}`;
@@ -279,7 +291,7 @@ export class NarrativeStateSystem {
     `).run(workspaceId, fingerprint, originId, eventId, Date.now());
   }
 
-  private currentRelationshipValue(workspaceId: string, sourceId: string, targetId: string, dimension: string): number {
+  private currentRelationshipBaseline(workspaceId: string, sourceId: string, targetId: string, dimension: string): RelationshipBaseline {
     const row = this.db.prepare(`
       SELECT records.payload_json FROM kanora_narrative_records records
       JOIN kanora_narrative_events events
@@ -294,8 +306,27 @@ export class NarrativeStateSystem {
         AND COALESCE(lifecycle.status, 'active') = 'active'
       ORDER BY records.rowid DESC LIMIT 1
     `).get(workspaceId, sourceId, targetId, dimension) as { payload_json: string } | undefined;
-    if (!row) return 0;
-    return Number((JSON.parse(row.payload_json) as { value?: number }).value ?? 0);
+    if (row) {
+      const value = Number((JSON.parse(row.payload_json) as { value?: number }).value ?? 0);
+      return { exists: true, value: Number.isFinite(value) ? Math.max(-100, Math.min(100, value)) : 0 };
+    }
+    const link = this.db.prepare(`
+      SELECT metadata_json FROM entity_links
+      WHERE workspaceId = ? AND fromId = ? AND relType = 'related_to' AND toId = ?
+      ORDER BY createdAt LIMIT 1
+    `).get(workspaceId, sourceId, targetId) as { metadata_json: string | null } | undefined;
+    if (!link) return { exists: false, value: 0 };
+    if (!link.metadata_json) return { exists: true, value: 0 };
+    try {
+      const value = Number((JSON.parse(link.metadata_json) as { value?: number }).value);
+      return { exists: true, value: Number.isFinite(value) ? Math.max(-100, Math.min(100, value)) : 0 };
+    } catch {
+      return { exists: true, value: 0 };
+    }
+  }
+
+  private hasAwareness(workspaceId: string, subjectId: string, targetId: string): boolean {
+    return this.knowledgeCards.getCard(workspaceId, subjectId, targetId)?.status === 'active';
   }
 
   private isDuplicateOperation(workspaceId: string, operation: NarrativeOperation): boolean {
@@ -336,6 +367,8 @@ export class NarrativeStateSystem {
     const hasLinks = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'entity_links'").get();
     if (!hasLinks) return;
     const appliedOperationIds = this.appliedOperationIds(workspaceId, record.proposal.changeSet.event.id);
+    const relationshipValueOnly = record.proposal.provenance.interpreter === 'model'
+      && record.proposal.evidence[0]?.originType !== 'worldbuild-update';
     for (const operation of record.proposal.changeSet.operations) {
       if (operation.type !== 'set-relationship' || !appliedOperationIds.has(operation.id)) continue;
       const relationship = operation.relationship;
@@ -345,14 +378,17 @@ export class NarrativeStateSystem {
         ORDER BY createdAt LIMIT 1
       `).get(workspaceId, relationship.sourceEntityId, relationship.targetEntityId) as { id: string; label: string | null; metadataJson: string | null } | undefined;
       const metadata = current?.metadataJson ? JSON.parse(current.metadataJson) as Record<string, unknown> : {};
-      const nextMetadata = JSON.stringify({ ...metadata, value: relationship.value, description: relationship.description ?? '', sourceEventId: relationship.sourceEventId, updatedBy: 'ai' });
+      const nextMetadata = JSON.stringify(relationshipValueOnly
+        ? { ...metadata, value: relationship.value, sourceEventId: relationship.sourceEventId, updatedBy: 'ai' }
+        : { ...metadata, value: relationship.value, description: relationship.description ?? '', sourceEventId: relationship.sourceEventId, updatedBy: 'ai' });
       if (current) {
-        this.db.prepare('UPDATE entity_links SET label = ?, metadata_json = ? WHERE id = ?').run(relationship.title?.trim() || current.label, nextMetadata, current.id);
+        this.db.prepare('UPDATE entity_links SET label = ?, metadata_json = ? WHERE id = ?')
+          .run(relationshipValueOnly ? current.label : relationship.title?.trim() || current.label, nextMetadata, current.id);
       } else {
         this.db.prepare(`
           INSERT INTO entity_links (id, workspaceId, fromId, relType, toId, label, metadata_json, createdAt)
           VALUES (?, ?, ?, 'related_to', ?, ?, ?, ?)
-        `).run(randomUUID(), workspaceId, relationship.sourceEntityId, relationship.targetEntityId, relationship.title?.trim() || relationship.dimension, nextMetadata, Date.now());
+        `).run(randomUUID(), workspaceId, relationship.sourceEntityId, relationship.targetEntityId, relationshipValueOnly ? null : relationship.title?.trim() || relationship.dimension, nextMetadata, Date.now());
       }
     }
   }
@@ -413,11 +449,20 @@ export class NarrativeStateSystem {
   }
 }
 
-function buildOperations(input: CreateEventInput, fingerprint: string, currentRelationshipValue: (sourceId: string, targetId: string, dimension: string) => number): NarrativeOperation[] {
+export function isValidNarrativeOperation(operation: NarrativeOperation): boolean {
+  return validateNarrativeOperation(operation).success;
+}
+
+function buildOperations(
+  input: CreateEventInput,
+  fingerprint: string,
+  currentRelationshipBaseline: (sourceId: string, targetId: string, dimension: string) => RelationshipBaseline,
+  hasAwareness: (subjectId: string, targetId: string) => boolean
+): NarrativeOperation[] {
   const eventId = `evt_${fingerprint}`;
   const evidenceIds = [`evidence_${fingerprint}`];
   return input.event.operations.flatMap((operation, index): NarrativeOperation[] => {
-    if (!isAllowed(operation, input.allowedEntityIds)) return [];
+    if (!isAllowed(operation, input.allowedEntityIds, input.excludedRelationshipSourceIds)) return [];
     const suffix = `${fingerprint}_${index}`;
     if (operation.type === 'fact') return [{
       id: `op_${suffix}`,
@@ -449,14 +494,79 @@ function buildOperations(input: CreateEventInput, fingerprint: string, currentRe
         && candidate.targetId === operation.proposition.subjectId
       ));
       const supportedByDocument = input.originType === 'worldbuild-update';
-      if (!aware && !supportedByDocument) return [];
-      return [{ id: `op_${suffix}`, type: 'grant-knowledge', evidenceIds, knowledge: { id: `knowledge_${suffix}`, entryId: `entry_${suffix}`, subjectId: operation.subjectId, proposition: operation.proposition, sourceEventId: eventId, acquisition: operation.acquisition, confidence: confidence(operation.confidence), accessibility: operation.accessibility ?? 'available', status: 'active' } }];
+      if (confidence(operation.confidence) < MIN_KNOWLEDGE_CONFIDENCE) return [];
+      const needsAwareness = !aware
+        && !hasAwareness(operation.subjectId, operation.proposition.subjectId)
+        && !supportedByDocument;
+      if (needsAwareness && !input.event.participantIds.includes(operation.subjectId)) return [];
+      return [
+        ...(needsAwareness ? [{
+          id: `op_${suffix}_awareness`,
+          type: 'grant-awareness',
+          evidenceIds,
+          awareness: {
+            id: `awareness_${suffix}`,
+            subjectId: operation.subjectId,
+            targetId: operation.proposition.subjectId,
+            status: 'active',
+            sourceEventId: eventId
+          }
+        } as const] : []),
+        { id: `op_${suffix}`, type: 'grant-knowledge', evidenceIds, knowledge: { id: `knowledge_${suffix}`, entryId: `entry_${suffix}`, subjectId: operation.subjectId, proposition: operation.proposition, sourceEventId: eventId, acquisition: operation.acquisition, confidence: confidence(operation.confidence), accessibility: operation.accessibility ?? 'available', status: 'active' } }
+      ];
     }
-    if (operation.type === 'belief') return [{ id: `op_${suffix}`, type: 'set-belief', evidenceIds, belief: { id: `belief_${suffix}`, entryId: `entry_${suffix}`, subjectId: operation.subjectId, proposition: operation.proposition, sourceEventId: eventId, confidence: confidence(operation.confidence), relationToCanon: 'unknown', status: 'active' } }];
+    if (operation.type === 'belief') {
+      const aware = input.event.operations.some(candidate => (
+        candidate.type === 'awareness'
+        && candidate.subjectId === operation.subjectId
+        && candidate.targetId === operation.proposition.subjectId
+      ));
+      const needsAwareness = !aware && !hasAwareness(operation.subjectId, operation.proposition.subjectId);
+      if (needsAwareness && !input.event.participantIds.includes(operation.subjectId)) return [];
+      return [
+        ...(needsAwareness ? [{
+          id: `op_${suffix}_awareness`,
+          type: 'grant-awareness',
+          evidenceIds,
+          awareness: {
+            id: `awareness_${suffix}`,
+            subjectId: operation.subjectId,
+            targetId: operation.proposition.subjectId,
+            status: 'active',
+            sourceEventId: eventId
+          }
+        } as const] : []),
+        { id: `op_${suffix}`, type: 'set-belief', evidenceIds, belief: { id: `belief_${suffix}`, entryId: `entry_${suffix}`, subjectId: operation.subjectId, proposition: operation.proposition, sourceEventId: eventId, confidence: confidence(operation.confidence), relationToCanon: 'unknown', status: 'active' } }
+      ];
+    }
     if (operation.type === 'memory') return [{ id: `op_${suffix}`, type: 'record-memory', evidenceIds, memory: { id: `memory_${suffix}`, subjectId: operation.subjectId, eventId, summary: operation.summary.trim(), accessibility: operation.accessibility ?? 'available', status: 'active', relatedEntityIds: unique(operation.relatedEntityIds ?? []).filter(id => input.allowedEntityIds.has(id)) } }];
-    if (Math.abs(operation.value - currentRelationshipValue(operation.sourceEntityId, operation.targetEntityId, operation.dimension)) < MIN_RELATIONSHIP_VALUE) return [];
+    const valueOnly = (input.provenanceInterpreter ?? 'model') === 'model'
+      && input.originType !== 'worldbuild-update';
+    const dimension = valueOnly ? 'overall' : operation.dimension.trim().toLowerCase();
+    const baseline = currentRelationshipBaseline(operation.sourceEntityId, operation.targetEntityId, dimension);
+    const previousValue = baseline.value;
+    const requestedValue = Math.max(-100, Math.min(100, Number(operation.value)));
+    if (!Number.isFinite(requestedValue)) return [];
+    if (valueOnly && baseline.exists && Math.abs(requestedValue - previousValue) < MIN_RELATIONSHIP_VALUE) return [];
+    const requestedImpact = operation.impact === 'drastic' || operation.impact === 'significant' ? operation.impact : 'meaningful';
+    let impact: keyof typeof RELATIONSHIP_IMPACT_LIMITS = requestedImpact;
+    if (impact === 'drastic' && input.event.confidence < 0.95) impact = 'significant';
+    if (impact === 'significant' && input.event.confidence < 0.9) impact = 'meaningful';
+    const maximumDelta = RELATIONSHIP_IMPACT_LIMITS[impact];
+    const maximumInitialValue = INITIAL_RELATIONSHIP_LIMITS[impact];
+    const delta = Math.sign(requestedValue - previousValue) * Math.min(Math.abs(requestedValue - previousValue), maximumDelta);
+    const value = valueOnly
+      ? baseline.exists
+        ? Math.max(-100, Math.min(100, previousValue + delta))
+        : Math.max(-maximumInitialValue, Math.min(maximumInitialValue, requestedValue))
+      : requestedValue;
+    const alreadyAwareThisEvent = input.event.operations.some(candidate => (
+      candidate.type === 'awareness'
+      && candidate.subjectId === operation.sourceEntityId
+      && candidate.targetId === operation.targetEntityId
+    ));
     return [
-      {
+      ...(!alreadyAwareThisEvent ? [{
         id: `op_${suffix}_awareness`,
         type: 'grant-awareness',
         evidenceIds,
@@ -467,14 +577,37 @@ function buildOperations(input: CreateEventInput, fingerprint: string, currentRe
           status: 'active',
           sourceEventId: eventId
         }
-      },
-      { id: `op_${suffix}`, type: 'set-relationship', evidenceIds, relationship: { id: `relationship_${suffix}`, sourceEntityId: operation.sourceEntityId, targetEntityId: operation.targetEntityId, dimension: operation.dimension.trim().toLowerCase(), title: operation.title?.trim(), value: operation.value, description: operation.description?.trim(), sourceEventId: eventId } }
+      } as const] : []),
+      {
+        id: `op_${suffix}`,
+        type: 'set-relationship',
+        evidenceIds,
+        relationship: {
+          id: `relationship_${suffix}`,
+          sourceEntityId: operation.sourceEntityId,
+          targetEntityId: operation.targetEntityId,
+          dimension,
+          value,
+          previousValue,
+          sourceEventId: eventId,
+          ...(!valueOnly && operation.title?.trim() ? { title: operation.title.trim() } : {}),
+          ...(!valueOnly && operation.description?.trim() ? { description: operation.description.trim() } : {})
+        }
+      }
     ];
   });
 }
 
-function isAllowed(operation: ExtractedNarrativeOperation, allowed: Set<string>): boolean {
-  if (operation.type === 'relationship') return allowed.has(operation.sourceEntityId) && allowed.has(operation.targetEntityId) && Boolean(operation.dimension.trim());
+function isAllowed(operation: ExtractedNarrativeOperation, allowed: Set<string>, excludedRelationshipSourceIds = new Set<string>()): boolean {
+  if (operation.type === 'relationship') {
+    return typeof operation.sourceEntityId === 'string'
+      && typeof operation.targetEntityId === 'string'
+      && !excludedRelationshipSourceIds.has(operation.sourceEntityId)
+      && allowed.has(operation.sourceEntityId)
+      && allowed.has(operation.targetEntityId)
+      && typeof operation.dimension === 'string'
+      && Boolean(operation.dimension.trim());
+  }
   if (operation.type === 'fact') return allowed.has(operation.proposition.subjectId) && Boolean(operation.proposition.predicate.trim());
   if (!allowed.has(operation.subjectId)) return false;
   if (operation.type === 'awareness') return allowed.has(operation.targetId);

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, useCallback, useContext, useState, useEffect, useRef } from 'react';
 import { useChatSession } from '../features/chat/useChatSession';
 import { isGenerationEventForWorkspace } from '../features/chat/generation-target';
 
@@ -100,7 +100,7 @@ export const AppProvider = ({ children }) => {
   const [toast, setToast] = useState(null); // { message, type: 'success' | 'error' | 'info', show: boolean, action?: { label, onClick } }
   const toastTimeoutRef = useRef(null);
 
-  const showToast = (message, type = 'info', duration = null, action = null) => {
+  const showToast = useCallback((message, type = 'info', duration = null, action = null) => {
     // Errors linger much longer by default so they can actually be read.
     const ms = duration != null ? duration : (type === 'error' ? 14000 : 4000);
     if (toastTimeoutRef.current) {
@@ -110,7 +110,7 @@ export const AppProvider = ({ children }) => {
     toastTimeoutRef.current = setTimeout(() => {
       setToast(prev => prev ? { ...prev, show: false } : null);
     }, ms);
-  };
+  }, []);
 
   useEffect(() => {
     return () => {

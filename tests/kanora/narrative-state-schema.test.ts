@@ -16,7 +16,15 @@ describe('Narrative State structured output schemas', () => {
       confidence: 0.9,
       evidence: ['Kepler heard a new concept.'],
       requiresFullAnalysis: false,
-      reason: 'Kepler heard a new concept.'
+      reason: 'Kepler heard a new concept.',
+      timeAdvance: {
+        actionType: 'reported_discovery',
+        basis: 'explicit',
+        duration: { years: 0, months: 0, days: 0, hours: 5, minutes: 5 },
+        targetPosition: { eraId: 'ce', year: 997, month: 5, day: 15, hour: 13, minute: 15 },
+        confidence: 1,
+        evidence: 'The clock reads 13:15.'
+      }
     })).toBe(true);
     expect(validate({ consequential: true, types: ['knowledge'] })).toBe(false);
   });
@@ -26,6 +34,7 @@ describe('Narrative State structured output schemas', () => {
 
     expect(validate({
       newEntities: [],
+      identityUpdates: [],
       resourceChanges: [],
       scenePatch: {},
       inventoryChanges: [],
@@ -33,6 +42,7 @@ describe('Narrative State structured output schemas', () => {
     })).toBe(true);
     expect(validate({
       newEntities: [],
+      identityUpdates: [],
       resourceChanges: [],
       scenePatch: {},
       inventoryChanges: [],
@@ -45,5 +55,20 @@ describe('Narrative State structured output schemas', () => {
         operations: []
       }]
     })).toBe(true);
+    expect(validate({
+      newEntities: [],
+      identityUpdates: [],
+      resourceChanges: [],
+      scenePatch: {},
+      inventoryChanges: [],
+      events: [{
+        type: 'conversation',
+        description: 'Unsupported event type.',
+        excerpt: 'They talk.',
+        participantIds: ['mara', 'kepler'],
+        confidence: 0.95,
+        operations: []
+      }]
+    })).toBe(false);
   });
 });

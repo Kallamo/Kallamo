@@ -85,6 +85,59 @@ describe('Narrative State runtime', () => {
     expect(JSON.parse(link.metadata_json)).toMatchObject({ value: -35, description: 'Elias believes the accusation.', updatedBy: 'ai' });
   });
 
+  test('creates Awareness when a participating listener gains valid Knowledge', () => {
+    const result = system.createEvent(input('reported-knowledge', {
+      type: 'revelation', description: 'Mara reports the gate weakness to Elias.', excerpt: 'The eastern hinge breaks under cold.',
+      participantIds: ['mara', 'elias'], confidence: 0.98,
+      operations: [{
+        type: 'knowledge',
+        subjectId: 'elias',
+        proposition: { subjectId: 'guild', predicate: 'eastern-hinge-weakness', object: 'cold' },
+        acquisition: 'reported',
+        confidence: 0.98
+      }]
+    }));
+
+    expect(result.record?.proposal.changeSet.operations.map(operation => operation.type))
+      .toEqual(['grant-awareness', 'grant-knowledge']);
+    expect(db.prepare('SELECT subject_id, target_id FROM kanora_awareness_records').all())
+      .toEqual([{ subject_id: 'elias', target_id: 'guild' }]);
+  });
+
+  test('keeps valid relationships when another extracted operation is malformed', () => {
+    const result = system.createEvent(input('mixed-validity', {
+      type: 'revelation', description: 'Mara shares an incomplete account with Elias.', excerpt: 'There is more to this story.',
+      participantIds: ['mara', 'elias'], confidence: 0.95,
+      operations: [
+        { type: 'knowledge', subjectId: 'elias', proposition: { subjectId: 'guild', predicate: 'incomplete-account' } as never, acquisition: 'reported', confidence: 0.95 },
+        { type: 'relationship', sourceEntityId: 'mara', targetEntityId: 'elias', dimension: 'overall', value: 20, impact: 'meaningful' }
+      ]
+    }));
+
+    expect(result.record?.proposal.changeSet.operations.map(operation => operation.type))
+      .toEqual(['grant-awareness', 'set-relationship']);
+  });
+
+  test('blocks the protagonist relationship perspective without blocking awareness', () => {
+    const result = system.createEvent({
+      ...input('protagonist-boundary', {
+        type: 'relationship-change', description: 'Elias and Mara recognize each other.', excerpt: 'We have met before.',
+        participantIds: ['elias', 'mara'], confidence: 0.95,
+        operations: [
+          { type: 'awareness', subjectId: 'elias', targetId: 'mara', confidence: 0.95 },
+          { type: 'relationship', sourceEntityId: 'elias', targetEntityId: 'mara', dimension: 'overall', value: 20, impact: 'meaningful' },
+          { type: 'relationship', sourceEntityId: 'mara', targetEntityId: 'elias', dimension: 'overall', value: 20, impact: 'meaningful' }
+        ]
+      }),
+      excludedRelationshipSourceIds: new Set(['elias'])
+    });
+
+    const operations = result.record?.proposal.changeSet.operations ?? [];
+    expect(operations.some(operation => operation.type === 'grant-awareness' && operation.awareness.subjectId === 'elias')).toBe(true);
+    expect(operations.some(operation => operation.type === 'set-relationship' && operation.relationship.sourceEntityId === 'elias')).toBe(false);
+    expect(operations.some(operation => operation.type === 'set-relationship' && operation.relationship.sourceEntityId === 'mara')).toBe(true);
+  });
+
   test('applies selected review items and records rejected items without losing audit history', () => {
     const result = system.createEvent(input('partial-review', {
       type: 'deception', description: 'Mara makes two claims.', excerpt: 'The guild lied, but Elias is uncertain.',

@@ -21,39 +21,51 @@ const DEFAULT_CALENDAR = Object.freeze({
   seasons: []
 });
 
-const DEFAULT_TIME_MATRIX = Object.freeze({
-  version: 1,
-  categories: [
-    {
-      id: 'micro',
-      name: 'Micro',
-      minimumMinutes: 1,
-      maximumMinutes: 5,
-      guidance: 'Dialogue lines, combat rounds, lockpicking, and quick visual scans.'
-    },
-    {
-      id: 'local',
-      name: 'Local',
-      minimumMinutes: 10,
-      maximumMinutes: 15,
-      guidance: 'Walking within the same district, patching wounds, and careful room inspections.'
-    },
-    {
-      id: 'transit',
-      name: 'Transit',
-      minimumMinutes: 30,
-      maximumMinutes: 60,
-      guidance: 'Cross-district travel, heavy crowds, minor gear repairs, and setting camp.'
-    },
-    {
-      id: 'macro',
-      name: 'Macro',
-      minimumMinutes: 60,
-      maximumMinutes: 480,
-      guidance: 'Blacksmithing, deep study, resting, and inter-city travel. Use explicit narrative duration whenever available.'
-    }
-  ]
-});
+function buildDefaultTimeMatrix(hoursPerDay = DEFAULT_CALENDAR.hoursPerDay) {
+  const minutesPerDay = positiveInteger(hoursPerDay, DEFAULT_CALENDAR.hoursPerDay) * 60;
+  return {
+    version: 1,
+    categories: [
+      {
+        id: 'micro',
+        name: 'Micro',
+        minimumMinutes: 1,
+        maximumMinutes: 5,
+        guidance: 'Dialogue lines, combat rounds, lockpicking, and quick visual scans.'
+      },
+      {
+        id: 'local',
+        name: 'Local',
+        minimumMinutes: 10,
+        maximumMinutes: 15,
+        guidance: 'Walking within the same district, patching wounds, and careful room inspections.'
+      },
+      {
+        id: 'transit',
+        name: 'Transit',
+        minimumMinutes: 30,
+        maximumMinutes: 60,
+        guidance: 'Cross-district travel, heavy crowds, minor gear repairs, and setting camp.'
+      },
+      {
+        id: 'macro',
+        name: 'Macro',
+        minimumMinutes: 60,
+        maximumMinutes: 480,
+        guidance: 'Blacksmithing, deep study, resting, and inter-city travel. Use explicit narrative duration whenever available.'
+      },
+      {
+        id: 'timeskip',
+        name: 'Timeskip',
+        minimumMinutes: minutesPerDay,
+        maximumMinutes: minutesPerDay * 7,
+        guidance: 'Downtime, long recovery, waiting, long-distance travel, and other transitions spanning one or more calendar days.'
+      }
+    ]
+  };
+}
+
+const DEFAULT_TIME_MATRIX = Object.freeze(buildDefaultTimeMatrix());
 
 const DATE_FIELDS = [
   ['startDate', 'Start date'],
@@ -155,10 +167,10 @@ function normalizeCalendar(input) {
   };
 }
 
-function normalizeTimeMatrix(input) {
+function normalizeTimeMatrix(input, hoursPerDay = DEFAULT_CALENDAR.hoursPerDay) {
   const source = parseObject(input, {});
-  const defaults = new Map(DEFAULT_TIME_MATRIX.categories.map(category => [category.id, category]));
-  const categories = ['micro', 'local', 'transit', 'macro'].map(id => {
+  const defaults = new Map(buildDefaultTimeMatrix(hoursPerDay).categories.map(category => [category.id, category]));
+  const categories = ['micro', 'local', 'transit', 'macro', 'timeskip'].map(id => {
     const category = Array.isArray(source.categories)
       ? source.categories.find(candidate => candidate?.id === id)
       : null;
@@ -188,10 +200,11 @@ function getCalendar(db, workspaceId) {
 }
 
 function getTimeMatrix(db, workspaceId) {
+  const calendar = getCalendar(db, workspaceId);
   const row = db.prepare('SELECT matrix_json FROM roleplay_time_matrices WHERE workspace_id = ?')
     .get(workspaceId);
-  if (row) return normalizeTimeMatrix(row.matrix_json);
-  const matrix = normalizeTimeMatrix(DEFAULT_TIME_MATRIX);
+  if (row) return normalizeTimeMatrix(row.matrix_json, calendar.hoursPerDay);
+  const matrix = normalizeTimeMatrix(null, calendar.hoursPerDay);
   db.prepare(`
     INSERT OR IGNORE INTO roleplay_time_matrices (workspace_id, matrix_json, updated_at)
     VALUES (?, ?, ?)
@@ -200,7 +213,8 @@ function getTimeMatrix(db, workspaceId) {
 }
 
 function saveTimeMatrix(db, workspaceId, input) {
-  const matrix = normalizeTimeMatrix(input);
+  const calendar = getCalendar(db, workspaceId);
+  const matrix = normalizeTimeMatrix(input, calendar.hoursPerDay);
   db.prepare(`
     INSERT INTO roleplay_time_matrices (workspace_id, matrix_json, updated_at)
     VALUES (?, ?, ?)
@@ -405,12 +419,14 @@ function monthDayOrdinal(_calendar, month, day) {
 function decoratePosition(calendar, position, version) {
   const normalized = normalizePosition(calendar, position);
   const era = calendar.eras.find(candidate => candidate.id === normalized.eraId);
+  const weekdayIndex = modulo(toOrdinal(calendar, normalized) + calendar.epochWeekday, calendar.weekdays.length);
   return {
     ...normalized,
     version,
     monthName: calendar.months[normalized.month - 1]?.name || `Month ${normalized.month}`,
     eraName: era?.name || '',
     eraShortName: era?.shortName || '',
+    weekdayName: calendar.weekdays[weekdayIndex] || '',
     season: seasonFor(calendar, normalized)
   };
 }
@@ -451,6 +467,7 @@ function framePoint(db, workspaceId, clock, locationId) {
     display: {
       monthName: clock.monthName,
       eraShortName: clock.eraShortName,
+      weekdayName: clock.weekdayName,
       season: clock.season
     },
     locationId: locationId || null,
@@ -458,21 +475,47 @@ function framePoint(db, workspaceId, clock, locationId) {
   };
 }
 
-function normalizeTimeAdvance(input) {
+function durationToPosition(calendar, startInput, targetInput) {
+  if (!targetInput || !validateDate(calendar, targetInput)) return null;
+  const start = normalizePosition(calendar, startInput);
+  const target = normalizePosition(calendar, targetInput);
+  const minutesPerDay = calendar.hoursPerDay * 60;
+  const totalMinutes = (toOrdinal(calendar, target) - toOrdinal(calendar, start)) * minutesPerDay
+    + (target.hour - start.hour) * 60
+    + target.minute - start.minute;
+  if (totalMinutes <= 0) return null;
+  return {
+    duration: {
+      years: 0,
+      months: 0,
+      days: Math.floor(totalMinutes / minutesPerDay),
+      hours: Math.floor((totalMinutes % minutesPerDay) / 60),
+      minutes: totalMinutes % 60
+    },
+    targetPosition: target
+  };
+}
+
+function normalizeTimeAdvance(input, calendar = null, currentClock = null) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const durationInput = parseObject(input.duration, {});
-  const duration = {
+  let duration = {
     years: Math.max(0, integer(durationInput.years)),
     months: Math.max(0, integer(durationInput.months)),
     days: Math.max(0, integer(durationInput.days)),
     hours: Math.max(0, integer(durationInput.hours)),
     minutes: Math.max(0, integer(durationInput.minutes))
   };
+  const explicitTarget = calendar && currentClock
+    ? durationToPosition(calendar, currentClock, input.targetPosition)
+    : null;
+  if (explicitTarget) duration = explicitTarget.duration;
   if (!Object.values(duration).some(Boolean)) return null;
   return {
     actionType: String(input.actionType || 'elapsed_time').slice(0, 80),
     basis: input.basis === 'explicit' ? 'explicit' : 'matrix',
     duration,
+    targetPosition: explicitTarget?.targetPosition ?? null,
     confidence: Math.max(0, Math.min(1, Number(input.confidence) || 0)),
     evidence: String(input.evidence || '').slice(0, 500)
   };
@@ -492,8 +535,8 @@ function applyRoleplayTurnFrame(db, {
   `).get(workspaceId, originId);
   if (existing) return hydrateFrame(originId, existing);
   const calendar = getCalendar(db, workspaceId);
-  const normalizedAdvance = normalizeTimeAdvance(timeAdvance);
   const currentClock = startClock || getRoleplayClock(db, workspaceId);
+  const normalizedAdvance = normalizeTimeAdvance(timeAdvance, calendar, currentClock);
   let endClock = currentClock;
   if (normalizedAdvance) {
     const nextPosition = addDuration(calendar, currentClock, normalizedAdvance.duration);
@@ -539,23 +582,51 @@ function hydrateFrame(originId, row) {
   };
 }
 
+function decorateFrameWeekdays(calendar, frame) {
+  const decoratePoint = point => {
+    if (!point?.position) return point;
+    const weekdayIndex = modulo(toOrdinal(calendar, point.position) + calendar.epochWeekday, calendar.weekdays.length);
+    return { ...point, display: { ...(point.display || {}), weekdayName: calendar.weekdays[weekdayIndex] || '' } };
+  };
+  return { ...frame, start: decoratePoint(frame.start), end: decoratePoint(frame.end) };
+}
+
 function getMessageFrames(db, workspaceId, originIds) {
   const ids = [...new Set((originIds || []).map(String).filter(Boolean))];
   if (!ids.length) return [];
   const placeholders = ids.map(() => '?').join(',');
+  const calendar = getCalendar(db, workspaceId);
   return db.prepare(`
     SELECT origin_id, start_json, end_json, advance_json
     FROM roleplay_message_frames
     WHERE workspace_id = ? AND origin_id IN (${placeholders})
-  `).all(workspaceId, ...ids).map(row => hydrateFrame(row.origin_id, row));
+  `).all(workspaceId, ...ids).map(row => decorateFrameWeekdays(calendar, hydrateFrame(row.origin_id, row)));
+}
+
+function listRecentMessageFrames(db, workspaceId, limit = 50) {
+  const rows = db.prepare(`
+    SELECT origin_id, start_json, end_json, advance_json, created_at
+    FROM roleplay_message_frames
+    WHERE workspace_id = ?
+    ORDER BY created_at, origin_id
+  `).all(workspaceId);
+  const calendar = getCalendar(db, workspaceId);
+  const start = Math.max(0, rows.length - Math.max(1, Number(limit) || 50));
+  return rows.slice(start).map((row, index) => ({
+    ...decorateFrameWeekdays(calendar, hydrateFrame(row.origin_id, row)),
+    turnNumber: start + index + 1,
+    createdAt: Number(row.created_at)
+  }));
 }
 
 function formatClock(calendar, position) {
   const month = calendar.months[position.month - 1]?.name || `Month ${position.month}`;
   const era = calendar.eras.find(candidate => candidate.id === position.eraId);
+  const weekdayIndex = modulo(toOrdinal(calendar, position) + calendar.epochWeekday, calendar.weekdays.length);
   return {
     date: `${position.day} ${month} ${position.year}${era?.shortName ? ` ${era.shortName}` : ''}`,
-    time: `${String(position.hour).padStart(2, '0')}:${String(position.minute).padStart(2, '0')}`
+    time: `${String(position.hour).padStart(2, '0')}:${String(position.minute).padStart(2, '0')}`,
+    weekday: calendar.weekdays[weekdayIndex] || ''
   };
 }
 
@@ -569,15 +640,16 @@ function buildRoleplayTemporalContext(db, workspaceId) {
   return [
     '--- ROLEPLAY TIME ---',
     `Current narrative date: ${formatted.date}`,
-    `Current narrative time: ${formatted.time}`,
+    `Current narrative time: ${formatted.time}${formatted.weekday ? ` (${formatted.weekday})` : ''}`,
     ...(clock.season ? [`Current season: ${clock.season.name}${clock.season.description ? ` (${clock.season.description})` : ''}`] : []),
     ...(todayEntries.length
       ? ['Calendar entries today:', ...todayEntries.map(entry => `- ${entry.title} (${entry.kind})`)]
       : ['Calendar entries today: none']),
     `Calendar day length: ${calendar.hoursPerDay} hours`,
     'Time cost matrix:',
-    ...matrix.categories.map(category =>
-      `- ${category.name}: ${category.minimumMinutes}-${category.maximumMinutes} minutes. ${category.guidance}`
+    ...matrix.categories.map(category => category.id === 'timeskip'
+      ? `- ${category.name}: ${category.minimumMinutes / (calendar.hoursPerDay * 60)}-${category.maximumMinutes / (calendar.hoursPerDay * 60)} calendar days (${category.minimumMinutes}-${category.maximumMinutes} minutes). ${category.guidance}`
+      : `- ${category.name}: ${category.minimumMinutes}-${category.maximumMinutes} minutes. ${category.guidance}`
     ),
     'Keep line-by-line dialogue and micro actions within the Micro range. Never warp time.',
     'When substantial time passes, reflect lighting, fatigue, schedules, and day changes in the narration.',
@@ -839,6 +911,7 @@ module.exports = {
   getCalendar,
   getCalendarEntries,
   getMessageFrames,
+  listRecentMessageFrames,
   getRoleplayClock,
   getTimeMatrix,
   normalizeCalendar,

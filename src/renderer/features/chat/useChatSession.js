@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
-const STREAM_DISPLAY_INTERVAL_MS = 32;
-const STREAM_DISPLAY_CHARACTERS_PER_TICK = 16;
+const STREAM_DISPLAY_INTERVAL_MS = 48;
+const STREAM_DISPLAY_CHARACTERS_PER_TICK = 48;
 
 function getAlternativeData(message) {
   if (!message || message.role !== 'ai') return null;

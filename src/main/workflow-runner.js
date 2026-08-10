@@ -2107,6 +2107,21 @@ function shouldPlanWorkspaceContext(chatId, includeChatContext) {
     }
 }
 
+function shouldProcessNarrativeEntityProposal(proposal, updatePolicy) {
+    if (updatePolicy === 'manual') return false;
+    if (updatePolicy === 'review') return true;
+    return proposal?.decision === 'new'
+        && (proposal.type === 'Characters' || proposal.type === 'Creatures')
+        && proposal.identityEstablished === true
+        && Number(proposal.confidence) >= 0.9;
+}
+
+function shouldProcessNarrativeIdentityUpdate(update, updatePolicy) {
+    if (updatePolicy === 'manual') return false;
+    if (updatePolicy === 'review') return true;
+    return update?.identityEstablished === true && Number(update.confidence) >= 0.9;
+}
+
 async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, userMessage, narrativeResponse }) {
     const { getWorkspaceExperienceMode } = require('../../dist-main/main/features/kanora/mode-orchestration');
     if (getWorkspaceExperienceMode(db, workspaceId) !== 'roleplay') {
@@ -2237,8 +2252,11 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     const reachableLocationIds = findReachableLocations(scene?.locationId, locationLinks, 2);
     const calendar = calendarService.getCalendar(db, workspaceId);
     const timeMatrix = calendarService.getTimeMatrix(db, workspaceId);
+    const narrativeLanguageInstruction = getSystemLanguageInstruction();
+    const triageSystemPrompt = `${narrativeLanguageInstruction}\n${NARRATIVE_TRIAGE_SYSTEM_PROMPT}`;
+    const repairSystemPrompt = `${narrativeLanguageInstruction}\n${NARRATIVE_REPAIR_SYSTEM_PROMPT}`;
     const triagePayloadValue = {
-        currentScene: compactNarrativeScene(scene),
+        currentScene: compactNarrativeScene(scene, roleplaySettings.playerEntityId),
         currentTime: startClock,
         calendar: {
             name: calendar.name,
@@ -2266,30 +2284,40 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     let triageResponse = await sendNarrativeJson({
         apiProfileId: role.executor.apiProfileId,
         model: role.executor.model,
-        systemPrompt: NARRATIVE_TRIAGE_SYSTEM_PROMPT,
+        systemPrompt: triageSystemPrompt,
         chatHistory: [], newPrompt: triagePayload, temperature: 0, maxTokens: 512, manualMode: false, manualJson: null
     }, NARRATIVE_TRIAGE_SCHEMA, 'Narrative State triage', narrativeTelemetry);
     const triagePrimaryOutputTokens = estimateTokens(triageResponse);
     let triage = safeParseObject(triageResponse);
     if (!triage) {
         triageRepairCount += 1;
-        repairInputTokens += estimateTokens(NARRATIVE_REPAIR_SYSTEM_PROMPT)
+        repairInputTokens += estimateTokens(repairSystemPrompt)
             + estimateTokens(`INVALID RESPONSE:\n${String(triageResponse || '').slice(0, 16000)}`);
         triageResponse = await repairNarrativeJson({
             executor: role.executor,
             invalidResponse: triageResponse,
             schema: NARRATIVE_TRIAGE_SCHEMA,
             label: 'Narrative State triage',
-            telemetry: narrativeTelemetry
+            telemetry: narrativeTelemetry,
+            languageInstruction: narrativeLanguageInstruction
         });
         repairOutputTokens += estimateTokens(triageResponse);
         triage = safeParseObject(triageResponse);
+    }
+    if (triage) {
+        triage.timeAdvance = resolveNarrativeTimeAdvance({
+            timeAdvance: triage.timeAdvance,
+            startClock,
+            calendar,
+            userMessage,
+            narrativeResponse
+        });
     }
     const routing = resolveNarrativeRouting({ triage, signals: narrativeSignals });
     const forceDeepAnalysis = routing.forceDeepAnalysis;
     if (!triage?.consequential && !forceDeepAnalysis) {
         const timeFrame = recordTimeFrame(triage?.timeAdvance);
-        const triageInputTokens = estimateTokens(NARRATIVE_TRIAGE_SYSTEM_PROMPT) + estimateTokens(triagePayload);
+        const triageInputTokens = estimateTokens(triageSystemPrompt) + estimateTokens(triagePayload);
         const triageOutputTokens = triagePrimaryOutputTokens;
         const elapsedMs = Date.now() - startedAt;
         narrativeState.finishJob(workspaceId, provenanceId, 'skipped', { inputTokens: triageInputTokens, outputTokens: triageOutputTokens });
@@ -2306,7 +2334,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
                 timeFrame,
                 forceDeepAnalysis,
                 routing,
-                contextUsage: measureNarrativeContextSections(triagePayloadValue, NARRATIVE_TRIAGE_SYSTEM_PROMPT),
+                contextUsage: measureNarrativeContextSections(triagePayloadValue, triageSystemPrompt),
                 repairs: {
                     triage: triageRepairCount,
                     deep: 0,
@@ -2365,6 +2393,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
           AND COALESCE(lifecycle.status, 'active') = 'active'
         ORDER BY records.applied_at DESC LIMIT 120
     `).all(workspaceId, ...affectedIds, ...affectedIds, ...affectedIds)
+        .filter(row => row.type !== 'relationship' || row.subjectId !== roleplaySettings.playerEntityId)
         .map(row => ({ type: row.type, subjectId: row.subjectId, value: JSON.parse(row.payload) })) : [];
     const knowledgeCardRows = shouldAnalyzeEpistemicState && witnessIds.size && targetIds.size ? db.prepare(`
         SELECT cards.owner_id AS ownerId, cards.target_id AS targetId,
@@ -2379,10 +2408,19 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         ORDER BY cards.owner_id, cards.target_id, fields.field_key
     `).all(workspaceId, ...witnessIds, ...targetIds) : [];
     const currentKnowledgeCards = groupKnowledgeCardRows(knowledgeCardRows);
+    const currentRelationshipState = shouldAnalyzeEpistemicState
+        ? loadNarrativeRelationshipState(workspaceId, affectedIds, new Set([roleplaySettings.playerEntityId].filter(Boolean)))
+        : [];
     const shouldAnalyzeInventory = selectedDomains.includes('inventory');
     const shouldAnalyzeResources = selectedDomains.includes('resource');
     const shouldAnalyzeScene = selectedDomains.includes('scene');
-    const relevantHolderIds = new Set([...witnessIds].filter(Boolean));
+    const relevantHolderIds = new Set([
+        roleplaySettings.playerEntityId,
+        ...(scene?.participantIds || []),
+        ...(scene?.possibleObserverIds || []),
+        ...(scene?.nearbyIds || []),
+        ...witnessIds
+    ].filter(id => actorIds.has(id)));
     const relevantItemIds = new Set(narrativeSignals.mentionedItemIds);
     const currentInventoryState = shouldAnalyzeInventory
         ? loadNarrativeInventoryState(workspaceId, relevantHolderIds, relevantItemIds)
@@ -2409,7 +2447,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             requiresFullAnalysis: routing.requiresFullAnalysis,
             candidateSignals: narrativeSignals.signals
         },
-        currentScene: compactNarrativeScene(scene),
+        currentScene: compactNarrativeScene(scene, roleplaySettings.playerEntityId),
         preTurnContext: scopedManifest || undefined,
         availableEntities: selectedDomains.includes('entity')
             ? relevantEntities
@@ -2431,11 +2469,12 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         locationLinks: shouldAnalyzeScene ? locationLinks : undefined,
         currentPerspectiveState: shouldAnalyzeEpistemicState ? currentPerspectiveState : undefined,
         currentKnowledgeCards: shouldAnalyzeEpistemicState ? currentKnowledgeCards : undefined,
+        currentRelationshipState: shouldAnalyzeEpistemicState ? currentRelationshipState : undefined,
         userMessage,
         narrativeResponse
     };
     const payload = JSON.stringify(payloadValue);
-    const narrativeStateSystemPrompt = buildNarrativeStateSystemPrompt(selectedDomains);
+    const narrativeStateSystemPrompt = buildNarrativeStateSystemPrompt(selectedDomains, narrativeLanguageInstruction);
     const stateOutputBudget = Math.min(
         8192,
         Math.max(2048, 1024 + (relevantEntities.length * 64) + (shouldAnalyzeResources ? definitions.length * 96 : 0))
@@ -2455,14 +2494,15 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     let parsed = safeParseObject(response);
     if (!parsed) {
         deepRepairCount += 1;
-        repairInputTokens += estimateTokens(NARRATIVE_REPAIR_SYSTEM_PROMPT)
+        repairInputTokens += estimateTokens(repairSystemPrompt)
             + estimateTokens(`INVALID RESPONSE:\n${String(response || '').slice(0, 16000)}`);
         response = await repairNarrativeJson({
             executor: role.executor,
             invalidResponse: response,
             schema: NARRATIVE_STATE_SCHEMA,
             label: 'Narrative State analysis',
-            telemetry: narrativeTelemetry
+            telemetry: narrativeTelemetry,
+            languageInstruction: narrativeLanguageInstruction
         });
         repairOutputTokens += estimateTokens(response);
         parsed = safeParseObject(response);
@@ -2476,53 +2516,68 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     const definitionsByKey = new Map(definitions.map(definition => [definition.key, definition]));
     const changes = [];
     const referenceIds = new Map();
+    const narrativeIntroductions = [];
+    const identityContactCandidates = [];
+    const narrativeSkips = [];
+    const invalidInventoryChanges = [];
+    const excludedRelationshipSourceIds = new Set([roleplaySettings.playerEntityId].filter(Boolean));
+    let generatedContactEventCount = 0;
     let narrativeProposalCount = 0;
     db.transaction(() => {
+    for (const identityUpdate of routedResult.identityUpdates) {
+        if (!shouldProcessNarrativeIdentityUpdate(identityUpdate, roleplaySettings.defaultUpdatePolicy)) continue;
+        if (identityUpdate?.identityEstablished === true && actorIds.has(identityUpdate.entityId)) {
+            identityContactCandidates.push({
+                entityId: identityUpdate.entityId,
+                excerpt: identityUpdate.excerpt,
+                confidence: Number(identityUpdate.confidence),
+                reason: identityUpdate.reason
+            });
+        }
+        try {
+            const change = narrativeEntities.resolveIdentityUpdate(
+                workspaceId,
+                provenanceId,
+                identityUpdate,
+                roleplaySettings.defaultUpdatePolicy
+            );
+            if (change) changes.push({ kind: 'entity', ...change });
+        } catch (error) {
+            console.warn('[Narrative State] Ignored invalid identity update:', error.message);
+        }
+    }
     for (const proposal of routedResult.newEntities) {
+        if (!shouldProcessNarrativeEntityProposal(proposal, roleplaySettings.defaultUpdatePolicy)) continue;
         const change = narrativeEntities.resolveOrPropose(workspaceId, provenanceId, proposal);
         changes.push({ kind: 'entity', ...change });
         if (change.entityId) {
             referenceIds.set(proposal.referenceId, change.entityId);
             allowedEntityIds.add(change.entityId);
-            const introduction = narrativeState.createEvent({
-                    workspaceId,
-                    originId: provenanceId,
-                    sceneId: scene?.id,
-                    locationId: scene?.locationId,
-                    interpreterId: role.executor.model,
-                    updatePolicy: roleplaySettings.defaultUpdatePolicy,
-                    allowedEntityIds,
-                    event: {
-                        type: 'custom',
-                        description: proposal.description || `${proposal.name} enters the narrative.`,
-                        excerpt: proposal.excerpt || proposal.name,
-                        participantIds: [change.entityId],
-                        confidence: proposal.confidence,
-                        operations: [{
-                            type: 'fact',
-                            proposition: {
-                                subjectId: change.entityId,
-                                predicate: 'narrative-introduction',
-                                object: proposal.description || `${proposal.name} enters the narrative.`
-                            },
-                            confidence: proposal.confidence
-                        }]
-                    }
-            });
-            if (introduction.record) {
-                narrativeProposalCount += 1;
-                changes.push({
-                  kind: 'narrative',
-                  eventId: introduction.record.proposal.changeSet.event.id,
-                  status: introduction.record.status,
-                  decision: introduction.decision,
-                  description: introduction.record.proposal.changeSet.event.description
-                });
-            }
+            if (proposal.type === 'Characters' || proposal.type === 'Creatures') actorIds.add(change.entityId);
+            narrativeIntroductions.push({ proposal, entityId: change.entityId });
         }
     }
     const resolveReference = value => referenceIds.get(value) || value;
     const resolved = resolveNarrativeEntityReferences(routedResult, resolveReference);
+    const scenePatch = buildNarrativeScenePatch(scene, resolved.scenePatch, narrativeIntroductions, narrativeSignals);
+    const resolvedEvents = ensureEncounterRelationshipOperations(
+        workspaceId,
+        resolved.events,
+        roleplaySettings.playerEntityId
+    );
+    const finalParticipantIds = scenePatch.participantIds ?? scene?.participantIds ?? [];
+    const initialContactEvents = buildNarrativeInitialContactEvents({
+        workspaceId,
+        playerEntityId: roleplaySettings.playerEntityId,
+        participantIds: finalParticipantIds,
+        introductions: narrativeIntroductions,
+        identityContacts: identityContactCandidates,
+        actorIds,
+        relationshipPairs: collectRelationshipPairs(resolvedEvents),
+        awarenessPairs: collectAwarenessPairs(resolvedEvents)
+    });
+    generatedContactEventCount = initialContactEvents.length;
+    resolvedEvents.push(...initialContactEvents);
     for (const [index, proposal] of (Array.isArray(resolved.resourceChanges) ? resolved.resourceChanges : []).entries()) {
         const definition = definitionsByKey.get(proposal?.resourceKey);
         if (!definition || typeof proposal?.entityId !== 'string' || !Number.isFinite(proposal?.value)) continue;
@@ -2541,9 +2596,8 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             console.warn('[Roleplay State] Ignored invalid resource change:', error.message);
         }
     }
-    if (resolved.scenePatch && typeof resolved.scenePatch === 'object' && !Array.isArray(resolved.scenePatch)) {
+    if (Object.keys(scenePatch).length) {
         try {
-            const scenePatch = { ...resolved.scenePatch };
             if (scene?.locationId && scenePatch.locationId && !reachableLocationIds.has(scenePatch.locationId)) {
                 delete scenePatch.locationId;
             }
@@ -2562,31 +2616,61 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     }
     for (const [index, patch] of (Array.isArray(resolved.inventoryChanges) ? resolved.inventoryChanges : []).entries()) {
         try {
+            const normalizedPatch = normalizeNarrativeInventoryPatch(
+                patch,
+                currentInventoryState,
+                currentLocationInventoryState,
+                {
+                    userMessage,
+                    narrativeResponse,
+                    playerEntityId: roleplaySettings.playerEntityId
+                }
+            );
             const change = roleplay.proposeInventoryChange({
                 id: `${provenanceId}:inventory:${index}`,
                 workspaceId,
-                patch,
+                patch: normalizedPatch,
                 source: 'ai',
                 provenanceId
             });
             changes.push({ kind: 'inventory', changeId: change.id, ...change });
         } catch (error) {
+            invalidInventoryChanges.push({ index, reason: error.message });
             console.warn('[Roleplay State] Ignored invalid inventory change:', error.message);
         }
     }
-    const eventBatches = chunkValues(Array.isArray(resolved.events) ? resolved.events : [], 8);
+    const eventBatches = chunkValues(resolvedEvents, 8);
     for (const batch of eventBatches) {
         for (const event of batch) {
             try {
-                const result = narrativeState.createEvent({ workspaceId, originId: provenanceId, sceneId: scene?.id, locationId: scene?.locationId, interpreterId: role.executor.model, event, allowedEntityIds, updatePolicy: roleplaySettings.defaultUpdatePolicy });
+                const normalizedEvent = normalizeNarrativeEvent(event);
+                const result = narrativeState.createEvent({
+                    workspaceId,
+                    originId: provenanceId,
+                    sceneId: scene?.id,
+                    locationId: scene?.locationId,
+                    interpreterId: role.executor.model,
+                    event: normalizedEvent,
+                    allowedEntityIds,
+                    updatePolicy: roleplaySettings.defaultUpdatePolicy,
+                    excludedRelationshipSourceIds
+                });
                 if (result.record) {
                     narrativeProposalCount += 1;
-                    if (event.worldbuildEventId) {
-                        eventOccurrences.linkNarrative({ workspaceId, originId: provenanceId, record: result.record, event, startDate: startClock });
+                    if (normalizedEvent.worldbuildEventId) {
+                        eventOccurrences.linkNarrative({ workspaceId, originId: provenanceId, record: result.record, event: normalizedEvent, startDate: startClock });
                     }
                     changes.push({ kind: 'narrative', eventId: result.record.proposal.changeSet.event.id, status: result.record.status, decision: result.decision, description: result.record.proposal.changeSet.event.description });
+                } else if (result.skipped) {
+                    narrativeSkips.push({ description: event.description, reason: result.skipped });
                 }
             } catch (error) {
+                narrativeSkips.push({
+                    description: event.description,
+                    reason: 'invalid-event',
+                    detail: error.message,
+                    validationIssues: Array.isArray(error.issues) ? error.issues : []
+                });
                 console.warn('[Narrative State] Ignored invalid event:', error.message);
             }
         }
@@ -2597,7 +2681,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         routedResult.scenePatch?.locationId || roleplay.getScene(workspaceId)?.locationId
     );
     if (timeFrame.advance) changes.push({ kind: 'time', frame: timeFrame });
-    const triageInputTokens = estimateTokens(NARRATIVE_TRIAGE_SYSTEM_PROMPT) + estimateTokens(triagePayload);
+    const triageInputTokens = estimateTokens(triageSystemPrompt) + estimateTokens(triagePayload);
     const triageOutputTokens = triagePrimaryOutputTokens;
     const deepInputTokens = estimateTokens(narrativeStateSystemPrompt) + estimateTokens(payload);
     const deepOutputTokens = deepPrimaryOutputTokens;
@@ -2607,7 +2691,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     return {
         changes,
         diagnostics: {
-            status: 'completed',
+            status: narrativeSkips.length || invalidInventoryChanges.length ? 'completed-with-warnings' : 'completed',
             manifest: preTurnManifest ? {
                 requestId: preTurnManifest.requestId,
                 sequence: preTurnManifest.sequence
@@ -2617,7 +2701,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             forceDeepAnalysis,
             routing,
             contextUsage: {
-                triage: measureNarrativeContextSections(triagePayloadValue, NARRATIVE_TRIAGE_SYSTEM_PROMPT),
+                triage: measureNarrativeContextSections(triagePayloadValue, triageSystemPrompt),
                 analysis: measureNarrativeContextSections(payloadValue, narrativeStateSystemPrompt)
             },
             repairs: {
@@ -2629,13 +2713,21 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             },
             analysis: {
                 newEntities: routedResult.newEntities.length,
+                identityUpdates: routedResult.identityUpdates.length,
                 resourceChanges: routedResult.resourceChanges.length,
                 inventoryChanges: routedResult.inventoryChanges.length,
-                events: routedResult.events.length,
+                inventoryChangesApplied: changes.filter(change => change.kind === 'inventory').length,
+                invalidInventoryChanges: invalidInventoryChanges.length,
+                events: routedResult.events.length + generatedContactEventCount,
                 rawEvents: routedResult.events.length,
                 persistedEvents: narrativeProposalCount,
+                skippedEvents: narrativeSkips.length,
+                skippedEventReasons: [...new Set(narrativeSkips.map(skip => skip.reason))],
+                generatedContactEvents: generatedContactEventCount,
                 scenePatch: Boolean(routedResult.scenePatch && Object.keys(routedResult.scenePatch).length)
             },
+            skippedNarrativeEvents: narrativeSkips,
+            invalidInventoryChanges,
             proposals: changes.map(change => ({
                 kind: change.kind,
                 status: change.status || change.decision || 'processed',
@@ -2682,10 +2774,11 @@ async function reprocessNarrativeStateTurn(workspaceId, originId) {
     return result.changes;
 }
 
-function compactNarrativeScene(scene) {
+function compactNarrativeScene(scene, playerEntityId = null) {
     if (!scene) return null;
     return {
         id: scene.id,
+        playerEntityId,
         locationId: scene.locationId,
         participantIds: scene.participantIds || [],
         possibleObserverIds: scene.possibleObserverIds || [],
@@ -2721,6 +2814,7 @@ function constrainNarrativeStateResult(value, domains) {
     const selected = new Set(domains);
     return {
         newEntities: selected.has('entity') && Array.isArray(value.newEntities) ? value.newEntities : [],
+        identityUpdates: selected.has('entity') && Array.isArray(value.identityUpdates) ? value.identityUpdates : [],
         resourceChanges: selected.has('resource') && Array.isArray(value.resourceChanges) ? value.resourceChanges : [],
         scenePatch: selected.has('scene') && value.scenePatch && typeof value.scenePatch === 'object' && !Array.isArray(value.scenePatch)
             ? value.scenePatch
@@ -2728,6 +2822,52 @@ function constrainNarrativeStateResult(value, domains) {
         inventoryChanges: selected.has('inventory') && Array.isArray(value.inventoryChanges) ? value.inventoryChanges : [],
         events: hasEpistemicDomain(domains) && Array.isArray(value.events) ? value.events : []
     };
+}
+
+const NARRATIVE_EVENT_TYPES = new Set([
+    'movement',
+    'possession-transfer',
+    'revelation',
+    'deception',
+    'discovery',
+    'relationship-change',
+    'custom'
+]);
+
+function normalizeNarrativeEvent(event) {
+    if (NARRATIVE_EVENT_TYPES.has(event?.type)) return event;
+    const operations = Array.isArray(event?.operations) ? event.operations : [];
+    let type = 'custom';
+    if (operations.some(operation => operation?.type === 'relationship')) type = 'relationship-change';
+    else if (operations.some(operation => operation?.type === 'knowledge' || operation?.type === 'awareness')) type = 'revelation';
+    else if (operations.some(operation => operation?.type === 'fact')) type = 'discovery';
+    return { ...event, type };
+}
+
+function loadNarrativeRelationshipState(workspaceId, entityIds, excludedSourceIds = new Set()) {
+    const ids = [...entityIds];
+    if (!ids.length) return [];
+    const placeholders = ids.map(() => '?').join(',');
+    const excludedIds = [...excludedSourceIds];
+    const excludedClause = excludedIds.length ? `AND links.fromId NOT IN (${excludedIds.map(() => '?').join(',')})` : '';
+    return db.prepare(`
+        SELECT links.fromId AS sourceEntityId, links.toId AS targetEntityId,
+          links.metadata_json AS metadataJson
+        FROM entity_links links
+        WHERE links.workspaceId = ? AND links.relType = 'related_to'
+          AND (links.fromId IN (${placeholders}) OR links.toId IN (${placeholders}))
+          ${excludedClause}
+        ORDER BY links.createdAt DESC LIMIT 120
+    `).all(workspaceId, ...ids, ...ids, ...excludedIds).map(row => {
+        const metadata = safeParseObject(row.metadataJson) || {};
+        const value = Number(metadata.value);
+        return {
+            sourceEntityId: row.sourceEntityId,
+            targetEntityId: row.targetEntityId,
+            dimension: 'overall',
+            value: Number.isFinite(value) ? Math.max(-100, Math.min(100, value)) : 0
+        };
+    });
 }
 
 function loadNarrativeInventoryState(workspaceId, holderIds, itemIds) {
@@ -2830,59 +2970,66 @@ function loadNarrativeLocationInventoryState(workspaceId, locationId, itemIds) {
 
 const NARRATIVE_TRIAGE_SYSTEM_PROMPT = `You route Roleplay turns to durable-state analyzers and estimate elapsed narrative time. Inspect the user action, final narrative, current time, calendar, time matrix, compact scene, named entities, and locally extracted candidate signals. Candidate signals are hints, not conclusions.
 Return JSON only with {"consequential":boolean,"types":["entity","scene","resource","inventory","awareness","knowledge","belief","memory","relationship","fact"],"entityIds":["existing-id"],"confidence":0.0,"evidence":["short verbatim excerpt"],"requiresFullAnalysis":boolean,"reason":"brief","timeAdvance":null}.
-Always evaluate elapsed time, even when no other durable domain is consequential. For an in-world action, timeAdvance is {"actionType":"short_snake_case","basis":"explicit|matrix","duration":{"years":0,"months":0,"days":0,"hours":0,"minutes":0},"confidence":0.0,"evidence":"short verbatim excerpt"}. Use null for out-of-character instructions, corrections, hypothetical actions, or when no in-world time passed.
-Explicit duration in the final narrative wins over the matrix. Otherwise choose a reasonable value within the supplied matrix: Micro for dialogue lines, combat rounds, lockpicking, and quick scans; Local for same-district walking, wound care, and careful room inspection; Transit for cross-district travel, crowds, minor repairs, and setting camp; Macro for crafting, deep study, rest, and inter-city travel. Do not advance hours during line-by-line dialogue. Do not use a tiny advance for substantial travel. A jump of one day or more must be explicitly supported by the final narrative. Return calendar units directly instead of assuming a 24-hour day.
-Mark inventory for explicit pickup, drop, transfer, gift, theft, loss, consumption, equip, unequip, drawing, sheathing, or quantity change. Mark scene for explicit arrival, departure, movement, participation, observer, nearby, object, or location change. Mark epistemic domains only for information actually communicated, perceived, discovered, remembered, believed, or relationally consequential. Mark resource for an actual value change, not a price mention or hypothetical. A concrete edition of a supplied recurring Event is consequential when it actually takes place, even if the tradition itself is already known.
+Always evaluate elapsed time, even when no other durable domain is consequential. For an in-world action, timeAdvance is {"actionType":"short_snake_case","basis":"explicit|matrix","duration":{"years":0,"months":0,"days":0,"hours":0,"minutes":0},"targetPosition":null,"confidence":0.0,"evidence":"short verbatim excerpt"}. When the final narrative establishes an absolute ending date or time, set basis to "explicit", copy the complete resulting calendar position into targetPosition, and also return the calculated duration. Use null for out-of-character instructions, corrections, hypothetical actions, or when no in-world time passed.
+An explicit final position or duration in the narrative wins over the matrix. Reconcile every clock reference with currentTime; do not describe a turn as reaching a later time while returning null or a conflicting duration. Otherwise choose a reasonable value within the supplied matrix: Micro for dialogue lines, combat rounds, lockpicking, and quick scans; Local for same-district walking, wound care, and careful room inspection; Transit for cross-district travel, crowds, minor repairs, and setting camp; Macro for crafting, deep study, rest, and inter-city travel; Timeskip for supported downtime, recovery, waiting, long-distance travel, or another transition spanning one or more calendar days. Do not advance hours during line-by-line dialogue. Do not use a tiny advance for substantial travel. A jump of one day or more must be explicitly supported by the final narrative or by a completed action whose duration is covered by the configured Timeskip range. Return calendar units directly instead of assuming a 24-hour day.
+Mark inventory for explicit pickup, drop, transfer, gift, theft, loss, consumption, equip, unequip, drawing, sheathing, or quantity change. Mark scene for explicit arrival, departure, movement, participation, observer, nearby, object, or location change. Mark epistemic domains only for information actually communicated, perceived, discovered, remembered, believed, or relationally consequential. Mark relationship for a first demonstrated encounter or interaction that must initialize a directional relationship, even when its initial value is 0, and for an event that materially and durably changes an existing value. Direct conversation is mutual interaction. Listening or overhearing is interaction only from the aware listener toward the speaker unless the speaker also perceives the listener. Mere co-presence is not interaction. Ordinary politeness, irritation, banter, compliance, disagreement, or passing mood does not change an existing value. Mark resource for an actual value change, not a price mention or hypothetical. A concrete edition of a supplied recurring Event is consequential when it actually takes place, even if the tradition itself is already known.
 A newly introduced persistent named character, stably identifiable individual creature, named location, or narratively important unique item is consequential even without an existing ID. An unnamed person distinguished only by appearance, ancestry, clothing, age, expression, or scene position may be routed as a sparse entity candidate, but is not yet a Worldbuild identity. Mark false for crowds, atmosphere, repetition, casual dialogue, hypotheticals, offers not completed, item mentions without possession changes, and events without durable consequences. Presence alone never grants awareness or knowledge. Set requiresFullAnalysis only when four or more domains interact or the consequence cannot be safely isolated.`;
 const NARRATIVE_REPAIR_SYSTEM_PROMPT = 'Repair the supplied response into one valid JSON object that follows the required schema. Preserve supported values. Return JSON only.';
 
 const NARRATIVE_FULL_STATE_SYSTEM_PROMPT = `You are Kallamo's Narrative State interpreter. Never write narrative prose. Extract only explicit, durable consequences from the supplied user message and narrative response. Use only supplied entity IDs and resource keys.
-Return JSON only with {"newEntities":[],"resourceChanges":[],"scenePatch":{},"inventoryChanges":[],"events":[]}.
+Return JSON only with {"newEntities":[],"identityUpdates":[],"resourceChanges":[],"scenePatch":{},"inventoryChanges":[],"events":[]}.
 The user message is the player character's chosen action. The narrative response contains world and NPC consequences. Never infer a player choice, line, intention, emotion, memory, or private thought that the user did not supply.
 preTurnContext is the exact compact epistemic manifest used for generation. Use its separate subject assessments to decide who could acquire information this turn. "undetermined" is not ignorance. "derived" and "evidence-candidate" are not automatically canon. currentKnowledgeCards contains Awareness and known-field coverage at the start of the turn.
-When the final narrative clearly introduces a persistent Character, individual Creature, named Location, or narratively important Item that is absent from availableEntities, add {"referenceId":"new:stable-local-key","name":"canonical name or concise sparse label","type":"Characters|Creatures|Locations|Items","aliases":[],"description":"only explicit introduction facts","excerpt":"short verbatim evidence","confidence":0.0,"decision":"new|ambiguous|conflicting","identityEstablished":true|false,"reason":"brief","itemNature":"unique|type"}. Use its referenceId everywhere else in this response. Set identityEstablished true only when a proper name, stable title, number, designation, unmistakable continuity identity, or explicit registration establishes who the individual is. Appearance, ancestry, clothing, age, expression, or scene position alone never establishes identity. An individually described but anonymous person may be retained with a concise sparse label and identityEstablished false; it remains reviewable and must not become a Worldbuild entity automatically. Characters and individual Creatures may be created automatically only when identityEstablished is true and the identity is unequivocal. Locations and Items are reviewable. Do not create generic crowds, ordinary item mentions, aliases of existing entities, transformations, disguises, or duplicates. Mark ambiguous identity or possible duplication as ambiguous. Mark an invention that contradicts supplied canon as conflicting.
-Scene patch may contain locationId, participantIds, possibleObserverIds, nearbyIds, and objectIds. Participants are directly involved, possible observers can witness the scene, and nearby entities are present in the broader location without necessarily witnessing it. When inventory also changes, keep objectIds consistent with unique items explicitly dropped, picked up, consumed, destroyed, or removed. Change location only when movement is explicit and use only reachableLocationIds; never jump to an unrelated branch of the location hierarchy. Presence is not ownership. A possible observer is only a candidate and does not automatically observe or learn.
-Inventory changes must be explicit and use currentInventoryState plus currentLocationInventoryState. Track pickup, drop, placement, gift, transfer, theft, loss, consumption, destruction, equip, unequip, drawing, sheathing, and quantities. For a unique item move return {"itemId":"id","fromHolderId":"id-or-null","toHolderId":"id-or-null","locationId":"id-or-null","equipped":boolean-when-explicit}. For an item type transfer return {"itemId":"id","fromHolderId":"id-or-null","fromLocationId":"id-or-null","toHolderId":"id-or-null","locationId":"id-or-null","quantity":1,"equipped":boolean-when-explicit}. locationId means deliberately dropped or stored; fromLocationId means picked up. Removal, consumption, or loss may have no destination. For equipment only return {"itemId":"id","holderId":"id","equipped":boolean}. Drawing, wielding, or wearing normally equips; sheathing, stowing, or taking off normally unequips. Never mutate inventory from a mere mention, observation, price, request, offer, temporary use, or speculation.
-Each event must contain: type, description, a short verbatim excerpt, participantIds, confidence from 0 to 1, and operations. When the narrative depicts a concrete edition of a supplied Worldbuild Event, also return worldbuildEventId, occurrenceTitle, worldDate using the supplied calendar position, and participants as [{"entityId":"id","role":"role","audienceType":"all-members|selected-members","selectedMemberIds":[]}]. Record a memory for each directly participating Character, individual Creature, or institutionally involved Faction. Locations and Items are related participants but never memory owners. Use selected-members for a Faction only when the occurrence was communicated to a specific supplied subset; otherwise use all-members for an official collective record. Set worldbuildEventId only when that edition actually happens, never for planning, recollection, comparison, or a passing mention.
+When the final narrative clearly introduces a persistent Character, individual Creature, named Location, or narratively important Item that is absent from availableEntities, add {"referenceId":"new:stable-local-key","name":"canonical name or concise sparse label","type":"Characters|Creatures|Locations|Items","aliases":[],"description":"only explicit introduction facts","excerpt":"short verbatim evidence","confidence":0.0,"decision":"new|ambiguous|conflicting","identityEstablished":true|false,"reason":"brief","itemNature":"unique|type","scenePresence":"participant|observer|nearby|absent"}. Use its referenceId everywhere else in this response. For Characters and individual Creatures, set scenePresence to participant only when directly engaged in the action or conversation, observer only when explicitly able to witness or listen, nearby only when physically present in the broader location, and absent for recollections, reports, or offscreen mentions. Scene presence is independent from a location change. Set identityEstablished true only when a proper name, stable title, number, designation, unmistakable continuity identity, or explicit registration establishes who the individual is. Appearance, ancestry, clothing, age, expression, or scene position alone never establishes identity. An individually described but anonymous person may be retained with a concise sparse label and identityEstablished false; it remains reviewable and must not become a Worldbuild entity automatically. Characters and individual Creatures may be created automatically only when identityEstablished is true and the identity is unequivocal. Locations and Items are reviewable. Do not create generic crowds, ordinary item mentions, transformations, disguises, or duplicates. Mark ambiguous identity or possible duplication as ambiguous. Mark an invention that contradicts supplied canon as conflicting.
+When the narrative establishes that an existing Character or individual Creature has a newly revealed proper name, corrected name, nickname, title, designation, or alternate spelling, add {"referenceId":"identity:stable-local-key","entityId":"existing-id","canonicalName":"new primary name or empty string","aliases":["new alternate name"],"excerpt":"short verbatim evidence","confidence":0.0,"identityEstablished":true|false,"reason":"brief"} to identityUpdates. Use canonicalName only when the text clearly replaces a provisional, descriptive, or incorrect primary label. Put nicknames, titles, alternate spellings, and additional forms in aliases. The previous canonical name is retained automatically as an alias after a rename. Never remove aliases, change an entity ID or type, or update a Location or Item through identityUpdates. Require explicit same-person evidence such as self-identification, direct naming, registration, or unmistakable continuity. Proximity, pronouns, appearance, ancestry, clothing, age, expression, and scene position are insufficient. If the target identity is uncertain, return no identity update.
+Scene patch may contain locationId, participantIds, possibleObserverIds, nearbyIds, and objectIds. Participants are directly involved, possible observers can witness the scene, and nearby entities are present in the broader location without necessarily witnessing it. Update these arrays when an existing or newly introduced character enters, leaves, joins, observes, or moves nearby, even if locationId does not change. When inventory also changes, keep objectIds consistent with unique items explicitly dropped, picked up, consumed, destroyed, or removed. Change location only after movement is completed in the user action or final narrative and use only reachableLocationIds; intention, preparation, a destination plan, an open door, or a visible route is not a completed location change. Never jump to an unrelated branch of the location hierarchy. Presence is not ownership. A possible observer is only a candidate and does not automatically observe or learn.
+Inventory changes must be explicit and use currentInventoryState plus currentLocationInventoryState. Track pickup, drop, placement, gift, transfer, theft, loss, consumption, destruction, equip, unequip, drawing, sheathing, and quantities for every Character and individual Creature, including currentScene.playerEntityId. Inventory means everything the character possesses but is not actively using; equipped means only what is actively being used, wielded, worn, or held in use. A carried item in a belt, sheath, scabbard, holster, bag, pocket, or ordinary inventory remains inventory and is not equipped. Determine the final state after the whole user message and narrative response, not the first intermediate action. If the same item is drawn or used and later sheathed, stowed, put away, placed on a belt, or taken off, return only the final equipped:false state. For a unique item move return {"itemId":"id","fromHolderId":"id-or-null","toHolderId":"id-or-null","locationId":"id-or-null","equipped":boolean-when-explicit}. For an item type transfer return {"itemId":"id","fromHolderId":"id-or-null","fromLocationId":"id-or-null","toHolderId":"id-or-null","locationId":"id-or-null","quantity":1,"equipped":boolean-when-explicit}. locationId means deliberately dropped or stored; fromLocationId means picked up. Removal, consumption, or loss may have no destination. For equipment only return {"itemId":"id","holderId":"id","equipped":boolean}. Drawing, wielding, or wearing normally equips; sheathing, stowing, taking off, or putting away normally unequips without changing possession. Never mutate inventory from a mere mention, observation, price, request, offer, or speculation.
+Each event must contain: type, description, a short verbatim excerpt, participantIds, confidence from 0 to 1, and operations. Event type must be exactly one of movement, possession-transfer, revelation, deception, discovery, relationship-change, or custom. Use custom when no narrower allowed type fits. When the narrative depicts a concrete edition of a supplied Worldbuild Event, also return worldbuildEventId, occurrenceTitle, worldDate using the supplied calendar position, and participants as [{"entityId":"id","role":"role","audienceType":"all-members|selected-members","selectedMemberIds":[]}]. Record a memory for each directly participating Character, individual Creature, or institutionally involved Faction. Locations and Items are related participants but never memory owners. Use selected-members for a Faction only when the occurrence was communicated to a specific supplied subset; otherwise use all-members for an official collective record. Set worldbuildEventId only when that edition actually happens, never for planning, recollection, comparison, or a passing mention.
 Allowed operations:
 {"type":"fact","proposition":{"subjectId":"id","predicate":"stable-key","object":any},"confidence":0.0}
 {"type":"awareness","subjectId":"id","targetId":"id","confidence":0.0}
 {"type":"knowledge","subjectId":"id","proposition":{"subjectId":"id","predicate":"stable-key","object":any},"acquisition":"participant|witness|reported|inferred","confidence":0.0,"accessibility":"available|suppressed|inaccessible"}
 {"type":"belief","subjectId":"id","proposition":{"subjectId":"id","predicate":"stable-key","object":any},"confidence":0.0}
 {"type":"memory","subjectId":"id","summary":"durable personal memory","salience":0.0,"accessibility":"available|suppressed|inaccessible"}
-{"type":"relationship","sourceEntityId":"id","targetEntityId":"id","dimension":"trust|fear|respect|affection|hostility|debt|loyalty|overall","title":"current relationship title when explicitly changed","value":number,"description":"current subjective description"}
-Awareness means the subject demonstrably knows the target exists through interaction, recognition, testimony, discovery, conscious possession, or a relationship. Presence in the same scene is insufficient. Directly acquired information may become knowledge. Unverified claims normally become beliefs. Group knowledge requires explicit collective communication, an official report, meeting, archive, or equivalent. Do not union member knowledge. Record memory only for identity, goals, emotional impact, material consequence, or likely future use. Ignore repeated knowledge and memories already present in currentPerspectiveState. Relationship values are directional and absolute current values; do not change them for isolated politeness, rudeness, mood, or speculation. Do not report atmosphere, repetition, casual dialogue, hypotheticals, private thoughts unavailable to a subject, or out-of-character instructions. Empty arrays and an empty scenePatch are correct.`;
+{"type":"relationship","sourceEntityId":"id","targetEntityId":"id","dimension":"overall","value":absolute-number,"impact":"meaningful|significant|drastic"}
+Awareness means the subject demonstrably knows the target exists through interaction, recognition, testimony, discovery, conscious possession, or a relationship. Presence in the same scene is insufficient. Grant knowledge only when the subject actually receives, perceives, discovers, recalls, or reliably infers the specific proposition in this turn. Narrator-only information, another character's private thought, unnoticed events, vague implications, and facts merely present in context are not knowledge. Use belief for rumors, deception, disputed claims, uncertain interpretation, suspicion, or an unsupported inference. When one character reports established observations plus a personal theory, listeners gain reported Knowledge of the observations and of the fact that the speaker proposed the theory; only the speaker receives the Belief unless a listener explicitly accepts it. Existing Awareness in currentKnowledgeCards is sufficient; do not repeat awareness solely to make knowledge valid. Group knowledge requires explicit collective communication, an official report, meeting, archive, or equivalent. Do not union member knowledge. Ignore knowledge already present in currentPerspectiveState.
+Relationship changes only the numeric bar. Never return a relationship title or description. currentScene.playerEntityId identifies the Player. The Player's feelings are unknowable: never emit a relationship operation whose sourceEntityId is the Player. You may emit Awareness with the Player as subject or target. When an NPC is explicitly presented to the Player, record Player-to-NPC Awareness, NPC-to-Player Awareness, and only the NPC-to-Player directional relationship. Use currentRelationshipState as the numeric baseline and return the absolute result. On a first demonstrated encounter or interaction, initialize each supported non-Player directional relationship and its Awareness card. Direct mutual interaction normally requires both directions. Listening or overhearing requires listener-to-speaker only unless the speaker also perceives the listener. Default a new relationship to 0. Prior favorable or adverse information may support an initial value normally within -25 to 25 with meaningful impact. Significant explicit evidence may support up to -50 or 50 with significant impact. Set drastic impact and use values approaching -100 or 100 only for extreme, explicit evidence such as established hatred, mortal enmity, absolute devotion, or an equivalent relationship-defining fact. The two directions may differ. For an existing relationship, use meaningful for a durable but modest shift near 5 points, significant for a major act or repeated pattern within 15 points, and drastic only for an explicit rupture or transformation such as betrayal, sacrifice, life-saving action, devastating revelation, or equivalent. Direction matters: sourceEntityId is whose relationship changes. Do not change existing values for isolated politeness, rudeness, mood, banter, compliance, routine help, ordinary disagreement, or speculation. Record memory only for identity, goals, emotional impact, material consequence, or likely future use. Ignore repeated memories already present in currentPerspectiveState. Do not report atmosphere, repetition, casual dialogue, hypotheticals, private thoughts unavailable to a subject, or out-of-character instructions. Empty arrays and an empty scenePatch are correct.`;
 
 const NARRATIVE_SCOPED_BASE_PROMPT = `You are Kallamo's Narrative State interpreter. Never write narrative prose. Analyze only routing.selectedDomains. Extract explicit durable consequences from the user action and final narrative. Candidate signals are hints, not facts. Use only supplied IDs and resource keys.
-Return JSON only with {"newEntities":[],"resourceChanges":[],"scenePatch":{},"inventoryChanges":[],"events":[]}. Leave every unselected domain empty. The user message is the player character's chosen action. The narrative response contains world and NPC consequences. Never invent a player choice, line, intention, emotion, memory, or private thought. Empty arrays and an empty scenePatch are correct.`;
+Return JSON only with {"newEntities":[],"identityUpdates":[],"resourceChanges":[],"scenePatch":{},"inventoryChanges":[],"events":[]}. Leave every unselected domain empty. The user message is the player character's chosen action. The narrative response contains world and NPC consequences. Never invent a player choice, line, intention, emotion, memory, or private thought. Empty arrays and an empty scenePatch are correct.`;
 
-const NARRATIVE_ENTITY_SCOPED_PROMPT = `ENTITY DOMAIN: Retain a newly introduced persistent individual absent from availableEntities as either an established identity or a sparse candidate. Return {"referenceId":"new:stable-local-key","name":"canonical name or concise sparse label","type":"Characters|Creatures|Locations|Items","aliases":[],"description":"explicit introduction facts","excerpt":"short verbatim evidence","confidence":0.0,"decision":"new|ambiguous|conflicting","identityEstablished":true|false,"reason":"brief","itemNature":"unique|type"}. Set identityEstablished true only for a proper name, stable title, number, designation, unmistakable continuity identity, or explicit registration. Appearance, ancestry, clothing, age, expression, or scene position alone means false. Anonymous individuals with false remain sparse and reviewable; they do not become Worldbuild entities automatically. Use referenceId elsewhere. Do not create crowds, ordinary item mentions, aliases, disguises, transformations, or duplicates.`;
+const NARRATIVE_ENTITY_SCOPED_PROMPT = `ENTITY DOMAIN: Retain a newly introduced persistent individual absent from availableEntities as either an established identity or a sparse candidate. Return it in newEntities as {"referenceId":"new:stable-local-key","name":"canonical name or concise sparse label","type":"Characters|Creatures|Locations|Items","aliases":[],"description":"explicit introduction facts","excerpt":"short verbatim evidence","confidence":0.0,"decision":"new|ambiguous|conflicting","identityEstablished":true|false,"reason":"brief","itemNature":"unique|type","scenePresence":"participant|observer|nearby|absent"}. For Characters and individual Creatures, use participant only for direct involvement, observer only for explicit witnessing or listening, nearby only for broader physical presence, and absent for recollections, reports, or offscreen mentions. This presence can change without a location change. Set identityEstablished true only for a proper name, stable title, number, designation, unmistakable continuity identity, or explicit registration. Appearance, ancestry, clothing, age, expression, or scene position alone means false. Anonymous individuals with false remain sparse and reviewable; they do not become Worldbuild entities automatically. Use referenceId elsewhere. Do not create crowds, ordinary item mentions, disguises, transformations, or duplicates.
+When an existing Character or individual Creature is explicitly identified by a newly revealed or corrected primary name, return in identityUpdates {"referenceId":"identity:stable-local-key","entityId":"existing-id","canonicalName":"new primary name or empty string","aliases":["new nickname, title, alternate spelling, or designation"],"excerpt":"short verbatim evidence","confidence":0.0,"identityEstablished":true|false,"reason":"brief"}. Use canonicalName only to replace a provisional, descriptive, or incorrect primary label. Use aliases for additional valid forms. Renames retain the previous primary label as an alias automatically. Never remove an alias or alter an ID or type. Require explicit same-person evidence; proximity, pronouns, appearance, and scene position are insufficient. Return no identity update when the association is uncertain.`;
 
-const NARRATIVE_SCENE_SCOPED_PROMPT = `SCENE DOMAIN: scenePatch may contain locationId, participantIds, possibleObserverIds, nearbyIds, and objectIds. Return complete replacement arrays only for fields that changed. Participants are directly involved, possible observers can witness, nearby entities are in the broader location, and objects are physically present. Explicit arrivals, departures, joining a conversation, sitting with the group, leaving, and deliberate movement can change scene membership. When inventory is also selected, dropping a unique item may add it to objectIds, while picking up, consuming, destroying, or removing it may remove it. Keep unrelated existing objectIds. Change location only when movement is explicit and use reachableLocationIds. Presence is not ownership or knowledge.`;
+const NARRATIVE_SCENE_SCOPED_PROMPT = `SCENE DOMAIN: scenePatch may contain locationId, participantIds, possibleObserverIds, nearbyIds, and objectIds. Return complete replacement arrays only for fields that changed. Participants are directly involved, possible observers can witness, nearby entities are in the broader location, and objects are physically present. Explicit completed arrivals, departures, joining a conversation, sitting with the group, leaving, and deliberate movement can change scene membership independently from locationId. Include newly introduced entity referenceIds in the appropriate array. When inventory is also selected, dropping a unique item may add it to objectIds, while picking up, consuming, destroying, or removing it may remove it. Keep unrelated existing objectIds. Change location only after movement is completed and use reachableLocationIds. Intention, preparation, a destination plan, an open door, or a visible route is not a completed location change. Presence is not ownership or knowledge.`;
 
 const NARRATIVE_RESOURCE_SCOPED_PROMPT = `RESOURCE DOMAIN: resourceChanges contain {"entityId":"id","resourceKey":"key","value":absolute-number}. Use currentResourceStates and return the absolute result. Apply only explicit mechanical gains, losses, recovery, damage, or expenditure. Prices, wages, comparisons, plans, hypotheticals, and narration without an actual value change are not resource changes.`;
 
 const NARRATIVE_INVENTORY_SCOPED_PROMPT = `INVENTORY DOMAIN: Track explicit pickup, drop, deliberate placement, gift, transfer, theft, loss, consumption, destruction, equip, unequip, drawing, sheathing, and quantity changes. currentInventoryState and currentLocationInventoryState are the pre-turn truth.
 For a unique item move return {"itemId":"id","fromHolderId":"id-or-null","toHolderId":"id-or-null","locationId":"id-or-null","equipped":boolean-when-explicit}. It has exactly one holder or location. Dropping or deliberately leaving it uses locationId. Loss, consumption, or destruction with no destination uses null targets.
 For an item type transfer return {"itemId":"id","fromHolderId":"id-or-null","fromLocationId":"id-or-null","toHolderId":"id-or-null","locationId":"id-or-null","quantity":positive-integer,"equipped":boolean-when-explicit}. fromLocationId means pickup; locationId means dropped or stored. Consumption or loss removes quantity without adding a destination.
-For equipment only return {"itemId":"id","holderId":"id","equipped":boolean}. Drawing, wielding, wearing, or putting on a carried item normally equips it. Sheathing, stowing, taking off, or putting away normally unequips it without changing holder. A transfer from an equipped holder includes equipped:false; equipping by the recipient uses equipped:true.
+For equipment only return {"itemId":"id","holderId":"id","equipped":boolean}. Apply these same rules to every Character and individual Creature in currentInventoryState, including currentScene.playerEntityId. Inventory is possession without active use. Equipped is reserved for active use, such as wielding, holding in use, or wearing. A belt, sheath, scabbard, holster, bag, pocket, or ordinary inventory is not equipped. Determine the final state after the entire turn. Drawing, wielding, wearing, or putting on a carried item normally equips it. Sheathing, stowing, taking off, putting away, or placing it on a belt normally unequips it without changing holder. If an item is used first and then put away later in the same message, return equipped:false. A transfer from an equipped holder includes equipped:false; equipping by the recipient uses equipped:true.
 Do not mutate inventory from seeing, discussing, pricing, offering, requesting, touching, or temporary use unless possession, placement, quantity, or equipped state explicitly changes. Never invent an item ID.`;
 
 const NARRATIVE_EPISTEMIC_SCOPED_PROMPT = `EPISTEMIC DOMAINS: preTurnContext is the scoped epistemic manifest used for generation. "undetermined" is not ignorance. "derived" and "evidence-candidate" are not automatically canon. currentKnowledgeCards groups Awareness and known fields by card. currentPerspectiveState contains relevant current records.
-Each event contains type, description, a short verbatim excerpt, participantIds, confidence from 0 to 1, and operations. When a concrete edition of a supplied recurring Worldbuild Event actually happens, also return worldbuildEventId, occurrenceTitle, worldDate, and participants with roles plus Faction audience. Record memories for directly participating Characters, individual Creatures, and institutionally involved Factions, never for Locations or Items. Do not link plans, recollections, comparisons, or passing mentions as new occurrences. Allowed operations:
+Each event contains type, description, a short verbatim excerpt, participantIds, confidence from 0 to 1, and operations. Event type must be exactly one of movement, possession-transfer, revelation, deception, discovery, relationship-change, or custom. Use custom when no narrower allowed type fits. When a concrete edition of a supplied recurring Worldbuild Event actually happens, also return worldbuildEventId, occurrenceTitle, worldDate, and participants with roles plus Faction audience. Record memories for directly participating Characters, individual Creatures, and institutionally involved Factions, never for Locations or Items. Do not link plans, recollections, comparisons, or passing mentions as new occurrences. Allowed operations:
 {"type":"fact","proposition":{"subjectId":"id","predicate":"stable-key","object":any},"confidence":0.0}
 {"type":"awareness","subjectId":"id","targetId":"id","confidence":0.0}
 {"type":"knowledge","subjectId":"id","proposition":{"subjectId":"id","predicate":"stable-key","object":any},"acquisition":"participant|witness|reported|inferred","confidence":0.0,"accessibility":"available|suppressed|inaccessible"}
 {"type":"belief","subjectId":"id","proposition":{"subjectId":"id","predicate":"stable-key","object":any},"confidence":0.0}
 {"type":"memory","subjectId":"id","summary":"durable personal memory","salience":0.0,"accessibility":"available|suppressed|inaccessible"}
-{"type":"relationship","sourceEntityId":"id","targetEntityId":"id","dimension":"trust|fear|respect|affection|hostility|debt|loyalty|overall","title":"current relationship title when explicitly changed","value":number,"description":"current subjective description"}
-Awareness requires demonstrated interaction, recognition, testimony, discovery, conscious possession, or a relationship. Shared presence is insufficient. Direct information may become knowledge; unverified claims normally become beliefs. Group knowledge requires explicit collective communication or a shared source. Do not union member knowledge. Record memory only for identity, goals, emotional impact, material consequence, or likely future use. Ignore existing records. Relationship values are directional absolute current values; isolated mood, politeness, or rudeness is not durable.`;
+{"type":"relationship","sourceEntityId":"id","targetEntityId":"id","dimension":"overall","value":absolute-number,"impact":"meaningful|significant|drastic"}
+Awareness requires demonstrated interaction, recognition, testimony, discovery, conscious possession, or a relationship. Shared presence is insufficient. Grant knowledge only when the subject actually acquires the exact proposition in this turn. Narrator-only information, unnoticed events, private thoughts, vague implication, and contextual availability are not character knowledge. Use belief for rumors, deception, disputed claims, suspicion, and unsupported inference. When a speaker reports observations and a personal theory, listeners gain reported Knowledge of the observations and of the speaker's claim; only the speaker receives the Belief unless a listener explicitly accepts it. Existing Awareness in currentKnowledgeCards is sufficient; do not repeat it only to make knowledge valid. Group knowledge requires explicit collective communication or a shared source. Do not union member knowledge. Ignore existing knowledge records.
+Relationship changes only the directional numeric bar. Never return a title or description. currentScene.playerEntityId identifies the Player. The Player's feelings are unknowable: never emit a relationship operation whose sourceEntityId is the Player. You may emit Awareness with the Player as subject or target. When an NPC is explicitly presented to the Player, record Player-to-NPC Awareness, NPC-to-Player Awareness, and only the NPC-to-Player directional relationship. Use currentRelationshipState as the baseline and return an absolute value. On a first demonstrated encounter or interaction, initialize the supported non-Player directional relationship and Awareness card. Direct mutual interaction normally requires both directions. Listening or overhearing requires listener-to-speaker only unless the speaker perceives the listener. Default a new relationship to 0. Prior favorable or adverse information normally supports an initial value within -25 to 25 with meaningful impact. Significant explicit evidence may support up to -50 or 50 with significant impact. Set drastic impact and use values approaching -100 or 100 only for extreme explicit evidence such as established hatred, mortal enmity, absolute devotion, or an equivalent relationship-defining fact. Directions may differ. For an existing relationship, a meaningful durable shift should stay near 5 points; a significant major act or repeated pattern may move up to 15; drastic is reserved for explicit betrayal, sacrifice, life-saving action, devastating revelation, or equivalent rupture. Do not change existing values for ordinary politeness, irritation, banter, compliance, routine assistance, disagreement, mood, or speculation. Record memory only for identity, goals, emotional impact, material consequence, or likely future use. Ignore existing memories.`;
 
-function buildNarrativeStateSystemPrompt(domains) {
+function buildNarrativeStateSystemPrompt(domains, languageInstruction = '') {
+    const sections = languageInstruction ? [languageInstruction] : [];
     if (domains.length >= 4) {
-        return `${NARRATIVE_FULL_STATE_SYSTEM_PROMPT}\nSelected domains: ${domains.join(', ')}. Leave unselected domains empty.`;
+        sections.push(NARRATIVE_FULL_STATE_SYSTEM_PROMPT);
+        sections.push(`Selected domains: ${domains.join(', ')}. Leave unselected domains empty.`);
+        return sections.join('\n\n');
     }
-    const sections = [NARRATIVE_SCOPED_BASE_PROMPT];
+    sections.push(NARRATIVE_SCOPED_BASE_PROMPT);
     if (domains.includes('entity')) sections.push(NARRATIVE_ENTITY_SCOPED_PROMPT);
     if (domains.includes('scene')) sections.push(NARRATIVE_SCENE_SCOPED_PROMPT);
     if (domains.includes('resource')) sections.push(NARRATIVE_RESOURCE_SCOPED_PROMPT);
@@ -2921,11 +3068,13 @@ async function sendNarrativeJson(params, schema, label, telemetry) {
     }
 }
 
-function repairNarrativeJson({ executor, invalidResponse, schema, label, telemetry }) {
+function repairNarrativeJson({ executor, invalidResponse, schema, label, telemetry, languageInstruction = '' }) {
     return sendNarrativeJson({
         apiProfileId: executor.apiProfileId,
         model: executor.model,
-        systemPrompt: NARRATIVE_REPAIR_SYSTEM_PROMPT,
+        systemPrompt: languageInstruction
+            ? `${languageInstruction}\n${NARRATIVE_REPAIR_SYSTEM_PROMPT}`
+            : NARRATIVE_REPAIR_SYSTEM_PROMPT,
         chatHistory: [],
         newPrompt: `INVALID RESPONSE:\n${String(invalidResponse || '').slice(0, 16000)}`,
         temperature: 0,
@@ -2950,6 +3099,394 @@ function resolveNarrativeEntityReferences(value, resolveReference) {
     };
     visit(clone);
     return clone;
+}
+
+const PORTUGUESE_CLOCK_NUMBERS = new Map([
+    ['zero', 0], ['uma', 1], ['um', 1], ['duas', 2], ['dois', 2], ['tres', 3],
+    ['quatro', 4], ['cinco', 5], ['seis', 6], ['sete', 7], ['oito', 8], ['nove', 9],
+    ['dez', 10], ['onze', 11], ['doze', 12], ['treze', 13], ['catorze', 14],
+    ['quatorze', 14], ['quinze', 15], ['dezesseis', 16], ['dezessete', 17],
+    ['dezoito', 18], ['dezenove', 19], ['vinte', 20], ['trinta', 30],
+    ['quarenta', 40], ['cinquenta', 50]
+]);
+
+function parsePortugueseClockNumber(value) {
+    const normalized = normalizeInventoryText(value).trim();
+    if (PORTUGUESE_CLOCK_NUMBERS.has(normalized)) return PORTUGUESE_CLOCK_NUMBERS.get(normalized);
+    const parts = normalized.split(/\s+e\s+/);
+    if (parts.length !== 2) return null;
+    const tens = PORTUGUESE_CLOCK_NUMBERS.get(parts[0]);
+    const units = PORTUGUESE_CLOCK_NUMBERS.get(parts[1]);
+    return Number.isInteger(tens) && tens >= 20 && Number.isInteger(units) ? tens + units : null;
+}
+
+function extractExplicitClockTarget(text, startClock, calendar, futureOnly = false) {
+    const source = normalizeInventoryText(text);
+    const candidates = [];
+    const marker = futureOnly ? '(?:ate|until|by)' : '(?:as|ate|marca(?:va)?|at|until|by)';
+    const numeric = new RegExp(`\\b${marker}\\b\\s*(\\d{1,2})(?:\\s*(?::|h)\\s*(\\d{2}))?`, 'g');
+    for (const match of source.matchAll(numeric)) {
+        candidates.push({ index: match.index ?? 0, hour: Number(match[1]), minute: Number(match[2] || 0) });
+    }
+    if (!futureOnly) {
+        const words = /\b(?:as|marca(?:va)?)\b\s+((?:vinte\s+e\s+)?[a-z]+)(?:\s+e\s+([a-z]+))?(?:\s+horas?)?/g;
+        for (const match of source.matchAll(words)) {
+            const hour = parsePortugueseClockNumber(match[1]);
+            const minute = match[2] ? parsePortugueseClockNumber(match[2]) : 0;
+            if (hour !== null && minute !== null) candidates.push({ index: match.index ?? 0, hour, minute });
+        }
+        for (const match of source.matchAll(/\b(meio-dia|noon)\b/g)) {
+            candidates.push({ index: match.index ?? 0, hour: 12, minute: 0 });
+        }
+    }
+    const target = candidates
+        .filter(candidate => candidate.hour >= 0 && candidate.hour < calendar.hoursPerDay && candidate.minute >= 0 && candidate.minute < 60)
+        .sort((left, right) => left.index - right.index)
+        .at(-1);
+    return target ? {
+        eraId: startClock.eraId,
+        year: startClock.year,
+        month: startClock.month,
+        day: startClock.day,
+        hour: target.hour,
+        minute: target.minute
+    } : null;
+}
+
+function resolveNarrativeTimeAdvance({ timeAdvance, startClock, calendar, userMessage, narrativeResponse }) {
+    const responseTarget = extractExplicitClockTarget(narrativeResponse, startClock, calendar);
+    const requestedTarget = responseTarget || extractExplicitClockTarget(userMessage, startClock, calendar, true);
+    if (!requestedTarget && !timeAdvance) return null;
+    const current = timeAdvance && typeof timeAdvance === 'object' && !Array.isArray(timeAdvance)
+        ? { ...timeAdvance }
+        : {
+            actionType: 'explicit_clock_progression',
+            duration: { years: 0, months: 0, days: 0, hours: 0, minutes: 0 },
+            confidence: 1,
+            evidence: ''
+        };
+    if (requestedTarget) {
+        current.basis = 'explicit';
+        current.targetPosition = requestedTarget;
+        current.evidence = current.evidence || 'Explicit narrative clock position.';
+    } else if (!Object.hasOwn(current, 'targetPosition')) {
+        current.targetPosition = null;
+    }
+    return current;
+}
+
+function hasPlayerInventoryAction(text, itemName) {
+    const normalized = normalizeInventoryText(text);
+    const primaryTerm = normalizeInventoryText(itemName).match(/[a-z0-9]+/g)?.find(term => term.length >= 4);
+    if (!primaryTerm || !normalized.includes(primaryTerm)) return false;
+    return /\b(?:eu|meu|minha|pegava|peguei|pego|tirava|tirei|tiro|colocava|coloquei|coloco|guardava|guardei|guardo|largava|larguei|largo|deixava|deixei|deixo|vestia|vesti|visto|equipava|equipei|equipo|empunhava|empunhei|empunho|i|my)\b/.test(normalized);
+}
+
+function normalizeNarrativeInventoryPatch(value, currentInventoryState, currentLocationInventoryState = [], context = {}) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error('Inventory changes must be objects.');
+    }
+    const patch = { ...value };
+    if (patch.equipped !== undefined) {
+        if (typeof patch.equipped === 'string') {
+            const normalized = patch.equipped.trim().toLowerCase();
+            if (normalized === 'true' || normalized === 'false') patch.equipped = normalized === 'true';
+            else delete patch.equipped;
+        } else {
+            patch.equipped = Boolean(patch.equipped);
+        }
+    }
+    if (patch.quantity !== undefined) patch.quantity = Math.round(Number(patch.quantity));
+    const inventoryItem = [...(currentInventoryState || []), ...(currentLocationInventoryState || [])]
+        .find(item => item.itemId === patch.itemId);
+    if (inventoryItem?.itemName && hasPlayerInventoryAction(context.userMessage, inventoryItem.itemName)) {
+        for (const key of ['fromHolderId', 'holderId']) {
+            if (!patch[key] || patch[key] === context.playerEntityId) continue;
+            const playerHasItem = (currentInventoryState || []).some(item =>
+                item.itemId === patch.itemId && item.holderId === context.playerEntityId
+            );
+            if (!playerHasItem) throw new Error('Inventory source conflicts with explicit player action evidence.');
+            patch[key] = context.playerEntityId;
+        }
+    }
+    const playerOwnsAction = patch.holderId === context.playerEntityId
+        || patch.fromHolderId === context.playerEntityId
+        || (patch.toHolderId === context.playerEntityId && patch.fromLocationId);
+    const actionText = playerOwnsAction
+        ? context.userMessage
+        : context.narrativeResponse;
+    const inferredEquipmentState = inferNarrativeEquipmentState(actionText, inventoryItem?.itemName);
+    if (inferredEquipmentState !== null) patch.equipped = inferredEquipmentState;
+    if (patch.fromHolderId && patch.equipped === undefined) {
+        const sourceIsEquipped = (currentInventoryState || []).some(item =>
+            item.itemId === patch.itemId
+            && item.holderId === patch.fromHolderId
+            && item.equipped === true
+        );
+        if (sourceIsEquipped) patch.equipped = false;
+    }
+    return patch;
+}
+
+function normalizeInventoryText(value) {
+    return String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+}
+
+function lastPatternIndex(text, patterns) {
+    return patterns.reduce((lastIndex, pattern) => {
+        const matches = text.matchAll(pattern);
+        for (const match of matches) lastIndex = Math.max(lastIndex, match.index ?? -1);
+        return lastIndex;
+    }, -1);
+}
+
+function inferNarrativeEquipmentState(text, itemName) {
+    if (!itemName || !text) return null;
+    const normalizedText = normalizeInventoryText(text);
+    const itemTerms = normalizeInventoryText(itemName).match(/[a-z0-9]+/g) || [];
+    const primaryTerm = itemTerms.find(term => term.length >= 4) || itemTerms[0];
+    if (!primaryTerm) return null;
+    const itemIndex = normalizedText.lastIndexOf(primaryTerm);
+    if (itemIndex < 0) return null;
+
+    const windowStart = Math.max(0, itemIndex - 180);
+    const windowEnd = Math.min(normalizedText.length, itemIndex + 220);
+    const actionWindow = normalizedText.slice(windowStart, windowEnd);
+    const equipPatterns = [
+        /\b(?:desembainh\w*|draw\w*|drew|wield\w*|brandish\w*|empunh\w*|sac(?:ei|ou|ava|ar|ando)\w*)\b/g,
+        /\b(?:peg\w*|hold\w*|held|grip\w*)\b.{0,90}\b(?:mao|hand)\b/g,
+        /\b(?:na|em|in|on)\s+(?:a|o|uma|um|my|your|his|her|the)?\s*(?:mao|hand)\b/g,
+        /\b(?:vest\w*|wear\w*|wore|put on|equip\w*)\b/g,
+        /\b(?:retir\w*|draw\w*)\b.{0,100}\b(?:do|da|from)\s+(?:cinto|cintura|bainha|coldre|belt|waist|scabbard|sheath|holster)\b/g
+    ];
+    const unequipPatterns = [
+        /\b(?:embainh\w*|sheathe\w*|stow\w*|store\w*|put away|put back|guard\w*|deix\w*)\b/g,
+        /\b(?:guard\w*|deix\w*|coloc\w*|put)\b.{0,100}\b(?:cinto|cintura|bainha|coldre|belt|waist|scabbard|sheath|holster|inventario|inventory|mochila|bag|pack|bolsa|pocket)\b/g,
+        /\b(?:tir\w*|remov\w*|take off|took off)\b.{0,90}\b(?:mao|hand|corpo|body|armadura|armor|capacete|helmet)\b/g
+    ];
+    const equipIndex = lastPatternIndex(actionWindow, equipPatterns);
+    const unequipIndex = lastPatternIndex(actionWindow, unequipPatterns);
+    if (equipIndex < 0 && unequipIndex < 0) return null;
+    return unequipIndex > equipIndex;
+}
+
+function buildNarrativeScenePatch(currentScene, rawPatch, introductions, narrativeSignals = {}) {
+    const patch = {};
+    const source = rawPatch && typeof rawPatch === 'object' && !Array.isArray(rawPatch) ? rawPatch : {};
+    if (Object.hasOwn(source, 'locationId') && (source.locationId === null || typeof source.locationId === 'string')) {
+        patch.locationId = source.locationId;
+    }
+    for (const key of ['participantIds', 'possibleObserverIds', 'nearbyIds', 'objectIds']) {
+        if (Array.isArray(source[key])) patch[key] = [...new Set(source[key].filter(value => typeof value === 'string' && value))];
+    }
+
+    const presenceFields = {
+        participant: 'participantIds',
+        observer: 'possibleObserverIds',
+        nearby: 'nearbyIds'
+    };
+    for (const introduction of introductions || []) {
+        const targetField = presenceFields[introduction.proposal?.scenePresence];
+        if (!targetField) continue;
+        for (const key of ['participantIds', 'possibleObserverIds', 'nearbyIds']) {
+            const values = [...(patch[key] ?? currentScene?.[key] ?? [])].filter(id => id !== introduction.entityId);
+            if (key === targetField) values.push(introduction.entityId);
+            patch[key] = [...new Set(values)];
+        }
+    }
+
+    if (Object.hasOwn(patch, 'locationId') && patch.locationId === (currentScene?.locationId ?? null)) delete patch.locationId;
+    const hasCompletedMovement = (narrativeSignals.signals || []).some(signal =>
+        signal.domain === 'scene' && signal.action === 'movement'
+    );
+    if (Object.hasOwn(patch, 'locationId') && !hasCompletedMovement) delete patch.locationId;
+    for (const key of ['participantIds', 'possibleObserverIds', 'nearbyIds', 'objectIds']) {
+        if (Object.hasOwn(patch, key) && sameIdSet(patch[key], currentScene?.[key] ?? [])) delete patch[key];
+    }
+    return patch;
+}
+
+function buildNarrativeInitialContactEvents({
+    workspaceId,
+    playerEntityId,
+    participantIds,
+    introductions,
+    identityContacts,
+    actorIds,
+    relationshipPairs,
+    awarenessPairs
+}) {
+    const events = [];
+    const seenEntityIds = new Set();
+    const participantSet = new Set(participantIds || []);
+    const relationshipPairSet = new Set(relationshipPairs || []);
+    const awarenessPairSet = new Set(awarenessPairs || []);
+    const candidates = [
+        ...(introductions || []).map(introduction => ({
+            entityId: introduction.entityId,
+            name: introduction.proposal?.name,
+            description: introduction.proposal?.description,
+            excerpt: introduction.proposal?.excerpt,
+            confidence: introduction.proposal?.confidence,
+            scenePresence: introduction.proposal?.scenePresence,
+            isNew: true
+        })),
+        ...(identityContacts || []).map(identity => ({
+            entityId: identity.entityId,
+            name: null,
+            description: identity.reason,
+            excerpt: identity.excerpt,
+            confidence: identity.confidence,
+            scenePresence: 'participant',
+            isNew: false
+        }))
+    ];
+    for (const candidate of candidates) {
+        const entityId = candidate.entityId;
+        const isActor = actorIds.has(entityId);
+        if (!entityId || seenEntityIds.has(entityId) || (!isActor && !candidate.isNew)) continue;
+        if (candidate.isNew && candidate.scenePresence !== 'participant') {
+            if (!candidate.description && !candidate.excerpt) continue;
+        } else if (!participantSet.has(entityId)) {
+            continue;
+        }
+        seenEntityIds.add(entityId);
+        const operations = [];
+        if (candidate.isNew) {
+            operations.push({
+                type: 'fact',
+                proposition: {
+                    subjectId: entityId,
+                    predicate: 'narrative-introduction',
+                    object: candidate.description || `${candidate.name || 'An individual'} enters the narrative.`
+                },
+                confidence: clampNarrativeConfidence(candidate.confidence)
+            });
+        }
+        const participantIdsForEvent = [entityId];
+        if (isActor && playerEntityId && playerEntityId !== entityId && participantSet.has(entityId)) {
+            participantIdsForEvent.push(playerEntityId);
+            appendInitialAwarenessOperation(operations, awarenessPairSet, playerEntityId, entityId, candidate.confidence);
+            appendInitialAwarenessOperation(operations, awarenessPairSet, entityId, playerEntityId, candidate.confidence);
+            appendInitialRelationshipOperation(
+                workspaceId,
+                operations,
+                relationshipPairSet,
+                entityId,
+                playerEntityId,
+                playerEntityId
+            );
+        }
+        if (!operations.length) continue;
+        const label = candidate.name || 'An existing character';
+        events.push({
+            type: 'custom',
+            description: candidate.isNew
+                ? candidate.description || `${label} is introduced to the scene.`
+                : `${label} is introduced to the controlled character.`,
+            excerpt: candidate.excerpt || candidate.description || label,
+            participantIds: [...new Set(participantIdsForEvent)],
+            confidence: clampNarrativeConfidence(candidate.confidence),
+            operations
+        });
+    }
+    return events;
+}
+
+function collectAwarenessPairs(events) {
+    const pairs = new Set();
+    for (const event of events || []) {
+        for (const operation of event?.operations || []) {
+            if (operation?.type === 'awareness' && operation.subjectId && operation.targetId) {
+                pairs.add(`${operation.subjectId}\u0000${operation.targetId}`);
+            }
+        }
+    }
+    return pairs;
+}
+
+function appendInitialAwarenessOperation(operations, pairs, subjectId, targetId, confidenceValue) {
+    if (!subjectId || !targetId || subjectId === targetId) return;
+    const pair = `${subjectId}\u0000${targetId}`;
+    if (pairs.has(pair) || operations.some(operation => operation?.type === 'awareness' && operation.subjectId === subjectId && operation.targetId === targetId)) return;
+    operations.push({
+        type: 'awareness',
+        subjectId,
+        targetId,
+        confidence: clampNarrativeConfidence(confidenceValue)
+    });
+    pairs.add(pair);
+}
+
+function clampNarrativeConfidence(value) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? Math.max(0, Math.min(1, numeric)) : 0.9;
+}
+
+function ensureEncounterRelationshipOperations(workspaceId, events, playerEntityId = null) {
+    const resolvedEvents = Array.isArray(events) ? events : [];
+    const pairs = collectRelationshipPairs(resolvedEvents);
+    for (const event of resolvedEvents) {
+        if (!Array.isArray(event.operations)) continue;
+        const additions = [];
+        for (const operation of event.operations) {
+            if (operation?.type !== 'awareness') continue;
+            appendInitialRelationshipOperation(
+                workspaceId,
+                additions,
+                pairs,
+                operation.subjectId,
+                operation.targetId,
+                playerEntityId
+            );
+        }
+        event.operations.push(...additions);
+    }
+    return resolvedEvents;
+}
+
+function collectRelationshipPairs(events) {
+    const pairs = new Set();
+    for (const event of events || []) {
+        for (const operation of event?.operations || []) {
+            if (operation?.type === 'relationship' && operation.sourceEntityId && operation.targetEntityId) {
+                pairs.add(`${operation.sourceEntityId}\u0000${operation.targetEntityId}`);
+            }
+        }
+    }
+    return pairs;
+}
+
+function appendInitialRelationshipOperation(workspaceId, operations, pairs, sourceEntityId, targetEntityId, excludedSourceId = null) {
+    if (!sourceEntityId || !targetEntityId || sourceEntityId === targetEntityId || sourceEntityId === excludedSourceId) return;
+    const pair = `${sourceEntityId}\u0000${targetEntityId}`;
+    if (pairs.has(pair) || hasStoredRelationship(workspaceId, sourceEntityId, targetEntityId)) return;
+    operations.push({
+        type: 'relationship',
+        sourceEntityId,
+        targetEntityId,
+        dimension: 'overall',
+        value: 0,
+        impact: 'meaningful'
+    });
+    pairs.add(pair);
+}
+
+function hasStoredRelationship(workspaceId, sourceEntityId, targetEntityId) {
+    return Boolean(db.prepare(`
+        SELECT 1 FROM entity_links
+        WHERE workspaceId = ? AND fromId = ? AND relType = 'related_to' AND toId = ?
+        LIMIT 1
+    `).get(workspaceId, sourceEntityId, targetEntityId));
+}
+
+function sameIdSet(left, right) {
+    const leftIds = [...new Set(left || [])];
+    const rightIds = [...new Set(right || [])];
+    return leftIds.length === rightIds.length && leftIds.every(id => rightIds.includes(id));
 }
 
 function findReachableLocations(originId, links, maxDepth) {

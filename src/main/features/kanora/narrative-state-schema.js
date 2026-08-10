@@ -22,7 +22,7 @@ const NARRATIVE_TRIAGE_SCHEMA = {
         {
           type: 'object',
           additionalProperties: false,
-          required: ['actionType', 'basis', 'duration', 'confidence', 'evidence'],
+          required: ['actionType', 'basis', 'duration', 'targetPosition', 'confidence', 'evidence'],
           properties: {
             actionType: { type: 'string' },
             basis: { type: 'string', enum: ['explicit', 'matrix'] },
@@ -38,6 +38,24 @@ const NARRATIVE_TRIAGE_SCHEMA = {
                 minutes: { type: 'integer', minimum: 0 },
               },
             },
+            targetPosition: {
+              anyOf: [
+                { type: 'null' },
+                {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['eraId', 'year', 'month', 'day', 'hour', 'minute'],
+                  properties: {
+                    eraId: { type: 'string' },
+                    year: { type: 'integer' },
+                    month: { type: 'integer', minimum: 1 },
+                    day: { type: 'integer', minimum: 1 },
+                    hour: { type: 'integer', minimum: 0 },
+                    minute: { type: 'integer', minimum: 0, maximum: 59 },
+                  },
+                },
+              ],
+            },
             confidence: { type: 'number', minimum: 0, maximum: 1 },
             evidence: { type: 'string' },
           },
@@ -50,9 +68,10 @@ const NARRATIVE_TRIAGE_SCHEMA = {
 const NARRATIVE_STATE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['newEntities', 'resourceChanges', 'scenePatch', 'inventoryChanges', 'events'],
+  required: ['newEntities', 'identityUpdates', 'resourceChanges', 'scenePatch', 'inventoryChanges', 'events'],
   properties: {
     newEntities: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    identityUpdates: { type: 'array', items: { type: 'object', additionalProperties: true } },
     resourceChanges: { type: 'array', items: { type: 'object', additionalProperties: true } },
     scenePatch: { type: 'object', additionalProperties: true },
     inventoryChanges: { type: 'array', items: { type: 'object', additionalProperties: true } },
@@ -63,7 +82,10 @@ const NARRATIVE_STATE_SCHEMA = {
         additionalProperties: true,
         required: ['type', 'description', 'excerpt', 'participantIds', 'confidence', 'operations'],
         properties: {
-          type: { type: 'string' },
+          type: {
+            type: 'string',
+            enum: ['movement', 'possession-transfer', 'revelation', 'deception', 'discovery', 'relationship-change', 'custom'],
+          },
           description: { type: 'string' },
           excerpt: { type: 'string' },
           participantIds: { type: 'array', items: { type: 'string' } },

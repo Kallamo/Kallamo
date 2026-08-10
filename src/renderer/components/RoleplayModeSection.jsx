@@ -28,6 +28,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
   const [inspectId, setInspectId] = useState('');
   const [resources, setResources] = useState([]);
   const [timeMatrix, setTimeMatrix] = useState(EMPTY_TIME_MATRIX);
+  const [calendar, setCalendar] = useState({ hoursPerDay: 24 });
 
   const load = useCallback(async () => {
     const [mode, config, worldbuild] = await Promise.all([api.getWorkspaceExperienceMode(workspaceId), api.getRoleplayConfiguration(workspaceId), api.listEntities(workspaceId)]);
@@ -47,6 +48,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
       setNarrativeMetrics(config.narrativeMetrics || []);
       setNarrativeJobs(config.narrativeJobs || []);
       setTimeMatrix(config.timeMatrix || EMPTY_TIME_MATRIX);
+      setCalendar(config.calendar || { hoursPerDay: 24 });
     }
     setEntities((worldbuild?.entities || worldbuild || []).filter(entity => entity.status !== 'proposed'));
   }, [api, onModeChange, workspaceId]);
@@ -155,6 +157,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
       categories: current.categories.map(category => category.id === id ? { ...category, ...patch } : category)
     }));
   };
+  const minutesPerDay = Math.max(1, Number(calendar.hoursPerDay) || 24) * 60;
   const saveTimeMatrix = async () => {
     const result = await api.saveRoleplayTimeMatrix(workspaceId, timeMatrix);
     if (!result?.success) return showToast(result?.error || 'Could not save the time cost matrix.', 'error');
@@ -198,7 +201,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
           <Field label="Participating characters" hint="Characters currently taking part in the scene." fieldLabel={fieldLabel}><SearchableSelect multiple values={scene.participantIds} onChange={value => saveScene({ participantIds: value })} options={entityOptions(groups.actors)} placeholder="Add participating characters" /></Field>
           <Field label="Nearby characters" hint="Present in the broader location. Narrative State determines what they actually notice from the narrative." fieldLabel={fieldLabel}><SearchableSelect multiple values={[...new Set([...(scene.possibleObserverIds || []), ...(scene.nearbyIds || [])])]} onChange={value => saveScene({ possibleObserverIds: [], nearbyIds: value })} options={entityOptions(groups.actors)} placeholder="Add nearby characters" /></Field>
           <Field label="Objects present" hint="Scene presence does not change ownership or inventory." fieldLabel={fieldLabel}><SearchableSelect multiple values={scene.objectIds} onChange={value => saveScene({ objectIds: value })} options={entityOptions(groups.items)} placeholder="Add objects in the scene" /></Field>
-          <Field label="AI scene updates" hint={POLICY[settings.defaultUpdatePolicy]} fieldLabel={fieldLabel}><select className={inputClass} value={settings.defaultUpdatePolicy} onChange={event => saveSettings({ defaultUpdatePolicy: event.target.value })}><option value="manual">Manual only</option><option value="review">Review changes</option><option value="automatic">Automatic</option></select></Field>
+          <Field label="Narrative State Updates" hint={POLICY[settings.defaultUpdatePolicy]} fieldLabel={fieldLabel}><select className={inputClass} value={settings.defaultUpdatePolicy} onChange={event => saveSettings({ defaultUpdatePolicy: event.target.value })}><option value="manual">Manual only</option><option value="review">Review changes</option><option value="automatic">Automatic</option></select></Field>
         </div>
         <div className="mt-4 grid gap-4 lg:grid-cols-2">
           <Field label="Scenario name" fieldLabel={fieldLabel}><input className={inputClass} value={settings.scenarioName} onChange={event => setSettings({ ...settings, scenarioName: event.target.value })} onBlur={() => saveSettings({ scenarioName: settings.scenarioName })} placeholder="Siege at Dawn" /></Field>
@@ -212,8 +215,13 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
             <article key={category.id} className="rounded-xl border border-white/10 bg-[#07151b] p-4">
               <div className="grid gap-3 sm:grid-cols-[9rem_1fr_1fr]">
                 <div><span className="text-xs font-bold uppercase tracking-wider text-gray-300">{category.name}</span><p className="mt-1 text-[0.65rem] text-gray-600">{category.id}</p></div>
-                <Field label="Minimum minutes" fieldLabel={fieldLabel}><input className={inputClass} type="number" min="1" value={category.minimumMinutes} onChange={event => updateTimeCategory(category.id, { minimumMinutes: Number(event.target.value) || 1 })} /></Field>
-                <Field label="Maximum minutes" fieldLabel={fieldLabel}><input className={inputClass} type="number" min={category.minimumMinutes} value={category.maximumMinutes} onChange={event => updateTimeCategory(category.id, { maximumMinutes: Math.max(category.minimumMinutes, Number(event.target.value) || category.minimumMinutes) })} /></Field>
+                {category.id === 'timeskip' ? <>
+                  <Field label="Minimum days" fieldLabel={fieldLabel}><input className={inputClass} type="number" min="1" step="1" value={Math.max(1, Math.round(category.minimumMinutes / minutesPerDay))} onChange={event => updateTimeCategory(category.id, { minimumMinutes: Math.max(1, Number(event.target.value) || 1) * minutesPerDay })} /></Field>
+                  <Field label="Maximum days" fieldLabel={fieldLabel}><input className={inputClass} type="number" min={Math.max(1, Math.round(category.minimumMinutes / minutesPerDay))} step="1" value={Math.max(1, Math.round(category.maximumMinutes / minutesPerDay))} onChange={event => updateTimeCategory(category.id, { maximumMinutes: Math.max(category.minimumMinutes, (Number(event.target.value) || 1) * minutesPerDay) })} /></Field>
+                </> : <>
+                  <Field label="Minimum minutes" fieldLabel={fieldLabel}><input className={inputClass} type="number" min="1" value={category.minimumMinutes} onChange={event => updateTimeCategory(category.id, { minimumMinutes: Number(event.target.value) || 1 })} /></Field>
+                  <Field label="Maximum minutes" fieldLabel={fieldLabel}><input className={inputClass} type="number" min={category.minimumMinutes} value={category.maximumMinutes} onChange={event => updateTimeCategory(category.id, { maximumMinutes: Math.max(category.minimumMinutes, Number(event.target.value) || category.minimumMinutes) })} /></Field>
+                </>}
               </div>
               <label className="mt-3 block"><span className={fieldLabel + ' mb-1.5'}>Action guidance</span><textarea className={inputClass + ' min-h-16 resize-y'} value={category.guidance} onChange={event => updateTimeCategory(category.id, { guidance: event.target.value })} /></label>
             </article>
@@ -252,7 +260,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
 
       {pendingCount > 0 && <Panel icon={Activity} title="Pending AI Changes" summary={`${pendingCount} waiting`} description="Review changes that require your approval before they become part of the campaign state." defaultOpen>
         <div className="space-y-2">
-          {pendingEntities.map(change => <Pending key={change.id} label={`${change.proposal.type.replace(/s$/, '')}: ${change.proposal.name}`} detail={change.status === 'conflicting' ? `Conflict: ${change.proposal.reason || change.proposal.description}` : change.proposal.description || change.proposal.reason} onApprove={() => resolve('entity', change.id, 'approved')} onReject={() => resolve('entity', change.id, 'rejected')} />)}
+          {pendingEntities.map(change => <Pending key={change.id} label={describeEntityChangeLabel(change)} detail={describeEntityChangeDetail(change)} onApprove={() => resolve('entity', change.id, 'approved')} onReject={() => resolve('entity', change.id, 'rejected')} />)}
           {pendingNarrative.map(item => <Pending key={item.proposal.changeSet.event.id} label={item.proposal.changeSet.event.description} detail={describeNarrativeEvent(item, names)} onApprove={() => resolve('narrative', item.proposal.changeSet.event.id, 'approved')} onReject={() => resolve('narrative', item.proposal.changeSet.event.id, 'rejected')} />)}
           {pendingScenes.map(change => <Pending key={change.id} label="Scene update" detail={describePatch(change.patch, names)} onApprove={() => resolve('scene', change.id, 'approved')} onReject={() => resolve('scene', change.id, 'rejected')} />)}
           {pendingInventory.map(change => <Pending key={change.id} label="Inventory update" detail={describeInventoryPatch(change.patch, names)} onApprove={() => resolve('inventory', change.id, 'approved')} onReject={() => resolve('inventory', change.id, 'rejected')} />)}
@@ -268,12 +276,34 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
         </div>
         {delayedJobs.length > 0 && <div className="mt-4 space-y-2">{delayedJobs.map(job => <div key={job.originId} className="flex items-center gap-3 rounded-lg border border-amber-500/20 bg-amber-500/[0.04] px-3 py-2.5"><div className="min-w-0 flex-1"><p className="text-xs font-semibold text-amber-200">{job.status === 'failed' ? 'State update failed' : 'State update interrupted'}</p><p className="mt-0.5 truncate text-[0.7rem] text-gray-500">{job.error || 'This turn may be behind the visible narrative.'}</p></div><button type="button" onClick={() => reprocess(job.originId)} className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/25 px-2.5 py-1.5 text-[0.7rem] font-semibold text-amber-200 hover:bg-amber-500/10"><RefreshCw className="h-3.5 w-3.5" />Reprocess turn</button></div>)}</div>}
         {(recentEntities.length > 0 || recentEvents.length > 0) && <div className="mt-4 divide-y divide-white/[0.06] overflow-hidden rounded-xl border border-white/10">
-          {recentEntities.map(change => <div key={change.id} className="bg-[#07151b] px-4 py-3"><p className="text-xs font-semibold text-gray-200">{change.createdEntity ? 'Created' : 'Resolved'} {change.proposal.name}</p><p className="mt-0.5 text-[0.7rem] text-gray-600">{change.createdEntity ? `${change.proposal.type.replace(/s$/, '')} identity added to Worldbuild` : 'Matched an existing Worldbuild identity'}</p></div>)}
+          {recentEntities.map(change => <div key={change.id} className="bg-[#07151b] px-4 py-3"><p className="text-xs font-semibold text-gray-200">{describeEntityChangeLabel(change)}</p><p className="mt-0.5 text-[0.7rem] text-gray-600">{describeEntityChangeDetail(change)}</p></div>)}
           {recentEvents.map(event => <div key={event.proposal.changeSet.event.id} className="bg-[#07151b] px-4 py-3"><p className="text-xs font-semibold text-gray-200">{event.proposal.changeSet.event.description}</p><p className="mt-0.5 text-[0.7rem] text-gray-600">{describeNarrativeEvent(event, names)}</p></div>)}
         </div>}
       </Panel>
     </div>}
   </div>;
+}
+
+function describeEntityChangeLabel(change) {
+  const identity = change.identityUpdate;
+  if (!identity) return `${change.proposal.type.replace(/s$/, '')}: ${change.proposal.name}`;
+  if (identity.canonicalName) return `Rename ${identity.previousCanonicalName} to ${identity.canonicalName}`;
+  return `Add aliases to ${identity.previousCanonicalName}`;
+}
+
+function describeEntityChangeDetail(change) {
+  const identity = change.identityUpdate;
+  if (!identity) {
+    return change.status === 'conflicting'
+      ? `Conflict: ${change.proposal.reason || change.proposal.description}`
+      : change.proposal.description || change.proposal.reason;
+  }
+  const details = [];
+  if (identity.canonicalName) details.push(`The previous name remains as an alias.`);
+  if (identity.aliases?.length) details.push(`New aliases: ${identity.aliases.join(', ')}.`);
+  if (change.status === 'conflicting') details.push(`Conflict: ${identity.reason || change.proposal.reason || 'another identity uses this name.'}`);
+  else if (identity.reason) details.push(identity.reason);
+  return details.join(' ');
 }
 
 function Panel({ icon: Icon, title, summary, description, defaultOpen = false, children }) {

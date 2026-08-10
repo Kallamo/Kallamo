@@ -251,6 +251,7 @@ function validateRelationshipValue(value: unknown, path: string, issues: Validat
     addIssue(issues, VALIDATION_ISSUE_CODES.INVALID_TYPE, `${path}.title`, 'Expected a string.');
   }
   requireRelationshipValue(relationship, 'value', path, issues);
+  if (relationship.previousValue !== undefined) requireRelationshipValue(relationship, 'previousValue', path, issues);
   if (relationship.description !== undefined && typeof relationship.description !== 'string') {
     addIssue(issues, VALIDATION_ISSUE_CODES.INVALID_TYPE, `${path}.description`, 'Expected a string.');
   }

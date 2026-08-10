@@ -14,6 +14,7 @@ export interface EntityLink {
   relType: string;
   label?: string | null;
   metadata?: Record<string, unknown>;
+  direction?: 'outgoing' | 'incoming';
   entity: Pick<WorldbuildEntity, 'id' | 'type' | 'canonicalName' | 'data'>;
 }
 
@@ -50,18 +51,21 @@ export function WorldbuildRelationships({ workspaceId, subject, links, options, 
   const [editor, setEditor] = useState<RelationshipDraft | null>(null);
   const [deleting, setDeleting] = useState<EntityLink | null>(null);
   const [saving, setSaving] = useState(false);
-  const linkedIds = useMemo(() => new Set(links.map(link => link.entity.id)), [links]);
+  const linkedIds = useMemo(() => new Set(links.filter(link => link.direction !== 'incoming').map(link => link.entity.id)), [links]);
   const available = options.filter(option => option.id !== subject.id && !linkedIds.has(option.id));
 
   const startAdd = () => setEditor({ targetId: '', targetQuery: '', label: '', value: 0, description: '' });
-  const startEdit = (link: EntityLink) => setEditor({
-    link,
-    targetId: link.entity.id,
-    targetQuery: link.entity.canonicalName,
-    label: link.label ?? '',
-    value: clampRelationship(link.metadata?.value),
-    description: String(link.metadata?.description ?? ''),
-  });
+  const startEdit = (link: EntityLink) => {
+    if (link.direction === 'incoming') return;
+    setEditor({
+      link,
+      targetId: link.entity.id,
+      targetQuery: link.entity.canonicalName,
+      label: link.label ?? '',
+      value: clampRelationship(link.metadata?.value),
+      description: String(link.metadata?.description ?? ''),
+    });
+  };
 
   const save = async () => {
     if (!editor?.targetId) return;
@@ -104,7 +108,7 @@ export function WorldbuildRelationships({ workspaceId, subject, links, options, 
       <div className="space-y-3">
         {links.map(link => editor?.link?.linkId === link.linkId
           ? <RelationshipEditor key={link.linkId} draft={editor} setDraft={setEditor} options={[link.entity as WorldbuildEntity, ...available]} onSave={save} onClose={() => setEditor(null)} saving={saving} compact />
-          : <RelationshipCard key={link.linkId} link={link} api={api} showToast={showToast} onChanged={onChanged} onEdit={() => startEdit(link)} onDelete={() => setDeleting(link)} />)}
+          : <RelationshipCard key={link.linkId} link={link} subjectName={subject.canonicalName} api={api} showToast={showToast} onChanged={onChanged} onEdit={() => startEdit(link)} onDelete={() => setDeleting(link)} readOnly={link.direction === 'incoming'} />)}
         {editor && !editor.link && <RelationshipEditor draft={editor} setDraft={setEditor} options={available} onSave={save} onClose={() => setEditor(null)} saving={saving} />}
       </div>
       {deleting && <ConfirmDialog title="Delete relationship" message={`Delete ${subject.canonicalName}'s relationship with ${deleting.entity.canonicalName}? This removes only this direction and cannot be undone.`} actions={[
@@ -115,7 +119,7 @@ export function WorldbuildRelationships({ workspaceId, subject, links, options, 
   );
 }
 
-function RelationshipCard({ link, api, showToast, onChanged, onEdit, onDelete }: { link: EntityLink; api: LinkApi; showToast: Toast; onChanged(): Promise<void> | void; onEdit(): void; onDelete(): void }) {
+function RelationshipCard({ link, subjectName, api, showToast, onChanged, onEdit, onDelete, readOnly = false }: { link: EntityLink; subjectName: string; api: LinkApi; showToast: Toast; onChanged(): Promise<void> | void; onEdit(): void; onDelete(): void; readOnly?: boolean }) {
   const [value, setValue] = useState(() => clampRelationship(link.metadata?.value));
   const [description, setDescription] = useState(() => String(link.metadata?.description ?? ''));
   const [saving, setSaving] = useState(false);
@@ -136,31 +140,35 @@ function RelationshipCard({ link, api, showToast, onChanged, onEdit, onDelete }:
           <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
             <h4 className="text-sm font-semibold text-gray-100">{link.entity.canonicalName}</h4>
             <span className="text-xs font-semibold text-accent/85">{link.label || 'Unlabeled relationship'}</span>
+            {readOnly && <span className="text-[11px] font-medium text-text-subtle">Incoming perspective</span>}
           </div>
-          <RelationshipScale value={value} onChange={setValue} onCommit={persist} />
-          <textarea aria-label={`Relationship description for ${link.entity.canonicalName}`} className="mt-3 min-h-20 w-full resize-y rounded-lg border border-border-subtle bg-surface-input/85 px-3 py-2.5 text-sm leading-relaxed text-text-secondary placeholder:italic placeholder:text-text-subtle focus:border-accent/45 focus:outline-none focus:ring-2 focus:ring-accent/15" value={description} onChange={event => setDescription(event.target.value)} onBlur={() => persist()} placeholder="Describe this relationship from this subject’s perspective." />
+          {readOnly && <p className="mt-1 text-xs text-text-subtle">How {link.entity.canonicalName} sees {subjectName}.</p>}
+          <RelationshipScale value={value} onChange={setValue} onCommit={persist} readOnly={readOnly} />
+          <textarea readOnly={readOnly} aria-label={`Relationship description for ${link.entity.canonicalName}`} className="mt-3 min-h-20 w-full resize-y rounded-lg border border-border-subtle bg-surface-input/85 px-3 py-2.5 text-sm leading-relaxed text-text-secondary placeholder:italic placeholder:text-text-subtle focus:border-accent/45 focus:outline-none focus:ring-2 focus:ring-accent/15 read-only:cursor-default read-only:opacity-80" value={description} onChange={event => setDescription(event.target.value)} onBlur={() => { if (!readOnly) persist(); }} placeholder="Describe this relationship from this subject’s perspective." />
         </div>
-        <RowActions onEdit={onEdit} onDelete={onDelete} />
+        {!readOnly && <RowActions onEdit={onEdit} onDelete={onDelete} />}
       </div>
     </article>
   );
 }
 
-function RelationshipScale({ value, onChange, onCommit }: { value: number; onChange(value: number): void; onCommit(value: number): void }) {
+function RelationshipScale({ value, onChange, onCommit, readOnly = false }: { value: number; onChange(value: number): void; onCommit(value: number): void; readOnly?: boolean }) {
   const [inputValue, setInputValue] = useState(String(value));
   useEffect(() => setInputValue(String(value)), [value]);
   const commitInput = () => {
+    if (readOnly) return;
     const nextValue = clampRelationship(inputValue);
     setInputValue(String(nextValue));
     onChange(nextValue);
     onCommit(nextValue);
   };
   const changeInput = (nextValue: string) => {
+    if (readOnly) return;
     if (!/^-?\d{0,3}$/.test(nextValue)) return;
     setInputValue(nextValue);
     if (nextValue !== '' && nextValue !== '-') onChange(clampRelationship(nextValue));
   };
-  return <div className="mt-3 flex items-center gap-3"><input aria-label="Relationship value" type="range" min="-100" max="100" step="1" value={value} onChange={event => onChange(clampRelationship(event.target.value))} onPointerUp={() => onCommit(value)} onKeyUp={() => onCommit(value)} className="relationship-range min-w-0 flex-1" /><input aria-label="Relationship numeric value" className={`${INPUT} !w-20 shrink-0 text-center tabular-nums`} type="text" inputMode="numeric" value={inputValue} onChange={event => changeInput(event.target.value)} onBlur={commitInput} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }} /></div>;
+  return <div className={`mt-3 flex items-center gap-3 ${readOnly ? 'opacity-80' : ''}`}><input disabled={readOnly} aria-label="Relationship value" type="range" min="-100" max="100" step="1" value={value} onChange={event => onChange(clampRelationship(event.target.value))} onPointerUp={() => onCommit(value)} onKeyUp={() => onCommit(value)} className="relationship-range min-w-0 flex-1" /><input readOnly={readOnly} aria-label="Relationship numeric value" className={`${INPUT} !w-20 shrink-0 text-center tabular-nums`} type="text" inputMode="numeric" value={inputValue} onChange={event => changeInput(event.target.value)} onBlur={commitInput} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }} /></div>;
 }
 
 function RelationshipEditor({ draft, setDraft, options, onSave, onClose, saving, compact = false }: {

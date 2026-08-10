@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Backpack, Check, ChevronRight, Clock3, Drama, Image as ImageIcon, MapPin,
+  Backpack, CalendarDays, Check, ChevronRight, Clock3, Drama, Image as ImageIcon, MapPin,
   MoreVertical, Pencil, Plus, Settings2, Sparkles, Swords, Users, X
 } from 'lucide-react';
 import SearchableSelect from '../../components/ui/SearchableSelect';
@@ -24,14 +24,16 @@ const PRESENCE = {
 
 const COLLAPSED_ACTOR_LIMIT = 5;
 
-export default function RoleplayQuickPanel({
+function RoleplayQuickPanel({
   workspaceId,
   api,
   showToast,
   onOpenConfiguration,
-  onBackgroundChange
+  onBackgroundChange,
+  onCollapsedChange,
+  initialCollapsed = false
 }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(initialCollapsed);
   const [tab, setTab] = useState('scene');
   const [settings, setSettings] = useState({});
   const [scene, setScene] = useState(EMPTY_SCENE);
@@ -41,23 +43,37 @@ export default function RoleplayQuickPanel({
   const [editingClock, setEditingClock] = useState(false);
   const [entities, setEntities] = useState([]);
   const [templates, setTemplates] = useState([]);
+  const [definitions, setDefinitions] = useState([]);
   const [inventory, setInventory] = useState([]);
   const [background, setBackground] = useState(null);
   const [addingCharacter, setAddingCharacter] = useState(false);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [transfer, setTransfer] = useState(null);
   const [recentOpen, setRecentOpen] = useState(false);
-  const [recentChanges, setRecentChanges] = useState([]);
+  const [recentTurns, setRecentTurns] = useState([]);
+  const [expandedTurnId, setExpandedTurnId] = useState(null);
+  const [resolvingChangeId, setResolvingChangeId] = useState(null);
   const [pendingCount, setPendingCount] = useState(0);
   const [refreshKey, setRefreshKey] = useState(0);
   const backgroundInputRef = useRef(null);
+  const refreshFrameRef = useRef(null);
 
   const load = useCallback(async () => {
-    const [configuration, worldbuild, uiState, templateResult] = await Promise.all([
-      api.getRoleplayConfiguration(workspaceId),
+    const configurationPromise = api.getRoleplayConfiguration(workspaceId);
+    const inventoryPromise = configurationPromise.then(configuration => {
+      const playerEntityId = configuration?.settings?.playerEntityId;
+      return playerEntityId ? api.getRoleplayInventory(workspaceId, playerEntityId) : null;
+    });
+    const backgroundPromise = configurationPromise.then(configuration => {
+      const locationId = configuration?.scene?.locationId;
+      return locationId ? api.getRoleplayLocationBackground(workspaceId, locationId) : null;
+    });
+    const [configuration, worldbuild, templateResult, inventoryResult, backgroundResult] = await Promise.all([
+      configurationPromise,
       api.listEntities(workspaceId),
-      api.getWorkspaceUiState?.(workspaceId, 'roleplay-quick-panel'),
-      api.listWorldbuildEntityTemplates?.(workspaceId)
+      api.listWorldbuildEntityTemplates?.(workspaceId),
+      inventoryPromise,
+      backgroundPromise
     ]);
     if (!configuration?.success) throw new Error(configuration?.error || 'Could not load Roleplay state.');
     const nextSettings = configuration.settings || {};
@@ -70,11 +86,8 @@ export default function RoleplayQuickPanel({
     setClockDraft(configuration.clock || null);
     setEntities(nextEntities);
     setTemplates(templateResult?.templates || []);
-    const recent = [
-      ...(configuration.sceneChanges || []).map(change => ({ ...change, kind: 'Scene' })),
-      ...(configuration.inventoryChanges || []).map(change => ({ ...change, kind: 'Inventory' }))
-    ].filter(change => change.status === 'applied').slice(-8).reverse();
-    setRecentChanges(recent);
+    setDefinitions(configuration.definitions || []);
+    setRecentTurns(groupRecentTurns(configuration));
     setPendingCount([
       ...(configuration.sceneChanges || []),
       ...(configuration.inventoryChanges || []),
@@ -82,22 +95,10 @@ export default function RoleplayQuickPanel({
       ...(configuration.entityChanges || []),
       ...(configuration.narrativeEvents || [])
     ].filter(change => change.status === 'pending' || change.status === 'proposed' || change.status === 'conflicting').length);
-    if (uiState?.value && typeof uiState.value.collapsed === 'boolean') setCollapsed(uiState.value.collapsed);
-    if (nextSettings.playerEntityId) {
-      const result = await api.getRoleplayInventory(workspaceId, nextSettings.playerEntityId);
-      if (result?.success) setInventory(result.inventory || []);
-    } else {
-      setInventory([]);
-    }
-    if (nextScene.locationId) {
-      const result = await api.getRoleplayLocationBackground(workspaceId, nextScene.locationId);
-      const nextBackground = result?.success ? result.background : null;
-      setBackground(nextBackground);
-      onBackgroundChange(nextBackground);
-    } else {
-      setBackground(null);
-      onBackgroundChange(null);
-    }
+    setInventory(inventoryResult?.success ? inventoryResult.inventory || [] : []);
+    const nextBackground = backgroundResult?.success ? backgroundResult.background : null;
+    setBackground(nextBackground);
+    onBackgroundChange(nextBackground);
   }, [api, onBackgroundChange, workspaceId]);
 
   useEffect(() => {
@@ -105,18 +106,27 @@ export default function RoleplayQuickPanel({
   }, [load, refreshKey, showToast]);
 
   useEffect(() => {
+    const scheduleRefresh = () => {
+      if (refreshFrameRef.current) return;
+      refreshFrameRef.current = requestAnimationFrame(() => {
+        refreshFrameRef.current = null;
+        setRefreshKey(value => value + 1);
+      });
+    };
     const refresh = event => {
       if (!event.detail?.workspaceId || event.detail.workspaceId === workspaceId) {
-        setRefreshKey(value => value + 1);
+        scheduleRefresh();
       }
     };
     window.addEventListener('roleplay-state-change', refresh);
     const unsubscribe = api.onRoleplayResourceChanges?.(payload => {
-      if (payload?.workspaceId === workspaceId) setRefreshKey(value => value + 1);
+      if (payload?.workspaceId === workspaceId) scheduleRefresh();
     });
     return () => {
       window.removeEventListener('roleplay-state-change', refresh);
       unsubscribe?.();
+      if (refreshFrameRef.current) cancelAnimationFrame(refreshFrameRef.current);
+      refreshFrameRef.current = null;
     };
   }, [api, workspaceId]);
 
@@ -168,6 +178,7 @@ export default function RoleplayQuickPanel({
       return presenceOrder || left.canonicalName.localeCompare(right.canonicalName);
     });
   const savePanelState = async nextCollapsed => {
+    onCollapsedChange?.(nextCollapsed);
     setCollapsed(nextCollapsed);
     await api.setWorkspaceUiState?.(workspaceId, 'roleplay-quick-panel', { collapsed: nextCollapsed });
   };
@@ -244,6 +255,7 @@ export default function RoleplayQuickPanel({
       itemId: item.itemId,
       fromHolderId: settings.playerEntityId,
       ...(transfer.mode === 'character' ? { toHolderId: destinationId } : { locationId: destinationId }),
+      ...(item.equipped ? { equipped: false } : {}),
       ...(quantity ? { quantity } : {})
     };
     if ((transfer.mode === 'character' && !patch.toHolderId) || (transfer.mode === 'location' && !patch.locationId)) {
@@ -284,6 +296,24 @@ export default function RoleplayQuickPanel({
     setClock(result.clock);
     setClockDraft(result.clock);
     setEditingClock(false);
+    window.dispatchEvent(new CustomEvent('roleplay-state-change', { detail: { workspaceId } }));
+  };
+
+  const resolveRecentChange = async (change, decision) => {
+    const methods = {
+      resource: api.resolveRoleplayResourceChange,
+      scene: api.resolveRoleplaySceneChange,
+      inventory: api.resolveRoleplayInventoryChange,
+      entity: api.resolveRoleplayEntityChange,
+      narrative: api.resolveNarrativeStateEvent
+    };
+    const method = methods[change.kind];
+    if (!method) return;
+    setResolvingChangeId(change.id);
+    const result = await method(workspaceId, change.id, decision);
+    setResolvingChangeId(null);
+    if (!result?.success) return showToast(result?.error || 'Could not resolve the Narrative State update.', 'error');
+    setRefreshKey(value => value + 1);
     window.dispatchEvent(new CustomEvent('roleplay-state-change', { detail: { workspaceId } }));
   };
 
@@ -341,10 +371,16 @@ export default function RoleplayQuickPanel({
           </div>
         ) : (
           <button type="button" onClick={() => setEditingClock(true)} className="group/clock flex w-full items-center justify-between gap-3 text-left">
-            <div className="min-w-0">
-              <span className="block truncate text-xs font-bold uppercase tracking-[0.12em] text-text-muted">{formatWorldDate(calendar, clock)}</span>
-              <span className="mt-0.5 block font-mono text-2xl font-semibold tracking-tight text-gray-100">{String(clock?.hour ?? 0).padStart(2, '0')}:{String(clock?.minute ?? 0).padStart(2, '0')}</span>
-              {clock?.season && <span className="mt-0.5 block truncate text-xs text-text-subtle">{clock.season.name}</span>}
+            <div className="min-w-0 space-y-1.5">
+              <span className="flex min-w-0 items-center gap-2 truncate text-sm font-bold uppercase tracking-[0.1em] text-text-secondary">
+                <CalendarDays className="h-4 w-4 shrink-0 text-sky-300" />
+                {formatWorldDate(calendar, clock)}
+              </span>
+              <span className="flex items-center gap-2 text-text-muted">
+                <Clock3 className="h-3.5 w-3.5 shrink-0 text-amber-300" />
+                <span className="font-mono text-lg font-semibold tracking-tight text-gray-100">{String(clock?.hour ?? 0).padStart(2, '0')}:{String(clock?.minute ?? 0).padStart(2, '0')}</span>
+                {clock?.weekdayName && <span className="text-xs font-medium">· {clock.weekdayName}</span>}
+              </span>
             </div>
             <Pencil className="h-3.5 w-3.5 text-gray-600 group-hover/clock:text-accent" />
           </button>
@@ -432,13 +468,28 @@ export default function RoleplayQuickPanel({
               </p>
             </section>
 
-            {!!recentChanges.length && (
+            {!!recentTurns.length && (
               <section className="border-t border-white/10 pt-3">
                 <button type="button" onClick={() => setRecentOpen(value => !value)} className="flex w-full items-center justify-between text-xs font-semibold text-gray-400 hover:text-white">
                   <span className="inline-flex items-center gap-2"><Sparkles className="h-3.5 w-3.5 text-accent" />Recent Changes</span>
                   <ChevronRight className={'h-3.5 w-3.5 transition-transform ' + (recentOpen ? 'rotate-90' : '')} />
                 </button>
-                {recentOpen && <div className="mt-2 space-y-1.5">{recentChanges.map(change => <RecentChange key={change.id} change={change} names={names} />)}</div>}
+                {recentOpen && (
+                  <div className="mt-2 space-y-2">
+                    {recentTurns.map(turn => (
+                      <RecentTurn
+                        key={turn.originId}
+                        turn={turn}
+                        names={names}
+                        definitions={definitions}
+                        open={expandedTurnId === turn.originId}
+                        onToggle={() => setExpandedTurnId(current => current === turn.originId ? null : turn.originId)}
+                        onResolve={resolveRecentChange}
+                        resolvingChangeId={resolvingChangeId}
+                      />
+                    ))}
+                  </div>
+                )}
               </section>
             )}
           </div>
@@ -605,7 +656,7 @@ function SceneSummaryTooltip({ player, participants, nearby, locationName, calen
       <span className="mb-2 block text-xs font-bold uppercase tracking-[0.16em] text-accent/80">RP Mode</span>
       <span className="mb-2 flex items-start gap-2 border-b border-white/[0.07] pb-2.5">
         <Clock3 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-300" />
-        <span className="min-w-0"><span className="block truncate text-xs font-medium text-text-secondary">{formatWorldDate(calendar, clock)}</span><span className="block font-mono text-xs text-text-muted">{String(clock?.hour ?? 0).padStart(2, '0')}:{String(clock?.minute ?? 0).padStart(2, '0')}{clock?.season ? ` · ${clock.season.name}` : ''}</span></span>
+        <span className="min-w-0"><span className="block truncate text-xs font-medium text-text-secondary">{formatWorldDate(calendar, clock)}</span><span className="block text-xs text-text-muted"><span className="font-mono">{String(clock?.hour ?? 0).padStart(2, '0')}:{String(clock?.minute ?? 0).padStart(2, '0')}</span>{clock?.weekdayName ? ` · ${clock.weekdayName}` : ''}</span></span>
       </span>
       <div className="flex flex-wrap items-center gap-1.5">
         {visibleActors.map(entity => (
@@ -624,11 +675,215 @@ function SceneSummaryTooltip({ player, participants, nearby, locationName, calen
   );
 }
 
-function RecentChange({ change, names }) {
-  const detail = change.kind === 'Scene'
-    ? describeSceneChange(change.patch, names)
-    : `${names.get(change.patch?.itemId) || 'Item'} updated`;
-  return <div className="rounded-lg border border-border-subtle bg-surface-panel-muted px-2.5 py-2"><p className="text-xs font-semibold text-text-secondary">{change.kind}</p><p className="mt-0.5 truncate text-xs text-text-subtle">{detail}</p></div>;
+function RecentTurn({ turn, names, definitions, open, onToggle, onResolve, resolvingChangeId }) {
+  const point = turn.frame?.end;
+  const date = point?.position ? formatTurnDate(point) : '';
+  const time = point?.position ? `${String(point.position.hour ?? 0).padStart(2, '0')}:${String(point.position.minute ?? 0).padStart(2, '0')}` : '';
+  const pending = turn.changes.filter(isPendingChange).length;
+  return (
+    <article className={`overflow-hidden rounded-xl border transition-colors ${open ? 'border-accent/25 bg-accent/[0.035]' : 'border-border-subtle bg-surface-panel-muted'}`}>
+      <button type="button" aria-expanded={open} onClick={onToggle} className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-accent/20 bg-accent/[0.06] text-accent"><Sparkles className="h-3.5 w-3.5" /></span>
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.1em] text-text-secondary">{turn.frame ? `Turn ${turn.turnNumber}` : 'Recent change'}{pending > 0 && <span className="rounded-full bg-amber-300/10 px-1.5 py-0.5 text-[0.6rem] text-amber-200">{pending} review</span>}</span>
+          <span className="mt-0.5 block truncate text-[0.6875rem] text-text-subtle">{date}{date && time ? ' · ' : ''}{time}{point?.display?.weekdayName ? ` · ${point.display.weekdayName}` : ''}</span>
+        </span>
+        <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-gray-600 transition-transform ${open ? 'rotate-90' : ''}`} />
+      </button>
+      {open && (
+        <div className="space-y-1.5 border-t border-white/[0.07] px-2.5 py-2.5">
+          {turn.changes.map(change => (
+            <RecentTurnChange
+              key={`${change.kind}:${change.id}`}
+              change={change}
+              names={names}
+              definitions={definitions}
+              onResolve={onResolve}
+              resolving={resolvingChangeId === change.id}
+            />
+          ))}
+        </div>
+      )}
+    </article>
+  );
+}
+
+function RecentTurnChange({ change, names, definitions, onResolve, resolving }) {
+  const details = describeRecentChange(change, names, definitions);
+  const pending = isPendingChange(change);
+  return (
+    <div className="rounded-lg border border-white/[0.07] bg-black/15 px-2.5 py-2">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[0.625rem] font-bold uppercase tracking-wider text-accent/80">{changeLabel(change.kind)}</span>
+            {change.status && <span className={`text-[0.6rem] font-semibold uppercase ${pending ? 'text-amber-200' : change.status === 'rejected' ? 'text-red-300' : 'text-gray-600'}`}>{change.status}</span>}
+          </div>
+          <div className="mt-1 space-y-1">
+            {details.map((detail, index) => <p key={index} className="text-xs leading-relaxed text-text-secondary">{detail}</p>)}
+          </div>
+        </div>
+        {pending && (
+          <div className="flex shrink-0 items-center gap-1">
+            <button type="button" disabled={resolving} onClick={() => onResolve(change, 'rejected')} className="rounded-md border border-red-400/20 px-2 py-1 text-[0.625rem] font-semibold text-red-300 hover:bg-red-400/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300/40 disabled:opacity-50">Reject</button>
+            <button type="button" disabled={resolving} onClick={() => onResolve(change, 'approved')} className="rounded-md bg-accent px-2 py-1 text-[0.625rem] font-bold text-[#011419] hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-50">Approve</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function groupRecentTurns(configuration) {
+  const frames = configuration.recentTurnFrames || [];
+  const turns = new Map(frames.map(frame => [frame.originId, { ...frame, frame, changes: [] }]));
+  const add = (originId, change) => {
+    if (!originId) return;
+    let turn = turns.get(originId);
+    if (!turn) {
+      turn = { originId, frame: null, turnNumber: null, createdAt: change.createdAt || 0, changes: [] };
+      turns.set(originId, turn);
+    }
+    turn.createdAt = Math.max(turn.createdAt || 0, change.createdAt || 0);
+    turn.changes.push(change);
+  };
+  (configuration.sceneChanges || []).forEach(change => add(change.provenanceId, { ...change, kind: 'scene' }));
+  (configuration.inventoryChanges || []).forEach(change => add(change.provenanceId, { ...change, kind: 'inventory' }));
+  (configuration.changes || []).forEach(change => add(change.provenanceId, { ...change, kind: 'resource' }));
+  (configuration.entityChanges || []).forEach(change => add(change.provenanceId, { ...change, kind: 'entity' }));
+  (configuration.narrativeEvents || []).forEach(record => {
+    const originId = record.proposal?.evidence?.[0]?.originId;
+    const event = record.proposal?.changeSet?.event;
+    if (!originId || !event) return;
+    add(originId, {
+      id: event.id,
+      kind: 'narrative',
+      status: record.status,
+      createdAt: Date.parse(record.proposal.provenance?.createdAt || '') || 0,
+      record
+    });
+  });
+  frames.forEach(frame => {
+    if (frame.advance) add(frame.originId, { id: `${frame.originId}:time`, kind: 'time', status: 'applied', createdAt: frame.createdAt, frame });
+  });
+  return [...turns.values()]
+    .filter(turn => turn.frame && turn.changes.length)
+    .map(turn => ({ ...turn, changes: turn.changes.sort((left, right) => (left.createdAt || 0) - (right.createdAt || 0)) }))
+    .sort((left, right) => (right.frame?.createdAt || right.createdAt || 0) - (left.frame?.createdAt || left.createdAt || 0))
+    .slice(0, 12);
+}
+
+function isPendingChange(change) {
+  return change.status === 'pending' || change.status === 'proposed' || change.status === 'conflicting';
+}
+
+function changeLabel(kind) {
+  return ({ scene: 'Scene', inventory: 'Inventory', resource: 'State', entity: 'Entity', narrative: 'Narrative', time: 'Time' })[kind] || 'Update';
+}
+
+function formatTurnDate(point) {
+  const position = point.position;
+  return `${position.day} ${point.display?.monthName || `Month ${position.month}`} ${position.year}${point.display?.eraShortName ? ` ${point.display.eraShortName}` : ''}`;
+}
+
+function describeRecentChange(change, names, definitions) {
+  if (change.kind === 'scene') return describeSceneChange(change.patch, names);
+  if (change.kind === 'inventory') return describeInventoryChange(change.patch, names);
+  if (change.kind === 'resource') {
+    const definition = definitions.find(item => item.id === change.definitionId);
+    return [`${definition?.name || 'Tracked state'} for ${names.get(change.entityId) || 'entity'}: ${change.previousValue} → ${change.nextValue}`];
+  }
+  if (change.kind === 'entity') {
+    if (change.identityUpdate) {
+      const identity = change.identityUpdate;
+      const details = [];
+      if (identity.canonicalName) details.push(`Name: ${identity.previousCanonicalName} → ${identity.canonicalName}.`);
+      if (identity.aliases?.length) details.push(`Aliases added to ${identity.canonicalName || identity.previousCanonicalName}: ${identity.aliases.join(', ')}.`);
+      if (isPendingChange(change)) details.push('Awaiting identity review.');
+      return details;
+    }
+    const label = change.proposal?.type?.replace(/s$/, '') || 'Entity';
+    const action = change.createdEntity ? 'created' : isPendingChange(change) ? 'awaiting identity review' : 'matched';
+    return [`${label} ${action}: ${change.proposal?.name || 'Unnamed entity'}`];
+  }
+  if (change.kind === 'narrative') {
+    const proposal = change.record.proposal;
+    const event = proposal.changeSet.event;
+    const operations = proposal.changeSet.operations.map(operation => describeNarrativeOperation(operation, names)).filter(Boolean);
+    return [event.description, ...operations];
+  }
+  if (change.kind === 'time') {
+    const end = change.frame.end;
+    return [`Time advanced to ${formatTurnDate(end)} at ${String(end.position.hour).padStart(2, '0')}:${String(end.position.minute).padStart(2, '0')}.`];
+  }
+  return ['Narrative State updated.'];
+}
+
+function describeSceneChange(patch, names) {
+  const details = [];
+  if (Object.hasOwn(patch || {}, 'locationId')) details.push(`Location changed to ${names.get(patch.locationId) || 'no current Location'}.`);
+  if (patch?.participantIds) details.push(`Active characters: ${nameList(patch.participantIds, names)}.`);
+  if (patch?.possibleObserverIds) details.push(`Possible observers: ${nameList(patch.possibleObserverIds, names)}.`);
+  if (patch?.nearbyIds) details.push(`Nearby characters: ${nameList(patch.nearbyIds, names)}.`);
+  if (patch?.objectIds) details.push(`Scene objects: ${nameList(patch.objectIds, names)}.`);
+  return details.length ? details : ['Scene state updated.'];
+}
+
+function describeInventoryChange(patch, names) {
+  const item = names.get(patch?.itemId) || 'Item';
+  const quantity = patch?.quantity ? `${patch.quantity} × ` : '';
+  const hasMove = Boolean(patch?.toHolderId || patch?.locationId || patch?.fromHolderId || patch?.fromLocationId);
+  if (!hasMove && patch?.equipped !== undefined) {
+    return [`${item} ${patch.equipped ? 'equipped' : 'unequipped'} by ${names.get(patch.holderId) || 'character'}.`];
+  }
+  const details = [];
+  if (patch?.toHolderId) {
+    const from = patch.fromHolderId || patch.fromLocationId;
+    details.push(`${quantity}${item} moved${from ? ` from ${names.get(from) || 'its previous holder'}` : ''} to ${names.get(patch.toHolderId) || 'character'}.`);
+  } else if (patch?.locationId) {
+    const from = patch.fromHolderId || patch.fromLocationId;
+    details.push(`${quantity}${item} moved${from ? ` from ${names.get(from) || 'its previous holder'}` : ''} to ${names.get(patch.locationId) || 'Location'}.`);
+  } else if (patch?.fromHolderId || patch?.fromLocationId) {
+    details.push(`${quantity}${item} removed from ${names.get(patch.fromHolderId || patch.fromLocationId) || 'its previous holder'}.`);
+  }
+  if (patch?.equipped !== undefined && patch?.fromHolderId) {
+    details.push(`${item} was ${patch.equipped ? 'equipped for the recipient' : 'unequipped'} by ${names.get(patch.fromHolderId) || 'character'}.`);
+  }
+  return details.length ? details : [`${item} inventory state updated.`];
+}
+
+function describeNarrativeOperation(operation, names) {
+  if (operation.type === 'assert-fact') return `Fact: ${describeProposition(operation.fact?.proposition, names)}`;
+  if (operation.type === 'set-state') return `State: ${names.get(operation.state?.entityId) || 'Entity'} · ${operation.state?.property || 'property'} → ${displayValue(operation.state?.value)}`;
+  if (operation.type === 'grant-awareness') return `${names.get(operation.awareness?.subjectId) || 'Entity'} became aware of ${names.get(operation.awareness?.targetId) || 'another entity'}.`;
+  if (operation.type === 'grant-knowledge') {
+    const knowledge = operation.knowledge;
+    return `Knowledge: ${names.get(knowledge?.subjectId) || 'Entity'} learned ${describeProposition(knowledge?.proposition, names)} (${knowledge?.acquisition || 'acquired'}).`;
+  }
+  if (operation.type === 'set-belief') return `${names.get(operation.belief?.subjectId) || 'Entity'} now believes ${describeProposition(operation.belief?.proposition, names)}.`;
+  if (operation.type === 'record-memory') return `Memory for ${names.get(operation.memory?.subjectId) || 'entity'}: ${operation.memory?.summary || 'Memory updated.'}`;
+  if (operation.type === 'set-relationship') {
+    const relationship = operation.relationship;
+    const previous = Number.isFinite(relationship?.previousValue) ? relationship.previousValue : '?';
+    return `Relationship bar: ${names.get(relationship?.sourceEntityId) || 'Entity'} → ${names.get(relationship?.targetEntityId) || 'Entity'} · ${previous} → ${relationship?.value}.`;
+  }
+  return null;
+}
+
+function describeProposition(proposition, names) {
+  if (!proposition) return 'narrative fact updated';
+  const subject = names.get(proposition.subjectId) || 'entity';
+  return `${subject} · ${proposition.predicate || 'fact'}: ${displayValue(proposition.object)}`;
+}
+
+function displayValue(value) {
+  if (typeof value === 'string') return value;
+  if (value === null || value === undefined) return 'empty';
+  return JSON.stringify(value);
+}
+
+function nameList(ids, names) {
+  return ids?.length ? ids.map(id => names.get(id) || 'Unknown entity').join(', ') : 'none';
 }
 
 function TabButton({ active, onClick, icon: Icon, label, count }) {
@@ -648,9 +903,4 @@ function presenceOf(entityId, scene) {
   return 'nearby';
 }
 
-function describeSceneChange(patch, names) {
-  if (patch?.locationId) return `Location changed to ${names.get(patch.locationId) || 'another Location'}`;
-  if (patch?.participantIds) return 'Active character roster updated';
-  if (patch?.possibleObserverIds || patch?.nearbyIds) return 'Nearby characters updated';
-  return 'Scene state updated';
-}
+export default memo(RoleplayQuickPanel);

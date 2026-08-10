@@ -165,6 +165,7 @@ export interface RelationshipState {
   dimension: string;
   title?: string;
   value: number;
+  previousValue?: number;
   description?: string;
   sourceEventId: NarrativeId;
 }
