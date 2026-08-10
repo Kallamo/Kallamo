@@ -20,7 +20,7 @@ const RELEASE_1_1_2 = {
 };
 
 const RELEASE_1_1_5 = {
-  title: 'Local AI and chat hotfixes',
+  title: 'Local AI and chat fixes',
   sections: {
     Fixed: [
       'Chat now keeps the selected AI Profile or Workflow and any pending attachments when sending, so valid local requests are no longer stopped before reaching the provider.',
@@ -188,7 +188,7 @@ export const GLOBAL_WHATS_NEW = {
 export const PATCH_WHATS_NEW = {
   '1.1.5': {
     ...RELEASE_1_1_5,
-    intro: 'This hotfix restores dependable local AI connections and corrects the chat paths around sending, retrying, editing, and regenerating.',
+    intro: 'This focused patch restores dependable local AI connections and corrects the chat paths around sending, retrying, editing, and regenerating.',
     highlights: [
       {
         icon: 'Brain',

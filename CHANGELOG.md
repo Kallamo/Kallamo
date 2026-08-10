@@ -2,7 +2,7 @@
 
 All notable changes to Kallamo are documented in this file. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.5] - 2026-08-03
+## [1.1.5] - 2026-08-10
 
 ### Fixed
 - Chat submissions now preserve the selected AI Profile or Workflow and pending attachments, fixing a regression that stopped valid local API requests before they reached the provider.
