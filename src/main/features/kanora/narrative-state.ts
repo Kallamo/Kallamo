@@ -120,14 +120,14 @@ export class NarrativeStateSystem {
     }
     const fingerprint = fingerprintEvent(input.workspaceId, input.originId, input.event);
     if (this.hasFingerprint(input.workspaceId, fingerprint)) return { skipped: 'duplicate' };
-    const operations = buildOperations(
+    const operations = deduplicateAwarenessOperations(buildOperations(
       input,
       fingerprint,
       (sourceId, targetId, dimension) => this.currentRelationshipBaseline(input.workspaceId, sourceId, targetId, dimension),
       (subjectId, targetId) => this.hasAwareness(input.workspaceId, subjectId, targetId)
     )
       .filter(isValidNarrativeOperation)
-      .filter(operation => !this.isDuplicateOperation(input.workspaceId, operation));
+      .filter(operation => !this.isDuplicateOperation(input.workspaceId, operation)));
     if (!operations.length) return { skipped: 'no-valid-operations' };
     const eventId = `evt_${fingerprint}`;
     const evidenceId = `evidence_${fingerprint}`;
@@ -499,7 +499,7 @@ function buildOperations(
         && !hasAwareness(operation.subjectId, operation.proposition.subjectId)
         && !supportedByDocument;
       if (needsAwareness && !input.event.participantIds.includes(operation.subjectId)) return [];
-      return [
+      const operations: NarrativeOperation[] = [
         ...(needsAwareness ? [{
           id: `op_${suffix}_awareness`,
           type: 'grant-awareness',
@@ -514,6 +514,7 @@ function buildOperations(
         } as const] : []),
         { id: `op_${suffix}`, type: 'grant-knowledge', evidenceIds, knowledge: { id: `knowledge_${suffix}`, entryId: `entry_${suffix}`, subjectId: operation.subjectId, proposition: operation.proposition, sourceEventId: eventId, acquisition: operation.acquisition, confidence: confidence(operation.confidence), accessibility: operation.accessibility ?? 'available', status: 'active' } }
       ];
+      return operations.every(isValidNarrativeOperation) ? operations : [];
     }
     if (operation.type === 'belief') {
       const aware = input.event.operations.some(candidate => (
@@ -523,7 +524,7 @@ function buildOperations(
       ));
       const needsAwareness = !aware && !hasAwareness(operation.subjectId, operation.proposition.subjectId);
       if (needsAwareness && !input.event.participantIds.includes(operation.subjectId)) return [];
-      return [
+      const operations: NarrativeOperation[] = [
         ...(needsAwareness ? [{
           id: `op_${suffix}_awareness`,
           type: 'grant-awareness',
@@ -538,6 +539,7 @@ function buildOperations(
         } as const] : []),
         { id: `op_${suffix}`, type: 'set-belief', evidenceIds, belief: { id: `belief_${suffix}`, entryId: `entry_${suffix}`, subjectId: operation.subjectId, proposition: operation.proposition, sourceEventId: eventId, confidence: confidence(operation.confidence), relationToCanon: 'unknown', status: 'active' } }
       ];
+      return operations.every(isValidNarrativeOperation) ? operations : [];
     }
     if (operation.type === 'memory') return [{ id: `op_${suffix}`, type: 'record-memory', evidenceIds, memory: { id: `memory_${suffix}`, subjectId: operation.subjectId, eventId, summary: operation.summary.trim(), accessibility: operation.accessibility ?? 'available', status: 'active', relatedEntityIds: unique(operation.relatedEntityIds ?? []).filter(id => input.allowedEntityIds.has(id)) } }];
     const valueOnly = (input.provenanceInterpreter ?? 'model') === 'model'
@@ -595,6 +597,17 @@ function buildOperations(
         }
       }
     ];
+  });
+}
+
+function deduplicateAwarenessOperations(operations: NarrativeOperation[]): NarrativeOperation[] {
+  const awarenessPairs = new Set<string>();
+  return operations.filter(operation => {
+    if (operation.type !== 'grant-awareness') return true;
+    const pair = `${operation.awareness.subjectId}\u0000${operation.awareness.targetId}`;
+    if (awarenessPairs.has(pair)) return false;
+    awarenessPairs.add(pair);
+    return true;
   });
 }
 
