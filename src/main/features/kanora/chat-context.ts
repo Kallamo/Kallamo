@@ -851,7 +851,6 @@ export class KallamoKanoraChatContext {
         AND audience.entry_id = cards.card_id
         AND audience.member_id = members.fromId
       WHERE relationships.workspace_id = ?
-        AND relationships.relation_type = 'related_to'
         AND cards.status = 'active'
         AND (relationships.from_id IN (${entityPlaceholders}) OR relationships.to_id IN (${entityPlaceholders}))
         AND (
@@ -876,7 +875,10 @@ export class KallamoKanoraChatContext {
         workspaceId,
         sourceType: 'knowledge',
         sourceId: row.relationshipId,
-        content: `Known connection: ${row.fromName} knows ${row.toName}.`,
+        content: [
+          `Known relationship: ${row.fromName} / ${row.relationType.replace(/_/g, ' ')} / ${row.toName}`,
+          `Relationship type: ${row.relationType}`,
+        ].join('\n'),
         relevance: 1,
         epistemic: { kind: 'knowledge', subjectId: row.effectiveOwnerId, accessibility: 'available' },
         provenanceIds: [row.cardId, row.relationshipId, row.fromId, row.toId, row.sourceOwnerId]
