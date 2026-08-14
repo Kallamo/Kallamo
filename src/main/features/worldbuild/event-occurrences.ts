@@ -1,8 +1,15 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
+import type { NarrativeOperation } from '../../../kanora/contracts';
 import type { NarrativeEventLedgerRecord } from '../../../kanora/ledger';
-import { NarrativeStateSystem, type ExtractedNarrativeEvent } from '../kanora/narrative-state';
+import { isValidNarrativeOperation, NarrativeStateSystem, type ExtractedNarrativeEvent } from '../kanora/narrative-state';
 import { RoleplaySystem, type RoleplayInventoryPatch } from '../kanora/roleplay-system';
+
+interface EventOccurrenceCalendarService {
+  getCalendar(db: Database.Database, workspaceId: string): Record<string, any>;
+  validateDate(calendar: Record<string, any>, date: Record<string, unknown>): boolean;
+  compareDates(calendar: Record<string, any>, left: Record<string, unknown>, right: Record<string, unknown>): number;
+}
 
 type MemoryAccessibility = 'available' | 'suppressed' | 'inaccessible';
 
@@ -35,6 +42,19 @@ export interface ManualEventOccurrenceInput {
     value: number;
     description?: string;
   }>;
+}
+
+export interface UpdateManualEventOccurrenceInput {
+  workspaceId: string;
+  occurrenceId: string;
+  eventEntityId: string;
+  title: string;
+  summary: string;
+  startDate?: Record<string, unknown> | null;
+  endDate?: Record<string, unknown> | null;
+  participants: EventOccurrenceParticipant[];
+  locationIds: string[];
+  relatedEntityIds: string[];
 }
 
 export interface WorldbuildEventOccurrence {
@@ -81,7 +101,10 @@ export class EventOccurrenceService {
   private readonly narrativeState: NarrativeStateSystem;
   private readonly roleplay: RoleplaySystem;
 
-  constructor(private readonly db: Database.Database) {
+  constructor(
+    private readonly db: Database.Database,
+    private readonly calendarService: EventOccurrenceCalendarService
+  ) {
     this.narrativeState = new NarrativeStateSystem(db);
     this.roleplay = new RoleplaySystem(db);
   }
@@ -98,7 +121,8 @@ export class EventOccurrenceService {
         AND occurrences.archived = 0
       ORDER BY COALESCE(occurrences.start_date_json, ''), occurrences.created_at, occurrences.occurrence_id
     `).all(workspaceId, eventEntityId) as OccurrenceRow[];
-    return rows.map(hydrateOccurrence).sort(compareOccurrences);
+    const calendar = this.calendarService.getCalendar(this.db, workspaceId);
+    return rows.map(hydrateOccurrence).sort((left, right) => compareOccurrences(this.calendarService, calendar, left, right));
   }
 
   createManual(input: ManualEventOccurrenceInput): WorldbuildEventOccurrence {
@@ -106,6 +130,7 @@ export class EventOccurrenceService {
     const eventEntity = this.requireEventEntity(workspaceId, input.eventEntityId);
     const title = requireText(input.title, 'title');
     const summary = requireText(input.summary, 'summary');
+    const { startDate, endDate } = this.normalizeDateRange(workspaceId, input.startDate, input.endDate);
     const occurrenceId = randomUUID();
     const originId = `worldbuild-occurrence:${occurrenceId}`;
     const participants = this.normalizeParticipants(workspaceId, input.participants ?? []);
@@ -124,7 +149,7 @@ export class EventOccurrenceService {
       ],
       worldbuildEventId: eventEntity.id,
       occurrenceTitle: title,
-      worldDate: input.startDate ?? undefined,
+      worldDate: startDate ?? undefined,
       confidence: 1,
       operations: [
         {
@@ -132,7 +157,7 @@ export class EventOccurrenceService {
           proposition: {
             subjectId: eventEntity.id,
             predicate: 'recorded-occurrence',
-            object: { occurrenceId, title, summary, startDate: input.startDate ?? null, endDate: input.endDate ?? null }
+            object: { occurrenceId, title, summary, startDate, endDate }
           },
           confidence: 1
         },
@@ -184,8 +209,8 @@ export class EventOccurrenceService {
         record: result.record,
         title,
         summary,
-        startDate: input.startDate ?? null,
-        endDate: input.endDate ?? null,
+        startDate,
+        endDate,
         participants,
         locationIds,
         relatedEntityIds,
@@ -194,6 +219,177 @@ export class EventOccurrenceService {
         originId
       });
       return this.requireOccurrence(workspaceId, occurrenceId);
+    })();
+  }
+
+  updateManual(input: UpdateManualEventOccurrenceInput): WorldbuildEventOccurrence {
+    const workspaceId = requireText(input.workspaceId, 'workspaceId');
+    const occurrenceId = requireText(input.occurrenceId, 'occurrenceId');
+    const occurrence = this.requireEditableOccurrence(workspaceId, occurrenceId);
+    if (occurrence.eventEntityId !== requireText(input.eventEntityId, 'eventEntityId')) {
+      throw new Error('The occurrence no longer belongs to the active event.');
+    }
+    const eventEntity = this.requireEventEntity(workspaceId, occurrence.eventEntityId);
+    const title = requireText(input.title, 'title');
+    const summary = requireText(input.summary, 'summary');
+    const { startDate, endDate } = this.normalizeDateRange(workspaceId, input.startDate, input.endDate);
+    const participants = this.normalizeParticipants(workspaceId, input.participants ?? []);
+    const locationIds = this.normalizeEntityIds(workspaceId, input.locationIds ?? [], ['Locations']);
+    const relatedEntityIds = this.normalizeEntityIds(workspaceId, input.relatedEntityIds ?? []);
+    const participantIds = unique([eventEntity.id, ...participants.map(participant => participant.entityId)]);
+    const memoryRelatedIds = unique([eventEntity.id, ...participantIds, ...locationIds, ...relatedEntityIds]);
+    const updatedAt = Date.now();
+    const appliedAt = new Date(updatedAt).toISOString();
+
+    return this.db.transaction(() => {
+      const eventRow = this.db.prepare(`
+        SELECT operations_json FROM kanora_narrative_events
+        WHERE workspace_id = ? AND event_id = ?
+      `).get(workspaceId, occurrence.narrativeEventId) as { operations_json: string } | undefined;
+      if (!eventRow) throw new Error('The linked narrative event was not found.');
+
+      const operations = parseArray<NarrativeOperation>(eventRow.operations_json);
+      const factOperation = operations.find((operation): operation is Extract<NarrativeOperation, { type: 'assert-fact' }> => (
+        operation.type === 'assert-fact'
+        && operation.fact.proposition.predicate === 'recorded-occurrence'
+      ));
+      if (!factOperation) throw new Error('The occurrence fact could not be updated safely.');
+
+      const updatedFactOperation: Extract<NarrativeOperation, { type: 'assert-fact' }> = {
+        ...factOperation,
+        fact: {
+          ...factOperation.fact,
+          proposition: {
+            subjectId: eventEntity.id,
+            predicate: 'recorded-occurrence',
+            object: {
+              occurrenceId,
+              title,
+              summary,
+              startDate,
+              endDate,
+            },
+          },
+        },
+      };
+      const existingMemoryOperations = operations.filter((operation): operation is Extract<NarrativeOperation, { type: 'record-memory' }> => operation.type === 'record-memory');
+      const memoryBySubject = new Map(existingMemoryOperations.map(operation => [operation.memory.subjectId, operation]));
+      const memoryOperations = participants.filter(participant => participant.remember).map(participant => {
+        const existing = memoryBySubject.get(participant.entityId);
+        if (existing) {
+          return {
+            ...existing,
+            memory: {
+              ...existing.memory,
+              summary: `${title}: ${summary}`,
+              accessibility: participant.memoryAccessibility,
+              status: 'active' as const,
+              relatedEntityIds: memoryRelatedIds,
+            },
+          };
+        }
+        const suffix = stableOccurrenceSuffix(occurrenceId, participant.entityId);
+        return {
+          id: `op_occurrence_memory_${suffix}`,
+          type: 'record-memory' as const,
+          evidenceIds: factOperation.evidenceIds,
+          memory: {
+            id: `memory_occurrence_${suffix}`,
+            subjectId: participant.entityId,
+            eventId: occurrence.narrativeEventId,
+            summary: `${title}: ${summary}`,
+            accessibility: participant.memoryAccessibility,
+            status: 'active' as const,
+            relatedEntityIds: memoryRelatedIds,
+          },
+        };
+      });
+      const preservedOperations = operations.filter(operation => operation.type !== 'assert-fact' && operation.type !== 'record-memory');
+      const nextOperations: NarrativeOperation[] = [updatedFactOperation, ...memoryOperations, ...preservedOperations];
+      if (!nextOperations.every(isValidNarrativeOperation)) {
+        throw new Error('The edited occurrence would produce an invalid narrative record.');
+      }
+
+      const updatedEvent = this.db.prepare(`
+        UPDATE kanora_narrative_events
+        SET description = ?, location_id = ?, operations_json = ?, version = version + 1
+        WHERE workspace_id = ? AND event_id = ?
+      `).run(`${title}: ${summary}`, locationIds[0] ?? null, JSON.stringify(nextOperations), workspaceId, occurrence.narrativeEventId);
+      if (updatedEvent.changes !== 1) throw new Error('The linked narrative event was not found.');
+      const updatedEvidence = this.db.prepare(`
+        UPDATE kanora_narrative_event_evidence SET excerpt = ?
+        WHERE workspace_id = ? AND event_id = ? AND ordinal = 0 AND origin_id = ?
+      `).run(summary.slice(0, 500), workspaceId, occurrence.narrativeEventId, occurrence.originId);
+      if (updatedEvidence.changes !== 1) throw new Error('The occurrence provenance could not be updated safely.');
+      this.db.prepare(`
+        DELETE FROM kanora_narrative_event_participants
+        WHERE workspace_id = ? AND event_id = ?
+      `).run(workspaceId, occurrence.narrativeEventId);
+      const insertParticipant = this.db.prepare(`
+        INSERT INTO kanora_narrative_event_participants
+          (workspace_id, event_id, ordinal, entity_id, role)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+      participantIds.forEach((entityId, index) => {
+        const role = entityId === eventEntity.id
+          ? 'recurring event'
+          : participants.find(participant => participant.entityId === entityId)?.role ?? 'involved';
+        insertParticipant.run(workspaceId, occurrence.narrativeEventId, index, entityId, role);
+      });
+
+      this.updateAppliedRecord(workspaceId, occurrence.narrativeEventId, updatedFactOperation, appliedAt);
+      const nextMemoryOperationIds = new Set(memoryOperations.map(operation => operation.id));
+      for (const operation of existingMemoryOperations) {
+        if (!nextMemoryOperationIds.has(operation.id)) {
+          this.db.prepare(`
+            DELETE FROM kanora_narrative_records
+            WHERE workspace_id = ? AND source_event_id = ? AND operation_id = ? AND record_type = 'memory'
+          `).run(workspaceId, occurrence.narrativeEventId, operation.id);
+        }
+      }
+      for (const operation of memoryOperations) {
+        this.updateAppliedRecord(workspaceId, occurrence.narrativeEventId, operation, appliedAt);
+      }
+
+      const updatedOccurrence = this.db.prepare(`
+        UPDATE worldbuild_event_occurrences
+        SET title = ?, summary = ?, start_date_json = ?, end_date_json = ?,
+          participants_json = ?, location_ids_json = ?, related_entity_ids_json = ?, updated_at = ?
+        WHERE workspace_id = ? AND occurrence_id = ? AND archived = 0
+      `).run(
+        title, summary, jsonOrNull(startDate), jsonOrNull(endDate),
+        JSON.stringify(participants), JSON.stringify(locationIds), JSON.stringify(relatedEntityIds),
+        updatedAt, workspaceId, occurrenceId
+      );
+      if (updatedOccurrence.changes !== 1) throw new Error('The event occurrence was not found.');
+      return this.requireOccurrence(workspaceId, occurrenceId);
+    })();
+  }
+
+  deleteManual(workspaceIdValue: string, occurrenceIdValue: string, eventEntityIdValue: string): boolean {
+    const workspaceId = requireText(workspaceIdValue, 'workspaceId');
+    const occurrenceId = requireText(occurrenceIdValue, 'occurrenceId');
+    const occurrence = this.requireEditableOccurrence(workspaceId, occurrenceId);
+    if (occurrence.eventEntityId !== requireText(eventEntityIdValue, 'eventEntityId')) {
+      throw new Error('The occurrence no longer belongs to the active event.');
+    }
+    if (!occurrence.originId) throw new Error('The occurrence provenance could not be removed safely.');
+    const updatedAt = Date.now();
+    return this.db.transaction(() => {
+      const archived = this.db.prepare(`
+        UPDATE worldbuild_event_occurrences
+        SET archived = 1, updated_at = ?
+        WHERE workspace_id = ? AND occurrence_id = ? AND archived = 0
+      `).run(updatedAt, workspaceId, occurrenceId);
+      if (archived.changes !== 1) throw new Error('The event occurrence was not found.');
+      this.db.prepare(`
+        INSERT INTO kanora_narrative_origin_lifecycle
+          (workspace_id, origin_id, status, replacement_origin_id, updated_at)
+        VALUES (?, ?, 'deleted', NULL, ?)
+        ON CONFLICT(workspace_id, origin_id) DO UPDATE SET
+          status = 'deleted', replacement_origin_id = NULL, updated_at = excluded.updated_at
+      `).run(workspaceId, occurrence.originId, updatedAt);
+      return true;
     })();
   }
 
@@ -310,6 +506,62 @@ export class EventOccurrenceService {
     );
   }
 
+  private updateAppliedRecord(
+    workspaceId: string,
+    narrativeEventId: string,
+    operation: Extract<NarrativeOperation, { type: 'assert-fact' | 'record-memory' }>,
+    appliedAt: string
+  ): void {
+    const record = operation.type === 'assert-fact'
+      ? { type: 'fact', id: operation.fact.id, subjectId: null, payload: operation.fact }
+      : { type: 'memory', id: operation.memory.id, subjectId: operation.memory.subjectId, payload: operation.memory };
+    this.db.prepare(`
+      INSERT INTO kanora_narrative_records (
+        workspace_id, record_type, record_id, subject_id, source_event_id,
+        operation_id, payload_json, applied_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(workspace_id, operation_id) DO UPDATE SET
+        subject_id = excluded.subject_id,
+        payload_json = excluded.payload_json
+    `).run(
+      workspaceId, record.type, record.id, record.subjectId, narrativeEventId,
+      operation.id, JSON.stringify(record.payload), appliedAt
+    );
+  }
+
+  private requireEditableOccurrence(workspaceId: string, occurrenceId: string): WorldbuildEventOccurrence {
+    const occurrence = this.requireOccurrence(workspaceId, occurrenceId);
+    if (occurrence.source !== 'user') throw new Error('Narrative State occurrences are protected history.');
+    const provenance = this.db.prepare(`
+      SELECT occurrences.archived, occurrences.origin_id,
+        events.provenance_interpreter, events.provenance_interpreter_id,
+        evidence.origin_id AS evidence_origin_id
+      FROM worldbuild_event_occurrences occurrences
+      JOIN kanora_narrative_events events
+        ON events.workspace_id = occurrences.workspace_id
+        AND events.event_id = occurrences.narrative_event_id
+      LEFT JOIN kanora_narrative_event_evidence evidence
+        ON evidence.workspace_id = events.workspace_id
+        AND evidence.event_id = events.event_id
+        AND evidence.ordinal = 0
+      WHERE occurrences.workspace_id = ? AND occurrences.occurrence_id = ?
+    `).get(workspaceId, occurrenceId) as {
+      archived: number;
+      origin_id: string | null;
+      provenance_interpreter: string;
+      provenance_interpreter_id: string | null;
+      evidence_origin_id: string | null;
+    } | undefined;
+    if (!provenance || provenance.archived === 1) throw new Error('The event occurrence was not found.');
+    const isManualOccurrence = provenance.provenance_interpreter === 'user'
+      && provenance.provenance_interpreter_id === 'worldbuild-event-occurrence'
+      && Boolean(provenance.origin_id)
+      && provenance.origin_id === provenance.evidence_origin_id
+      && provenance.origin_id === occurrence.originId;
+    if (!isManualOccurrence) throw new Error('Only manually recorded occurrences can be changed.');
+    return occurrence;
+  }
+
   private requireOccurrence(workspaceId: string, occurrenceId: string): WorldbuildEventOccurrence {
     const row = this.db.prepare(`
       SELECT occurrences.*, events.status
@@ -386,6 +638,45 @@ export class EventOccurrenceService {
       if (types && !types.includes(entity.type)) throw new Error('An occurrence reference has an invalid entity type.');
       return true;
     });
+  }
+
+  private normalizeDateRange(
+    workspaceId: string,
+    startDateValue?: Record<string, unknown> | null,
+    endDateValue?: Record<string, unknown> | null
+  ): { startDate: Record<string, unknown> | null; endDate: Record<string, unknown> | null } {
+    const calendar = this.calendarService.getCalendar(this.db, workspaceId);
+    if (!startDateValue && endDateValue) throw new Error('Choose a start date before adding an end date.');
+    if (!startDateValue) return { startDate: null, endDate: null };
+
+    const normalizeDate = (value: Record<string, unknown>, label: string) => {
+      const date = { ...value };
+      for (const field of ['year', 'month', 'day'] as const) {
+        const number = Number(date[field]);
+        if (!Number.isInteger(number)) throw new Error(`Choose a valid ${label.toLowerCase()}.`);
+        date[field] = number;
+      }
+      for (const field of ['hour', 'minute'] as const) {
+        if (date[field] == null) continue;
+        const number = Number(date[field]);
+        if (!Number.isInteger(number)) throw new Error(`Choose a valid ${label.toLowerCase()}.`);
+        date[field] = number;
+      }
+      const hour = date.hour == null ? null : Number(date.hour);
+      const minute = date.minute == null ? null : Number(date.minute);
+      if ((hour != null && (hour < 0 || hour >= calendar.hoursPerDay)) || (minute != null && (minute < 0 || minute > 59))) {
+        throw new Error(`Choose a valid ${label.toLowerCase()}.`);
+      }
+      if (!this.calendarService.validateDate(calendar, date)) throw new Error(`Choose a valid ${label.toLowerCase()}.`);
+      return date;
+    };
+
+    const startDate = normalizeDate(startDateValue, 'start date');
+    const endDate = endDateValue ? normalizeDate(endDateValue, 'end date') : null;
+    if (endDate && this.calendarService.compareDates(calendar, startDate, endDate) > 0) {
+      throw new Error('End date cannot be earlier than start date.');
+    }
+    return { startDate, endDate };
   }
 
   private requireEntity(workspaceId: string, entityId: string): { type: string; scope: string } {
@@ -468,28 +759,20 @@ function hydrateOccurrence(row: OccurrenceRow): WorldbuildEventOccurrence {
   };
 }
 
-function compareOccurrences(left: WorldbuildEventOccurrence, right: WorldbuildEventOccurrence): number {
+function compareOccurrences(
+  calendarService: EventOccurrenceCalendarService,
+  calendar: Record<string, any>,
+  left: WorldbuildEventOccurrence,
+  right: WorldbuildEventOccurrence
+): number {
   if (!left.startDate && !right.startDate) return left.createdAt - right.createdAt;
   if (!left.startDate) return -1;
   if (!right.startDate) return 1;
-  const leftParts = dateParts(left.startDate);
-  const rightParts = dateParts(right.startDate);
-  for (let index = 0; index < leftParts.length; index += 1) {
-    const comparison = leftParts[index].localeCompare(rightParts[index], undefined, { numeric: true });
-    if (comparison !== 0) return comparison;
-  }
-  return left.createdAt - right.createdAt;
-}
-
-function dateParts(value: Record<string, unknown>): string[] {
-  return [
-    String(value.eraId ?? ''),
-    String(value.year ?? 0),
-    String(value.month ?? 0),
-    String(value.day ?? 0),
-    String(value.hour ?? 0),
-    String(value.minute ?? 0)
-  ];
+  const dateComparison = calendarService.compareDates(calendar, left.startDate, right.startDate);
+  if (dateComparison !== 0) return dateComparison;
+  const timeComparison = (Number(left.startDate.hour) || 0) - (Number(right.startDate.hour) || 0)
+    || (Number(left.startDate.minute) || 0) - (Number(right.startDate.minute) || 0);
+  return timeComparison || left.createdAt - right.createdAt;
 }
 
 function summarizeNarrativeConsequences(record: NarrativeEventLedgerRecord, originId: string, roleplay: RoleplaySystem): Record<string, unknown> {
@@ -509,6 +792,10 @@ function relatedIdsForOperation(operation: ExtractedNarrativeEvent['operations']
   if (operation.type === 'knowledge' || operation.type === 'belief') return [operation.subjectId, operation.proposition.subjectId];
   if (operation.type === 'memory') return [operation.subjectId, ...(operation.relatedEntityIds ?? [])];
   return [operation.sourceEntityId, operation.targetEntityId];
+}
+
+function stableOccurrenceSuffix(occurrenceId: string, entityId: string): string {
+  return createHash('sha256').update(`${occurrenceId}:${entityId}`).digest('hex').slice(0, 24);
 }
 
 function normalizeAccessibility(value: unknown): MemoryAccessibility {

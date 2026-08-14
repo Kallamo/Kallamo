@@ -174,6 +174,16 @@ export interface WorldbuildApi {
     occurrence?: WorldbuildEventOccurrence;
     error?: string;
   }>;
+  updateWorldbuildEventOccurrence(payload: Record<string, unknown>): Promise<{
+    success: boolean;
+    occurrence?: WorldbuildEventOccurrence;
+    error?: string;
+  }>;
+  deleteWorldbuildEventOccurrence(workspaceId: string, eventEntityId: string, occurrenceId: string): Promise<{
+    success: boolean;
+    deleted?: boolean;
+    error?: string;
+  }>;
   listEntityLinks(workspaceId: string, relType?: string): Promise<{
     success: boolean;
     links?: Array<{ id: string; fromId: string; toId: string; relType: string }>;

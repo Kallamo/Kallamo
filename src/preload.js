@@ -147,6 +147,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteWorldbuildFact: (payload) => ipcRenderer.invoke('delete-worldbuild-fact', payload),
   listWorldbuildEventOccurrences: (workspaceId, eventEntityId) => ipcRenderer.invoke('list-worldbuild-event-occurrences', { workspaceId, eventEntityId }),
   createWorldbuildEventOccurrence: (payload) => ipcRenderer.invoke('create-worldbuild-event-occurrence', payload),
+  updateWorldbuildEventOccurrence: (payload) => ipcRenderer.invoke('update-worldbuild-event-occurrence', payload),
+  deleteWorldbuildEventOccurrence: (workspaceId, eventEntityId, occurrenceId) => ipcRenderer.invoke('delete-worldbuild-event-occurrence', { workspaceId, eventEntityId, occurrenceId }),
   getWorldbuildSubjectReview: (workspaceId, subjectId) => ipcRenderer.invoke('get-worldbuild-subject-review', { workspaceId, subjectId }),
   listWorldbuildReviewCounts: (workspaceId) => ipcRenderer.invoke('list-worldbuild-review-counts', { workspaceId }),
   saveWorldbuildSubjectEntry: (payload) => ipcRenderer.invoke('save-worldbuild-subject-entry', payload),

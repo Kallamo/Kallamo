@@ -163,9 +163,17 @@ function createWorldbuildDataService(db) {
       JOIN kanora_narrative_events AS events
         ON events.workspace_id = records.workspace_id
         AND events.event_id = records.source_event_id
+      LEFT JOIN kanora_narrative_event_evidence AS evidence
+        ON evidence.workspace_id = events.workspace_id
+        AND evidence.event_id = events.event_id
+        AND evidence.ordinal = 0
+      LEFT JOIN kanora_narrative_origin_lifecycle AS lifecycle
+        ON lifecycle.workspace_id = events.workspace_id
+        AND lifecycle.origin_id = evidence.origin_id
       WHERE records.workspace_id = ?
         AND records.subject_id = ?
         AND records.record_type IN ('observation', 'knowledge', 'belief', 'memory')
+        AND COALESCE(lifecycle.status, 'active') = 'active'
       ORDER BY events.narrative_sequence, records.rowid
     `).all(requireText(workspaceId, 'workspaceId'), requireText(subjectId, 'subjectId'));
     const projection = projectSubjectKnowledge(workspaceId, subjectId, rows);
@@ -244,8 +252,21 @@ function createWorldbuildDataService(db) {
 
   function getSubjectRecord(workspaceId, subjectId, kind, recordId) {
     const row = db.prepare(`
-      SELECT record_id, payload_json FROM kanora_narrative_records
-      WHERE workspace_id = ? AND subject_id = ? AND record_type = ? AND record_id = ?
+      SELECT records.record_id, records.payload_json
+      FROM kanora_narrative_records AS records
+      JOIN kanora_narrative_events AS events
+        ON events.workspace_id = records.workspace_id
+        AND events.event_id = records.source_event_id
+      LEFT JOIN kanora_narrative_event_evidence AS evidence
+        ON evidence.workspace_id = events.workspace_id
+        AND evidence.event_id = events.event_id
+        AND evidence.ordinal = 0
+      LEFT JOIN kanora_narrative_origin_lifecycle AS lifecycle
+        ON lifecycle.workspace_id = events.workspace_id
+        AND lifecycle.origin_id = evidence.origin_id
+      WHERE records.workspace_id = ? AND records.subject_id = ?
+        AND records.record_type = ? AND records.record_id = ?
+        AND COALESCE(lifecycle.status, 'active') = 'active'
     `).get(workspaceId, subjectId, kind, recordId);
     return row ? { id: row.record_id, payload: JSON.parse(row.payload_json) } : null;
   }
@@ -300,7 +321,15 @@ function createWorldbuildDataService(db) {
       JOIN kanora_narrative_events events
         ON events.workspace_id = records.workspace_id
         AND events.event_id = records.source_event_id
+      LEFT JOIN kanora_narrative_event_evidence evidence
+        ON evidence.workspace_id = events.workspace_id
+        AND evidence.event_id = events.event_id
+        AND evidence.ordinal = 0
+      LEFT JOIN kanora_narrative_origin_lifecycle lifecycle
+        ON lifecycle.workspace_id = events.workspace_id
+        AND lifecycle.origin_id = evidence.origin_id
       WHERE records.workspace_id = ? AND records.record_type = 'fact'
+        AND COALESCE(lifecycle.status, 'active') = 'active'
       ORDER BY events.narrative_sequence, records.rowid
     `).all(projectId);
     const current = new Map();
@@ -335,10 +364,21 @@ function createWorldbuildDataService(db) {
 
   function getWorldFactRecord(workspaceId, factId) {
     const rows = db.prepare(`
-      SELECT record_id, payload_json
-      FROM kanora_narrative_records
-      WHERE workspace_id = ? AND record_type = 'fact'
-      ORDER BY rowid DESC
+      SELECT records.record_id, records.payload_json
+      FROM kanora_narrative_records AS records
+      JOIN kanora_narrative_events AS events
+        ON events.workspace_id = records.workspace_id
+        AND events.event_id = records.source_event_id
+      LEFT JOIN kanora_narrative_event_evidence AS evidence
+        ON evidence.workspace_id = events.workspace_id
+        AND evidence.event_id = events.event_id
+        AND evidence.ordinal = 0
+      LEFT JOIN kanora_narrative_origin_lifecycle AS lifecycle
+        ON lifecycle.workspace_id = events.workspace_id
+        AND lifecycle.origin_id = evidence.origin_id
+      WHERE records.workspace_id = ? AND records.record_type = 'fact'
+        AND COALESCE(lifecycle.status, 'active') = 'active'
+      ORDER BY records.rowid DESC
     `).all(requireText(workspaceId, 'workspaceId'));
     const requestedId = requireText(factId, 'factId');
     for (const row of rows) {

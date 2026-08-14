@@ -3303,7 +3303,7 @@ ipcMain.handle('delete-worldbuild-fact', async (event, payload = {}) => {
 
 function getEventOccurrenceService() {
   const { EventOccurrenceService } = require('../../dist-main/main/features/worldbuild/event-occurrences');
-  return new EventOccurrenceService(db);
+  return new EventOccurrenceService(db, getCalendarService());
 }
 
 ipcMain.handle('list-worldbuild-event-occurrences', async (event, { workspaceId, eventEntityId } = {}) => {
@@ -3320,6 +3320,24 @@ ipcMain.handle('create-worldbuild-event-occurrence', async (event, payload = {})
     return { success: true, occurrence: getEventOccurrenceService().createManual(payload) };
   } catch (e) {
     console.error('[create-worldbuild-event-occurrence] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('update-worldbuild-event-occurrence', async (event, payload = {}) => {
+  try {
+    return { success: true, occurrence: getEventOccurrenceService().updateManual(payload) };
+  } catch (e) {
+    console.error('[update-worldbuild-event-occurrence] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('delete-worldbuild-event-occurrence', async (event, { workspaceId, occurrenceId, eventEntityId } = {}) => {
+  try {
+    return { success: true, deleted: getEventOccurrenceService().deleteManual(workspaceId, occurrenceId, eventEntityId) };
+  } catch (e) {
+    console.error('[delete-worldbuild-event-occurrence] failed:', e);
     return { success: false, error: e.message };
   }
 });

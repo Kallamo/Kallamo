@@ -907,6 +907,7 @@ module.exports = {
   applyRoleplayTurnFrame,
   buildRoleplayTemporalContext,
   collectInvalidDates,
+  compareDates,
   formatClock,
   getCalendar,
   getCalendarEntries,
