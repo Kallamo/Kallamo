@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Backpack, CalendarDays, Check, ChevronRight, Clock3, Drama, Image as ImageIcon, MapPin,
-  MoreVertical, Pencil, Plus, Settings2, Sparkles, Swords, Users, X
+  Backpack, CalendarDays, Check, ChevronRight, Clock3, Image as ImageIcon, MapPin,
+  Loader2, MoreVertical, PanelRightOpen, Pencil, Plus, Settings2, Sparkles, Swords, Users, X
 } from 'lucide-react';
 import SearchableSelect from '../../components/ui/SearchableSelect';
 import Popover from '../../components/ui/Popover';
@@ -31,6 +31,7 @@ function RoleplayQuickPanel({
   onOpenConfiguration,
   onBackgroundChange,
   onCollapsedChange,
+  narrativeStateProcessing = false,
   initialCollapsed = false
 }) {
   const [collapsed, setCollapsed] = useState(initialCollapsed);
@@ -177,6 +178,11 @@ function RoleplayQuickPanel({
       const presenceOrder = Number(!scene.participantIds?.includes(left.id)) - Number(!scene.participantIds?.includes(right.id));
       return presenceOrder || left.canonicalName.localeCompare(right.canonicalName);
     });
+  const roleplayStatusLabel = narrativeStateProcessing
+    ? 'Updating Narrative State'
+    : pendingCount > 0
+      ? `${pendingCount} ${pendingCount === 1 ? 'change' : 'changes'} to review`
+      : 'Active';
   const savePanelState = async nextCollapsed => {
     onCollapsedChange?.(nextCollapsed);
     setCollapsed(nextCollapsed);
@@ -326,63 +332,86 @@ function RoleplayQuickPanel({
 
   if (collapsed) {
     return (
-      <button
-        type="button"
-        onClick={() => savePanelState(false)}
-        aria-label="Open Roleplay panel"
-        className="group absolute bottom-5 right-5 z-30 flex h-11 w-11 items-center justify-center rounded-xl border border-accent/35 bg-surface-panel/95 text-accent shadow-xl backdrop-blur-md transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-      >
-        <Drama className="h-5 w-5" />
-        <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
-        <SceneSummaryTooltip
-          player={player}
-          participants={otherCharacters.filter(entity => scene.participantIds?.includes(entity.id))}
-          nearby={otherCharacters.filter(entity => !scene.participantIds?.includes(entity.id))}
-          locationName={names.get(scene.locationId)}
-          calendar={calendar}
-          clock={clock}
-        />
-      </button>
+      <div className="group absolute bottom-5 right-5 z-30 text-xs">
+        <button
+          type="button"
+          onClick={() => savePanelState(false)}
+          aria-label={launcherLabel(roleplayStatusLabel, calendar, clock, names.get(scene.locationId))}
+          className="flex w-[10em] flex-col overflow-hidden rounded-surface border border-accent/35 bg-surface-panel/95 text-left text-accent shadow-panel backdrop-blur-md transition-[width,background-color,border-color,box-shadow] duration-300 ease-emphasized hover:w-[17.5em] hover:border-accent/55 hover:shadow-overlay focus-visible:w-[17.5em] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 group-focus-within:w-[17.5em]"
+        >
+          <span className="flex min-h-11 w-full items-center justify-between gap-2 px-3.5">
+            <span className="flex shrink-0 items-center gap-2">
+              <span className="font-bold uppercase tracking-[0.14em]">RP Mode</span>
+              <RoleplayStatus processing={narrativeStateProcessing} pendingCount={pendingCount} />
+            </span>
+            {/* The only cue that a full panel exists behind this button. */}
+            <span className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-text-subtle opacity-0 transition-opacity duration-200 ease-standard group-hover:opacity-100 group-hover:delay-150 group-focus-within:opacity-100 group-focus-within:delay-150">
+              <span className="truncate font-semibold">Open panel</span>
+              <PanelRightOpen aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+            </span>
+          </span>
+          <span
+            aria-hidden="true"
+            className="reveal group-hover:reveal-open group-focus-within:reveal-open"
+          >
+            <span className="reveal-body block">
+              <LauncherSummary
+                player={player}
+                participants={otherCharacters.filter(entity => scene.participantIds?.includes(entity.id))}
+                nearby={otherCharacters.filter(entity => !scene.participantIds?.includes(entity.id))}
+                locationName={names.get(scene.locationId)}
+                calendar={calendar}
+                clock={clock}
+              />
+            </span>
+          </span>
+        </button>
+      </div>
     );
   }
 
   return (
-    <aside className="relative z-20 flex h-full w-[22.5rem] shrink-0 flex-col border-l border-border-subtle bg-surface-sidebar/90 shadow-2xl backdrop-blur-xl 2xl:w-[23.5rem]">
+    <aside className="relative z-20 flex h-full w-[clamp(18rem,30vw,22.5rem)] shrink-0 flex-col border-l border-border-subtle bg-surface-sidebar/90 shadow-2xl backdrop-blur-xl 2xl:w-[23.5rem]">
       <header className="flex h-14 shrink-0 items-center justify-between border-b border-border-subtle px-4">
-        <button type="button" onClick={openConfiguration} className="flex items-center gap-2 text-accent" title="Open Roleplay Mode settings">
-          <span className="h-2 w-2 animate-pulse rounded-full bg-accent" />
-          <span className="text-xs font-bold uppercase tracking-[0.16em]">RP Mode</span>
-          {pendingCount > 0 && <span className="rounded-full bg-accent px-1.5 text-xs text-on-accent">{pendingCount}</span>}
-        </button>
-        <div className="flex items-center gap-1">
-          <button type="button" onClick={openConfiguration} className="rounded-lg p-2 text-gray-500 hover:bg-white/5 hover:text-accent" title="Roleplay Mode settings"><Settings2 className="h-4 w-4" /></button>
-          <button type="button" onClick={() => savePanelState(true)} className="rounded-lg p-2 text-gray-500 hover:bg-white/5 hover:text-white" title="Minimize panel"><ChevronRight className="h-4 w-4" /></button>
+        {/* The pulsing dot already says "active", so the label only appears when
+            there is something else to report. */}
+        <div className="flex min-w-0 items-center gap-2.5 py-1 text-accent">
+          <RoleplayStatus processing={narrativeStateProcessing} pendingCount={pendingCount} />
+          <span className="min-w-0 text-left">
+            <span className="block text-xs font-bold uppercase tracking-[0.16em]">RP Mode</span>
+            {(narrativeStateProcessing || pendingCount > 0) && (
+              <span className="mt-0.5 block truncate text-[0.625rem] font-medium text-text-subtle">{roleplayStatusLabel}</span>
+            )}
+          </span>
+        </div>
+        <div className="flex items-center gap-0.5">
+          <button type="button" onClick={openConfiguration} aria-label="Open Roleplay Mode settings" className="rounded-control p-2 text-text-subtle transition-colors hover:bg-surface-hover/60 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" title="Roleplay Mode settings"><Settings2 aria-hidden="true" className="h-4 w-4" /></button>
+          <button type="button" onClick={() => savePanelState(true)} aria-label="Minimize Roleplay panel" className="rounded-control p-2 text-text-subtle transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" title="Minimize panel"><ChevronRight aria-hidden="true" className="h-4 w-4" /></button>
         </div>
       </header>
 
-      <section className="shrink-0 border-b border-white/10 bg-black/10 px-4 py-3">
+      <section className="shrink-0 border-b border-border-subtle bg-surface-canvas/40 px-4 py-3">
         {editingClock && calendar ? (
-          <div className="space-y-2">
-            <WorldDateInput calendar={calendar} value={clockDraft} includeTime allowClear={false} onChange={setClockDraft} />
-            <div className="flex justify-end gap-1">
-              <button type="button" onClick={() => { setClockDraft(clock); setEditingClock(false); }} className="rounded-md p-1.5 text-gray-500 hover:text-white"><X className="h-3.5 w-3.5" /></button>
-              <button type="button" onClick={saveClock} className="rounded-md bg-accent p-1.5 text-[#011419]"><Check className="h-3.5 w-3.5" /></button>
+          <div className="space-y-3">
+            <WorldDateInput calendar={calendar} value={clockDraft} includeTime allowClear={false} label="Roleplay date and time" emptyLabel="Set date and time" onChange={setClockDraft} />
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => { setClockDraft(clock); setEditingClock(false); }} className="inline-flex min-h-9 items-center gap-1.5 rounded-control px-3 text-xs font-semibold text-text-muted transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><X aria-hidden="true" className="h-3.5 w-3.5" />Cancel</button>
+              <button type="button" onClick={saveClock} className="inline-flex min-h-9 items-center gap-1.5 rounded-control bg-accent px-3 text-xs font-bold text-on-accent transition-[filter] hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Check aria-hidden="true" className="h-3.5 w-3.5" />Save time</button>
             </div>
           </div>
         ) : (
-          <button type="button" onClick={() => setEditingClock(true)} className="group/clock flex w-full items-center justify-between gap-3 text-left">
-            <div className="min-w-0 space-y-1.5">
-              <span className="flex min-w-0 items-center gap-2 truncate text-sm font-bold uppercase tracking-[0.1em] text-text-secondary">
-                <CalendarDays className="h-4 w-4 shrink-0 text-sky-300" />
+          <button type="button" onClick={() => setEditingClock(true)} className="group/clock flex w-full items-center justify-between gap-3 rounded-control text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            <span className="min-w-0">
+              <span className="flex min-w-0 items-center gap-2 truncate text-sm font-semibold text-text-secondary">
+                <CalendarDays aria-hidden="true" className="h-4 w-4 shrink-0 text-status-info" />
                 {formatWorldDate(calendar, clock)}
               </span>
-              <span className="flex items-center gap-2 text-text-muted">
-                <Clock3 className="h-3.5 w-3.5 shrink-0 text-amber-300" />
-                <span className="font-mono text-lg font-semibold tracking-tight text-gray-100">{String(clock?.hour ?? 0).padStart(2, '0')}:{String(clock?.minute ?? 0).padStart(2, '0')}</span>
-                {clock?.weekdayName && <span className="text-xs font-medium">· {clock.weekdayName}</span>}
+              <span className="mt-1 flex items-baseline gap-2 text-text-muted">
+                <span className="font-mono text-xl font-semibold tabular-nums tracking-tight text-text-primary">{String(clock?.hour ?? 0).padStart(2, '0')}:{String(clock?.minute ?? 0).padStart(2, '0')}</span>
+                {clock?.weekdayName && <span className="truncate text-xs font-medium">{clock.weekdayName}</span>}
               </span>
-            </div>
-            <Pencil className="h-3.5 w-3.5 text-gray-600 group-hover/clock:text-accent" />
+            </span>
+            <Pencil aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-text-disabled transition-colors group-hover/clock:text-accent" />
           </button>
         )}
       </section>
@@ -391,23 +420,24 @@ function RoleplayQuickPanel({
         {tab === 'scene' ? (
           <div className="space-y-5">
             <section>
-              <div className="mb-2.5 flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-gray-100">Active Characters</h3>
-                <button type="button" onClick={() => setAddingCharacter(value => !value)} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold text-accent hover:bg-accent/10"><Plus className="h-3.5 w-3.5" />Add</button>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <h3 className="eyebrow">Active Characters</h3>
+                <button type="button" onClick={() => setAddingCharacter(value => !value)} aria-expanded={addingCharacter} className="inline-flex items-center gap-1 rounded-control px-2 py-1 text-xs font-semibold text-accent transition-colors hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Plus aria-hidden="true" className="h-3.5 w-3.5" />Add</button>
               </div>
               {addingCharacter && (
-                <div className="mb-2 rounded-xl border border-accent/20 bg-accent/[0.04] p-2">
+                <div className="mb-2 animate-rise-in rounded-card border border-accent/20 bg-accent/[0.04] p-2">
                   <SearchableSelect
                     value=""
                     onChange={addCharacter}
                     options={actorOptions.filter(option => !presentIds.has(option.id))}
                     placeholder="Search characters"
+                    ariaLabel="Add a character to the scene"
                   />
                 </div>
               )}
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 {player ? <CharacterCard entity={player} protagonist typeLabel={typeLabels.get(player.type)} /> : <EmptyState text="Choose a Player Character in Roleplay Mode settings." />}
-                <div className={(presentIds.size >= 5 ? 'max-h-[17rem] overflow-y-auto pr-1 custom-scrollbar' : '') + ' space-y-2'}>
+                <div className={(presentIds.size >= 5 ? 'max-h-[17rem] overflow-y-auto pr-1 custom-scrollbar' : '') + ' space-y-1.5'}>
                   {otherCharacters.map(entity => (
                     <CharacterCard
                       key={entity.id}
@@ -421,33 +451,34 @@ function RoleplayQuickPanel({
                       onRemove={() => removeCharacter(entity.id)}
                     />
                   ))}
-                  {!otherCharacters.length && player && <p className="px-2 py-3 text-center text-xs text-gray-600">No one else is present.</p>}
+                  {!otherCharacters.length && player && <p className="px-2 py-3 text-center text-xs text-text-disabled">No one else is present.</p>}
                 </div>
               </div>
             </section>
 
             <section>
-              <label className="mb-2 block text-sm font-semibold text-gray-100">Current Location</label>
+              <h3 className="eyebrow mb-2">Current Location</h3>
               <SearchableSelect
                 value={scene.locationId || ''}
                 onChange={locationId => saveScene({ locationId: locationId || null })}
                 options={locationOptions}
                 placeholder="Select a Location"
+                ariaLabel="Current Location"
               />
             </section>
 
             <section>
-              <div className="mb-2 flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-gray-100">Location Background</h3>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <h3 className="eyebrow">Location Background</h3>
                 {background?.imagePath && !background.inherited && (
-                  <button type="button" onClick={removeBackground} className="text-xs font-semibold text-text-muted hover:text-status-danger">Remove</button>
+                  <button type="button" onClick={removeBackground} className="rounded-control px-1.5 py-0.5 text-xs font-semibold text-text-muted transition-colors hover:text-status-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-danger/40">Remove</button>
                 )}
               </div>
               <button
                 type="button"
                 disabled={!scene.locationId}
                 onClick={() => backgroundInputRef.current?.click()}
-                className="group relative flex h-32 w-full items-center justify-center overflow-hidden rounded-xl border border-border-subtle bg-surface-panel-muted disabled:cursor-not-allowed disabled:opacity-50"
+                className={`group relative flex w-full overflow-hidden rounded-card border border-border-subtle bg-surface-panel-muted transition-colors duration-200 ease-standard hover:border-border-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50 ${background?.imagePath ? 'h-32 items-center justify-center' : 'min-h-11 items-center px-3'}`}
                 style={background?.imagePath ? {
                   backgroundImage: `url("app-file:///${background.imagePath.replace(/\\/g, '/')}")`,
                   backgroundPosition: 'center',
@@ -455,8 +486,8 @@ function RoleplayQuickPanel({
                 } : {}}
               >
                 <div className={'absolute inset-0 rounded-[inherit] transition-colors ' + (background?.imagePath ? 'bg-black/0 group-hover:bg-black/50 group-focus-visible:bg-black/50' : 'bg-transparent')} />
-                <div className={'relative flex flex-col items-center gap-2 transition-opacity ' + (background?.imagePath ? 'opacity-0 text-accent group-hover:opacity-100 group-focus-visible:opacity-100' : 'text-gray-500 group-hover:text-accent')}>
-                  <ImageIcon className="h-6 w-6" />
+                <div className={'relative flex items-center gap-2 transition-opacity ' + (background?.imagePath ? 'flex-col opacity-0 text-accent group-hover:opacity-100 group-focus-visible:opacity-100' : 'text-text-muted group-hover:text-accent')}>
+                  <ImageIcon className={background?.imagePath ? 'h-6 w-6' : 'h-4 w-4'} />
                   <span className="text-xs font-semibold">{background?.imagePath ? 'Change background' : 'Choose background'}</span>
                 </div>
               </button>
@@ -469,13 +500,13 @@ function RoleplayQuickPanel({
             </section>
 
             {!!recentTurns.length && (
-              <section className="border-t border-white/10 pt-3">
-                <button type="button" onClick={() => setRecentOpen(value => !value)} className="flex w-full items-center justify-between text-xs font-semibold text-gray-400 hover:text-white">
-                  <span className="inline-flex items-center gap-2"><Sparkles className="h-3.5 w-3.5 text-accent" />Recent Changes</span>
-                  <ChevronRight className={'h-3.5 w-3.5 transition-transform ' + (recentOpen ? 'rotate-90' : '')} />
+              <section className="border-t border-border-subtle pt-3">
+                <button type="button" onClick={() => setRecentOpen(value => !value)} aria-expanded={recentOpen} className="flex w-full items-center justify-between rounded-control text-xs font-semibold text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                  <span className="inline-flex items-center gap-2"><Sparkles aria-hidden="true" className="h-3.5 w-3.5 text-accent" />Recent Changes</span>
+                  <ChevronRight aria-hidden="true" className={'h-3.5 w-3.5 transition-transform duration-200 ease-standard ' + (recentOpen ? 'rotate-90' : '')} />
                 </button>
                 {recentOpen && (
-                  <div className="mt-2 space-y-2">
+                  <div className="mt-2 animate-rise-in space-y-2">
                     {recentTurns.map(turn => (
                       <RecentTurn
                         key={turn.originId}
@@ -495,11 +526,11 @@ function RoleplayQuickPanel({
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="flex items-center gap-3 rounded-xl border border-accent/15 bg-accent/[0.04] p-3">
+            <div className="flex items-center gap-3 rounded-card border border-accent/15 bg-accent/[0.04] p-3">
               <Avatar entity={player} />
               <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-gray-100">{player?.canonicalName || 'No controlled character'}</p>
-                <p className="text-xs uppercase tracking-wider text-accent">Current inventory</p>
+                <p className="eyebrow text-accent">Current inventory</p>
+                <p className="mt-0.5 truncate text-sm font-semibold text-text-primary">{player?.canonicalName || 'No controlled character'}</p>
               </div>
             </div>
             <InventorySection title="Equipped" items={inventory.filter(item => item.equipped)} empty="Nothing is equipped." onMenu={setOpenMenuId} openMenuId={openMenuId} onToggle={toggleEquipped} onTransfer={setTransfer} />
@@ -527,7 +558,7 @@ function RoleplayQuickPanel({
         </Modal>
       )}
 
-      <footer className="grid h-14 shrink-0 grid-cols-2 gap-1 border-t border-white/10 bg-[#020e13]/90 p-2">
+      <footer className="grid h-14 shrink-0 grid-cols-2 gap-1 border-t border-border-subtle bg-surface-canvas/70 p-2">
         <TabButton active={tab === 'scene'} onClick={() => setTab('scene')} icon={Users} label="Scene" />
         <TabButton active={tab === 'inventory'} onClick={() => setTab('inventory')} icon={Backpack} label="Inventory" count={inventory.length} />
       </footer>
@@ -541,20 +572,19 @@ function CharacterCard({ entity, typeLabel, protagonist = false, presence, menuO
   const typeMeta = meta(entity.type);
   const menuButtonRef = useRef(null);
   return (
-    <article data-roleplay-menu-root className={'relative flex items-center gap-2.5 rounded-xl border p-2.5 transition-colors ' + (protagonist ? 'border-accent/35 bg-accent/[0.07]' : `${typeMeta.ring} bg-[#07151b]/90`)}>
+    <article data-roleplay-menu-root className={'group/card relative flex items-center gap-2.5 rounded-card border p-2 transition-colors duration-200 ease-standard ' + (protagonist ? 'border-accent/35 bg-accent/[0.07]' : `${typeMeta.ring} bg-surface-panel-muted/70 hover:bg-surface-panel-muted`)}>
       <Avatar entity={entity} protagonist={protagonist} />
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1.5">
-          <span className={'truncate text-xs font-semibold uppercase tracking-wider ' + typeMeta.soft}>{typeLabel || typeMeta.label}</span>
-          <span className="text-xs text-text-disabled">·</span>
+          <span className={'truncate text-[0.6875rem] font-bold uppercase tracking-[0.09em] ' + typeMeta.soft}>{typeLabel || typeMeta.label}</span>
           {protagonist
-            ? <span className="shrink-0 rounded-md bg-accent/15 px-1.5 py-0.5 text-xs font-bold uppercase tracking-wider text-accent">Playing</span>
-            : <span className="inline-flex shrink-0 items-center gap-1 text-xs text-text-muted"><PresenceIcon className="h-3 w-3" />{presenceConfig.label}</span>}
+            ? <span className="shrink-0 rounded bg-accent/15 px-1.5 py-0.5 text-[0.6875rem] font-bold uppercase tracking-[0.09em] text-accent">Playing</span>
+            : <span className="inline-flex shrink-0 items-center gap-1 text-[0.6875rem] font-medium text-text-muted"><PresenceIcon aria-hidden="true" className="h-3 w-3" />{presenceConfig.label}</span>}
         </div>
-        <p className="mt-0.5 truncate text-sm font-semibold text-gray-100">{entity.canonicalName}</p>
+        <p className="mt-0.5 truncate text-sm font-semibold text-text-primary">{entity.canonicalName}</p>
       </div>
       {!protagonist && (
-        <button ref={menuButtonRef} type="button" onClick={onMenu} className="rounded-lg p-1.5 text-gray-500 hover:bg-white/5 hover:text-white"><MoreVertical className="h-4 w-4" /></button>
+        <button ref={menuButtonRef} type="button" aria-label={`Actions for ${entity.canonicalName}`} onClick={onMenu} className="shrink-0 rounded-control p-1.5 text-text-subtle opacity-0 transition-[color,background-color,opacity] hover:bg-surface-hover/60 hover:text-text-primary focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 group-focus-within/card:opacity-100 group-hover/card:opacity-100"><MoreVertical aria-hidden="true" className="h-4 w-4" /></button>
       )}
       {menuOpen && (
         <FloatingMenu anchorRef={menuButtonRef} onClose={onMenu}>
@@ -575,25 +605,26 @@ function FloatingMenu({ anchorRef, onClose, children }) {
   );
 }
 
+/* A span so it stays valid phrasing content inside the launcher button. */
 function Avatar({ entity, protagonist = false, compact = false }) {
   const image = entity?.data?.image || entity?.data?.imagePath || entity?.data?.avatar;
   return (
-    <div
-      className={'flex shrink-0 items-center justify-center overflow-hidden border bg-surface-canvas font-bold ' + (compact ? 'h-7 w-7 rounded-lg text-xs ' : 'h-10 w-10 rounded-xl text-sm ') + (protagonist ? 'border-accent/50 text-accent' : 'border-border-subtle text-text-muted')}
+    <span
+      className={'inline-flex shrink-0 items-center justify-center overflow-hidden border bg-surface-canvas font-bold uppercase ' + (compact ? 'h-7 w-7 rounded-control text-xs ' : 'h-10 w-10 rounded-card text-sm ') + (protagonist ? 'border-accent/50 text-accent' : 'border-border-subtle text-text-muted')}
       style={image ? { backgroundImage: `url("app-file:///${String(image).replace(/\\/g, '/')}")`, backgroundPosition: 'center', backgroundSize: 'cover' } : {}}
     >
       {!image && (entity?.canonicalName?.[0] || '?')}
-    </div>
+    </span>
   );
 }
 
 function InventorySection({ title, items, empty, openMenuId, onMenu, onToggle, onTransfer }) {
   return (
     <section>
-      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500">{title}</h3>
-      <div className="space-y-2">
+      <h3 className="eyebrow mb-2">{title}</h3>
+      <div className="space-y-1.5">
         {items.map(item => <InventoryItemCard key={item.itemId} item={item} menuOpen={openMenuId === item.itemId} onMenu={() => onMenu(openMenuId === item.itemId ? null : item.itemId)} onCloseMenu={() => onMenu(null)} onToggle={onToggle} onTransfer={onTransfer} />)}
-        {!items.length && <p className="rounded-xl border border-dashed border-white/10 px-3 py-5 text-center text-xs text-gray-600">{empty}</p>}
+        {!items.length && <p className="rounded-card border border-dashed border-border-subtle px-3 py-5 text-center text-xs text-text-disabled">{empty}</p>}
       </div>
     </section>
   );
@@ -603,13 +634,13 @@ function InventoryItemCard({ item, menuOpen, onMenu, onCloseMenu, onToggle, onTr
   const menuButtonRef = useRef(null);
   const ItemIcon = itemMeta(item.data?.itemType).icon;
   return (
-    <article data-roleplay-menu-root className={'relative flex items-center gap-2.5 rounded-xl border p-2.5 transition-colors ' + (item.equipped ? 'border-status-info/35 bg-status-info/[0.07]' : 'border-border-subtle bg-surface-panel-muted/90')}>
-      <div className={'flex h-9 w-9 items-center justify-center rounded-lg border bg-surface-canvas ' + (item.equipped ? 'border-status-info/30 text-status-info' : 'border-border-default text-entity-item')}><ItemIcon className="h-4 w-4" /></div>
+    <article data-roleplay-menu-root className={'group/item relative flex items-center gap-2.5 rounded-card border p-2 transition-colors duration-200 ease-standard ' + (item.equipped ? 'border-status-info/35 bg-status-info/[0.07]' : 'border-border-subtle bg-surface-panel-muted/70 hover:bg-surface-panel-muted')}>
+      <div className={'flex h-9 w-9 shrink-0 items-center justify-center rounded-control border bg-surface-canvas ' + (item.equipped ? 'border-status-info/30 text-status-info' : 'border-border-default text-entity-item')}><ItemIcon aria-hidden="true" className="h-4 w-4" /></div>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-semibold text-text-primary">{item.name}</p>
         <p className={'text-xs ' + (item.equipped ? 'text-status-info' : 'text-text-muted')}>{item.equipped ? 'Equipped' : item.nature === 'unique' ? 'Unique item' : `Quantity ${item.quantity}`}</p>
       </div>
-      <button ref={menuButtonRef} type="button" aria-label={`Actions for ${item.name}`} onClick={onMenu} className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><MoreVertical className="h-4 w-4" /></button>
+      <button ref={menuButtonRef} type="button" aria-label={`Actions for ${item.name}`} onClick={onMenu} className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-text-subtle opacity-0 transition-[color,background-color,opacity] hover:bg-surface-hover/60 hover:text-text-primary focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 group-focus-within/item:opacity-100 group-hover/item:opacity-100"><MoreVertical aria-hidden="true" className="h-4 w-4" /></button>
       {menuOpen ? (
         <FloatingMenu anchorRef={menuButtonRef} onClose={onCloseMenu}>
           <MenuAction onClick={() => onToggle(item)} icon={Swords}>{item.equipped ? 'Unequip' : 'Equip'}</MenuAction>
@@ -635,15 +666,17 @@ function TransferEditor({ transfer, setTransfer, item, actors, locations, curren
       {item?.nature === 'type' && (
         <label className="flex items-center justify-between text-xs font-medium text-text-muted">
           Quantity
-          <input type="number" min="1" max={item.quantity} value={transfer.quantity} onChange={event => setTransfer({ ...transfer, quantity: event.target.value })} className="min-h-10 w-20 rounded-lg border border-border-default bg-surface-input px-2 text-right text-sm text-text-primary outline-none focus:border-accent/50 focus:ring-2 focus:ring-accent/20" />
+          <input type="number" min="1" max={item.quantity} value={transfer.quantity} onChange={event => setTransfer({ ...transfer, quantity: event.target.value })} className="min-h-10 w-20 rounded-control border border-border-default bg-surface-input px-2 text-right text-sm text-text-primary outline-none focus:border-accent/50 focus:ring-2 focus:ring-accent/20" />
         </label>
       )}
-      <button type="button" onClick={onApply} className="min-h-10 w-full rounded-lg border border-accent/30 bg-accent/10 px-4 text-sm font-semibold text-accent hover:bg-accent/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">Apply move</button>
+      <button type="button" onClick={onApply} className="min-h-10 w-full rounded-control border border-accent/30 bg-accent/10 px-4 text-sm font-semibold text-accent hover:bg-accent/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">Apply move</button>
     </section>
   );
 }
 
-function SceneSummaryTooltip({ player, participants, nearby, locationName, calendar, clock }) {
+/* Revealed inside the collapsed launcher itself. Purely visual: the button
+   carries the equivalent text in its aria-label. */
+function LauncherSummary({ player, participants, nearby, locationName, calendar, clock }) {
   const actors = [
     player,
     ...participants.filter(entity => entity.id !== player?.id),
@@ -652,26 +685,73 @@ function SceneSummaryTooltip({ player, participants, nearby, locationName, calen
   const visibleActors = actors.slice(0, COLLAPSED_ACTOR_LIMIT);
   const overflowCount = actors.length - visibleActors.length;
   return (
-    <div className="pointer-events-none absolute bottom-full right-0 mb-3 hidden w-56 rounded-xl border border-border-default bg-surface-panel/98 p-3 text-left shadow-2xl group-hover:block group-focus-visible:block">
-      <span className="mb-2 block text-xs font-bold uppercase tracking-[0.16em] text-accent/80">RP Mode</span>
-      <span className="mb-2 flex items-start gap-2 border-b border-white/[0.07] pb-2.5">
-        <Clock3 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-300" />
-        <span className="min-w-0"><span className="block truncate text-xs font-medium text-text-secondary">{formatWorldDate(calendar, clock)}</span><span className="block text-xs text-text-muted"><span className="font-mono">{String(clock?.hour ?? 0).padStart(2, '0')}:{String(clock?.minute ?? 0).padStart(2, '0')}</span>{clock?.weekdayName ? ` · ${clock.weekdayName}` : ''}</span></span>
+    /* Full-width rows with edge-to-edge dividers. Short strings still read as
+       filling the card because the row, not the text, defines the width. */
+    <span className="block border-t border-border-subtle opacity-0 transition-opacity duration-200 ease-standard group-hover:opacity-100 group-hover:delay-100 group-focus-within:opacity-100 group-focus-within:delay-100">
+      <span className="flex w-full items-start gap-2.5 px-3.5 py-2.5">
+        <Clock3 aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-info" />
+        <span className="min-w-0 flex-1">
+          <span className="flex items-baseline justify-between gap-2">
+            <span className="min-w-0 truncate font-semibold text-text-primary">{formatWorldDate(calendar, clock)}</span>
+            <span className="shrink-0 font-mono tabular-nums text-text-secondary">{String(clock?.hour ?? 0).padStart(2, '0')}:{String(clock?.minute ?? 0).padStart(2, '0')}</span>
+          </span>
+          {clock?.weekdayName && <span className="mt-0.5 block truncate text-text-muted">{clock.weekdayName}</span>}
+        </span>
       </span>
-      <div className="flex flex-wrap items-center gap-1.5">
-        {visibleActors.map(entity => (
-          <div key={entity.id} title={entity.canonicalName}>
-            <Avatar entity={entity} protagonist={entity.id === player?.id} compact />
-          </div>
-        ))}
-        {overflowCount > 0 && <span className="flex h-7 min-w-7 items-center justify-center rounded-lg border border-border-default bg-surface-panel-muted px-1 text-xs font-semibold text-text-secondary">+{overflowCount}</span>}
-        {!visibleActors.length && <span className="text-xs text-text-muted">No active characters</span>}
-      </div>
-      <span className="mt-3 flex items-center gap-2 border-t border-white/[0.07] pt-2.5">
-        <MapPin className="h-3.5 w-3.5 shrink-0 text-emerald-300" />
-        <span className="truncate text-xs font-medium text-text-secondary">{locationName || 'No current Location'}</span>
+
+      <span className="flex w-full items-center gap-2.5 border-t border-border-subtle px-3.5 py-2.5">
+        <Users aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-accent/70" />
+        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+          {visibleActors.map(entity => (
+            <Avatar key={entity.id} entity={entity} protagonist={entity.id === player?.id} compact />
+          ))}
+          {overflowCount > 0 && (
+            <span className="flex h-7 min-w-7 items-center justify-center rounded-control border border-border-default bg-surface-panel-muted px-1 font-semibold text-text-secondary">+{overflowCount}</span>
+          )}
+          {!visibleActors.length && <span className="text-text-muted">No active characters</span>}
+        </span>
       </span>
-    </div>
+
+      <span className="flex w-full items-center gap-2.5 border-t border-border-subtle px-3.5 py-2.5">
+        <MapPin aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-status-success" />
+        <span className="min-w-0 flex-1 truncate font-medium text-text-secondary">{locationName || 'No current Location'}</span>
+      </span>
+    </span>
+  );
+}
+
+function launcherLabel(statusLabel, calendar, clock, locationName) {
+  const time = `${String(clock?.hour ?? 0).padStart(2, '0')}:${String(clock?.minute ?? 0).padStart(2, '0')}`;
+  return [
+    'Open Roleplay panel',
+    statusLabel,
+    [formatWorldDate(calendar, clock), time].filter(Boolean).join(' '),
+    locationName
+  ].filter(Boolean).join('. ') + '.';
+}
+
+function RoleplayStatus({ processing, pendingCount }) {
+  if (processing) {
+    return (
+      <span aria-hidden="true" className="inline-flex h-5 w-5 shrink-0 items-center justify-center text-accent">
+        <span className="inline-flex animate-spin motion-reduce:animate-none"><Loader2 className="h-4 w-4" /></span>
+      </span>
+    );
+  }
+  if (pendingCount > 0) {
+    return (
+      <span aria-hidden="true" className="inline-flex min-h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-accent px-1.5 text-[0.625rem] font-bold leading-none text-on-accent">
+        {pendingCount > 99 ? '99+' : pendingCount}
+      </span>
+    );
+  }
+  /* Live state. Goes static as soon as there is something to review, so the
+     motion always means "running", never "needs attention". */
+  return (
+    <span aria-hidden="true" className="relative inline-flex h-5 w-5 shrink-0 items-center justify-center">
+      <span className="absolute h-2 w-2 animate-live-halo rounded-full bg-accent motion-reduce:animate-none" />
+      <span className="relative h-2 w-2 animate-live-core rounded-full bg-accent motion-reduce:animate-none" />
+    </span>
   );
 }
 
@@ -681,17 +761,17 @@ function RecentTurn({ turn, names, definitions, open, onToggle, onResolve, resol
   const time = point?.position ? `${String(point.position.hour ?? 0).padStart(2, '0')}:${String(point.position.minute ?? 0).padStart(2, '0')}` : '';
   const pending = turn.changes.filter(isPendingChange).length;
   return (
-    <article className={`overflow-hidden rounded-xl border transition-colors ${open ? 'border-accent/25 bg-accent/[0.035]' : 'border-border-subtle bg-surface-panel-muted'}`}>
+    <article className={`overflow-hidden rounded-card border transition-colors duration-200 ease-standard ${open ? 'border-accent/25 bg-accent/[0.035]' : 'border-border-subtle bg-surface-panel-muted/70 hover:bg-surface-panel-muted'}`}>
       <button type="button" aria-expanded={open} onClick={onToggle} className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40">
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-accent/20 bg-accent/[0.06] text-accent"><Sparkles className="h-3.5 w-3.5" /></span>
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-accent/20 bg-accent/[0.06] text-accent"><Sparkles aria-hidden="true" className="h-3.5 w-3.5" /></span>
         <span className="min-w-0 flex-1">
-          <span className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.1em] text-text-secondary">{turn.frame ? `Turn ${turn.turnNumber}` : 'Recent change'}{pending > 0 && <span className="rounded-full bg-amber-300/10 px-1.5 py-0.5 text-[0.6rem] text-amber-200">{pending} review</span>}</span>
+          <span className="flex items-center gap-2 text-[0.6875rem] font-bold uppercase tracking-[0.09em] text-text-secondary">{turn.frame ? `Turn ${turn.turnNumber}` : 'Recent change'}{pending > 0 && <span className="rounded-full bg-status-warning/10 px-1.5 py-0.5 text-[0.625rem] text-status-warning">{pending} review</span>}</span>
           <span className="mt-0.5 block truncate text-[0.6875rem] text-text-subtle">{date}{date && time ? ' · ' : ''}{time}{point?.display?.weekdayName ? ` · ${point.display.weekdayName}` : ''}</span>
         </span>
-        <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-gray-600 transition-transform ${open ? 'rotate-90' : ''}`} />
+        <ChevronRight aria-hidden="true" className={`h-3.5 w-3.5 shrink-0 text-text-disabled transition-transform duration-200 ease-standard ${open ? 'rotate-90' : ''}`} />
       </button>
       {open && (
-        <div className="space-y-1.5 border-t border-white/[0.07] px-2.5 py-2.5">
+        <div className="animate-rise-in space-y-1.5 border-t border-border-subtle px-2.5 py-2.5">
           {turn.changes.map(change => (
             <RecentTurnChange
               key={`${change.kind}:${change.id}`}
@@ -712,12 +792,12 @@ function RecentTurnChange({ change, names, definitions, onResolve, resolving }) 
   const details = describeRecentChange(change, names, definitions);
   const pending = isPendingChange(change);
   return (
-    <div className="rounded-lg border border-white/[0.07] bg-black/15 px-2.5 py-2">
+    <div className="rounded-control border border-border-subtle bg-surface-canvas/40 px-2.5 py-2">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
-            <span className="text-[0.625rem] font-bold uppercase tracking-wider text-accent/80">{changeLabel(change.kind)}</span>
-            {change.status && <span className={`text-[0.6rem] font-semibold uppercase ${pending ? 'text-amber-200' : change.status === 'rejected' ? 'text-red-300' : 'text-gray-600'}`}>{change.status}</span>}
+            <span className="text-[0.625rem] font-bold uppercase tracking-[0.09em] text-accent/80">{changeLabel(change.kind)}</span>
+            {change.status && <span className={`text-[0.625rem] font-semibold uppercase ${pending ? 'text-status-warning' : change.status === 'rejected' ? 'text-status-danger' : 'text-text-disabled'}`}>{change.status}</span>}
           </div>
           <div className="mt-1 space-y-1">
             {details.map((detail, index) => <p key={index} className="text-xs leading-relaxed text-text-secondary">{detail}</p>)}
@@ -725,8 +805,8 @@ function RecentTurnChange({ change, names, definitions, onResolve, resolving }) 
         </div>
         {pending && (
           <div className="flex shrink-0 items-center gap-1">
-            <button type="button" disabled={resolving} onClick={() => onResolve(change, 'rejected')} className="rounded-md border border-red-400/20 px-2 py-1 text-[0.625rem] font-semibold text-red-300 hover:bg-red-400/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300/40 disabled:opacity-50">Reject</button>
-            <button type="button" disabled={resolving} onClick={() => onResolve(change, 'approved')} className="rounded-md bg-accent px-2 py-1 text-[0.625rem] font-bold text-[#011419] hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-50">Approve</button>
+            <button type="button" disabled={resolving} onClick={() => onResolve(change, 'rejected')} className="rounded border border-status-danger/25 px-2 py-1 text-[0.625rem] font-semibold text-status-danger transition-colors hover:bg-status-danger/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-danger/40 disabled:opacity-50">Reject</button>
+            <button type="button" disabled={resolving} onClick={() => onResolve(change, 'approved')} className="rounded bg-accent px-2 py-1 text-[0.625rem] font-bold text-on-accent transition-[filter] hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-50">Approve</button>
           </div>
         )}
       </div>
@@ -887,15 +967,15 @@ function nameList(ids, names) {
 }
 
 function TabButton({ active, onClick, icon: Icon, label, count }) {
-  return <button type="button" onClick={onClick} className={'flex items-center justify-center gap-2 rounded-lg text-xs font-semibold transition-colors ' + (active ? 'bg-accent/10 text-accent' : 'text-text-muted hover:bg-white/5 hover:text-text-secondary')}><Icon className="h-4 w-4" />{label}{count > 0 && <span className="rounded-full bg-white/[0.07] px-1.5 py-0.5 text-xs">{count}</span>}</button>;
+  return <button type="button" onClick={onClick} aria-pressed={active} className={'flex items-center justify-center gap-2 rounded-control text-xs font-semibold transition-colors duration-200 ease-standard focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ' + (active ? 'bg-accent/10 text-accent' : 'text-text-muted hover:bg-surface-hover/60 hover:text-text-secondary')}><Icon aria-hidden="true" className="h-4 w-4" />{label}{count > 0 && <span className="rounded-full bg-surface-hover px-1.5 py-0.5 text-xs tabular-nums">{count}</span>}</button>;
 }
 
 function MenuAction({ onClick, icon: Icon, children, danger = false }) {
-  return <button type="button" onClick={onClick} className={'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors hover:bg-white/5 ' + (danger ? 'text-status-danger' : 'text-text-secondary hover:text-text-primary')}><Icon className="h-3.5 w-3.5" />{children}</button>;
+  return <button type="button" onClick={onClick} className={'flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-left text-xs transition-colors hover:bg-surface-hover/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ' + (danger ? 'text-status-danger' : 'text-text-secondary hover:text-text-primary')}><Icon aria-hidden="true" className="h-3.5 w-3.5" />{children}</button>;
 }
 
 function EmptyState({ text }) {
-  return <p className="rounded-xl border border-dashed border-white/10 px-3 py-5 text-center text-xs text-gray-600">{text}</p>;
+  return <p className="rounded-card border border-dashed border-border-subtle px-3 py-5 text-center text-xs text-text-disabled">{text}</p>;
 }
 
 function presenceOf(entityId, scene) {

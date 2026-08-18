@@ -1153,7 +1153,7 @@ export default function ChatWorkspaceView() {
                     aria-label="Attach files"
                     onClick={handleLoadOlderMessages}
                     disabled={isLoadingOlderMessages}
-                    className="rounded-lg border border-gray-700 bg-[#0a161d] px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-gray-300 transition-colors hover:border-accent/50 hover:text-accent disabled:cursor-wait disabled:opacity-60"
+                    className="rounded-lg border border-gray-700 bg-[#0a161d] px-3 py-1.5 text-[0.625rem] font-bold uppercase tracking-wider text-gray-300 transition-colors hover:border-accent/50 hover:text-accent disabled:cursor-wait disabled:opacity-60"
                   >
                     {isLoadingOlderMessages ? 'Loading history...' : 'Show 50 previous messages'}
                   </button>
@@ -1163,7 +1163,7 @@ export default function ChatWorkspaceView() {
                     type="button"
                     onClick={handleJumpToStart}
                     disabled={isLoadingOlderMessages}
-                    className="rounded-lg border border-gray-700 bg-[#0a161d] px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-gray-300 transition-colors hover:border-accent/50 hover:text-accent disabled:cursor-wait disabled:opacity-60"
+                    className="rounded-lg border border-gray-700 bg-[#0a161d] px-3 py-1.5 text-[0.625rem] font-bold uppercase tracking-wider text-gray-300 transition-colors hover:border-accent/50 hover:text-accent disabled:cursor-wait disabled:opacity-60"
                   >
                     Go to start
                   </button>
@@ -1237,7 +1237,7 @@ export default function ChatWorkspaceView() {
                                 return (
                                   <div
                                     key={file.name}
-                                    className="flex items-center space-x-2 bg-[#1a2d32]/45 backdrop-blur-sm border border-gray-800/80 rounded-xl p-1.5 text-[10px] text-gray-300 shadow-md"
+                                    className="flex items-center space-x-2 bg-[#1a2d32]/45 backdrop-blur-sm border border-gray-800/80 rounded-xl p-1.5 text-[0.625rem] text-gray-300 shadow-md"
                                   >
                                     {isImage(file.name) && (
                                       <img
@@ -1259,8 +1259,8 @@ export default function ChatWorkspaceView() {
                                       </div>
                                     )}
                                     <div className="flex flex-col min-w-0 max-w-[80px]">
-                                      <span className="truncate text-[9px] font-bold text-gray-100" title={file.name}>{file.name}</span>
-                                      <span className="text-[7px] text-gray-500 font-mono mt-0.5">{(file.size / 1024).toFixed(0)} KB</span>
+                                      <span className="truncate text-[0.5625rem] font-bold text-gray-100" title={file.name}>{file.name}</span>
+                                      <span className="text-[0.4375rem] text-gray-500 font-mono mt-0.5">{(file.size / 1024).toFixed(0)} KB</span>
                                     </div>
                                   </div>
                                 );
@@ -1286,7 +1286,7 @@ export default function ChatWorkspaceView() {
                                   <div className="flex justify-end items-center gap-2 select-none">
                                     <button
                                       onClick={() => setEditingMessageId(null)}
-                                      className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-gray-400 hover:text-white transition-colors"
+                                      className="px-3 py-1.5 text-[0.625rem] font-bold uppercase tracking-wider text-gray-400 hover:text-white transition-colors"
                                     >
                                       Cancel
                                     </button>
@@ -1299,7 +1299,7 @@ export default function ChatWorkspaceView() {
                                           setEditError(null);
                                           await handleEditUserMessage(msg.id, editingMessageText, targetId);
                                         }}
-                                        className="px-4 py-1.5 text-[10px] font-bold uppercase tracking-wider bg-accent text-[#011419] rounded-lg shadow-sm hover:brightness-110 transition-all active:scale-95"
+                                        className="px-4 py-1.5 text-[0.625rem] font-bold uppercase tracking-wider bg-accent text-[#011419] rounded-lg shadow-sm hover:brightness-110 transition-all active:scale-95"
                                       >
                                         Save & Regenerate
                                       </button>
@@ -1314,7 +1314,7 @@ export default function ChatWorkspaceView() {
 
                           {/* User Actions (Copy, Edit, 3-dots) */}
                           {editingMessageId !== msg.id && (
-                            <div className="flex items-center space-x-2 px-2 py-1 backdrop-blur-[2px] rounded-lg text-[9px] font-bold uppercase tracking-wider select-none shrink-0 group">
+                            <div className="flex items-center space-x-2 px-2 py-1 backdrop-blur-[2px] rounded-lg text-[0.5625rem] font-bold uppercase tracking-wider select-none shrink-0 group">
                               <button
                                 onClick={() => {
                                   copyText(msg.content);
@@ -1469,7 +1469,7 @@ export default function ChatWorkspaceView() {
 
                               {/* Legacy RAG Context Warning Header */}
                               {settings.advanced.ragDebug && (debugObj?.legacyText || debugObj?.workflowStatus) && (
-                                <div className="text-[9px] text-gray-500 font-mono mb-1 ml-1.5 select-none uppercase tracking-wider">
+                                <div className="text-[0.5625rem] text-gray-500 font-mono mb-1 ml-1.5 select-none uppercase tracking-wider">
                                   ℹ️ {debugObj.legacyText || debugObj.workflowStatus}
                                 </div>
                               )}
@@ -1491,7 +1491,7 @@ export default function ChatWorkspaceView() {
                                     <div className="flex justify-end items-center gap-2 select-none">
                                       <button
                                         onClick={() => setEditingMessageId(null)}
-                                        className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-gray-400 hover:text-white transition-colors"
+                                        className="px-3 py-1.5 text-[0.625rem] font-bold uppercase tracking-wider text-gray-400 hover:text-white transition-colors"
                                       >
                                         Cancel
                                       </button>
@@ -1502,7 +1502,7 @@ export default function ChatWorkspaceView() {
                                           await electronAPI.saveMessage(updatedMsg);
                                           setActiveMessages(prev => prev.map(m => m.id === msg.id ? updatedMsg : m));
                                         }}
-                                        className="px-4 py-1.5 text-[10px] font-bold uppercase tracking-wider bg-accent text-[#011419] rounded-lg shadow-sm hover:brightness-110 transition-all active:scale-95"
+                                        className="px-4 py-1.5 text-[0.625rem] font-bold uppercase tracking-wider bg-accent text-[#011419] rounded-lg shadow-sm hover:brightness-110 transition-all active:scale-95"
                                       >
                                         Save
                                       </button>
@@ -1517,7 +1517,7 @@ export default function ChatWorkspaceView() {
                                       if (alts.length > 1) {
                                         const currentIdx = msg.alternativeIndex || 0;
                                         return (
-                                          <div className="mb-2 ml-auto flex w-fit items-center space-x-1.5 rounded border border-gray-800 bg-[#011419]/70 px-1.5 py-0.5 text-[8px] font-bold text-gray-400 select-none">
+                                          <div className="mb-2 ml-auto flex w-fit items-center space-x-1.5 rounded border border-gray-800 bg-[#011419]/70 px-1.5 py-0.5 text-[0.5rem] font-bold text-gray-400 select-none">
                                             <button
                                               disabled={currentIdx === 0}
                                               onClick={() => handleSwitchAIAlternative(msg.id, currentIdx - 1)}
@@ -1525,7 +1525,7 @@ export default function ChatWorkspaceView() {
                                             >
                                               <ChevronLeft className="w-2.5 h-2.5" />
                                             </button>
-                                            <span className="font-mono text-[8px]">{currentIdx + 1}/{alts.length}</span>
+                                            <span className="font-mono text-[0.5rem]">{currentIdx + 1}/{alts.length}</span>
                                             <button
                                               disabled={currentIdx === alts.length - 1}
                                               onClick={() => handleSwitchAIAlternative(msg.id, currentIdx + 1)}
@@ -1544,7 +1544,7 @@ export default function ChatWorkspaceView() {
                                       <div className="mb-2.5 select-none border-b border-gray-800/40 pb-2">
                                         <button
                                           onClick={() => setExpandedThinking(prev => ({ ...prev, [msg.id]: !prev[msg.id] }))}
-                                          className="flex items-center space-x-1.5 text-gray-500 hover:text-accent transition-colors text-[10px] font-bold uppercase tracking-wider cursor-pointer"
+                                          className="flex items-center space-x-1.5 text-gray-500 hover:text-accent transition-colors text-[0.625rem] font-bold uppercase tracking-wider cursor-pointer"
                                         >
                                           <Brain className="w-3.5 h-3.5" />
                                           <span>{expandedThinking[msg.id] ? 'Hide Thoughts' : 'Thinking'}</span>
@@ -1573,7 +1573,7 @@ export default function ChatWorkspaceView() {
 
                               {/* AI Actions (Copy, Edit, Regenerate, 3-dots) */}
                               {editingMessageId !== msg.id && (
-                                <div className="flex items-center space-x-2 px-2 py-1 backdrop-blur-[2px] rounded-lg text-[9px] font-bold uppercase tracking-wider select-none shrink-0 group">
+                                <div className="flex items-center space-x-2 px-2 py-1 backdrop-blur-[2px] rounded-lg text-[0.5625rem] font-bold uppercase tracking-wider select-none shrink-0 group">
                                   <button
                                     onClick={() => {
                                       copyText(response);
@@ -1680,7 +1680,7 @@ export default function ChatWorkspaceView() {
                     {/* Header info */}
                     <div className="flex items-center justify-between shrink-0">
                       <div className="flex items-center space-x-2">
-                        <span className="text-[10px] font-extrabold uppercase tracking-widest text-[#ddba6e] drop-shadow">
+                        <span className="text-[0.625rem] font-extrabold uppercase tracking-widest text-[#ddba6e] drop-shadow">
                           [{generationProgress.step || 1}/{generationProgress.totalSteps || 1}] {generationProgress.profileName || 'Thinking'}
                         </span>
                       </div>
@@ -1719,7 +1719,7 @@ export default function ChatWorkspaceView() {
               <button
                 type="button"
                 onClick={scrollToLatest}
-                className="absolute right-6 bottom-28 z-20 flex items-center gap-2 rounded-full border border-accent/35 bg-[#0a161d]/95 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-accent shadow-lg shadow-black/30 backdrop-blur-md transition-colors hover:bg-accent hover:text-[#011419]"
+                className="absolute right-6 bottom-28 z-20 flex items-center gap-2 rounded-full border border-accent/35 bg-[#0a161d]/95 px-3 py-2 text-[0.625rem] font-bold uppercase tracking-wider text-accent shadow-lg shadow-black/30 backdrop-blur-md transition-colors hover:bg-accent hover:text-[#011419]"
               >
                 <ArrowDown className="w-3.5 h-3.5" />
                 <span>New response below</span>
@@ -1753,8 +1753,8 @@ export default function ChatWorkspaceView() {
                           </div>
                         )}
                         <div className="flex flex-col min-w-0 max-w-[120px]">
-                          <span className="truncate text-[10px] font-bold text-gray-100" title={file.name}>{file.name}</span>
-                          <span className="text-[8px] text-gray-500 font-mono mt-0.5">{(file.size / 1024).toFixed(0)} KB</span>
+                          <span className="truncate text-[0.625rem] font-bold text-gray-100" title={file.name}>{file.name}</span>
+                          <span className="text-[0.5rem] text-gray-500 font-mono mt-0.5">{(file.size / 1024).toFixed(0)} KB</span>
                         </div>
                         {/* Floating delete button on hover or always */}
                         <button
@@ -1794,7 +1794,7 @@ export default function ChatWorkspaceView() {
                     <button
                       type="button"
                       onClick={() => setProfileDropdownOpen(!profileDropdownOpen)}
-                      className="px-2.5 py-1.5 rounded-lg border border-gray-800 bg-[#011419] text-gray-400 hover:text-white text-[10px] font-bold uppercase tracking-wider flex items-center space-x-1.5 cursor-pointer transition-colors"
+                      className="px-2.5 py-1.5 rounded-lg border border-gray-800 bg-[#011419] text-gray-400 hover:text-white text-[0.625rem] font-bold uppercase tracking-wider flex items-center space-x-1.5 cursor-pointer transition-colors"
                     >
                       <Cpu className="w-3.5 h-3.5" />
                       <span className="truncate max-w-[80px]">
@@ -1804,12 +1804,12 @@ export default function ChatWorkspaceView() {
                     </button>
 
                     <Popover anchorRef={dropdownRef} open={profileDropdownOpen} onClose={() => setProfileDropdownOpen(false)} matchAnchorWidth={false} align="right" scroll={false} className="w-64 !p-2.5 font-sans">
-                        <span className="block text-[8px] font-bold text-gray-500 uppercase tracking-widest px-2 pb-1.5 select-none">AI Profile / Workflow</span>
+                        <span className="block text-[0.5rem] font-bold text-gray-500 uppercase tracking-widest px-2 pb-1.5 select-none">AI Profile / Workflow</span>
 
                         <div className="max-h-60 overflow-y-auto custom-scrollbar space-y-2.5">
                           {/* Writing Profiles */}
                           <div>
-                            <span className="block text-[7px] font-extrabold text-[#FBCB2D]/55 uppercase tracking-widest px-2 py-0.5 select-none">Profiles</span>
+                            <span className="block text-[0.4375rem] font-extrabold text-[#FBCB2D]/55 uppercase tracking-widest px-2 py-0.5 select-none">Profiles</span>
                             {displayProfiles.length > 0 ? (
                               <div className="space-y-1">
                                 {displayProfiles.map(p => (
@@ -1842,7 +1842,7 @@ export default function ChatWorkspaceView() {
                                     setProfileDropdownOpen(false);
                                     setActiveSubView('configuration');
                                   }}
-                                  className="mt-1 flex items-center space-x-1 text-[9px] font-bold text-accent hover:underline uppercase cursor-pointer"
+                                  className="mt-1 flex items-center space-x-1 text-[0.5625rem] font-bold text-accent hover:underline uppercase cursor-pointer"
                                 >
                                   <Plus className="w-2.5 h-2.5" />
                                   <span>Active Profile</span>
@@ -1856,7 +1856,7 @@ export default function ChatWorkspaceView() {
 
                           {/* Workflows */}
                           <div>
-                            <span className="block text-[7px] font-extrabold text-[#FBCB2D]/55 uppercase tracking-widest px-2 py-0.5 select-none">Workflows</span>
+                            <span className="block text-[0.4375rem] font-extrabold text-[#FBCB2D]/55 uppercase tracking-widest px-2 py-0.5 select-none">Workflows</span>
                             {displayWorkflows.length > 0 ? (
                               <div className="space-y-1">
                                 {displayWorkflows.map(w => (
@@ -1886,7 +1886,7 @@ export default function ChatWorkspaceView() {
                                     setProfileDropdownOpen(false);
                                     setActiveSubView('configuration');
                                   }}
-                                  className="mt-1 flex items-center space-x-1 text-[9px] font-bold text-accent hover:underline uppercase cursor-pointer"
+                                  className="mt-1 flex items-center space-x-1 text-[0.5625rem] font-bold text-accent hover:underline uppercase cursor-pointer"
                                 >
                                   <Plus className="w-2.5 h-2.5" />
                                   <span>Active Workflow</span>
@@ -1961,6 +1961,7 @@ export default function ChatWorkspaceView() {
           api={electronAPI}
           showToast={showToast}
           initialCollapsed={roleplayPanelCollapsed}
+          narrativeStateProcessing={isGenerating && generationProgress?.chatId === activeChat.id && generationProgress?.phase === 'narrative-state'}
           onBackgroundChange={handleRoleplayBackgroundChange}
           onCollapsedChange={handleRoleplayPanelCollapsedChange}
           onOpenConfiguration={openRoleplayConfiguration}
@@ -1992,7 +1993,7 @@ export default function ChatWorkspaceView() {
           <div className="flex items-center justify-end space-x-2 pt-1 select-none">
             <button
               onClick={() => setEditError(null)}
-              className="px-2.5 py-1 text-[10px] font-bold uppercase text-gray-400 hover:text-white cursor-pointer transition-colors"
+              className="px-2.5 py-1 text-[0.625rem] font-bold uppercase text-gray-400 hover:text-white cursor-pointer transition-colors"
             >
               Dismiss
             </button>
@@ -2004,7 +2005,7 @@ export default function ChatWorkspaceView() {
                 setEditError(null);
                 await handleEditUserMessage(msgId, editedText, targetId);
               }}
-              className="px-3 py-1 bg-red-600 hover:bg-red-500 text-white rounded text-[10px] font-bold uppercase hover:scale-[1.02] active:scale-95 transition-all cursor-pointer"
+              className="px-3 py-1 bg-red-600 hover:bg-red-500 text-white rounded text-[0.625rem] font-bold uppercase hover:scale-[1.02] active:scale-95 transition-all cursor-pointer"
             >
               Retry
             </button>
