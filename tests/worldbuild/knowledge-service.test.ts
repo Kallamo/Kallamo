@@ -170,6 +170,80 @@ describe('Worldbuild awareness Knowledge service', () => {
       .toEqual([{ status: 'active' }, { status: 'revoked' }]);
   });
 
+  test('offers only the subject own side of a related_to pair', () => {
+    db.prepare('INSERT INTO entities VALUES (?, ?, ?, ?, ?, ?)').run(
+      'aethel', 'workspace-one', 'Characters', 'Aethel', JSON.stringify({}), 'active',
+    );
+    db.prepare('INSERT INTO entity_links VALUES (?, ?, ?, ?, ?, NULL, ?, ?)').run(
+      'kepler-view', 'workspace-one', 'kepler', 'related_to', 'aethel', '{}', 1,
+    );
+    db.prepare('INSERT INTO entity_links VALUES (?, ?, ?, ?, ?, NULL, ?, ?)').run(
+      'aethel-view', 'workspace-one', 'aethel', 'related_to', 'kepler', '{}', 2,
+    );
+    service.ensureAwareness({
+      workspaceId: 'workspace-one', ownerId: 'valdrin', targetId: 'kepler',
+      sourceType: 'manual', sourceId: 'manual-one',
+    });
+
+    const card = service.getCard('workspace-one', 'valdrin', 'kepler');
+
+    expect(card.availableRelationships.map((item: { relationshipId: string }) => item.relationshipId))
+      .toEqual(['kepler-view']);
+    expect(() => service.setKnownRelationships({
+      workspaceId: 'workspace-one', ownerId: 'valdrin', targetId: 'kepler',
+      relationshipIds: ['aethel-view'],
+    })).toThrow('unavailable');
+  });
+
+  test('prunes a reciprocal related_to marked before cards held one perspective', () => {
+    db.prepare('INSERT INTO entities VALUES (?, ?, ?, ?, ?, ?)').run(
+      'aethel', 'workspace-one', 'Characters', 'Aethel', JSON.stringify({}), 'active',
+    );
+    service.ensureAwareness({
+      workspaceId: 'workspace-one', ownerId: 'valdrin', targetId: 'kepler',
+      sourceType: 'manual', sourceId: 'manual-one',
+    });
+    const card = service.getCard('workspace-one', 'valdrin', 'kepler');
+    db.prepare(`
+      INSERT INTO worldbuild_known_relationships (
+        workspace_id, card_id, relationship_id, from_id, from_name,
+        relation_type, relation_label, to_id, to_name, metadata_json,
+        source_type, source_id, audience_type, created_at
+      ) VALUES (?, ?, ?, 'aethel', 'Aethel', 'related_to', NULL, 'kepler', 'Kepler', NULL, 'manual', 'legacy', 'inherit', 1)
+    `).run('workspace-one', card.cardId, 'legacy-mirror');
+
+    service.reconcileWorkspace('workspace-one');
+
+    expect(db.prepare('SELECT COUNT(*) AS count FROM worldbuild_known_relationships').get())
+      .toEqual({ count: 0 });
+  });
+
+  test('keeps a faction audience to people the roster still holds', () => {
+    db.prepare('INSERT INTO entities VALUES (?, ?, ?, ?, ?, ?)').run(
+      'aethel', 'workspace-one', 'Characters', 'Aethel', JSON.stringify({}), 'active',
+    );
+    db.prepare('INSERT INTO entity_links VALUES (?, ?, ?, ?, ?, NULL, ?, ?)').run(
+      'membership-one', 'workspace-one', 'kepler', 'member_of', 'valdrin', '{}', Date.now(),
+    );
+    service.ensureAwareness({
+      workspaceId: 'workspace-one', ownerId: 'valdrin', targetId: 'aethel',
+      sourceType: 'manual', sourceId: 'manual-one',
+    });
+
+    const chosen = service.setAudience({
+      workspaceId: 'workspace-one', ownerId: 'valdrin', targetId: 'aethel',
+      audienceType: 'selected-members', memberIds: ['kepler', 'aethel'],
+    });
+    expect(chosen.selectedMemberIds).toEqual(['kepler']);
+
+    const shared = service.setAudience({
+      workspaceId: 'workspace-one', ownerId: 'valdrin', targetId: 'aethel',
+      audienceType: 'all-members',
+    });
+    expect(shared.audienceType).toBe('all-members');
+    expect(shared.selectedMemberIds).toEqual(['kepler']);
+  });
+
   test('creates reciprocal awareness between a faction and each member', () => {
     db.prepare('INSERT INTO entity_links VALUES (?, ?, ?, ?, ?, NULL, ?, ?)').run(
       'membership-one', 'workspace-one', 'kepler', 'member_of', 'valdrin', '{}', Date.now(),

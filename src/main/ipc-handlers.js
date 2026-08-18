@@ -3019,9 +3019,12 @@ ipcMain.handle('set-entity-link', async (event, payload) => {
   try {
     const result = entitiesStore.setLink(payload || {});
     if (result.id && payload?.workspaceId && payload?.toId) {
+      // A former member keeps both awareness cards: leaving a faction does not erase what
+      // someone knew. What they lose is membership itself, and every reader of member_of
+      // (context, epistemic resolver, occurrence audiences) stops counting them for free.
       const mappings = payload.relType === 'related_to'
         ? { ownerId: payload.fromId, targetId: payload.toId, sourceType: 'relationship' }
-        : payload.relType === 'member_of'
+        : payload.relType === 'member_of' || payload.relType === 'former_member_of'
           ? [
               { ownerId: payload.fromId, targetId: payload.toId, sourceType: 'faction-membership' },
               { ownerId: payload.toId, targetId: payload.fromId, sourceType: 'faction-membership', audienceType: 'all-members' },

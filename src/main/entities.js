@@ -398,6 +398,13 @@ function setLink({ workspaceId, fromId, relType, toId, single = false, label = n
         .run(workspaceId, fromId, counterpart);
     }
   }
+  // Belonging and having belonged are exclusive. Enforced here so every path holds it:
+  // the faction sheet, an AI-proposed membership, and an imported package alike.
+  if ((relType === 'member_of' || relType === 'former_member_of') && toId) {
+    const counterpart = relType === 'member_of' ? 'former_member_of' : 'member_of';
+    db.prepare('DELETE FROM entity_links WHERE workspaceId = ? AND fromId = ? AND relType = ? AND toId = ?')
+      .run(workspaceId, fromId, counterpart, toId);
+  }
   const cleanLabel = label != null && String(label).trim() ? String(label).trim() : null;
   if (single) db.prepare('DELETE FROM entity_links WHERE fromId = ? AND relType = ?').run(fromId, relType);
   if (!toId) return { cleared: true };

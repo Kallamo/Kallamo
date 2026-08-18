@@ -18,10 +18,10 @@ const KNOWABLE_RELATION_TYPES = new Set([
   'inside',
   'led_by',
   'member_of',
+  'former_member_of',
   'operates_in',
   'owned_by',
   'located_in',
-  'carried_by',
   'created_by',
   'found_in',
   'sold_in',
@@ -30,6 +30,21 @@ const KNOWABLE_RELATION_TYPES = new Set([
   'adjacent_to',
   'related_to',
 ]);
+// carried_by is deliberately absent. It is the inventory edge for stackable item types,
+// which changes every time someone picks something up or puts it down, so marking it as
+// known records a fact that is stale by the next scene. owned_by covers the durable
+// half of the same question and is what a perspective can actually hold on to.
+
+// title and wording, which is why the Relationships tab shows the reverse edge as an
+// incoming perspective it will not let you edit. A card about someone therefore offers
+// only the edges they are the source of. "Barnaby regards Alistair" is Barnaby's to
+// know, and it belongs on Barnaby's card, not on Alistair's.
+const PERSPECTIVE_RELATION_TYPES = new Set(['related_to']);
+
+function isKnowableForTarget(relation, targetId) {
+  if (!KNOWABLE_RELATION_TYPES.has(relation.relationType)) return false;
+  return !PERSPECTIVE_RELATION_TYPES.has(relation.relationType) || relation.fromId === targetId;
+}
 
 function createWorldbuildKnowledgeService(db) {
   const insertCard = db.prepare(`
@@ -178,7 +193,8 @@ function createWorldbuildKnowledgeService(db) {
     const knownIds = new Set(existing.map(row => row.relationship_id));
     for (const relationshipId of relationshipIds) {
       const row = currentById.get(relationshipId);
-      if (!knownIds.has(relationshipId) && (!row || !KNOWABLE_RELATION_TYPES.has(row.relType))) {
+      const knowable = row && isKnowableForTarget({ relationType: row.relType, fromId: row.fromId }, card.targetId);
+      if (!knownIds.has(relationshipId) && !knowable) {
         throw new Error('A selected relationship is unavailable for this Knowledge card.');
       }
     }
@@ -268,12 +284,20 @@ function createWorldbuildKnowledgeService(db) {
   function setAudience(input = {}) {
     const card = getRequiredCard(input.workspaceId, input.ownerId, input.targetId);
     const audienceType = input.audienceType === 'selected-members' ? 'selected-members' : 'all-members';
-    const memberIds = audienceType === 'selected-members' ? normalizeIds(input.memberIds) : [];
+    // An audience only means something for people the roster still holds: every reader of
+    // a shared card reaches it through member_of. Someone who has left is dropped rather
+    // than rejected, since a departure must not make an unrelated audience edit fail.
+    const roster = currentMemberIds(card.workspaceId, card.ownerId);
+    const memberIds = normalizeIds(input.memberIds).filter(memberId => !roster || roster.has(memberId));
     db.transaction(() => {
       db.prepare(`
         UPDATE worldbuild_knowledge_cards SET audience_type = ?, updated_at = ?
         WHERE workspace_id = ? AND card_id = ?
       `).run(audienceType, Date.now(), card.workspaceId, card.cardId);
+      // Sharing with everyone leaves the named list alone rather than emptying it: every
+      // reader already ignores it while the card is open to all members, and keeping it
+      // means switching back restores the choice instead of asking for it again.
+      if (audienceType !== 'selected-members') return;
       db.prepare(`
         DELETE FROM worldbuild_knowledge_audience_members
         WHERE workspace_id = ? AND card_id = ? AND entry_type = 'card' AND entry_id = ?
@@ -290,12 +314,13 @@ function createWorldbuildKnowledgeService(db) {
 
   function reconcileWorkspace(workspaceId) {
     const projectId = requireText(workspaceId, 'workspaceId');
+    pruneUnknowableRelationships(projectId);
     if (!hasTable(db, 'entity_links')) return;
     const links = db.prepare(`
       SELECT id, fromId, relType, toId
       FROM entity_links
       WHERE workspaceId = ?
-        AND relType IN ('related_to', 'member_of', 'owned_by', 'carried_by')
+        AND relType IN ('related_to', 'member_of', 'former_member_of', 'owned_by', 'carried_by')
     `).all(projectId);
     db.transaction(() => {
       for (const link of links) {
@@ -304,7 +329,7 @@ function createWorldbuildKnowledgeService(db) {
             workspaceId: projectId, ownerId: link.fromId, targetId: link.toId,
             sourceType: 'relationship', sourceId: link.id,
           });
-        } else if (link.relType === 'member_of') {
+        } else if (link.relType === 'member_of' || link.relType === 'former_member_of') {
           ensureAwareness({
             workspaceId: projectId, ownerId: link.fromId, targetId: link.toId,
             sourceType: 'faction-membership', sourceId: link.id,
@@ -350,7 +375,7 @@ function createWorldbuildKnowledgeService(db) {
       WHERE workspace_id = ? AND card_id = ?
       ORDER BY created_at, from_name, to_name
     `).all(row.workspace_id, row.card_id)
-      .filter(relationship => KNOWABLE_RELATION_TYPES.has(relationship.relationType))
+      .filter(relationship => isKnowableForTarget(relationship, row.target_id))
       .map(hydrateRelationship);
     const availableRelationships = hasTable(db, 'entity_links') && hasTable(db, 'entities')
       ? db.prepare(`
@@ -365,7 +390,7 @@ function createWorldbuildKnowledgeService(db) {
         WHERE links.workspaceId = ? AND (links.fromId = ? OR links.toId = ?)
         ORDER BY links.createdAt, source.canonicalName, target.canonicalName
       `).all(row.workspace_id, row.target_id, row.target_id)
-        .filter(relationship => KNOWABLE_RELATION_TYPES.has(relationship.relationType))
+        .filter(relationship => isKnowableForTarget(relationship, row.target_id))
         .map(hydrateRelationship)
       : [];
     return {
@@ -391,6 +416,42 @@ function createWorldbuildKnowledgeService(db) {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
+  }
+
+  /**
+   * Marked rows that the current rules no longer consider knowable: a relation type that
+   * has since been dropped, or the far side of a perspective edge. Filtering them at read
+   * time is not enough, because chat-context queries worldbuild_known_relationships
+   * directly, so they would keep reaching retrieval. Every read of a workspace runs this,
+   * which makes the repair happen once and stay done.
+   */
+  function pruneUnknowableRelationships(workspaceId) {
+    const knowable = [...KNOWABLE_RELATION_TYPES];
+    const perspective = [...PERSPECTIVE_RELATION_TYPES];
+    db.prepare(`
+      DELETE FROM worldbuild_known_relationships
+      WHERE workspace_id = ?
+        AND (
+          relation_type NOT IN (${knowable.map(() => '?').join(', ')})
+          OR (
+            relation_type IN (${perspective.map(() => '?').join(', ')})
+            AND from_id IS NOT (
+              SELECT target_id FROM worldbuild_knowledge_cards cards
+              WHERE cards.workspace_id = worldbuild_known_relationships.workspace_id
+                AND cards.card_id = worldbuild_known_relationships.card_id
+            )
+          )
+        )
+    `).run(workspaceId, ...knowable, ...perspective);
+  }
+
+  /** Who belongs to a group right now, or null when links are not part of this database. */
+  function currentMemberIds(workspaceId, factionId) {
+    if (!hasTable(db, 'entity_links')) return null;
+    return new Set(db.prepare(`
+      SELECT fromId FROM entity_links
+      WHERE workspaceId = ? AND relType = 'member_of' AND toId = ?
+    `).all(workspaceId, factionId).map(row => row.fromId));
   }
 
   function getRequiredCard(workspaceId, ownerId, targetId) {
