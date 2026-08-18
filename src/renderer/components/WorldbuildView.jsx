@@ -4,7 +4,7 @@ import {
   Plus, Search, BookOpen, MapPin, Package, Users, Flag, User,
   Sparkles, Trash2, Save, X, Pencil, Check, Link2, Globe, Tag, ScrollText, Ghost, Info, Replace,
   Lock, ShieldCheck, RefreshCw, Upload, Download, CalendarClock, ChevronRight, ChevronsLeftRight,
-  AlertTriangle, LayoutTemplate, BookCheck, Bot, CircleHelp, ChevronLeft,
+  AlertTriangle, LayoutTemplate, BookCheck, Bot, CircleHelp, ChevronLeft, UserMinus, Undo2, Crown,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import Button from './ui/Button';
@@ -32,10 +32,11 @@ import {
   ABUNDANCE_HELP, CREATURE_NATURES, DISPOSITION, entityMeta, fieldLabel, ITEM_TYPES, itemMeta, meta, TYPES,
   RARITY, RELATIONSHIP_LABELS, STATUS, THREAT, TYPE_ORDER,
 } from '../features/worldbuild/worldbuildConfig';
+import { normalizeTemplateSections, sheetTabs as sheetTabsFor, tabLabel } from '../features/worldbuild/worldbuildSections';
 
 // Frosted dark inputs: their own dark backing guarantees legible text over BOTH
 // light and dark workspace backgrounds, while the blur keeps the background alive.
-const FIELD = 'wb-input min-h-10 w-full bg-surface-input/90 backdrop-blur-md border border-border-default text-text-primary text-sm rounded-lg px-3 py-2 placeholder:text-text-subtle focus:outline-none focus:border-accent/70 focus:ring-2 focus:ring-accent/20 transition-colors';
+const FIELD = 'wb-input min-h-10 w-full bg-surface-input/90 backdrop-blur-md border border-border-default text-text-primary text-sm rounded-control px-3 py-2 placeholder:text-text-subtle focus:outline-none focus:border-accent/70 focus:ring-2 focus:ring-accent/20 transition-colors';
 const LInput = (p) => <input {...p} className={`${FIELD} ${p.className || ''}`} />;
 const LTextarea = (p) => <textarea {...p} className={`${FIELD} resize-none leading-relaxed custom-scrollbar ${p.className || ''}`} />;
 const LSelect = ({ children, ...p }) => <select {...p} className={`${FIELD} cursor-pointer ${p.className || ''}`}>{children}</select>;
@@ -52,13 +53,13 @@ const EvidenceReferences = ({ excerpts, support = '' }) => {
   if (!references.length && !support) return null;
   return (
     <div className="mt-2">
-      <button type="button" onClick={() => setOpen(value => !value)} className="inline-flex items-center gap-1 text-xs font-semibold text-sky-100/75 hover:text-sky-50 transition-colors">
+      <button type="button" onClick={() => setOpen(value => !value)} className="inline-flex items-center gap-1 text-xs font-semibold text-status-info/75 hover:text-status-info transition-colors">
         <ChevronRight className={`w-3.5 h-3.5 transition-transform ${open ? 'rotate-90' : ''}`} />
         {open ? 'Hide references' : references.length ? `View references (${references.length})` : 'View explanation'}
       </button>
       {open && <div className="mt-2 max-h-56 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
-        {support && <p className="caption text-sky-100/75">{support}</p>}
-        {references.map((excerpt, index) => <p key={index} className="caption text-sky-100/75">“{excerpt}”</p>)}
+        {support && <p className="caption text-status-info/75">{support}</p>}
+        {references.map((excerpt, index) => <p key={index} className="caption text-status-info/75">“{excerpt}”</p>)}
       </div>}
     </div>
   );
@@ -70,25 +71,25 @@ const EvidenceReferences = ({ excerpts, support = '' }) => {
 // data.aiPolicy; default 'review'.
 const AI_POLICY = {
   open:   { label: 'Open',   icon: Pencil,      tip: 'AI can edit this entity freely',        active: 'bg-accent/20 text-accent border-accent/40' },
-  review: { label: 'Review', icon: ShieldCheck, tip: 'AI edits are staged for your approval', active: 'bg-amber-400/15 text-amber-200 border-amber-400/40' },
+  review: { label: 'Review', icon: ShieldCheck, tip: 'AI edits are staged for your approval', active: 'bg-status-warning/15 text-status-warning border-status-warning/40' },
   locked: { label: 'Locked', icon: Lock,        tip: 'AI can read but never edit this entity', active: 'bg-slate-400/15 text-slate-200 border-slate-400/40' },
 };
 const AiPolicyControl = ({ value, onChange }) => {
   const cur = AI_POLICY[value] ? value : 'review';
   return (
     <div className="flex flex-col items-end gap-1 shrink-0">
-      <div className="inline-flex rounded-lg border border-white/10 bg-black/20 p-0.5">
+      <div className="inline-flex rounded-control border border-border-subtle bg-surface-canvas/45 p-0.5">
         {Object.entries(AI_POLICY).map(([k, v]) => {
           const Icon = v.icon; const on = k === cur;
           return (
             <button key={k} type="button" onClick={() => onChange(k)} data-tooltip={v.tip}
-              className={`p-1.5 rounded-md transition-colors cursor-pointer ${on ? v.active + ' border' : 'text-gray-500 hover:text-gray-300 border border-transparent'}`}>
+              className={`p-1.5 rounded-md transition-colors cursor-pointer ${on ? v.active + ' border' : 'text-text-subtle hover:text-text-secondary border border-transparent'}`}>
               <Icon className="w-3.5 h-3.5" />
             </button>
           );
         })}
       </div>
-      <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">AI: {AI_POLICY[cur].label}</span>
+      <span className="text-[0.625rem] font-semibold uppercase tracking-wider text-text-subtle">AI: {AI_POLICY[cur].label}</span>
     </div>
   );
 };
@@ -131,62 +132,72 @@ const InfoPopover = ({ items }) => {
   const anchorRef = useRef(null);
   return (
     <span ref={anchorRef} className="relative inline-flex align-middle" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
-      <Info className="w-3 h-3 text-gray-500 hover:text-accent cursor-help" />
-      <Popover anchorRef={anchorRef} open={open} onClose={() => setOpen(false)} matchAnchorWidth={false} scroll={false} className="w-60 border-white/15 bg-[#021a20] p-3 normal-case tracking-normal">
+      <Info className="w-3 h-3 text-text-subtle hover:text-accent cursor-help" />
+      <Popover anchorRef={anchorRef} open={open} onClose={() => setOpen(false)} matchAnchorWidth={false} scroll={false} className="w-60 border-border-default bg-surface-panel-muted p-3 normal-case tracking-normal">
         <div className="space-y-1.5">
-          {items.map(([k, v]) => <div key={k} className="text-xs leading-snug"><span className="font-semibold text-gray-100">{k}</span> <span className="text-gray-400">{v}</span></div>)}
+          {items.map(([k, v]) => <div key={k} className="text-xs leading-snug"><span className="font-semibold text-text-primary">{k}</span> <span className="text-text-muted">{v}</span></div>)}
         </div>
       </Popover>
     </span>
   );
 };
 
-const FieldLabel = ({ children }) => <label className="block text-xs font-semibold text-text-muted uppercase tracking-wider mb-1">{children}</label>;
+const FieldLabel = ({ children }) => <label className="eyebrow mb-1 block">{children}</label>;
 const Hint = ({ children }) => <span className="caption mt-1 block">{children}</span>;
 const Edit = ({ label, hint, children }) => (
   <div>{label && <FieldLabel>{label}</FieldLabel>}{children}{hint && <Hint>{hint}</Hint>}</div>
 );
 
-// Read-only field in the rendered sheet.
-const ViewField = ({ label, value, empty = 'Not set' }) => (
-  <div>
-    <div className="text-xs font-semibold uppercase tracking-wider text-text-subtle mb-0.5">{label}</div>
-    {value ? <div className="text-sm text-text-primary">{value}</div> : <div className="text-sm text-text-disabled italic">{empty}</div>}
+// Read-only field in the rendered sheet. `value` may be a node (a state tag, a chip
+// row) as well as text; `full` spans both columns of the surrounding FactGrid.
+const ViewField = ({ label, value, empty = 'Not set', full = false }) => (
+  <div className={full ? 'col-span-2 min-w-0' : 'min-w-0'}>
+    <div className="eyebrow mb-1">{label}</div>
+    {value === null || value === undefined || value === ''
+      ? <div className="text-sm text-text-disabled italic">{empty}</div>
+      : typeof value === 'object' ? value : <div className="text-sm text-text-primary whitespace-pre-wrap break-words leading-relaxed">{value}</div>}
   </div>
+);
+
+// The scannable half of a sheet. Framing the short facts as one block keeps them
+// from floating against the prose that follows them.
+const FactGrid = ({ children }) => (
+  <div className="grid grid-cols-2 gap-x-5 gap-y-3.5 rounded-control border border-border-subtle bg-surface-canvas/30 px-3.5 py-3.5">{children}</div>
 );
 
 const Prose = ({ text, empty = 'Nothing written yet.' }) =>
   text && text.trim()
-    ? <p className="text-sm text-gray-200 leading-relaxed whitespace-pre-wrap">{text}</p>
+    ? <p className="text-sm text-text-secondary leading-relaxed whitespace-pre-wrap">{text}</p>
     : <p className="text-sm text-text-disabled italic">{empty}</p>;
 
 const Chip = ({ children }) => (
-  <span className="inline-flex items-center gap-1 rounded-full border border-border-subtle bg-white/[0.035] px-2 py-0.5 text-[0.6875rem] font-medium text-text-secondary">{children}</span>
+  <span className="inline-flex items-center gap-1 rounded-full border border-border-subtle bg-surface-hover/35 px-2 py-0.5 text-[0.6875rem] font-medium text-text-secondary">{children}</span>
 );
 
 // A sheet section: titled card with an optional pencil that flips it to edit mode.
+// The pencil rests quietly and comes forward on hover or keyboard focus.
 function Section({ icon, title, editing, onEdit, showPencil, children }) {
   const Icon = icon || BookOpen;
   return (
-    <div className="rounded-xl border border-border-default bg-surface-panel-muted/60 backdrop-blur-md overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/[0.08]">
-        <div className="flex items-center gap-2">
-          <Icon className="w-3.5 h-3.5 text-accent" />
-          <span className="text-xs font-semibold uppercase tracking-wider text-text-secondary">{title}</span>
+    <section className="group/section rounded-card border border-border-default bg-surface-panel-muted/60 backdrop-blur-md overflow-hidden">
+      <header className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-border-subtle bg-surface-canvas/20">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-accent/20 bg-accent/10 text-accent"><Icon className="w-3.5 h-3.5" /></span>
+          <span className="eyebrow truncate text-text-secondary">{title}</span>
         </div>
         {showPencil && !editing && (
-          <button onClick={onEdit} data-tooltip="Edit this section"
-            className="p-1.5 -mr-1 text-gray-500 hover:text-accent hover:bg-white/5 rounded-md transition-colors cursor-pointer">
+          <button onClick={onEdit} aria-label={`Edit ${title || 'section'}`} data-tooltip="Edit this section"
+            className="p-1.5 -mr-1 shrink-0 rounded-md text-text-subtle opacity-60 transition-[color,background-color,opacity] duration-200 ease-standard hover:bg-surface-hover/60 hover:text-accent group-hover/section:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 cursor-pointer">
             <Pencil className="w-3.5 h-3.5" />
           </button>
         )}
-      </div>
+      </header>
       <div className="p-4 space-y-3.5">{children}</div>
-    </div>
+    </section>
   );
 }
 
-const draftFor = (type) => ({ id: null, type, canonicalName: '', aliases: '', lore: '', loreDocumentId: '', status: 'confirmed', data: {} });
+const draftFor = (type, data = {}) => ({ id: null, type, canonicalName: '', aliases: '', lore: '', loreDocumentId: '', status: 'confirmed', data });
 
 // Relation pickers (single-value and many-to-many), styled to match the light inputs.
 // Links need a saved entity id, so these render nothing until the entity exists,
@@ -198,11 +209,11 @@ function SingleRelation({ label, hint, current, options, onSet, disabled }) {
     <Edit label={label} hint={hint}>
       <div className="flex items-center gap-2 flex-wrap">
         {currentName
-          ? <div className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-border-default bg-surface-input/70 pl-3 pr-1.5 text-sm font-medium text-text-primary">
+          ? <div className="inline-flex min-h-9 items-center gap-2 rounded-control border border-border-default bg-surface-input/70 pl-3 pr-1.5 text-sm font-medium text-text-primary">
               <span>{currentName}</span>
               <button type="button" aria-label={`Clear ${label}`} onClick={() => onSet(null)} className="inline-flex h-7 w-7 items-center justify-center rounded-md text-text-muted hover:bg-status-danger/10 hover:text-status-danger"><X className="w-3.5 h-3.5" /></button>
             </div>
-          : <span className="inline-flex min-h-9 items-center rounded-lg border border-dashed border-border-default px-3 text-sm text-text-subtle">None set</span>}
+          : <span className="inline-flex min-h-9 items-center rounded-control border border-dashed border-border-default px-3 text-sm text-text-subtle">None set</span>}
         <EntityPickerButton icon={currentName ? Replace : Plus} label={currentName ? 'Change' : 'Set'} title={label} options={options} onPick={(id) => onSet(id)} />
       </div>
     </Edit>
@@ -216,9 +227,9 @@ function MultiRelation({ label, hint, links, options, onAdd, onRemove, disabled 
     <Edit label={label} hint={hint}>
       <div className="flex flex-wrap items-center gap-1.5">
         {links.map(l => (
-          <span key={l.linkId} className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-100 bg-white/[0.08] border border-white/15 rounded-full pl-2.5 pr-1 py-0.5">
+          <span key={l.linkId} className="inline-flex items-center gap-1 text-[0.6875rem] font-medium text-text-primary bg-surface-hover/65 border border-border-default rounded-full pl-2.5 pr-1 py-0.5">
             {l.entity.canonicalName}
-            <button onClick={() => onRemove(l.linkId)} className="text-gray-400 hover:text-rose-300 cursor-pointer p-0.5"><X className="w-3 h-3" /></button>
+            <button onClick={() => onRemove(l.linkId)} className="text-text-muted hover:text-status-danger cursor-pointer p-0.5"><X className="w-3 h-3" /></button>
           </span>
         ))}
         <EntityPickerButton title={label} options={remaining} onPick={onAdd} />
@@ -246,9 +257,9 @@ function LabeledRelation({ subjectName, links, options, priorLabels, onAdd, onRe
       <div className="flex flex-wrap gap-1.5 my-2">
         {(!links || links.length === 0) && <span className="caption">None yet.</span>}
         {(links || []).map(l => (
-          <span key={l.linkId} className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-100 bg-white/[0.08] border border-white/15 rounded-full pl-2.5 pr-1 py-0.5">
+          <span key={l.linkId} className="inline-flex items-center gap-1 text-[0.6875rem] font-medium text-text-primary bg-surface-hover/65 border border-border-default rounded-full pl-2.5 pr-1 py-0.5">
             <span className="text-accent/90 font-semibold">{l.label || 'related'}</span> · {l.entity.canonicalName}
-            <button onClick={() => onRemove(l.linkId)} className="text-gray-400 hover:text-rose-300 cursor-pointer p-0.5"><X className="w-3 h-3" /></button>
+            <button onClick={() => onRemove(l.linkId)} className="text-text-muted hover:text-status-danger cursor-pointer p-0.5"><X className="w-3 h-3" /></button>
           </span>
         ))}
       </div>
@@ -256,7 +267,7 @@ function LabeledRelation({ subjectName, links, options, priorLabels, onAdd, onRe
         ? <span className="caption">Everyone is already linked.</span>
         : toId
           ? <div className="flex items-center gap-1.5">
-              <span className="caption shrink-0"><span className="text-gray-200 font-medium">{pickedName}</span> is {who}'s</span>
+              <span className="caption shrink-0"><span className="text-text-secondary font-medium">{pickedName}</span> is {who}'s</span>
               <div className="flex-1"><FreeDatalist value={role} onChange={(e) => setRole(e.target.value)} options={suggestions} placeholder="e.g. father, rival, mentor (optional)" /></div>
               <Button size="sm" icon={Check} onClick={submit}>Add</Button>
               <Button size="sm" variant="ghost" onClick={() => { setToId(''); setRole(''); }}>Cancel</Button>
@@ -266,35 +277,99 @@ function LabeledRelation({ subjectName, links, options, priorLabels, onAdd, onRe
   );
 }
 
-// One member row with an inline, optional role that saves on blur / Enter.
-function MemberRole({ link, onSetRole, onRemove }) {
+// A membership badge: leader, founder. Small enough to sit beside a name.
+const MemberFlag = ({ icon: Icon, label, tone }) => (
+  <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[0.625rem] font-semibold ${tone}`}>
+    <Icon className="h-2.5 w-2.5" />{label}
+  </span>
+);
+
+// One line of a faction roster, past or present: name on the left, rank on the right,
+// and the dates of the tenure underneath. The same row serves both lists so a departure
+// changes only the wording, never the shape of what you are reading.
+function MemberRow({ link, calendar, kind, isLeader, editing, onOpen, onSetRole, onSetMeta, onSetFormer, onRestore, onRemove }) {
   const [role, setRole] = useState(link.label || '');
+  const [datesOpen, setDatesOpen] = useState(false);
   useEffect(() => { setRole(link.label || ''); }, [link.label]);
-  const commit = () => { if ((role.trim() || '') !== (link.label || '')) onSetRole(link.linkId, role.trim()); };
+  const meta = link.metadata || {};
+  const isFormer = kind === 'former';
+  const commitRole = () => { if ((role.trim() || '') !== (link.label || '')) onSetRole(link, role.trim()); };
+  const rank = link.label || (isFormer ? 'former member' : '');
+  const joined = formatWorldDate(calendar, meta.joined);
+  const left = formatWorldDate(calendar, meta.left);
+  const leaderSince = formatWorldDate(calendar, meta.leaderSince);
+  const tenure = [
+    joined && (left ? `${joined} to ${left}` : `Joined ${joined}`),
+    !joined && left && `Left ${left}`,
+    isLeader && leaderSince && `Leading since ${leaderSince}`,
+  ].filter(Boolean).join(' · ');
+
   return (
-    <div className="flex items-center gap-2 py-1">
-      <span className="text-sm text-gray-100 flex-1 min-w-0 truncate">{link.entity.canonicalName}</span>
-      <input value={role} onChange={(e) => setRole(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
-        placeholder="role (optional)"
-        className="wb-input w-36 rounded-md border border-border-default bg-surface-input/90 px-2 py-1 text-xs text-text-primary placeholder:text-text-subtle focus:border-accent/70 focus:outline-none" />
-      <button onClick={() => onRemove(link.linkId)} className="text-gray-400 hover:text-rose-300 cursor-pointer p-1"><X className="w-3.5 h-3.5" /></button>
+    <div className="py-1.5">
+      <div className="flex items-center gap-2">
+        {onOpen
+          ? <button type="button" onClick={() => onOpen(link.entity.id)} title={`Open ${link.entity.canonicalName}`} className="min-w-0 truncate text-left text-sm text-text-primary transition-colors hover:text-accent cursor-pointer">{link.entity.canonicalName}</button>
+          : <span className="min-w-0 truncate text-sm text-text-primary">{link.entity.canonicalName}</span>}
+        {isLeader && <MemberFlag icon={Crown} label="Leader" tone="border-accent/30 bg-accent/10 text-accent" />}
+        {meta.founder && <MemberFlag icon={Sparkles} label="Founder" tone="border-entity-faction/30 bg-entity-faction/10 text-entity-faction" />}
+        {editing ? (
+          <>
+            <input value={role} onChange={(e) => setRole(e.target.value)} onBlur={commitRole} onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+              placeholder={isFormer ? 'last rank' : 'rank (optional)'} aria-label={`Rank of ${link.entity.canonicalName}`}
+              className="wb-input ml-auto w-36 rounded-md border border-border-default bg-surface-input/90 px-2 py-1 text-xs text-text-primary placeholder:text-text-subtle focus:border-accent/70 focus:outline-none" />
+            <button onClick={() => setDatesOpen(open => !open)} aria-label={`Dates for ${link.entity.canonicalName}`} data-tooltip="Tenure dates" aria-expanded={datesOpen}
+              className={`p-1 cursor-pointer ${datesOpen ? 'text-accent' : 'text-text-muted hover:text-accent'}`}><CalendarClock className="w-3.5 h-3.5" /></button>
+            <button onClick={() => onSetMeta(link, { founder: !meta.founder })} aria-label={`${meta.founder ? 'Unmark' : 'Mark'} ${link.entity.canonicalName} as founder`} data-tooltip={meta.founder ? 'Not a founder' : 'Founded this faction'}
+              className={`p-1 cursor-pointer ${meta.founder ? 'text-entity-faction' : 'text-text-muted hover:text-entity-faction'}`}><Sparkles className="w-3.5 h-3.5" /></button>
+            {onSetFormer && <button onClick={() => onSetFormer(link)} aria-label={`Move ${link.entity.canonicalName} to former members`} data-tooltip="Moved on: keeps what they knew, stops receiving what the faction shares"
+              className="p-1 text-text-muted hover:text-status-warning cursor-pointer"><UserMinus className="w-3.5 h-3.5" /></button>}
+            {onRestore && <button onClick={() => onRestore(link)} aria-label={`Restore ${link.entity.canonicalName} to the roster`} data-tooltip="Back on the roster"
+              className="p-1 text-text-muted hover:text-status-success cursor-pointer"><Undo2 className="w-3.5 h-3.5" /></button>}
+            <button onClick={() => onRemove(link.linkId)} aria-label={`Remove ${link.entity.canonicalName}`} data-tooltip={isFormer ? 'Drop this record entirely' : 'Remove from the roster entirely'}
+              className="p-1 text-text-muted hover:text-status-danger cursor-pointer"><X className="w-3.5 h-3.5" /></button>
+          </>
+        ) : (
+          rank && <span className={`ml-auto shrink-0 text-xs font-medium ${isFormer ? 'text-text-muted' : 'text-accent'}`}>{rank}</span>
+        )}
+      </div>
+      {tenure && <p className="caption mt-0.5">{tenure}</p>}
+      {/* One date per row: the control needs its full width to show the month by name. */}
+      {editing && datesOpen && calendar && (
+        <div className="mt-2 grid gap-3 rounded-control border border-border-subtle bg-surface-canvas/30 p-3">
+          <Edit label="Joined"><WorldDateInput label="Joined" emptyLabel="Set the date they joined" calendar={calendar} value={meta.joined} onChange={joinedDate => onSetMeta(link, { joined: joinedDate })} /></Edit>
+          {isFormer && <Edit label="Left"><WorldDateInput label="Left" emptyLabel="Set the date they left" calendar={calendar} value={meta.left} onChange={leftDate => onSetMeta(link, { left: leftDate })} /></Edit>}
+          {isLeader && <Edit label="Leading since"><WorldDateInput label="Leading since" emptyLabel="Set the date they took charge" calendar={calendar} value={meta.leaderSince} onChange={since => onSetMeta(link, { leaderSince: since })} /></Edit>}
+        </div>
+      )}
+      {editing && datesOpen && !calendar && <p className="caption mt-2">Set up the world calendar to record dates.</p>}
     </div>
   );
 }
 
-// Faction membership with per-member roles: an editable list plus an add picker.
-function MemberRoles({ links, options, onAdd, onSetRole, onRemove, disabled }) {
-  if (disabled) return null;
-  const linked = new Set((links || []).map(l => l.entity.id));
-  const remaining = options.filter(o => !linked.has(o.id));
+// The roster. The leader sits at the top: they are a member like any other, and reading
+// a faction should start with who answers for it.
+function MemberList({ links, calendar, kind = 'member', leaderId, editing, options, onOpen, onAdd, onSetRole, onSetMeta, onSetFormer, onRestore, onRemove, empty }) {
+  const rows = [...(links || [])].sort((a, b) => {
+    if (a.entity.id === leaderId) return -1;
+    if (b.entity.id === leaderId) return 1;
+    return a.entity.canonicalName.localeCompare(b.entity.canonicalName);
+  });
+  const linked = new Set(rows.map(l => l.entity.id));
+  const remaining = (options || []).filter(o => !linked.has(o.id));
   return (
-    <Edit label="Members" hint="Add characters, then give each an optional role (captain, spy, initiate).">
-      <div className="divide-y divide-white/[0.06] mb-2">
-        {(!links || links.length === 0) && <span className="caption">No members yet.</span>}
-        {(links || []).map(l => <MemberRole key={l.linkId} link={l} onSetRole={onSetRole} onRemove={onRemove} />)}
-      </div>
-      <EntityPickerButton label="Add member" title="Add member" options={remaining} onPick={onAdd} />
-    </Edit>
+    <div>
+      {editing && kind === 'member' && <p className="caption mb-2">Add anyone who belongs here, give each a rank, and record when they joined.</p>}
+      {rows.length === 0
+        ? <p className="text-sm text-text-disabled italic">{empty}</p>
+        : <div className="divide-y divide-border-subtle">
+            {rows.map(link => (
+              <MemberRow key={link.linkId} link={link} calendar={calendar} kind={kind} isLeader={link.entity.id === leaderId}
+                editing={editing} onOpen={onOpen} onSetRole={onSetRole} onSetMeta={onSetMeta}
+                onSetFormer={onSetFormer} onRestore={onRestore} onRemove={onRemove} />
+            ))}
+          </div>}
+      {editing && onAdd && <div className="mt-2"><EntityPickerButton label="Add member" title="Add member" options={remaining} onPick={onAdd} /></div>}
+    </div>
   );
 }
 
@@ -358,24 +433,27 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const isIndividualCreature = selected?.type === 'Creatures' && (selected?.data?.scope || 'individual') !== 'group';
   const hasKnowledgeTab = selected?.type === 'Characters' || selected?.type === 'Factions' || isIndividualCreature;
   const hasOccurrencesTab = selected?.type === 'Events';
-  const activeTemplate = templates.find(template => template.typeId === selected?.type);
+  // Templates are read through the registry on this side too. Reading them raw is what
+  // left a Creature's "Details" ignoring the layout saved under its former id, which
+  // pushed the section to the end of the sheet and detached it from the editor.
+  const storedTemplate = templates.find(template => template.typeId === selected?.type);
+  const activeTemplate = useMemo(() => storedTemplate && {
+    ...storedTemplate,
+    layout: { ...storedTemplate.layout, sections: normalizeTemplateSections(storedTemplate.typeId, storedTemplate.layout?.sections) },
+  }, [storedTemplate]);
   const templateSections = activeTemplate?.layout?.sections || [];
   const sectionSetting = (id) => templateSections.find(section => section.id === id);
   const selectedReviewCounts = reviewCounts[selected?.id] || { entityUpdates: selected?.data?._enrichPending ? 1 : 0, kanora: 0 };
   const hasEntityReview = selectedReviewCounts.entityUpdates > 0;
   const hasKanoraReview = selectedReviewCounts.kanora > 0;
   const hasReview = hasEntityReview || hasKanoraReview;
-  const sheetTabs = (selected?.type === 'Characters' || isIndividualCreature
-    ? ['data', 'inventory', 'connections', 'knowledge']
-    : hasKnowledgeTab ? ['data', 'knowledge'] : hasOccurrencesTab ? ['data', 'occurrences'] : ['data']);
-  if (hasReview && !isNew) sheetTabs.push('review');
-  const visibleSheetTabs = sheetTabs.filter(tab => {
-      if (tab === 'inventory') return !sectionSetting('inv')?.hidden;
-      if (tab === 'knowledge') return !sectionSetting('knowledge')?.hidden;
-      if (tab === 'connections') return !sectionSetting('rels')?.hidden || !sectionSetting('fac')?.hidden || !sectionSetting('loc')?.hidden;
-      return true;
-    });
-  const sheetTabLabel = (tab) => tab === 'inventory' ? sectionSetting('inv')?.label || tab : tab === 'knowledge' ? sectionSetting('knowledge')?.label || tab : tab;
+  const isFaction = selected?.type === 'Factions';
+  // Which tabs a sheet shows follows from the type and its shape. The relational tabs are
+  // systematic, so the template has no say over them.
+  const sheetVariant = selected?.type === 'Creatures' ? (isIndividualCreature ? 'individual' : 'group') : null;
+  const visibleSheetTabs = sheetTabsFor(selected?.type, sheetVariant);
+  if (hasReview && !isNew) visibleSheetTabs.push('review');
+  const sheetTabLabel = (tab) => tab === 'review' ? 'Review' : tabLabel(selected?.type, sheetVariant, tab);
   const typeMeta = (type) => {
     const base = meta(type);
     const displayName = templates.find(template => template.typeId === type)?.displayName;
@@ -387,12 +465,27 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     return displayName ? { ...base, label: displayName } : base;
   };
   const docTitle = (id) => documents.find(d => d.id === id)?.title;
+  // A creature is either one being or a whole species, and the two get different sheets.
+  // Offering the choice here, instead of a toggle found later inside the sheet, means the
+  // right shape opens from the start.
+  const createOptions = TYPE_ORDER.flatMap(type => type === 'Creatures'
+    ? [
+        { id: 'Creatures:individual', type, note: 'A specific being', data: { scope: 'individual' } },
+        { id: 'Creatures:group', type, note: 'A group or species', data: { scope: 'group' } },
+      ]
+    : [{ id: type, type, data: {} }]);
 
   const byType = useMemo(() => {
     const m = {}; for (const t of Object.keys(TYPES)) m[t] = [];
     for (const e of entities) (m[e.type] = m[e.type] || []).push(e);
     return m;
   }, [entities]);
+  // A group creature is a species or a swarm, not someone a relation can point at.
+  // Only specific beings can own things, hold a relationship, or be regarded by a faction.
+  const individualCreatures = useMemo(
+    () => (byType.Creatures || []).filter(entity => (entity.data?.scope || 'individual') !== 'group'),
+    [byType.Creatures],
+  );
 
   const load = useCallback(async () => {
     if (!workspaceId) return;
@@ -455,50 +548,65 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     if (!hasEntityReview && hasKanoraReview) setReviewKind('kanora');
     else if (hasEntityReview && !hasKanoraReview) setReviewKind('entity');
   }, [hasEntityReview, hasKanoraReview, selected?.id]);
+  // A tab can disappear under the reader: the template hides its section, or a creature
+  // changes shape. Fall back to Data instead of leaving an empty tab selected.
+  useEffect(() => {
+    if (selected && !visibleSheetTabs.includes(charTab)) setCharTab('data');
+  }, [visibleSheetTabs.join(','), charTab, selected?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Every edge a sheet needs, fetched in one round of parallel reads. These used to run
+  // one after another, so opening a character waited on eight sequential IPC calls.
   const loadRelations = useCallback(async (ent) => {
     if (!ent?.id) { setRel({}); return; }
-    const from = (r) => electronAPI.getEntityLinks(ent.id, 'from', r).then(x => x?.links || []);
-    const to = (r) => electronAPI.getEntityLinks(ent.id, 'to', r).then(x => x?.links || []);
+    const request = (direction, relType) => electronAPI.getEntityLinks(ent.id, direction, relType).then(x => x?.links || []);
+    const wanted = {
+      Locations: { inside: ['from', 'inside'], leader: ['from', 'led_by'] },
+      Items: {
+        createdBy: ['from', 'created_by'], ownedBy: ['from', 'owned_by'], locatedIn: ['from', 'located_in'],
+        foundIn: ['from', 'found_in'], soldIn: ['from', 'sold_in'],
+      },
+      Races: { members: ['to', 'is_race'] },
+      Creatures: {
+        foundIn: ['from', 'found_in'], memberOf: ['from', 'member_of'],
+        formerMemberOf: ['from', 'former_member_of'],
+      },
+      Events: { happenedAt: ['from', 'happened_at'], involved: ['from', 'involved'] },
+      Factions: {
+        operatesIn: ['from', 'operates_in'], members: ['to', 'member_of'],
+        formerMembers: ['to', 'former_member_of'], leader: ['from', 'led_by'],
+      },
+      Characters: {
+        isRace: ['from', 'is_race'], memberOf: ['from', 'member_of'],
+        formerMemberOf: ['from', 'former_member_of'], connectedTo: ['from', 'connected_to'],
+      },
+    }[ent.type] || {};
+    const singles = new Set(['inside', 'leader', 'createdBy', 'ownedBy', 'locatedIn', 'isRace']);
+    const isAgent = ent.type === 'Characters' || (ent.type === 'Creatures' && (ent.data?.scope || 'individual') !== 'group');
+    const wantsRelationships = isAgent || ent.type === 'Factions';
+    const extras = {
+      ...(isAgent ? { owned: ['to', 'owned_by'], carried: ['to', 'carried_by'] } : {}),
+      ...(wantsRelationships ? { outgoing: ['from', 'related_to'], incoming: ['to', 'related_to'] } : {}),
+    };
+    const keys = [...Object.keys(wanted), ...Object.keys(extras)];
+    const results = await Promise.all(keys.map(key => {
+      const [direction, relType] = wanted[key] || extras[key];
+      return request(direction, relType);
+    }));
+    const links = Object.fromEntries(keys.map((key, index) => [key, results[index]]));
     const n = {};
-    if (ent.type === 'Locations') { n.inside = (await from('inside'))[0] || null; n.leader = (await from('led_by'))[0] || null; }
-    if (ent.type === 'Items') {
-      n.createdBy = (await from('created_by'))[0] || null;
-      n.ownedBy = (await from('owned_by'))[0] || null;
-      n.locatedIn = (await from('located_in'))[0] || null;
-      n.foundIn = await from('found_in');
-      n.soldIn = await from('sold_in');
-    }
-    if (ent.type === 'Races') n.members = await to('is_race');
-    if (ent.type === 'Creatures') {
-      n.foundIn = await from('found_in');
-      if ((ent.data?.scope || 'individual') !== 'group') {
-        n.inventory = [...await to('owned_by'), ...await to('carried_by')];
-        const [outgoingRelationships, incomingRelationships] = await Promise.all([from('related_to'), to('related_to')]);
-        n.relationships = [
-          ...outgoingRelationships.map(link => ({ ...link, direction: 'outgoing' })),
-          ...incomingRelationships.map(link => ({ ...link, direction: 'incoming' }))
-        ];
-      }
-    }
-    if (ent.type === 'Events') { n.happenedAt = await from('happened_at'); n.involved = await from('involved'); }
-    if (ent.type === 'Factions') { n.operatesIn = await from('operates_in'); n.members = await to('member_of'); n.leader = (await from('led_by'))[0] || null; }
-    if (ent.type === 'Characters') {
-      n.isRace = (await from('is_race'))[0] || null;
-      n.inventory = [...await to('owned_by'), ...await to('carried_by')];
-      n.memberOf = await from('member_of');
-      n.connectedTo = await from('connected_to');
-      const [outgoingRelationships, incomingRelationships] = await Promise.all([from('related_to'), to('related_to')]);
+    for (const key of Object.keys(wanted)) n[key] = singles.has(key) ? links[key][0] || null : links[key];
+    if (isAgent) n.inventory = [...links.owned, ...links.carried];
+    if (wantsRelationships) {
       n.relationships = [
-        ...outgoingRelationships.map(link => ({ ...link, direction: 'outgoing' })),
-        ...incomingRelationships.map(link => ({ ...link, direction: 'incoming' }))
+        ...links.outgoing.map(link => ({ ...link, direction: 'outgoing' })),
+        ...links.incoming.map(link => ({ ...link, direction: 'incoming' })),
       ];
     }
     setRel(n);
   }, [electronAPI]);
 
-  const openEntity = async (en, { preserveTab = false } = {}) => {
+  const openEntity = async (en, { preserveTab = false, tab = null } = {}) => {
     setSurface('entities');
-    setEditingSection(null); if (!preserveTab) setCharTab('data'); setMergePrompt(null);
+    setEditingSection(null); if (tab) setCharTab(tab); else if (!preserveTab) setCharTab('data'); setMergePrompt(null);
     setSelected({ id: en.id, type: en.type, canonicalName: en.canonicalName || '', aliases: (en.aliases || []).join(', '), lore: en.lore || '', loreDocumentId: en.loreDocumentId || '', status: en.status || 'confirmed', data: en.data || {} });
     await loadRelations(en);
   };
@@ -516,7 +624,11 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     const en = entities.find(e => e.id === restoredEntityId);
     if (en) openEntity(en);
   }, [navigationStateReady, surface, focusEntityId, selected, restoredEntityId, entities]); // eslint-disable-line react-hooks/exhaustive-deps
-  const startNew = (type) => { setSurface('entities'); setShowCreate(false); setEditingSection(null); setCharTab('data'); setSelected(draftFor(type)); setRel({}); };
+  const openEntityById = (entityId, options) => {
+    const target = entities.find(item => item.id === entityId);
+    if (target) openEntity(target, options);
+  };
+  const startNew = (type, data = {}) => { setSurface('entities'); setShowCreate(false); setEditingSection(null); setCharTab('data'); setSelected(draftFor(type, data)); setRel({}); };
   const patch = (f) => setSelected(p => ({ ...p, ...f }));
   const patchData = (f) => setSelected(p => ({ ...p, data: { ...p.data, ...f } }));
   const applyIntegratedEntity = (entity) => {
@@ -742,6 +854,67 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const setRole = async (linkId, role) => { await linkOp(() => electronAPI.updateEntityLinkLabel(linkId, role)); };
   const removeLink = async (linkId) => { await linkOp(() => electronAPI.removeEntityLink(linkId)); };
 
+  // Leaving and rejoining a faction swap one edge for the other. Membership is its own
+  // relation on purpose: everything that reads member_of (retrieval context, the
+  // epistemic resolver, occurrence audiences) means "member right now", so a former
+  // member stops receiving what the faction shares without any of them changing.
+  // The label carries the departure in plain words, since the retrieval dossier prints
+  // it verbatim; the old role is kept in metadata so rejoining can restore it.
+  const swapMembership = async (link, relType, label, metadata) => {
+    if (!selected?.id) return;
+    await linkOp(async () => {
+      const created = await electronAPI.setEntityLink({
+        workspaceId, fromId: link.entity.id, relType, toId: selected.id, single: false, label, metadata,
+      });
+      if (created && created.success === false) return created;
+      return electronAPI.removeEntityLink(link.linkId);
+    });
+  };
+  // A tenure carries its own record: when it began, when it ended, and whether this is
+  // the person the faction started with. Leaving keeps all of it.
+  const tenureOf = (link) => {
+    const meta = link.metadata || {};
+    return { ...(meta.joined ? { joined: meta.joined } : {}), ...(meta.founder ? { founder: true } : {}) };
+  };
+  const markFormerMember = async (link) => {
+    const role = (link.label || '').trim();
+    await swapMembership(link, 'former_member_of', role ? `former ${role}` : 'former member', { ...tenureOf(link), ...(role ? { role } : {}) });
+  };
+  const restoreMember = async (link) => {
+    const role = String(link.metadata?.role || '').trim();
+    await swapMembership(link, 'member_of', role, tenureOf(link));
+  };
+  const setMemberMeta = async (link, patch) => {
+    await linkOp(() => electronAPI.updateEntityLink(link.linkId, { metadata: { ...(link.metadata || {}), ...patch } }));
+  };
+  const setMemberRole = async (link, value) => { await setRole(link.linkId, value); };
+  // A departure carries the rank in two places: the label the dossier prints, and the
+  // rank kept for a return. Editing one has to move the other.
+  const setFormerRole = async (link, value) => {
+    const rank = value.trim().replace(/^former\s+/i, '');
+    await linkOp(() => electronAPI.updateEntityLink(link.linkId, {
+      label: value.trim() || 'former member',
+      metadata: { ...(link.metadata || {}), ...(rank ? { role: rank } : {}) },
+    }));
+  };
+  // Leading a faction without belonging to it made no sense, so naming a leader puts them
+  // on the roster. Someone who had left keeps the rank and dates they already had.
+  const setFactionLeader = async (characterId) => {
+    if (!selected?.id) return;
+    const alreadyMember = (rel.members || []).some(link => link.entity.id === characterId);
+    const former = (rel.formerMembers || []).find(link => link.entity.id === characterId);
+    await linkOp(async () => {
+      const led = await electronAPI.setEntityLink({ workspaceId, fromId: selected.id, relType: 'led_by', toId: characterId, single: true });
+      if (led && led.success === false) return led;
+      if (!characterId || alreadyMember) return led;
+      return electronAPI.setEntityLink({
+        workspaceId, fromId: characterId, relType: 'member_of', toId: selected.id, single: false,
+        label: String(former?.metadata?.role || '').trim() || 'Leader',
+        metadata: former ? tenureOf(former) : {},
+      });
+    });
+  };
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     const list = entities.filter(en =>
@@ -829,7 +1002,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   // character holds it. A character owner is an owned_by edge; the two ownerless modes
   // live in data.ownership. Picking a character also clears the ownerless flag.
   const ownerVal = rel.ownedBy ? rel.ownedBy.entity.id : (selected?.data?.ownership === 'lost' ? 'lost' : 'ai');
-  const ownerOptions = [...byType.Characters, ...byType.Creatures.filter(entity => (entity.data?.scope || 'individual') !== 'group')];
+  const ownerOptions = [...byType.Characters, ...individualCreatures];
   const persistItemDraft = async () => {
     if (!selected?.id) return false;
     return Boolean(await persist());
@@ -856,9 +1029,9 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
         <div className="flex flex-wrap gap-1.5 mb-2">
           {linkedDocs.length === 0 && <span className="caption">None linked.</span>}
           {linkedDocs.map(id => (
-            <span key={id} className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-100 bg-white/[0.08] border border-white/15 rounded-full pl-2.5 pr-1 py-0.5">
+            <span key={id} className="inline-flex items-center gap-1 text-[0.6875rem] font-medium text-text-primary bg-surface-hover/65 border border-border-default rounded-full pl-2.5 pr-1 py-0.5">
               <ScrollText className="w-3 h-3 text-accent/80" />{docTitle(id) || 'Untitled'}
-              <button onClick={() => removeLoreDoc(id)} className="text-gray-400 hover:text-rose-300 cursor-pointer p-0.5"><X className="w-3 h-3" /></button>
+              <button onClick={() => removeLoreDoc(id)} className="text-text-muted hover:text-status-danger cursor-pointer p-0.5"><X className="w-3 h-3" /></button>
             </span>
           ))}
         </div>
@@ -890,8 +1063,12 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     if (type === 'Locations') {
       S.push({ key: 'overview', title: 'Overview', icon: MapPin, scalar: true,
         view: <>
-          <div className="grid grid-cols-2 gap-4"><ViewField label="Type" value={selected.data.locationType} empty="Not set" /><ViewField label="Inside" value={rel.inside?.entity?.canonicalName} empty="Not set" /><ViewField label="Owner / leader" value={rel.leader?.entity?.canonicalName} empty="Not set" /></div>
-          <div className="pt-1"><Prose text={selected.data.description} empty="No description." /></div>
+          <FactGrid>
+            <ViewField label="Type" value={selected.data.locationType} />
+            <ViewField label="Inside" value={rel.inside?.entity?.canonicalName} />
+            <ViewField label="Owner / leader" value={rel.leader?.entity?.canonicalName} />
+          </FactGrid>
+          <Prose text={selected.data.description} empty="No description." />
         </>,
         edit: <>
           <Edit label="Type"><LInput placeholder="e.g. continent / kingdom / city / tavern" value={selected.data.locationType || ''} onChange={(e) => patchData({ locationType: e.target.value })} /></Edit>
@@ -904,22 +1081,22 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     if (type === 'Items') {
       S.push({ key: 'details', title: 'Details', icon: itemMeta(selected.data.itemType).icon, scalar: true,
         view: <>
-          <div className="grid grid-cols-2 gap-4">
+          <FactGrid>
             <ViewField label="Nature" value={(selected.data.itemNature || 'type') === 'unique' ? 'Unique item' : 'Item type'} />
-            <ViewField label="Category" value={selected.data.itemType} empty="Not set" />
-            {isUniqueItem && <ViewField label="Owner" value={ownerLabel} empty="Not set" />}
+            <ViewField label="Category" value={selected.data.itemType} />
+            {isUniqueItem && <ViewField label="Owner" value={ownerLabel} />}
             {isUniqueItem && <ViewField label="Current location" value={rel.locatedIn?.entity?.canonicalName} empty={rel.ownedBy ? `In ${rel.ownedBy.entity.canonicalName}'s inventory` : 'Not set'} />}
             <ViewField label="Creator" value={rel.createdBy?.entity?.canonicalName} empty="Unknown" />
-            {isItemType && <ViewField label="Abundance" value={selected.data.abundance} empty="Not set" />}
-            {isItemType && <div className="col-span-2"><div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-0.5">Where found</div><ChipList links={rel.foundIn} empty="Not set" /></div>}
-            {isItemType && <div className="col-span-2"><div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-0.5">Where sold</div><ChipList links={rel.soldIn} empty="Not set" /></div>}
-          </div>
-          <div className="pt-1"><Prose text={selected.data.description} empty="No description." /></div>
+            {isItemType && <ViewField label="Abundance" value={selected.data.abundance} />}
+            {isItemType && <ViewField full label="Where found" value={<ChipList onOpen={openEntityById} links={rel.foundIn} empty="Not set" />} />}
+            {isItemType && <ViewField full label="Where sold" value={<ChipList onOpen={openEntityById} links={rel.soldIn} empty="Not set" />} />}
+          </FactGrid>
+          <Prose text={selected.data.description} empty="No description." />
         </>,
         edit: <>
           <Edit label="Item nature" hint={(selected.data.itemNature || 'type') === 'unique' ? 'A unique item exists only once.' : 'An item type can appear in quantities.'}>
-            <div className="flex w-fit rounded-lg border border-white/10 bg-white/[0.04] p-0.5">
-              {[['type', 'Item type'], ['unique', 'Unique item']].map(([value, label]) => <button key={value} type="button" onClick={() => patchData({ itemNature: value })} className={`rounded-md px-3 py-1.5 text-xs font-bold uppercase tracking-wider transition-colors ${(selected.data.itemNature || 'type') === value ? 'bg-accent text-[#011419]' : 'text-gray-400 hover:text-white'}`}>{label}</button>)}
+            <div className="flex w-fit rounded-control border border-border-subtle bg-surface-hover/40 p-0.5">
+              {[['type', 'Item type'], ['unique', 'Unique item']].map(([value, label]) => <button key={value} type="button" onClick={() => patchData({ itemNature: value })} className={`rounded-md px-3 py-1.5 text-xs font-bold uppercase tracking-wider transition-colors ${(selected.data.itemNature || 'type') === value ? 'bg-accent text-on-accent' : 'text-text-muted hover:text-text-primary'}`}>{label}</button>)}
             </div>
           </Edit>
           <Edit label="Category">
@@ -938,13 +1115,13 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             />
           </Edit>
           <SingleRelation label="Creator" hint="Leave blank if unknown." disabled={unsaved} current={rel.createdBy?.entity?.id} options={byType.Characters} onSet={(id) => setSingle('created_by', id)} />
-          {isUniqueItem && <Edit label="Owner" hint={unsaved ? 'Save first to assign an owner.' : 'A unique item can be in one inventory or one world location.'}>
-            {!unsaved && <div className="flex items-center gap-2 flex-wrap">
-              <button type="button" onClick={() => setOwner('ai')} aria-pressed={ownerVal === 'ai'} className={`inline-flex min-h-9 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors ${ownerVal === 'ai' ? 'border-accent/40 bg-accent/15 text-accent' : 'border-border-default bg-surface-input/70 text-text-muted hover:border-border-strong hover:text-text-primary'}`}><Bot className="h-3.5 w-3.5" />AI decides</button>
-              <button type="button" onClick={() => setOwner('lost')} aria-pressed={ownerVal === 'lost'} className={`inline-flex min-h-9 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors ${ownerVal === 'lost' ? 'border-accent/40 bg-accent/15 text-accent' : 'border-border-default bg-surface-input/70 text-text-muted hover:border-border-strong hover:text-text-primary'}`}><CircleHelp className="h-3.5 w-3.5" />Unknown / Lost</button>
-              {rel.ownedBy && <div className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-accent/40 bg-accent/15 px-3 py-2 text-xs font-semibold text-accent"><User className="h-3.5 w-3.5" />{rel.ownedBy.entity.canonicalName}</div>}
+          {isUniqueItem && !unsaved && <Edit label="Owner" hint="A unique item can be in one inventory or one world location.">
+            <div className="flex items-center gap-2 flex-wrap">
+              <button type="button" onClick={() => setOwner('ai')} aria-pressed={ownerVal === 'ai'} className={`inline-flex min-h-9 items-center gap-2 rounded-control border px-3 py-2 text-xs font-semibold transition-colors ${ownerVal === 'ai' ? 'border-accent/40 bg-accent/15 text-accent' : 'border-border-default bg-surface-input/70 text-text-muted hover:border-border-strong hover:text-text-primary'}`}><Bot className="h-3.5 w-3.5" />AI decides</button>
+              <button type="button" onClick={() => setOwner('lost')} aria-pressed={ownerVal === 'lost'} className={`inline-flex min-h-9 items-center gap-2 rounded-control border px-3 py-2 text-xs font-semibold transition-colors ${ownerVal === 'lost' ? 'border-accent/40 bg-accent/15 text-accent' : 'border-border-default bg-surface-input/70 text-text-muted hover:border-border-strong hover:text-text-primary'}`}><CircleHelp className="h-3.5 w-3.5" />Unknown / Lost</button>
+              {rel.ownedBy && <div className="inline-flex min-h-9 items-center gap-2 rounded-control border border-accent/40 bg-accent/15 px-3 py-2 text-xs font-semibold text-accent"><User className="h-3.5 w-3.5" />{rel.ownedBy.entity.canonicalName}</div>}
               <EntityPickerButton icon={rel.ownedBy ? Replace : Plus} label={rel.ownedBy ? 'Change' : 'Choose entity'} title="Choose owner" options={ownerOptions} onPick={setOwner} />
-            </div>}
+            </div>
           </Edit>}
           {isUniqueItem && <SingleRelation label="Current location" hint="Setting a location removes this item from its current inventory." disabled={unsaved} current={rel.locatedIn?.entity?.id} options={byType.Locations} onSet={setItemLocation} />}
           {isItemType && <Edit label={<>Abundance <InfoPopover items={ABUNDANCE_HELP} /></>} hint="How common this item type is in the world."><LSelect value={selected.data.abundance || ''} onChange={(e) => patchData({ abundance: e.target.value })}><option value="">Choose…</option>{RARITY.map(r => <option key={r} value={r}>{r}</option>)}</LSelect></Edit>}
@@ -957,39 +1134,38 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     if (type === 'Races') {
       S.push({ key: 'desc', title: 'Description', icon: Users, scalar: true, view: <Prose text={selected.data.description} />, edit: <Edit label="Description"><LTextarea rows={5} placeholder="Traits, appearance, culture." value={selected.data.description || ''} onChange={(e) => patchData({ description: e.target.value })} /></Edit> });
       S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, view: loreView, edit: loreEdit });
-      S.push({ key: 'members', title: 'Known members', icon: User, scalar: false, derived: true, relational: true, view: <ChipList links={rel.members} empty="Auto-filled as you assign this race to characters." />, edit: <ChipList links={rel.members} empty="Auto-filled as you assign this race to characters." /> });
+      S.push({ key: 'members', title: 'Known members', icon: User, scalar: false, derived: true, relationalOnly: true, view: <ChipList onOpen={openEntityById} links={rel.members} empty="Auto-filled as you assign this race to characters." />, edit: <ChipList onOpen={openEntityById} links={rel.members} empty="Auto-filled as you assign this race to characters." /> });
     }
     if (type === 'Creatures') {
       const natureOpts = [...CREATURE_NATURES, ...byType.Creatures.map(c => c.data?.nature).filter(Boolean)];
       const isIndividual = (selected.data.scope || 'individual') !== 'group';
       S.push({ key: 'details', title: 'Details', icon: Ghost, scalar: true,
         view: <>
-          <div className="flex flex-wrap gap-2 mb-3">
-            <StateTag map={DISPOSITION} value={selected.data.disposition || 'unknown'} />
-            {isIndividual && <StateTag map={STATUS} value={selected.data.status || 'unknown'} />}
-          </div>
-          <div className="grid grid-cols-2 gap-4">
+          <FactGrid>
             <ViewField label="Kind" value={isIndividual ? 'A specific being' : 'A group / species'} />
-            <ViewField label="Nature" value={selected.data.nature} empty="Not set" />
-            {!isIndividual && <ViewField label="Abundance" value={selected.data.abundance} empty="Not set" />}
-            <ViewField label="Threat" value={selected.data.threat} empty="Not set" />
-          </div>
-          <div className="pt-1"><ViewField label="Abilities & traits" value={selected.data.abilities} empty="Not set" /></div>
-          {isIndividual && <div className="grid grid-cols-2 gap-4 pt-1">
-            <ViewField label="Born" value={formatWorldDate(worldCalendar, selected.data.birthDate)} empty="Not set" />
-            {selected.data.status === 'deceased' && <ViewField label="Died" value={formatWorldDate(worldCalendar, selected.data.deathDate)} empty="Not set" />}
-            {selected.data.status === 'missing' && <ViewField label="Disappeared" value={formatWorldDate(worldCalendar, selected.data.missingDate)} empty="Not set" />}
-          </div>}
-          <div className="pt-1"><div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-0.5">Habitat</div><ChipList links={rel.foundIn} empty="Not set" /></div>
+            <ViewField label="Nature" value={selected.data.nature} />
+            <ViewField label="Disposition" value={<StateTag map={DISPOSITION} value={selected.data.disposition || 'unknown'} />} />
+            {isIndividual && <ViewField label="Status" value={<StateTag map={STATUS} value={selected.data.status || 'unknown'} />} />}
+            {!isIndividual && <ViewField label="Abundance" value={selected.data.abundance} />}
+            <ViewField label="Threat" value={selected.data.threat} />
+            {isIndividual && <ViewField label="Born" value={formatWorldDate(worldCalendar, selected.data.birthDate)} />}
+            {isIndividual && selected.data.status === 'deceased' && <ViewField label="Died" value={formatWorldDate(worldCalendar, selected.data.deathDate)} />}
+            {isIndividual && selected.data.status === 'missing' && <ViewField label="Disappeared" value={formatWorldDate(worldCalendar, selected.data.missingDate)} />}
+            <ViewField full label="Abilities & traits" value={selected.data.abilities} />
+            <ViewField full label="Habitat" value={<ChipList onOpen={openEntityById} links={rel.foundIn} empty="Not set" />} />
+          </FactGrid>
         </>,
         edit: <>
           <Edit label="This entity is">
-            <div className="flex bg-white/[0.04] p-0.5 rounded-lg border border-white/10 w-fit">
+            <div className="flex bg-surface-hover/40 p-0.5 rounded-control border border-border-subtle w-fit">
               {[['individual', 'A specific being'], ['group', 'A group / species']].map(([k, l]) => (
-                <button key={k} type="button" onClick={() => patchData({ scope: k })} className={`px-3 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-colors cursor-pointer ${(selected.data.scope || 'individual') === k ? 'bg-accent text-[#011419]' : 'text-gray-400 hover:text-white'}`}>{l}</button>
+                <button key={k} type="button" onClick={() => patchData({ scope: k })} className={`px-3 py-1.5 rounded-md text-[0.625rem] font-bold uppercase tracking-wider transition-colors cursor-pointer ${(selected.data.scope || 'individual') === k ? 'bg-accent text-on-accent' : 'text-text-muted hover:text-text-primary'}`}>{l}</button>
               ))}
             </div>
             <Hint>A group (goblins, a wolf pack) has no single life state. A specific being (one tamed wolf) does.</Hint>
+            {isIndividual && (rel.inventory?.length || 0) + (rel.relationships?.length || 0) > 0 && (
+              <Hint>Turning this into a group hides its inventory, connections and knowledge. Nothing is deleted, and switching back brings them into view again.</Hint>
+            )}
           </Edit>
           <Edit label="Nature / category" hint="What kind of thing it is. Type your own or reuse one."><FreeDatalist value={selected.data.nature} onChange={(e) => patchData({ nature: e.target.value })} options={natureOpts} placeholder="e.g. Beast, Spirit, Deity" /></Edit>
           <div className="grid grid-cols-2 gap-3">
@@ -1000,61 +1176,49 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           </div>
           <Edit label="Abilities & traits" hint="Short, concrete powers the AI can use in a scene."><LTextarea rows={3} placeholder="e.g. flies, breathes fire, immune to steel." value={selected.data.abilities || ''} onChange={(e) => patchData({ abilities: e.target.value })} /></Edit>
           {isIndividual && worldCalendar && <Edit label="Birth date">
-            <WorldDateInput calendar={worldCalendar} value={selected.data.birthDate} onChange={birthDate => patchData({ birthDate })} />
+            <WorldDateInput label="Birth date" emptyLabel="Set birth date" calendar={worldCalendar} value={selected.data.birthDate} onChange={birthDate => patchData({ birthDate })} />
             <div className="mt-2"><Checkbox checked={Boolean(selected.data.showBirthday)} onChange={showBirthday => patchData({ showBirthday })} label="Show birthday in Calendar" /></div>
           </Edit>}
-          {isIndividual && selected.data.status === 'deceased' && worldCalendar && <Edit label="Death date"><WorldDateInput calendar={worldCalendar} value={selected.data.deathDate} onChange={deathDate => patchData({ deathDate })} /></Edit>}
-          {isIndividual && selected.data.status === 'missing' && worldCalendar && <Edit label="Disappearance date"><WorldDateInput calendar={worldCalendar} value={selected.data.missingDate} onChange={missingDate => patchData({ missingDate })} /></Edit>}
+          {isIndividual && selected.data.status === 'deceased' && worldCalendar && <Edit label="Death date"><WorldDateInput label="Death date" emptyLabel="Set death date" calendar={worldCalendar} value={selected.data.deathDate} onChange={deathDate => patchData({ deathDate })} /></Edit>}
+          {isIndividual && selected.data.status === 'missing' && worldCalendar && <Edit label="Disappearance date"><WorldDateInput label="Disappearance date" emptyLabel="Set disappearance date" calendar={worldCalendar} value={selected.data.missingDate} onChange={missingDate => patchData({ missingDate })} /></Edit>}
           <MultiRelation label="Habitat" hint="Where it is found or dwells." disabled={unsaved} links={rel.foundIn || []} options={byType.Locations} onAdd={(id) => addMulti('found_in', id)} onRemove={removeLink} />
         </> });
       S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, view: loreView, edit: loreEdit });
     }
     if (type === 'Factions') {
-      S.push({ key: 'overview', title: 'Overview', icon: MapPin, scalar: false, relational: true,
-        view: <>
-          <ViewField label="Leader" value={rel.leader?.entity?.canonicalName} empty="Not set" />
-          <div className="pt-2"><div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-0.5">Area of operation</div><ChipList links={rel.operatesIn} empty="No territory set." /></div>
-        </>,
-        edit: <>
-          <SingleRelation label="Leader (optional)" hint="Who heads this faction." disabled={unsaved} current={rel.leader?.entity?.id} options={byType.Characters} onSet={(id) => setSingle('led_by', id)} />
-          <MultiRelation label="Origin / area of operation" hint="Locations this faction works out of." disabled={unsaved} links={rel.operatesIn || []} options={byType.Locations} onAdd={(id) => addMulti('operates_in', id)} onRemove={removeLink} />
-        </> });
       S.push({ key: 'desc', title: 'Description', icon: Flag, scalar: true, view: <Prose text={selected.data.description} />, edit: <Edit label="Description"><LTextarea rows={5} placeholder="Goals, structure, reputation." value={selected.data.description || ''} onChange={(e) => patchData({ description: e.target.value })} /></Edit> });
       S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, view: loreView, edit: loreEdit });
-      S.push({ key: 'members', title: 'Members', icon: Users, scalar: false, relational: true,
-        view: (!rel.members || rel.members.length === 0)
-          ? <p className="text-sm text-gray-600 italic">No members yet.</p>
-          : <div className="flex flex-wrap gap-1.5">{rel.members.map(l => <Chip key={l.linkId}>{l.entity.canonicalName}{l.label && <span className="text-accent/90"> · {l.label}</span>}</Chip>)}</div>,
-        edit: <MemberRoles disabled={unsaved} links={rel.members || []} options={byType.Characters} onAdd={(id) => addMulti('member_of', id, false)} onSetRole={setRole} onRemove={removeLink} /> });
     }
     if (type === 'Events') {
       const kindOpts = ['Battle', 'Festival', 'Holiday', 'Disaster', 'Ceremony', 'Discovery'];
-      S.push({ key: 'overview', title: 'Overview', icon: CalendarClock, scalar: true, relational: true,
+      S.push({ key: 'overview', title: 'Overview', icon: CalendarClock, scalar: true,
         view: <>
-          <ViewField label="Event type" value={(selected.data.eventNature || 'one-time') === 'recurring' ? 'Recurring event' : 'One-time event'} />
-          <ViewField label="Kind" value={selected.data.kind} empty="Not set" />
-          {(selected.data.eventNature || 'one-time') === 'recurring'
-            ? <ViewField label="Schedule" value={selected.data.recurrence?.anchorDate ? `${formatWorldDate(worldCalendar, selected.data.recurrence.anchorDate)} · every ${selected.data.recurrence.interval || 1} ${selected.data.recurrence.unit || 'year'}(s)` : null} empty="Not set" />
-            : <ViewField label="Date" value={selected.data.startDate ? `${formatWorldDate(worldCalendar, selected.data.startDate)}${selected.data.endDate ? ` to ${formatWorldDate(worldCalendar, selected.data.endDate)}` : ''}` : null} empty="Not set" />}
-          <div className="pt-2"><div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-0.5">Where it happened</div><ChipList links={rel.happenedAt} empty="No place set." /></div>
-          <div className="pt-2"><div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-0.5">Who was involved</div><ChipList links={rel.involved} empty="No one set." /></div>
+          <FactGrid>
+            <ViewField label="Event type" value={(selected.data.eventNature || 'one-time') === 'recurring' ? 'Recurring event' : 'One-time event'} />
+            <ViewField label="Kind" value={selected.data.kind} />
+            {(selected.data.eventNature || 'one-time') === 'recurring'
+              ? <ViewField full label="Schedule" value={selected.data.recurrence?.anchorDate ? `${formatWorldDate(worldCalendar, selected.data.recurrence.anchorDate)} · every ${selected.data.recurrence.interval || 1} ${selected.data.recurrence.unit || 'year'}(s)` : null} />
+              : <ViewField full label="Date" value={selected.data.startDate ? `${formatWorldDate(worldCalendar, selected.data.startDate)}${selected.data.endDate ? ` to ${formatWorldDate(worldCalendar, selected.data.endDate)}` : ''}` : null} />}
+            <ViewField full label="Where it happened" value={<ChipList onOpen={openEntityById} links={rel.happenedAt} empty="No place set." />} />
+            <ViewField full label="Who was involved" value={<ChipList onOpen={openEntityById} links={rel.involved} empty="No one set." />} />
+          </FactGrid>
         </>,
         edit: <>
           <Edit label="Event type">
-            <div className="flex w-fit rounded-lg border border-white/10 bg-white/[0.04] p-0.5">
-              {[['one-time', 'One-time event'], ['recurring', 'Recurring event']].map(([value, label]) => <button key={value} type="button" onClick={() => patchData({ eventNature: value })} className={`rounded-md px-3 py-1.5 text-xs font-bold uppercase tracking-wider ${(selected.data.eventNature || 'one-time') === value ? 'bg-accent text-[#011419]' : 'text-gray-400 hover:text-white'}`}>{label}</button>)}
+            <div className="flex w-fit rounded-control border border-border-subtle bg-surface-hover/40 p-0.5">
+              {[['one-time', 'One-time event'], ['recurring', 'Recurring event']].map(([value, label]) => <button key={value} type="button" onClick={() => patchData({ eventNature: value })} className={`rounded-md px-3 py-1.5 text-xs font-bold uppercase tracking-wider ${(selected.data.eventNature || 'one-time') === value ? 'bg-accent text-on-accent' : 'text-text-muted hover:text-text-primary'}`}>{label}</button>)}
             </div>
           </Edit>
           <Edit label="Kind" hint="What sort of event. Type your own or reuse one."><FreeDatalist value={selected.data.kind} onChange={(e) => patchData({ kind: e.target.value })} options={kindOpts} placeholder="e.g. Battle, Festival, Holiday" /></Edit>
           {worldCalendar && (selected.data.eventNature || 'one-time') === 'recurring' ? (
             <>
-              <Edit label="First occurrence"><WorldDateInput calendar={worldCalendar} value={selected.data.recurrence?.anchorDate} onChange={anchorDate => patchData({ recurrence: { ...(selected.data.recurrence || {}), anchorDate } })} /></Edit>
+              <Edit label="First occurrence"><WorldDateInput label="First occurrence" emptyLabel="Set the first occurrence" calendar={worldCalendar} value={selected.data.recurrence?.anchorDate} onChange={anchorDate => patchData({ recurrence: { ...(selected.data.recurrence || {}), anchorDate } })} /></Edit>
               <Edit label="Repeats every"><div className="grid grid-cols-[7rem_1fr] gap-2"><LInput type="number" min="1" value={selected.data.recurrence?.interval || 1} onChange={event => patchData({ recurrence: { ...(selected.data.recurrence || {}), interval: Math.max(1, Number(event.target.value) || 1) } })} /><LSelect value={selected.data.recurrence?.unit || 'year'} onChange={event => patchData({ recurrence: { ...(selected.data.recurrence || {}), unit: event.target.value } })}><option value="day">Days</option><option value="week">Weeks</option><option value="month">Months</option><option value="year">Years</option></LSelect></div></Edit>
             </>
           ) : worldCalendar ? (
             <>
-              <Edit label="Start date"><WorldDateInput calendar={worldCalendar} value={selected.data.startDate} onChange={startDate => patchData({ startDate })} /></Edit>
-              <Edit label="End date" hint="Optional. Leave blank for a single-day event."><WorldDateInput calendar={worldCalendar} value={selected.data.endDate} onChange={endDate => patchData({ endDate })} /></Edit>
+              <Edit label="Start date"><WorldDateInput label="Start date" emptyLabel="Set start date" calendar={worldCalendar} value={selected.data.startDate} onChange={startDate => patchData({ startDate })} /></Edit>
+              <Edit label="End date" hint="Optional. Leave blank for a single-day event."><WorldDateInput label="End date" emptyLabel="Add end date" calendar={worldCalendar} value={selected.data.endDate} onChange={endDate => patchData({ endDate })} /></Edit>
             </>
           ) : null}
           <MultiRelation label="Where it happened" hint="Places this event took place." disabled={unsaved} links={rel.happenedAt || []} options={byType.Locations} onAdd={(id) => addMulti('happened_at', id)} onRemove={removeLink} />
@@ -1066,18 +1230,40 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     return S;
   };
 
+  // Belonging reads the same whoever is doing it, so the section is written once and both
+  // the character sheet and a specific being's sheet render it.
+  const membershipSection = (hint) => {
+    const pastFactions = rel.formerMemberOf || [];
+    const previously = pastFactions.length > 0 && (
+      <div className="flex flex-wrap gap-1.5">{pastFactions.map(l => <EntityChip key={l.linkId} entity={l.entity} label={l.label} onOpen={openEntityById} />)}</div>
+    );
+    return { key: 'fac', title: 'Factions', icon: Flag, scalar: false,
+      view: <>
+        <ChipList onOpen={openEntityById} links={rel.memberOf} empty="Belongs to no faction." />
+        {previously && <div className="mt-3 border-t border-border-subtle pt-3">
+          <div className="eyebrow mb-1.5">Previously</div>
+          {previously}
+        </div>}
+      </>,
+      edit: <>
+        <MultiRelation label="Factions" hint={hint} disabled={unsaved} links={rel.memberOf || []} options={byType.Factions} onAdd={(id) => addMulti('member_of', id)} onRemove={removeLink} />
+        {previously && <Edit label="Previously" hint="Departures are recorded on the faction sheet.">{previously}</Edit>}
+      </> };
+  };
+
   // Character sheet is tabbed; build its sections per active tab.
   const characterSections = () => {
     if (charTab === 'data') return [
       { key: 'identity', title: 'Identity', icon: User, scalar: true,
         view: <>
-          <div className="mb-3 flex items-center gap-2"><span className="text-[10px] font-bold uppercase tracking-wider text-gray-500">Status</span><StateTag map={STATUS} value={selected.data.status || 'unknown'} /></div>
-          <div className="grid grid-cols-2 gap-4"><ViewField label="Age" value={selected.data.age} empty="Not set" /><ViewField label="Race" value={rel.isRace?.entity?.canonicalName} empty="Not set" /></div>
-          <div className="mt-4 grid grid-cols-2 gap-4">
-            <ViewField label="Born" value={formatWorldDate(worldCalendar, selected.data.birthDate)} empty="Not set" />
-            {selected.data.status === 'deceased' && <ViewField label="Died" value={formatWorldDate(worldCalendar, selected.data.deathDate)} empty="Not set" />}
-            {selected.data.status === 'missing' && <ViewField label="Disappeared" value={formatWorldDate(worldCalendar, selected.data.missingDate)} empty="Not set" />}
-          </div>
+          <FactGrid>
+            <ViewField label="Status" value={<StateTag map={STATUS} value={selected.data.status || 'unknown'} />} />
+            <ViewField label="Age" value={selected.data.age} />
+            <ViewField label="Race" value={rel.isRace?.entity?.canonicalName} />
+            <ViewField label="Born" value={formatWorldDate(worldCalendar, selected.data.birthDate)} />
+            {selected.data.status === 'deceased' && <ViewField label="Died" value={formatWorldDate(worldCalendar, selected.data.deathDate)} />}
+            {selected.data.status === 'missing' && <ViewField label="Disappeared" value={formatWorldDate(worldCalendar, selected.data.missingDate)} />}
+          </FactGrid>
         </>,
         edit: <>
           <div className="grid grid-cols-2 gap-3">
@@ -1086,11 +1272,11 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           </div>
           <SingleRelation label="Race" disabled={unsaved} current={rel.isRace?.entity?.id} options={byType.Races} onSet={(id) => setSingle('is_race', id)} />
           {worldCalendar && <Edit label="Birth date">
-            <WorldDateInput calendar={worldCalendar} value={selected.data.birthDate} onChange={birthDate => patchData({ birthDate })} />
+            <WorldDateInput label="Birth date" emptyLabel="Set birth date" calendar={worldCalendar} value={selected.data.birthDate} onChange={birthDate => patchData({ birthDate })} />
             <div className="mt-2"><Checkbox checked={Boolean(selected.data.showBirthday)} onChange={showBirthday => patchData({ showBirthday })} label="Show birthday in Calendar" /></div>
           </Edit>}
-          {selected.data.status === 'deceased' && worldCalendar && <Edit label="Death date"><WorldDateInput calendar={worldCalendar} value={selected.data.deathDate} onChange={deathDate => patchData({ deathDate })} /></Edit>}
-          {selected.data.status === 'missing' && worldCalendar && <Edit label="Disappearance date"><WorldDateInput calendar={worldCalendar} value={selected.data.missingDate} onChange={missingDate => patchData({ missingDate })} /></Edit>}
+          {selected.data.status === 'deceased' && worldCalendar && <Edit label="Death date"><WorldDateInput label="Death date" emptyLabel="Set death date" calendar={worldCalendar} value={selected.data.deathDate} onChange={deathDate => patchData({ deathDate })} /></Edit>}
+          {selected.data.status === 'missing' && worldCalendar && <Edit label="Disappearance date"><WorldDateInput label="Disappearance date" emptyLabel="Set disappearance date" calendar={worldCalendar} value={selected.data.missingDate} onChange={missingDate => patchData({ missingDate })} /></Edit>}
         </> },
       { key: 'appearance', title: 'Appearance', icon: User, scalar: true, view: <Prose text={selected.data.appearance} />, edit: <Edit label="Appearance"><LTextarea rows={5} placeholder="Physical presence, clothing, and distinguishing features." value={selected.data.appearance || ''} onChange={(e) => patchData({ appearance: e.target.value })} /></Edit> },
       { key: 'personality', title: 'Personality', icon: Users, scalar: true, view: <Prose text={selected.data.personality} />, edit: <Edit label="Personality"><LTextarea rows={5} placeholder="Temperament, habits, values, and contradictions." value={selected.data.personality || ''} onChange={(e) => patchData({ personality: e.target.value })} /></Edit> },
@@ -1100,15 +1286,68 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       { key: 'inv', raw: <WorldbuildInventory workspaceId={workspaceId} subject={selected} links={rel.inventory || []} options={byType.Items} api={electronAPI} showToast={showToast} onChanged={() => loadRelations(selected)} /> },
     ];
     return [
-      { key: 'fac', title: 'Factions', icon: Flag, scalar: false, view: <ChipList links={rel.memberOf} empty="Belongs to no faction." />, edit: <MultiRelation label="Factions" hint="Groups this character belongs to." disabled={unsaved} links={rel.memberOf || []} options={byType.Factions} onAdd={(id) => addMulti('member_of', id)} onRemove={removeLink} /> },
-      { key: 'loc', title: 'Locations', icon: MapPin, scalar: false, view: <ChipList links={rel.connectedTo} empty="Tied to no place." />, edit: <MultiRelation label="Locations" hint="Places this character is tied to." disabled={unsaved} links={rel.connectedTo || []} options={byType.Locations} onAdd={(id) => addMulti('connected_to', id)} onRemove={removeLink} /> },
-      { key: 'rels', raw: <WorldbuildRelationships workspaceId={workspaceId} subject={selected} links={rel.relationships || []} options={[...byType.Characters, ...byType.Creatures.filter(entity => (entity.data?.scope || 'individual') !== 'group')]} api={electronAPI} showToast={showToast} onChanged={() => loadRelations(selected)} /> },
+      membershipSection('Groups this character belongs to.'),
+      { key: 'loc', title: 'Locations', icon: MapPin, scalar: false, view: <ChipList onOpen={openEntityById} links={rel.connectedTo} empty="Tied to no place." />, edit: <MultiRelation label="Locations" hint="Places this character is tied to." disabled={unsaved} links={rel.connectedTo || []} options={byType.Locations} onAdd={(id) => addMulti('connected_to', id)} onRemove={removeLink} /> },
+      { key: 'rels', raw: <WorldbuildRelationships workspaceId={workspaceId} subject={selected} links={rel.relationships || []} options={[...byType.Characters, ...individualCreatures]} api={electronAPI} showToast={showToast} onChanged={() => loadRelations(selected)} /> },
+    ];
+  };
+
+  // Faction sheet mirrors the Character one: Data holds what a faction is, the
+  // connections tab holds who it is made of and how it stands with the world.
+  const factionSections = () => {
+    if (charTab !== 'connections') return sectionsFor('Factions');
+    const leaderId = rel.leader?.entity?.id;
+    const founders = [...(rel.members || []), ...(rel.formerMembers || [])].filter(link => link.metadata?.founder);
+    // A roster is not only people: a bonded mount, a familiar or a dragon at the head of a
+    // cult belongs to the group as much as any of its members do.
+    const candidates = [...byType.Characters, ...individualCreatures];
+    const roster = (editing) => (
+      <MemberList links={rel.members} calendar={worldCalendar} leaderId={leaderId} editing={editing}
+        options={candidates} onOpen={openEntityById} onAdd={(id) => addMulti('member_of', id, false)}
+        onSetRole={setMemberRole} onSetMeta={setMemberMeta} onSetFormer={markFormerMember} onRemove={removeLink}
+        empty="No members yet." />
+    );
+    return [
+      { key: 'overview', title: 'Command & territory', icon: MapPin, scalar: true,
+        view: <FactGrid>
+          <ViewField label="Leader" value={rel.leader?.entity?.canonicalName} />
+          <ViewField label="Founded" value={formatWorldDate(worldCalendar, selected.data.foundedDate)} empty="Unknown" />
+          <ViewField full label="Founded by" value={founders.length
+            ? <div className="flex flex-wrap gap-1.5">{founders.map(link => <EntityChip key={link.linkId} entity={link.entity} onOpen={openEntityById} />)}</div>
+            : null} empty="Not recorded" />
+          <ViewField full label="Area of operation" value={<ChipList onOpen={openEntityById} links={rel.operatesIn} empty="No territory set." />} />
+        </FactGrid>,
+        edit: <>
+          <SingleRelation label="Leader (optional)" hint="Who heads this faction. They join the roster automatically, with an editable rank." disabled={unsaved} current={leaderId} options={candidates} onSet={setFactionLeader} />
+          {worldCalendar && <Edit label="Founded" hint="When this faction came into being."><WorldDateInput label="Founded" emptyLabel="Set founding date" calendar={worldCalendar} value={selected.data.foundedDate} onChange={foundedDate => patchData({ foundedDate })} /></Edit>}
+          <Edit label="Founded by" hint="Mark a founder with the star on their row in Members or Former members.">
+            {founders.length
+              ? <div className="flex flex-wrap gap-1.5">{founders.map(link => <EntityChip key={link.linkId} entity={link.entity} onOpen={openEntityById} />)}</div>
+              : <span className="caption">Nobody marked yet.</span>}
+          </Edit>
+          <MultiRelation label="Origin / area of operation" hint="Locations this faction works out of." disabled={unsaved} links={rel.operatesIn || []} options={byType.Locations} onAdd={(id) => addMulti('operates_in', id)} onRemove={removeLink} />
+        </> },
+      { key: 'members', title: 'Members', icon: Users, scalar: false,
+        view: roster(false),
+        edit: unsaved ? null : roster(true) },
+      { key: 'formerMembers', title: 'Former members', icon: UserMinus, scalar: false,
+        view: <MemberList links={rel.formerMembers} calendar={worldCalendar} kind="former" onOpen={openEntityById} empty="Nobody has left yet." />,
+        edit: <div>
+          <p className="caption mb-2">They keep what they already knew. From here on, whatever the faction shares with all members no longer reaches them.</p>
+          <MemberList links={rel.formerMembers} calendar={worldCalendar} kind="former" editing onOpen={openEntityById}
+            onSetRole={setFormerRole} onSetMeta={setMemberMeta} onRestore={restoreMember} onRemove={removeLink}
+            empty="Nobody has left yet." />
+        </div> },
+      { key: 'diplomacy', raw: <WorldbuildRelationships title="Relations" workspaceId={workspaceId} subject={selected} links={rel.relationships || []} options={[...byType.Factions.filter(entity => entity.id !== selected.id), ...byType.Characters, ...individualCreatures]} api={electronAPI} showToast={showToast} onChanged={() => loadRelations(selected)} /> },
     ];
   };
 
   const individualCreatureSections = () => {
     if (charTab === 'inventory') return [{ key: 'inv', raw: <WorldbuildInventory workspaceId={workspaceId} subject={selected} links={rel.inventory || []} options={byType.Items} api={electronAPI} showToast={showToast} onChanged={() => loadRelations(selected)} /> }];
-    if (charTab === 'connections') return [{ key: 'rels', raw: <WorldbuildRelationships workspaceId={workspaceId} subject={selected} links={rel.relationships || []} options={[...byType.Characters, ...byType.Creatures.filter(entity => (entity.data?.scope || 'individual') !== 'group')]} api={electronAPI} showToast={showToast} onChanged={() => loadRelations(selected)} /> }];
+    if (charTab === 'connections') return [
+      membershipSection('Groups this being belongs to. A pack, a cult, or the household that keeps it.'),
+      { key: 'rels', raw: <WorldbuildRelationships workspaceId={workspaceId} subject={selected} links={rel.relationships || []} options={[...byType.Characters, ...individualCreatures]} api={electronAPI} showToast={showToast} onChanged={() => loadRelations(selected)} /> },
+    ];
     const base = sectionsFor('Creatures');
     const loreIndex = base.findIndex(section => section.key === 'lore');
     const agentFields = [
@@ -1118,15 +1357,25 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     return loreIndex < 0 ? [...base, ...agentFields] : [...base.slice(0, loreIndex), ...agentFields, ...base.slice(loreIndex)];
   };
 
+  // Template fields for one section. Before the first save the entity has no row to
+  // write to, so the inputs feed the draft and ride along with the create payload.
+  const customFieldsFor = (sectionId, embedded = false) => (
+    <WorldbuildCustomFields
+      workspaceId={workspaceId} entity={selected} entities={entities} api={electronAPI} showToast={showToast}
+      definitions={fieldDefinitions}
+      onEntityChange={applyIntegratedEntity} onDraftChange={(customFields) => patchData({ customFields })}
+      template={activeTemplate} sectionId={sectionId} embedded={embedded}
+    />
+  );
   const customizeSections = (source) => {
-    if (!templateSections.length) return (charTab === 'data' || !hasKnowledgeTab) ? [...source, {
+    if (!templateSections.length) return charTab === 'data' ? [...source, {
       key: 'custom-fields',
-      raw: <WorldbuildCustomFields workspaceId={workspaceId} entity={selected} entities={entities} api={electronAPI} showToast={showToast} onEntityChange={applyIntegratedEntity} sectionId="custom-fields" />,
+      raw: customFieldsFor('custom-fields'),
     }] : source;
     const positions = new Map(templateSections.map((section, index) => [section.id, index]));
-    const custom = (charTab === 'data' || !hasKnowledgeTab) ? templateSections.filter(section => section.kind === 'custom' && !section.hidden).map(section => ({
+    const custom = charTab === 'data' ? templateSections.filter(section => section.kind === 'custom' && !section.hidden).map(section => ({
       key: section.id,
-      raw: <WorldbuildCustomFields workspaceId={workspaceId} entity={selected} entities={entities} api={electronAPI} showToast={showToast} onEntityChange={applyIntegratedEntity} template={activeTemplate} sectionId={section.id} />,
+      raw: customFieldsFor(section.id),
     })) : [];
     return [...source, ...custom]
       .filter(section => !sectionSetting(section.key)?.hidden)
@@ -1136,7 +1385,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const sections = selected
     ? (charTab === 'knowledge' && hasKnowledgeTab) || (charTab === 'occurrences' && hasOccurrencesTab)
       ? []
-      : customizeSections(selected.type === 'Characters' ? characterSections() : isIndividualCreature ? individualCreatureSections() : sectionsFor(selected.type))
+      : customizeSections(selected.type === 'Characters' ? characterSections() : isIndividualCreature ? individualCreatureSections() : isFaction ? factionSections() : sectionsFor(selected.type))
     : [];
   const m = selected ? concreteEntityMeta(selected) : null;
   const nameLabel = selected?.type === 'System' ? 'Title' : 'Name';
@@ -1149,12 +1398,12 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     return (
       <div key={en.id} className="relative">
         {manageMode && <Checkbox size="sm" checked={selectedIds.has(en.id)} onChange={() => toggleEntitySelection(en.id)} ariaLabel={`Select ${en.canonicalName}`} className="absolute z-10 left-2.5 top-1/2 -translate-y-1/2" />}
-        <button onClick={() => openEntity(en)} className={`w-full rounded-lg pr-2.5 text-left flex items-center transition-colors cursor-pointer group ${manageMode ? 'gap-2 py-1.5 pl-9' : 'gap-2.5 py-2 pl-2.5'} ${active ? 'bg-accent/15' : 'hover:bg-white/5'}`}>
+        <button onClick={() => openEntity(en)} className={`w-full rounded-control pr-2.5 text-left flex items-center transition-colors cursor-pointer group ${manageMode ? 'gap-2 py-1.5 pl-9' : 'gap-2.5 py-2 pl-2.5'} ${active ? 'bg-accent/15' : 'hover:bg-surface-hover/60'}`}>
           <span className={`${manageMode ? 'h-6 w-6' : 'h-7 w-7'} rounded-md border flex items-center justify-center shrink-0 ${t.medallion}`}><Icon className="w-3.5 h-3.5" /></span>
-          <span className={`flex-1 min-w-0 truncate text-sm font-medium ${active ? 'text-accent' : 'text-gray-200'}`}>{en.canonicalName}</span>
-          {en.status === 'proposed' && <Sparkles className="w-3.5 h-3.5 text-amber-300 shrink-0" data-tooltip="AI proposal, needs accept" />}
-          {en.status !== 'proposed' && (reviewCounts[en.id]?.entityUpdates || 0) > 0 && <ShieldCheck className="w-3.5 h-3.5 text-sky-300 shrink-0" data-tooltip={`${reviewCounts[en.id].entityUpdates} entity update suggestions`} />}
-          {en.status !== 'proposed' && (reviewCounts[en.id]?.kanora || 0) > 0 && <Sparkles className="w-3.5 h-3.5 text-violet-300 shrink-0" data-tooltip={`${reviewCounts[en.id].kanora} Kanora suggestions`} />}
+          <span className={`flex-1 min-w-0 truncate text-sm font-medium ${active ? 'text-accent' : 'text-text-secondary'}`}>{en.canonicalName}</span>
+          {en.status === 'proposed' && <Sparkles className="w-3.5 h-3.5 text-status-warning shrink-0" data-tooltip="AI proposal, needs accept" />}
+          {en.status !== 'proposed' && (reviewCounts[en.id]?.entityUpdates || 0) > 0 && <ShieldCheck className="w-3.5 h-3.5 text-status-info shrink-0" data-tooltip={`${reviewCounts[en.id].entityUpdates} entity update suggestions`} />}
+          {en.status !== 'proposed' && (reviewCounts[en.id]?.kanora || 0) > 0 && <Sparkles className="w-3.5 h-3.5 text-entity-event shrink-0" data-tooltip={`${reviewCounts[en.id].kanora} Kanora suggestions`} />}
         </button>
       </div>
     );
@@ -1170,21 +1419,21 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     return (
       <div key={entity.id} className={`relative ${isNested ? 'pl-4' : ''}`}>
         {isNested && (isLast
-          ? <span className="absolute left-0 top-0 h-5 w-4 rounded-bl-sm border-b border-l border-emerald-300/25" />
+          ? <span className="absolute left-0 top-0 h-5 w-4 rounded-bl-sm border-b border-l border-status-success/25" />
           : <>
-              <span className="absolute left-0 top-0 bottom-0 border-l border-emerald-300/25" />
-              <span className="absolute left-0 top-5 w-4 border-t border-emerald-300/25" />
+              <span className="absolute left-0 top-0 bottom-0 border-l border-status-success/25" />
+              <span className="absolute left-0 top-5 w-4 border-t border-status-success/25" />
             </>)}
         <div className="relative">
             {manageMode && <Checkbox size="sm" checked={selectedIds.has(entity.id)} onChange={() => toggleEntitySelection(entity.id)} ariaLabel={`Select ${entity.canonicalName}`} className="absolute z-10 left-2.5 top-1/2 -translate-y-1/2" />}
-            <button onClick={() => openEntity(entity)} className={`w-full rounded-lg pr-2.5 text-left flex items-center transition-colors cursor-pointer group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent ${manageMode ? 'gap-2 py-1.5 pl-9' : 'gap-2.5 py-2 pl-2.5'} ${hasChildren ? 'pr-9' : ''} ${active ? 'bg-accent/15' : 'hover:bg-white/5'}`}>
+            <button onClick={() => openEntity(entity)} className={`w-full rounded-control pr-2.5 text-left flex items-center transition-colors cursor-pointer group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent ${manageMode ? 'gap-2 py-1.5 pl-9' : 'gap-2.5 py-2 pl-2.5'} ${hasChildren ? 'pr-9' : ''} ${active ? 'bg-accent/15' : 'hover:bg-surface-hover/60'}`}>
               <span className={`${manageMode ? 'h-6 w-6' : 'h-7 w-7'} rounded-md border flex items-center justify-center shrink-0 ${t.medallion}`}><Icon className="w-3.5 h-3.5" /></span>
-              <span className={`flex-1 min-w-0 truncate text-sm font-medium ${active ? 'text-accent' : 'text-gray-200'}`}>{entity.canonicalName}</span>
-              {entity.status === 'proposed' && <Sparkles className="w-3.5 h-3.5 text-amber-300 shrink-0" data-tooltip="AI proposal, needs accept" />}
-              {entity.status !== 'proposed' && (reviewCounts[entity.id]?.entityUpdates || 0) > 0 && <ShieldCheck className="w-3.5 h-3.5 text-sky-300 shrink-0" data-tooltip={`${reviewCounts[entity.id].entityUpdates} entity update suggestions`} />}
-              {entity.status !== 'proposed' && (reviewCounts[entity.id]?.kanora || 0) > 0 && <Sparkles className="w-3.5 h-3.5 text-violet-300 shrink-0" data-tooltip={`${reviewCounts[entity.id].kanora} Kanora suggestions`} />}
+              <span className={`flex-1 min-w-0 truncate text-sm font-medium ${active ? 'text-accent' : 'text-text-secondary'}`}>{entity.canonicalName}</span>
+              {entity.status === 'proposed' && <Sparkles className="w-3.5 h-3.5 text-status-warning shrink-0" data-tooltip="AI proposal, needs accept" />}
+              {entity.status !== 'proposed' && (reviewCounts[entity.id]?.entityUpdates || 0) > 0 && <ShieldCheck className="w-3.5 h-3.5 text-status-info shrink-0" data-tooltip={`${reviewCounts[entity.id].entityUpdates} entity update suggestions`} />}
+              {entity.status !== 'proposed' && (reviewCounts[entity.id]?.kanora || 0) > 0 && <Sparkles className="w-3.5 h-3.5 text-entity-event shrink-0" data-tooltip={`${reviewCounts[entity.id].kanora} Kanora suggestions`} />}
             </button>
-            {hasChildren && <button type="button" onClick={() => toggleLocation(entity.id)} aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${entity.canonicalName}`} className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-gray-200 hover:bg-white/5 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent">
+            {hasChildren && <button type="button" onClick={() => toggleLocation(entity.id)} aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${entity.canonicalName}`} className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-md text-text-subtle hover:text-text-secondary hover:bg-surface-hover/60 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent">
               <ChevronRight className={`w-3.5 h-3.5 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
             </button>}
         </div>
@@ -1226,9 +1475,21 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             </div>
           </>
         ) : s.view}
-        {activeTemplate && (charTab === 'data' || !hasKnowledgeTab) && (
-          <WorldbuildCustomFields workspaceId={workspaceId} entity={selected} entities={entities} api={electronAPI} showToast={showToast} onEntityChange={applyIntegratedEntity} template={activeTemplate} sectionId={s.key} embedded />
-        )}
+        {activeTemplate && charTab === 'data' && customFieldsFor(s.key, true)}
+      </Section>
+    );
+  };
+
+  // Create form: every native section of the Data tab, opened for editing, plus the
+  // template's own fields. Sections made only of relations are left out — links need a
+  // saved id, so they are filled once the sheet exists.
+  const renderCreateSection = (s) => {
+    if (s.raw) return <React.Fragment key={s.key}>{s.raw}</React.Fragment>;
+    if (!s.edit || s.relationalOnly) return null;
+    return (
+      <Section key={s.key} icon={s.icon} title={s.title}>
+        {s.edit}
+        {activeTemplate && customFieldsFor(s.key, true)}
       </Section>
     );
   };
@@ -1267,7 +1528,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   })();
 
   return (
-    <div className="flex-1 flex flex-col lg:flex-row h-full overflow-hidden bg-[#000508]/40 select-none relative">
+    <div className="flex-1 flex flex-col lg:flex-row h-full overflow-hidden bg-surface-canvas/40 select-none relative">
       {showExportModal && createPortal(
         <ExportWorldbuildModal
           entityCount={exportableCount}
@@ -1300,7 +1561,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
         <ConfirmDialog
           tone="danger"
           title="Delete entity"
-          message={<>The {typeMeta(selected.type).label.toLowerCase()} <strong className="text-gray-200">“{selected.canonicalName}”</strong> will be permanently deleted, along with its connections and story tags. This cannot be undone.</>}
+          message={<>The {typeMeta(selected.type).label.toLowerCase()} <strong className="text-text-secondary">“{selected.canonicalName}”</strong> will be permanently deleted, along with its connections and story tags. This cannot be undone.</>}
           actions={[
             { label: 'Cancel', variant: 'ghost', onClick: () => setConfirmDelete(false) },
             { label: 'Delete', variant: 'danger', autoFocus: true, loading: saving, onClick: async () => { await remove(); setConfirmDelete(false); } },
@@ -1309,10 +1570,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
         />
       )}
       {enriching && (
-        <div className="absolute inset-0 z-[70] flex flex-col items-center justify-center gap-3 bg-[#000508]/80 backdrop-blur-sm">
+        <div className="absolute inset-0 z-[70] flex flex-col items-center justify-center gap-3 bg-surface-canvas/80 backdrop-blur-sm">
           <RefreshCw className="w-7 h-7 text-accent animate-spin" />
           <div className="text-center">
-            <p className="text-sm font-bold text-white">Updating your world…</p>
+            <p className="text-sm font-bold text-text-primary">Updating your world…</p>
             <p className="caption mt-1">
               {enrichProgress?.total
                 ? `Reading passages for ${enrichProgress.name || 'your entities'} (${Math.min(enrichProgress.done + 1, enrichProgress.total)}/${enrichProgress.total})`
@@ -1322,48 +1583,48 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
         </div>
       )}
       {showEnrichErrors && enrichErrors.length > 0 && (
-        <aside className="fixed right-5 bottom-20 z-[70] w-[min(30rem,calc(100vw-2.5rem))] max-h-[70vh] overflow-hidden rounded-xl border border-red-400/40 bg-[#180b0b]/85 backdrop-blur-xl shadow-2xl flex flex-col" aria-labelledby="entity-update-errors-title">
-          <header className="shrink-0 flex items-start justify-between gap-4 px-4 py-3 border-b border-red-400/20 bg-[#210d0d]/70">
+        <aside className="fixed right-5 bottom-20 z-[70] w-[min(30rem,calc(100vw-2.5rem))] max-h-[70vh] overflow-hidden rounded-surface border border-status-danger/30 bg-surface-panel/95 backdrop-blur-xl shadow-overlay flex flex-col" aria-labelledby="entity-update-errors-title">
+          <header className="shrink-0 flex items-start justify-between gap-4 px-4 py-3 border-b border-status-danger/20 bg-status-danger/[0.08]">
             <div className="flex min-w-0 gap-3">
-              <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5 text-red-300" />
-              <div>
-                <h2 id="entity-update-errors-title" className="font-bold text-red-100">Entity updates need attention</h2>
-                <p className="mt-0.5 text-sm leading-relaxed text-red-200/80">{enrichErrorSummary || `${enrichErrors.length} ${enrichErrors.length === 1 ? 'entity update failed' : 'entity updates failed'}.`}</p>
+              <AlertTriangle aria-hidden="true" className="w-5 h-5 shrink-0 mt-0.5 text-status-danger" />
+              <div className="min-w-0">
+                <h2 id="entity-update-errors-title" className="font-bold text-status-danger">Entity updates need attention</h2>
+                <p className="caption mt-0.5">{enrichErrorSummary || `${enrichErrors.length} ${enrichErrors.length === 1 ? 'entity update failed' : 'entity updates failed'}.`}</p>
               </div>
             </div>
-            <button type="button" aria-label="Dismiss all entity update errors" onClick={dismissAllEnrichErrors} className="shrink-0 p-1 rounded text-red-200/70 hover:text-white focus-visible:ring-2 focus-visible:ring-red-300"><X className="w-5 h-5" /></button>
+            <button type="button" aria-label="Dismiss all entity update errors" onClick={dismissAllEnrichErrors} className="shrink-0 p-1 rounded text-text-subtle transition-colors hover:bg-status-danger/10 hover:text-status-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-danger/40"><X aria-hidden="true" className="w-5 h-5" /></button>
           </header>
-          <div className="flex-1 overflow-y-auto overscroll-contain divide-y divide-red-500/20 custom-scrollbar" aria-live="polite">
+          <div className="flex-1 overflow-y-auto overscroll-contain divide-y divide-border-subtle custom-scrollbar" aria-live="polite">
               {enrichErrors.map(error => (
                 <article key={error.id} className="p-4 text-sm">
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
-                      <h3 className="font-bold text-red-100">{error.entityName}</h3>
-                      <p className="mt-0.5 text-red-200/80">{typeMeta(error.entityType).label}</p>
-                      <p className="mt-3 leading-relaxed break-words text-red-100">{error.error}</p>
+                      <h3 className="font-bold text-text-primary">{error.entityName}</h3>
+                      <p className="eyebrow mt-1">{typeMeta(error.entityType).label}</p>
+                      <p className="mt-3 leading-relaxed break-words text-text-secondary">{error.error}</p>
                     </div>
                   </div>
                   <div className="mt-4 flex items-center justify-between gap-3">
-                    <button type="button" onClick={() => openSettings('engine', 'system-ai')} className="font-bold text-red-100 hover:text-white underline underline-offset-4">Open System AI settings</button>
-                    <button type="button" onClick={() => dismissEnrichError(error.id)} className="text-red-200/80 hover:text-white">Dismiss</button>
+                    <button type="button" onClick={() => openSettings('engine', 'system-ai')} className="font-bold text-accent hover:brightness-110 underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded">Open System AI settings</button>
+                    <button type="button" onClick={() => dismissEnrichError(error.id)} className="text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded">Dismiss</button>
                   </div>
                 </article>
               ))}
           </div>
         </aside>
       )}
-      <div style={{ '--worldbuild-sidebar-width': `${sidebarWidth}px` }} className="relative w-full lg:w-[var(--worldbuild-sidebar-width)] shrink-0 flex flex-col h-full overflow-visible border-r border-gray-800/40 bg-[#011419]/25 backdrop-blur-md">
-        <button type="button" aria-label="Resize Worldbuild sidebar" onPointerDown={startSidebarResize} onKeyDown={handleSidebarResizeKey} className="hidden lg:flex absolute -right-4 top-3 z-20 w-8 h-8 items-center justify-center rounded-full border border-white/20 bg-[#071720] text-white shadow-lg cursor-col-resize transition-colors hover:border-accent hover:text-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent">
+      <div style={{ '--worldbuild-sidebar-width': `${sidebarWidth}px` }} className="relative w-full lg:w-[var(--worldbuild-sidebar-width)] shrink-0 flex flex-col h-full overflow-visible border-r border-border-subtle/40 bg-surface-canvas/25 backdrop-blur-md">
+        <button type="button" aria-label="Resize Worldbuild sidebar" onPointerDown={startSidebarResize} onKeyDown={handleSidebarResizeKey} className="hidden lg:flex absolute -right-4 top-3 z-20 w-8 h-8 items-center justify-center rounded-full border border-border-strong bg-surface-panel text-text-primary shadow-lg cursor-col-resize transition-colors hover:border-accent hover:text-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent">
           <ChevronsLeftRight className="w-4 h-4" />
         </button>
-        <div className="px-3 py-3 border-b border-gray-800/80 bg-[#011419]/35 flex items-center justify-between">
+        <div className="px-3 py-3 border-b border-border-subtle/80 bg-surface-canvas/35 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Globe className="w-4 h-4 text-accent" /><span className="text-sm font-bold text-white tracking-wide">Worldbuild</span>
-            <button type="button" onClick={() => manageMode ? leaveManageMode() : setManageMode(true)} className={`ml-1 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md border transition-colors cursor-pointer ${manageMode ? 'bg-accent/20 text-accent border-accent/40' : 'text-gray-400 border-white/10 hover:text-white hover:bg-white/5'}`}>{manageMode ? 'Done' : 'Manage'}</button>
-            <button type="button" onClick={() => setShowTemplateManager(true)} aria-label="Customize entity types" data-tooltip="Entity types & templates" className="rounded-md border border-white/10 p-1 text-gray-500 transition-colors hover:bg-white/5 hover:text-accent"><LayoutTemplate className="h-3.5 w-3.5" /></button>
+            <Globe className="w-4 h-4 text-accent" /><span className="text-sm font-bold text-text-primary tracking-wide">Worldbuild</span>
+            <button type="button" onClick={() => manageMode ? leaveManageMode() : setManageMode(true)} className={`ml-1 text-[0.625rem] font-bold uppercase tracking-wider px-2 py-1 rounded-md border transition-colors cursor-pointer ${manageMode ? 'bg-accent/20 text-accent border-accent/40' : 'text-text-muted border-border-subtle hover:text-text-primary hover:bg-surface-hover/60'}`}>{manageMode ? 'Done' : 'Manage'}</button>
+            <button type="button" onClick={() => setShowTemplateManager(true)} aria-label="Customize entity types" data-tooltip="Entity types & templates" className="rounded-md border border-border-subtle p-1 text-text-subtle transition-colors hover:bg-surface-hover/60 hover:text-accent"><LayoutTemplate className="h-3.5 w-3.5" /></button>
           </div>
           <div className="flex items-center gap-2">
-            {proposedCount > 0 && <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-300 bg-amber-400/10 border border-amber-400/30 rounded-full px-2 py-0.5"><Sparkles className="w-3 h-3" />{proposedCount}</span>}
+            {proposedCount > 0 && <span className="inline-flex items-center gap-1 text-[0.625rem] font-bold text-status-warning bg-status-warning/10 border border-status-warning/30 rounded-full px-2 py-0.5"><Sparkles className="w-3 h-3" />{proposedCount}</span>}
           </div>
         </div>
 
@@ -1391,34 +1652,37 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
 
           <div className="relative" ref={createRef}>
             <Button fullWidth icon={Plus} onClick={() => setShowCreate(v => !v)} className="!border !border-accent/25 !bg-accent/10 !text-accent hover:!bg-accent/15">Create</Button>
-            <Popover anchorRef={createRef} open={showCreate} onClose={() => setShowCreate(false)} className="!bg-[#021a20] backdrop-blur-sm">
-              {TYPE_ORDER.map(key => { const t = typeMeta(key); const Icon = t.icon; return (
-                <button key={key} onClick={() => startNew(key)} className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-white/5 hover:text-white transition-colors flex items-center gap-2.5 cursor-pointer font-medium rounded-lg">
-                  <span className={`w-6 h-6 rounded-md border flex items-center justify-center ${t.medallion}`}><Icon className="w-3.5 h-3.5" /></span>
-                  {t.label}
+            <Popover anchorRef={createRef} open={showCreate} onClose={() => setShowCreate(false)} className="!bg-surface-panel-muted backdrop-blur-sm">
+              {createOptions.map(option => { const t = typeMeta(option.type); const Icon = t.icon; return (
+                <button key={option.id} onClick={() => startNew(option.type, option.data)} className="w-full text-left px-3 py-2 text-xs text-text-secondary hover:bg-surface-hover/60 hover:text-text-primary transition-colors flex items-center gap-2.5 cursor-pointer font-medium rounded-control">
+                  <span className={`w-6 h-6 shrink-0 rounded-md border flex items-center justify-center ${t.medallion}`}><Icon className="w-3.5 h-3.5" /></span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate">{t.label}</span>
+                    {option.note && <span className="block truncate text-[0.6875rem] font-normal text-text-subtle">{option.note}</span>}
+                  </span>
                 </button>
               ); })}
             </Popover>
           </div>
 
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500 pointer-events-none" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-subtle pointer-events-none" />
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search the world..." className={`${FIELD} pl-9`} />
           </div>
 
           <div className="flex items-center gap-1.5">
-            <button type="button" onClick={() => moveFilterStrip(-1)} aria-label="Move entity filters left" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border-subtle bg-surface-panel/80 text-text-muted hover:text-text-primary"><ChevronLeft className="h-3.5 w-3.5" /></button>
+            <button type="button" onClick={() => moveFilterStrip(-1)} aria-label="Move entity filters left" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-text-subtle transition-colors duration-200 ease-standard hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><ChevronLeft className="h-3.5 w-3.5" /></button>
             <div ref={filterStripRef} className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              <button onClick={() => { setFilterType(null); setReviewFilter(null); }} className={`shrink-0 rounded-full border px-2.5 py-1 text-[0.6875rem] font-semibold tracking-wide transition-colors cursor-pointer ${!filterType && !reviewFilter ? 'border-accent/30 bg-accent/15 text-accent' : 'border-border-subtle bg-white/[0.035] text-text-muted hover:bg-white/[0.06] hover:text-text-primary'}`}>All</button>
-              {TYPE_ORDER.map(key => <button key={key} onClick={() => setFilterType(key === filterType ? null : key)} className={`shrink-0 rounded-full border px-2.5 py-1 text-[0.6875rem] font-semibold tracking-wide transition-colors cursor-pointer ${filterType === key ? 'border-accent/30 bg-accent/15 text-accent' : 'border-border-subtle bg-white/[0.035] text-text-muted hover:bg-white/[0.06] hover:text-text-primary'}`}>{typeMeta(key).label}</button>)}
+              <button onClick={() => { setFilterType(null); setReviewFilter(null); }} className={`shrink-0 rounded-full border px-2.5 py-1 text-[0.6875rem] font-semibold tracking-wide transition-colors cursor-pointer ${!filterType && !reviewFilter ? 'border-accent/30 bg-accent/15 text-accent' : 'border-border-subtle bg-surface-hover/35 text-text-muted hover:bg-surface-hover/55 hover:text-text-primary'}`}>All</button>
+              {TYPE_ORDER.map(key => <button key={key} onClick={() => setFilterType(key === filterType ? null : key)} className={`shrink-0 rounded-full border px-2.5 py-1 text-[0.6875rem] font-semibold tracking-wide transition-colors cursor-pointer ${filterType === key ? 'border-accent/30 bg-accent/15 text-accent' : 'border-border-subtle bg-surface-hover/35 text-text-muted hover:bg-surface-hover/55 hover:text-text-primary'}`}>{typeMeta(key).label}</button>)}
             </div>
-            <button type="button" onClick={() => moveFilterStrip(1)} aria-label="Move entity filters right" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border-subtle bg-surface-panel/80 text-text-muted hover:text-text-primary"><ChevronRight className="h-3.5 w-3.5" /></button>
+            <button type="button" onClick={() => moveFilterStrip(1)} aria-label="Move entity filters right" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-text-subtle transition-colors duration-200 ease-standard hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><ChevronRight className="h-3.5 w-3.5" /></button>
           </div>
           {(proposedCount > 0 || pendingUpdateCount > 0) && (
             <div className="flex items-center gap-1.5 border-t border-border-subtle pt-2">
-              <span className="mr-1 shrink-0 text-[0.625rem] font-bold uppercase tracking-wider text-text-subtle">AI review</span>
-              {proposedCount > 0 && <button onClick={() => setReviewFilter(reviewFilter === 'proposed' ? null : 'proposed')} className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[0.6875rem] font-semibold tracking-wide transition-colors cursor-pointer ${reviewFilter === 'proposed' ? 'bg-amber-400/15 text-amber-200 border-amber-400/35' : 'bg-amber-400/[0.05] text-amber-300/80 border-amber-400/20 hover:bg-amber-400/10'}`}><Sparkles className="w-3 h-3" />Proposed</button>}
-              {pendingUpdateCount > 0 && <button onClick={() => setReviewFilter(reviewFilter === 'updates' ? null : 'updates')} className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[0.6875rem] font-semibold tracking-wide transition-colors cursor-pointer ${reviewFilter === 'updates' ? 'bg-sky-400/15 text-sky-100 border-sky-400/35' : 'bg-sky-400/[0.05] text-sky-300/80 border-sky-400/20 hover:bg-sky-400/10'}`}><ShieldCheck className="w-3 h-3" />Reviews</button>}
+              <span className="mr-1 shrink-0 eyebrow">AI review</span>
+              {proposedCount > 0 && <button onClick={() => setReviewFilter(reviewFilter === 'proposed' ? null : 'proposed')} className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[0.6875rem] font-semibold tracking-wide transition-colors cursor-pointer ${reviewFilter === 'proposed' ? 'bg-status-warning/15 text-status-warning border-status-warning/35' : 'bg-status-warning/[0.05] text-status-warning/80 border-status-warning/20 hover:bg-status-warning/10'}`}><Sparkles className="w-3 h-3" />Proposed</button>}
+              {pendingUpdateCount > 0 && <button onClick={() => setReviewFilter(reviewFilter === 'updates' ? null : 'updates')} className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[0.6875rem] font-semibold tracking-wide transition-colors cursor-pointer ${reviewFilter === 'updates' ? 'bg-status-info/15 text-status-info border-status-info/35' : 'bg-status-info/[0.05] text-status-info/80 border-status-info/20 hover:bg-status-info/10'}`}><ShieldCheck className="w-3 h-3" />Reviews</button>}
             </div>
           )}
         </div>
@@ -1426,18 +1690,18 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
         {!manageMode && (
           <div className="space-y-1.5 px-2 pb-2">
             <button type="button" onClick={() => { setSurface('calendar'); setSelected(null); setEditingSection(null); }}
-              className={`flex w-full items-center gap-2.5 rounded-lg border px-2.5 py-2.5 text-left transition-colors ${surface === 'calendar' ? 'border-sky-300/25 bg-sky-300/[0.08] text-sky-100' : 'border-white/[0.08] bg-white/[0.025] text-gray-300 hover:border-white/15 hover:bg-white/5'}`}>
-              <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border ${surface === 'calendar' ? 'border-sky-300/25 bg-sky-300/[0.08] text-sky-200' : 'border-white/10 bg-black/10 text-gray-500'}`}><CalendarClock className="h-3.5 w-3.5" /></span>
-              <span className="min-w-0 flex-1"><span className="block text-xs font-bold uppercase tracking-wider">Calendar</span><span className="block truncate text-[11px] text-gray-500">Dates, seasons, and events</span></span>
+              className={`flex w-full items-center gap-2.5 rounded-card border px-2.5 py-2.5 text-left transition-colors duration-200 ease-standard ${surface === 'calendar' ? 'border-status-info/25 bg-status-info/[0.08] text-status-info' : 'border-border-subtle bg-surface-hover/25 text-text-secondary hover:border-border-default hover:bg-surface-hover/60'}`}>
+              <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-control border ${surface === 'calendar' ? 'border-status-info/25 bg-status-info/[0.08] text-status-info' : 'border-border-subtle bg-surface-canvas/30 text-text-subtle'}`}><CalendarClock className="h-3.5 w-3.5" /></span>
+              <span className="min-w-0 flex-1"><span className="block text-xs font-bold uppercase tracking-wider">Calendar</span><span className="block truncate text-[0.6875rem] text-text-subtle">Dates, seasons, and events</span></span>
             </button>
             <button type="button" onClick={() => { setSurface('facts'); setSelected(null); setEditingSection(null); }}
-              className={`flex w-full items-center gap-2.5 rounded-lg border px-2.5 py-2.5 text-left transition-colors ${surface === 'facts' ? 'border-amber-300/25 bg-amber-300/[0.08] text-amber-100' : 'border-white/[0.08] bg-white/[0.025] text-gray-300 hover:border-white/15 hover:bg-white/5'}`}>
-              <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border ${surface === 'facts' ? 'border-amber-300/25 bg-amber-300/[0.08] text-amber-200' : 'border-white/10 bg-black/10 text-gray-500'}`}><BookCheck className="h-3.5 w-3.5" /></span>
+              className={`flex w-full items-center gap-2.5 rounded-card border px-2.5 py-2.5 text-left transition-colors duration-200 ease-standard ${surface === 'facts' ? 'border-accent/25 bg-accent/[0.08] text-accent' : 'border-border-subtle bg-surface-hover/25 text-text-secondary hover:border-border-default hover:bg-surface-hover/60'}`}>
+              <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-control border ${surface === 'facts' ? 'border-accent/25 bg-accent/[0.08] text-accent' : 'border-border-subtle bg-surface-canvas/30 text-text-subtle'}`}><BookCheck className="h-3.5 w-3.5" /></span>
               <span className="min-w-0 flex-1">
                 <span className="block text-xs font-bold uppercase tracking-wider">Facts</span>
-                <span className="block truncate text-[11px] text-gray-500">Canonical world truths</span>
+                <span className="block truncate text-[0.6875rem] text-text-subtle">Canonical world truths</span>
               </span>
-              {factCount > 0 && <span className="rounded-full bg-white/[0.07] px-2 py-0.5 text-xs text-gray-400">{factCount}</span>}
+              {factCount > 0 && <span className="rounded-full bg-surface-hover/60 px-2 py-0.5 text-xs text-text-muted">{factCount}</span>}
             </button>
           </div>
         )}
@@ -1450,40 +1714,40 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
         {manageMode && (
           <div className="shrink-0 space-y-2 border-t border-border-subtle bg-surface-panel/95 p-3 backdrop-blur-md">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-semibold text-gray-200">{selectedIds.size} selected{hiddenSelectedCount ? ` · ${hiddenSelectedCount} hidden` : ''}</span>
-              <button type="button" onClick={() => setSelectedIds(new Set())} disabled={!selectedIds.size} className="text-[10px] font-bold uppercase tracking-wider text-gray-500 hover:text-white disabled:opacity-40 cursor-pointer">Clear</button>
+              <span className="text-xs font-semibold text-text-secondary">{selectedIds.size} selected{hiddenSelectedCount ? ` · ${hiddenSelectedCount} hidden` : ''}</span>
+              <button type="button" onClick={() => setSelectedIds(new Set())} disabled={!selectedIds.size} className="eyebrow hover:text-text-primary disabled:opacity-40 cursor-pointer">Clear</button>
             </div>
-            <details className="group rounded-lg border border-border-subtle bg-white/[0.02]">
+            <details className="group rounded-control border border-border-subtle bg-surface-hover/25">
               <summary className="flex cursor-pointer list-none items-center justify-between px-2.5 py-1.5 text-[0.6875rem] font-semibold text-text-muted hover:text-text-primary [&::-webkit-details-marker]:hidden">
                 Selection tools
                 <ChevronRight className="h-3.5 w-3.5 transition-transform group-open:rotate-90" />
               </summary>
               <div className="space-y-2 border-t border-border-subtle px-2.5 py-2">
               <div className="flex flex-wrap gap-1.5">
-              <button type="button" onClick={selectVisibleEntities} disabled={!filtered.length} className="text-[10px] font-semibold px-2 py-1 rounded-md border border-white/10 text-gray-300 hover:bg-white/5 disabled:opacity-40 cursor-pointer">Select visible</button>
-              {proposedCount > 0 && <button type="button" onClick={() => selectEntities(entities.filter(entity => entity.status === 'proposed'))} className="text-[10px] font-semibold px-2 py-1 rounded-md border border-amber-400/25 text-amber-300 hover:bg-amber-400/10 cursor-pointer">Proposed</button>}
-              {pendingUpdateCount > 0 && <button type="button" onClick={() => selectEntities(entities.filter(entity => entity.status !== 'proposed' && ((reviewCounts[entity.id]?.entityUpdates || 0) > 0 || (reviewCounts[entity.id]?.kanora || 0) > 0)))} className="text-[10px] font-semibold px-2 py-1 rounded-md border border-sky-400/25 text-sky-300 hover:bg-sky-400/10 cursor-pointer">Reviews</button>}
+              <button type="button" onClick={selectVisibleEntities} disabled={!filtered.length} className="text-[0.625rem] font-semibold px-2 py-1 rounded-md border border-border-subtle text-text-secondary hover:bg-surface-hover/60 disabled:opacity-40 cursor-pointer">Select visible</button>
+              {proposedCount > 0 && <button type="button" onClick={() => selectEntities(entities.filter(entity => entity.status === 'proposed'))} className="text-[0.625rem] font-semibold px-2 py-1 rounded-md border border-status-warning/25 text-status-warning hover:bg-status-warning/10 cursor-pointer">Proposed</button>}
+              {pendingUpdateCount > 0 && <button type="button" onClick={() => selectEntities(entities.filter(entity => entity.status !== 'proposed' && ((reviewCounts[entity.id]?.entityUpdates || 0) > 0 || (reviewCounts[entity.id]?.kanora || 0) > 0)))} className="text-[0.625rem] font-semibold px-2 py-1 rounded-md border border-status-info/25 text-status-info hover:bg-status-info/10 cursor-pointer">Reviews</button>}
               {Object.keys(AI_POLICY).map(policy => {
                 const matches = entities.filter(entity => entity.status !== 'proposed' && (entity.data?.aiPolicy || 'review') === policy);
-                return <button key={`select-${policy}`} type="button" onClick={() => selectEntities(matches)} disabled={!matches.length} data-tooltip={`Select all entities with the ${AI_POLICY[policy].label} AI policy`} className="text-[10px] font-semibold px-2 py-1 rounded-md border border-white/10 text-gray-400 hover:bg-white/5 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer">{AI_POLICY[policy].label} ({matches.length})</button>;
+                return <button key={`select-${policy}`} type="button" onClick={() => selectEntities(matches)} disabled={!matches.length} data-tooltip={`Select all entities with the ${AI_POLICY[policy].label} AI policy`} className="text-[0.625rem] font-semibold px-2 py-1 rounded-md border border-border-subtle text-text-muted hover:bg-surface-hover/60 hover:text-text-primary disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer">{AI_POLICY[policy].label} ({matches.length})</button>;
               })}
               </div>
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="mr-1 text-[0.6875rem] font-medium text-text-subtle">Set AI policy</span>
               {Object.entries(AI_POLICY).map(([policy, config]) => {
                 const Icon = config.icon;
-                return <button key={policy} type="button" onClick={() => runBulkAction('policy', policy)} disabled={!selectedIds.size || bulkSaving} data-tooltip={config.tip} className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-md border border-white/10 text-gray-300 hover:bg-white/5 disabled:opacity-40 cursor-pointer"><Icon className="w-3 h-3" />{config.label}</button>;
+                return <button key={policy} type="button" onClick={() => runBulkAction('policy', policy)} disabled={!selectedIds.size || bulkSaving} data-tooltip={config.tip} className="inline-flex items-center gap-1 text-[0.625rem] font-semibold px-2 py-1 rounded-md border border-border-subtle text-text-secondary hover:bg-surface-hover/60 disabled:opacity-40 cursor-pointer"><Icon className="w-3 h-3" />{config.label}</button>;
               })}
             </div>
               </div>
             </details>
             <div className="grid grid-cols-2 gap-1.5">
-              <button type="button" onClick={() => requestBulkConfirmation('accept-proposed')} disabled={!selectedProposedCount || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-amber-400/25 text-amber-200 hover:bg-amber-400/10 disabled:opacity-40 cursor-pointer">Accept proposals</button>
-              <button type="button" onClick={() => requestBulkConfirmation('reject-proposed')} disabled={!selectedProposedCount || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-red-400/25 text-red-300 hover:bg-red-400/10 disabled:opacity-40 cursor-pointer">Reject proposals</button>
-              <button type="button" onClick={() => requestBulkConfirmation('accept-updates')} disabled={!selectedUpdateCount || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-sky-400/25 text-sky-100 hover:bg-sky-400/10 disabled:opacity-40 cursor-pointer">Accept updates</button>
-              <button type="button" onClick={() => requestBulkConfirmation('reject-updates')} disabled={!selectedUpdateCount || bulkSaving} className="text-[10px] font-semibold px-2 py-1.5 rounded-md border border-red-400/25 text-red-300 hover:bg-red-400/10 disabled:opacity-40 cursor-pointer">Reject updates</button>
-              <button type="button" onClick={() => requestBulkConfirmation('reprocess')} disabled={!selectedConfirmedCount || bulkSaving} data-tooltip="Clear the processed-evidence history for the selected entities so Update entities reads their evidence again" className="inline-flex items-center justify-center gap-1 text-[10px] font-semibold px-2 py-1.5 rounded-md border border-border-subtle text-text-muted hover:bg-white/5 hover:text-text-primary disabled:opacity-40 cursor-pointer"><RefreshCw className="w-3 h-3" />Reprocess</button>
-              <button type="button" onClick={() => requestBulkConfirmation('delete')} disabled={!selectedIds.size || bulkSaving} className="inline-flex items-center justify-center gap-1 text-[10px] font-semibold px-2 py-1.5 rounded-md border border-status-danger/25 text-status-danger hover:bg-status-danger/10 disabled:opacity-40 cursor-pointer"><Trash2 className="w-3 h-3" />Delete</button>
+              <button type="button" onClick={() => requestBulkConfirmation('accept-proposed')} disabled={!selectedProposedCount || bulkSaving} className="text-[0.625rem] font-semibold px-2 py-1.5 rounded-md border border-status-warning/25 text-status-warning hover:bg-status-warning/10 disabled:opacity-40 cursor-pointer">Accept proposals</button>
+              <button type="button" onClick={() => requestBulkConfirmation('reject-proposed')} disabled={!selectedProposedCount || bulkSaving} className="text-[0.625rem] font-semibold px-2 py-1.5 rounded-md border border-status-danger/25 text-status-danger hover:bg-status-danger/10 disabled:opacity-40 cursor-pointer">Reject proposals</button>
+              <button type="button" onClick={() => requestBulkConfirmation('accept-updates')} disabled={!selectedUpdateCount || bulkSaving} className="text-[0.625rem] font-semibold px-2 py-1.5 rounded-md border border-status-info/25 text-status-info hover:bg-status-info/10 disabled:opacity-40 cursor-pointer">Accept updates</button>
+              <button type="button" onClick={() => requestBulkConfirmation('reject-updates')} disabled={!selectedUpdateCount || bulkSaving} className="text-[0.625rem] font-semibold px-2 py-1.5 rounded-md border border-status-danger/25 text-status-danger hover:bg-status-danger/10 disabled:opacity-40 cursor-pointer">Reject updates</button>
+              <button type="button" onClick={() => requestBulkConfirmation('reprocess')} disabled={!selectedConfirmedCount || bulkSaving} data-tooltip="Clear the processed-evidence history for the selected entities so Update entities reads their evidence again" className="inline-flex items-center justify-center gap-1 text-[0.625rem] font-semibold px-2 py-1.5 rounded-md border border-border-subtle text-text-muted hover:bg-surface-hover/60 hover:text-text-primary disabled:opacity-40 cursor-pointer"><RefreshCw className="w-3 h-3" />Reprocess</button>
+              <button type="button" onClick={() => requestBulkConfirmation('delete')} disabled={!selectedIds.size || bulkSaving} className="inline-flex items-center justify-center gap-1 text-[0.625rem] font-semibold px-2 py-1.5 rounded-md border border-status-danger/25 text-status-danger hover:bg-status-danger/10 disabled:opacity-40 cursor-pointer"><Trash2 className="w-3 h-3" />Delete</button>
             </div>
           </div>
         )}
@@ -1496,10 +1760,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             api={electronAPI}
             showToast={showToast}
             onCalendarChanged={setWorldCalendar}
-            onOpenEntity={entityId => {
-              const entity = entities.find(item => item.id === entityId);
-              if (entity) openEntity(entity);
-            }}
+            onOpenEntity={openEntityById}
           />
         ) : surface === 'facts' ? (
           <WorldbuildFactsRegistry
@@ -1511,18 +1772,20 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           />
         ) : !selected ? (
           <div className="h-full flex flex-col items-center justify-center text-center px-8 gap-4">
-            <div className="w-16 h-16 rounded-2xl border border-white/10 bg-white/[0.03] flex items-center justify-center"><Globe className="w-8 h-8 text-accent/70" /></div>
+            <div className="w-16 h-16 rounded-surface border border-border-subtle bg-surface-hover/35 flex items-center justify-center"><Globe className="w-8 h-8 text-accent/70" /></div>
             <div>
-              <h2 className="text-lg font-bold text-white">Build your world</h2>
+              <h2 className="text-lg font-bold text-text-primary">Build your world</h2>
               <p className="caption mt-1 max-w-sm">Create characters, locations, factions, items and the rules that bind them. The AI tags your story against this registry so it remembers who's who.</p>
             </div>
           </div>
         ) : (
           <div className="max-w-2xl mx-auto p-6 space-y-4">
-            <div className={`rounded-2xl border ${m.ring} bg-[#0a1721]/60 backdrop-blur-md p-5`}>
+            <div className={`relative overflow-hidden rounded-surface border ${m.ring} bg-surface-panel-muted/60 backdrop-blur-md p-5`}>
+              <div aria-hidden="true" className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${m.wash} via-transparent to-transparent`} />
+              <div className="relative">
               {selected.status === 'proposed' && (
-                <div className="flex flex-col gap-2 mb-4 bg-amber-400/10 border border-amber-400/30 rounded-xl px-3 py-2.5">
-                  <span className="flex items-center gap-2 text-xs font-semibold text-amber-200 min-w-0">
+                <div className="flex flex-col gap-2 mb-4 bg-status-warning/10 border border-status-warning/30 rounded-card px-3 py-2.5">
+                  <span className="flex items-center gap-2 text-xs font-semibold text-status-warning min-w-0">
                     <Sparkles className="w-4 h-4 shrink-0" />
                     {selected.data?._imported
                       ? 'Imported from a Worldbuild package. Keep it as a new entity, merge it into an existing one, or dismiss it.'
@@ -1531,7 +1794,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                   {!selected.data?._imported && Array.isArray(selected.data?.proposalEvidence) && <EvidenceReferences excerpts={selected.data.proposalEvidence.map(item => item.excerpt)} />}
                   {mergePrompt ? (
                     <div className="flex items-center flex-wrap gap-2">
-                      <span className="text-xs text-amber-100/90 min-w-0">Merge into “{mergePrompt.name}”. On conflicting details, keep:</span>
+                      <span className="text-xs text-status-warning/90 min-w-0">Merge into “{mergePrompt.name}”. On conflicting details, keep:</span>
                       <Button size="sm" loading={saving} onClick={() => mergeInto(mergePrompt.id, 'source')}>Imported</Button>
                       <Button size="sm" loading={saving} onClick={() => mergeInto(mergePrompt.id, 'target')}>Existing</Button>
                       <Button size="sm" variant="ghost" loading={saving} onClick={() => setMergePrompt(null)}>Cancel</Button>
@@ -1557,24 +1820,25 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                   )}
                 </div>
               ) : (
-                <div className="flex items-start gap-4">
-                  <span className={`w-14 h-14 rounded-xl border flex items-center justify-center shrink-0 ${m.medallion}`}>{React.createElement(m.icon, { className: 'w-7 h-7' })}</span>
-                  {!isNew && selected.status !== 'proposed' && <div className="order-last"><AiPolicyControl value={selected.data?.aiPolicy} onChange={setAiPolicy} /></div>}
+                <div className="group/header flex items-start gap-3.5">
+                  <span className={`w-12 h-12 rounded-card border flex items-center justify-center shrink-0 ${m.medallion}`}>{React.createElement(m.icon, { className: 'w-6 h-6' })}</span>
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <h1 className="text-2xl font-bold text-white truncate">{selected.canonicalName}</h1>
-                      <button onClick={() => setEditingSection('__header__')} data-tooltip="Edit name & aliases" className="p-1.5 text-gray-500 hover:text-accent hover:bg-white/5 rounded-md transition-colors cursor-pointer shrink-0"><Pencil className="w-3.5 h-3.5" /></button>
-                    </div>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className={`text-[11px] font-bold uppercase tracking-widest ${m.soft}`}>{m.label}</span>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`eyebrow ${m.soft}`}>{m.label}</span>
                       {(selected.type === 'Characters' || (selected.type === 'Creatures' && (selected.data.scope || 'individual') !== 'group')) && <StateTag map={STATUS} value={selected.data.status || 'unknown'} />}
+                    </div>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <h1 className="text-2xl font-bold text-text-primary truncate leading-tight">{selected.canonicalName}</h1>
+                      <button onClick={() => setEditingSection('__header__')} aria-label="Edit name and aliases" data-tooltip="Edit name & aliases" className="p-1.5 text-text-subtle hover:text-accent hover:bg-surface-hover/60 rounded transition-[color,background-color,opacity] duration-200 ease-standard cursor-pointer shrink-0 opacity-0 group-hover/header:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Pencil className="w-3.5 h-3.5" /></button>
                     </div>
                     {showAliases && aliasesArr(selected.aliases).length > 0 && (
                       <div className="flex flex-wrap gap-1.5 mt-2.5">{aliasesArr(selected.aliases).map((a, i) => <Chip key={i}><Tag className="w-2.5 h-2.5" />{a}</Chip>)}</div>
                     )}
                   </div>
+                  {!isNew && selected.status !== 'proposed' && <div className="shrink-0"><AiPolicyControl value={selected.data?.aiPolicy} onChange={setAiPolicy} /></div>}
                 </div>
               )}
+              </div>
             </div>
 
             {!isNew && selected.status !== 'proposed' && (selected.type === 'Characters' || (selected.type === 'Creatures' && (selected.data?.scope || 'individual') !== 'group')) && (
@@ -1587,16 +1851,16 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                 {visibleSheetTabs.map(t => (
                   <button key={t} onClick={() => { setCharTab(t); setEditingSection(null); }} className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[0.6875rem] font-semibold tracking-wide transition-colors cursor-pointer ${charTab === t ? 'bg-accent/20 text-accent shadow-sm' : 'text-text-muted hover:bg-surface-hover hover:text-text-primary'}`}>
                     {sheetTabLabel(t)}
-                    {t === 'review' && <span className={`rounded-full px-1.5 py-0.5 text-[0.625rem] ${charTab === t ? 'bg-accent/10' : 'bg-white/[0.07]'}`}>{selectedReviewCounts.entityUpdates + selectedReviewCounts.kanora}</span>}
+                    {t === 'review' && <span className={`rounded-full px-1.5 py-0.5 text-[0.625rem] ${charTab === t ? 'bg-accent/10' : 'bg-surface-hover/60'}`}>{selectedReviewCounts.entityUpdates + selectedReviewCounts.kanora}</span>}
                   </button>
                 ))}
               </div>
             )}
 
             {charTab === 'review' && hasEntityReview && hasKanoraReview && (
-              <div className="grid grid-cols-2 gap-1 rounded-xl border border-white/10 bg-[#0a1721]/60 p-1.5 backdrop-blur-md">
-                <button type="button" onClick={() => setReviewKind('entity')} className={`rounded-lg px-3 py-2 text-xs font-bold uppercase tracking-wider transition-colors ${reviewKind === 'entity' ? 'bg-sky-300 text-[#011419]' : 'text-gray-500 hover:bg-white/5 hover:text-gray-200'}`}>Entity updates <span className="ml-1 rounded-full bg-black/15 px-1.5 py-0.5">{selectedReviewCounts.entityUpdates}</span></button>
-                <button type="button" onClick={() => setReviewKind('kanora')} className={`rounded-lg px-3 py-2 text-xs font-bold uppercase tracking-wider transition-colors ${reviewKind === 'kanora' ? 'bg-violet-300 text-[#011419]' : 'text-gray-500 hover:bg-white/5 hover:text-gray-200'}`}>Kanora <span className="ml-1 rounded-full bg-black/15 px-1.5 py-0.5">{selectedReviewCounts.kanora}</span></button>
+              <div className="grid grid-cols-2 gap-1 rounded-card border border-border-subtle bg-surface-panel-muted/60 p-1.5 backdrop-blur-md">
+                <button type="button" onClick={() => setReviewKind('entity')} aria-pressed={reviewKind === 'entity'} className={`rounded-control px-3 py-2 text-xs font-bold uppercase tracking-[0.09em] transition-colors duration-200 ease-standard focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${reviewKind === 'entity' ? 'bg-status-info text-on-accent' : 'text-text-subtle hover:bg-surface-hover/60 hover:text-text-secondary'}`}>Entity updates <span className="ml-1 rounded-full bg-surface-canvas/35 px-1.5 py-0.5 tabular-nums">{selectedReviewCounts.entityUpdates}</span></button>
+                <button type="button" onClick={() => setReviewKind('kanora')} aria-pressed={reviewKind === 'kanora'} className={`rounded-control px-3 py-2 text-xs font-bold uppercase tracking-[0.09em] transition-colors duration-200 ease-standard focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${reviewKind === 'kanora' ? 'bg-entity-event text-on-accent' : 'text-text-subtle hover:bg-surface-hover/60 hover:text-text-secondary'}`}>Kanora <span className="ml-1 rounded-full bg-surface-canvas/35 px-1.5 py-0.5 tabular-nums">{selectedReviewCounts.kanora}</span></button>
               </div>
             )}
 
@@ -1619,10 +1883,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               const allLinks = links.map(linkKey);
               const allChapters = chapters.map(c => c.id);
               return (
-                <div className="rounded-2xl border border-sky-400/30 bg-sky-400/[0.06] backdrop-blur-md p-4 space-y-3">
+                <div className="rounded-surface border border-status-info/30 bg-status-info/[0.06] backdrop-blur-md p-4 space-y-3">
                   <div className="flex items-center gap-2">
-                    <ShieldCheck className="w-4 h-4 text-sky-300 shrink-0" />
-                    <span className="text-xs font-semibold text-sky-100">The AI suggested updates from your story. Accept or reject each change.</span>
+                    <ShieldCheck className="w-4 h-4 text-status-info shrink-0" />
+                    <span className="text-xs font-semibold text-status-info">The AI suggested updates from your story. Accept or reject each change.</span>
                   </div>
                   <div className="space-y-2">
                     {fields.map(f => {
@@ -1630,62 +1894,62 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                       const cur = customFieldKey ? selected.data?.customFields?.[customFieldKey] : selected.data?.[f];
                       const curStr = cur == null || String(cur).trim() === '' ? '(empty)' : String(cur);
                       return (
-                        <div key={f} className="flex items-start gap-3 bg-black/20 border border-white/10 rounded-lg px-3 py-2">
+                        <div key={f} className="flex items-start gap-3 bg-surface-canvas/45 border border-border-subtle rounded-control px-3 py-2">
                           <div className="min-w-0 flex-1">
-                            <span className="block text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">{pData[f]?.fieldLabel || fieldLabel(f)}</span>
+                            <span className="block eyebrow text-text-muted mb-1">{pData[f]?.fieldLabel || fieldLabel(f)}</span>
                             <div className="flex items-center flex-wrap gap-2 text-sm">
-                              <span className="text-gray-500 line-through">{curStr}</span>
-                              <span className="text-gray-500">→</span>
-                              <span className="text-sky-100 font-medium">{displayProposalValue(f, pData[f], fieldDefinitions, entities)}</span>
+                              <span className="text-text-subtle line-through">{curStr}</span>
+                              <span className="text-text-subtle">→</span>
+                              <span className="text-status-info font-medium">{displayProposalValue(f, pData[f], fieldDefinitions, entities)}</span>
                             </div>
                             <EvidenceReferences excerpts={proposalEvidence(pData[f])} support={proposalSupport(pData[f])} />
                           </div>
                           <div className="flex items-center gap-1 shrink-0">
-                            <button onClick={() => resolveReview({ fields: [f] }, {})} disabled={saving} data-tooltip="Accept" className="p-1.5 rounded-md text-emerald-300 hover:bg-emerald-400/15 transition-colors cursor-pointer"><Check className="w-3.5 h-3.5" /></button>
-                            <button onClick={() => resolveReview({}, { fields: [f] })} disabled={saving} data-tooltip="Reject" className="p-1.5 rounded-md text-gray-400 hover:bg-white/10 transition-colors cursor-pointer"><X className="w-3.5 h-3.5" /></button>
+                            <button onClick={() => resolveReview({ fields: [f] }, {})} disabled={saving} data-tooltip="Accept" className="p-1.5 rounded-md text-status-success hover:bg-status-success/15 transition-colors cursor-pointer"><Check className="w-3.5 h-3.5" /></button>
+                            <button onClick={() => resolveReview({}, { fields: [f] })} disabled={saving} data-tooltip="Reject" className="p-1.5 rounded-md text-text-muted hover:bg-surface-hover transition-colors cursor-pointer"><X className="w-3.5 h-3.5" /></button>
                           </div>
                         </div>
                       );
                     })}
                     {hasLore && (
-                      <div className="bg-black/20 border border-white/10 rounded-lg px-3 py-2">
+                      <div className="bg-surface-canvas/45 border border-border-subtle rounded-control px-3 py-2">
                         <div className="flex items-center justify-between gap-3 mb-1">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Lore</span>
+                          <span className="eyebrow text-text-muted">Lore</span>
                           <div className="flex items-center gap-1 shrink-0">
-                            <button onClick={() => resolveReview({ lore: true }, {})} disabled={saving} data-tooltip="Accept" className="p-1.5 rounded-md text-emerald-300 hover:bg-emerald-400/15 transition-colors cursor-pointer"><Check className="w-3.5 h-3.5" /></button>
-                            <button onClick={() => resolveReview({}, { lore: true })} disabled={saving} data-tooltip="Reject" className="p-1.5 rounded-md text-gray-400 hover:bg-white/10 transition-colors cursor-pointer"><X className="w-3.5 h-3.5" /></button>
+                            <button onClick={() => resolveReview({ lore: true }, {})} disabled={saving} data-tooltip="Accept" className="p-1.5 rounded-md text-status-success hover:bg-status-success/15 transition-colors cursor-pointer"><Check className="w-3.5 h-3.5" /></button>
+                            <button onClick={() => resolveReview({}, { lore: true })} disabled={saving} data-tooltip="Reject" className="p-1.5 rounded-md text-text-muted hover:bg-surface-hover transition-colors cursor-pointer"><X className="w-3.5 h-3.5" /></button>
                           </div>
                         </div>
-                        <p className="text-sm text-sky-100 leading-relaxed whitespace-pre-wrap">{String(proposalValue(pending.lore))}</p>
+                        <p className="text-sm text-status-info leading-relaxed whitespace-pre-wrap">{String(proposalValue(pending.lore))}</p>
                         <EvidenceReferences excerpts={proposalEvidence(pending.lore)} support={proposalSupport(pending.lore)} />
                       </div>
                     )}
                     {links.map(l => { const k = linkKey(l); return (
-                      <div key={k} className="flex items-center gap-3 bg-black/20 border border-white/10 rounded-lg px-3 py-2">
-                        <Link2 className="w-3.5 h-3.5 text-sky-300 shrink-0" />
+                      <div key={k} className="flex items-center gap-3 bg-surface-canvas/45 border border-border-subtle rounded-control px-3 py-2">
+                        <Link2 className="w-3.5 h-3.5 text-status-info shrink-0" />
                         <div className="min-w-0 flex-1 text-sm">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mr-2">{l.relLabel || l.relKey}</span>
-                          <span className="text-sky-100 font-medium">{l.metadata ? `${selected.canonicalName} → ${l.targetName}` : l.targetName}</span>
+                          <span className="eyebrow text-text-muted mr-2">{l.relLabel || l.relKey}</span>
+                          <span className="text-status-info font-medium">{l.metadata ? `${selected.canonicalName} → ${l.targetName}` : l.targetName}</span>
                           {l.label && <span className="text-accent/90"> · {l.label}</span>}
-                          {l.metadata && <p className="mt-1 text-xs text-gray-400"><span className="font-semibold text-gray-300">How {selected.canonicalName} sees {l.targetName}:</span> {l.metadata.value}{l.metadata.description ? ` · ${l.metadata.description}` : ''}</p>}
+                          {l.metadata && <p className="mt-1 text-xs text-text-muted"><span className="font-semibold text-text-secondary">How {selected.canonicalName} sees {l.targetName}:</span> {l.metadata.value}{l.metadata.description ? ` · ${l.metadata.description}` : ''}</p>}
                           <EvidenceReferences excerpts={proposalEvidence(l)} support={proposalSupport(l)} />
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
-                          <button onClick={() => resolveReview({ links: [k] }, {})} disabled={saving} data-tooltip="Accept" className="p-1.5 rounded-md text-emerald-300 hover:bg-emerald-400/15 transition-colors cursor-pointer"><Check className="w-3.5 h-3.5" /></button>
-                          <button onClick={() => resolveReview({}, { links: [k] })} disabled={saving} data-tooltip="Reject" className="p-1.5 rounded-md text-gray-400 hover:bg-white/10 transition-colors cursor-pointer"><X className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => resolveReview({ links: [k] }, {})} disabled={saving} data-tooltip="Accept" className="p-1.5 rounded-md text-status-success hover:bg-status-success/15 transition-colors cursor-pointer"><Check className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => resolveReview({}, { links: [k] })} disabled={saving} data-tooltip="Reject" className="p-1.5 rounded-md text-text-muted hover:bg-surface-hover transition-colors cursor-pointer"><X className="w-3.5 h-3.5" /></button>
                         </div>
                       </div>
                     ); })}
                     {chapters.map(c => (
-                      <div key={c.id} className="flex items-center gap-3 bg-black/20 border border-white/10 rounded-lg px-3 py-2">
-                        <ScrollText className="w-3.5 h-3.5 text-sky-300 shrink-0" />
+                      <div key={c.id} className="flex items-center gap-3 bg-surface-canvas/45 border border-border-subtle rounded-control px-3 py-2">
+                        <ScrollText className="w-3.5 h-3.5 text-status-info shrink-0" />
                         <div className="min-w-0 flex-1 text-sm">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mr-2">Chapter</span>
-                          <span className="text-sky-100 font-medium">{c.title || 'Untitled'}</span>
+                          <span className="eyebrow text-text-muted mr-2">Chapter</span>
+                          <span className="text-status-info font-medium">{c.title || 'Untitled'}</span>
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
-                          <button onClick={() => resolveReview({ chapters: [c.id] }, {})} disabled={saving} data-tooltip="Accept" className="p-1.5 rounded-md text-emerald-300 hover:bg-emerald-400/15 transition-colors cursor-pointer"><Check className="w-3.5 h-3.5" /></button>
-                          <button onClick={() => resolveReview({}, { chapters: [c.id] })} disabled={saving} data-tooltip="Reject" className="p-1.5 rounded-md text-gray-400 hover:bg-white/10 transition-colors cursor-pointer"><X className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => resolveReview({ chapters: [c.id] }, {})} disabled={saving} data-tooltip="Accept" className="p-1.5 rounded-md text-status-success hover:bg-status-success/15 transition-colors cursor-pointer"><Check className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => resolveReview({}, { chapters: [c.id] })} disabled={saving} data-tooltip="Reject" className="p-1.5 rounded-md text-text-muted hover:bg-surface-hover transition-colors cursor-pointer"><X className="w-3.5 h-3.5" /></button>
                         </div>
                       </div>
                     ))}
@@ -1701,18 +1965,9 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             {/* Body: create form (all sections in edit) or rendered sheet */}
             {isNew ? (
               <>
-                {selected.type !== 'Characters' && sections.filter(s => !s.relational).map(s => (
-                  <Section key={s.key} icon={s.icon} title={s.title}>{s.edit}</Section>
-                ))}
-                {selected.type === 'Characters' && (
-                  <Section icon={User} title="Identity">
-                    <div className="grid grid-cols-2 gap-3">
-                      <Edit label="Age"><LInput placeholder="e.g. 34" value={selected.data.age || ''} onChange={(e) => patchData({ age: e.target.value })} /></Edit>
-                      <Edit label="Status"><StateSelect map={STATUS} value={selected.data.status || 'unknown'} onChange={(e) => patchData({ status: e.target.value })} /></Edit>
-                    </div>
-                    <Hint>Race, inventory and connections unlock once you create the character.</Hint>
-                    {loreEdit}
-                  </Section>
+                {sections.map(renderCreateSection)}
+                {createRelationHint(selected.type) && (
+                  <p className="caption flex items-center gap-1.5"><Link2 className="w-3 h-3 shrink-0" />{createRelationHint(selected.type)}</p>
                 )}
                 <div className="flex items-center justify-between pt-1">
                   <Button variant="danger" size="sm" icon={Trash2} onClick={() => setSelected(null)}>Discard</Button>
@@ -1741,6 +1996,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                     entities={entities}
                     api={electronAPI}
                     showToast={showToast}
+                    onOpenEntity={openEntityById}
                   />
                 ) : charTab === 'occurrences' && hasOccurrencesTab ? (
                   <WorldbuildEventOccurrences
@@ -1769,10 +2025,39 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   );
 }
 
-// Read-only chip row for derived/relation lists.
-function ChipList({ links, empty }) {
-  if (!links || links.length === 0) return <p className="text-sm text-gray-600 italic">{empty}</p>;
-  return <div className="flex flex-wrap gap-1.5">{links.map(l => <Chip key={l.linkId}>{l.entity.canonicalName}</Chip>)}</div>;
+// Chip row for derived/relation lists. Every name on a sheet is a way into that sheet:
+// reading a faction and wanting its captain was a trip back through the sidebar.
+function ChipList({ links, empty, onOpen }) {
+  if (!links || links.length === 0) return <p className="text-sm text-text-disabled italic">{empty}</p>;
+  return <div className="flex flex-wrap gap-1.5">{links.map(l => (
+    <EntityChip key={l.linkId} entity={l.entity} label={l.label} onOpen={onOpen} />
+  ))}</div>;
+}
+
+function EntityChip({ entity, label, onOpen }) {
+  const body = <>{entity.canonicalName}{label && <span className="text-accent/90"> · {label}</span>}</>;
+  if (!onOpen) return <Chip>{body}</Chip>;
+  return (
+    <button type="button" onClick={() => onOpen(entity.id)} title={`Open ${entity.canonicalName}`}
+      className="inline-flex items-center gap-1 rounded-full border border-border-subtle bg-surface-hover/35 px-2 py-0.5 text-[0.6875rem] font-medium text-text-secondary transition-colors duration-200 ease-standard hover:border-accent/40 hover:bg-accent/10 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 cursor-pointer">
+      {body}
+    </button>
+  );
+}
+
+// What each type gains once it exists: links always need a saved id, and the
+// relational tabs (inventory, connections, knowledge, occurrences) open with it.
+function createRelationHint(type) {
+  return {
+    System: '',
+    Locations: 'Its parent place and its owner can be set once the location exists.',
+    Items: 'Creator, owner, and where it is found or sold can be set once the item exists.',
+    Races: 'Members are filled in automatically as you assign this race to characters.',
+    Factions: 'Leader, territory, members, and knowledge open once the faction exists.',
+    Characters: 'Race, inventory, connections, and knowledge open once the character exists.',
+    Creatures: 'Habitat, inventory, connections, and knowledge open once it exists.',
+    Events: 'Places, participants, and recorded occurrences open once the event exists.',
+  }[type] || 'Connections can be added once this entity exists.';
 }
 
 // Invented (non-user) example names, English.

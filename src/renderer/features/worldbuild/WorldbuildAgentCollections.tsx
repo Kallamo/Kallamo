@@ -4,10 +4,42 @@ import Button from '../../components/ui/Button';
 import SearchableSelect from '../../components/ui/SearchableSelect';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import Modal from '../../components/ui/Modal';
-import { itemMeta } from './worldbuildConfig';
+import { itemMeta, meta } from './worldbuildConfig';
 import type { Toast, WorldbuildEntity } from './worldbuildTypes';
 
-const INPUT = 'wb-input min-h-10 w-full rounded-lg border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary placeholder:text-text-subtle focus:border-accent/70 focus:outline-none focus:ring-2 focus:ring-accent/20';
+// A faction's stance is the body's own position, which is not the sum of what its
+// members feel. The wording says so, so the two never get recorded in the same voice.
+const RELATION_COPY = {
+  subject: {
+    emptyTitle: 'No relationships yet',
+    emptyDetail: 'Add only relationships this subject has formed or explicitly knows.',
+    party: 'Subject',
+    search: 'Search characters or entities',
+    type: 'Relationship type',
+    typePlaceholder: 'Friend, rival, mentor…',
+    value: 'Relationship value',
+    valueHint: '−100 is intense hostility, 0 is neutral, and 100 is deep closeness.',
+    description: 'Subjective description',
+    descriptionHint: 'Always written from the perspective of the open sheet.',
+    descriptionPlaceholder: 'How does this subject see and feel about the other entity?',
+  },
+  faction: {
+    emptyTitle: 'No relations yet',
+    emptyDetail: 'Record where this faction stands with another group, character or entity.',
+    party: 'Other party',
+    search: 'Search factions, characters or entities',
+    type: 'Classification',
+    typePlaceholder: 'Ally, rival, enemy, patron…',
+    value: 'Standing',
+    valueHint: '−100 is open hostility, 0 is indifference, and 100 is a close alliance.',
+    description: 'The faction’s position',
+    descriptionHint: 'This is the group’s official stance. Individual members may feel otherwise, and that belongs on their own sheets.',
+    descriptionPlaceholder: 'How does this faction, as a body, regard them?',
+  },
+};
+type RelationCopy = typeof RELATION_COPY.subject;
+
+const INPUT = 'wb-input min-h-10 w-full rounded-control border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary placeholder:text-text-subtle focus:border-accent/70 focus:outline-none focus:ring-2 focus:ring-accent/20';
 
 export interface EntityLink {
   linkId: string;
@@ -36,6 +68,8 @@ interface CommonProps {
 
 interface RelationshipProps extends CommonProps {
   options: WorldbuildEntity[];
+  /** Card heading. Factions call these "Relations" rather than "Relationships". */
+  title?: string;
 }
 
 interface RelationshipDraft {
@@ -47,7 +81,7 @@ interface RelationshipDraft {
   description: string;
 }
 
-export function WorldbuildRelationships({ workspaceId, subject, links, options, api, showToast, onChanged }: RelationshipProps) {
+export function WorldbuildRelationships({ workspaceId, subject, links, options, api, showToast, onChanged, title = 'Relationships' }: RelationshipProps) {
   const [editor, setEditor] = useState<RelationshipDraft | null>(null);
   const [deleting, setDeleting] = useState<EntityLink | null>(null);
   const [saving, setSaving] = useState(false);
@@ -102,14 +136,15 @@ export function WorldbuildRelationships({ workspaceId, subject, links, options, 
     }
   };
 
+  const copy = subject.type === 'Factions' ? RELATION_COPY.faction : RELATION_COPY.subject;
   return (
-    <CollectionShell icon={Users} title="Relationships" onAdd={available.length ? startAdd : undefined}>
-      {!links.length && <EmptyCollection icon={Users} title="No relationships yet" detail="Add only relationships this subject has formed or explicitly knows." onAdd={available.length ? startAdd : undefined} />}
+    <CollectionShell icon={Users} title={title} onAdd={available.length ? startAdd : undefined}>
+      {!links.length && <EmptyCollection icon={Users} title={copy.emptyTitle} detail={copy.emptyDetail} onAdd={available.length ? startAdd : undefined} />}
       <div className="space-y-3">
         {links.map(link => editor?.link?.linkId === link.linkId
-          ? <RelationshipEditor key={link.linkId} draft={editor} setDraft={setEditor} options={[link.entity as WorldbuildEntity, ...available]} onSave={save} onClose={() => setEditor(null)} saving={saving} compact />
+          ? <RelationshipEditor key={link.linkId} draft={editor} setDraft={setEditor} options={[link.entity as WorldbuildEntity, ...available]} copy={copy} onSave={save} onClose={() => setEditor(null)} saving={saving} compact />
           : <RelationshipCard key={link.linkId} link={link} subjectName={subject.canonicalName} api={api} showToast={showToast} onChanged={onChanged} onEdit={() => startEdit(link)} onDelete={() => setDeleting(link)} readOnly={link.direction === 'incoming'} />)}
-        {editor && !editor.link && <RelationshipEditor draft={editor} setDraft={setEditor} options={available} onSave={save} onClose={() => setEditor(null)} saving={saving} />}
+        {editor && !editor.link && <RelationshipEditor draft={editor} setDraft={setEditor} options={available} copy={copy} onSave={save} onClose={() => setEditor(null)} saving={saving} />}
       </div>
       {deleting && <ConfirmDialog title="Delete relationship" message={`Delete ${subject.canonicalName}'s relationship with ${deleting.entity.canonicalName}? This removes only this direction and cannot be undone.`} actions={[
         { label: 'Cancel', variant: 'ghost', onClick: () => setDeleting(null) },
@@ -134,17 +169,17 @@ function RelationshipCard({ link, subjectName, api, showToast, onChanged, onEdit
     finally { setSaving(false); }
   };
   return (
-    <article className={`group rounded-xl border bg-black/15 px-4 py-3.5 transition-colors ${saving ? 'border-accent/20' : 'border-white/[0.09]'}`}>
+    <article className={`group rounded-card border bg-surface-canvas/35 px-4 py-3.5 transition-colors ${saving ? 'border-accent/20' : 'border-border-subtle'}`}>
       <div className="flex items-start gap-4">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-            <h4 className="text-sm font-semibold text-gray-100">{link.entity.canonicalName}</h4>
+            <h4 className="text-sm font-semibold text-text-primary">{link.entity.canonicalName}</h4>
             <span className="text-xs font-semibold text-accent/85">{link.label || 'Unlabeled relationship'}</span>
-            {readOnly && <span className="text-[11px] font-medium text-text-subtle">Incoming perspective</span>}
+            {readOnly && <span className="text-[0.6875rem] font-medium text-text-subtle">Incoming perspective</span>}
           </div>
           {readOnly && <p className="mt-1 text-xs text-text-subtle">How {link.entity.canonicalName} sees {subjectName}.</p>}
           <RelationshipScale value={value} onChange={setValue} onCommit={persist} readOnly={readOnly} />
-          <textarea readOnly={readOnly} aria-label={`Relationship description for ${link.entity.canonicalName}`} className="mt-3 min-h-20 w-full resize-y rounded-lg border border-border-subtle bg-surface-input/85 px-3 py-2.5 text-sm leading-relaxed text-text-secondary placeholder:italic placeholder:text-text-subtle focus:border-accent/45 focus:outline-none focus:ring-2 focus:ring-accent/15 read-only:cursor-default read-only:opacity-80" value={description} onChange={event => setDescription(event.target.value)} onBlur={() => { if (!readOnly) persist(); }} placeholder="Describe this relationship from this subject’s perspective." />
+          <textarea readOnly={readOnly} aria-label={`Relationship description for ${link.entity.canonicalName}`} className="mt-3 min-h-20 w-full resize-y rounded-control border border-border-subtle bg-surface-input/85 px-3 py-2.5 text-sm leading-relaxed text-text-secondary placeholder:italic placeholder:text-text-subtle focus:border-accent/45 focus:outline-none focus:ring-2 focus:ring-accent/15 read-only:cursor-default read-only:opacity-80" value={description} onChange={event => setDescription(event.target.value)} onBlur={() => { if (!readOnly) persist(); }} placeholder="Describe this relationship from this subject’s perspective." />
         </div>
         {!readOnly && <RowActions onEdit={onEdit} onDelete={onDelete} />}
       </div>
@@ -171,32 +206,33 @@ function RelationshipScale({ value, onChange, onCommit, readOnly = false }: { va
   return <div className={`mt-3 flex items-center gap-3 ${readOnly ? 'opacity-80' : ''}`}><input disabled={readOnly} aria-label="Relationship value" type="range" min="-100" max="100" step="1" value={value} onChange={event => onChange(clampRelationship(event.target.value))} onPointerUp={() => onCommit(value)} onKeyUp={() => onCommit(value)} className="relationship-range min-w-0 flex-1" /><input readOnly={readOnly} aria-label="Relationship numeric value" className={`${INPUT} !w-20 shrink-0 text-center tabular-nums`} type="text" inputMode="numeric" value={inputValue} onChange={event => changeInput(event.target.value)} onBlur={commitInput} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }} /></div>;
 }
 
-function RelationshipEditor({ draft, setDraft, options, onSave, onClose, saving, compact = false }: {
-  draft: RelationshipDraft; setDraft(draft: RelationshipDraft): void; options: WorldbuildEntity[]; onSave(): void; onClose(): void; saving: boolean; compact?: boolean;
+function RelationshipEditor({ draft, setDraft, options, copy, onSave, onClose, saving, compact = false }: {
+  draft: RelationshipDraft; setDraft(draft: RelationshipDraft): void; options: WorldbuildEntity[]; copy: RelationCopy; onSave(): void; onClose(): void; saving: boolean; compact?: boolean;
 }) {
   const update = (patch: Partial<RelationshipDraft>) => setDraft({ ...draft, ...patch });
-  return <div className="rounded-xl border border-accent/25 bg-[#071820]/95 p-4 shadow-lg shadow-black/10">
+  return <div className="rounded-card border border-accent/25 bg-surface-panel-muted/95 p-4 shadow-lg shadow-black/10">
     <div className="space-y-5">
-      <div className="grid grid-cols-2 gap-4">
-        <Field label="Subject">
-          <EntityCombobox options={options} value={draft.targetId} query={draft.targetQuery} onChange={(targetId, targetQuery) => update({ targetId, targetQuery })} autoFocus={!draft.link} />
+      {/* items-end keeps both inputs on one baseline when a label wraps to two lines. */}
+      <div className="grid grid-cols-2 items-end gap-4">
+        <Field label={copy.party}>
+          <EntityCombobox options={options} value={draft.targetId} query={draft.targetQuery} placeholder={copy.search} onChange={(targetId, targetQuery) => update({ targetId, targetQuery })} autoFocus={!draft.link} />
         </Field>
-        <Field label="Relationship type">
-          <input className={INPUT} value={draft.label} onChange={event => update({ label: event.target.value })} placeholder="Friend, rival, mentor…" autoFocus={Boolean(draft.link)} />
+        <Field label={copy.type}>
+          <input className={INPUT} value={draft.label} onChange={event => update({ label: event.target.value })} placeholder={copy.typePlaceholder} autoFocus={Boolean(draft.link)} />
         </Field>
       </div>
-      {!compact && <><Field label="Relationship value" hint="−100 is intense hostility, 0 is neutral, and 100 is deep closeness.">
+      {!compact && <><Field label={copy.value} hint={copy.valueHint}>
         <div className="flex items-center gap-3"><input type="range" min="-100" max="100" step="1" value={draft.value} onChange={event => update({ value: Number(event.target.value) })} className="relationship-range min-w-0 flex-1" /><input className={`${INPUT} !w-20 shrink-0 text-center tabular-nums`} type="number" min="-100" max="100" value={draft.value} onChange={event => update({ value: clampRelationship(event.target.value) })} /></div>
       </Field>
-      <Field label="Subjective description" hint="Always written from the perspective of the open sheet.">
-        <textarea className={`${INPUT} min-h-32 resize-y`} value={draft.description} onChange={event => update({ description: event.target.value })} placeholder="How does this subject see and feel about the other entity?" />
+      <Field label={copy.description} hint={copy.descriptionHint}>
+        <textarea className={`${INPUT} min-h-32 resize-y`} value={draft.description} onChange={event => update({ description: event.target.value })} placeholder={copy.descriptionPlaceholder} />
       </Field></>}
       <div className="flex justify-end gap-2"><Button variant="ghost" size="sm" onClick={onClose} disabled={saving}>Cancel</Button><Button icon={Check} size="sm" onClick={onSave} loading={saving} disabled={!draft.targetId}>Save relationship</Button></div>
     </div>
   </div>;
 }
 
-function EntityCombobox({ options, value, query, onChange, autoFocus }: { options: WorldbuildEntity[]; value: string; query: string; onChange(value: string, query: string): void; autoFocus?: boolean }) {
+function EntityCombobox({ options, value, query, onChange, autoFocus, placeholder = 'Search characters or entities' }: { options: WorldbuildEntity[]; value: string; query: string; onChange(value: string, query: string): void; autoFocus?: boolean; placeholder?: string }) {
   void query;
   void autoFocus;
   return <SearchableSelect
@@ -205,13 +241,16 @@ function EntityCombobox({ options, value, query, onChange, autoFocus }: { option
       const selected = options.find(option => option.id === targetId);
       onChange(targetId, selected?.canonicalName || '');
     }}
+    // Group by the type's own name, trimmed to its first word so the tag stays short.
+    // Labelling everything that is not a character "Entity" hid what a faction or a
+    // creature actually was.
     options={options.map(option => ({
       id: option.id,
       label: option.canonicalName,
       aliases: option.aliases,
-      group: option.type === 'Characters' ? 'Character' : 'Entity',
+      group: meta(option.type).label.split(' / ')[0],
     }))}
-    placeholder="Search characters or entities"
+    placeholder={placeholder}
   />;
 }
 
@@ -268,12 +307,12 @@ function InventoryCard({ link, onEdit, onDelete }: { link: EntityLink; onEdit():
   const condition = String(link.metadata?.condition ?? '');
   const notes = String(link.metadata?.notes ?? '');
   const ItemIcon = itemMeta(link.entity.data?.itemType).icon;
-  return <article className="group flex items-start gap-3 rounded-xl border border-white/[0.09] bg-black/15 px-3.5 py-3">
-    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-entity-item/20 bg-entity-item/[0.06] text-entity-item"><ItemIcon className="h-4 w-4" /></div>
+  return <article className="group flex items-start gap-3 rounded-card border border-border-subtle bg-surface-canvas/35 px-3.5 py-3">
+    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-control border border-entity-item/20 bg-entity-item/[0.06] text-entity-item"><ItemIcon className="h-4 w-4" /></div>
     <div className="min-w-0 flex-1">
-      <div className="flex flex-wrap items-center gap-2"><h4 className="truncate text-sm font-semibold text-gray-100">{link.entity.canonicalName}</h4>{!isUnique && <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-xs font-semibold tabular-nums text-gray-300">×{quantity}</span>}{isUnique && <span className="text-xs font-medium text-accent/70">Unique</span>}</div>
+      <div className="flex flex-wrap items-center gap-2"><h4 className="truncate text-sm font-semibold text-text-primary">{link.entity.canonicalName}</h4>{!isUnique && <span className="rounded-full border border-border-subtle bg-surface-hover/45 px-2 py-0.5 text-xs font-semibold tabular-nums text-text-secondary">×{quantity}</span>}{isUnique && <span className="text-xs font-medium text-accent/70">Unique</span>}</div>
       {condition && <p className="mt-1 text-xs font-medium text-accent/75">{condition}</p>}
-      {notes && <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-gray-500">{notes}</p>}
+      {notes && <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-text-subtle">{notes}</p>}
     </div>
     <RowActions onEdit={onEdit} onDelete={onDelete} />
   </article>;
@@ -296,22 +335,22 @@ function InventoryEditor({ draft, setDraft, options, onSave, onClose, saving }: 
 }
 
 function CollectionShell({ icon: Icon, title, onAdd, children }: { icon: typeof Users; title: string; onAdd?: () => void; children: React.ReactNode }) {
-  return <section className="overflow-hidden rounded-xl border border-white/10 bg-[#0a1721]/60 backdrop-blur-md">
-    <header className="flex items-center justify-between border-b border-white/[0.08] px-4 py-2.5"><div className="flex items-center gap-2"><Icon className="h-3.5 w-3.5 text-accent" /><h3 className="text-xs font-bold uppercase tracking-wider text-gray-300">{title}</h3></div>{onAdd && <button type="button" onClick={onAdd} aria-label={`Add ${title.toLowerCase()}`} className="rounded-md p-1.5 text-gray-500 transition-colors hover:bg-white/5 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Plus className="h-4 w-4" /></button>}</header>
+  return <section className="overflow-hidden rounded-card border border-border-subtle bg-surface-panel-muted/60 backdrop-blur-md">
+    <header className="flex items-center justify-between gap-3 border-b border-border-subtle bg-surface-canvas/20 px-4 py-2.5"><div className="flex min-w-0 items-center gap-2.5"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-accent/20 bg-accent/10 text-accent"><Icon className="h-3.5 w-3.5" /></span><h3 className="eyebrow truncate text-text-secondary">{title}</h3></div>{onAdd && <button type="button" onClick={onAdd} aria-label={`Add ${title.toLowerCase()}`} className="shrink-0 rounded-md p-1.5 text-text-subtle transition-colors hover:bg-surface-hover/60 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Plus className="h-4 w-4" /></button>}</header>
     <div className="p-4">{children}</div>
   </section>;
 }
 
 function EmptyCollection({ icon: Icon, title, detail, onAdd }: { icon: typeof Users; title: string; detail: string; onAdd?: () => void }) {
-  return <button type="button" onClick={onAdd} disabled={!onAdd} className="flex w-full flex-col items-center rounded-lg border border-dashed border-white/10 px-5 py-8 text-center transition-colors enabled:hover:border-accent/30 enabled:hover:bg-accent/[0.04]"><Icon className="mb-2 h-5 w-5 text-gray-600" /><span className="text-sm font-medium text-gray-400">{title}</span><span className="mt-1 max-w-md text-xs leading-relaxed text-gray-600">{detail}</span></button>;
+  return <button type="button" onClick={onAdd} disabled={!onAdd} className="flex w-full flex-col items-center rounded-control border border-dashed border-border-subtle px-5 py-8 text-center transition-colors enabled:hover:border-accent/30 enabled:hover:bg-accent/[0.04]"><Icon className="mb-2 h-5 w-5 text-text-disabled" /><span className="text-sm font-medium text-text-muted">{title}</span><span className="mt-1 max-w-md text-xs leading-relaxed text-text-disabled">{detail}</span></button>;
 }
 
 function RowActions({ onEdit, onDelete }: { onEdit(): void; onDelete(): void }) {
-  return <div className="flex shrink-0 items-center gap-1 opacity-70 transition-opacity group-hover:opacity-100"><button type="button" onClick={onEdit} aria-label="Edit" className="rounded-md p-1.5 text-gray-500 transition-colors hover:bg-white/5 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Pencil className="h-3.5 w-3.5" /></button><button type="button" onClick={onDelete} aria-label="Delete" className="rounded-md p-1.5 text-gray-500 transition-colors hover:bg-red-500/10 hover:text-red-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/40"><Trash2 className="h-3.5 w-3.5" /></button></div>;
+  return <div className="flex shrink-0 items-center gap-1 opacity-70 transition-opacity group-hover:opacity-100"><button type="button" onClick={onEdit} aria-label="Edit" className="rounded-md p-1.5 text-text-subtle transition-colors hover:bg-surface-hover/60 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Pencil className="h-3.5 w-3.5" /></button><button type="button" onClick={onDelete} aria-label="Delete" className="rounded-md p-1.5 text-text-subtle transition-colors hover:bg-status-danger/10 hover:text-status-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-danger/40"><Trash2 className="h-3.5 w-3.5" /></button></div>;
 }
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) { return <label className="block"><span className="mb-1 block text-xs font-bold uppercase tracking-wider text-gray-400">{label}</span>{children}{hint && <span className="mt-1 block text-xs leading-relaxed text-gray-500">{hint}</span>}</label>; }
-function ModalFooter({ saving, valid, onClose, onSave, label }: { saving: boolean; valid: boolean; onClose(): void; onSave(): void; label: string }) { return <footer className="flex justify-end gap-2 border-t border-white/10 px-5 py-4"><Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button><Button icon={Check} onClick={onSave} loading={saving} disabled={!valid}>{label}</Button></footer>; }
+function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) { return <label className="block"><span className="mb-1 block eyebrow text-text-muted">{label}</span>{children}{hint && <span className="mt-1 block text-xs leading-relaxed text-text-subtle">{hint}</span>}</label>; }
+function ModalFooter({ saving, valid, onClose, onSave, label }: { saving: boolean; valid: boolean; onClose(): void; onSave(): void; label: string }) { return <footer className="flex justify-end gap-2 border-t border-border-subtle px-5 py-4"><Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button><Button icon={Check} onClick={onSave} loading={saving} disabled={!valid}>{label}</Button></footer>; }
 function clampRelationship(value: unknown): number { const number = Number(value); return Number.isFinite(number) ? Math.max(-100, Math.min(100, Math.round(number))) : 0; }
 function positiveQuantity(value: unknown): number { const number = Number(value); return Number.isFinite(number) ? Math.max(1, Math.round(number)) : 1; }
 function isUniqueItem(item?: Pick<WorldbuildEntity, 'data'>): boolean { return item?.data?.itemNature === 'unique'; }

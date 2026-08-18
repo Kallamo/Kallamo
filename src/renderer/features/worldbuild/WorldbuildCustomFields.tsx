@@ -5,7 +5,7 @@ import Button from '../../components/ui/Button';
 import SearchableSelect from '../../components/ui/SearchableSelect';
 import type { Toast, WorldbuildApi, WorldbuildEntity, WorldbuildEntityTemplate } from './worldbuildTypes';
 
-const INPUT = 'wb-input min-h-10 w-full rounded-lg border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary placeholder:text-text-subtle focus:border-accent/70 focus:outline-none focus:ring-2 focus:ring-accent/20';
+const INPUT = 'wb-input min-h-10 w-full rounded-control border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary placeholder:text-text-subtle focus:border-accent/70 focus:outline-none focus:ring-2 focus:ring-accent/20';
 
 interface Props {
   workspaceId: string;
@@ -14,27 +14,38 @@ interface Props {
   api: WorldbuildApi;
   showToast: Toast;
   onEntityChange(entity: WorldbuildEntity): void;
+  /** Receives the whole customFields map while the entity is still an unsaved draft. */
+  onDraftChange?(customFields: Record<string, unknown>): void;
+  /** Field definitions for this entity type, loaded once by the sheet. */
+  definitions?: EntityFieldDefinition[];
   template?: WorldbuildEntityTemplate;
   sectionId?: string;
   embedded?: boolean;
 }
 
-export default function WorldbuildCustomFields({ workspaceId, entity, entities, api, showToast, onEntityChange, template, sectionId, embedded = false }: Props) {
-  const [definitions, setDefinitions] = useState<EntityFieldDefinition[]>([]);
+export default function WorldbuildCustomFields({ workspaceId, entity, entities, api, showToast, onEntityChange, onDraftChange, definitions: providedDefinitions, template, sectionId, embedded = false }: Props) {
+  // A sheet renders one of these per section. Reading the definitions the sheet already
+  // has keeps that to a single load instead of one request per section.
+  const [loadedDefinitions, setLoadedDefinitions] = useState<EntityFieldDefinition[]>([]);
+  const definitions = providedDefinitions ?? loadedDefinitions;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftValue, setDraftValue] = useState<unknown>('');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    if (providedDefinitions) return;
     let active = true;
     api.listWorldbuildFieldDefinitions(workspaceId, entity.type).then(result => {
       if (!active) return;
-      if (result.success) setDefinitions(result.fields ?? []);
+      if (result.success) setLoadedDefinitions(result.fields ?? []);
       else showToast(`Could not load custom fields: ${result.error || 'unknown error'}`, 'error');
     });
     return () => { active = false; };
-  }, [api, entity.type, showToast, workspaceId]);
+  }, [api, entity.type, providedDefinitions, showToast, workspaceId]);
 
+  // An unsaved draft has nothing to write to yet, so its fields stay open and feed the
+  // pending entity; they are persisted by the first save together with the native ones.
+  const isDraft = !entity.id;
   const values = entity.data.customFields ?? {};
   const visibleSections = (template?.layout.sections ?? []).filter(section => !section.hidden);
   const groups = visibleSections.filter(section => !sectionId || section.id === sectionId).map(section => ({
@@ -66,23 +77,33 @@ export default function WorldbuildCustomFields({ workspaceId, entity, entities, 
 
   if (!definitions.length) return null;
   return <>{groups.filter(group => group.definitions.length).map(group => {
-    const content = <div className={embedded ? 'mt-4 space-y-2 border-t border-white/[0.07] pt-4' : 'space-y-2 p-4'}>{group.definitions.map(definition => {
+    const content = <div className={embedded ? 'mt-4 space-y-2 border-t border-border-subtle pt-4' : 'space-y-2 p-4'}>{group.definitions.map(definition => {
       const isEditing = editingId === definition.id;
-      return <div key={definition.id} className="group rounded-lg border border-white/[0.07] bg-black/10 px-3.5 py-3">
+      const header = <div className="mb-1 flex items-center gap-2"><span className="eyebrow">{definition.label}</span>{definition.required && <span className="text-xs text-status-warning/80">Required</span>}</div>;
+      if (isDraft) return <div key={definition.id} className="rounded-control border border-border-subtle bg-surface-canvas/30 px-3.5 py-3">
+        {header}
+        <FieldInput
+          definition={definition}
+          value={values[definition.key] ?? definition.defaultValue ?? emptyValue(definition.valueType)}
+          onChange={value => onDraftChange?.({ ...values, [definition.key]: normalizeValue(value, definition) })}
+          entities={entities}
+        />
+      </div>;
+      return <div key={definition.id} className="group rounded-control border border-border-subtle bg-surface-canvas/30 px-3.5 py-3">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
-            <div className="mb-1 flex items-center gap-2"><span className="text-xs font-bold uppercase tracking-wider text-gray-500">{definition.label}</span>{definition.required && <span className="text-xs text-amber-300/80">Required</span>}</div>
+            {header}
             {isEditing
               ? <FieldInput definition={definition} value={draftValue} onChange={setDraftValue} entities={entities} />
               : <FieldValue definition={definition} value={values[definition.key] ?? definition.defaultValue} entities={entities} />}
           </div>
-          {!isEditing && <button type="button" onClick={() => startEdit(definition)} aria-label={`Edit ${definition.label} value`} data-tooltip="Edit value" className="shrink-0 rounded-md p-1.5 text-gray-500 opacity-70 transition-colors hover:bg-white/5 hover:text-accent group-hover:opacity-100"><Pencil className="h-3.5 w-3.5" /></button>}
+          {!isEditing && <button type="button" onClick={() => startEdit(definition)} aria-label={`Edit ${definition.label} value`} data-tooltip="Edit value" className="shrink-0 rounded-md p-1.5 text-text-subtle opacity-70 transition-colors hover:bg-surface-hover/60 hover:text-accent group-hover:opacity-100"><Pencil className="h-3.5 w-3.5" /></button>}
         </div>
         {isEditing && <div className="mt-3 flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={cancelEdit} disabled={saving}>Cancel</Button><Button size="sm" icon={Check} onClick={() => saveValue(definition)} loading={saving}>Save</Button></div>}
       </div>;
     })}</div>;
     if (embedded) return <div key={group.id}>{content}</div>;
-    return <section key={group.id} className="overflow-hidden rounded-xl border border-white/10 bg-[#0a1721]/60 backdrop-blur-md"><header className="flex items-center border-b border-white/[0.08] px-4 py-2.5"><div className="flex items-center gap-2"><Braces className="h-3.5 w-3.5 text-accent" /><span className="text-xs font-bold uppercase tracking-wider text-gray-300">{group.label}</span></div></header>{content}</section>;
+    return <section key={group.id} className="overflow-hidden rounded-card border border-border-subtle bg-surface-panel-muted/60 backdrop-blur-md"><header className="flex items-center border-b border-border-subtle bg-surface-canvas/20 px-4 py-2.5"><div className="flex min-w-0 items-center gap-2.5"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-accent/20 bg-accent/10 text-accent"><Braces className="h-3.5 w-3.5" /></span><span className="eyebrow truncate text-text-secondary">{group.label}</span></div></header>{content}</section>;
   })}</>;
 }
 
@@ -117,13 +138,13 @@ function FieldInput({ definition, value, onChange, entities }: { definition: Ent
 function FieldValue({ definition, value, entities }: { definition: EntityFieldDefinition; value: unknown; entities: WorldbuildEntity[] }) {
   const names = useMemo(() => new Map(entities.map(entity => [entity.id, entity.canonicalName])), [entities]);
   const optionNames = useMemo(() => new Map(definition.options?.map(option => [option.id, option.label]) ?? []), [definition.options]);
-  if (value === undefined || value === null || value === '' || (Array.isArray(value) && !value.length)) return <p className="text-sm italic text-gray-600">Not set</p>;
-  if (definition.valueType === 'boolean') return <p className="text-sm text-gray-200">{value ? 'Yes' : 'No'}</p>;
-  if (definition.valueType === 'entity-reference') return <p className="text-sm text-gray-200">{names.get(String(value)) ?? 'Unknown entity'}</p>;
-  if (definition.valueType === 'entity-reference-list') return <p className="text-sm text-gray-200">{(value as string[]).map(id => names.get(id) ?? 'Unknown entity').join(', ')}</p>;
-  if (Array.isArray(value)) return <div className="flex flex-wrap gap-1.5">{value.map(item => <span key={String(item)} className="rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-0.5 text-xs text-gray-300">{optionNames.get(String(item)) ?? String(item)}</span>)}</div>;
-  if (definition.valueType === 'single-choice') return <p className="text-sm text-gray-200">{optionNames.get(String(value)) ?? String(value)}</p>;
-  return <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-200">{String(value)}</p>;
+  if (value === undefined || value === null || value === '' || (Array.isArray(value) && !value.length)) return <p className="text-sm italic text-text-disabled">Not set</p>;
+  if (definition.valueType === 'boolean') return <p className="text-sm text-text-secondary">{value ? 'Yes' : 'No'}</p>;
+  if (definition.valueType === 'entity-reference') return <p className="text-sm text-text-secondary">{names.get(String(value)) ?? 'Unknown entity'}</p>;
+  if (definition.valueType === 'entity-reference-list') return <p className="text-sm text-text-secondary">{(value as string[]).map(id => names.get(id) ?? 'Unknown entity').join(', ')}</p>;
+  if (Array.isArray(value)) return <div className="flex flex-wrap gap-1.5">{value.map(item => <span key={String(item)} className="rounded-full border border-border-subtle bg-surface-hover/45 px-2.5 py-0.5 text-xs text-text-secondary">{optionNames.get(String(item)) ?? String(item)}</span>)}</div>;
+  if (definition.valueType === 'single-choice') return <p className="text-sm text-text-secondary">{optionNames.get(String(value)) ?? String(value)}</p>;
+  return <p className="whitespace-pre-wrap text-sm leading-relaxed text-text-secondary">{String(value)}</p>;
 }
 
 function emptyValue(type: EntityFieldType): unknown {
