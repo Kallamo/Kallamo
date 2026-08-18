@@ -1140,6 +1140,21 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             }
 
             try {
+                const { getWorkspaceExperienceMode } = require('../../dist-main/main/features/kanora/mode-orchestration');
+                if (getWorkspaceExperienceMode(db, chatId) === 'roleplay') {
+                    sendRunEvent(webContents, 'workflow-progress', currentRun, {
+                        step: totalSteps,
+                        totalSteps,
+                        profileName: 'Narrative State',
+                        status: 'Updating Narrative State…',
+                        phase: 'narrative-state'
+                    });
+                }
+            } catch (error) {
+                console.warn('[Narrative State] Could not report processing status:', error.message);
+            }
+
+            try {
                 const narrativeResult = await updateRoleplayStateWithSystemAi({
                     workspaceId: chatId,
                     provenanceId: aiMsgId,
@@ -1184,9 +1199,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             db.prepare('UPDATE messages SET debugNotice = ? WHERE id = ? AND chatId = ?')
                 .run(JSON.stringify(debugObj), aiMsgId, chatId);
 
-            if (roleplayChanges.length) {
-                webContents.send('roleplay-resource-changes', { workspaceId: chatId, changes: roleplayChanges });
-            }
+            webContents.send('roleplay-resource-changes', { workspaceId: chatId, changes: roleplayChanges });
 
             checkAndAutoSummarize(chatId, lastProfileUsed.id).catch(e => {
                 console.error("[Auto-Summarize] error:", e);
@@ -1412,6 +1425,8 @@ const DOSSIER_DATA_FIELDS = [
     ['rarity', 'abundance'], ['abundance', 'abundance'], ['threat', 'threat'],
     ['age', 'age'], ['role', 'role'], ['abilities', 'abilities'], ['ownership', 'ownership'],
 ];
+const { edgeDetail } = require('./features/worldbuild/relation-dossier');
+
 function entityDataFacts(data) {
     if (!data || typeof data !== 'object') return '';
     const parts = [];
@@ -2165,7 +2180,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     const narrativeState = new NarrativeStateSystem(db);
     const narrativeEntities = new NarrativeEntitySystem(db);
     const contextManifests = new NarrativeContextManifestRepository(db);
-    const eventOccurrences = new EventOccurrenceService(db);
+    const eventOccurrences = new EventOccurrenceService(db, calendarService);
     if (narrativeState.beginJob(workspaceId, provenanceId) === 'complete') {
         const existingMetric = narrativeState.listMetrics(workspaceId, 100)
             .find(metric => metric.originId === provenanceId);
@@ -2249,7 +2264,10 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         SELECT fromId, toId, relType FROM entity_links
         WHERE workspaceId = ? AND relType IN ('inside', 'connected_to', 'adjacent_to')
     `).all(workspaceId).filter(link => locationIds.has(link.fromId) && locationIds.has(link.toId));
-    const reachableLocationIds = findReachableLocations(scene?.locationId, locationLinks, 2);
+    // Depth counts containment levels climbed, not distance walked: it decides how large a
+    // region counts as local. Four covers a room nested several levels inside a district while
+    // the world root, which is never expanded, keeps separate continents out regardless.
+    const reachableLocationIds = findReachableLocations(scene?.locationId, locationLinks, 4);
     const calendar = calendarService.getCalendar(db, workspaceId);
     const timeMatrix = calendarService.getTimeMatrix(db, workspaceId);
     const narrativeLanguageInstruction = getSystemLanguageInstruction();
@@ -2523,6 +2541,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     const excludedRelationshipSourceIds = new Set([roleplaySettings.playerEntityId].filter(Boolean));
     let generatedContactEventCount = 0;
     let narrativeProposalCount = 0;
+    let rejectedSceneChange = null;
     db.transaction(() => {
     for (const identityUpdate of routedResult.identityUpdates) {
         if (!shouldProcessNarrativeIdentityUpdate(identityUpdate, roleplaySettings.defaultUpdatePolicy)) continue;
@@ -2598,10 +2617,18 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     }
     if (Object.keys(scenePatch).length) {
         try {
+            // A patch describes one moment: who is present, where, and with what. Dropping the
+            // destination while keeping the cast wrote the arriving characters into the room the
+            // player had just left, and nothing said so. Either the whole moment applies or none
+            // of it does, and the reason is reported instead of vanishing.
             if (scene?.locationId && scenePatch.locationId && !reachableLocationIds.has(scenePatch.locationId)) {
-                delete scenePatch.locationId;
+                rejectedSceneChange = {
+                    reason: 'unreachable-location',
+                    locationId: scenePatch.locationId,
+                    fromLocationId: scene.locationId
+                };
+                throw new Error(`Scene patch names a location outside the current region: ${scenePatch.locationId}.`);
             }
-            if (!Object.keys(scenePatch).length) throw new Error('Scene patch did not contain a locally valid change.');
             const change = roleplay.proposeSceneChange({
                 id: `${provenanceId}:scene`,
                 workspaceId,
@@ -2678,7 +2705,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     })();
     const timeFrame = recordTimeFrame(
         triage?.timeAdvance,
-        routedResult.scenePatch?.locationId || roleplay.getScene(workspaceId)?.locationId
+        (rejectedSceneChange ? null : routedResult.scenePatch?.locationId) || roleplay.getScene(workspaceId)?.locationId
     );
     if (timeFrame.advance) changes.push({ kind: 'time', frame: timeFrame });
     const triageInputTokens = estimateTokens(triageSystemPrompt) + estimateTokens(triagePayload);
@@ -2691,7 +2718,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     return {
         changes,
         diagnostics: {
-            status: narrativeSkips.length || invalidInventoryChanges.length ? 'completed-with-warnings' : 'completed',
+            status: narrativeSkips.length || invalidInventoryChanges.length || rejectedSceneChange ? 'completed-with-warnings' : 'completed',
             manifest: preTurnManifest ? {
                 requestId: preTurnManifest.requestId,
                 sequence: preTurnManifest.sequence
@@ -2724,9 +2751,11 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
                 skippedEvents: narrativeSkips.length,
                 skippedEventReasons: [...new Set(narrativeSkips.map(skip => skip.reason))],
                 generatedContactEvents: generatedContactEventCount,
-                scenePatch: Boolean(routedResult.scenePatch && Object.keys(routedResult.scenePatch).length)
+                scenePatch: Boolean(routedResult.scenePatch && Object.keys(routedResult.scenePatch).length),
+                rejectedScenePatch: rejectedSceneChange?.reason ?? null
             },
             skippedNarrativeEvents: narrativeSkips,
+            rejectedSceneChange,
             invalidInventoryChanges,
             proposals: changes.map(change => ({
                 kind: change.kind,
@@ -2970,7 +2999,7 @@ function loadNarrativeLocationInventoryState(workspaceId, locationId, itemIds) {
 
 const NARRATIVE_TRIAGE_SYSTEM_PROMPT = `You route Roleplay turns to durable-state analyzers and estimate elapsed narrative time. Inspect the user action, final narrative, current time, calendar, time matrix, compact scene, named entities, and locally extracted candidate signals. Candidate signals are hints, not conclusions.
 Return JSON only with {"consequential":boolean,"types":["entity","scene","resource","inventory","awareness","knowledge","belief","memory","relationship","fact"],"entityIds":["existing-id"],"confidence":0.0,"evidence":["short verbatim excerpt"],"requiresFullAnalysis":boolean,"reason":"brief","timeAdvance":null}.
-Always evaluate elapsed time, even when no other durable domain is consequential. For an in-world action, timeAdvance is {"actionType":"short_snake_case","basis":"explicit|matrix","duration":{"years":0,"months":0,"days":0,"hours":0,"minutes":0},"targetPosition":null,"confidence":0.0,"evidence":"short verbatim excerpt"}. When the final narrative establishes an absolute ending date or time, set basis to "explicit", copy the complete resulting calendar position into targetPosition, and also return the calculated duration. Use null for out-of-character instructions, corrections, hypothetical actions, or when no in-world time passed.
+Always evaluate elapsed time, even when no other durable domain is consequential. For an in-world action, timeAdvance is {"actionType":"short_snake_case","basis":"explicit|matrix","duration":{"years":0,"months":0,"days":0,"hours":0,"minutes":0},"targetPosition":null,"confidence":0.0,"evidence":"short verbatim excerpt"}. When the final narrative establishes an absolute ending date or time, set basis to "explicit", copy the complete resulting calendar position into targetPosition, and also return the calculated duration. Use null for out-of-character instructions, corrections, hypothetical actions, or when no in-world time passed. Travel always costs time: when the turn completes a journey between places, timeAdvance is never null, and its duration must match the distance actually crossed rather than the length of the passage describing it.
 An explicit final position or duration in the narrative wins over the matrix. Reconcile every clock reference with currentTime; do not describe a turn as reaching a later time while returning null or a conflicting duration. Otherwise choose a reasonable value within the supplied matrix: Micro for dialogue lines, combat rounds, lockpicking, and quick scans; Local for same-district walking, wound care, and careful room inspection; Transit for cross-district travel, crowds, minor repairs, and setting camp; Macro for crafting, deep study, rest, and inter-city travel; Timeskip for supported downtime, recovery, waiting, long-distance travel, or another transition spanning one or more calendar days. Do not advance hours during line-by-line dialogue. Do not use a tiny advance for substantial travel. A jump of one day or more must be explicitly supported by the final narrative or by a completed action whose duration is covered by the configured Timeskip range. Return calendar units directly instead of assuming a 24-hour day.
 Mark inventory for explicit pickup, drop, transfer, gift, theft, loss, consumption, equip, unequip, drawing, sheathing, or quantity change. Mark scene for explicit arrival, departure, movement, participation, observer, nearby, object, or location change. Mark epistemic domains only for information actually communicated, perceived, discovered, remembered, believed, or relationally consequential. Mark relationship for a first demonstrated encounter or interaction that must initialize a directional relationship, even when its initial value is 0, and for an event that materially and durably changes an existing value. Direct conversation is mutual interaction. Listening or overhearing is interaction only from the aware listener toward the speaker unless the speaker also perceives the listener. Mere co-presence is not interaction. Ordinary politeness, irritation, banter, compliance, disagreement, or passing mood does not change an existing value. Mark resource for an actual value change, not a price mention or hypothetical. A concrete edition of a supplied recurring Event is consequential when it actually takes place, even if the tradition itself is already known.
 A newly introduced persistent named character, stably identifiable individual creature, named location, or narratively important unique item is consequential even without an existing ID. An unnamed person distinguished only by appearance, ancestry, clothing, age, expression, or scene position may be routed as a sparse entity candidate, but is not yet a Worldbuild identity. Mark false for crowds, atmosphere, repetition, casual dialogue, hypotheticals, offers not completed, item mentions without possession changes, and events without durable consequences. Presence alone never grants awareness or knowledge. Set requiresFullAnalysis only when four or more domains interact or the consequence cannot be safely isolated.`;
@@ -2982,17 +3011,17 @@ The user message is the player character's chosen action. The narrative response
 preTurnContext is the exact compact epistemic manifest used for generation. Use its separate subject assessments to decide who could acquire information this turn. "undetermined" is not ignorance. "derived" and "evidence-candidate" are not automatically canon. currentKnowledgeCards contains Awareness and known-field coverage at the start of the turn.
 When the final narrative clearly introduces a persistent Character, individual Creature, named Location, or narratively important Item that is absent from availableEntities, add {"referenceId":"new:stable-local-key","name":"canonical name or concise sparse label","type":"Characters|Creatures|Locations|Items","aliases":[],"description":"only explicit introduction facts","excerpt":"short verbatim evidence","confidence":0.0,"decision":"new|ambiguous|conflicting","identityEstablished":true|false,"reason":"brief","itemNature":"unique|type","scenePresence":"participant|observer|nearby|absent"}. Use its referenceId everywhere else in this response. For Characters and individual Creatures, set scenePresence to participant only when directly engaged in the action or conversation, observer only when explicitly able to witness or listen, nearby only when physically present in the broader location, and absent for recollections, reports, or offscreen mentions. Scene presence is independent from a location change. Set identityEstablished true only when a proper name, stable title, number, designation, unmistakable continuity identity, or explicit registration establishes who the individual is. Appearance, ancestry, clothing, age, expression, or scene position alone never establishes identity. An individually described but anonymous person may be retained with a concise sparse label and identityEstablished false; it remains reviewable and must not become a Worldbuild entity automatically. Characters and individual Creatures may be created automatically only when identityEstablished is true and the identity is unequivocal. Locations and Items are reviewable. Do not create generic crowds, ordinary item mentions, transformations, disguises, or duplicates. Mark ambiguous identity or possible duplication as ambiguous. Mark an invention that contradicts supplied canon as conflicting.
 When the narrative establishes that an existing Character or individual Creature has a newly revealed proper name, corrected name, nickname, title, designation, or alternate spelling, add {"referenceId":"identity:stable-local-key","entityId":"existing-id","canonicalName":"new primary name or empty string","aliases":["new alternate name"],"excerpt":"short verbatim evidence","confidence":0.0,"identityEstablished":true|false,"reason":"brief"} to identityUpdates. Use canonicalName only when the text clearly replaces a provisional, descriptive, or incorrect primary label. Put nicknames, titles, alternate spellings, and additional forms in aliases. The previous canonical name is retained automatically as an alias after a rename. Never remove aliases, change an entity ID or type, or update a Location or Item through identityUpdates. Require explicit same-person evidence such as self-identification, direct naming, registration, or unmistakable continuity. Proximity, pronouns, appearance, ancestry, clothing, age, expression, and scene position are insufficient. If the target identity is uncertain, return no identity update.
-Scene patch may contain locationId, participantIds, possibleObserverIds, nearbyIds, and objectIds. Participants are directly involved, possible observers can witness the scene, and nearby entities are present in the broader location without necessarily witnessing it. Update these arrays when an existing or newly introduced character enters, leaves, joins, observes, or moves nearby, even if locationId does not change. When inventory also changes, keep objectIds consistent with unique items explicitly dropped, picked up, consumed, destroyed, or removed. Change location only after movement is completed in the user action or final narrative and use only reachableLocationIds; intention, preparation, a destination plan, an open door, or a visible route is not a completed location change. Never jump to an unrelated branch of the location hierarchy. Presence is not ownership. A possible observer is only a candidate and does not automatically observe or learn.
+Scene patch may contain locationId, participantIds, possibleObserverIds, nearbyIds, and objectIds. Participants are directly involved, possible observers can witness the scene, and nearby entities are present in the broader location without necessarily witnessing it. Update these arrays when an existing or newly introduced character enters, leaves, joins, observes, or moves nearby, even if locationId does not change. When inventory also changes, keep objectIds consistent with unique items explicitly dropped, picked up, consumed, destroyed, or removed. Change location only after movement is completed in the user action or final narrative and use only reachableLocationIds; intention, preparation, a destination plan, an open door, or a visible route is not a completed location change. Never jump to an unrelated branch of the location hierarchy. reachableLocationIds already spans the whole surrounding region, so a completed journey across a city, district, or road belongs here and must not be downgraded to an epistemic record instead. A scene patch is applied whole or not at all: if the destination is not in reachableLocationIds, the participant and object arrays are discarded with it, so return the arrays that match the location you actually set. Presence is not ownership. A possible observer is only a candidate and does not automatically observe or learn.
 Inventory changes must be explicit and use currentInventoryState plus currentLocationInventoryState. Track pickup, drop, placement, gift, transfer, theft, loss, consumption, destruction, equip, unequip, drawing, sheathing, and quantities for every Character and individual Creature, including currentScene.playerEntityId. Inventory means everything the character possesses but is not actively using; equipped means only what is actively being used, wielded, worn, or held in use. A carried item in a belt, sheath, scabbard, holster, bag, pocket, or ordinary inventory remains inventory and is not equipped. Determine the final state after the whole user message and narrative response, not the first intermediate action. If the same item is drawn or used and later sheathed, stowed, put away, placed on a belt, or taken off, return only the final equipped:false state. For a unique item move return {"itemId":"id","fromHolderId":"id-or-null","toHolderId":"id-or-null","locationId":"id-or-null","equipped":boolean-when-explicit}. For an item type transfer return {"itemId":"id","fromHolderId":"id-or-null","fromLocationId":"id-or-null","toHolderId":"id-or-null","locationId":"id-or-null","quantity":1,"equipped":boolean-when-explicit}. locationId means deliberately dropped or stored; fromLocationId means picked up. Removal, consumption, or loss may have no destination. For equipment only return {"itemId":"id","holderId":"id","equipped":boolean}. Drawing, wielding, or wearing normally equips; sheathing, stowing, taking off, or putting away normally unequips without changing possession. Never mutate inventory from a mere mention, observation, price, request, offer, or speculation.
 Each event must contain: type, description, a short verbatim excerpt, participantIds, confidence from 0 to 1, and operations. Event type must be exactly one of movement, possession-transfer, revelation, deception, discovery, relationship-change, or custom. Use custom when no narrower allowed type fits. When the narrative depicts a concrete edition of a supplied Worldbuild Event, also return worldbuildEventId, occurrenceTitle, worldDate using the supplied calendar position, and participants as [{"entityId":"id","role":"role","audienceType":"all-members|selected-members","selectedMemberIds":[]}]. Record a memory for each directly participating Character, individual Creature, or institutionally involved Faction. Locations and Items are related participants but never memory owners. Use selected-members for a Faction only when the occurrence was communicated to a specific supplied subset; otherwise use all-members for an official collective record. Set worldbuildEventId only when that edition actually happens, never for planning, recollection, comparison, or a passing mention.
 Allowed operations:
 {"type":"fact","proposition":{"subjectId":"id","predicate":"stable-key","object":any},"confidence":0.0}
 {"type":"awareness","subjectId":"id","targetId":"id","confidence":0.0}
-{"type":"knowledge","subjectId":"id","proposition":{"subjectId":"id","predicate":"stable-key","object":any},"acquisition":"participant|witness|reported|inferred","confidence":0.0,"accessibility":"available|suppressed|inaccessible"}
+{"type":"knowledge","subjectId":"id","proposition":{"subjectId":"id","predicate":"stable-key","object":any},"acquisition":"participant|witness|reported|inferred","informantIds":["id"],"confidence":0.0,"accessibility":"available|suppressed|inaccessible"}
 {"type":"belief","subjectId":"id","proposition":{"subjectId":"id","predicate":"stable-key","object":any},"confidence":0.0}
 {"type":"memory","subjectId":"id","summary":"durable personal memory","salience":0.0,"accessibility":"available|suppressed|inaccessible"}
 {"type":"relationship","sourceEntityId":"id","targetEntityId":"id","dimension":"overall","value":absolute-number,"impact":"meaningful|significant|drastic"}
-Awareness means the subject demonstrably knows the target exists through interaction, recognition, testimony, discovery, conscious possession, or a relationship. Presence in the same scene is insufficient. Grant knowledge only when the subject actually receives, perceives, discovers, recalls, or reliably infers the specific proposition in this turn. Narrator-only information, another character's private thought, unnoticed events, vague implications, and facts merely present in context are not knowledge. Use belief for rumors, deception, disputed claims, uncertain interpretation, suspicion, or an unsupported inference. When one character reports established observations plus a personal theory, listeners gain reported Knowledge of the observations and of the fact that the speaker proposed the theory; only the speaker receives the Belief unless a listener explicitly accepts it. Existing Awareness in currentKnowledgeCards is sufficient; do not repeat awareness solely to make knowledge valid. Group knowledge requires explicit collective communication, an official report, meeting, archive, or equivalent. Do not union member knowledge. Ignore knowledge already present in currentPerspectiveState.
+Awareness means the subject demonstrably knows the target exists through interaction, recognition, testimony, discovery, conscious possession, or a relationship. Presence in the same scene is insufficient. Grant knowledge only when the subject actually receives, perceives, discovers, recalls, or reliably infers the specific proposition in this turn. Set acquisition from how they came by it: participant or witness when they were present and perceived it themselves, reported when someone told them, inferred when they reasoned it out. Return informantIds only with reported acquisition, naming the supplied ids of whoever told them, and omit the field otherwise. A subject is never their own informant. Narrator-only information, another character's private thought, unnoticed events, vague implications, and facts merely present in context are not knowledge. Use belief for rumors, deception, disputed claims, uncertain interpretation, suspicion, or an unsupported inference. When one character reports established observations plus a personal theory, listeners gain reported Knowledge of the observations and of the fact that the speaker proposed the theory; only the speaker receives the Belief unless a listener explicitly accepts it. Existing Awareness in currentKnowledgeCards is sufficient; do not repeat awareness solely to make knowledge valid. Group knowledge requires explicit collective communication, an official report, meeting, archive, or equivalent. Do not union member knowledge. A Faction that learns through one of its own uses reported acquisition with that member in informantIds. Knowledge held by a Faction is institutional and never becomes a member's own record automatically: when a scene shows a member being told what the group holds, record it for that member with reported acquisition naming who told them. Ignore knowledge already present in currentPerspectiveState. Scene state is neither canon nor knowledge: where someone is, what they are doing right now, and who is present belong to scenePatch alone, so never emit a fact, knowledge, or belief whose predicate is current-location, location, position, current-activity, activity, presence, whereabouts, or any equivalent momentary state. A perception shared by everyone present, withheld from nobody, and without later consequence is already carried by the scene and needs no record. Knowledge earns a record only when someone relevant does not hold it and that gap can change what a character later does, says, or withholds. When an object names an entity, use its supplied id; otherwise write plain prose.
 Relationship changes only the numeric bar. Never return a relationship title or description. currentScene.playerEntityId identifies the Player. The Player's feelings are unknowable: never emit a relationship operation whose sourceEntityId is the Player. You may emit Awareness with the Player as subject or target. When an NPC is explicitly presented to the Player, record Player-to-NPC Awareness, NPC-to-Player Awareness, and only the NPC-to-Player directional relationship. Use currentRelationshipState as the numeric baseline and return the absolute result. On a first demonstrated encounter or interaction, initialize each supported non-Player directional relationship and its Awareness card. Direct mutual interaction normally requires both directions. Listening or overhearing requires listener-to-speaker only unless the speaker also perceives the listener. Default a new relationship to 0. Prior favorable or adverse information may support an initial value normally within -25 to 25 with meaningful impact. Significant explicit evidence may support up to -50 or 50 with significant impact. Set drastic impact and use values approaching -100 or 100 only for extreme, explicit evidence such as established hatred, mortal enmity, absolute devotion, or an equivalent relationship-defining fact. The two directions may differ. For an existing relationship, use meaningful for a durable but modest shift near 5 points, significant for a major act or repeated pattern within 15 points, and drastic only for an explicit rupture or transformation such as betrayal, sacrifice, life-saving action, devastating revelation, or equivalent. Direction matters: sourceEntityId is whose relationship changes. Do not change existing values for isolated politeness, rudeness, mood, banter, compliance, routine help, ordinary disagreement, or speculation. Record memory only for identity, goals, emotional impact, material consequence, or likely future use. Ignore repeated memories already present in currentPerspectiveState. Do not report atmosphere, repetition, casual dialogue, hypotheticals, private thoughts unavailable to a subject, or out-of-character instructions. Empty arrays and an empty scenePatch are correct.`;
 
 const NARRATIVE_SCOPED_BASE_PROMPT = `You are Kallamo's Narrative State interpreter. Never write narrative prose. Analyze only routing.selectedDomains. Extract explicit durable consequences from the user action and final narrative. Candidate signals are hints, not facts. Use only supplied IDs and resource keys.
@@ -3001,7 +3030,7 @@ Return JSON only with {"newEntities":[],"identityUpdates":[],"resourceChanges":[
 const NARRATIVE_ENTITY_SCOPED_PROMPT = `ENTITY DOMAIN: Retain a newly introduced persistent individual absent from availableEntities as either an established identity or a sparse candidate. Return it in newEntities as {"referenceId":"new:stable-local-key","name":"canonical name or concise sparse label","type":"Characters|Creatures|Locations|Items","aliases":[],"description":"explicit introduction facts","excerpt":"short verbatim evidence","confidence":0.0,"decision":"new|ambiguous|conflicting","identityEstablished":true|false,"reason":"brief","itemNature":"unique|type","scenePresence":"participant|observer|nearby|absent"}. For Characters and individual Creatures, use participant only for direct involvement, observer only for explicit witnessing or listening, nearby only for broader physical presence, and absent for recollections, reports, or offscreen mentions. This presence can change without a location change. Set identityEstablished true only for a proper name, stable title, number, designation, unmistakable continuity identity, or explicit registration. Appearance, ancestry, clothing, age, expression, or scene position alone means false. Anonymous individuals with false remain sparse and reviewable; they do not become Worldbuild entities automatically. Use referenceId elsewhere. Do not create crowds, ordinary item mentions, disguises, transformations, or duplicates.
 When an existing Character or individual Creature is explicitly identified by a newly revealed or corrected primary name, return in identityUpdates {"referenceId":"identity:stable-local-key","entityId":"existing-id","canonicalName":"new primary name or empty string","aliases":["new nickname, title, alternate spelling, or designation"],"excerpt":"short verbatim evidence","confidence":0.0,"identityEstablished":true|false,"reason":"brief"}. Use canonicalName only to replace a provisional, descriptive, or incorrect primary label. Use aliases for additional valid forms. Renames retain the previous primary label as an alias automatically. Never remove an alias or alter an ID or type. Require explicit same-person evidence; proximity, pronouns, appearance, and scene position are insufficient. Return no identity update when the association is uncertain.`;
 
-const NARRATIVE_SCENE_SCOPED_PROMPT = `SCENE DOMAIN: scenePatch may contain locationId, participantIds, possibleObserverIds, nearbyIds, and objectIds. Return complete replacement arrays only for fields that changed. Participants are directly involved, possible observers can witness, nearby entities are in the broader location, and objects are physically present. Explicit completed arrivals, departures, joining a conversation, sitting with the group, leaving, and deliberate movement can change scene membership independently from locationId. Include newly introduced entity referenceIds in the appropriate array. When inventory is also selected, dropping a unique item may add it to objectIds, while picking up, consuming, destroying, or removing it may remove it. Keep unrelated existing objectIds. Change location only after movement is completed and use reachableLocationIds. Intention, preparation, a destination plan, an open door, or a visible route is not a completed location change. Presence is not ownership or knowledge.`;
+const NARRATIVE_SCENE_SCOPED_PROMPT = `SCENE DOMAIN: scenePatch may contain locationId, participantIds, possibleObserverIds, nearbyIds, and objectIds. Return complete replacement arrays only for fields that changed. Participants are directly involved, possible observers can witness, nearby entities are in the broader location, and objects are physically present. Explicit completed arrivals, departures, joining a conversation, sitting with the group, leaving, and deliberate movement can change scene membership independently from locationId. Include newly introduced entity referenceIds in the appropriate array. When inventory is also selected, dropping a unique item may add it to objectIds, while picking up, consuming, destroying, or removing it may remove it. Keep unrelated existing objectIds. Change location only after movement is completed and use reachableLocationIds. Intention, preparation, a destination plan, an open door, or a visible route is not a completed location change. reachableLocationIds already spans the whole surrounding region, so a completed journey across a city, district, or road belongs here. A scene patch is applied whole or not at all: if the destination is not in reachableLocationIds, the participant and object arrays are discarded with it, so return the arrays that match the location you actually set. Presence is not ownership or knowledge.`;
 
 const NARRATIVE_RESOURCE_SCOPED_PROMPT = `RESOURCE DOMAIN: resourceChanges contain {"entityId":"id","resourceKey":"key","value":absolute-number}. Use currentResourceStates and return the absolute result. Apply only explicit mechanical gains, losses, recovery, damage, or expenditure. Prices, wages, comparisons, plans, hypotheticals, and narration without an actual value change are not resource changes.`;
 
@@ -3015,11 +3044,11 @@ const NARRATIVE_EPISTEMIC_SCOPED_PROMPT = `EPISTEMIC DOMAINS: preTurnContext is 
 Each event contains type, description, a short verbatim excerpt, participantIds, confidence from 0 to 1, and operations. Event type must be exactly one of movement, possession-transfer, revelation, deception, discovery, relationship-change, or custom. Use custom when no narrower allowed type fits. When a concrete edition of a supplied recurring Worldbuild Event actually happens, also return worldbuildEventId, occurrenceTitle, worldDate, and participants with roles plus Faction audience. Record memories for directly participating Characters, individual Creatures, and institutionally involved Factions, never for Locations or Items. Do not link plans, recollections, comparisons, or passing mentions as new occurrences. Allowed operations:
 {"type":"fact","proposition":{"subjectId":"id","predicate":"stable-key","object":any},"confidence":0.0}
 {"type":"awareness","subjectId":"id","targetId":"id","confidence":0.0}
-{"type":"knowledge","subjectId":"id","proposition":{"subjectId":"id","predicate":"stable-key","object":any},"acquisition":"participant|witness|reported|inferred","confidence":0.0,"accessibility":"available|suppressed|inaccessible"}
+{"type":"knowledge","subjectId":"id","proposition":{"subjectId":"id","predicate":"stable-key","object":any},"acquisition":"participant|witness|reported|inferred","informantIds":["id"],"confidence":0.0,"accessibility":"available|suppressed|inaccessible"}
 {"type":"belief","subjectId":"id","proposition":{"subjectId":"id","predicate":"stable-key","object":any},"confidence":0.0}
 {"type":"memory","subjectId":"id","summary":"durable personal memory","salience":0.0,"accessibility":"available|suppressed|inaccessible"}
 {"type":"relationship","sourceEntityId":"id","targetEntityId":"id","dimension":"overall","value":absolute-number,"impact":"meaningful|significant|drastic"}
-Awareness requires demonstrated interaction, recognition, testimony, discovery, conscious possession, or a relationship. Shared presence is insufficient. Grant knowledge only when the subject actually acquires the exact proposition in this turn. Narrator-only information, unnoticed events, private thoughts, vague implication, and contextual availability are not character knowledge. Use belief for rumors, deception, disputed claims, suspicion, and unsupported inference. When a speaker reports observations and a personal theory, listeners gain reported Knowledge of the observations and of the speaker's claim; only the speaker receives the Belief unless a listener explicitly accepts it. Existing Awareness in currentKnowledgeCards is sufficient; do not repeat it only to make knowledge valid. Group knowledge requires explicit collective communication or a shared source. Do not union member knowledge. Ignore existing knowledge records.
+Awareness requires demonstrated interaction, recognition, testimony, discovery, conscious possession, or a relationship. Shared presence is insufficient. Grant knowledge only when the subject actually acquires the exact proposition in this turn. Set acquisition from how they came by it: participant or witness for first-hand perception, reported when someone told them, inferred when they reasoned it out. Return informantIds only with reported acquisition, naming the supplied ids of whoever told them, and omit the field otherwise. A subject is never their own informant. Narrator-only information, unnoticed events, private thoughts, vague implication, and contextual availability are not character knowledge. Use belief for rumors, deception, disputed claims, suspicion, and unsupported inference. When a speaker reports observations and a personal theory, listeners gain reported Knowledge of the observations and of the speaker's claim; only the speaker receives the Belief unless a listener explicitly accepts it. Existing Awareness in currentKnowledgeCards is sufficient; do not repeat it only to make knowledge valid. Group knowledge requires explicit collective communication or a shared source. Do not union member knowledge. A Faction that learns through one of its own uses reported acquisition with that member in informantIds. Knowledge held by a Faction is institutional and never becomes a member's own record automatically: when a scene shows a member being told what the group holds, record it for that member with reported acquisition naming who told them. Ignore existing knowledge records. Scene state is neither canon nor knowledge: where someone is, what they are doing right now, and who is present belong to scenePatch alone, so never emit a fact, knowledge, or belief whose predicate is current-location, location, position, current-activity, activity, presence, whereabouts, or any equivalent momentary state. A perception shared by everyone present, withheld from nobody, and without later consequence is already carried by the scene and needs no record. Knowledge earns a record only when someone relevant does not hold it and that gap can change what a character later does, says, or withholds. When an object names an entity, use its supplied id; otherwise write plain prose.
 Relationship changes only the directional numeric bar. Never return a title or description. currentScene.playerEntityId identifies the Player. The Player's feelings are unknowable: never emit a relationship operation whose sourceEntityId is the Player. You may emit Awareness with the Player as subject or target. When an NPC is explicitly presented to the Player, record Player-to-NPC Awareness, NPC-to-Player Awareness, and only the NPC-to-Player directional relationship. Use currentRelationshipState as the baseline and return an absolute value. On a first demonstrated encounter or interaction, initialize the supported non-Player directional relationship and Awareness card. Direct mutual interaction normally requires both directions. Listening or overhearing requires listener-to-speaker only unless the speaker perceives the listener. Default a new relationship to 0. Prior favorable or adverse information normally supports an initial value within -25 to 25 with meaningful impact. Significant explicit evidence may support up to -50 or 50 with significant impact. Set drastic impact and use values approaching -100 or 100 only for extreme explicit evidence such as established hatred, mortal enmity, absolute devotion, or an equivalent relationship-defining fact. Directions may differ. For an existing relationship, a meaningful durable shift should stay near 5 points; a significant major act or repeated pattern may move up to 15; drastic is reserved for explicit betrayal, sacrifice, life-saving action, devastating revelation, or equivalent rupture. Do not change existing values for ordinary politeness, irritation, banter, compliance, routine assistance, disagreement, mood, or speculation. Record memory only for identity, goals, emotional impact, material consequence, or likely future use. Ignore existing memories.`;
 
 function buildNarrativeStateSystemPrompt(domains, languageInstruction = '') {
@@ -3489,22 +3518,74 @@ function sameIdSet(left, right) {
     return leftIds.length === rightIds.length && leftIds.every(id => rightIds.includes(id));
 }
 
+// Containment is directional, so treating it as an undirected graph and counting hops measures
+// the wrong thing: a walk across town reads as far because it climbs to the shared district and
+// back down, while a jump to another continent under the same root reads as near. Reachability
+// is therefore anchored on the containers the origin sits in. Everything under those containers
+// is walkable, everything outside them is a different branch of the world.
 function findReachableLocations(originId, links, maxDepth) {
     if (!originId) return new Set();
-    const reachable = new Set([originId]);
-    let frontier = [originId];
-    for (let depth = 0; depth < maxDepth && frontier.length; depth += 1) {
+    const parents = new Map();
+    const children = new Map();
+    const lateral = new Map();
+    const append = (map, key, value) => {
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push(value);
+    };
+    for (const link of links) {
+        if (link.relType === 'inside') {
+            append(parents, link.fromId, link.toId);
+            append(children, link.toId, link.fromId);
+        } else {
+            append(lateral, link.fromId, link.toId);
+            append(lateral, link.toId, link.fromId);
+        }
+    }
+    const anchors = new Set([originId]);
+    let climbing = [originId];
+    for (let depth = 0; depth < maxDepth && climbing.length; depth += 1) {
         const next = [];
-        for (const id of frontier) {
-            for (const link of links) {
-                const neighbor = link.fromId === id ? link.toId : link.toId === id ? link.fromId : null;
-                if (neighbor && !reachable.has(neighbor)) {
-                    reachable.add(neighbor);
-                    next.push(neighbor);
-                }
+        for (const id of climbing) {
+            for (const parent of parents.get(id) ?? []) {
+                if (anchors.has(parent)) continue;
+                anchors.add(parent);
+                next.push(parent);
             }
         }
-        frontier = next;
+        climbing = next;
+    }
+    const reachable = new Set(anchors);
+    const descend = startIds => {
+        let frontier = startIds.filter(id => {
+            if (reachable.has(id)) return false;
+            reachable.add(id);
+            return true;
+        });
+        while (frontier.length) {
+            const next = [];
+            for (const id of frontier) {
+                for (const child of children.get(id) ?? []) {
+                    if (reachable.has(child)) continue;
+                    reachable.add(child);
+                    next.push(child);
+                }
+            }
+            frontier = next;
+        }
+    };
+    // The outermost container is the world, not a region. Expanding it would make every place
+    // reachable from every other and the guard would stop meaning anything.
+    for (const anchor of [...anchors]) {
+        if (!(parents.get(anchor) ?? []).length) continue;
+        descend(children.get(anchor) ?? []);
+    }
+    // An explicit connection is an authored shortcut and outranks containment: a road, a portal
+    // or a tunnel is exactly the case the hierarchy cannot express.
+    for (const id of [...reachable]) descend(lateral.get(id) ?? []);
+    // Climbing may have passed through the world itself. It is a container, never somewhere a
+    // scene can be set, so it stays out unless the scene already sits there.
+    for (const id of [...reachable]) {
+        if (id !== originId && !(parents.get(id) ?? []).length && (children.get(id) ?? []).length) reachable.delete(id);
     }
     return reachable;
 }
@@ -3606,12 +3687,13 @@ const ENRICH_RELATIONS = {
     ],
     Creatures: [
         { key: 'habitat', label: 'Habitat', relType: 'found_in', targetType: 'Locations', from: 'self', single: false },
+        { key: 'factions', label: 'Faction', relType: 'member_of', targetType: 'Factions', from: 'self', single: false, individualOnly: true },
         { key: 'relationships', label: 'Relationship', relType: 'related_to', targetTypes: ['Characters', 'Creatures'], from: 'self', single: false, labeled: true, detailed: true, individualOnly: true },
     ],
     Factions: [
-        { key: 'leader',     label: 'Leader',            relType: 'led_by',      targetType: 'Characters', from: 'self',   single: true },
+        { key: 'leader',     label: 'Leader',            relType: 'led_by',      targetTypes: ['Characters', 'Creatures'], from: 'self',   single: true },
         { key: 'operatesIn', label: 'Area of operation', relType: 'operates_in', targetType: 'Locations',  from: 'self',   single: false },
-        { key: 'members',    label: 'Member',            relType: 'member_of',   targetType: 'Characters', from: 'target', single: false, labeled: true },
+        { key: 'members',    label: 'Member',            relType: 'member_of',   targetTypes: ['Characters', 'Creatures'], from: 'target', single: false, labeled: true },
     ],
     Races: [],
     Events: [
@@ -5212,13 +5294,15 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                     const relLines = [];
                     const edgesByEntity = new Map();
                     let anyLore = false;
+                    let dossierCalendar = null;
+                    try { dossierCalendar = require('./features/worldbuild/calendar-service').getCalendar(db, chatId); } catch (e) { }
                     try {
                         for (const eid of entityIds) {
                             const ent = entitiesStore.getEntity(eid);
                             if (!ent) continue;
                             const links = entitiesStore.getLinksFrom(eid) || [];
                             if (links.length) {
-                                const edges = links.map(l => `${l.label || l.relType} → ${l.entity ? l.entity.canonicalName : '?'}`).join('; ');
+                                const edges = links.map(l => `${l.label || l.relType} → ${l.entity ? l.entity.canonicalName : '?'}${edgeDetail(l, dossierCalendar)}`).join('; ');
                                 relLines.push(`${ent.canonicalName}: ${edges}`);
                                 edgesByEntity.set(eid, edges);
                             }
