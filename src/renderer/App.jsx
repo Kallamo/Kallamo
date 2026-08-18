@@ -137,7 +137,7 @@ function MainLayout() {
   // Global Tooltip Engine
   useEffect(() => {
     const globalTooltip = document.createElement('div');
-    globalTooltip.className = 'fixed hidden bg-[#051116] border border-gray-800 text-gray-300 text-[10px] leading-relaxed rounded-md p-2.5 shadow-xl z-[100000] max-w-[220px] pointer-events-none transition-opacity duration-200 opacity-0';
+    globalTooltip.className = 'fixed hidden bg-[#051116] border border-gray-800 text-gray-300 text-[0.625rem] leading-relaxed rounded-md p-2.5 shadow-xl z-[100000] max-w-[220px] pointer-events-none transition-opacity duration-200 opacity-0';
     document.body.appendChild(globalTooltip);
 
     const handleMouseOver = (e) => {
@@ -357,7 +357,7 @@ function MainLayout() {
                   {task.status === 'completed' && <span className="w-2.5 h-2.5 rounded-full bg-green-500" />}
                   {task.status === 'error' && <span className="w-2.5 h-2.5 rounded-full bg-red-500" />}
 
-                  <span className="text-[10px] font-bold text-white uppercase tracking-wider truncate max-w-[180px]">
+                  <span className="text-[0.625rem] font-bold text-white uppercase tracking-wider truncate max-w-[180px]">
                     {task.name}
                   </span>
                 </div>
@@ -394,7 +394,7 @@ function MainLayout() {
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
               </svg>
             </div>
-            <span className="text-[11px] font-bold text-white uppercase tracking-wider">
+            <span className="text-[0.6875rem] font-bold text-white uppercase tracking-wider">
               {engineDownloadProgress.status === 'downloading' && 'Downloading Local AI Engine...'}
               {engineDownloadProgress.status === 'verifying' && 'Verifying Integrity...'}
               {engineDownloadProgress.status === 'extracting' && 'Setting up AI files...'}
@@ -415,7 +415,7 @@ function MainLayout() {
                 </span>
                 <button
                   onClick={() => cancelEngineDownload()}
-                  className="text-[10px] text-gray-400 hover:text-white transition-colors cursor-pointer underline"
+                  className="text-[0.625rem] text-gray-400 hover:text-white transition-colors cursor-pointer underline"
                 >
                   Cancel
                 </button>

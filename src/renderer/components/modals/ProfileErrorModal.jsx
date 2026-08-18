@@ -21,7 +21,7 @@ export default function ProfileErrorModal() {
           </div>
           <div className="flex flex-col">
             <h3 className="text-white font-bold text-base">AI Profile Execution Error</h3>
-            <span className="text-[10px] text-red-400 font-bold uppercase tracking-wider">Failed at: {profileName}</span>
+            <span className="text-[0.625rem] text-red-400 font-bold uppercase tracking-wider">Failed at: {profileName}</span>
           </div>
         </div>
 
@@ -45,8 +45,8 @@ export default function ProfileErrorModal() {
             className="flex flex-col items-center justify-center p-3 bg-red-950/10 hover:bg-red-950/30 border border-red-900/50 hover:border-red-500/50 rounded-xl transition-all cursor-pointer group"
           >
             <XCircle className="w-5 h-5 text-red-500 mb-1 group-hover:scale-110 transition-transform" />
-            <span className="text-[10px] font-bold text-red-400 uppercase tracking-wider">Interrupt</span>
-            <span className="text-[8px] text-gray-500 text-center mt-0.5 leading-tight">Stop execution & save messages</span>
+            <span className="text-[0.625rem] font-bold text-red-400 uppercase tracking-wider">Interrupt</span>
+            <span className="text-[0.5rem] text-gray-500 text-center mt-0.5 leading-tight">Stop execution & save messages</span>
           </button>
 
           {/* Retry */}
@@ -55,8 +55,8 @@ export default function ProfileErrorModal() {
             className="flex flex-col items-center justify-center p-3 bg-accent/5 hover:bg-accent/15 border border-accent/20 hover:border-accent rounded-xl transition-all cursor-pointer group"
           >
             <Play className="w-5 h-5 text-accent mb-1 group-hover:scale-110 transition-transform" fill="currentColor" />
-            <span className="text-[10px] font-bold text-accent uppercase tracking-wider">Retry</span>
-            <span className="text-[8px] text-gray-500 text-center mt-0.5 leading-tight">Re-execute call to AI Profile</span>
+            <span className="text-[0.625rem] font-bold text-accent uppercase tracking-wider">Retry</span>
+            <span className="text-[0.5rem] text-gray-500 text-center mt-0.5 leading-tight">Re-execute call to AI Profile</span>
           </button>
         </div>
 

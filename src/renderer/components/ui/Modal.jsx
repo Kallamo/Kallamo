@@ -96,7 +96,7 @@ export default function Modal({
         aria-labelledby={title ? generatedTitleId : undefined}
         tabIndex={-1}
         onKeyDown={keepFocusInside}
-        className={`w-full ${SIZES[size] || SIZES.sm} bg-surface-canvas border border-border-default rounded-xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200 ${className}`}
+        className={`w-full ${SIZES[size] || SIZES.sm} bg-surface-canvas border border-border-default rounded-card shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200 ${className}`}
       >
         {title && (
           <div className="relative z-10 shrink-0 flex items-center justify-between gap-3 min-h-14 px-5 bg-surface-panel/60 border-b border-border-subtle">
@@ -109,7 +109,7 @@ export default function Modal({
                 type="button"
                 onClick={onClose}
                 aria-label="Close dialog"
-                className="titlebar-nodrag relative z-10 min-h-8 min-w-8 inline-flex items-center justify-center text-text-muted hover:text-status-danger transition-colors cursor-pointer rounded-md hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                className="titlebar-nodrag relative z-10 min-h-8 min-w-8 inline-flex items-center justify-center text-text-muted hover:text-status-danger transition-colors cursor-pointer rounded-md hover:bg-surface-hover/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
               >
                 <X className="w-4 h-4" />
               </button>

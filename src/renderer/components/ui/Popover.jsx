@@ -95,7 +95,7 @@ export default function Popover({
       role={role}
       data-floating-layer="popover"
       style={style}
-      className={`${scroll ? 'overflow-y-auto overscroll-contain custom-scrollbar' : ''} bg-surface-panel border border-border-default rounded-xl shadow-2xl p-1 animate-in fade-in duration-150 ${className}`}
+      className={`${scroll ? 'overflow-y-auto overscroll-contain custom-scrollbar' : ''} bg-surface-panel border border-border-default rounded-card shadow-2xl p-1 animate-in fade-in duration-150 ${className}`}
     >
       {children}
     </div>,

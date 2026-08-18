@@ -21,8 +21,8 @@ import Button from './Button';
  * Layout: 2 actions render inline (right-aligned); 3+ stack full-width.
  */
 const TONES = {
-  danger: { Icon: Trash2, chip: 'bg-red-500/10 text-red-500' },
-  warning: { Icon: AlertTriangle, chip: 'bg-amber-500/10 text-amber-400' },
+  danger: { Icon: Trash2, chip: 'bg-status-danger/10 text-status-danger' },
+  warning: { Icon: AlertTriangle, chip: 'bg-status-warning/10 text-status-warning' },
   info: { Icon: Info, chip: 'bg-blue-500/10 text-blue-400' },
   question: { Icon: HelpCircle, chip: 'bg-accent/10 text-accent' },
 };
@@ -43,13 +43,13 @@ export default function ConfirmDialog({
     <Modal onClose={onClose} size="sm" showClose={false}>
       <div className="p-6 flex flex-col space-y-4">
         <div className="flex items-center gap-3">
-          <div className={`p-2 rounded-lg shrink-0 ${toneConf.chip}`}>
+          <div className={`p-2 rounded-control shrink-0 ${toneConf.chip}`}>
             <Icon className="w-5 h-5" />
           </div>
-          <h3 className="text-sm font-bold text-white uppercase tracking-wider">{title}</h3>
+          <h3 className="text-sm font-bold text-text-primary uppercase tracking-wider">{title}</h3>
         </div>
 
-        <div className="text-xs text-gray-400 leading-relaxed whitespace-pre-wrap select-text">
+        <div className="text-xs text-text-muted leading-relaxed whitespace-pre-wrap select-text">
           {message}
         </div>
 

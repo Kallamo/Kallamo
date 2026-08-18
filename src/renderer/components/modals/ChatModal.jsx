@@ -184,12 +184,12 @@ export default function ChatModal({ chat, onClose }) {
                 {!bgImage ? (
                   <div className="flex flex-col items-center justify-center transition-all duration-200">
                     <ImageIcon className="text-gray-600 group-hover:text-accent transition-colors w-6 h-6 mb-1" />
-                    <span className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold opacity-0 group-hover:opacity-100 transition-opacity font-sans">Upload Image</span>
+                    <span className="text-[0.625rem] text-gray-500 uppercase tracking-widest font-semibold opacity-0 group-hover:opacity-100 transition-opacity font-sans">Upload Image</span>
                   </div>
                 ) : (
                   <button 
                     onClick={(e) => { e.stopPropagation(); handleRemoveBgImage(); }}
-                    className="absolute inset-0 w-full h-full bg-black/75 text-white text-[10px] font-bold tracking-widest opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer font-sans"
+                    className="absolute inset-0 w-full h-full bg-black/75 text-white text-[0.625rem] font-bold tracking-widest opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer font-sans"
                   >
                     REMOVE IMAGE
                   </button>
@@ -240,7 +240,7 @@ export default function ChatModal({ chat, onClose }) {
                       value={searchProfiles}
                       onChange={(e) => setSearchProfiles(e.target.value)}
                       placeholder="Search profiles..." 
-                      className="w-full bg-[#051116] border border-gray-800/50 text-gray-300 text-[11px] rounded pl-7 pr-2 py-1.5 focus:outline-none focus:border-accent transition-colors font-sans"
+                      className="w-full bg-[#051116] border border-gray-800/50 text-gray-300 text-[0.6875rem] rounded pl-7 pr-2 py-1.5 focus:outline-none focus:border-accent transition-colors font-sans"
                     />
                   </div>
                 </div>
@@ -304,7 +304,7 @@ export default function ChatModal({ chat, onClose }) {
                       value={searchWorkflows}
                       onChange={(e) => setSearchWorkflows(e.target.value)}
                       placeholder="Search workflows..." 
-                      className="w-full bg-[#051116] border border-gray-800/50 text-gray-300 text-[11px] rounded pl-7 pr-2 py-1.5 focus:outline-none focus:border-accent transition-colors font-sans"
+                      className="w-full bg-[#051116] border border-gray-800/50 text-gray-300 text-[0.6875rem] rounded pl-7 pr-2 py-1.5 focus:outline-none focus:border-accent transition-colors font-sans"
                     />
                   </div>
                 </div>

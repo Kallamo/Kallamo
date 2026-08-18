@@ -816,7 +816,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           <button
                             type="button"
                             onClick={() => setShowAddModelField(true)}
-                            className="bg-transparent border border-gray-700 hover:bg-gray-800 text-white text-[10px] uppercase font-bold px-2 py-1 rounded transition-colors cursor-pointer"
+                            className="bg-transparent border border-gray-700 hover:bg-gray-800 text-white text-[0.625rem] uppercase font-bold px-2 py-1 rounded transition-colors cursor-pointer"
                           >
                             + Add Model
                           </button>
@@ -855,7 +855,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                             modelsList.map(m => (
                               <span
                                 key={m}
-                                className="flex items-center space-x-1.5 bg-[#1a2d3d] border border-gray-700/50 text-gray-300 text-[10px] font-semibold px-2 py-0.5 rounded-full select-none"
+                                className="flex items-center space-x-1.5 bg-[#1a2d3d] border border-gray-700/50 text-gray-300 text-[0.625rem] font-semibold px-2 py-0.5 rounded-full select-none"
                               >
                                 <span>{m}</span>
                                 <X
@@ -1489,7 +1489,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                             </label>
                           </div>
                           {isPlatformUnsupported && (
-                            <p className="text-red-400/90 text-[10px] leading-relaxed">
+                            <p className="text-red-400/90 text-[0.625rem] leading-relaxed">
                               ⚠️ Local AI is not supported on Intel Mac. Please configure an external embedding provider.
                             </p>
                           )}
@@ -1803,7 +1803,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                   <div className="flex flex-col justify-center">
                     <div className="flex items-baseline space-x-3">
                       <Logotype height={44} className="text-white font-bold select-none pointer-events-none" cutColor="#000D11" />
-                      <span className="text-[10px] bg-accent/10 border border-accent/25 text-accent px-2 py-0.5 rounded-full font-bold uppercase tracking-wider select-none pointer-events-none">v{appVersion}</span>
+                      <span className="text-[0.625rem] bg-accent/10 border border-accent/25 text-accent px-2 py-0.5 rounded-full font-bold uppercase tracking-wider select-none pointer-events-none">v{appVersion}</span>
                     </div>
                     <p className="caption mt-1 font-medium select-none pointer-events-none">A local-first studio for writing and living worlds.</p>
                   </div>
@@ -1813,7 +1813,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                   {/* Auto-update Section */}
                   <div className="bg-[#051116] border border-gray-800/80 rounded-xl p-5 shadow-lg flex items-center justify-between">
                     <div className="space-y-1 pr-4">
-                      <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest block mb-1 select-none pointer-events-none">Auto-Update</span>
+                      <span className="text-[0.625rem] text-gray-500 font-bold uppercase tracking-widest block mb-1 select-none pointer-events-none">Auto-Update</span>
                       {updateStatus === 'downloaded' ? (
                         <>
                           <h4 className="text-sm font-bold text-emerald-400 leading-tight">Update v{updateVersion} is ready to install!</h4>
@@ -1859,12 +1859,12 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                   {/* Creator Section */}
                   <div className="bg-[#051116] border border-gray-800/80 rounded-xl p-5 shadow-lg flex items-center justify-between">
                     <div className="space-y-1.5 pr-4">
-                      <span className="text-[10px] text-accent font-bold uppercase tracking-widest block mb-1 select-none pointer-events-none">Creator</span>
+                      <span className="text-[0.625rem] text-accent font-bold uppercase tracking-widest block mb-1 select-none pointer-events-none">Creator</span>
                       <h4 className="text-base font-bold text-white leading-tight">Jonathan Ferreira da Conceição</h4>
 
                       <div className="flex flex-wrap gap-2 mt-2">
                         {/* GitHub tag */}
-                        <div className="flex items-center space-x-1.5 bg-[#101c24]/85 border border-gray-800 text-gray-300 text-[10px] font-semibold px-2 py-0.5 rounded-full select-none">
+                        <div className="flex items-center space-x-1.5 bg-[#101c24]/85 border border-gray-800 text-gray-300 text-[0.625rem] font-semibold px-2 py-0.5 rounded-full select-none">
                           <svg viewBox="0 0 24 24" className="w-3 h-3 text-gray-400" fill="currentColor">
                             <path d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.87 8.17 6.84 9.5.5.08.66-.23.66-.5v-1.69c-2.77.6-3.36-1.34-3.36-1.34-.46-1.16-1.11-1.47-1.11-1.47-.9-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.07 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.92 0-1.11.38-2 1.03-2.71-.1-.25-.45-1.29.1-2.64 0 0 .84-.27 2.75 1.02.79-.22 1.65-.33 2.5-.33.85 0 1.71.11 2.5.33 1.91-1.29 2.75-1.02 2.75-1.02.55 1.35.2 2.39.1 2.64.65.71 1.03 1.6 1.03 2.71 0 3.82-2.34 4.66-4.57 4.91.36.31.69.92.69 1.85V21c0 .27.16.59.67.5C19.14 20.16 22 16.42 22 12A10 10 0 0012 2z" />
                           </svg>
@@ -1872,7 +1872,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                         </div>
 
                         {/* Reddit & Discord tag */}
-                        <div className="flex items-center space-x-1.5 bg-[#101c24]/85 border border-gray-800 text-gray-300 text-[10px] font-semibold px-2 py-0.5 rounded-full select-none">
+                        <div className="flex items-center space-x-1.5 bg-[#101c24]/85 border border-gray-800 text-gray-300 text-[0.625rem] font-semibold px-2 py-0.5 rounded-full select-none">
                           <div className="flex space-x-1.5 items-center mr-0.5">
                             {/* Discord icon */}
                             <svg viewBox="0 0 127.14 96.36" className="w-3 h-3 text-gray-400" fill="currentColor">
@@ -1900,7 +1900,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                   {/* Contributors & Open Source Community */}
                   <div className="bg-[#051116] border border-gray-800/80 rounded-xl p-5 shadow-lg space-y-4">
                     <div className="space-y-1">
-                      <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest block mb-1 select-none pointer-events-none">Contributors</span>
+                      <span className="text-[0.625rem] text-gray-500 font-bold uppercase tracking-widest block mb-1 select-none pointer-events-none">Contributors</span>
                       <h4 className="text-sm font-bold text-gray-200">Future Contributors & Community</h4>
                       <p className="caption">Kallamo is built under the open-source <strong className="font-bold text-gray-300">AGPL-3.0 License</strong> and welcomes contributions. Join the development, submit pull requests, or file bug reports on our GitHub organization!</p>
                     </div>

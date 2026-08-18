@@ -36,7 +36,7 @@ const Textarea = React.forwardRef(function Textarea({
         aria-describedby={(error || hint) ? messageId : rest['aria-describedby']}
         value={value}
         maxLength={maxLength}
-        className={`w-full rounded-lg border bg-surface-input p-3 text-sm text-text-secondary transition-colors
+        className={`w-full rounded-control border bg-surface-input p-3 text-sm text-text-secondary transition-colors
           placeholder:text-text-subtle focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 resize-none custom-scrollbar leading-relaxed
           disabled:opacity-60 ${monospace ? 'font-mono' : ''} ${
           invalid ? 'border-status-danger/60 focus:border-status-danger' : 'border-border-default focus:border-accent'

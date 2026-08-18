@@ -21,7 +21,7 @@ export default function WorkflowErrorModal() {
           </div>
           <div className="flex flex-col">
             <h3 className="text-white font-bold text-base">Workflow Execution Error</h3>
-            <span className="text-[10px] text-red-400 font-bold uppercase tracking-wider">Failed at: {stepName}</span>
+            <span className="text-[0.625rem] text-red-400 font-bold uppercase tracking-wider">Failed at: {stepName}</span>
           </div>
         </div>
 
@@ -45,8 +45,8 @@ export default function WorkflowErrorModal() {
             className="flex flex-col items-center justify-center p-3 bg-red-950/10 hover:bg-red-950/30 border border-red-900/50 hover:border-red-500/50 rounded-xl transition-all cursor-pointer group"
           >
             <XCircle className="w-5 h-5 text-red-500 mb-1 group-hover:scale-110 transition-transform" />
-            <span className="text-[10px] font-bold text-red-400 uppercase tracking-wider">Interrupt</span>
-            <span className="text-[8px] text-gray-500 text-center mt-0.5 leading-tight">Stop chain & save messages</span>
+            <span className="text-[0.625rem] font-bold text-red-400 uppercase tracking-wider">Interrupt</span>
+            <span className="text-[0.5rem] text-gray-500 text-center mt-0.5 leading-tight">Stop chain & save messages</span>
           </button>
 
           {/* Skip */}
@@ -55,8 +55,8 @@ export default function WorkflowErrorModal() {
             className="flex flex-col items-center justify-center p-3 bg-[#0a161d] hover:bg-[#1a2d32] border border-gray-800 hover:border-gray-500 rounded-xl transition-all cursor-pointer group"
           >
             <SkipForward className="w-5 h-5 text-gray-400 group-hover:text-white mb-1 group-hover:scale-110 transition-transform" />
-            <span className="text-[10px] font-bold text-gray-300 uppercase tracking-wider">Skip Step</span>
-            <span className="text-[8px] text-gray-500 text-center mt-0.5 leading-tight">Pass prev output to next step</span>
+            <span className="text-[0.625rem] font-bold text-gray-300 uppercase tracking-wider">Skip Step</span>
+            <span className="text-[0.5rem] text-gray-500 text-center mt-0.5 leading-tight">Pass prev output to next step</span>
           </button>
 
           {/* Retry */}
@@ -65,8 +65,8 @@ export default function WorkflowErrorModal() {
             className="flex flex-col items-center justify-center p-3 bg-accent/5 hover:bg-accent/15 border border-accent/20 hover:border-accent rounded-xl transition-all cursor-pointer group"
           >
             <Play className="w-5 h-5 text-accent mb-1 group-hover:scale-110 transition-transform" fill="currentColor" />
-            <span className="text-[10px] font-bold text-accent uppercase tracking-wider">Retry Step</span>
-            <span className="text-[8px] text-gray-500 text-center mt-0.5 leading-tight">Re-execute call to errored AI</span>
+            <span className="text-[0.625rem] font-bold text-accent uppercase tracking-wider">Retry Step</span>
+            <span className="text-[0.5rem] text-gray-500 text-center mt-0.5 leading-tight">Re-execute call to errored AI</span>
           </button>
         </div>
 

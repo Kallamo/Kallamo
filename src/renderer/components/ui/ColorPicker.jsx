@@ -134,14 +134,14 @@ export default function ColorPicker({ value, onChange, onChangeEnd }) {
       </div>
 
       <div className="flex items-center gap-2 mt-3">
-        <span className="w-7 h-7 rounded-md border border-gray-700 shrink-0" style={{ backgroundColor: value }} />
+        <span className="w-7 h-7 rounded-md border border-border-default shrink-0" style={{ backgroundColor: value }} />
         <input
           value={hexText}
           onChange={(e) => setHexText(e.target.value)}
           onBlur={commitHex}
           onKeyDown={(e) => { if (e.key === 'Enter') commitHex(); }}
           spellCheck={false}
-          className="w-full bg-[#00080B] border border-gray-800 text-gray-200 text-xs rounded-md px-2.5 py-1.5 focus:outline-none focus:border-accent uppercase"
+          className="w-full bg-surface-canvas border border-border-subtle text-text-secondary text-xs rounded-md px-2.5 py-1.5 focus:outline-none focus:border-accent uppercase"
         />
       </div>
     </div>

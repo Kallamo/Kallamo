@@ -17,7 +17,7 @@ export default function SectionCard({
   const hasHeader = title || description || action;
 
   return (
-    <section className={`bg-surface-panel border border-border-subtle rounded-xl p-5 ${className}`}>
+    <section className={`bg-surface-panel border border-border-subtle rounded-card p-5 ${className}`}>
       {hasHeader && (
         <div className="flex items-start justify-between gap-4 mb-4">
           <div className="min-w-0">

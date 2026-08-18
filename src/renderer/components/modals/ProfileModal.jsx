@@ -139,11 +139,11 @@ export default function ProfileModal({ profile, onClose, onSave }) {
       if (found) {
         return `
           <div class="my-3 border border-gray-800 rounded-lg overflow-hidden bg-[#030d11] select-text">
-            <div class="px-3 py-1.5 bg-[#0a161d] border-b border-gray-800 text-[10px] font-mono font-bold text-accent select-none">
+            <div class="px-3 py-1.5 bg-[#0a161d] border-b border-gray-800 text-[0.625rem] font-mono font-bold text-accent select-none">
               &lt;${key}&gt;
             </div>
             <div class="p-3 text-xs font-mono text-gray-300 whitespace-pre-wrap leading-relaxed">${escapeHTML(found.value)}</div>
-            <div class="px-3 py-1 bg-[#0a161d]/50 border-t border-gray-800/40 text-[9px] font-mono text-gray-500 select-none">
+            <div class="px-3 py-1 bg-[#0a161d]/50 border-t border-gray-800/40 text-[0.5625rem] font-mono text-gray-500 select-none">
               &lt;${key}/&gt;
             </div>
           </div>
@@ -353,11 +353,11 @@ export default function ProfileModal({ profile, onClose, onSave }) {
 
                 <div className="mt-auto pt-4 border-t border-gray-800/60">
                   <div className="flex items-center justify-between mb-3">
-                    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <span className="text-[0.625rem] font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
                       <SlidersHorizontal className="w-3 h-3 text-gray-500" /> Generation
                     </span>
                     <div className="flex items-center space-x-2">
-                      <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wider">Manual JSON</span>
+                      <span className="text-[0.5625rem] text-gray-500 font-bold uppercase tracking-wider">Manual JSON</span>
                       <label className="relative inline-flex items-center cursor-pointer">
                         <input
                           type="checkbox"
@@ -373,7 +373,7 @@ export default function ProfileModal({ profile, onClose, onSave }) {
                   {!manualMode ? (
                     <div className="flex gap-3">
                       <div className="flex-1 bg-[#011419] p-3 rounded-lg border border-gray-800/80">
-                        <div className="flex justify-between text-[11px] text-gray-400 mb-1.5">
+                        <div className="flex justify-between text-[0.6875rem] text-gray-400 mb-1.5">
                           <span>Temperature</span>
                           <span className="font-mono text-accent">{temperature}</span>
                         </div>
@@ -388,7 +388,7 @@ export default function ProfileModal({ profile, onClose, onSave }) {
                         />
                       </div>
                       <div className="flex-1 bg-[#011419] p-3 rounded-lg border border-gray-800/80">
-                        <div className="flex justify-between text-[11px] text-gray-400 mb-1.5">
+                        <div className="flex justify-between text-[0.6875rem] text-gray-400 mb-1.5">
                           <span>Max Tokens</span>
                           <span className="font-mono text-accent">{maxTokens}</span>
                         </div>
@@ -424,7 +424,7 @@ export default function ProfileModal({ profile, onClose, onSave }) {
             <div className="flex min-h-[32rem] flex-col overflow-hidden xl:col-span-7 xl:h-full xl:min-h-0">
               <div className={`${cardCls} flex flex-col h-full min-h-0`}>
                 <Head icon={Wand2} title="Behavior & Rules" right={
-                  <div className="flex bg-[#011419] p-0.5 rounded-lg border border-gray-800 text-[10px] font-bold uppercase tracking-wider select-none shrink-0 z-10 space-x-0.5">
+                  <div className="flex bg-[#011419] p-0.5 rounded-lg border border-gray-800 text-[0.625rem] font-bold uppercase tracking-wider select-none shrink-0 z-10 space-x-0.5">
                     <button
                       type="button"
                       onClick={() => setSystemPromptMode('editor')}

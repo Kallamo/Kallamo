@@ -114,7 +114,7 @@ export default function SearchableSelect({
           aria-haspopup="listbox"
           aria-controls={isOpen ? listboxId : undefined}
           aria-expanded={isOpen}
-          className={`flex min-h-10 w-full items-center gap-2 rounded-lg border border-border-default bg-surface-input px-3 text-left text-sm text-text-secondary transition-colors
+          className={`flex min-h-10 w-full items-center gap-2 rounded-control border border-border-default bg-surface-input px-3 text-left text-sm text-text-secondary transition-colors
             hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50
             ${clearable && selected.length > 0 && !multiple ? 'pr-16' : 'pr-9'}`}
         >
@@ -130,7 +130,7 @@ export default function SearchableSelect({
             type="button"
             aria-label="Clear selection"
             onClick={() => onChange('')}
-            className="absolute right-8 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-text-subtle hover:bg-white/[0.06] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            className="absolute right-8 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-text-subtle hover:bg-surface-hover/55 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
             <X className="h-3.5 w-3.5" />
           </button>
@@ -145,7 +145,7 @@ export default function SearchableSelect({
               key={option.id}
               type="button"
               onClick={() => select(option.id)}
-              className="inline-flex min-h-8 items-center gap-1 rounded-full border border-border-default bg-white/[0.04] px-2.5 py-1 text-xs text-text-secondary hover:border-status-danger/30 hover:text-status-danger"
+              className="inline-flex min-h-8 items-center gap-1 rounded-full border border-border-default bg-surface-hover/40 px-2.5 py-1 text-xs text-text-secondary hover:border-status-danger/30 hover:text-status-danger"
             >
               {option.label}<X className="h-3 w-3" />
             </button>
@@ -182,8 +182,8 @@ export default function SearchableSelect({
                 aria-selected={isSelected}
                 onMouseEnter={() => setActiveIndex(index)}
                 onClick={() => select(option.id)}
-                className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors [content-visibility:auto] [contain-intrinsic-size:0_44px]
-                  ${isSelected ? 'bg-accent/12 text-accent' : isActive ? 'bg-white/[0.06] text-text-primary' : 'text-text-secondary hover:bg-white/[0.06] hover:text-text-primary'}`}
+                className={`flex w-full items-center gap-3 rounded-control px-3 py-2.5 text-left transition-colors [content-visibility:auto] [contain-intrinsic-size:0_44px]
+                  ${isSelected ? 'bg-accent/12 text-accent' : isActive ? 'bg-surface-hover/55 text-text-primary' : 'text-text-secondary hover:bg-surface-hover/55 hover:text-text-primary'}`}
               >
                 {Icon ? <Icon className="h-4 w-4 shrink-0" aria-hidden="true" /> : null}
                 {option.color ? <span className="h-6 w-1 rounded-full" style={{ backgroundColor: option.color }} /> : null}

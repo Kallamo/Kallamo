@@ -428,7 +428,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
           <div>
             {childFolders(folder.id).map(f => renderFolder(f, depth + 1))}
             {childDocs(folder.id).map(d => renderDoc(d, depth + 1))}
-            <button onClick={() => newDocument(folder.id)} className="flex items-center gap-1 text-[11px] text-gray-600 hover:text-gray-300 px-2 py-0.5" style={{ paddingLeft: `${8 + (depth + 1) * 12}px` }}>
+            <button onClick={() => newDocument(folder.id)} className="flex items-center gap-1 text-[0.6875rem] text-gray-600 hover:text-gray-300 px-2 py-0.5" style={{ paddingLeft: `${8 + (depth + 1) * 12}px` }}>
               <FilePlus className="w-3 h-3" /> chapter
             </button>
           </div>
@@ -478,7 +478,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
       {!sidebarCollapsed && (
       <div className="w-60 shrink-0 border-r border-gray-800/40 flex flex-col bg-[#011419]/25">
         <div className="flex items-center gap-1 px-3 py-3 border-b border-gray-800/80 bg-[#011419]/35">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mr-auto">Chapters</span>
+          <span className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-500 mr-auto">Chapters</span>
           <button title="New chapter" onClick={() => newDocument(null)} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md"><FilePlus className="w-4 h-4" /></button>
           <button title="New folder" onClick={() => newFolder(null)} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md"><FolderPlus className="w-4 h-4" /></button>
           <button title="Import .docx/.pdf" onClick={importDocument} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md"><Upload className="w-4 h-4" /></button>
@@ -501,7 +501,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
             onDrop={onRootDrop}
           >
             {dragItem && dropInfo?.id === '__root__' && (
-              <div className="mx-2 mt-1 border border-dashed border-accent/60 rounded-md py-1.5 text-center text-[10px] text-accent/80">Move to root</div>
+              <div className="mx-2 mt-1 border border-dashed border-accent/60 rounded-md py-1.5 text-center text-[0.625rem] text-accent/80">Move to root</div>
             )}
           </div>
         </div>

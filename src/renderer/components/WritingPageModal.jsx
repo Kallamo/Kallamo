@@ -26,7 +26,7 @@ function Segmented({ value, options, onChange }) {
 
 function NumberField({ label, value, onChange, min = 0, step = 1 }) {
   return (
-    <label className="flex flex-col gap-1 text-[11px] text-gray-400">
+    <label className="flex flex-col gap-1 text-[0.6875rem] text-gray-400">
       {label}
       <input
         type="number"

@@ -33,20 +33,20 @@ export function InvokeModal({ selection, profiles, initialChannel, onSubmit, onC
           <p className="text-sm text-amber-400/90 mb-4">No active writing profiles in this workspace. Activate one in the Chat tab to invoke the AI here.</p>
         ) : (
           <div className="mb-3">
-            <label className="block text-[11px] uppercase tracking-wide text-gray-500 mb-1">Profile</label>
+            <label className="block text-[0.6875rem] uppercase tracking-wide text-gray-500 mb-1">Profile</label>
             <SearchableSelect value={profileId} onChange={setProfileId} options={profiles.map(profile => ({ id: profile.id, label: profile.name, color: profile.color }))} placeholder="Search for a profile" />
           </div>
         )}
 
         {selected?.needsSetup && (
-          <div className="flex items-start gap-2 mb-3 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-900/50 text-[11px] leading-relaxed text-amber-200">
+          <div className="flex items-start gap-2 mb-3 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-900/50 text-[0.6875rem] leading-relaxed text-amber-200">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-500" />
             <span>To activate: create an API profile in Settings, then link it to this profile in the Library.</span>
           </div>
         )}
 
         <div className="mb-3">
-          <label className="block text-[11px] uppercase tracking-wide text-gray-500 mb-1">Result channel</label>
+          <label className="block text-[0.6875rem] uppercase tracking-wide text-gray-500 mb-1">Result channel</label>
           <div className="flex bg-[#011419] p-0.5 rounded-lg border border-gray-800 text-xs">
             {CHANNELS.map(ch => (
               <button
@@ -59,13 +59,13 @@ export function InvokeModal({ selection, profiles, initialChannel, onSubmit, onC
               </button>
             ))}
           </div>
-          <p className="text-[10px] leading-tight text-gray-500 mt-1">
+          <p className="text-[0.625rem] leading-tight text-gray-500 mt-1">
             Replacement rewrites the span (green/red diff), Insertion adds new prose (green only), Analysis returns a read-only side note.
           </p>
         </div>
 
         <div className="mb-4">
-          <label className="block text-[11px] uppercase tracking-wide text-gray-500 mb-1">Instruction (optional)</label>
+          <label className="block text-[0.6875rem] uppercase tracking-wide text-gray-500 mb-1">Instruction (optional)</label>
           <textarea
             value={prompt}
             onChange={e => setPrompt(e.target.value)}

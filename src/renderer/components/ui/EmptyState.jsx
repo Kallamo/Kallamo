@@ -15,7 +15,7 @@ export default function EmptyState({
   return (
     <div
       className={`w-full flex flex-col items-center justify-center text-center ${compact ? 'py-6' : 'py-9'} px-6
-        border border-dashed border-border-default rounded-xl bg-surface-canvas/20 ${className}`}
+        border border-dashed border-border-default rounded-card bg-surface-canvas/20 ${className}`}
     >
       {Icon && <Icon className={`${compact ? 'w-5 h-5' : 'w-7 h-7'} text-text-subtle mb-3`} />}
       <span className="text-sm font-semibold text-text-secondary">{title}</span>

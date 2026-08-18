@@ -1162,7 +1162,7 @@ export default function ChatMemoryView({
                         setEditorError('');
                         setEditorOpen(true);
                       }}
-                      className="w-full text-left px-3 py-2 text-[10px] uppercase font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors flex items-center space-x-2"
+                      className="w-full text-left px-3 py-2 text-[0.625rem] uppercase font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors flex items-center space-x-2"
                     >
                       <Plus className="w-3.5 h-3.5 text-accent" />
                       <span>Custom Memory</span>
@@ -1173,7 +1173,7 @@ export default function ChatMemoryView({
                         setUploadStrategy('rag_search');
                         fileInputRef.current?.click();
                       }}
-                      className="w-full text-left px-3 py-2 text-[10px] uppercase font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors flex items-center space-x-2"
+                      className="w-full text-left px-3 py-2 text-[0.625rem] uppercase font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors flex items-center space-x-2"
                     >
                       <Search className="w-3.5 h-3.5 text-accent" />
                       <span>Searchable (RAG)</span>
@@ -1184,7 +1184,7 @@ export default function ChatMemoryView({
                         setUploadStrategy('full_context');
                         fileInputRef.current?.click();
                       }}
-                      className="w-full text-left px-3 py-2 text-[10px] uppercase font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors flex items-center space-x-2"
+                      className="w-full text-left px-3 py-2 text-[0.625rem] uppercase font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors flex items-center space-x-2"
                     >
                       <FileText className="w-3.5 h-3.5 text-accent" />
                       <span>Constant Memory</span>
@@ -1195,7 +1195,7 @@ export default function ChatMemoryView({
                         setAddDropdownOpen(false);
                         handleImportChatKb();
                       }}
-                      className="w-full text-left px-3 py-2 text-[10px] uppercase font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors flex items-center space-x-2"
+                      className="w-full text-left px-3 py-2 text-[0.625rem] uppercase font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors flex items-center space-x-2"
                     >
                       <Upload className="w-3.5 h-3.5 text-accent" />
                       <span>Import KB Package</span>
@@ -1241,7 +1241,7 @@ export default function ChatMemoryView({
             </div>
             {progressDetail && (
               <div className="flex items-center space-x-3 w-72 shrink-0">
-                <span className="text-gray-500 font-mono text-[10px] shrink-0">
+                <span className="text-gray-500 font-mono text-[0.625rem] shrink-0">
                   {progressDetail.current} / {progressDetail.total} chunks
                 </span>
                 <div className="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden">
@@ -1392,7 +1392,7 @@ export default function ChatMemoryView({
                         {activeScopingBlockId === block.id && (
                           <Popover anchorRef={scopeAnchorRef} open onClose={() => { scopeAnchorRef.current = null; setActiveScopingBlockId(null); }} matchAnchorWidth={false} align="right" scroll={false} className="w-48 !p-2">
                             <div onMouseDown={(event) => event.stopPropagation()}>
-                              <span className="block text-[8px] font-bold text-gray-500 uppercase tracking-widest px-2 py-1">Scope Settings</span>
+                              <span className="block text-[0.5rem] font-bold text-gray-500 uppercase tracking-widest px-2 py-1">Scope Settings</span>
 
                               <div className="max-h-40 overflow-y-auto custom-scrollbar space-y-0.5 mt-1 select-none">
                                 {(() => {
@@ -1416,7 +1416,7 @@ export default function ChatMemoryView({
                                         <div key={p.id} className="flex items-center justify-between p-1.5 rounded opacity-60" title="This AI Profile needs an API Connection and model before it can be used.">
                                           <div className="flex items-center space-x-2 min-w-0 mr-2">
                                             <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: p.color }} />
-                                            <span className="text-[10px] text-gray-400 truncate font-sans">{p.name}</span>
+                                            <span className="text-[0.625rem] text-gray-400 truncate font-sans">{p.name}</span>
                                           </div>
                                           <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
                                         </div>
@@ -1429,7 +1429,7 @@ export default function ChatMemoryView({
                                       >
                                         <div className="flex items-center space-x-2 min-w-0 mr-2">
                                           <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: p.color }} />
-                                          <span className="text-[10px] text-gray-300 truncate font-sans">{p.name}</span>
+                                          <span className="text-[0.625rem] text-gray-300 truncate font-sans">{p.name}</span>
                                         </div>
                                         <div className={`w-3.5 h-3.5 rounded-sm border flex items-center justify-center transition-all duration-200 hover:scale-105 active:scale-95 ${isSelected ? 'bg-accent border-accent text-[#011419] shadow-[0_0_8px_rgba(221,186,110,0.4)]' : 'border-gray-700 bg-[#011419]/90 hover:border-accent/50'
                                           }`}>
@@ -1448,7 +1448,7 @@ export default function ChatMemoryView({
                               </div>
 
                               <div className="h-px bg-gray-800/80 my-1.5" />
-                              <span className="text-[8px] text-gray-500 italic px-2 block leading-snug">
+                              <span className="text-[0.5rem] text-gray-500 italic px-2 block leading-snug">
                                 If no profiles are selected, this block is shared globally.
                               </span>
                             </div>
@@ -1502,7 +1502,7 @@ export default function ChatMemoryView({
         {/* World Index section */}
         <div ref={worldIndexRef} className="flex items-center space-x-1.5 mb-2.5">
           <Brain className="w-4 h-4 text-accent" />
-          <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest font-sans">World Index</span>
+          <span className="text-[0.625rem] font-bold text-gray-400 uppercase tracking-widest font-sans">World Index</span>
         </div>
         <CoachMark
           anchorRef={worldIndexRef}
@@ -1544,7 +1544,7 @@ export default function ChatMemoryView({
                   </span>
                   <ChevronDown className={`w-3.5 h-3.5 transition-transform ${indexMenu === t.key ? 'rotate-180' : ''}`} />
                 </button>
-                <p className={`mt-1 px-1 text-[9px] truncate ${status?.failed ? 'text-red-400' : 'text-gray-500'}`}>
+                <p className={`mt-1 px-1 text-[0.5625rem] truncate ${status?.failed ? 'text-red-400' : 'text-gray-500'}`}>
                   {status?.failed ? `${status.failed} chunk${status.failed === 1 ? '' : 's'} need another try` : label}
                 </p>
                 <Popover anchorRef={t.ref} open={indexMenu === t.key} onClose={() => setIndexMenu(null)} matchAnchorWidth={true} align="left" className="!p-2">
@@ -1582,7 +1582,7 @@ export default function ChatMemoryView({
         {/* RAG Query Simulator section */}
         <div className="flex items-center space-x-1.5 mb-2.5">
           <Sparkles className="w-4 h-4 text-accent animate-pulse" />
-          <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest font-sans">RAG Query Simulator</span>
+          <span className="text-[0.625rem] font-bold text-gray-400 uppercase tracking-widest font-sans">RAG Query Simulator</span>
         </div>
 
         <div className="bg-[#051116]/80 border border-gray-800 rounded-xl p-3.5 flex flex-col space-y-3 shrink-0">
@@ -1594,7 +1594,7 @@ export default function ChatMemoryView({
             {/* AI Profile Selector */}
             <div className="flex flex-col space-y-1">
               <div className="flex items-center justify-between">
-                <label className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">AI Profile Scoping</label>
+                <label className="text-[0.5625rem] font-bold text-gray-400 uppercase tracking-widest">AI Profile Scoping</label>
                 <span title="Profiles with Agentic RAG active will first refine your query using LLM before searching. This incurs a small token cost.">
                   <HelpCircle className="w-3 h-3 text-gray-500 hover:text-accent cursor-help" />
                 </span>
@@ -1621,7 +1621,7 @@ export default function ChatMemoryView({
 
             {/* Agentic RAG Active Alert */}
             {simProfileId && writingProfiles.find(p => p.id === simProfileId)?.isAgentic === 1 && (
-              <div className="bg-[#FBCB2D]/10 border border-[#FBCB2D]/30 rounded-lg p-2 flex items-center space-x-2 text-[9px] text-[#FBCB2D] font-medium select-none">
+              <div className="bg-[#FBCB2D]/10 border border-[#FBCB2D]/30 rounded-lg p-2 flex items-center space-x-2 text-[0.5625rem] text-[#FBCB2D] font-medium select-none">
                 <Sparkles className="w-3.5 h-3.5 shrink-0 text-accent" />
                 <span>Agentic RAG active. LLM refinement query will consume a few tokens.</span>
               </div>
@@ -1636,7 +1636,7 @@ export default function ChatMemoryView({
             <button
               onClick={handleTestSearch}
               disabled={simLoading || !simQuery.trim()}
-              className="w-full py-1.5 bg-accent hover:brightness-110 disabled:opacity-40 text-[#011419] text-[9px] font-bold uppercase tracking-widest rounded-lg transition-all cursor-pointer flex items-center justify-center space-x-2"
+              className="w-full py-1.5 bg-accent hover:brightness-110 disabled:opacity-40 text-[#011419] text-[0.5625rem] font-bold uppercase tracking-widest rounded-lg transition-all cursor-pointer flex items-center justify-center space-x-2"
             >
               {simLoading ? (
                 <>
@@ -1661,32 +1661,32 @@ export default function ChatMemoryView({
             </div>
           ) : (simResults.kbResults.length === 0 && simResults.memoryResults.length === 0 && (!simResults.profileResults || simResults.profileResults.length === 0)) ? (
             <div className="flex-1 border border-dashed border-red-900/10 rounded-xl bg-red-950/5 flex items-center justify-center text-center p-4 select-none">
-              <span className="text-[10px] text-red-400 italic font-sans">No matches found above threshold</span>
+              <span className="text-[0.625rem] text-red-400 italic font-sans">No matches found above threshold</span>
             </div>
           ) : (
             <div className="space-y-4 max-h-[50vh] overflow-y-auto custom-scrollbar select-text animate-in fade-in duration-200">
               {/* Refined Query banner if agentic applied */}
               {simResults.isAgenticApplied && (
                 <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg select-none">
-                  <span className="block text-[8px] font-bold text-emerald-400 uppercase tracking-widest">Refined Query (Agentic RAG)</span>
-                  <p className="text-[10px] text-gray-200 mt-0.5 italic">"{simResults.searchQuery}"</p>
+                  <span className="block text-[0.5rem] font-bold text-emerald-400 uppercase tracking-widest">Refined Query (Agentic RAG)</span>
+                  <p className="text-[0.625rem] text-gray-200 mt-0.5 italic">"{simResults.searchQuery}"</p>
                 </div>
               )}
 
               {/* Chat Memories & Files Section */}
               <div className="space-y-2">
-                <span className="block text-[8px] font-bold text-gray-500 uppercase tracking-widest px-1">Chat Memories & Files</span>
+                <span className="block text-[0.5rem] font-bold text-gray-500 uppercase tracking-widest px-1">Chat Memories & Files</span>
                 {(simResults.kbResults.length === 0 && simResults.memoryResults.length === 0) ? (
                   <p className="caption italic px-1">No matching chat files or snippets found.</p>
                 ) : (
                   <div className="space-y-2">
                     {simResults.kbResults.map((res, i) => (
                       <div key={`kb_${i}`} className="p-3 bg-[#0a161d]/20 border border-gray-800/60 rounded-xl flex flex-col space-y-1">
-                        <div className="flex items-center justify-between text-[8px] font-bold">
+                        <div className="flex items-center justify-between text-[0.5rem] font-bold">
                           <span className="text-accent truncate max-w-[120px] font-sans">FILE: {res.source}</span>
                           <span className="font-mono text-gray-400">Score: {res.score.toFixed(3)}</span>
                         </div>
-                        <p className="text-[10px] text-gray-300 leading-normal font-sans line-clamp-4">
+                        <p className="text-[0.625rem] text-gray-300 leading-normal font-sans line-clamp-4">
                           {res.text}
                         </p>
                       </div>
@@ -1694,11 +1694,11 @@ export default function ChatMemoryView({
 
                     {simResults.memoryResults.map((res, i) => (
                       <div key={`mem_${i}`} className="p-3 bg-[#0a161d]/20 border border-gray-800/60 rounded-xl flex flex-col space-y-1">
-                        <div className="flex items-center justify-between text-[8px] font-bold">
+                        <div className="flex items-center justify-between text-[0.5rem] font-bold">
                           <span className="text-cyan-400 truncate max-w-[120px] font-sans">MEM: {res.source}</span>
                           <span className="font-mono text-gray-400">Score: {res.score.toFixed(3)}</span>
                         </div>
-                        <p className="text-[10px] text-gray-300 leading-normal font-sans line-clamp-4">
+                        <p className="text-[0.625rem] text-gray-300 leading-normal font-sans line-clamp-4">
                           {res.text}
                         </p>
                       </div>
@@ -1710,7 +1710,7 @@ export default function ChatMemoryView({
               {/* AI Profile Memories Section */}
               {simProfileId && (
                 <div className="space-y-2 pt-2 border-t border-gray-800/40">
-                  <span className="block text-[8px] font-bold text-gray-500 uppercase tracking-widest px-1">
+                  <span className="block text-[0.5rem] font-bold text-gray-500 uppercase tracking-widest px-1">
                     AI Profile Memories ({writingProfiles.find(p => p.id === simProfileId)?.name})
                   </span>
                   {!simResults.profileResults || simResults.profileResults.length === 0 ? (
@@ -1719,11 +1719,11 @@ export default function ChatMemoryView({
                     <div className="space-y-2">
                       {simResults.profileResults.map((res, i) => (
                         <div key={`prof_${i}`} className="p-3 bg-[#0a161d]/20 border border-[#3b82f6]/20 rounded-xl flex flex-col space-y-1 animate-in slide-in-from-bottom-2 duration-200">
-                          <div className="flex items-center justify-between text-[8px] font-bold">
+                          <div className="flex items-center justify-between text-[0.5rem] font-bold">
                             <span className="text-blue-400 truncate max-w-[120px] font-sans">PROFILE: {res.source}</span>
                             <span className="font-mono text-gray-400">Score: {res.score.toFixed(3)}</span>
                           </div>
-                          <p className="text-[10px] text-gray-300 leading-normal font-sans line-clamp-4">
+                          <p className="text-[0.625rem] text-gray-300 leading-normal font-sans line-clamp-4">
                             {res.text}
                           </p>
                         </div>
@@ -1787,31 +1787,31 @@ export default function ChatMemoryView({
 
               {(!editingBlock || editingBlock.type === 'snippet') && (
                 <div className="flex flex-col space-y-1.5">
-                  <label className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">Storage Strategy</label>
+                  <label className="text-[0.5625rem] font-bold text-gray-400 uppercase tracking-widest">Storage Strategy</label>
                   <div className="flex space-x-2">
                     <button
                       type="button"
                       onClick={() => setEditorStrategy('rag_search')}
-                      className={`flex-1 py-1.5 rounded-lg border text-[10px] font-bold uppercase transition-all flex flex-col items-center justify-center space-y-0.5 cursor-pointer ${
+                      className={`flex-1 py-1.5 rounded-lg border text-[0.625rem] font-bold uppercase transition-all flex flex-col items-center justify-center space-y-0.5 cursor-pointer ${
                         editorStrategy === 'rag_search'
                           ? 'bg-[#3b82f6]/20 border-[#3b82f6] text-[#3b82f6] shadow-[0_0_12px_rgba(59,130,246,0.2)]'
                           : 'bg-[#011419] border-gray-800 text-gray-500 hover:text-gray-300 hover:border-gray-700'
                       }`}
                     >
                       <span>Searchable (RAG)</span>
-                      <span className="text-[8px] font-normal opacity-70 lowercase">Indexed for vector searches</span>
+                      <span className="text-[0.5rem] font-normal opacity-70 lowercase">Indexed for vector searches</span>
                     </button>
                     <button
                       type="button"
                       onClick={() => setEditorStrategy('constant')}
-                      className={`flex-1 py-1.5 rounded-lg border text-[10px] font-bold uppercase transition-all flex flex-col items-center justify-center space-y-0.5 cursor-pointer ${
+                      className={`flex-1 py-1.5 rounded-lg border text-[0.625rem] font-bold uppercase transition-all flex flex-col items-center justify-center space-y-0.5 cursor-pointer ${
                         editorStrategy === 'constant'
                           ? 'bg-[#FBCB2D]/20 border-[#FBCB2D] text-[#FBCB2D] shadow-[0_0_12px_rgba(251,203,45,0.2)]'
                           : 'bg-[#011419] border-gray-800 text-gray-500 hover:text-gray-300 hover:border-gray-700'
                       }`}
                     >
                       <span>Constant (Injected)</span>
-                      <span className="text-[8px] font-normal opacity-70 lowercase">Always in AI prompt context</span>
+                      <span className="text-[0.5rem] font-normal opacity-70 lowercase">Always in AI prompt context</span>
                     </button>
                   </div>
                 </div>
@@ -1819,8 +1819,8 @@ export default function ChatMemoryView({
 
               {(!editingBlock || editingBlock.type === 'snippet') && (
                 <div className="flex flex-col space-y-1.5">
-                  <label className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">Tags (Categorization)</label>
-                  <span className="text-[9px] text-gray-500 -mt-1">Blue = world entity (pick it from the list), yellow = plain keyword (type and press Enter).</span>
+                  <label className="text-[0.5625rem] font-bold text-gray-400 uppercase tracking-widest">Tags (Categorization)</label>
+                  <span className="text-[0.5625rem] text-gray-500 -mt-1">Blue = world entity (pick it from the list), yellow = plain keyword (type and press Enter).</span>
 
                   {/* Current Tags Chips: yellow keywords + blue pinned entities */}
                   {(editorKeywords.length > 0 || editorEntityTags.length > 0) && (
@@ -1828,7 +1828,7 @@ export default function ChatMemoryView({
                       {editorEntityTags.map((t, idx) => (
                         <span
                           key={`ent_${t.entity}`}
-                          className="px-1.5 py-0.5 bg-sky-500/15 border border-sky-400/40 text-sky-200 text-[10px] font-bold rounded flex items-center gap-1.5"
+                          className="px-1.5 py-0.5 bg-sky-500/15 border border-sky-400/40 text-sky-200 text-[0.625rem] font-bold rounded flex items-center gap-1.5"
                         >
                           <Sparkles className="w-3 h-3" />
                           <span>{t.name}</span>
@@ -1906,7 +1906,7 @@ export default function ChatMemoryView({
                             maxHeight={240}
                           >
                             {entityMatches.length > 0 && (
-                              <div className="px-3 pt-1.5 pb-1 text-[8px] font-bold text-sky-400/70 uppercase tracking-widest">Entities</div>
+                              <div className="px-3 pt-1.5 pb-1 text-[0.5rem] font-bold text-sky-400/70 uppercase tracking-widest">Entities</div>
                             )}
                             {entityMatches.map((c) => {
                               const Icon = entityTypeIcon(c.type);
@@ -1915,14 +1915,14 @@ export default function ChatMemoryView({
                                   key={c.id}
                                   type="button"
                                   onClick={() => addEntityTag(c)}
-                                  className="w-full text-left px-3 py-1.5 text-[11px] font-bold text-sky-200 hover:text-white hover:bg-sky-500/10 rounded-lg transition-colors flex items-center gap-1.5"
+                                  className="w-full text-left px-3 py-1.5 text-[0.6875rem] font-bold text-sky-200 hover:text-white hover:bg-sky-500/10 rounded-lg transition-colors flex items-center gap-1.5"
                                 >
                                   <Icon className="w-3.5 h-3.5 shrink-0 text-sky-400" />
                                   <span className="truncate">{c.canonicalName}</span>
                                   {c.matchedAlias && (
-                                    <span className="text-[8px] font-normal text-gray-500 truncate">alias: {c.matchedAlias}</span>
+                                    <span className="text-[0.5rem] font-normal text-gray-500 truncate">alias: {c.matchedAlias}</span>
                                   )}
-                                  <span className="ml-auto text-[8px] font-normal text-gray-500 uppercase shrink-0">{c.type}</span>
+                                  <span className="ml-auto text-[0.5rem] font-normal text-gray-500 uppercase shrink-0">{c.type}</span>
                                 </button>
                               );
                             })}
@@ -1934,7 +1934,7 @@ export default function ChatMemoryView({
                                 key={tag}
                                 type="button"
                                 onClick={() => addKeywordTag(tag)}
-                                className="w-full text-left px-3 py-1.5 text-[10px] uppercase font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
+                                className="w-full text-left px-3 py-1.5 text-[0.625rem] uppercase font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
                               >
                                 {tag}
                               </button>
@@ -1956,7 +1956,7 @@ export default function ChatMemoryView({
                 </div>
               )}
 
-              {editorError && <p className="text-[10px] text-red-400 font-semibold">{editorError}</p>}
+              {editorError && <p className="text-[0.625rem] text-red-400 font-semibold">{editorError}</p>}
             </div>
 
             {/* Footer */}
@@ -1964,14 +1964,14 @@ export default function ChatMemoryView({
               <button
                 disabled={savingSnippet}
                 onClick={() => setEditorOpen(false)}
-                className="px-4 py-2 text-[10px] uppercase font-bold text-gray-400 hover:text-white transition-colors cursor-pointer disabled:opacity-30"
+                className="px-4 py-2 text-[0.625rem] uppercase font-bold text-gray-400 hover:text-white transition-colors cursor-pointer disabled:opacity-30"
               >
                 Cancel
               </button>
               <button
                 disabled={savingSnippet}
                 onClick={handleSaveSnippet}
-                className="px-5 py-2 bg-accent text-[#011419] text-[10px] font-bold uppercase tracking-widest rounded-lg shadow-lg shadow-accent/5 hover:brightness-110 active:scale-98 transition-all cursor-pointer flex items-center space-x-2"
+                className="px-5 py-2 bg-accent text-[#011419] text-[0.625rem] font-bold uppercase tracking-widest rounded-lg shadow-lg shadow-accent/5 hover:brightness-110 active:scale-98 transition-all cursor-pointer flex items-center space-x-2"
               >
                 {savingSnippet ? (
                   <>
@@ -2017,20 +2017,20 @@ export default function ChatMemoryView({
               {(deleteTarget.type === 'rag' || deleteTarget.type === 'constant') && (
                 <button
                   onClick={() => handleDeleteEntireFile(deleteTarget.source)}
-                  className="w-full py-2 bg-red-950/45 hover:bg-red-900 border border-red-900/40 hover:border-red-900/80 text-red-200 text-[10px] uppercase font-bold rounded-lg transition-colors cursor-pointer"
+                  className="w-full py-2 bg-red-950/45 hover:bg-red-900 border border-red-900/40 hover:border-red-900/80 text-red-200 text-[0.625rem] uppercase font-bold rounded-lg transition-colors cursor-pointer"
                 >
                   Delete Entire File ({deleteTarget.source})
                 </button>
               )}
               <button
                 onClick={handleDeleteTarget}
-                className="w-full py-2 bg-red-650 hover:bg-red-600 text-white text-[10px] uppercase font-bold rounded-lg transition-colors cursor-pointer"
+                className="w-full py-2 bg-red-650 hover:bg-red-600 text-white text-[0.625rem] uppercase font-bold rounded-lg transition-colors cursor-pointer"
               >
                 {deleteTarget.type === 'rag' || deleteTarget.type === 'constant' ? 'Delete Only This Block' : 'Confirm Delete'}
               </button>
               <button
                 onClick={() => setDeleteTarget(null)}
-                className="w-full py-2 bg-[#0a161d] hover:bg-[#1a2d32] border border-gray-800 text-gray-400 hover:text-white text-[10px] uppercase font-bold rounded-lg transition-colors cursor-pointer"
+                className="w-full py-2 bg-[#0a161d] hover:bg-[#1a2d32] border border-gray-800 text-gray-400 hover:text-white text-[0.625rem] uppercase font-bold rounded-lg transition-colors cursor-pointer"
               >
                 Cancel
               </button>
@@ -2058,13 +2058,13 @@ export default function ChatMemoryView({
             <div className="flex justify-end space-x-3 mt-4 select-none">
               <button
                 onClick={() => setIsBulkDeleteConfirmOpen(false)}
-                className="px-4 py-2 bg-[#0a161d] hover:bg-[#1a2d32] border border-gray-800 text-gray-400 hover:text-white text-[10px] uppercase font-bold rounded-lg transition-colors cursor-pointer"
+                className="px-4 py-2 bg-[#0a161d] hover:bg-[#1a2d32] border border-gray-800 text-gray-400 hover:text-white text-[0.625rem] uppercase font-bold rounded-lg transition-colors cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 onClick={handleBulkDelete}
-                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-[10px] uppercase font-bold rounded-lg transition-colors cursor-pointer shadow-lg shadow-red-950/20"
+                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-[0.625rem] uppercase font-bold rounded-lg transition-colors cursor-pointer shadow-lg shadow-red-950/20"
               >
                 Delete All
               </button>
@@ -2096,13 +2096,13 @@ export default function ChatMemoryView({
             {/* Body */}
             <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar bg-[#000508]/40">
               <div className="p-3 bg-[#0a161d]/45 border border-gray-800/80 rounded-xl mb-4">
-                <span className="block text-[8px] font-bold text-gray-500 uppercase tracking-widest mb-1">Block Summary</span>
+                <span className="block text-[0.5rem] font-bold text-gray-500 uppercase tracking-widest mb-1">Block Summary</span>
                 <p className="text-xs text-gray-300 font-sans leading-relaxed select-text">
                   {selectedSummaryBlock.summary}
                 </p>
               </div>
 
-              <span className="block text-[8px] font-bold text-gray-500 uppercase tracking-widest px-1">Saved Conversation History</span>
+              <span className="block text-[0.5rem] font-bold text-gray-500 uppercase tracking-widest px-1">Saved Conversation History</span>
 
               {(!selectedSummaryBlock.raw?.messages || selectedSummaryBlock.raw.messages.length === 0) ? (
                 <div className="flex flex-col items-center justify-center py-12 text-gray-500 text-xs font-sans select-none space-y-2">
@@ -2125,7 +2125,7 @@ export default function ChatMemoryView({
                           : 'bg-[#011419]/35 border-accent/10 mr-12'
                           }`}
                       >
-                        <div className="flex items-center justify-between text-[8px] font-bold uppercase tracking-wider select-none">
+                        <div className="flex items-center justify-between text-[0.5rem] font-bold uppercase tracking-wider select-none">
                           <span className={isUser ? 'text-gray-400' : 'text-accent'}>
                             {isUser ? 'User' : (msg.aiName || 'AI Assistant')}
                           </span>
@@ -2149,7 +2149,7 @@ export default function ChatMemoryView({
             <div className="p-4 border-t border-gray-800 flex items-center justify-end bg-[#011419]/30">
               <button
                 onClick={() => setSelectedSummaryBlock(null)}
-                className="px-5 py-2 bg-accent text-[#011419] text-[10px] font-bold uppercase tracking-widest rounded-lg shadow-lg hover:brightness-110 active:scale-98 transition-all cursor-pointer"
+                className="px-5 py-2 bg-accent text-[#011419] text-[0.625rem] font-bold uppercase tracking-widest rounded-lg shadow-lg hover:brightness-110 active:scale-98 transition-all cursor-pointer"
               >
                 Close Logs
               </button>
@@ -2161,25 +2161,25 @@ export default function ChatMemoryView({
       {/* Floating Selection Action Bar */}
       {selectedBlockIds.length > 0 && (
         <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 px-5 py-3 bg-[#051116]/90 border border-accent/25 backdrop-blur-md rounded-2xl shadow-2xl flex items-center space-x-4 z-30 animate-in slide-in-from-bottom duration-300 select-none">
-          <span className="text-[10px] font-bold text-gray-300 uppercase tracking-wider">
+          <span className="text-[0.625rem] font-bold text-gray-300 uppercase tracking-wider">
             {selectedBlockIds.length} Selected
           </span>
           <div className="h-4 w-px bg-gray-800" />
           <button
             onClick={handleSelectAll}
-            className="text-[10px] font-bold text-gray-400 hover:text-white uppercase tracking-wider cursor-pointer"
+            className="text-[0.625rem] font-bold text-gray-400 hover:text-white uppercase tracking-wider cursor-pointer"
           >
             Select All
           </button>
           <button
             onClick={handleClearSelection}
-            className="text-[10px] font-bold text-gray-400 hover:text-white uppercase tracking-wider cursor-pointer"
+            className="text-[0.625rem] font-bold text-gray-400 hover:text-white uppercase tracking-wider cursor-pointer"
           >
             Clear
           </button>
           <button
             onClick={() => setIsBulkDeleteConfirmOpen(true)}
-            className="px-3 py-1.5 bg-red-650 hover:bg-red-500 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg transition-colors cursor-pointer flex items-center space-x-1.5 shadow-md shadow-red-950/20"
+            className="px-3 py-1.5 bg-red-650 hover:bg-red-500 text-white text-[0.625rem] font-bold uppercase tracking-wider rounded-lg transition-colors cursor-pointer flex items-center space-x-1.5 shadow-md shadow-red-950/20"
           >
             <Trash2 className="w-3.5 h-3.5" />
             <span>Delete</span>
@@ -2342,7 +2342,7 @@ export default function ChatMemoryView({
                   {/* Per-chunk tags: blue entities + yellow keywords, both add/removable */}
                   <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
                     {cTags.entities.map((t) => (
-                      <span key={`e_${t.entity}`} className="px-1.5 py-0.5 bg-sky-500/10 border border-sky-500/25 text-sky-300 text-[9px] font-bold rounded flex items-center gap-1">
+                      <span key={`e_${t.entity}`} className="px-1.5 py-0.5 bg-sky-500/10 border border-sky-500/25 text-sky-300 text-[0.5625rem] font-bold rounded flex items-center gap-1">
                         <Sparkles className="w-2.5 h-2.5" />{t.value}
                         <button type="button" onClick={() => removeChunkEntity(chunk.id, t.entity)} className="text-sky-300/70 hover:text-white transition-colors cursor-pointer">
                           <XIcon className="w-2.5 h-2.5" />
@@ -2350,7 +2350,7 @@ export default function ChatMemoryView({
                       </span>
                     ))}
                     {cTags.keywords.map((kw) => (
-                      <span key={`k_${kw}`} className="px-1.5 py-0.5 bg-accent/10 border border-accent/20 text-accent text-[9px] font-bold uppercase tracking-wider rounded flex items-center gap-1">
+                      <span key={`k_${kw}`} className="px-1.5 py-0.5 bg-accent/10 border border-accent/20 text-accent text-[0.5625rem] font-bold uppercase tracking-wider rounded flex items-center gap-1">
                         {kw}
                         <button type="button" onClick={() => removeChunkKeyword(chunk.id, kw)} className="text-accent/70 hover:text-white transition-colors cursor-pointer">
                           <XIcon className="w-2.5 h-2.5" />
@@ -2371,22 +2371,22 @@ export default function ChatMemoryView({
                           }}
                           onBlur={() => setTimeout(() => { setActiveTagChunk(null); setChunkTagInput(''); setChunkEntityCandidates([]); }, 150)}
                           placeholder="Type a tag, pick an entity..."
-                          className="bg-[#011419] border border-gray-700 rounded px-2 py-0.5 text-[10px] text-white placeholder-gray-600 focus:outline-none focus:border-accent w-52"
+                          className="bg-[#011419] border border-gray-700 rounded px-2 py-0.5 text-[0.625rem] text-white placeholder-gray-600 focus:outline-none focus:border-accent w-52"
                         />
                         {(() => {
                           const entityMatches = chunkEntityCandidates.filter(c => !cTags.entities.some(t => t.entity === c.id));
                           return (
                             <Popover anchorRef={chunkTagAnchorRef} open={entityMatches.length > 0} onClose={() => setChunkEntityCandidates([])} maxHeight={200}>
-                              <div className="px-3 pt-1.5 pb-1 text-[8px] font-bold text-sky-400/70 uppercase tracking-widest">Entities</div>
+                              <div className="px-3 pt-1.5 pb-1 text-[0.5rem] font-bold text-sky-400/70 uppercase tracking-widest">Entities</div>
                               {entityMatches.map((c) => {
                                 const Icon = entityTypeIcon(c.type);
                                 return (
                                   <button key={c.id} type="button" onMouseDown={(e) => { e.preventDefault(); addChunkEntity(chunk.id, c); }}
-                                    className="w-full text-left px-3 py-1.5 text-[11px] font-bold text-sky-200 hover:text-white hover:bg-sky-500/10 rounded-lg transition-colors flex items-center gap-1.5">
+                                    className="w-full text-left px-3 py-1.5 text-[0.6875rem] font-bold text-sky-200 hover:text-white hover:bg-sky-500/10 rounded-lg transition-colors flex items-center gap-1.5">
                                     <Icon className="w-3.5 h-3.5 shrink-0 text-sky-400" />
                                     <span className="truncate">{c.canonicalName}</span>
-                                    {c.matchedAlias && <span className="text-[8px] font-normal text-gray-500 truncate">alias: {c.matchedAlias}</span>}
-                                    <span className="ml-auto text-[8px] font-normal text-gray-500 uppercase shrink-0">{c.type}</span>
+                                    {c.matchedAlias && <span className="text-[0.5rem] font-normal text-gray-500 truncate">alias: {c.matchedAlias}</span>}
+                                    <span className="ml-auto text-[0.5rem] font-normal text-gray-500 uppercase shrink-0">{c.type}</span>
                                   </button>
                                 );
                               })}
@@ -2398,7 +2398,7 @@ export default function ChatMemoryView({
                       <button
                         type="button"
                         onClick={() => { setActiveTagChunk(chunk.id); setChunkTagInput(''); setChunkEntityCandidates([]); }}
-                        className="px-1.5 py-0.5 border border-dashed border-gray-700 text-gray-500 hover:text-accent hover:border-accent/50 text-[9px] font-bold rounded flex items-center gap-1 transition-colors cursor-pointer"
+                        className="px-1.5 py-0.5 border border-dashed border-gray-700 text-gray-500 hover:text-accent hover:border-accent/50 text-[0.5625rem] font-bold rounded flex items-center gap-1 transition-colors cursor-pointer"
                       >
                         <Plus className="w-2.5 h-2.5" />Tag
                       </button>

@@ -51,13 +51,13 @@ export default function WritingDirectivesPanel({ workspaceId, electronAPI, onClo
     <div className="w-72 shrink-0 border-l border-gray-800/40 flex flex-col bg-[#011419]/25">
       <div className="flex items-center gap-2 px-3 py-3 border-b border-gray-800/80 bg-[#011419]/35">
         <Pin className="w-3.5 h-3.5 text-accent shrink-0" />
-        <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mr-auto">Directives</span>
+        <span className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-500 mr-auto">Directives</span>
         <button title="Hide directives" onClick={onClose} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md">
           <PanelRightClose className="w-4 h-4" />
         </button>
       </div>
 
-      <p className="text-[11px] text-gray-600 px-3 pt-3 leading-relaxed">
+      <p className="text-[0.6875rem] text-gray-600 px-3 pt-3 leading-relaxed">
         Always-on instructions sent with every AI invocation in this project, immune to summarization.
       </p>
 
@@ -90,7 +90,7 @@ export default function WritingDirectivesPanel({ workspaceId, electronAPI, onClo
                 >{d.text}</span>
                 <div className="flex items-center gap-1.5 shrink-0">
                   <Toggle checked={d.enabled !== 0} onChange={(next) => toggleEnabled(d, next)} />
-                  <button title="Delete" onClick={() => remove(d.id)} className="p-0.5 text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100">
+                  <button title="Delete" onClick={() => remove(d.id)} className="p-0.5 text-gray-600 hover:text-red-400 hover-reveal">
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 </div>

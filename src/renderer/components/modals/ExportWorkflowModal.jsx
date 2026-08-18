@@ -135,7 +135,7 @@ export default function ExportWorkflowModal({ workflow, onClose, onExport }) {
           {/* Packaged Profiles List Panel */}
           {associatedProfiles.length > 0 && (
             <div className="space-y-2 pt-2">
-              <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-wider font-sans">AI Profiles inside package:</h4>
+              <h4 className="text-[0.625rem] font-bold text-gray-500 uppercase tracking-wider font-sans">AI Profiles inside package:</h4>
               <div className="bg-[#051116] border border-gray-800/80 rounded-lg p-2 max-h-28 overflow-y-auto custom-scrollbar space-y-1.5">
                 {associatedProfiles.map(p => (
                   <div key={p.id} className="flex items-center space-x-2.5 px-2 py-1 rounded bg-[#011419]/50 border border-gray-800/50">

@@ -86,13 +86,13 @@ export default function RenameFilesModal({
     <Modal onClose={onCancel} size="md" closeOnOverlay={!loading} closeOnEsc={!loading}>
       <div className="p-6 flex flex-col space-y-4">
         <div className="flex items-center gap-3">
-          <div className="p-2 rounded-lg shrink-0 bg-accent/10 text-accent">
+          <div className="p-2 rounded-control shrink-0 bg-accent/10 text-accent">
             <FilePen className="w-5 h-5" />
           </div>
-          <h3 className="text-sm font-bold text-white uppercase tracking-wider">Rename Files</h3>
+          <h3 className="text-sm font-bold text-text-primary uppercase tracking-wider">Rename Files</h3>
         </div>
 
-        <p className="text-xs text-gray-400 leading-relaxed">
+        <p className="text-xs text-text-muted leading-relaxed">
           Give each file a new name to keep it alongside the existing one. The file is
           vectorized after you confirm.
         </p>
@@ -100,7 +100,7 @@ export default function RenameFilesModal({
         <div className="flex flex-col gap-3 max-h-[320px] overflow-y-auto custom-scrollbar pr-1">
           {files.map((file) => (
             <div key={file.name} className="flex flex-col gap-1">
-              <span className="text-[10px] font-mono text-gray-500 truncate" title={file.name}>
+              <span className="text-[0.625rem] font-mono text-text-subtle truncate" title={file.name}>
                 {file.name}
               </span>
               <TextInput

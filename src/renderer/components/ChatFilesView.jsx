@@ -192,7 +192,7 @@ export default function ChatFilesView({
             <button
               key={category}
               onClick={() => setActiveFilter(category)}
-              className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded-lg border transition-all cursor-pointer ${activeFilter === category
+              className={`px-3 py-1.5 text-[0.625rem] font-bold uppercase tracking-wider rounded-lg border transition-all cursor-pointer ${activeFilter === category
                 ? 'bg-accent/20 border-accent/40 text-accent shadow-md shadow-accent/5'
                 : 'bg-transparent border-gray-800 text-gray-400 hover:text-white hover:border-gray-700'
                 }`}
@@ -225,7 +225,7 @@ export default function ChatFilesView({
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
             </svg>
-            <span className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Scanning files...</span>
+            <span className="text-[0.625rem] text-gray-500 uppercase tracking-widest font-bold">Scanning files...</span>
           </div>
         ) : filteredFiles.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64 text-center">
@@ -271,12 +271,12 @@ export default function ChatFilesView({
                     {/* Overlay badge (Pinned / AI Generated) */}
                     <div className="absolute top-2 left-2 flex flex-col space-y-1 z-10">
                       {isPinned && (
-                        <span className="bg-[#FBCB2D]/15 border border-[#FBCB2D]/30 text-[#FBCB2D] text-[7px] font-bold px-1.5 py-0.5 rounded tracking-wider uppercase font-sans">
+                        <span className="bg-[#FBCB2D]/15 border border-[#FBCB2D]/30 text-[#FBCB2D] text-[0.4375rem] font-bold px-1.5 py-0.5 rounded tracking-wider uppercase font-sans">
                           Pinned
                         </span>
                       )}
                       {file.isAiGenerated && (
-                        <span className="bg-cyan-500/10 border border-cyan-500/25 text-cyan-400 text-[7px] font-bold px-1.5 py-0.5 rounded tracking-wider uppercase font-sans">
+                        <span className="bg-cyan-500/10 border border-cyan-500/25 text-cyan-400 text-[0.4375rem] font-bold px-1.5 py-0.5 rounded tracking-wider uppercase font-sans">
                           AI Generated
                         </span>
                       )}
@@ -324,10 +324,10 @@ export default function ChatFilesView({
 
                   {/* Metadata Footer bar */}
                   <div className="p-3 bg-[#011419]/70 border-t border-gray-800/80 shrink-0">
-                    <p className="text-[10px] text-gray-200 font-bold truncate tracking-wide" title={file.name}>
+                    <p className="text-[0.625rem] text-gray-200 font-bold truncate tracking-wide" title={file.name}>
                       {file.name}
                     </p>
-                    <div className="flex items-center justify-between text-[8px] text-gray-500 font-medium uppercase font-mono mt-0.5">
+                    <div className="flex items-center justify-between text-[0.5rem] text-gray-500 font-medium uppercase font-mono mt-0.5">
                       <span>.{getFileExtension(file.name)}</span>
                       {file.size > 0 && <span>{Math.round(file.size / 1024)} KB</span>}
                     </div>

@@ -720,11 +720,11 @@ export default function KbManagerModal({ profile, onClose }) {
       if (found) {
         return `
           <div class="my-3 border border-gray-800 rounded-lg overflow-hidden bg-[#030d11] select-text">
-            <div class="px-3 py-1.5 bg-[#0a161d] border-b border-gray-800 text-[10px] font-mono font-bold text-accent select-none">
+            <div class="px-3 py-1.5 bg-[#0a161d] border-b border-gray-800 text-[0.625rem] font-mono font-bold text-accent select-none">
               &lt;${key}&gt;
             </div>
             <div class="p-3 text-xs font-mono text-gray-300 whitespace-pre-wrap leading-relaxed">${escapeHTML(found.value)}</div>
-            <div class="px-3 py-1 bg-[#0a161d]/50 border-t border-gray-800/40 text-[9px] font-mono text-gray-500 select-none">
+            <div class="px-3 py-1 bg-[#0a161d]/50 border-t border-gray-800/40 text-[0.5625rem] font-mono text-gray-500 select-none">
               &lt;${key}/&gt;
             </div>
           </div>
@@ -934,7 +934,7 @@ export default function KbManagerModal({ profile, onClose }) {
             <div>
               <div className="flex items-center space-x-2">
                 <h2 className="text-base font-bold text-white tracking-wide">Knowledge Base Manager</h2>
-                <span className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2 py-0.5 rounded bg-gray-800 text-gray-300 uppercase tracking-wider">
+                <span className="inline-flex items-center gap-1.5 text-[0.625rem] font-bold px-2 py-0.5 rounded bg-gray-800 text-gray-300 uppercase tracking-wider">
                   <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: profile?.color || '#FBCB2D' }} />
                   {profile?.name}
                 </span>
@@ -950,7 +950,7 @@ export default function KbManagerModal({ profile, onClose }) {
                 <button
                   onClick={() => setIsAddMenuOpen(!isAddMenuOpen)}
                   disabled={isProcessing}
-                  className="flex items-center space-x-1.5 px-3.5 py-1.5 bg-accent hover:brightness-110 text-[#011419] rounded font-bold text-[11px] transition-all cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
+                  className="flex items-center space-x-1.5 px-3.5 py-1.5 bg-accent hover:brightness-110 text-[#011419] rounded font-bold text-[0.6875rem] transition-all cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
                 >
                   <Plus className="w-3.5 h-3.5" strokeWidth={2.5} />
                   <span>Add</span>
@@ -1040,7 +1040,7 @@ export default function KbManagerModal({ profile, onClose }) {
             </div>
             {progressDetail && (
               <div className="flex items-center space-x-3 w-72 shrink-0">
-                <span className="text-gray-500 font-mono text-[10px] shrink-0">
+                <span className="text-gray-500 font-mono text-[0.625rem] shrink-0">
                   {progressDetail.current} / {progressDetail.total} chunks
                 </span>
                 <div className="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden">
@@ -1060,7 +1060,7 @@ export default function KbManagerModal({ profile, onClose }) {
           {/* Left Sidebar Filter */}
           <div className="w-56 shrink-0 bg-[#011419] border-r border-gray-800/60 p-4 flex flex-col space-y-6">
             <div>
-              <span className="block text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-3 px-2">Filter By Source</span>
+              <span className="block text-[0.5625rem] font-bold text-gray-500 uppercase tracking-widest mb-3 px-2">Filter By Source</span>
               <nav className="flex flex-col space-y-1">
                 {[
                   { id: 'all', label: 'All Memories' },
@@ -1106,17 +1106,17 @@ export default function KbManagerModal({ profile, onClose }) {
               </button>
 
               <div className="bg-[#051116] border border-gray-800/60 rounded-lg p-3">
-                <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider block mb-1">Knowledge Stats</span>
+                <span className="text-[0.625rem] text-gray-500 font-bold uppercase tracking-wider block mb-1">Knowledge Stats</span>
                 <div className="text-xs text-gray-300 font-mono space-y-1">
                   <div className="flex justify-between">
                     <span>Total Blocks:</span>
                     <span className="text-white font-bold">{blocks.length}</span>
                   </div>
-                  <div className="flex justify-between text-[10px] text-gray-400">
+                  <div className="flex justify-between text-[0.625rem] text-gray-400">
                     <span>Searchable:</span>
                     <span>{blocks.filter(b => !(b.type === 'constant' || (b.type === 'manual' && (b.strategy === 'constant' || b.rawItem?.strategy === 'constant')))).length}</span>
                   </div>
-                  <div className="flex justify-between text-[10px] text-gray-400">
+                  <div className="flex justify-between text-[0.625rem] text-gray-400">
                     <span>Constant:</span>
                     <span>{blocks.filter(b => b.type === 'constant' || (b.type === 'manual' && (b.strategy === 'constant' || b.rawItem?.strategy === 'constant'))).length}</span>
                   </div>
@@ -1190,10 +1190,10 @@ export default function KbManagerModal({ profile, onClose }) {
                   {isAgentic && (
                     <div className="bg-[#0a161d]/50 border border-gray-800/60 rounded-2xl p-4 flex flex-col min-h-[240px] relative">
                       <div className="flex justify-between items-center mb-3 shrink-0">
-                        <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Agentic System Prompt</span>
+                        <span className="text-[0.625rem] font-semibold text-gray-400 uppercase tracking-wider">Agentic System Prompt</span>
 
                         {/* Editor / Preview Toggles */}
-                        <div className="flex bg-[#011419] p-0.5 rounded border border-gray-800 text-[10px] font-bold uppercase tracking-wider select-none shrink-0 z-10 space-x-0.5">
+                        <div className="flex bg-[#011419] p-0.5 rounded border border-gray-800 text-[0.625rem] font-bold uppercase tracking-wider select-none shrink-0 z-10 space-x-0.5">
                           <button
                             type="button"
                             onClick={() => setAgenticPromptMode('editor')}
@@ -1285,7 +1285,7 @@ export default function KbManagerModal({ profile, onClose }) {
                     <span className="text-xs text-gray-400 font-bold font-sans">
                       STORED KNOWLEDGE BLOCKS ({filteredBlocks.length})
                     </span>
-                    <span className="flex flex-col gap-1 text-[10px] text-gray-500">
+                    <span className="flex flex-col gap-1 text-[0.625rem] text-gray-500">
                       <span className="flex items-center gap-1.5" title="Always-on context is injected into every prompt.">
                         <span className="uppercase tracking-wider w-16">Always-on</span>
                         <TokenBadge tokens={tokenTotals.alwaysOn} />
@@ -1362,7 +1362,7 @@ export default function KbManagerModal({ profile, onClose }) {
                               <Badge tone={vis.tone} className="shrink-0">
                                 {getBadgeLabel(block)}
                               </Badge>
-                              <span className="text-[11px] text-gray-400 font-semibold truncate" title={block.source}>
+                              <span className="text-[0.6875rem] text-gray-400 font-semibold truncate" title={block.source}>
                                 {block.source}
                               </span>
                               <TokenBadge tokens={tokenOf(block)} className="shrink-0" />
@@ -1373,7 +1373,7 @@ export default function KbManagerModal({ profile, onClose }) {
                                 onChange={(next) => handleToggleEnabled(block, next)}
                                 className="shrink-0"
                               />
-                              <div className="flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                              <div className="flex space-x-1 hover-reveal shrink-0">
                                 {block.type !== 'rag_file' && (
                                   <button
                                     onClick={() => openEditor(block)}
@@ -1405,7 +1405,7 @@ export default function KbManagerModal({ profile, onClose }) {
                           </div>
 
                           {/* Card Content */}
-                          <p className="text-[11px] text-gray-300 leading-relaxed font-mono px-4 py-3 overflow-y-auto custom-scrollbar flex-1 whitespace-pre-wrap break-words select-text">
+                          <p className="text-[0.6875rem] text-gray-300 leading-relaxed font-mono px-4 py-3 overflow-y-auto custom-scrollbar flex-1 whitespace-pre-wrap break-words select-text">
                             {block.text}
                           </p>
 
@@ -1441,7 +1441,7 @@ export default function KbManagerModal({ profile, onClose }) {
                     <FileText className="w-4 h-4 text-blue-400" />
                     <span>File Chunks Viewer</span>
                   </h3>
-                  <span className="text-[10px] font-mono text-gray-500 truncate block mt-0.5 max-w-[380px]" title={viewingFileBlock.source}>
+                  <span className="text-[0.625rem] font-mono text-gray-500 truncate block mt-0.5 max-w-[380px]" title={viewingFileBlock.source}>
                     {viewingFileBlock.source}
                   </span>
                 </div>
@@ -1458,7 +1458,7 @@ export default function KbManagerModal({ profile, onClose }) {
                 {viewingFileBlock.chunks.map((chunk, idx) => (
                   <div key={chunk.id} className="bg-[#00080B] border border-gray-800/80 rounded-lg p-3 flex flex-col relative group/chunk">
                     <div className="flex justify-between items-center mb-2">
-                      <span className="text-[9px] font-mono text-gray-500 flex items-center gap-1.5">
+                      <span className="text-[0.5625rem] font-mono text-gray-500 flex items-center gap-1.5">
                         Chunk #{idx + 1} (~{(chunk.tokenCount || tokenMap[chunk.id] || 0).toLocaleString()} tokens)
                         {chunk.manuallyEdited && (
                           <Badge tone="accent" title="Manually edited. Survives Knowledge Base re-indexing.">edited</Badge>
@@ -1507,7 +1507,7 @@ export default function KbManagerModal({ profile, onClose }) {
                         </button>
                       </div>
                     </div>
-                    <p className="text-[10.5px] text-gray-300 font-mono whitespace-pre-wrap leading-relaxed max-h-[150px] overflow-y-auto custom-scrollbar select-text bg-[#011419]/30 p-2 rounded border border-gray-900/60">
+                    <p className="text-[0.6875rem] text-gray-300 font-mono whitespace-pre-wrap leading-relaxed max-h-[150px] overflow-y-auto custom-scrollbar select-text bg-[#011419]/30 p-2 rounded border border-gray-900/60">
                       {chunk.text}
                     </p>
                   </div>
@@ -1548,7 +1548,7 @@ export default function KbManagerModal({ profile, onClose }) {
 
                 {(!editingBlock || editingBlock.type === 'manual') && (
                   <div>
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Storage Strategy</label>
+                    <label className="block text-[0.625rem] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Storage Strategy</label>
                     <div className="flex space-x-2">
                       <button
                         type="button"
@@ -1559,7 +1559,7 @@ export default function KbManagerModal({ profile, onClose }) {
                           }`}
                       >
                         <span>Searchable (RAG)</span>
-                        <span className="text-[8px] font-normal opacity-70">Indexed for vector searches</span>
+                        <span className="text-[0.5rem] font-normal opacity-70">Indexed for vector searches</span>
                       </button>
                       <button
                         type="button"
@@ -1570,7 +1570,7 @@ export default function KbManagerModal({ profile, onClose }) {
                           }`}
                       >
                         <span>Constant (Injected)</span>
-                        <span className="text-[8px] font-normal opacity-70">Always in AI prompt context</span>
+                        <span className="text-[0.5rem] font-normal opacity-70">Always in AI prompt context</span>
                       </button>
                     </div>
                   </div>
@@ -1588,7 +1588,7 @@ export default function KbManagerModal({ profile, onClose }) {
 
                 {(!editingBlock || editingBlock.type === 'manual') && (
                   <div className="flex flex-col space-y-1.5 shrink-0">
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Tags (Categorization)</label>
+                    <label className="block text-[0.625rem] font-bold text-gray-400 uppercase tracking-wider mb-1">Tags (Categorization)</label>
 
                     {/* Current Tags Chips */}
                     {editorKeywords.length > 0 && (
@@ -1659,7 +1659,7 @@ export default function KbManagerModal({ profile, onClose }) {
                                     setTagInput('');
                                     setTagSuggestionsOpen(false);
                                   }}
-                                  className="w-full text-left px-3 py-1.5 text-[10px] uppercase font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
+                                  className="w-full text-left px-3 py-1.5 text-[0.625rem] uppercase font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
                                 >
                                   {tag}
                                 </button>
@@ -1682,7 +1682,7 @@ export default function KbManagerModal({ profile, onClose }) {
                 )}
 
                 {editorError && (
-                  <p className="text-[10px] text-red-400 font-semibold px-1">{editorError}</p>
+                  <p className="text-[0.625rem] text-red-400 font-semibold px-1">{editorError}</p>
                 )}
               </div>
 
@@ -1717,25 +1717,25 @@ export default function KbManagerModal({ profile, onClose }) {
           {/* Floating Selection Action Bar */}
           {selectedBlockIds.length > 0 && (
             <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 px-5 py-3 bg-[#051116]/90 border border-accent/25 backdrop-blur-md rounded-2xl shadow-2xl flex items-center space-x-4 z-30 animate-in slide-in-from-bottom duration-300 select-none">
-              <span className="text-[10px] font-bold text-gray-300 uppercase tracking-wider">
+              <span className="text-[0.625rem] font-bold text-gray-300 uppercase tracking-wider">
                 {selectedBlockIds.length} Selected
               </span>
               <div className="h-4 w-px bg-gray-800" />
               <button
                 onClick={handleSelectAll}
-                className="text-[10px] font-bold text-gray-400 hover:text-white uppercase tracking-wider cursor-pointer font-sans"
+                className="text-[0.625rem] font-bold text-gray-400 hover:text-white uppercase tracking-wider cursor-pointer font-sans"
               >
                 Select All
               </button>
               <button
                 onClick={handleClearSelection}
-                className="text-[10px] font-bold text-gray-400 hover:text-white uppercase tracking-wider cursor-pointer font-sans"
+                className="text-[0.625rem] font-bold text-gray-400 hover:text-white uppercase tracking-wider cursor-pointer font-sans"
               >
                 Clear
               </button>
               <button
                 onClick={() => setIsBulkDeleteConfirmOpen(true)}
-                className="px-3 py-1.5 bg-red-650 hover:bg-red-650/80 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg transition-colors cursor-pointer flex items-center space-x-1.5 shadow-md shadow-red-950/20"
+                className="px-3 py-1.5 bg-red-650 hover:bg-red-650/80 text-white text-[0.625rem] font-bold uppercase tracking-wider rounded-lg transition-colors cursor-pointer flex items-center space-x-1.5 shadow-md shadow-red-950/20"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>Delete</span>

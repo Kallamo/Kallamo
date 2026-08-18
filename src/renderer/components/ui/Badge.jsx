@@ -10,7 +10,7 @@ const TONES = {
   amber: 'bg-status-warning/15 text-status-warning border-status-warning/30',
   emerald: 'bg-status-success/15 text-status-success border-status-success/30',
   red: 'bg-status-danger/15 text-status-danger border-status-danger/30',
-  gray: 'bg-white/[0.04] text-text-muted border-border-default',
+  gray: 'bg-surface-hover/40 text-text-muted border-border-default',
 };
 
 export default function Badge({

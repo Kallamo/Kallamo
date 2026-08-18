@@ -97,7 +97,7 @@ export default function VariableModal({ variable, onClose, onSave }) {
                 <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider">
                   Variable Key
                 </label>
-                <div className="text-[10px] text-gray-500 font-mono">
+                <div className="text-[0.625rem] text-gray-500 font-mono">
                   {'{{' + (key || 'key') + '}}'}
                 </div>
               </div>
@@ -110,7 +110,7 @@ export default function VariableModal({ variable, onClose, onSave }) {
                 className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 focus:outline-none focus:border-accent disabled:opacity-50 disabled:cursor-not-allowed font-mono"
               />
               {keyError && (
-                <p className="text-[10px] text-red-400 mt-1 font-semibold">{keyError}</p>
+                <p className="text-[0.625rem] text-red-400 mt-1 font-semibold">{keyError}</p>
               )}
             </div>
           </div>

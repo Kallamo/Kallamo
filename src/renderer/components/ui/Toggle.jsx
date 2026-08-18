@@ -23,10 +23,10 @@ export default function Toggle({
       onClick={handle}
       className={`relative w-9 h-5 rounded-full shrink-0 transition-colors duration-200 cursor-pointer
         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40
-        disabled:opacity-50 disabled:pointer-events-none ${checked ? 'bg-accent' : 'bg-gray-700'} ${className}`}
+        disabled:opacity-50 disabled:pointer-events-none ${checked ? 'bg-accent' : 'bg-surface-hover'} ${className}`}
     >
       <span
-        className={`absolute top-[2px] left-[2px] h-4 w-4 rounded-full bg-white shadow transition-transform duration-200 ${
+        className={`absolute top-[2px] left-[2px] h-4 w-4 rounded-full bg-text-primary shadow transition-transform duration-200 ${
           checked ? 'translate-x-4' : 'translate-x-0'
         }`}
       />
@@ -38,7 +38,7 @@ export default function Toggle({
   return (
     <div className="flex items-start justify-between gap-4">
       <div className="min-w-0">
-        {label && <span className="block text-sm font-bold text-gray-200">{label}</span>}
+        {label && <span className="block text-sm font-bold text-text-secondary">{label}</span>}
         {description && (
           <p className="caption mt-1">{description}</p>
         )}

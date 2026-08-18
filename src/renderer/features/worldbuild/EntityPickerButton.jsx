@@ -38,7 +38,7 @@ export default function EntityPickerButton({ label = 'Add', title, options, onPi
                 ariaLabel={title || 'Choose entity'}
               />
             ) : (
-              <p className="rounded-lg border border-dashed border-border-default px-4 py-6 text-center text-sm text-text-muted">Nothing to add. Create one first.</p>
+              <p className="rounded-control border border-dashed border-border-default px-4 py-6 text-center text-sm text-text-muted">Nothing to add. Create one first.</p>
             )}
           </div>
         </Modal>

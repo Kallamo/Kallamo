@@ -319,7 +319,7 @@ export default function ExportBookModal({ folderTitle, documents, electronAPI, o
 
         {/* Options */}
         <div className="w-72 shrink-0 border-l border-gray-800/60 bg-[#011419] p-5 flex flex-col gap-5 overflow-y-auto custom-scrollbar">
-          <p className="text-[11px] text-gray-500 leading-snug">
+          <p className="text-[0.6875rem] text-gray-500 leading-snug">
             {activeChapters.length} of {chapters.length} chapter{chapters.length === 1 ? '' : 's'} · using page setup from "{firstTitle}"
           </p>
 

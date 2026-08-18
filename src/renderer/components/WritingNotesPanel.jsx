@@ -107,7 +107,7 @@ export default function WritingNotesPanel({ documentId, workspaceId, electronAPI
                     className="w-full text-left flex items-start gap-1 mb-1.5 pl-2 border-l-2 border-gray-700 text-gray-500 hover:text-accent hover:border-accent transition-colors"
                   >
                     <span className="flex-1 line-clamp-2 italic break-words">“{n.excerpt}”</span>
-                    <CornerDownLeft className="w-3 h-3 shrink-0 mt-0.5 opacity-0 group-hover:opacity-100" />
+                    <CornerDownLeft className="w-3 h-3 shrink-0 mt-0.5 hover-reveal" />
                   </button>
                 )}
 
@@ -151,7 +151,7 @@ export default function WritingNotesPanel({ documentId, workspaceId, electronAPI
             ) : (
               <button title="Mark resolved" onClick={() => setStatus(n.id, 'resolved')} className="p-0.5 text-gray-600 hover:text-green-400"><Check className="w-3.5 h-3.5" /></button>
             )}
-            <button title="Delete" onClick={() => setConfirmId(n.id)} className="p-0.5 text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100"><Trash2 className="w-3.5 h-3.5" /></button>
+            <button title="Delete" onClick={() => setConfirmId(n.id)} className="p-0.5 text-gray-600 hover:text-red-400 hover-reveal"><Trash2 className="w-3.5 h-3.5" /></button>
           </div>
         </div>
       </div>
@@ -162,13 +162,13 @@ export default function WritingNotesPanel({ documentId, workspaceId, electronAPI
     <div className="w-72 shrink-0 border-l border-gray-800/40 flex flex-col bg-[#011419]/25">
       <div className="flex items-center gap-2 px-3 py-3 border-b border-gray-800/80 bg-[#011419]/35">
         <StickyNote className="w-3.5 h-3.5 text-accent shrink-0" />
-        <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mr-auto">Notes</span>
+        <span className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-500 mr-auto">Notes</span>
         <button title="Hide notes" onClick={onClose} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md">
           <PanelRightClose className="w-4 h-4" />
         </button>
       </div>
 
-      <p className="text-[11px] text-gray-600 px-3 pt-3 leading-relaxed">
+      <p className="text-[0.6875rem] text-gray-600 px-3 pt-3 leading-relaxed">
         Editorial notes for this chapter. Add your own, or an AI analysis lands here to keep as a pending.
       </p>
 

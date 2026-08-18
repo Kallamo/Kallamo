@@ -157,7 +157,7 @@ export function parseMarkdown(text, lineNumbersEnabled = false) {
                     let tableHtml = `
                     <div class="my-4 overflow-x-auto border border-gray-800 rounded-lg select-text">
                         <table class="min-w-full divide-y divide-gray-800 text-xs text-left text-gray-200">
-                            <thead class="bg-[#0a161d] text-gray-400 font-bold uppercase tracking-wider text-[10px]">
+                            <thead class="bg-[#0a161d] text-gray-400 font-bold uppercase tracking-wider text-[0.625rem]">
                                 <tr>
                                     ${headers.map(h => `<th class="px-4 py-2 border-r border-gray-800 last:border-r-0">${parseInlineMarkdown(h)}</th>`).join('')}
                                 </tr>

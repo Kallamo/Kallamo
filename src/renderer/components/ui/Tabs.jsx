@@ -27,8 +27,8 @@ export default function Tabs({
               vertical ? 'w-full px-3 py-2.5' : 'px-3 py-2'
             } ${
               active
-                ? 'bg-[#1a2d32] text-white shadow-sm' + (vertical ? ' border-l-2 border-accent' : '')
-                : 'text-gray-400 hover:text-gray-200 hover:bg-[#071318]'
+                ? 'bg-surface-hover text-text-primary shadow-sm' + (vertical ? ' border-l-2 border-accent' : '')
+                : 'text-text-muted hover:text-text-secondary hover:bg-surface-canvas'
             }`}
           >
             {Icon && <Icon className="w-3.5 h-3.5 shrink-0" />}

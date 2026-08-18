@@ -151,7 +151,7 @@ export default function DashboardView() {
                         e.stopPropagation();
                         setActiveDropdownId(activeDropdownId === chat.id ? null : chat.id);
                       }}
-                      className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-white transition-opacity p-1.5 rounded-md hover:bg-black/50 backdrop-blur-sm shadow-sm cursor-pointer" 
+                      className="hover-reveal text-gray-400 hover:text-white transition-opacity p-1.5 rounded-md hover:bg-black/50 backdrop-blur-sm shadow-sm cursor-pointer" 
                       title="Options"
                     >
                       <MoreVertical className="w-4 h-4" />

@@ -56,7 +56,7 @@ export default function Drawer({
       {overlay && (
         <div
           onMouseDown={onClose}
-          className={`${fixed ? 'fixed' : 'absolute'} inset-0 z-40 bg-black/40 animate-in fade-in duration-200`}
+          className={`${fixed ? 'fixed' : 'absolute'} inset-0 z-40 bg-surface-canvas/60 animate-in fade-in duration-200`}
         />
       )}
       <div
@@ -85,7 +85,7 @@ export default function Drawer({
             <button
               onClick={onClose}
               aria-label="Close panel"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-text-muted hover:bg-status-danger/10 hover:text-status-danger transition-colors cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-control text-text-muted hover:bg-status-danger/10 hover:text-status-danger transition-colors cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
               <X className="w-4 h-4" />
             </button>

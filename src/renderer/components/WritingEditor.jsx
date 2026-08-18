@@ -302,7 +302,7 @@ function FontSizeControl({ editor, baseSize }) {
         className="flex items-center gap-1 text-gray-300 text-xs rounded-md pl-1.5 pr-1 py-1.5 border border-gray-800 hover:border-gray-700 cursor-pointer"
       >
         <ALargeSmall className="w-4 h-4 text-gray-500 shrink-0" />
-        {value}<span className="text-[10px] text-gray-500">pt</span>
+        {value}<span className="text-[0.625rem] text-gray-500">pt</span>
         <ChevronDown className="w-3.5 h-3.5 text-gray-500" />
       </button>
       <Popover anchorRef={ref} open={open} onClose={close} matchAnchorWidth={false} scroll={false} className="w-20 !rounded-lg">
@@ -387,7 +387,7 @@ function ParagraphSpacingControl({ editor, baseSpacing }) {
         className="flex items-center gap-1 text-gray-300 text-xs rounded-md pl-1.5 pr-1 py-1.5 border border-gray-800 hover:border-gray-700 cursor-pointer"
       >
         <Pilcrow className="w-4 h-4 text-gray-500" />
-        {value}<span className="text-[10px] text-gray-500">pt</span>
+        {value}<span className="text-[0.625rem] text-gray-500">pt</span>
         <ChevronDown className="w-3.5 h-3.5 text-gray-500" />
       </button>
       <Popover anchorRef={ref} open={open} onClose={() => setOpen(false)} matchAnchorWidth={false} className="w-20 !rounded-lg">
@@ -447,11 +447,11 @@ function ColorPopover({ editor }) {
         </div>
 
         <div className="flex items-center justify-between gap-2 mt-3 pt-2.5 border-t border-gray-800">
-          <span className="text-[11px] font-bold text-gray-300">Custom</span>
+          <span className="text-[0.6875rem] font-bold text-gray-300">Custom</span>
           <button
             type="button"
             onMouseDown={(e) => { e.preventDefault(); openPicker(); }}
-            className="text-[11px] font-semibold text-accent hover:brightness-110 flex items-center gap-0.5"
+            className="text-[0.6875rem] font-semibold text-accent hover:brightness-110 flex items-center gap-0.5"
           >
             <Plus className="w-3.5 h-3.5" /> Add
           </button>
@@ -552,7 +552,7 @@ function CellColorControl({ editor }) {
   const apply = (color) => editor.chain().focus().setCellBackground(color).run();
   return (
     <div className="flex items-center gap-1 px-0.5 relative" ref={ref}>
-      <span className="text-[10px] text-gray-500 uppercase tracking-wider mr-1">Cell</span>
+      <span className="text-[0.625rem] text-gray-500 uppercase tracking-wider mr-1">Cell</span>
       {CELL_SWATCHES.map(c => (
         <button key={c} type="button" title={c}
           onMouseDown={(e) => { e.preventDefault(); apply(c); }}
@@ -565,7 +565,7 @@ function CellColorControl({ editor }) {
         style={{ background: 'conic-gradient(red, yellow, lime, aqua, blue, magenta, red)' }} />
       <button type="button" title="Clear fill"
         onMouseDown={(e) => { e.preventDefault(); apply(null); }}
-        className="text-[10px] text-gray-500 hover:text-white ml-0.5">Clear</button>
+        className="text-[0.625rem] text-gray-500 hover:text-white ml-0.5">Clear</button>
       <Popover anchorRef={ref} open={showPicker} onClose={() => setShowPicker(false)} matchAnchorWidth={false} scroll={false} className="w-52 !p-3 !rounded-lg">
         <ColorPicker value={draft} onChange={setDraft} />
         <div className="flex justify-end gap-2 mt-3">
@@ -1151,7 +1151,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
           placeholder="Untitled"
         />
         {counts.words > 0 && (
-          <span title="Estimated pages" className="text-[11px] text-gray-500 shrink-0 tabular-nums">
+          <span title="Estimated pages" className="text-[0.6875rem] text-gray-500 shrink-0 tabular-nums">
             ~{estimatePagesFromWords(counts.words, pageConfig)} pages
           </span>
         )}
@@ -1418,13 +1418,13 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
             {pending.status === 'flagged' && (
               <div className="pointer-events-auto flex items-start gap-2 max-w-md bg-amber-950/90 border border-amber-700/60 rounded-xl shadow-2xl px-3.5 py-2.5">
                 <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                <span className="text-[11px] leading-relaxed text-amber-200">
+                <span className="text-[0.6875rem] leading-relaxed text-amber-200">
                   The AI's reply came back malformed or was cut off, so this suggestion may be incomplete or off. Read it carefully before accepting.
                 </span>
               </div>
             )}
             <div className="pointer-events-auto flex items-center gap-2 bg-[#0a161d]/95 border border-gray-800 rounded-full shadow-2xl px-3 py-1.5">
-              <span className="flex items-center gap-1.5 text-[11px] tabular-nums pr-1 border-r border-gray-800">
+              <span className="flex items-center gap-1.5 text-[0.6875rem] tabular-nums pr-1 border-r border-gray-800">
                 <Sparkles className="w-3.5 h-3.5 text-accent" />
                 {stale
                   ? <span className="text-red-400">text changed, reject</span>
@@ -1443,7 +1443,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
       </div>
 
       {/* Status bar: live word/char count + per-chapter word goal */}
-      <div className="flex items-center gap-4 px-5 py-1.5 border-t border-gray-800/80 bg-[#011419]/35 text-[11px] text-gray-500 shrink-0">
+      <div className="flex items-center gap-4 px-5 py-1.5 border-t border-gray-800/80 bg-[#011419]/35 text-[0.6875rem] text-gray-500 shrink-0">
         <span>{counts.words.toLocaleString()} words</span>
         <span>{counts.chars.toLocaleString()} chars</span>
         <label className="flex items-center gap-1.5 ml-auto" title="Word goal for this chapter (0 = none)">

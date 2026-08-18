@@ -345,7 +345,7 @@ export default function LibraryView() {
                             </div>
                           )}
                         </div>
-                        <div className="flex space-x-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                        <div className="flex space-x-1 z-10 hover-reveal shrink-0">
                           <button 
                             onClick={() => handleExportProfileClick(profile)}
                             className="text-gray-400 hover:text-accent hover:bg-accent/10 p-1.5 bg-[#0a141d] rounded-md transition-colors cursor-pointer" 
@@ -451,7 +451,7 @@ export default function LibraryView() {
                       {/* Title & Actions */}
                       <div className="flex justify-between items-start mb-2 mt-1 w-full overflow-hidden">
                         <h3 className="text-white font-bold text-lg truncate pr-2 flex-1 min-w-0" title={wf.name}>{wf.name}</h3>
-                        <div className="flex space-x-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                        <div className="flex space-x-1 z-10 hover-reveal shrink-0">
                           <button 
                             onClick={() => handleExportWorkflowClick(wf)}
                             className="text-gray-400 hover:text-accent hover:bg-accent/10 p-1.5 bg-[#0a141d] rounded-md transition-colors cursor-pointer" 
@@ -478,7 +478,7 @@ export default function LibraryView() {
 
                       {/* Chain visualization */}
                       <div className="flex flex-col mb-auto">
-                        <span className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold mb-1">Execution Chain</span>
+                        <span className="text-[0.625rem] text-gray-500 uppercase tracking-wider font-semibold mb-1">Execution Chain</span>
                         <div className="flex items-center flex-wrap gap-1 text-xs text-gray-300">
                           {stepNames.length === 0 ? (
                             <span className="text-gray-500 italic">No steps defined</span>
@@ -486,7 +486,7 @@ export default function LibraryView() {
                             stepNames.map((name, sIdx) => (
                               <React.Fragment key={sIdx}>
                                 <span className="bg-[#1a2d3d] px-2 py-0.5 rounded border border-gray-700/40 truncate max-w-[90px]">{name}</span>
-                                {sIdx < stepNames.length - 1 && <span className="text-accent text-[9px]">→</span>}
+                                {sIdx < stepNames.length - 1 && <span className="text-accent text-[0.5625rem]">→</span>}
                               </React.Fragment>
                             ))
                           )}
@@ -538,7 +538,7 @@ export default function LibraryView() {
                     
                     <div className="flex justify-between items-start mb-2 mt-1">
                       <h3 className="text-white font-bold text-sm truncate pr-2" title={v.name}>{v.name}</h3>
-                      <div className="flex space-x-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="flex space-x-1 z-10 hover-reveal">
                         <button 
                           onClick={() => openEditVariable(v)}
                           className="text-gray-400 hover:text-white p-1.5 bg-[#0a141d] rounded-md transition-colors cursor-pointer" 
@@ -557,7 +557,7 @@ export default function LibraryView() {
                     </div>
 
                     <div className="flex items-center justify-between bg-[#051116] border border-gray-800/60 rounded px-2.5 py-1 mt-1 shrink-0">
-                      <span className="font-mono text-accent text-[11px] font-bold select-all">&#123;&#123;{v.key}&#125;&#125;</span>
+                      <span className="font-mono text-accent text-[0.6875rem] font-bold select-all">&#123;&#123;{v.key}&#125;&#125;</span>
                       <button 
                         onClick={() => {
                           copyText(`{{${v.key}}}`);
@@ -572,7 +572,7 @@ export default function LibraryView() {
 
                     <p className="caption mt-2 truncate italic shrink-0" title={v.description}>{v.description || 'No description'}</p>
                     
-                    <div className="mt-2 p-2 rounded bg-black/25 border border-gray-800/40 text-[10px] font-mono text-gray-400 overflow-y-auto max-h-[60px] custom-scrollbar flex-1 whitespace-pre-wrap select-text">
+                    <div className="mt-2 p-2 rounded bg-black/25 border border-gray-800/40 text-[0.625rem] font-mono text-gray-400 overflow-y-auto max-h-[60px] custom-scrollbar flex-1 whitespace-pre-wrap select-text">
                       {v.value}
                     </div>
                   </div>

@@ -34,7 +34,7 @@ export default function TextInput({
           id={inputId}
           aria-invalid={invalid || undefined}
           aria-describedby={(error || hint) ? messageId : rest['aria-describedby']}
-          className={`min-h-10 w-full rounded-lg border bg-surface-input py-2 text-sm text-text-secondary transition-colors
+          className={`min-h-10 w-full rounded-control border bg-surface-input py-2 text-sm text-text-secondary transition-colors
             placeholder:text-text-subtle focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30
             read-only:bg-surface-panel/60 read-only:text-text-disabled
             disabled:opacity-60 ${Icon ? 'pl-9 pr-3' : 'px-3'} ${

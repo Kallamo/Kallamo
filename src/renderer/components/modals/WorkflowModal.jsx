@@ -180,9 +180,9 @@ export default function WorkflowModal({ workflow, onClose, onSave }) {
                       <div className="flex-1 min-w-0 bg-[#0a161d]/60 border border-gray-800/70 rounded-xl p-4 space-y-3 shadow-md hover:border-gray-700 transition-colors">
                         {/* Header row */}
                         <div className="flex items-center justify-between">
-                          <span className="text-[11px] font-bold text-gray-300 uppercase tracking-wider">Execution Step</span>
+                          <span className="text-[0.6875rem] font-bold text-gray-300 uppercase tracking-wider">Execution Step</span>
 
-                        <div className="flex items-center space-x-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="flex items-center space-x-1.5 hover-reveal">
                           <button
                             disabled={index === 0}
                             onClick={() => moveStep(index, 'up')}
@@ -211,7 +211,7 @@ export default function WorkflowModal({ workflow, onClose, onSave }) {
                       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-gray-800/40 pb-2.5">
                         {/* Profile Selector */}
                         <div className="flex-1 flex flex-col space-y-1">
-                          <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wide">AI Profile</label>
+                          <label className="text-[0.625rem] font-bold text-gray-500 uppercase tracking-wide">AI Profile</label>
                           <div className="relative flex items-center max-w-xs">
                             <span
                               className="absolute left-3 w-2.5 h-2.5 rounded-full"
@@ -239,7 +239,7 @@ export default function WorkflowModal({ workflow, onClose, onSave }) {
                         <div className="flex items-center gap-6 mt-2 sm:mt-0">
                           {/* Switch: Include Chat Context */}
                           <div className="flex items-center space-x-2">
-                            <span className="text-[10px] font-bold text-gray-400 uppercase leading-none">Include Chat Context</span>
+                            <span className="text-[0.625rem] font-bold text-gray-400 uppercase leading-none">Include Chat Context</span>
                             <div className="flex items-center">
                               <HelpCircle className="w-3.5 h-3.5 text-gray-500 hover:text-gray-300 transition-colors mr-2 cursor-help" data-tooltip="When enabled, this step receives chat and memory context. The AI Profile's Knowledge Base is always included." />
                             </div>
@@ -257,7 +257,7 @@ export default function WorkflowModal({ workflow, onClose, onSave }) {
                           {/* Switch: Include Chat History */}
                           {index > 0 && (
                             <div className="flex items-center space-x-2">
-                              <span className="text-[10px] font-bold text-gray-400 uppercase leading-none">Include Chat History</span>
+                              <span className="text-[0.625rem] font-bold text-gray-400 uppercase leading-none">Include Chat History</span>
                               <div className="flex items-center">
                                 <HelpCircle className="w-3.5 h-3.5 text-gray-500 hover:text-gray-300 transition-colors mr-2 cursor-help" data-tooltip="If disabled, this step ignores prior chat history and processes only the previous step's output." />
                               </div>
@@ -277,7 +277,7 @@ export default function WorkflowModal({ workflow, onClose, onSave }) {
 
                       {/* Textarea: Instructions */}
                       <div className="flex flex-col space-y-1">
-                        <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wide">Step Prompt Instructions</label>
+                        <label className="text-[0.625rem] font-bold text-gray-500 uppercase tracking-wide">Step Prompt Instructions</label>
                         <textarea
                           rows={3}
                           value={step.prompt}

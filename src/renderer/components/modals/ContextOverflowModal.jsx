@@ -27,7 +27,7 @@ export default function ContextOverflowModal() {
             <AlertTriangle className="w-5 h-5 animate-pulse" />
             <h3 className="text-white font-bold text-base">Output Context Overflow Warning</h3>
           </div>
-          <span className="text-[10px] bg-orange-500/10 text-orange-400 border border-orange-500/20 font-bold px-2 py-0.5 rounded uppercase">
+          <span className="text-[0.625rem] bg-orange-500/10 text-orange-400 border border-orange-500/20 font-bold px-2 py-0.5 rounded uppercase">
             Size: {sizeKb} KB
           </span>
         </div>

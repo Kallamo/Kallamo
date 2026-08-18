@@ -104,7 +104,7 @@ export default function SummarizeModal({
         <div className="flex-1 overflow-y-auto p-5 space-y-4 custom-scrollbar">
           {/* Custom title block */}
           <div className="flex flex-col space-y-1.5 shrink-0">
-            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Memory Chapter Title (Optional)</label>
+            <label className="text-[0.625rem] font-bold text-gray-400 uppercase tracking-wider">Memory Chapter Title (Optional)</label>
             <input
               type="text"
               value={customTitle}
@@ -118,7 +118,7 @@ export default function SummarizeModal({
           {/* Premium Info Tooltip Block */}
           <div className="flex items-start space-x-2.5 bg-[#1a2d32]/20 border border-[#FBCB2D]/15 rounded-xl p-3 select-text shrink-0">
             <Info className="w-4 h-4 text-accent shrink-0 mt-0.5" />
-            <div className="flex flex-col space-y-1 text-[10px] text-gray-300 leading-relaxed">
+            <div className="flex flex-col space-y-1 text-[0.625rem] text-gray-300 leading-relaxed">
               <span className="font-bold text-gray-200">How Memory Archiving Works:</span>
               <p>
                 Selected messages will be compiled and vectorized into your local vector database (RAG).
@@ -132,10 +132,10 @@ export default function SummarizeModal({
 
           {/* Selection Controls */}
           <div className="flex items-center justify-between pt-2 shrink-0">
-            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">
+            <span className="text-[0.625rem] font-bold text-gray-400 uppercase tracking-wide">
               Selected: <span className="text-accent font-mono">{selectedCount}</span> / {pendingList.length} Messages
             </span>
-            <div className="flex items-center space-x-2 text-[10px] uppercase font-bold tracking-wider">
+            <div className="flex items-center space-x-2 text-[0.625rem] uppercase font-bold tracking-wider">
               <button
                 disabled={isVectorizing}
                 onClick={handleSelectAll}
@@ -170,7 +170,7 @@ export default function SummarizeModal({
                     }`}
                 >
                   <div className="flex-1 pr-4">
-                    <span className={`text-[9px] font-bold uppercase mb-1 block ${isUser ? 'text-accent' : 'text-gray-400'
+                    <span className={`text-[0.5625rem] font-bold uppercase mb-1 block ${isUser ? 'text-accent' : 'text-gray-400'
                       }`}>
                       {isUser ? 'User Prompt' : 'AI Response'}
                     </span>

@@ -26,6 +26,52 @@ const SECTIONS = [
   { id: 'appearance', label: 'Appearance', icon: Palette },
 ];
 
+/* Declared at module scope: defining these inside the view remounted every
+   section header and its subtree on each render. */
+function SectionHead({ icon: Icon, title, desc, action }) {
+  return (
+    <div className="mb-5 flex items-start justify-between gap-4">
+      <div className="flex min-w-0 items-start gap-3">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-control border border-accent/20 bg-accent/10">
+          <Icon aria-hidden="true" className="h-4.5 w-4.5 text-accent" />
+        </div>
+        <div className="min-w-0">
+          <h3 className="text-sm font-bold uppercase tracking-[0.09em] text-text-primary">{title}</h3>
+          {desc && <p className="caption mt-0.5">{desc}</p>}
+        </div>
+      </div>
+      {action && <div className="shrink-0">{action}</div>}
+    </div>
+  );
+}
+
+function NewButton({ onClick, label = 'New' }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex min-h-8 cursor-pointer items-center gap-1 rounded-control border border-accent/20 bg-surface-canvas px-2.5 py-1.5 text-xs font-semibold uppercase text-accent transition-colors duration-200 ease-standard hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+    >
+      <Plus aria-hidden="true" className="h-2.5 w-2.5" />
+      <span>{label}</span>
+    </button>
+  );
+}
+
+/* Switch track. The previous version cleared the focus outline without giving
+   anything back, leaving keyboard users with no indicator. */
+const SWITCH_TRACK = "relative h-4 w-7 rounded-full bg-surface-hover transition-colors duration-200 ease-standard peer peer-checked:bg-accent peer-focus-visible:ring-2 peer-focus-visible:ring-accent/50 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-surface-canvas after:absolute after:top-[0.125rem] after:left-[0.125rem] after:h-3 after:w-3 after:rounded-full after:border after:border-border-strong after:bg-text-secondary after:transition-transform after:content-[''] peer-checked:after:translate-x-full peer-checked:after:border-on-accent motion-reduce:after:transition-none";
+
+/* The checkbox itself is sr-only rather than display:none, so these stay
+   keyboard reachable; the label paints the focus ring. */
+function ToggleBox({ active }) {
+  return (
+    <div className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border transition-[background-color,border-color,transform] duration-200 ease-standard hover:scale-105 active:scale-95 motion-reduce:transform-none ${active ? 'border-accent bg-accent text-on-accent' : 'border-border-default bg-surface-canvas/90 hover:border-accent/50'}`}>
+      {active && <Check aria-hidden="true" className="h-2.5 w-2.5 stroke-[3.5] text-on-accent" />}
+    </div>
+  );
+}
+
 export default function ConfigurationView({ onTriggerSummarize }) {
   const {
     activeChat,
@@ -282,35 +328,10 @@ export default function ConfigurationView({ onTriggerSummarize }) {
   const activeProfilesCount = writingProfiles.filter(p => activeProfilesList.includes(p.id)).length;
   const activeWorkflowsCount = workflows.filter(w => activeWorkflowsList.includes(w.id)).length;
 
-  const inputClass = "w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-lg px-3 py-2.5 focus:outline-none focus:border-accent transition-colors";
-  const fieldLabel = "block text-[10px] font-semibold text-gray-400 uppercase tracking-wider";
+  const inputClass = "field-input px-3 py-2.5 text-sm";
+  const fieldLabel = "eyebrow block";
 
   const registerSection = (id) => (el) => { sectionRefs.current[id] = el; };
-
-  const SectionHead = ({ icon: Icon, title, desc, action }) => (
-    <div className="flex items-start justify-between mb-5">
-      <div className="flex items-start space-x-3">
-        <div className="w-9 h-9 rounded-lg bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-          <Icon className="w-4.5 h-4.5 text-accent" />
-        </div>
-        <div>
-          <h3 className="text-sm font-bold text-white uppercase tracking-wider">{title}</h3>
-          {desc && <p className="caption mt-0.5">{desc}</p>}
-        </div>
-      </div>
-      {action && <div className="shrink-0">{action}</div>}
-    </div>
-  );
-
-  const newButton = (onClick) => (
-    <button
-      onClick={onClick}
-      className="min-h-8 text-xs font-semibold text-accent hover:bg-accent/10 uppercase flex items-center space-x-1 cursor-pointer bg-surface-canvas px-2.5 py-1.5 rounded-lg border border-accent/20 transition-colors"
-    >
-      <Plus className="w-2.5 h-2.5" />
-      <span>New</span>
-    </button>
-  );
 
   return (
     <div className="flex w-full h-full bg-surface-canvas overflow-hidden">
@@ -327,17 +348,17 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                 onClick={() => scrollToSection(sec.id)}
                 className={`w-full text-left flex items-center space-x-2.5 pl-3 pr-2 py-2.5 rounded-md text-xs font-semibold transition-colors cursor-pointer border-l-2 ${isActive
                   ? 'border-accent text-accent bg-accent/5'
-                  : 'border-transparent text-gray-400 hover:text-white hover:bg-white/5'
+                  : 'border-transparent text-text-muted hover:text-text-primary hover:bg-surface-hover/60'
                   }`}
               >
-                <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-accent' : 'text-gray-500'}`} />
+                <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-accent' : 'text-text-subtle'}`} />
                 <span>{sec.label}</span>
               </button>
             );
           })}
         </div>
         <div className="mt-auto pt-6 pb-20 px-3">
-          <div className="rounded-lg border border-gray-800/60 bg-[#011419]/60 p-3">
+          <div className="rounded-control border border-border-subtle bg-surface-canvas/60 p-3">
             <p className="caption">
               Everything here affects only the workspace <span className="text-accent/80 font-semibold">{activeChat.title}</span>.
             </p>
@@ -347,18 +368,18 @@ export default function ConfigurationView({ onTriggerSummarize }) {
 
       {/* Single scrolling content pane */}
       <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto custom-scrollbar">
-        <div className="max-w-3xl mx-auto px-10 py-9 space-y-6">
+        <div className="mx-auto max-w-4xl space-y-5 px-6 py-7">
 
           {/* Page header */}
           <header className="pb-1">
-            <span className="text-[10px] font-bold text-accent/70 uppercase tracking-[0.2em]">Workspace Configuration</span>
-            <h1 className="text-2xl font-bold text-white mt-1.5 tracking-tight">{activeChat.title}</h1>
-            <div className="mt-4 h-px bg-gradient-to-r from-accent/40 via-gray-800/60 to-transparent" />
+            <span className="text-[0.625rem] font-bold text-accent/70 uppercase tracking-[0.2em]">Workspace Configuration</span>
+            <h1 className="text-2xl font-bold text-text-primary mt-1.5 tracking-tight">{activeChat.title}</h1>
+            <div className="mt-4 h-px bg-gradient-to-r from-accent/40 via-border-default to-transparent" />
           </header>
 
           {/* Profiles & Workflows */}
           <section ref={registerSection('agents')} data-section="agents" className="scroll-mt-6">
-            <div className="bg-[#0a161d]/50 border border-gray-800/60 rounded-2xl p-6">
+            <div className="rounded-surface border border-border-subtle bg-surface-panel/50 p-5 sm:p-6">
               <SectionHead
                 icon={Cpu}
                 title="Profiles & Workflows"
@@ -368,18 +389,18 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                 {/* Profiles column */}
                 <div>
                   <div className="flex items-center justify-between mb-2.5">
-                    <span className="text-[10px] font-bold text-gray-300 uppercase tracking-wider flex items-center space-x-1.5">
+                    <span className="eyebrow flex items-center gap-1.5 text-text-secondary">
                       <span>Profiles</span>
                       <span className="text-accent/70 font-mono">{activeProfilesCount}</span>
                     </span>
-                    {newButton(() => setShowProfileModal(true))}
+                    <NewButton onClick={() => setShowProfileModal(true)} />
                   </div>
                   <input
                     type="text"
                     value={searchProfiles}
                     onChange={(e) => setSearchProfiles(e.target.value)}
                     placeholder="Filter profiles..."
-                    className="w-full bg-[#011419] border border-gray-800 text-gray-300 text-xs rounded-lg px-3 py-1.5 focus:outline-none focus:border-accent mb-2.5"
+                    className="field-input mb-2.5 px-3 py-1.5 text-xs"
                   />
                   <div className="space-y-2 max-h-[21rem] overflow-y-auto custom-scrollbar pr-1">
                     {filteredProfiles.length === 0 ? (
@@ -389,27 +410,25 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                         const isActive = activeProfilesList.includes(p.id);
                         if (p.needsSetup) {
                           return (
-                            <div key={p.id} className="relative flex items-center justify-between p-2.5 rounded-lg bg-[#011419] border border-gray-800">
+                            <div key={p.id} className="relative flex items-center justify-between p-2.5 rounded-control bg-surface-canvas border border-border-subtle">
                               <div className="flex items-center space-x-2 overflow-hidden mr-2">
                                 <span className="w-2.5 h-2.5 rounded-full shrink-0 opacity-40" style={{ backgroundColor: p.color }} />
-                                <span className="text-xs text-gray-500 truncate">{p.name}</span>
+                                <span className="text-xs text-text-subtle truncate">{p.name}</span>
                               </div>
                               <div className="flex shrink-0 items-center">
-                                <AlertTriangle className="w-3.5 h-3.5 text-amber-500 cursor-help" data-tooltip="To activate: create an API profile in Settings, then link it to this profile in the Library." />
+                                <AlertTriangle className="w-3.5 h-3.5 text-status-warning cursor-help" data-tooltip="To activate: create an API profile in Settings, then link it to this profile in the Library." />
                               </div>
                             </div>
                           );
                         }
                         return (
-                          <label key={p.id} className="flex items-center justify-between p-2.5 rounded-lg bg-[#011419] border border-gray-800 hover:border-gray-700 cursor-pointer transition-colors">
+                          <label key={p.id} className="flex items-center justify-between p-2.5 rounded-control bg-surface-canvas border border-border-subtle hover:border-border-default cursor-pointer transition-colors duration-200 ease-standard has-[:focus-visible]:border-accent/50 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-accent/40">
                             <div className="flex items-center space-x-2 overflow-hidden mr-2">
                               <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: p.color }} />
-                              <span className="text-xs text-gray-200 truncate">{p.name}</span>
+                              <span className="text-xs text-text-secondary truncate">{p.name}</span>
                             </div>
-                            <div className={`w-3.5 h-3.5 rounded-sm border flex items-center justify-center transition-all duration-200 hover:scale-105 active:scale-95 shrink-0 ${isActive ? 'bg-accent border-accent text-[#011419] shadow-[0_0_8px_rgba(221,186,110,0.4)]' : 'border-gray-700 bg-[#011419]/90 hover:border-accent/50'}`}>
-                              {isActive && <Check className="w-2.5 h-2.5 text-[#011419] stroke-[3.5]" />}
-                            </div>
-                            <input type="checkbox" checked={isActive} onChange={() => toggleProfile(p.id)} className="hidden" />
+                            <ToggleBox active={isActive} />
+                            <input type="checkbox" checked={isActive} onChange={() => toggleProfile(p.id)} className="sr-only" />
                           </label>
                         );
                       })
@@ -420,35 +439,33 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                 {/* Workflows column */}
                 <div>
                   <div className="flex items-center justify-between mb-2.5">
-                    <span className="text-[10px] font-bold text-gray-300 uppercase tracking-wider flex items-center space-x-1.5">
+                    <span className="eyebrow flex items-center gap-1.5 text-text-secondary">
                       <span>Workflows</span>
                       <span className="text-accent/70 font-mono">{activeWorkflowsCount}</span>
                     </span>
-                    {newButton(() => setShowWorkflowModal(true))}
+                    <NewButton onClick={() => setShowWorkflowModal(true)} />
                   </div>
                   <input
                     type="text"
                     value={searchWorkflows}
                     onChange={(e) => setSearchWorkflows(e.target.value)}
                     placeholder="Filter workflows..."
-                    className="w-full bg-[#011419] border border-gray-800 text-gray-300 text-xs rounded-lg px-3 py-1.5 focus:outline-none focus:border-accent mb-2.5"
+                    className="field-input mb-2.5 px-3 py-1.5 text-xs"
                   />
                   <div className="space-y-2 max-h-[21rem] overflow-y-auto custom-scrollbar pr-1">
                     {filteredWorkflows.length === 0 ? (
-                      <div className="flex flex-col items-center justify-center py-6 px-3 border border-dashed border-gray-800/70 rounded-lg text-center">
-                        <Workflow className="w-5 h-5 text-gray-700 mb-2" />
+                      <div className="flex flex-col items-center justify-center py-6 px-3 border border-dashed border-border-subtle rounded-control text-center">
+                        <Workflow className="w-5 h-5 text-text-disabled mb-2" />
                         <span className="caption italic">No workflows yet</span>
                       </div>
                     ) : (
                       filteredWorkflows.map(wf => {
                         const isActive = activeWorkflowsList.includes(wf.id);
                         return (
-                          <label key={wf.id} className="flex items-center justify-between p-2.5 rounded-lg bg-[#011419] border border-gray-800 hover:border-gray-700 cursor-pointer transition-colors">
-                            <span className="text-xs text-gray-200 truncate mr-2">{wf.name}</span>
-                            <div className={`w-3.5 h-3.5 rounded-sm border flex items-center justify-center transition-all duration-200 hover:scale-105 active:scale-95 shrink-0 ${isActive ? 'bg-accent border-accent text-[#011419] shadow-[0_0_8px_rgba(221,186,110,0.4)]' : 'border-gray-700 bg-[#011419]/90 hover:border-accent/50'}`}>
-                              {isActive && <Check className="w-2.5 h-2.5 text-[#011419] stroke-[3.5]" />}
-                            </div>
-                            <input type="checkbox" checked={isActive} onChange={() => toggleWorkflow(wf.id)} className="hidden" />
+                          <label key={wf.id} className="flex items-center justify-between p-2.5 rounded-control bg-surface-canvas border border-border-subtle hover:border-border-default cursor-pointer transition-colors duration-200 ease-standard has-[:focus-visible]:border-accent/50 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-accent/40">
+                            <span className="text-xs text-text-secondary truncate mr-2">{wf.name}</span>
+                            <ToggleBox active={isActive} />
+                            <input type="checkbox" checked={isActive} onChange={() => toggleWorkflow(wf.id)} className="sr-only" />
                           </label>
                         );
                       })
@@ -461,7 +478,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
 
           {/* Context & Memory */}
           <section ref={registerSection('context')} data-section="context" className="scroll-mt-6">
-            <div className="bg-[#0a161d]/50 border border-gray-800/60 rounded-2xl p-6">
+            <div className="rounded-surface border border-border-subtle bg-surface-panel/50 p-5 sm:p-6">
               <SectionHead
                 icon={Brain}
                 title="Context & Memory"
@@ -471,7 +488,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                 <div>
                   <div className="flex items-center space-x-1.5 mb-1.5">
                     <label className={fieldLabel}>Max API Payload (Tokens)</label>
-                    <HelpCircle className="w-3.5 h-3.5 text-gray-500 cursor-help shrink-0" data-tooltip="The workspace safety limit for estimated input plus the response reserved by the active AI Profile. Older chat history is removed first. If fixed context still cannot fit, Kallamo stops before contacting the API." />
+                    <HelpCircle className="w-3.5 h-3.5 text-text-subtle cursor-help shrink-0" data-tooltip="The workspace safety limit for estimated input plus the response reserved by the active AI Profile. Older chat history is removed first. If fixed context still cannot fit, Kallamo stops before contacting the API." />
                   </div>
                   <input
                     type="number"
@@ -488,7 +505,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                 <div>
                   <div className="flex items-center space-x-1.5 mb-1.5">
                     <label className={fieldLabel}>Archive Threshold</label>
-                    <HelpCircle className="w-3.5 h-3.5 text-gray-500 cursor-help shrink-0" data-tooltip="The visual limit for active chat memory. Reaching this prompts you to summarize and move older messages to the Vector DB, keeping the active context clean." />
+                    <HelpCircle className="w-3.5 h-3.5 text-text-subtle cursor-help shrink-0" data-tooltip="The visual limit for active chat memory. Reaching this prompts you to summarize and move older messages to the Vector DB, keeping the active context clean." />
                   </div>
                   <input
                     type="number"
@@ -502,24 +519,24 @@ export default function ConfigurationView({ onTriggerSummarize }) {
               </div>
 
               {/* Full-width active context usage bar */}
-              <div className="bg-[#011419] border border-gray-800 rounded-lg px-3.5 py-3 mb-3">
+              <div className="bg-surface-canvas border border-border-subtle rounded-control px-3.5 py-3 mb-3">
                 <div className="flex items-center justify-between gap-3 mb-2">
                   <span className={fieldLabel}>Active Context Usage</span>
-                  <div className="flex items-center gap-2 text-[10px] text-gray-500 font-mono whitespace-nowrap">
+                  <div className="flex items-center gap-2 text-[0.625rem] text-text-subtle font-mono whitespace-nowrap">
                     <span>{activeMessageCount} {activeMessageCount === 1 ? 'message' : 'messages'}</span>
-                    <span className="text-gray-700">•</span>
+                    <span className="text-text-disabled">•</span>
                     <span>~{tokensUsed} / {archiveThreshold} tokens</span>
                   </div>
                 </div>
-                <div className="w-full h-2.5 bg-gray-800 rounded-full overflow-hidden shadow-inner">
+                <div className="w-full h-2.5 bg-surface-hover/70 rounded-full overflow-hidden shadow-inner">
                   <div
                     style={{ width: `${percentage}%` }}
-                    className={`h-full transition-all duration-500 ease-out ${percentage >= 95 ? 'bg-red-500' : percentage >= 75 ? 'bg-orange-500' : 'bg-accent'}`}
+                    className={`h-full transition-all duration-500 ease-out ${percentage >= 95 ? 'bg-status-danger' : percentage >= 75 ? 'bg-status-warning' : 'bg-accent'}`}
                   />
                 </div>
-                <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-800/70">
+                <div className="flex items-center justify-between mt-3 pt-3 border-t border-border-subtle">
                   <div className="pr-4">
-                    <span className="text-xs text-gray-200 font-semibold">Show this bar at the top of the chat</span>
+                    <span className="text-xs text-text-secondary font-semibold">Show this bar at the top of the chat</span>
                     <p className="caption mt-0.5">Adds a thin usage bar under the chat header so you can watch the context fill as you write.</p>
                   </div>
                   <label className="relative inline-flex items-center cursor-pointer shrink-0">
@@ -529,14 +546,14 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                       onChange={(e) => handleToggleContextBar(e.target.checked)}
                       className="sr-only peer"
                     />
-                    <div className="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
+                    <div className={SWITCH_TRACK} />
                   </label>
                 </div>
               </div>
 
-              <div className="flex items-center justify-between bg-[#011419] border border-gray-800 rounded-lg px-3.5 py-2.5 mb-3">
+              <div className="flex items-center justify-between bg-surface-canvas border border-border-subtle rounded-control px-3.5 py-2.5 mb-3">
                 <div className="pr-4">
-                  <span className="text-xs text-gray-200 font-semibold">Auto-Summarize</span>
+                  <span className="text-xs text-text-secondary font-semibold">Auto-Summarize</span>
                   <p className="caption mt-0.5">Archive older messages automatically when the threshold is hit.</p>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer shrink-0">
@@ -546,23 +563,23 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                     onChange={(e) => handleToggleAutoSummarize(e.target.checked)}
                     className="sr-only peer"
                   />
-                  <div className="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
+                  <div className={SWITCH_TRACK} />
                 </label>
               </div>
 
               <button
                 onClick={handleSummarizeNow}
-                className="w-full bg-[#1a2d32] hover:bg-[#243b52] text-accent border border-accent/30 py-2.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                className="w-full bg-surface-hover hover:bg-status-info/25 text-accent border border-accent/30 py-2.5 rounded-control text-xs font-semibold transition-colors cursor-pointer"
               >
                 Summarize Now
               </button>
 
               {memoryBlocks.filter(b => b.type !== 'manual').length > 0 && (
-                <div className="space-y-2 mt-4 pt-4 border-t border-gray-800/80">
-                  <span className="block text-[9px] font-bold text-gray-500 uppercase tracking-wider mb-1.5">Summarization Blocks</span>
+                <div className="space-y-2 mt-4 pt-4 border-t border-border-subtle">
+                  <span className="block text-[0.5625rem] font-bold text-text-subtle uppercase tracking-wider mb-1.5">Summarization Blocks</span>
                   <div className="grid grid-cols-2 gap-2">
                     {memoryBlocks.filter(b => b.type !== 'manual').map(block => (
-                      <div key={block.id} className="bg-[#011419] border border-gray-800/80 rounded-lg p-3 relative group">
+                      <div key={block.id} className="bg-surface-canvas border border-border-subtle rounded-control p-3 relative group">
                         {editingBlockId === block.id ? (
                           <div className="flex items-center space-x-1.5 mt-0.5 mb-1.5">
                             <input
@@ -574,29 +591,33 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                                 else if (e.key === 'Escape') setEditingBlockId(null);
                               }}
                               onBlur={() => renameMemoryBlock(block.id, editingBlockTitle)}
-                              className="bg-[#051116] border border-gray-800 text-[10px] text-accent font-bold uppercase rounded px-1.5 py-0.5 w-full focus:outline-none focus:border-accent"
+                              className="bg-surface-editor border border-border-subtle text-[0.625rem] text-accent font-bold uppercase rounded px-1.5 py-0.5 w-full focus:outline-none focus:border-accent"
                               autoFocus
                             />
                           </div>
                         ) : (
                           <div className="flex items-center justify-between pr-6 mb-1">
-                            <div
+                            <button
+                              type="button"
                               onClick={() => { setEditingBlockId(block.id); setEditingBlockTitle(block.title); }}
-                              className="group/title text-[10px] font-bold text-accent uppercase truncate cursor-pointer hover:underline flex items-center space-x-1"
+                              className="group/title flex min-w-0 items-center gap-1 truncate rounded text-[0.625rem] font-bold uppercase text-accent transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                              aria-label={`Rename ${block.title}`}
                               title="Click to rename"
                             >
                               <span className="truncate">{block.title}</span>
-                              <Edit className="w-2.5 h-2.5 text-gray-500 opacity-0 group-hover/title:opacity-100 transition-opacity" />
-                            </div>
+                              <Edit aria-hidden="true" className="h-2.5 w-2.5 shrink-0 text-text-subtle opacity-0 transition-opacity group-hover/title:opacity-100 group-focus-visible/title:opacity-100" />
+                            </button>
                           </div>
                         )}
                         <p className="caption line-clamp-2">{block.summary}</p>
                         <button
+                          type="button"
                           onClick={() => deleteMemoryBlock(block.id)}
-                          className="absolute top-2 right-2 p-1 text-gray-600 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                          className="hover-reveal absolute right-2 top-2 cursor-pointer rounded p-1 text-text-disabled transition-colors hover:text-status-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-danger/40"
+                          aria-label={`Delete ${block.title}`}
                           title="Delete Memory"
                         >
-                          <Trash2 className="w-3 h-3" />
+                          <Trash2 aria-hidden="true" className="h-3 w-3" />
                         </button>
                       </div>
                     ))}
@@ -608,7 +629,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
 
           {/* Writing Desk */}
           <section ref={registerSection('writing')} data-section="writing" className="scroll-mt-6">
-            <div className="bg-[#0a161d]/50 border border-gray-800/60 rounded-2xl p-6">
+            <div className="rounded-surface border border-border-subtle bg-surface-panel/50 p-5 sm:p-6">
               <SectionHead
                 icon={PenTool}
                 title="Writing Desk"
@@ -633,9 +654,9 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                 </p>
               </div>
 
-              <div className="flex items-center justify-between bg-[#011419] border border-gray-800 rounded-lg px-3.5 py-2.5 mt-4">
+              <div className="flex items-center justify-between bg-surface-canvas border border-border-subtle rounded-control px-3.5 py-2.5 mt-4">
                 <div className="pr-4">
-                  <span className="text-xs text-gray-200 font-semibold">Include chat history</span>
+                  <span className="text-xs text-text-secondary font-semibold">Include chat history</span>
                   <p className="caption mt-0.5">Lets Writing Desk edits see this workspace's conversation for extra context. Turn it off if that chat is bleeding its tone or language into your prose and pulling the AI away from your directives.</p>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer shrink-0">
@@ -645,7 +666,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                     onChange={(e) => handleToggleWdChatHistory(e.target.checked)}
                     className="sr-only peer"
                   />
-                  <div className="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
+                  <div className={SWITCH_TRACK} />
                 </label>
               </div>
             </div>
@@ -664,7 +685,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
 
           {/* Appearance */}
           <section ref={registerSection('appearance')} data-section="appearance" className="scroll-mt-6 pb-4">
-            <div className="bg-[#0a161d]/50 border border-gray-800/60 rounded-2xl p-6">
+            <div className="rounded-surface border border-border-subtle bg-surface-panel/50 p-5 sm:p-6">
               <SectionHead
                 icon={Palette}
                 title="Appearance"
@@ -674,21 +695,21 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                 {/* Controls */}
                 <div className="flex flex-col space-y-4">
                   <div className="flex flex-col space-y-2">
-                    <span className="text-[9px] text-gray-400 uppercase font-semibold">Background Image</span>
+                    <span className="text-[0.5625rem] text-text-muted uppercase font-semibold">Background Image</span>
                     <div
                       onClick={() => bgInputRef.current?.click()}
                       style={bgImage ? { backgroundImage: `url("app-file:///${bgImage.replace(/\\/g, '/')}")` } : {}}
-                      className="w-full h-24 rounded-xl bg-transparent border-2 border-dashed border-gray-800 hover:border-accent flex flex-col items-center justify-center cursor-pointer transition-colors bg-cover bg-center bg-no-repeat relative group overflow-hidden"
+                      className="w-full h-24 rounded-card bg-transparent border-2 border-dashed border-border-default hover:border-accent flex flex-col items-center justify-center cursor-pointer transition-colors bg-cover bg-center bg-no-repeat relative group overflow-hidden"
                     >
                       {!bgImage ? (
                         <div className="flex flex-col items-center justify-center transition-all duration-200">
-                          <ImageIcon className="text-gray-600 group-hover:text-accent transition-colors w-6 h-6 mb-1" />
-                          <span className="text-[9px] text-gray-500 uppercase tracking-widest font-semibold opacity-0 group-hover:opacity-100 transition-opacity font-sans">Upload Image</span>
+                          <ImageIcon className="text-text-disabled group-hover:text-accent transition-colors w-6 h-6 mb-1" />
+                          <span className="text-[0.5625rem] text-text-subtle uppercase tracking-widest font-semibold hover-reveal font-sans">Upload Image</span>
                         </div>
                       ) : (
                         <button
                           onClick={(e) => { e.stopPropagation(); handleRemoveBgImage(); }}
-                          className="absolute inset-0 w-full h-full bg-black/75 text-white text-[9px] font-bold tracking-widest opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer font-sans"
+                          className="absolute inset-0 w-full h-full bg-surface-overlay text-text-primary text-[0.5625rem] font-bold tracking-widest hover-reveal flex items-center justify-center cursor-pointer font-sans"
                         >
                           REMOVE IMAGE
                         </button>
@@ -698,21 +719,21 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                   </div>
 
                   <div>
-                    <div className="flex justify-between text-[9px] text-gray-400 font-semibold mb-1">
+                    <div className="flex justify-between text-[0.5625rem] text-text-muted font-semibold mb-1">
                       <span>Backdrop Opacity</span>
                       <span className="font-mono text-accent/80">{backdropOpacity}%</span>
                     </div>
                     <input type="range" min="0" max="100" value={backdropOpacity} onChange={(e) => handleAppearanceChange('backdropOpacity', parseInt(e.target.value))} className="w-full accent-accent cursor-pointer" />
                   </div>
                   <div>
-                    <div className="flex justify-between text-[9px] text-gray-400 font-semibold mb-1">
+                    <div className="flex justify-between text-[0.5625rem] text-text-muted font-semibold mb-1">
                       <span>User Chat Bubble Opacity</span>
                       <span className="font-mono text-accent/80">{userBubbleOpacity}%</span>
                     </div>
                     <input type="range" min="0" max="100" value={userBubbleOpacity} onChange={(e) => handleAppearanceChange('userBubbleOpacity', parseInt(e.target.value))} className="w-full accent-accent cursor-pointer" />
                   </div>
                   <div>
-                    <div className="flex justify-between text-[9px] text-gray-400 font-semibold mb-1">
+                    <div className="flex justify-between text-[0.5625rem] text-text-muted font-semibold mb-1">
                       <span>AI Message Box Opacity</span>
                       <span className="font-mono text-accent/80">{aiBubbleOpacity}%</span>
                     </div>
@@ -722,12 +743,12 @@ export default function ConfigurationView({ onTriggerSummarize }) {
 
                 {/* Live preview, mirrors the real chat styling for this workspace */}
                 <div className="flex flex-col">
-                  <span className="text-[9px] text-gray-400 uppercase font-semibold mb-2 flex items-center space-x-1.5">
+                  <span className="text-[0.5625rem] text-text-muted uppercase font-semibold mb-2 flex items-center space-x-1.5">
                     <span>Live Preview</span>
                     <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
                   </span>
                   <div
-                    className="flex-1 rounded-xl border border-gray-800 overflow-hidden relative bg-cover bg-center min-h-[15rem]"
+                    className="flex-1 rounded-card border border-border-subtle overflow-hidden relative bg-cover bg-center min-h-[15rem]"
                     style={bgImage ? { backgroundImage: `url("app-file:///${bgImage.replace(/\\/g, '/')}")` } : { backgroundColor: '#011419' }}
                   >
                     {/* Backdrop overlay */}
@@ -739,7 +760,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                         {/* User message */}
                         <div className="flex justify-end">
                           <div
-                            className="max-w-[75%] rounded-2xl border px-3 py-2 text-[11px] leading-snug text-gray-200 backdrop-blur-md"
+                            className="max-w-[75%] rounded-surface border px-3 py-2 text-[0.6875rem] leading-snug text-text-secondary backdrop-blur-md"
                             style={{ backgroundColor: `rgba(26, 45, 50, ${userBubbleOpacity / 100})`, borderColor: 'rgba(221, 186, 110, 0.15)' }}
                           >
                             How does the northern keep look at dawn?
@@ -748,7 +769,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                         {/* AI message */}
                         <div className="flex justify-start">
                           <div
-                            className="max-w-[85%] rounded-2xl border px-3 py-2 text-[11px] leading-snug text-gray-200 backdrop-blur-md"
+                            className="max-w-[85%] rounded-surface border px-3 py-2 text-[0.6875rem] leading-snug text-text-secondary backdrop-blur-md"
                             style={{ backgroundColor: `rgba(10, 22, 29, ${aiBubbleOpacity / 100})`, borderColor: 'rgba(255, 255, 255, 0.05)' }}
                           >
                             Mist clings to the ramparts as first light spills over the valley, gilding the old stone gold.
@@ -757,10 +778,10 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                       </div>
 
                       {/* Chat bar */}
-                      <div className="shrink-0 mt-2.5 bg-[#051116]/90 border border-gray-800/80 rounded-xl flex items-center px-2 py-1.5">
-                        <span className="flex-1 text-[10px] text-gray-600 px-1.5 select-none">Write a message...</span>
+                      <div className="shrink-0 mt-2.5 bg-surface-editor/90 border border-border-subtle rounded-card flex items-center px-2 py-1.5">
+                        <span className="flex-1 text-[0.625rem] text-text-disabled px-1.5 select-none">Write a message...</span>
                         <div className="w-6 h-6 rounded-full bg-accent flex items-center justify-center shrink-0">
-                          <Send className="w-3 h-3 text-[#011419]" />
+                          <Send className="w-3 h-3 text-on-accent" />
                         </div>
                       </div>
                     </div>
