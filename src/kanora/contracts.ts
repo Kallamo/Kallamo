@@ -133,6 +133,12 @@ export interface Knowledge {
   accessibility: KnowledgeAccessibility;
   status: 'active' | 'forgotten' | 'revoked' | 'superseded';
   factIds?: NarrativeId[];
+  /**
+   * Who passed this on, when the subject did not find it out for themselves. Only
+   * meaningful for reported acquisition: a first-hand observation has no teller. Knowing
+   * the teller is what makes a chain of hearsay traceable and a lie attributable.
+   */
+  informantIds?: NarrativeId[];
 }
 
 export interface Belief {

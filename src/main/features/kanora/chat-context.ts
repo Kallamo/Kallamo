@@ -642,6 +642,14 @@ export class KallamoKanoraChatContext {
       workspaceId,
       recordTypes: ['fact', 'state', 'knowledge', 'belief', 'memory', 'relationship']
     });
+    // An id in a context line teaches the model nothing. Resolving every teller in one
+    // read keeps attribution readable without a query per record. A proposition object may
+    // itself be a reference to an entity, which is what keeps the record correct across a
+    // rename, so those are resolved in the same pass rather than reaching the model as a uuid.
+    const informantNames = this.getEntityNames(workspaceId, [...new Set(rows.flatMap(({ payload }) => [
+      ...(Array.isArray(payload.informantIds) ? payload.informantIds.map(String) : []),
+      ...entityReferencesIn(payload)
+    ]))]);
     return rows.flatMap(({ row, payload }) => {
       const aboutId = String((payload.proposition as Record<string, unknown> | undefined)?.subjectId ?? '');
       const stateEntityId = String(payload.entityId ?? '');
@@ -664,7 +672,7 @@ export class KallamoKanoraChatContext {
         && perspective.focalSubjectId
         && !canSubjectAccessOccurrence(this.db, workspaceId, row.source_event_id, perspective.focalSubjectId)
       ) return [];
-      const normalized = normalizeRecord(row, payload);
+      const normalized = normalizeRecord(row, payload, informantNames);
       if (!normalized) return [];
       if (
         perspective.access === 'subjective'
@@ -935,7 +943,8 @@ export class KallamoKanoraChatContext {
 
 function normalizeRecord(
   row: NarrativeRecordRow,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  nameById: Map<string, string> = new Map()
 ): { content: string; epistemic: ContextEpistemicMetadata } | undefined {
   const subjectId = row.subject_id;
   if (row.record_type === 'fact') {
@@ -944,7 +953,7 @@ function normalizeRecord(
     const predicate = String(proposition?.predicate ?? '').trim();
     if (!predicate || proposition?.object === undefined) return undefined;
     return {
-      content: `${predicate}: ${formatNarrativeValue(proposition.object)}`,
+      content: `${predicate}: ${formatNarrativeValue(proposition.object, nameById)}`,
       epistemic: { kind: 'canon', access: 'public' }
     };
   }
@@ -952,7 +961,7 @@ function normalizeRecord(
     const property = String(payload.property ?? '').trim();
     if (!property || payload.value === undefined) return undefined;
     return {
-      content: `${property}: ${formatNarrativeValue(payload.value)}`,
+      content: `${property}: ${formatNarrativeValue(payload.value, nameById)}`,
       epistemic: { kind: 'canon', access: 'public' }
     };
   }
@@ -979,7 +988,9 @@ function normalizeRecord(
   }
   if (payload.status !== 'active') return undefined;
   const proposition = payload.proposition as Record<string, unknown> | undefined;
-  const content = String(proposition?.object ?? '').trim();
+  const content = proposition?.object === undefined || proposition?.object === null
+    ? ''
+    : formatNarrativeValue(proposition.object, nameById).trim();
   if (!content) return undefined;
   if (row.record_type === 'belief') {
     const relation = payload.relationToCanon;
@@ -992,8 +1003,19 @@ function normalizeRecord(
       }
     };
   }
+  // How the subject came by it is part of what they know. Hearsay that reads identically to
+  // first-hand perception is what makes a character state a rumour as fact, so the record
+  // says which it is and, when someone passed it on, who.
+  const informants = Array.isArray(payload.informantIds) ? payload.informantIds.map(String).filter(Boolean) : [];
+  const attribution = payload.acquisition === 'reported'
+    ? `Learned: reported${informants.length ? ` by ${informants.map(id => nameById.get(id) ?? id).join(', ')}` : ''}`
+    : payload.acquisition === 'inferred'
+      ? 'Learned: inferred by the subject'
+      : payload.acquisition === 'participant' || payload.acquisition === 'witness'
+        ? 'Learned: observed first-hand'
+        : '';
   return {
-    content,
+    content: attribution ? `${content}\n${attribution}` : content,
     epistemic: { kind: 'knowledge', subjectId, accessibility: accessibility(payload.accessibility) }
   };
 }
@@ -1037,8 +1059,22 @@ function beliefRelation(value: unknown): 'aligned' | 'contradicted' | 'unknown' 
   return value === 'aligned' || value === 'contradicted' ? value : 'unknown';
 }
 
-function formatNarrativeValue(value: unknown): string {
-  return typeof value === 'string' ? value : JSON.stringify(value);
+const ENTITY_REFERENCE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function entityReferencesIn(payload: Record<string, unknown>): string[] {
+  const candidates = [
+    (payload.proposition as Record<string, unknown> | undefined)?.object,
+    payload.value
+  ];
+  return candidates
+    .filter((value): value is string => typeof value === 'string' && ENTITY_REFERENCE_PATTERN.test(value.trim()))
+    .map(value => value.trim());
+}
+
+function formatNarrativeValue(value: unknown, nameById: Map<string, string> = new Map()): string {
+  if (typeof value !== 'string') return JSON.stringify(value);
+  const trimmed = value.trim();
+  return ENTITY_REFERENCE_PATTERN.test(trimmed) ? nameById.get(trimmed) ?? value : value;
 }
 
 function composeEntity(entity: EntityRow, fields: FieldRow[]): string {

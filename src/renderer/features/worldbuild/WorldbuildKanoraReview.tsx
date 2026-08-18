@@ -79,20 +79,20 @@ export default function WorldbuildKanoraReview({
       {proposals.map(proposal => {
         const reviewed = proposal.operations.filter(operation => decisions[operation.id]).length;
         return (
-          <section key={proposal.eventId} className="overflow-hidden rounded-xl border border-violet-300/20 bg-[#0a1721]/70 backdrop-blur-md">
-            <header className="flex items-start justify-between gap-4 border-b border-white/[0.08] px-4 py-3.5">
+          <section key={proposal.eventId} className="overflow-hidden rounded-card border border-entity-event/20 bg-surface-panel-muted/70 backdrop-blur-md">
+            <header className="flex items-start justify-between gap-4 border-b border-border-subtle px-4 py-3.5">
               <div>
-                <h3 className="flex items-center gap-2 text-sm font-semibold text-gray-100">
-                  <Sparkles className="h-4 w-4 text-violet-300" />
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-text-primary">
+                  <Sparkles className="h-4 w-4 text-entity-event" />
                   Kanora perspective suggestions
                 </h3>
-                <p className="mt-1 text-xs leading-relaxed text-gray-500">{proposal.description}</p>
+                <p className="mt-1 text-xs leading-relaxed text-text-subtle">{proposal.description}</p>
               </div>
-              <span className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-xs text-gray-400">{reviewed}/{proposal.operations.length} reviewed</span>
+              <span className="shrink-0 rounded-full border border-border-subtle bg-surface-hover/40 px-2 py-1 text-xs text-text-muted">{reviewed}/{proposal.operations.length} reviewed</span>
             </header>
 
             {proposal.legacy && (
-              <div className="flex gap-2 border-b border-amber-300/20 bg-amber-300/[0.07] px-4 py-3 text-xs leading-relaxed text-amber-100/80">
+              <div className="flex gap-2 border-b border-status-warning/20 bg-status-warning/[0.07] px-4 py-3 text-xs leading-relaxed text-status-warning/80">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                 This proposal was created by the previous extraction model. Review ownership and direction carefully. Applying it is disabled; reject it and run Update Entities again.
               </div>
@@ -107,16 +107,16 @@ export default function WorldbuildKanoraReview({
                   ? `Global canon${target ? ` · About ${target}` : ''}`
                   : `${source}${target ? ` → ${target}` : ''}`;
                 return (
-                  <article key={operation.id} className={`rounded-xl border px-4 py-3.5 transition-colors ${decision === 'approved' ? 'border-emerald-300/30 bg-emerald-300/[0.06]' : decision === 'rejected' ? 'border-rose-300/25 bg-rose-300/[0.05]' : 'border-white/[0.09] bg-black/10'}`}>
+                  <article key={operation.id} className={`rounded-card border px-4 py-3.5 transition-colors ${decision === 'approved' ? 'border-status-success/30 bg-status-success/[0.06]' : decision === 'rejected' ? 'border-status-danger/25 bg-status-danger/[0.05]' : 'border-border-subtle bg-surface-canvas/30'}`}>
                     <div className="flex items-start justify-between gap-4">
                       <div className="min-w-0 flex-1">
                         <div className="mb-2 flex flex-wrap items-center gap-2">
-                          <span className="rounded-full border border-violet-300/20 bg-violet-300/[0.08] px-2 py-0.5 text-xs font-bold uppercase tracking-wider text-violet-200">{operation.kind}</span>
-                          <span className="text-xs text-gray-400">{scope}</span>
+                          <span className="rounded-full border border-entity-event/20 bg-entity-event/[0.08] px-2 py-0.5 eyebrow text-entity-event">{operation.kind}</span>
+                          <span className="text-xs text-text-muted">{scope}</span>
                         </div>
-                        {operation.title && <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-gray-400">{operation.title}</p>}
-                        <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-200">{operation.summary || 'No usable content was extracted.'}</p>
-                        <div className="mt-2 flex flex-wrap gap-2 text-xs text-gray-500">
+                        {operation.title && <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-text-muted">{operation.title}</p>}
+                        <p className="whitespace-pre-wrap text-sm leading-relaxed text-text-secondary">{operation.summary || 'No usable content was extracted.'}</p>
+                        <div className="mt-2 flex flex-wrap gap-2 text-xs text-text-subtle">
                           {operation.method && <span className="inline-flex items-center gap-1 capitalize"><Eye className="h-3 w-3" />{operation.method}</span>}
                           {operation.confidence !== undefined && <span>{Math.round(operation.confidence * 100)}% confidence</span>}
                           {operation.kind === 'relationship' && <span className="inline-flex items-center gap-1"><Link2 className="h-3 w-3" />Directional perspective</span>}
@@ -124,17 +124,17 @@ export default function WorldbuildKanoraReview({
                         </div>
                       </div>
                       <div className="flex shrink-0 gap-1">
-                        <button type="button" disabled={proposal.legacy || saving === proposal.eventId} onClick={() => decide(operation.id, 'approved')} data-tooltip="Apply suggestion" className={`rounded-md p-2 transition-colors ${decision === 'approved' ? 'bg-emerald-300 text-[#041912]' : 'text-gray-500 hover:bg-emerald-300/10 hover:text-emerald-300'}`}><Check className="h-4 w-4" /></button>
-                        <button type="button" disabled={saving === proposal.eventId} onClick={() => decide(operation.id, 'rejected')} data-tooltip="Reject suggestion" className={`rounded-md p-2 transition-colors ${decision === 'rejected' ? 'bg-rose-300 text-[#21080d]' : 'text-gray-500 hover:bg-rose-300/10 hover:text-rose-300'}`}><X className="h-4 w-4" /></button>
+                        <button type="button" disabled={proposal.legacy || saving === proposal.eventId} onClick={() => decide(operation.id, 'approved')} data-tooltip="Apply suggestion" className={`rounded-md p-2 transition-colors ${decision === 'approved' ? 'bg-status-success text-on-accent' : 'text-text-subtle hover:bg-status-success/10 hover:text-status-success'}`}><Check className="h-4 w-4" /></button>
+                        <button type="button" disabled={saving === proposal.eventId} onClick={() => decide(operation.id, 'rejected')} data-tooltip="Reject suggestion" className={`rounded-md p-2 transition-colors ${decision === 'rejected' ? 'bg-status-danger text-on-danger' : 'text-text-subtle hover:bg-status-danger/10 hover:text-status-danger'}`}><X className="h-4 w-4" /></button>
                       </div>
                     </div>
                   </article>
                 );
               })}
-              {proposal.excerpt && <p className="rounded-lg border border-white/[0.06] bg-black/10 px-3 py-2 text-xs italic leading-relaxed text-gray-500">{proposal.excerpt}</p>}
+              {proposal.excerpt && <p className="rounded-control border border-border-subtle bg-surface-canvas/30 px-3 py-2 text-xs italic leading-relaxed text-text-subtle">{proposal.excerpt}</p>}
             </div>
-            <footer className="flex flex-col gap-3 border-t border-white/[0.08] px-4 py-3 xl:flex-row xl:items-center xl:justify-between">
-              <p className="text-xs text-gray-500">Each suggestion has its own decision. Only approved operations are written.</p>
+            <footer className="flex flex-col gap-3 border-t border-border-subtle px-4 py-3 xl:flex-row xl:items-center xl:justify-between">
+              <p className="text-xs text-text-subtle">Each suggestion has its own decision. Only approved operations are written.</p>
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <Button size="sm" variant="ghost" disabled={proposal.legacy || saving === proposal.eventId} onClick={() => decideAll(proposal, 'approved')}>Approve all</Button>
                 <Button size="sm" variant="ghost" disabled={saving === proposal.eventId} onClick={() => decideAll(proposal, 'rejected')}>Reject all</Button>

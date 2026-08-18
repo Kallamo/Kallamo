@@ -1,12 +1,27 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BookCheck, Pencil, Plus, Search, Sparkles, Trash2 } from 'lucide-react';
+import { BookCheck, Lock, Pencil, Plus, Search, Sparkles, Trash2, X } from 'lucide-react';
 import Button from '../../components/ui/Button';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import Modal from '../../components/ui/Modal';
 import SearchableSelect from '../../components/ui/SearchableSelect';
 import type { Toast, WorldbuildApi, WorldbuildEntity, WorldbuildFact } from './worldbuildTypes';
 
-const INPUT = 'wb-input w-full rounded-lg border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary placeholder:text-text-subtle focus:border-accent/70 focus:outline-none focus:ring-2 focus:ring-accent/15';
+const INPUT = 'wb-input field-input px-3 py-2 text-sm';
+
+type SourceFilter = 'all' | 'manual' | 'narrative' | 'managed';
+
+const SOURCE_FILTERS: Array<{ id: SourceFilter; label: string }> = [
+  { id: 'all', label: 'All' },
+  { id: 'manual', label: 'Authored' },
+  { id: 'narrative', label: 'Narrative' },
+  { id: 'managed', label: 'Event records' },
+];
+
+function matchesFilter(fact: WorldbuildFact, filter: SourceFilter): boolean {
+  if (filter === 'all') return true;
+  if (filter === 'managed') return Boolean(fact.managed);
+  return !fact.managed && fact.source === filter;
+}
 
 export default function WorldbuildFactsRegistry({
   workspaceId, entities, api, showToast, onCountChanged,
@@ -28,6 +43,7 @@ export default function WorldbuildFactsRegistry({
     relatedEntityIds: string[];
   } | null>(null);
   const [deleting, setDeleting] = useState<WorldbuildFact | null>(null);
+  const [filter, setFilter] = useState<SourceFilter>('all');
   const names = useMemo(() => new Map(entities.map(entity => [entity.id, entity.canonicalName])), [entities]);
 
   const load = async () => {
@@ -51,12 +67,20 @@ export default function WorldbuildFactsRegistry({
     const normalized = query.trim().toLocaleLowerCase();
     return [...facts]
       .reverse()
+      .filter(fact => matchesFilter(fact, filter))
       .filter(fact => !normalized || [
         fact.title,
         fact.statement,
         ...fact.relatedEntityIds.map(id => names.get(id) || ''),
       ].some(value => value.toLocaleLowerCase().includes(normalized)));
-  }, [facts, names, query]);
+  }, [facts, filter, names, query]);
+
+  const counts = useMemo(() => ({
+    all: facts.length,
+    manual: facts.filter(fact => matchesFilter(fact, 'manual')).length,
+    narrative: facts.filter(fact => matchesFilter(fact, 'narrative')).length,
+    managed: facts.filter(fact => matchesFilter(fact, 'managed')).length,
+  }), [facts]);
 
   const entityOptions = useMemo(() => entities
     .filter(entity => entity.status !== 'proposed')
@@ -121,59 +145,64 @@ export default function WorldbuildFactsRegistry({
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-6">
-      <section className="overflow-hidden rounded-2xl border border-amber-300/20 bg-[#0a1721]/70 backdrop-blur-md">
-        <header className="flex flex-col gap-4 border-b border-white/[0.08] p-5 sm:flex-row sm:items-start sm:justify-between">
+      <section className="overflow-hidden rounded-surface border border-border-subtle bg-surface-panel/70 shadow-panel backdrop-blur-md">
+        <header className="flex flex-col gap-4 p-5 sm:flex-row sm:items-start sm:justify-between">
           <div className="flex min-w-0 gap-3">
-            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-amber-300/25 bg-amber-300/[0.08] text-amber-200">
-              <BookCheck className="h-5 w-5" />
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-card border border-accent/25 bg-accent/[0.08] text-accent">
+              <BookCheck aria-hidden="true" className="h-5 w-5" />
             </span>
-            <div>
-              <h1 className="text-xl font-bold text-white">Canonical Facts</h1>
-              <p className="mt-1 max-w-xl text-sm leading-relaxed text-gray-400">Objective truths of this world. Characters may observe, know, or interpret them differently without changing the canon.</p>
+            <div className="min-w-0">
+              <h1 className="text-lg font-bold text-text-primary">Canonical Facts</h1>
+              <p className="caption mt-1 max-w-xl">Objective truths of this world. Characters may observe, know, or interpret them differently without changing the canon.</p>
             </div>
           </div>
           <Button icon={Plus} onClick={startAdd}>Add Fact</Button>
         </header>
 
-        <div className="border-b border-white/[0.08] px-5 py-3">
-          <div className="relative max-w-md">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-500" />
-            <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search canonical facts..." className={`${INPUT} pl-9`} />
+        <div className="flex flex-col gap-2.5 border-y border-border-subtle bg-surface-canvas/30 px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="relative min-w-0 flex-1 sm:max-w-xs">
+            <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-subtle" />
+            <input value={query} onChange={event => setQuery(event.target.value)} aria-label="Search canonical facts" placeholder="Search canonical facts..." className={`${INPUT} pl-9 ${query ? 'pr-9' : ''}`} />
+            {query && (
+              <button type="button" onClick={() => setQuery('')} aria-label="Clear search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-text-subtle transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><X aria-hidden="true" className="h-3.5 w-3.5" /></button>
+            )}
+          </div>
+          <div role="group" aria-label="Filter Facts by source" className="flex shrink-0 flex-wrap gap-1">
+            {SOURCE_FILTERS.map(option => (
+              <button
+                key={option.id}
+                type="button"
+                aria-pressed={filter === option.id}
+                onClick={() => setFilter(option.id)}
+                className={`inline-flex min-h-8 items-center gap-1.5 rounded-control px-2.5 text-xs font-semibold transition-colors duration-200 ease-standard focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${filter === option.id ? 'bg-accent/12 text-accent' : 'text-text-muted hover:bg-surface-hover/60 hover:text-text-secondary'}`}
+              >
+                {option.label}
+                <span className="tabular-nums opacity-60">{counts[option.id]}</span>
+              </button>
+            ))}
           </div>
         </div>
 
-        <div className="space-y-2.5 p-5">
-          {loading && <><div className="h-28 animate-pulse rounded-xl bg-white/[0.04]" /><div className="h-24 animate-pulse rounded-xl bg-white/[0.03]" /></>}
+        <div className="space-y-2 p-5">
+          {loading && <><div className="h-24 animate-pulse rounded-card bg-surface-panel-muted/60" /><div className="h-20 animate-pulse rounded-card bg-surface-panel-muted/40" /></>}
           {!loading && !facts.length && (
-            <button type="button" onClick={startAdd} className="flex w-full flex-col items-center justify-center rounded-xl border border-dashed border-white/10 px-6 py-12 text-center transition-colors hover:border-amber-300/30 hover:bg-amber-300/[0.03]">
-              <Plus className="mb-2 h-5 w-5 text-gray-600" />
-              <span className="text-sm font-semibold text-gray-300">Add the first canonical Fact</span>
-              <span className="mt-1 max-w-md text-xs leading-relaxed text-gray-500">Facts are workspace-wide truths. They are not memories, beliefs, or knowledge owned by a character.</span>
+            <button type="button" onClick={startAdd} className="flex w-full flex-col items-center justify-center rounded-card border border-dashed border-border-subtle px-6 py-12 text-center transition-colors duration-200 ease-standard hover:border-accent/30 hover:bg-accent/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              <Plus aria-hidden="true" className="mb-2 h-5 w-5 text-text-disabled" />
+              <span className="text-sm font-semibold text-text-secondary">Add the first canonical Fact</span>
+              <span className="caption mt-1 max-w-md">Facts are workspace-wide truths. They are not memories, beliefs, or knowledge owned by a character.</span>
             </button>
           )}
           {!loading && facts.length > 0 && !visible.length && (
-            <p className="py-10 text-center text-sm text-gray-500">No Facts match this search.</p>
+            <p className="py-10 text-center text-sm text-text-subtle">No Facts match this search.</p>
           )}
           {visible.map(fact => (
-            <article key={fact.id} className="group rounded-xl border border-white/[0.08] bg-black/10 px-4 py-4 transition-colors hover:border-white/15 hover:bg-white/[0.025]">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0 flex-1">
-                  <div className="mb-2 flex flex-wrap items-center gap-2">
-                    <h2 className="text-sm font-bold text-amber-100">{fact.title}</h2>
-                    {fact.relatedEntityIds.map(id => <span key={id} className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-xs text-gray-400">About {names.get(id) || 'Unknown entity'}</span>)}
-                  </div>
-                  <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-200">{fact.statement}</p>
-                  <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-gray-500">
-                    {fact.source === 'narrative' ? <span className="inline-flex items-center gap-1"><Sparkles className="h-3 w-3 text-violet-300" />Narrative State</span> : <span>Added manually</span>}
-                    <span>{formatDate(fact.appliedAt || fact.position.timestamp)}</span>
-                  </div>
-                </div>
-                <div className="flex shrink-0 gap-1 opacity-70 transition-opacity group-hover:opacity-100">
-                  <button type="button" onClick={() => startEdit(fact)} aria-label="Edit Fact" data-tooltip="Edit" className="rounded-md p-1.5 text-gray-500 transition-colors hover:bg-white/5 hover:text-accent"><Pencil className="h-3.5 w-3.5" /></button>
-                  <button type="button" onClick={() => setDeleting(fact)} aria-label="Retract Fact" data-tooltip="Retract" className="rounded-md p-1.5 text-gray-500 transition-colors hover:bg-red-500/10 hover:text-red-400"><Trash2 className="h-3.5 w-3.5" /></button>
-                </div>
-              </div>
-            </article>
+            <FactCard
+              key={fact.id}
+              fact={fact}
+              names={names}
+              onEdit={() => startEdit(fact)}
+              onDelete={() => setDeleting(fact)}
+            />
           ))}
         </div>
       </section>
@@ -181,7 +210,7 @@ export default function WorldbuildFactsRegistry({
       {editor && (
         <Modal onClose={() => setEditor(null)} size="lg" title={`${editor.existing ? 'Edit' : 'Add'} canonical Fact`} icon={BookCheck} closeOnOverlay={!saving} closeOnEsc={!saving}>
           <div className="max-h-[72vh] space-y-5 overflow-y-auto p-5 custom-scrollbar">
-            <p className="rounded-lg border border-amber-300/15 bg-amber-300/[0.04] px-3.5 py-3 text-xs leading-relaxed text-gray-400">Write only an objective truth of the world. A character's interpretation belongs in Observed, Known, or Beliefs.</p>
+            <p className="rounded-control border border-accent/15 bg-accent/[0.04] px-3.5 py-3 text-xs leading-relaxed text-text-muted">Write only an objective truth of the world. A character's interpretation belongs in Observed, Known, or Beliefs.</p>
             <Field label="Fact title" hint="A stable, concise label used to identify this canonical truth.">
               <input autoFocus className={INPUT} value={editor.title} onChange={event => setEditor({ ...editor, title: event.target.value })} placeholder="e.g. Northern gate status" />
             </Field>
@@ -198,7 +227,7 @@ export default function WorldbuildFactsRegistry({
               />
             </Field>
           </div>
-          <footer className="flex justify-end gap-2 border-t border-white/10 px-5 py-4">
+          <footer className="flex justify-end gap-2 border-t border-border-subtle px-5 py-4">
             <Button variant="ghost" onClick={() => setEditor(null)} disabled={saving}>Cancel</Button>
             <Button onClick={save} loading={saving} disabled={!editor.title.trim() || !editor.statement.trim()}>Save Fact</Button>
           </footer>
@@ -209,7 +238,7 @@ export default function WorldbuildFactsRegistry({
         <ConfirmDialog
           tone="danger"
           title="Retract canonical Fact"
-          message={<>Retract <strong className="text-gray-200">“{deleting.title}”</strong> from the current canon? Its prior record remains in narrative history.</>}
+          message={<>Retract <strong className="text-text-primary">“{deleting.title}”</strong> from the current canon? Its prior record remains in narrative history.</>}
           actions={[
             { label: 'Cancel', variant: 'ghost', onClick: () => setDeleting(null) },
             { label: 'Retract', variant: 'danger', loading: saving, autoFocus: true, onClick: remove },
@@ -221,8 +250,58 @@ export default function WorldbuildFactsRegistry({
   );
 }
 
+function FactCard({ fact, names, onEdit, onDelete }: {
+  fact: WorldbuildFact;
+  names: Map<string, string>;
+  onEdit(): void;
+  onDelete(): void;
+}) {
+  const origin = fact.managed
+    ? { label: 'Event record', icon: Lock, tone: 'text-entity-event' }
+    : fact.source === 'narrative'
+      ? { label: 'Narrative State', icon: Sparkles, tone: 'text-entity-event' }
+      : { label: 'Authored', icon: null, tone: 'text-text-subtle' };
+  const OriginIcon = origin.icon;
+  return (
+    <article className="group relative rounded-card border border-border-subtle bg-surface-canvas/25 px-4 py-3.5 transition-colors duration-200 ease-standard hover:border-border-default hover:bg-surface-panel-muted/40">
+      <div className="mb-1.5 flex items-center gap-2">
+        <span className={`inline-flex items-center gap-1 eyebrow ${origin.tone}`}>
+          {OriginIcon && <OriginIcon aria-hidden="true" className="h-3 w-3" />}
+          {origin.label}
+        </span>
+        <span aria-hidden="true" className="h-px flex-1 bg-border-subtle" />
+        <span className="shrink-0 text-[0.6875rem] tabular-nums text-text-subtle">{formatDate(fact.appliedAt || fact.position.timestamp)}</span>
+      </div>
+
+      <div className="flex items-start justify-between gap-3">
+        <h2 className="min-w-0 flex-1 text-sm font-bold leading-snug text-text-primary">{fact.title}</h2>
+        {!fact.managed && (
+          <div className="flex shrink-0 gap-0.5 opacity-0 transition-opacity duration-200 ease-standard focus-within:opacity-100 group-hover:opacity-100">
+            <button type="button" onClick={onEdit} aria-label={`Edit ${fact.title}`} data-tooltip="Edit" className="rounded p-1.5 text-text-subtle transition-colors hover:bg-surface-hover/60 hover:text-accent focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Pencil aria-hidden="true" className="h-3.5 w-3.5" /></button>
+            <button type="button" onClick={onDelete} aria-label={`Retract ${fact.title}`} data-tooltip="Retract" className="rounded p-1.5 text-text-subtle transition-colors hover:bg-status-danger/10 hover:text-status-danger focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-danger/40"><Trash2 aria-hidden="true" className="h-3.5 w-3.5" /></button>
+          </div>
+        )}
+      </div>
+
+      {fact.statement && (
+        <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-text-secondary">{fact.statement}</p>
+      )}
+
+      {fact.relatedEntityIds.length > 0 && (
+        <div className="mt-2.5 flex flex-wrap gap-1.5">
+          {fact.relatedEntityIds.map(id => (
+            <span key={id} className="rounded-full border border-border-subtle bg-surface-panel-muted/60 px-2 py-0.5 text-[0.6875rem] font-medium text-text-muted">
+              {names.get(id) || 'Unknown entity'}
+            </span>
+          ))}
+        </div>
+      )}
+    </article>
+  );
+}
+
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return <label className="block"><span className="mb-1 block text-xs font-bold uppercase tracking-wider text-gray-400">{label}</span>{children}{hint && <span className="mt-1 block text-xs leading-relaxed text-gray-500">{hint}</span>}</label>;
+  return <label className="block"><span className="eyebrow mb-1.5 block">{label}</span>{children}{hint && <span className="caption mt-1.5 block">{hint}</span>}</label>;
 }
 
 function formatDate(value?: string): string {

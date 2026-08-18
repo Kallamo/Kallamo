@@ -2,24 +2,10 @@ import { createRequire } from 'node:module';
 import { describe, expect, test } from 'vitest';
 
 const require = createRequire(import.meta.url);
-const {
-  classifyRetrievalIntent,
-  retrievalExpansionForIntent,
-  selectRetrievedEntries
-} = require('../src/main/features/ai-engine/retrieval-selection');
+const { selectRetrievedEntries } = require('../src/main/features/ai-engine/retrieval-selection');
 
 describe('retrieval selection', () => {
-  test('recognizes latest-state questions in Portuguese and English', () => {
-    expect(classifyRetrievalIntent('Onde a história atual parou?')).toBe('latest-state');
-    expect(classifyRetrievalIntent('Where did the story leave off?')).toBe('latest-state');
-    expect(classifyRetrievalIntent('Quem é Kepler?')).toBe('entity-detail');
-    expect(classifyRetrievalIntent('Explique a política de Heidan.')).toBe('general');
-    expect(retrievalExpansionForIntent('latest-state')).toBe('none');
-    expect(retrievalExpansionForIntent('entity-detail')).toBe('dossier');
-    expect(retrievalExpansionForIntent('general')).toBe('summary');
-  });
-
-  test('keeps the newest decisive evidence for a latest-state question', () => {
+  test('keeps distinct semantic evidence without imposing chronology heuristics', () => {
     const result = selectRetrievedEntries('Onde a história parou?', [
       entry('day-8', 'workspace-text', 'Registro - Dia 8.pdf', 'Dia 8 terminou na arena.', 0.95),
       entry('day-14', 'workspace-text', 'Registro - Dia 14.pdf', 'Dia 14 terminou na oficina.', 0.7),
@@ -27,16 +13,13 @@ describe('retrieval selection', () => {
       entry('memory', 'workspace-memory', 'Chat Memory', 'Uma memória antiga.', 0.9)
     ]);
 
-    expect(result.selected.map((value: { key: string }) => value.key)).toEqual(['day-14']);
+    expect(result.selected.map((value: { key: string }) => value.key)).toEqual(['day-8', 'day-14', 'kepler', 'memory']);
     expect(result.funnel).toMatchObject({
-      intent: 'latest-state',
+      intent: 'general',
       discovered: 4,
-      selected: 1,
-      excluded: 3,
-      excludedByReason: {
-        'older-or-secondary-evidence': 1,
-        'expansion-not-required': 2
-      }
+      selected: 4,
+      excluded: 0,
+      excludedByReason: {}
     });
   });
 

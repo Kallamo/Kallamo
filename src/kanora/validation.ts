@@ -201,6 +201,7 @@ function validateKnowledgeValue(value: unknown, path: string, issues: Validation
   requireEnum(knowledge, 'accessibility', ['available', 'suppressed', 'inaccessible'], path, issues);
   requireEnum(knowledge, 'status', ['active', 'forgotten', 'revoked', 'superseded'], path, issues);
   if (knowledge.factIds !== undefined) requireStringArray(knowledge, 'factIds', path, issues);
+  if (knowledge.informantIds !== undefined) requireStringArray(knowledge, 'informantIds', path, issues);
 }
 
 function validateAwarenessValue(value: unknown, path: string, issues: ValidationIssue[]): void {

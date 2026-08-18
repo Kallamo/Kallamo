@@ -13,11 +13,22 @@ export interface WorldbuildEntity {
 export type KnowledgeEntryKind = 'knowledge' | 'belief' | 'memory';
 export type WorldbuildKnowledgeEntryKind = KnowledgeEntryKind;
 
+/** Where an entry came from, in the same terms the Facts registry uses. */
+export interface WorldbuildEntryOrigin {
+  kind: 'authored' | 'narrative' | 'occurrence';
+  occurrenceId?: string;
+  eventEntityId?: string;
+  title?: string;
+}
+
 export interface WorldbuildKnowledgeEntry {
   id: string;
   kind: WorldbuildKnowledgeEntryKind;
   subjectId: string;
   accessibility: 'available' | 'suppressed' | 'inaccessible';
+  origin?: WorldbuildEntryOrigin;
+  /** True while another feature owns the record. Occurrence entries are edited in the event. */
+  managed?: boolean;
   sourceEventId: string;
   position: { sequence: number; timestamp?: string };
   appliedAt: string;
@@ -26,6 +37,8 @@ export interface WorldbuildKnowledgeEntry {
   summary?: string;
   confidence?: number;
   acquisition?: 'participant' | 'witness' | 'reported' | 'inferred';
+  /** Who passed it on. Only carried by reported Knowledge; first-hand records have none. */
+  informantIds?: string[];
   relationToCanon?: 'aligned' | 'contradicted' | 'unknown';
   method?: 'participant' | 'witness' | 'reported' | 'inferred';
   eventId?: string;
@@ -83,6 +96,10 @@ export interface WorldbuildFact {
   id: string;
   title: string;
   statement: string;
+  /** Raw proposition predicate. Equals the title for author-written Facts. */
+  predicate?: string;
+  /** True when the Fact projects a structured record owned by another feature. */
+  managed?: boolean;
   relatedEntityIds: string[];
   sourceEventId: string;
   source: 'manual' | 'narrative';

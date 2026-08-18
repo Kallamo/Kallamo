@@ -98,7 +98,8 @@
         "confidence": { "$ref": "#/$defs/Confidence" },
         "accessibility": { "enum": ["available", "suppressed", "inaccessible"] },
         "status": { "enum": ["active", "forgotten", "revoked", "superseded"] },
-        "factIds": { "type": "array", "items": { "$ref": "#/$defs/Id" }, "uniqueItems": true }
+        "factIds": { "type": "array", "items": { "$ref": "#/$defs/Id" }, "uniqueItems": true },
+        "informantIds": { "type": "array", "items": { "$ref": "#/$defs/Id" }, "uniqueItems": true }
       },
       "additionalProperties": false
     },

@@ -80,9 +80,11 @@ describe('Narrative State runtime', () => {
     const eventId = result.record!.proposal.changeSet.event.id;
     expect(system.resolveEvent('workspace-one', eventId, 'approved')?.status).toBe('approved');
     expect(db.prepare('SELECT COUNT(*) AS count FROM kanora_narrative_records').get()).toEqual({ count: 2 });
-    const link = db.prepare('SELECT fromId, toId, label, metadata_json FROM entity_links').get() as { fromId: string; toId: string; label: string; metadata_json: string };
-    expect(link).toMatchObject({ fromId: 'elias', toId: 'guild', label: 'trust' });
-    expect(JSON.parse(link.metadata_json)).toMatchObject({ value: -35, description: 'Elias believes the accusation.', updatedBy: 'ai' });
+    const link = db.prepare('SELECT fromId, toId, label, metadata_json FROM entity_links').get() as { fromId: string; toId: string; label: string | null; metadata_json: string };
+    expect(link).toMatchObject({ fromId: 'elias', toId: 'guild', label: null });
+    const metadata = JSON.parse(link.metadata_json);
+    expect(metadata).toMatchObject({ value: -25, updatedBy: 'ai' });
+    expect(metadata).not.toHaveProperty('description');
   });
 
   test('creates Awareness when a participating listener gains valid Knowledge', () => {
@@ -162,8 +164,8 @@ describe('Narrative State runtime', () => {
     expect(db.prepare('SELECT operation_id, decision FROM kanora_narrative_operation_reviews ORDER BY operation_id').all())
       .toEqual([
         { operation_id: belief.id, decision: 'approved' },
-        { operation_id: relationship.id, decision: 'rejected' },
         { operation_id: awareness.id, decision: 'rejected' },
+        { operation_id: relationship.id, decision: 'rejected' },
       ]);
   });
 

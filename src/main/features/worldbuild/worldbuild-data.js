@@ -158,11 +158,15 @@ function createWorldbuildDataService(db) {
     const rows = db.prepare(`
       SELECT records.rowid AS record_order, records.record_type, records.record_id,
         records.payload_json, records.source_event_id, records.applied_at,
-        events.narrative_sequence, events.narrative_timestamp
+        events.narrative_sequence, events.narrative_timestamp, events.provenance_interpreter,
+        occurrences.occurrence_id, occurrences.event_entity_id, occurrences.title AS occurrence_title
       FROM kanora_narrative_records AS records
       JOIN kanora_narrative_events AS events
         ON events.workspace_id = records.workspace_id
         AND events.event_id = records.source_event_id
+      LEFT JOIN worldbuild_event_occurrences AS occurrences
+        ON occurrences.workspace_id = records.workspace_id
+        AND occurrences.narrative_event_id = records.source_event_id
       LEFT JOIN kanora_narrative_event_evidence AS evidence
         ON evidence.workspace_id = events.workspace_id
         AND evidence.event_id = events.event_id
@@ -176,12 +180,24 @@ function createWorldbuildDataService(db) {
         AND COALESCE(lifecycle.status, 'active') = 'active'
       ORDER BY events.narrative_sequence, records.rowid
     `).all(requireText(workspaceId, 'workspaceId'), requireText(subjectId, 'subjectId'));
-    const projection = projectSubjectKnowledge(workspaceId, subjectId, rows);
+    const projection = projectSubjectKnowledge(workspaceId, subjectId, rows, createEntityNameResolver(workspaceId));
     projection.cards = knowledgeCards.listCards(workspaceId, subjectId);
     return projection;
   }
 
+  function createEntityNameResolver(workspaceId) {
+    const cache = new Map();
+    return entityId => {
+      if (cache.has(entityId)) return cache.get(entityId);
+      const row = db.prepare('SELECT canonicalName FROM entities WHERE workspaceId = ? AND id = ?').get(workspaceId, entityId);
+      const name = row?.canonicalName || '';
+      cache.set(entityId, name);
+      return name;
+    };
+  }
+
   function getSubjectReview(workspaceId, subjectId) {
+    const resolveEntityName = createEntityNameResolver(workspaceId);
     const proposals = db.prepare(`
       SELECT DISTINCT events.event_id, events.description, events.operations_json,
         events.provenance_created_at, events.provenance_prompt_version, evidence.excerpt
@@ -199,7 +215,9 @@ function createWorldbuildDataService(db) {
       ORDER BY events.narrative_sequence, events.event_id
     `).all(workspaceId, subjectId).flatMap(row => {
       const operations = JSON.parse(row.operations_json);
-      const visibleOperations = operations.map(summarizeProposedOperation).filter(Boolean);
+      const visibleOperations = operations
+        .map(operation => summarizeProposedOperation(operation, resolveEntityName))
+        .filter(Boolean);
       return visibleOperations.length ? [{
         eventId: row.event_id,
         description: row.description,
@@ -252,11 +270,14 @@ function createWorldbuildDataService(db) {
 
   function getSubjectRecord(workspaceId, subjectId, kind, recordId) {
     const row = db.prepare(`
-      SELECT records.record_id, records.payload_json
+      SELECT records.record_id, records.payload_json, occurrences.occurrence_id
       FROM kanora_narrative_records AS records
       JOIN kanora_narrative_events AS events
         ON events.workspace_id = records.workspace_id
         AND events.event_id = records.source_event_id
+      LEFT JOIN worldbuild_event_occurrences AS occurrences
+        ON occurrences.workspace_id = records.workspace_id
+        AND occurrences.narrative_event_id = records.source_event_id
       LEFT JOIN kanora_narrative_event_evidence AS evidence
         ON evidence.workspace_id = events.workspace_id
         AND evidence.event_id = events.event_id
@@ -268,7 +289,14 @@ function createWorldbuildDataService(db) {
         AND records.record_type = ? AND records.record_id = ?
         AND COALESCE(lifecycle.status, 'active') = 'active'
     `).get(workspaceId, subjectId, kind, recordId);
-    return row ? { id: row.record_id, payload: JSON.parse(row.payload_json) } : null;
+    return row ? { id: row.record_id, payload: JSON.parse(row.payload_json), managed: Boolean(row.occurrence_id) } : null;
+  }
+
+  // Records owned by an Event occurrence are edited there. Rewriting one here would add
+  // a revision at a later narrative sequence, and every later edit of the occurrence,
+  // which rewrites its records in place, would silently stop showing.
+  function requireEditableRecord(current) {
+    if (current?.managed) throw new Error('This entry belongs to an Event occurrence. Open the event to change it.');
   }
 
   function saveSubjectEntry(payload) {
@@ -276,19 +304,35 @@ function createWorldbuildDataService(db) {
     requireEntryKind(kind);
     const current = existingId ? getSubjectRecord(workspaceId, subjectId, kind, existingId) : null;
     if (existingId && !current) throw new Error('The Knowledge entry no longer exists.');
+    requireEditableRecord(current);
     const eventId = crypto.randomUUID();
     const evidenceId = crypto.randomUUID();
     const createdAt = new Date().toISOString();
     const operations = buildRevisionOperations(kind, subjectId, entry || {}, current, eventId, evidenceId);
     db.transaction(() => {
       if (kind === 'knowledge' || kind === 'belief') {
+        const sourceId = current?.payload?.entryId || existingId || operations.at(-1)?.id;
         knowledgeCards.ensureAwareness({
           workspaceId,
           ownerId: subjectId,
           targetId: requireText(entry?.aboutId, 'aboutId'),
           sourceType: 'statement',
-          sourceId: current?.payload?.entryId || existingId || operations.at(-1)?.id,
+          sourceId,
         });
+        // Being told something means knowing who told you. Without this a reported entry
+        // could name an informant the subject has no awareness of, which reads as a
+        // message from nowhere the moment retrieval tries to attribute it. Only hearsay
+        // has a teller, so a first-hand record grants nothing here either.
+        const tellers = kind === 'knowledge' && entry?.acquisition === 'reported'
+          ? normalizeIds(entry?.informantIds)
+          : [];
+        for (const informantId of tellers) {
+          if (informantId === subjectId) continue;
+          knowledgeCards.ensureAwareness({
+            workspaceId, ownerId: subjectId, targetId: informantId,
+            sourceType: 'statement', sourceId: `informant:${sourceId}:${informantId}`,
+          });
+        }
       }
       persistManualEvent({ workspaceId, subjectId, eventId, evidenceId, createdAt, operations, action: current ? 'updated' : 'added' });
     })();
@@ -300,6 +344,7 @@ function createWorldbuildDataService(db) {
     requireEntryKind(kind);
     const current = getSubjectRecord(workspaceId, subjectId, kind, entryId);
     if (!current) return getSubjectKnowledge(workspaceId, subjectId);
+    requireEditableRecord(current);
     const eventId = crypto.randomUUID();
     const evidenceId = crypto.randomUUID();
     const createdAt = new Date().toISOString();
@@ -332,6 +377,7 @@ function createWorldbuildDataService(db) {
         AND COALESCE(lifecycle.status, 'active') = 'active'
       ORDER BY events.narrative_sequence, records.rowid
     `).all(projectId);
+    const resolveEntityName = createEntityNameResolver(projectId);
     const current = new Map();
     for (const row of rows) {
       const payload = JSON.parse(row.payload_json);
@@ -342,10 +388,13 @@ function createWorldbuildDataService(db) {
       }
       if (payload.status === 'active') {
         const legacyAboutId = payload.proposition?.subjectId === projectId ? null : payload.proposition?.subjectId || null;
+        const rendered = renderProposition(payload.proposition, resolveEntityName);
         current.set(key, {
           id: referenceId,
-          title: String(payload.proposition?.predicate || ''),
-          statement: String(payload.proposition?.object ?? ''),
+          title: rendered.title,
+          statement: rendered.statement,
+          predicate: String(payload.proposition?.predicate || ''),
+          managed: rendered.managed,
           relatedEntityIds: normalizeIds(payload.relatedEntityIds?.length ? payload.relatedEntityIds : legacyAboutId ? [legacyAboutId] : []),
           sourceEventId: row.source_event_id,
           source: row.provenance_interpreter === 'user' ? 'manual' : 'narrative',
@@ -395,6 +444,9 @@ function createWorldbuildDataService(db) {
     const workspaceId = requireText(payload.workspaceId, 'workspaceId');
     const current = payload.existingId ? getWorldFactRecord(workspaceId, payload.existingId) : null;
     if (payload.existingId && !current) throw new Error('The Fact no longer exists.');
+    if (current && isManagedProposition(current.payload.proposition)) {
+      throw new Error('This Fact is maintained by its source record and cannot be edited here.');
+    }
     const eventId = crypto.randomUUID();
     const evidenceId = crypto.randomUUID();
     const createdAt = new Date().toISOString();
@@ -434,6 +486,9 @@ function createWorldbuildDataService(db) {
     const workspaceId = requireText(payload.workspaceId, 'workspaceId');
     const current = getWorldFactRecord(workspaceId, payload.factId);
     if (!current) return listWorldFacts(workspaceId);
+    if (isManagedProposition(current.payload.proposition)) {
+      throw new Error('This Fact is maintained by its source record and cannot be retracted here.');
+    }
     const eventId = crypto.randomUUID();
     const evidenceId = crypto.randomUUID();
     const createdAt = new Date().toISOString();
@@ -582,14 +637,14 @@ function hydrateFieldDefinition(row) {
   return definition;
 }
 
-function projectSubjectKnowledge(projectId, subjectId, rows) {
+function projectSubjectKnowledge(projectId, subjectId, rows, resolveEntityName) {
   const observations = new Map();
   const known = new Map();
   const beliefs = new Map();
   const memories = new Map();
   for (const row of rows) {
     const payload = JSON.parse(row.payload_json);
-    const record = toEntry(row, payload);
+    const record = toEntry(row, payload, resolveEntityName);
     if (row.record_type === 'observation') {
       if (payload.supersedesObservationId) observations.delete(payload.supersedesObservationId);
       if ((payload.status || 'active') === 'active') observations.set(row.record_id, record);
@@ -613,10 +668,13 @@ function projectSubjectKnowledge(projectId, subjectId, rows) {
     known: [...known.values()],
     beliefs: [...beliefs.values()],
     memories: [...memories.values()],
+    // Declared here rather than only bolted on by the caller, so the projection has one
+    // shape whether or not awareness cards were loaded onto it.
+    cards: [],
   };
 }
 
-function summarizeProposedOperation(operation) {
+function summarizeProposedOperation(operation, resolveEntityName) {
   const common = { id: operation.id, evidenceIds: operation.evidenceIds || [] };
   if (operation.type === 'record-observation') return null;
   if (operation.type === 'grant-awareness') {
@@ -632,25 +690,45 @@ function summarizeProposedOperation(operation) {
     const value = operation.relationship;
     return { ...common, kind: 'relationship', subjectId: value.sourceEntityId, targetId: value.targetEntityId, title: value.title || value.dimension, summary: value.description || String(value.value) };
   }
-  if (operation.type === 'grant-knowledge') return { ...common, kind: 'knowledge', subjectId: operation.knowledge.subjectId, targetId: operation.knowledge.proposition?.subjectId, acquisition: operation.knowledge.acquisition, confidence: operation.knowledge.confidence, summary: String(operation.knowledge.proposition?.object ?? '') };
-  if (operation.type === 'set-belief') return { ...common, kind: 'belief', subjectId: operation.belief.subjectId, targetId: operation.belief.proposition?.subjectId, confidence: operation.belief.confidence, summary: String(operation.belief.proposition?.object ?? '') };
+  if (operation.type === 'grant-knowledge') return { ...common, kind: 'knowledge', subjectId: operation.knowledge.subjectId, targetId: operation.knowledge.proposition?.subjectId, acquisition: operation.knowledge.acquisition, confidence: operation.knowledge.confidence, summary: formatPropositionObject(operation.knowledge.proposition?.object, resolveEntityName) };
+  if (operation.type === 'set-belief') return { ...common, kind: 'belief', subjectId: operation.belief.subjectId, targetId: operation.belief.proposition?.subjectId, confidence: operation.belief.confidence, summary: formatPropositionObject(operation.belief.proposition?.object, resolveEntityName) };
   if (operation.type === 'assert-fact') {
     return {
       ...common,
       kind: 'fact',
       targetId: operation.fact.proposition?.subjectId,
-      title: operation.fact.proposition?.predicate,
-      summary: String(operation.fact.proposition?.object ?? ''),
+      title: humanizePredicate(String(operation.fact.proposition?.predicate || '')),
+      summary: formatPropositionObject(operation.fact.proposition?.object, resolveEntityName),
     };
   }
   return { ...common, kind: 'memory', subjectId: operation.memory.subjectId, summary: operation.memory.summary };
 }
 
-function toEntry(row, payload) {
+// Where an entry came from. A record written under an Event occurrence's narrative
+// event belongs to that occurrence and is edited there, never here: a revision saved
+// from the Knowledge tab lands at a higher narrative sequence and would shadow every
+// later edit of the occurrence. Everything else is either authored by hand or applied
+// from Narrative State, the same three origins the Facts registry already names.
+function entryOrigin(row) {
+  if (row.occurrence_id) {
+    return {
+      kind: 'occurrence',
+      occurrenceId: row.occurrence_id,
+      eventEntityId: row.event_entity_id,
+      title: row.occurrence_title || '',
+    };
+  }
+  return { kind: row.provenance_interpreter === 'user' ? 'authored' : 'narrative' };
+}
+
+function toEntry(row, payload, resolveEntityName) {
+  const origin = entryOrigin(row);
   const common = {
     id: payload.id,
     subjectId: payload.subjectId,
     accessibility: payload.accessibility || 'available',
+    origin,
+    managed: origin.kind === 'occurrence',
     sourceEventId: row.source_event_id,
     position: {
       sequence: row.narrative_sequence,
@@ -675,10 +753,12 @@ function toEntry(row, payload) {
     ...common,
     kind: row.record_type,
     aboutId: payload.proposition?.subjectId,
-    statement: String(payload.proposition?.object ?? ''),
+    statement: formatPropositionObject(payload.proposition?.object, resolveEntityName),
     confidence: payload.confidence,
     factIds: normalizeIds(payload.factIds),
-    ...(row.record_type === 'knowledge' ? { acquisition: payload.acquisition } : { relationToCanon: payload.relationToCanon }),
+    ...(row.record_type === 'knowledge'
+      ? { acquisition: payload.acquisition, informantIds: normalizeIds(payload.informantIds) }
+      : { relationToCanon: payload.relationToCanon }),
   };
 }
 
@@ -723,15 +803,19 @@ function buildActiveOperation(kind, subjectId, entry, current, eventId, evidence
   const aboutId = requireText(entry.aboutId || subjectId, 'aboutId');
   const proposition = { subjectId: aboutId, predicate: 'worldbuild-statement', object: statement };
   if (kind === 'knowledge') {
+    const acquisition = ACQUISITION.has(entry.acquisition) ? entry.acquisition : 'reported';
     return {
       id: operationId, type: 'grant-knowledge', evidenceIds: [evidenceId],
       knowledge: {
         id: crypto.randomUUID(), entryId: current?.payload.entryId || current?.payload.id || crypto.randomUUID(),
         subjectId, proposition, sourceEventId: eventId,
-        acquisition: ACQUISITION.has(entry.acquisition) ? entry.acquisition : 'reported',
+        acquisition,
         confidence: normalizeConfidence(entry.confidence),
         accessibility: normalizeAccessibility(entry.accessibility), status: 'active',
         factIds: normalizeIds(entry.factIds),
+        // Only hearsay has a teller. Keeping informants off a first-hand record stops a
+        // stale name surviving a switch from reported back to observed.
+        ...(acquisition === 'reported' ? { informantIds: normalizeIds(entry.informantIds) } : {}),
       },
     };
   }
@@ -816,6 +900,58 @@ function entryExcerpt(operation) {
 
 function propositionKey(payload) {
   return `${payload.proposition?.subjectId || ''}\u0000${payload.proposition?.predicate || ''}`;
+}
+
+/* Manual Facts store their statement as a plain string, so the predicate is the
+   author's own title. System records such as recorded-occurrence store a
+   structured object instead; those get a readable projection and are flagged as
+   managed so the registry does not offer to edit them in place. */
+const ENTITY_REFERENCE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// A proposition object is either prose or a reference to an entity, and the contract does not
+// say which. Anchoring on the id is what lets a record survive a rename, so the reference is
+// kept in storage and resolved here, on the way out, instead of reaching the reader as a uuid.
+function formatPropositionObject(object, resolveEntityName) {
+  if (typeof object !== 'string') return String(object ?? '');
+  const trimmed = object.trim();
+  if (!ENTITY_REFERENCE_PATTERN.test(trimmed)) return object;
+  return (resolveEntityName && resolveEntityName(trimmed)) || object;
+}
+
+function renderProposition(proposition, resolveEntityName) {
+  const object = proposition?.object;
+  const predicate = String(proposition?.predicate || '');
+  if (object === null || typeof object !== 'object') {
+    return {
+      title: humanizePredicate(predicate),
+      statement: formatPropositionObject(object, resolveEntityName),
+      managed: false,
+    };
+  }
+  const title = String(object.title || object.name || humanizePredicate(predicate));
+  const summary = object.summary || object.description || object.statement;
+  return {
+    title,
+    statement: summary ? String(summary) : describeStructuredObject(object),
+    managed: true,
+  };
+}
+
+function isManagedProposition(proposition) {
+  return proposition?.object !== null && typeof proposition?.object === 'object';
+}
+
+function humanizePredicate(predicate) {
+  const text = predicate.replace(/[-_]+/g, ' ').trim();
+  return text ? text[0].toLocaleUpperCase() + text.slice(1) : 'Record';
+}
+
+function describeStructuredObject(object) {
+  return Object.entries(object)
+    .filter(([key, value]) => value !== null && value !== undefined && value !== ''
+      && typeof value !== 'object' && !/id$/i.test(key))
+    .map(([key, value]) => `${humanizePredicate(key)}: ${value}`)
+    .join('\n');
 }
 
 function factReferenceId(proposition, fallbackId) {

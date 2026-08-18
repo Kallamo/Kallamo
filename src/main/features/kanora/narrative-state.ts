@@ -28,7 +28,7 @@ export interface ExtractedNarrativeEvent {
 export type ExtractedNarrativeOperation =
   | { type: 'fact'; proposition: Proposition; confidence: number }
   | { type: 'awareness'; subjectId: string; targetId: string; confidence: number }
-  | { type: 'knowledge'; subjectId: string; proposition: Proposition; acquisition: 'participant' | 'witness' | 'reported' | 'inferred'; confidence: number; accessibility?: 'available' | 'suppressed' | 'inaccessible' }
+  | { type: 'knowledge'; subjectId: string; proposition: Proposition; acquisition: 'participant' | 'witness' | 'reported' | 'inferred'; confidence: number; accessibility?: 'available' | 'suppressed' | 'inaccessible'; informantIds?: string[] }
   | { type: 'belief'; subjectId: string; proposition: Proposition; confidence: number }
   | { type: 'memory'; subjectId: string; summary: string; salience: number; accessibility?: 'available' | 'suppressed' | 'inaccessible'; relatedEntityIds?: string[] }
   | { type: 'relationship'; sourceEntityId: string; targetEntityId: string; dimension: string; value: number; impact?: 'meaningful' | 'significant' | 'drastic'; title?: string; description?: string };
@@ -74,6 +74,19 @@ const AUTO_CONFIDENCE = 0.9;
 const AUTO_MEMORY_SALIENCE = 0.85;
 const MIN_KNOWLEDGE_CONFIDENCE = 0.8;
 const MIN_RELATIONSHIP_VALUE = 5;
+/**
+ * Where someone is and what they are doing right now belong to the scene, which already
+ * carries them and is rewritten every turn. Asserting them as canon or as knowledge creates a
+ * second source of truth that nothing supersedes, so a character accumulates contradictory
+ * positions, and it buries the durable records under a transcript of prose the model already
+ * has in the window. Only model-authored operations are filtered: an authored predicate is a
+ * title the writer chose and is never rewritten here.
+ */
+const SCENE_STATE_PREDICATES = new Set([
+  'current-location', 'current-position', 'current-place', 'current-activity',
+  'current-action', 'current-scene', 'current-state', 'location', 'position',
+  'activity', 'whereabouts', 'present-at', 'presence', 'located-at', 'is-at'
+]);
 const RELATIONSHIP_IMPACT_LIMITS = { meaningful: 5, significant: 15, drastic: 50 } as const;
 const INITIAL_RELATIONSHIP_LIMITS = { meaningful: 25, significant: 50, drastic: 100 } as const;
 interface RelationshipBaseline { exists: boolean; value: number }
@@ -330,6 +343,7 @@ export class NarrativeStateSystem {
   }
 
   private isDuplicateOperation(workspaceId: string, operation: NarrativeOperation): boolean {
+    if (operation.type === 'assert-fact') return this.isDuplicateFact(workspaceId, operation.fact.proposition);
     if (operation.type !== 'record-memory' && operation.type !== 'grant-knowledge' && operation.type !== 'set-belief') return false;
     const recordType = operation.type === 'record-memory' ? 'memory' : operation.type === 'grant-knowledge' ? 'knowledge' : 'belief';
     const subjectId = operation.type === 'record-memory'
@@ -360,6 +374,33 @@ export class NarrativeStateSystem {
     return rows.some(row => {
       const record = JSON.parse(row.payload_json) as { proposition?: Proposition; status?: string };
       return record.status === 'active' && JSON.stringify(record.proposition) === proposition;
+    });
+  }
+
+  /**
+   * Facts carry no subject column and are never superseded, so an identical assertion made
+   * again in a later turn simply piles up and every copy stays eligible for retrieval.
+   * Occurrences are excluded: they are keyed by their own record and the occurrence service
+   * owns their lifecycle.
+   */
+  private isDuplicateFact(workspaceId: string, proposition: Proposition): boolean {
+    if (normalizeText(proposition.predicate) === 'recorded-occurrence') return false;
+    const rows = this.db.prepare(`
+      SELECT records.payload_json
+      FROM kanora_narrative_records records
+      JOIN kanora_narrative_events events
+        ON events.workspace_id = records.workspace_id AND events.event_id = records.source_event_id
+      LEFT JOIN kanora_narrative_event_evidence evidence
+        ON evidence.workspace_id = events.workspace_id AND evidence.event_id = events.event_id AND evidence.ordinal = 0
+      LEFT JOIN kanora_narrative_origin_lifecycle lifecycle
+        ON lifecycle.workspace_id = events.workspace_id AND lifecycle.origin_id = evidence.origin_id
+      WHERE records.workspace_id = ? AND records.record_type = 'fact'
+        AND COALESCE(lifecycle.status, 'active') = 'active'
+    `).all(workspaceId) as Array<{ payload_json: string }>;
+    const target = JSON.stringify(proposition);
+    return rows.some(row => {
+      const record = JSON.parse(row.payload_json) as { proposition?: Proposition; status?: string };
+      return (record.status ?? 'active') === 'active' && JSON.stringify(record.proposition) === target;
     });
   }
 
@@ -408,13 +449,27 @@ export class NarrativeStateSystem {
             sourceId: eventId,
           });
         } else if (operation.type === 'grant-knowledge') {
+          const sourceId = operation.knowledge.entryId || operation.knowledge.id;
           this.knowledgeCards.ensureAwareness({
             workspaceId,
             ownerId: operation.knowledge.subjectId,
             targetId: operation.knowledge.proposition.subjectId,
             sourceType: 'statement',
-            sourceId: operation.knowledge.entryId || operation.knowledge.id,
+            sourceId,
           });
+          // Being told something means knowing who told you. Doing this here rather than as
+          // its own operation keeps the review list about what the scene showed, while the
+          // card layer still ends up consistent with the record it just wrote.
+          for (const informantId of operation.knowledge.informantIds ?? []) {
+            if (informantId === operation.knowledge.subjectId) continue;
+            this.knowledgeCards.ensureAwareness({
+              workspaceId,
+              ownerId: operation.knowledge.subjectId,
+              targetId: informantId,
+              sourceType: 'statement',
+              sourceId: `informant:${sourceId}:${informantId}`,
+            });
+          }
         } else if (operation.type === 'set-belief') {
           this.knowledgeCards.ensureAwareness({
             workspaceId,
@@ -461,8 +516,11 @@ function buildOperations(
 ): NarrativeOperation[] {
   const eventId = `evt_${fingerprint}`;
   const evidenceIds = [`evidence_${fingerprint}`];
+  const modelAuthored = (input.provenanceInterpreter ?? 'model') === 'model'
+    && input.originType !== 'worldbuild-update';
   return input.event.operations.flatMap((operation, index): NarrativeOperation[] => {
     if (!isAllowed(operation, input.allowedEntityIds, input.excludedRelationshipSourceIds)) return [];
+    if (modelAuthored && isSceneStateOperation(operation)) return [];
     const suffix = `${fingerprint}_${index}`;
     if (operation.type === 'fact') return [{
       id: `op_${suffix}`,
@@ -475,18 +533,24 @@ function buildOperations(
         evidenceIds
       }
     }];
-    if (operation.type === 'awareness') return [{
-      id: `op_${suffix}`,
-      type: 'grant-awareness',
-      evidenceIds,
-      awareness: {
-        id: `awareness_${suffix}`,
-        subjectId: operation.subjectId,
-        targetId: operation.targetId,
-        status: 'active',
-        sourceEventId: eventId
-      }
-    }];
+    if (operation.type === 'awareness') {
+      // Awareness is binary and permanent, so re-granting a pair that already holds one records
+      // nothing. Without this the store gains a row every scene the two share, and the knowledge
+      // card behind it counts the same relationship several times.
+      if (hasAwareness(operation.subjectId, operation.targetId)) return [];
+      return [{
+        id: `op_${suffix}`,
+        type: 'grant-awareness',
+        evidenceIds,
+        awareness: {
+          id: `awareness_${suffix}`,
+          subjectId: operation.subjectId,
+          targetId: operation.targetId,
+          status: 'active',
+          sourceEventId: eventId
+        }
+      }];
+    }
     if (operation.type === 'knowledge') {
       const aware = input.event.operations.some(candidate => (
         candidate.type === 'awareness'
@@ -512,7 +576,7 @@ function buildOperations(
             sourceEventId: eventId
           }
         } as const] : []),
-        { id: `op_${suffix}`, type: 'grant-knowledge', evidenceIds, knowledge: { id: `knowledge_${suffix}`, entryId: `entry_${suffix}`, subjectId: operation.subjectId, proposition: operation.proposition, sourceEventId: eventId, acquisition: operation.acquisition, confidence: confidence(operation.confidence), accessibility: operation.accessibility ?? 'available', status: 'active' } }
+        { id: `op_${suffix}`, type: 'grant-knowledge', evidenceIds, knowledge: { id: `knowledge_${suffix}`, entryId: `entry_${suffix}`, subjectId: operation.subjectId, proposition: operation.proposition, sourceEventId: eventId, acquisition: operation.acquisition, confidence: confidence(operation.confidence), accessibility: operation.accessibility ?? 'available', status: 'active', ...informants(operation, input.allowedEntityIds) } }
       ];
       return operations.every(isValidNarrativeOperation) ? operations : [];
     }
@@ -600,6 +664,21 @@ function buildOperations(
   });
 }
 
+/**
+ * Who told the subject, kept only for hearsay. A first-hand acquisition has no teller, and
+ * a subject cannot be their own source, so both are dropped rather than trusted from the
+ * model. Returns nothing when there is no one to name, so the field stays absent.
+ */
+function informants(
+  operation: Extract<ExtractedNarrativeOperation, { type: 'knowledge' }>,
+  allowed: Set<string>
+): { informantIds?: string[] } {
+  if (operation.acquisition !== 'reported') return {};
+  const ids = unique(operation.informantIds ?? [])
+    .filter(id => id !== operation.subjectId && allowed.has(id));
+  return ids.length ? { informantIds: ids } : {};
+}
+
 function deduplicateAwarenessOperations(operations: NarrativeOperation[]): NarrativeOperation[] {
   const awarenessPairs = new Set<string>();
   return operations.filter(operation => {
@@ -609,6 +688,15 @@ function deduplicateAwarenessOperations(operations: NarrativeOperation[]): Narra
     awarenessPairs.add(pair);
     return true;
   });
+}
+
+function isSceneStateOperation(operation: ExtractedNarrativeOperation): boolean {
+  if (operation.type !== 'fact' && operation.type !== 'knowledge' && operation.type !== 'belief') return false;
+  return SCENE_STATE_PREDICATES.has(normalizePredicate(operation.proposition.predicate));
+}
+
+function normalizePredicate(predicate: string): string {
+  return normalizeText(predicate).replace(/[\s_]+/g, '-');
 }
 
 function isAllowed(operation: ExtractedNarrativeOperation, allowed: Set<string>, excludedRelationshipSourceIds = new Set<string>()): boolean {

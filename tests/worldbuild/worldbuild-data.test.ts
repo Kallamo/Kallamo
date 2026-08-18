@@ -139,6 +139,53 @@ describe('Worldbuild runtime data adapter', () => {
       .toEqual({ count: 3 });
   });
 
+  test('marks entries owned by an Event occurrence and keeps them read-only here', () => {
+    const added = service.saveSubjectEntry({
+      workspaceId: 'workspace-one', subjectId: 'vharos', kind: 'memory',
+      entry: { summary: 'Vharos rode in the tournament.', accessibility: 'available' }
+    });
+    expect(added.memories).toEqual([
+      expect.objectContaining({ managed: false, origin: { kind: 'authored' } })
+    ]);
+
+    // Adopt the entry's own narrative event as an occurrence, which is the shape the
+    // occurrence writer produces: one narrative event carrying the recorded memories.
+    const narrativeEventId = (db.prepare(
+      "SELECT source_event_id AS id FROM kanora_narrative_records WHERE record_type = 'memory'"
+    ).get() as { id: string }).id;
+    db.prepare(`
+      INSERT INTO worldbuild_event_occurrences (
+        workspace_id, occurrence_id, event_entity_id, narrative_event_id,
+        title, summary, source, archived, created_at, updated_at
+      ) VALUES (?, 'occurrence-one', 'silver-tournament', ?, 'The Silver Tournament', '', 'user', 0, 1, 1)
+    `).run('workspace-one', narrativeEventId);
+
+    const projection = service.getSubjectKnowledge('workspace-one', 'vharos');
+    expect(projection.memories).toEqual([
+      expect.objectContaining({
+        managed: true,
+        origin: {
+          kind: 'occurrence',
+          occurrenceId: 'occurrence-one',
+          eventEntityId: 'silver-tournament',
+          title: 'The Silver Tournament',
+        },
+      })
+    ]);
+
+    const entryId = projection.memories[0].id;
+    expect(() => service.saveSubjectEntry({
+      workspaceId: 'workspace-one', subjectId: 'vharos', kind: 'memory', existingId: entryId,
+      entry: { summary: 'Rewritten by hand.', accessibility: 'available' }
+    })).toThrow(/Event occurrence/);
+    expect(() => service.deleteSubjectEntry({
+      workspaceId: 'workspace-one', subjectId: 'vharos', kind: 'memory', entryId
+    })).toThrow(/Event occurrence/);
+    expect(service.getSubjectKnowledge('workspace-one', 'vharos').memories).toEqual([
+      expect.objectContaining({ summary: 'Vharos rode in the tournament.' })
+    ]);
+  });
+
   test('rejects new manual observations without deleting legacy support', () => {
     expect(() => service.saveSubjectEntry({
       workspaceId: 'workspace-one', subjectId: 'mara', kind: 'observation',
@@ -159,6 +206,37 @@ describe('Worldbuild runtime data adapter', () => {
     const faction = service.getSubjectKnowledge('workspace-one', 'ashen-circle');
     expect(faction.beliefs).toEqual([
       expect.objectContaining({ subjectId: 'ashen-circle', statement: 'The vault contains the crown.' })
+    ]);
+  });
+
+  test('keeps informants on reported Knowledge and grants awareness of the teller', () => {
+    const reported = service.saveSubjectEntry({
+      workspaceId: 'workspace-one', subjectId: 'elias', kind: 'knowledge',
+      entry: {
+        aboutId: 'vault', statement: 'The vault opens at dusk.', confidence: 0.75,
+        acquisition: 'reported', informantIds: ['mara', 'elias'],
+      }
+    });
+
+    expect(reported.known).toEqual([
+      expect.objectContaining({ acquisition: 'reported', informantIds: ['mara'] })
+    ]);
+    const awareOf = service.getSubjectKnowledge('workspace-one', 'elias')
+      .cards.map((card: { targetId: string }) => card.targetId);
+    expect([...awareOf].sort()).toEqual(['mara', 'vault']);
+  });
+
+  test('drops informants when Knowledge was acquired first-hand', () => {
+    const observed = service.saveSubjectEntry({
+      workspaceId: 'workspace-one', subjectId: 'elias', kind: 'knowledge',
+      entry: {
+        aboutId: 'vault', statement: 'The vault opens at dusk.', confidence: 0.95,
+        acquisition: 'witness', informantIds: ['mara'],
+      }
+    });
+
+    expect(observed.known).toEqual([
+      expect.objectContaining({ acquisition: 'witness', informantIds: [] })
     ]);
   });
 

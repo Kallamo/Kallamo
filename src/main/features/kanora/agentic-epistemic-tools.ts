@@ -117,7 +117,15 @@ export class AgenticEpistemicTools {
       if (row.record_type === 'knowledge' && accessibility(payload.accessibility) !== 'available') {
         return `${row.record_type}: unavailable (${accessibility(payload.accessibility)})`;
       }
-      return `${row.record_type}: ${formatPayload(payload)}`;
+      // A tool answer that omits how a statement was acquired invites the model to treat
+      // hearsay as something the subject saw for themselves.
+      const informants = Array.isArray(payload.informantIds)
+        ? payload.informantIds.map(id => this.entityName(workspaceId, String(id))).filter(Boolean)
+        : [];
+      const attribution = row.record_type === 'knowledge' && typeof payload.acquisition === 'string'
+        ? ` [${payload.acquisition}${informants.length ? ` by ${informants.join(', ')}` : ''}]`
+        : '';
+      return `${row.record_type}: ${formatPayload(payload)}${attribution}`;
     });
     return [
       `${pair.subject.canonicalName} -> ${pair.target.canonicalName}: ${assessment?.state ?? 'undetermined'}`,
@@ -235,6 +243,13 @@ export class AgenticEpistemicTools {
       WHERE workspaceId = ? AND id IN (${ids.map(() => '?').join(', ')})
     `).all(workspaceId, ...ids) as Array<{ id: string; canonicalName: string }>;
     return new Map(rows.map(row => [row.id, row.canonicalName]));
+  }
+
+  private entityName(workspaceId: string, entityId: string): string {
+    const row = this.db.prepare(`
+      SELECT canonicalName FROM entities WHERE workspaceId = ? AND id = ?
+    `).get(workspaceId, entityId) as { canonicalName: string } | undefined;
+    return row?.canonicalName ?? '';
   }
 
   private latestSequence(workspaceId: string): number {
