@@ -622,7 +622,13 @@ export class EventOccurrenceService {
   private normalizeFactionMembers(workspaceId: string, factionId: string, values: string[]): string[] {
     const entity = this.requireEntity(workspaceId, factionId);
     if (entity.type !== 'Factions') return [];
-    return this.normalizeEntityIds(workspaceId, values, ['Characters']).filter(memberId => {
+    // A roster holds whoever can carry a memory of its own, which includes a specific being
+    // but never a species: membership below is the real gate, this only rules out shapes
+    // that could not remember what the faction shared with them.
+    return this.normalizeEntityIds(workspaceId, values, ['Characters', 'Creatures']).filter(memberId => {
+      if (this.requireEntity(workspaceId, memberId).scope === 'group') {
+        throw new Error('A group or species cannot receive a faction memory.');
+      }
       const membership = this.db.prepare(`
         SELECT 1 FROM entity_links
         WHERE workspaceId = ? AND fromId = ? AND relType = 'member_of' AND toId = ?

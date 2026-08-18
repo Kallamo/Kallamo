@@ -161,7 +161,9 @@ describe('Narrative Event Ledger SQLite repository', () => {
       { id: 'worldbuild_known_relationships_v1' },
       { id: 'kanora_operation_review_v1' },
       { id: 'kallamo_roleplay_quick_panel_v1' },
-      { id: 'kanora_narrative_context_manifest_v1' }
+      { id: 'kanora_narrative_context_manifest_v1' },
+      { id: 'kallamo_world_calendar_and_roleplay_time_v1' },
+      { id: 'kallamo_worldbuild_event_occurrences_v1' }
     ]);
     expect(db.prepare('PRAGMA table_info(entity_links)').all()).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'metadata_json', type: 'TEXT' })
