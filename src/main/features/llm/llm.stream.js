@@ -18,7 +18,9 @@ async function sendApiRequestStream(params, onDelta, onStreamStart) {
 
     let content = '';
     let reasoning = '';
-    const finalize = () => (reasoning ? `<think>${reasoning}</think>${content}` : content);
+    // Parity with parseResponse: a jsonMode caller parses the reply as an object,
+    // so reasoning is dropped instead of being prepended.
+    const finalize = () => (reasoning && !params.jsonMode ? `<think>${reasoning}</think>${content}` : content);
 
     try {
         const response = await undiciFetch(endpoint, {

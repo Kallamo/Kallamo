@@ -185,7 +185,11 @@ function awsSignV4({ accessKeyId, secretAccessKey, region, service, method, path
 
 // --- RESPONSE PARSING ---
 
-function parseResponse(data, provider) {
+// `jsonMode` callers parse the reply as a JSON object, so reasoning must never be
+// prepended: the object extractor scans for the first '{', and a model that thinks
+// about the schema writes braces inside its reasoning, which makes a perfectly
+// valid response unparseable.
+function parseResponse(data, provider, jsonMode = false) {
     try {
         switch (provider.toLowerCase()) {
             case 'openai':
@@ -194,7 +198,7 @@ function parseResponse(data, provider) {
                 const message = data.choices[0].message;
                 const reasoning = message.reasoning_content || message.reasoning;
                 const content = message.content || '';
-                return reasoning ? `<think>${reasoning}</think>${content}` : content;
+                return reasoning && !jsonMode ? `<think>${reasoning}</think>${content}` : content;
             }
             case 'anthropic':
                 return data.content[0].text;
@@ -672,7 +676,7 @@ async function sendApiRequest(params) {
         }
 
         const data = await response.json();
-        const content = parseResponse(data, provider);
+        const content = parseResponse(data, provider, Boolean(params.jsonMode));
         if (!params.includeResponseMetadata) return content;
         return { content, ...getResponseMetadata(data, provider) };
 
