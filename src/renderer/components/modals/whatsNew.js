@@ -99,7 +99,7 @@ const RELEASE_1_1_3 = {
 };
 
 const RELEASE_1_1_6 = {
-  title: 'Memory you can rearrange',
+  title: 'More control over a long history',
   sections: {
     Added: [
       'The archive window now offers three choices for each message: archive it into the summary, keep it in the active conversation, or drop it from context without deleting it from the log.',
