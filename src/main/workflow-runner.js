@@ -3771,7 +3771,7 @@ function entityEnrichmentMaxTokens(entity) {
 // the real cause was usually the output budget: reasoning models spend it thinking
 // before they write the object, so a capable model still fails. `budget` and
 // `empty` are retried with a bigger allowance, the others with the same one.
-function describeEntityUpdateFailure(result, parsed) {
+function describeEntityUpdateFailure(result, parsed, fence) {
     const content = String(result?.content || '');
     if (result?.truncated) {
         return { cause: 'budget', message: 'The System AI response reached its output limit before the entity update was complete.' };
@@ -3782,7 +3782,7 @@ function describeEntityUpdateFailure(result, parsed) {
     if (!content.includes('{')) {
         return { cause: 'empty', message: 'The System AI reply contained no JSON object. Reasoning models can spend the whole output budget before answering.' };
     }
-    return { cause: 'format', message: 'The System AI returned invalid structured JSON.' };
+    return { cause: 'format', message: describeStructuredObjectFailure(content, fence) };
 }
 
 // Retry allowance. A budget failure doubles (capped well above the first ceiling)
@@ -4436,16 +4436,18 @@ async function enrichEntities(workspaceId, progressCallback = null) {
             let head = splitHeadAndBody(response, fence);
             let parsed = parseEntityUpdateObject(head.body).value || parseEntityUpdateObject(response).value;
             if (!isEntityUpdateShape(parsed)) {
-                const firstFailure = parsed
-                    ? 'The System AI returned JSON using an unsupported entity update shape.'
-                    : describeStructuredObjectFailure(response, fence);
-                const retryTokens = Math.min(8000, Math.max(maxTokens, Math.ceil(maxTokens * 1.5)));
-                if (responseResult.truncated) {
-                    retryCount++;
+                const firstFailure = describeEntityUpdateFailure(responseResult, parsed, fence);
+                logEntityUpdateFailure(ent, 'first attempt', firstFailure, responseResult);
+                const retryTokens = entityUpdateRetryTokens(firstFailure.cause, maxTokens);
+                retryCount++;
+                // A budget overrun and a reply that never reached the object are the same
+                // problem: no room was left to write it. Less evidence to read plus a
+                // larger allowance is the only retry that helps. Anything else is a
+                // formatting fault, which is what the repair pass is for.
+                if (firstFailure.cause === 'budget' || firstFailure.cause === 'empty') {
                     const reducedEvidence = selectEntityEvidence(evidenceEntries, 2500).map(entry => entry.prompt).join('\n\n');
                     responseResult = await requestUpdate(buildUserPrompt(reducedEvidence), retryTokens);
                 } else {
-                    retryCount++;
                     responseResult = await repairUpdate(response, retryTokens);
                 }
                 response = responseResult.content;
@@ -4454,11 +4456,10 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                 if (!isEntityUpdateShape(parsed)) {
                     failed++;
                     consecutiveStructuredFailures++;
-                    const retryFailure = parsed
-                        ? 'The System AI returned JSON using an unsupported entity update shape.'
-                        : describeStructuredObjectFailure(response, fence);
+                    const retryFailure = describeEntityUpdateFailure(responseResult, parsed, fence);
+                    logEntityUpdateFailure(ent, 'retry', retryFailure, responseResult);
                     const finish = responseResult.finishReason ? ` Finish reason: ${responseResult.finishReason}.` : '';
-                    rememberFailure(ent, `${retryFailure} Automatic retry also failed.${finish} Response length: ${String(response || '').length}. First response: ${firstFailure}`);
+                    rememberFailure(ent, `${retryFailure.message} Automatic retry also failed.${finish} Response length: ${String(response || '').length}. First response: ${firstFailure.message}`);
                     updateState.transition(workspaceId, ent.id, includedEvidence, 'deferred', runId, 'invalid-structured-output');
                     updateState.updateJob(runId, ent.id, {
                         status: 'failed',
@@ -4466,7 +4467,7 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                         output_tokens: outputTokenEstimate,
                         retry_count: retryCount,
                         evidence_used: includedEvidence.length,
-                        error: retryFailure,
+                        error: retryFailure.message,
                     });
                     continue;
                 }
