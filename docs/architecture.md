@@ -118,7 +118,7 @@ Chat workspace configuration and state.
 | `description` | TEXT | Optional description |
 | `maxContext` | INTEGER | Maximum context window in tokens (default: 128,000) |
 | `archiveThreshold` | INTEGER | Token count that triggers auto-summarization (default: 60,000) |
-| `summarizedIndex` | INTEGER | Index of the oldest non-archived message |
+| `summarizedIndex` | INTEGER | Derived legacy marker: how many messages from the start are out of live history. Kept in sync for older readers and exported packages; coverage is the source of truth |
 | `activeProfiles` | TEXT | JSON array of active profile IDs |
 | `activeWorkflows` | TEXT | JSON array of active workflow IDs |
 | `knowledgeFiles` | TEXT | JSON array of chat-scoped knowledge file metadata |
@@ -142,6 +142,7 @@ Individual chat messages with AI attribution.
 | `debugNotice` | TEXT | JSON blob with token usage, RAG diagnostics |
 | `attachedFiles` | TEXT | JSON array of file attachment metadata |
 | `alternatives` | TEXT | JSON array of alternative AI responses (regenerations) |
+| `excluded` | INTEGER | Boolean flag: message is dropped from every payload while staying in the log |
 
 #### `workflows`
 
@@ -303,7 +304,9 @@ Sort by descending fusionScore, truncate to top-K (default: 5).
 
 The strictness floor is checked against the raw `cosine`, not the fused score, so a strong keyword or tag match can reorder results but can never rescue a semantically off-topic chunk.
 
-**Dynamic-tag boost (living-world index).** For the world-indexed tier (chat memory), chunks carry tags for the Worldbuild entities and world variables they mention. When the query mentions one of a chunk's tags (whole-word, Unicode-aware match, so "Ana" doesn't match inside "banana"), a small fixed bonus (`TAG_BOOST = 0.05`) is added to its fusion score. It is deliberately small relative to the cosine band, so it reorders within the surviving set without swamping semantic similarity — and, being applied after the floor filter, it never rescues a chunk that failed the strictness cutoff.
+**Dynamic-tag boost (living-world index).** For the world-indexed tier (chat memory), chunks carry tags for the Worldbuild entities and world variables they mention. When the query mentions one of a chunk's tags (whole-word, Unicode-aware match, so "Ana" doesn't match inside "banana"), a small fixed bonus (`TAG_BOOST = 0.05`) is added to its fusion score. It is deliberately small relative to the cosine band, so it reorders within the surviving set without swamping semantic similarity.
+
+A tagged chunk also answers to a lower floor: `taggedFloor = cosineFloor * 0.7`. Carrying an entity the query names is explicit evidence rather than a guess, and without this the boost could only reorder what already survived. The case it exists for, a character named in a few lines of a long scene, was cut before the boost was ever applied.
 
 This single `fuseAndRank` path is shared by single-owner search, multi-owner cross-chapter search, and the in-memory volatile-chapter search in the Writing Desk.
 
@@ -399,6 +402,26 @@ This filtering prevents irrelevant context from inflating the final prompt and c
 
 Kallamo manages long conversations through an automatic archiving system that converts old messages into searchable vector memory.
 
+### Live History
+
+Which messages a workspace still sends is derived from the summary blocks themselves,
+not from a position marker. Each block stores the message ids it covers, so live history
+is every message no block claims and the user has not dropped:
+
+```
+covered = union of block.messages ids across chat.memoryBlocks
+live    = messages where id not in covered and excluded !== 1
+```
+
+A single number could not describe a gap, so any operation that produced one (deleting a
+summary, archiving a non-contiguous selection, deleting a message) used to leave the old
+`summarizedIndex` disagreeing with the blocks. Deriving coverage makes those states valid
+and self-repairing. `summarizedIndex` is still written, as a derived value, for older
+readers and exported packages.
+
+The logic is pure and lives in `features/chat/archive-coverage.js`, mirrored in the
+renderer so the number the user sees is the number the payload uses.
+
 ### Token Estimation
 
 Tokens are counted with the `gpt-tokenizer` BPE tokenizer (`encode(text).length`), with a `Math.ceil(text.length / 4)` heuristic as a fallback if encoding fails. The BPE count is accurate for OpenAI models and a close approximation for the other providers, giving reliable context-budget calculations.
@@ -409,7 +432,7 @@ After each AI response, the workflow runner checks:
 
 ```
 active_tokens = sum of estimateTokens(message.content)
-                for messages[summarizedIndex .. latest]
+                for selectActiveMessages(messages, memoryBlocks)
 
 if (chat.autoSummarize === 1 AND active_tokens > chat.archiveThreshold):
     trigger summarization flow
@@ -434,8 +457,13 @@ Selected messages for archival
    a. Insert vectors into knowledge_chunks (ownerType = 'chat_memory')
    b. Write vectors to ChatHistory/<chatId>/Memory/vector_db.json
    c. Append memory block metadata to chat.memoryBlocks JSON
-   d. Advance chat.summarizedIndex past the archived messages
+   d. Re-derive chat.summarizedIndex from what the blocks now cover
 ```
+
+Steps 3 and 4 run after the block is stored, so the archive window closes as soon as
+the history is safe. `recapStatus` and `taggingStatus` track them independently: a
+tagging failure never costs a recap that was written, and finishing a block again only
+redoes the part that is missing.
 
 ### Memory Block Structure
 
@@ -445,21 +473,26 @@ Selected messages for archival
   "title": "Dragon Encounter Arc",
   "summary": "The protagonist first meets the dragon in chapter 3...",
   "type": "summarized",
-  "messages": [ /* original archived messages */ ]
+  "messages": [ /* original archived messages */ ],
+  "recapStatus": "ready",
+  "taggingStatus": "ready"
 }
 ```
+
+`recapStatus` and `taggingStatus` are each `pending`, `ready`, `failed`, or `skipped`.
+A block left `pending` by a closed app is marked on startup and can be finished later.
 
 Memory blocks can also be `type: "manual"` — user-created snippets with custom tags that are vectorized and searchable alongside summarized history.
 
 ### Chat History Windowing
 
-During generation, active (non-archived) messages are loaded newest-first until the remaining context budget is exhausted:
+During generation, live history (see above: not covered by a summary, not dropped) is loaded newest-first until the remaining context budget is exhausted:
 
 ```
 budget = maxContextTokens - systemPrompt_tokens - userInput_tokens
 history = []
 
-for message in activeMessages (newest → oldest):
+for message in liveMessages (newest → oldest):
     if budget >= estimateTokens(message.content):
         history.prepend(message)
         budget -= estimateTokens(message.content)
