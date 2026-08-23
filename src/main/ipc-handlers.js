@@ -16,6 +16,15 @@ const https = require('https');
 const crypto = require('crypto');
 const db = require('./database');
 const { getMessagePage } = require('./features/chat/message-pages');
+const {
+  syncSummarizedIndex,
+  deleteSummaryBlock,
+  rebuildSummaryBlock,
+  resetSummaries,
+  setMessagesExcluded,
+  archiveTokenTotals
+} = require('./features/chat/archive-store');
+const { selectActiveMessages, selectArchivableMessages, coverageStats } = require('./features/chat/archive-coverage');
 const { registerWorkspaceStateIpc } = require('./features/workspace-state/workspace-state');
 const entitiesStore = require('./entities');
 const { chunkText, extractTextFromFile, extractDocxHtml, vectorizeChunks, insertChunksToDb, deleteChunksFromDb, searchKnowledgeBase, searchChatKnowledgeBase, searchChatMemories, RAG_MODEL_ID, RAG_MODEL_DIM, generateEmbeddingVector, countTokens } = require('./rag-service');
@@ -2450,6 +2459,14 @@ ipcMain.handle('set-wd-last-channel', async (event, { workspaceId, channel }) =>
   return { success: true };
 });
 
+// The chat's send target follows whatever the user last generated with, instead of
+// resetting to the first active profile every time the chat is reopened. Stored on
+// the chat row; an id that no longer exists simply falls back to the old behaviour.
+ipcMain.handle('set-chat-last-target', async (event, { chatId, targetId }) => {
+  db.prepare('UPDATE chats SET lastTargetId = ? WHERE id = ?').run(targetId || null, chatId);
+  return { success: true };
+});
+
 // Document ids in this workspace that currently hold an unresolved suggestion,
 // used to mark the sidebar chapter rows.
 ipcMain.handle('get-pending-suggestion-ids', async (event, { workspaceId }) => {
@@ -3183,6 +3200,10 @@ ipcMain.handle('save-chat', async (event, chat) => {
         chat.id
       );
 
+      // summarizedIndex is derived from the summary blocks that were just saved,
+      // so a renderer holding an older copy cannot write a stale marker back.
+      syncSummarizedIndex(db, chat.id);
+
       if (oldSyncToCloud === 0 && newSyncToCloud === 1) {
         db.prepare('UPDATE messages SET last_modified = ? WHERE chatId = ?').run(Date.now(), chat.id);
         console.log(`[Sync Touch] Touched all messages for chat ${chat.id} to trigger sync push.`);
@@ -3631,7 +3652,9 @@ ipcMain.handle('delete-message', async (event, messageId, deleteAttachedFilesFro
       }
     }
 
+    const owner = db.prepare('SELECT chatId FROM messages WHERE id = ?').get(messageId);
     db.prepare('DELETE FROM messages WHERE id = ?').run(messageId);
+    if (owner && owner.chatId) syncSummarizedIndex(db, owner.chatId);
     return { success: true };
   } catch (e) {
     console.error("Error deleting message:", e);
@@ -3654,6 +3677,7 @@ ipcMain.handle('revert-chat-to-message', async (event, { chatId, messageId }) =>
         }
       });
       transaction(toDelete.map(m => m.id));
+      syncSummarizedIndex(db, chatId);
     }
     return { success: true };
   } catch (e) {
@@ -3662,40 +3686,116 @@ ipcMain.handle('revert-chat-to-message', async (event, { chatId, messageId }) =>
   }
 });
 
-ipcMain.handle('trigger-manual-summarize', async (event, { chatId, profileId }) => {
+// What the archive window needs to open: the full history plus which messages
+// are already covered, muted, or held back as recent context.
+ipcMain.handle('get-archive-overview', async (event, { chatId }) => {
   try {
-    const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+    const chat = db.prepare('SELECT memoryBlocks, archiveThreshold FROM chats WHERE id = ?').get(chatId);
     if (!chat) throw new Error("Chat not found");
 
-    const messages = db.prepare('SELECT * FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
-    const summarizedIndex = chat.summarizedIndex || 0;
+    const messages = db
+      .prepare('SELECT id, role, content, excluded, createdAt FROM messages WHERE chatId = ? ORDER BY createdAt ASC')
+      .all(chatId);
+    const archivable = new Set(selectArchivableMessages(messages, chat.memoryBlocks).map(m => m.id));
+    const active = new Set(selectActiveMessages(messages, chat.memoryBlocks).map(m => m.id));
 
-    const tempSummarizeEndIndex = Math.max(0, messages.length - 10);
-    if (tempSummarizeEndIndex <= summarizedIndex) {
-      return { success: false, message: "Not enough active messages to archive (need at least 11)." };
-    }
-
-    const activeRange = messages.slice(summarizedIndex, tempSummarizeEndIndex);
-    const { executeSummarizationInternal } = require('./workflow-runner');
-    const result = await executeSummarizationInternal({
-      chatId,
-      selectedMessages: activeRange,
-      newSummarizedIndex: tempSummarizeEndIndex,
-      customTitle: '',
-      profileId
-    });
-
-    return { success: true, ...result };
+    return {
+      success: true,
+      archiveThreshold: chat.archiveThreshold || 60000,
+      stats: coverageStats(messages, chat.memoryBlocks),
+      messages: messages.map(message => ({
+        id: message.id,
+        role: message.role,
+        content: message.content,
+        excluded: message.excluded === 1,
+        // archived: a summary already holds it. reserved: still active but kept
+        // out of this pass so the next reply keeps its immediate continuity.
+        archived: !active.has(message.id) && message.excluded !== 1,
+        archivable: archivable.has(message.id),
+        // Held back by default for continuity, but the window may still offer it.
+        reserved: active.has(message.id) && !archivable.has(message.id)
+      }))
+    };
   } catch (e) {
-    console.error("Manual summarization failed:", e);
-    throw e;
+    console.error("Error building archive overview:", e);
+    return { success: false, error: e.message };
   }
 });
 
-ipcMain.handle('execute-summarization', async (event, { chatId, selectedMessages, newSummarizedIndex, customTitle, profileId }) => {
+// Drops every summary of a workspace so its history can be re-partitioned from
+// scratch. Custom memory and uploaded files are untouched.
+// Rebuild one summary: it disappears and its messages return to the conversation,
+// so a single stretch can be re-archived without touching the others.
+// The finishing pass for a stored summary: writes its recap and entity tags.
+// Runs after the archive window closes, and can be called again for a summary
+// that failed or was interrupted, without archiving anything twice.
+ipcMain.handle('finalize-summary-block', async (event, { chatId, blockId }) => {
+  try {
+    const { finalizeSummaryBlock } = require('./workflow-runner');
+    const result = await finalizeSummaryBlock({
+      chatId,
+      blockId,
+      onProgress: (progress) => {
+        if (!event.sender.isDestroyed()) event.sender.send('summarization-progress', { chatId, blockId, ...progress });
+      }
+    });
+    return result;
+  } catch (e) {
+    console.error("Error finalizing summary block:", e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('rebuild-chat-summary', async (event, { chatId, blockId }) => {
+  try {
+    const result = rebuildSummaryBlock(db, chatId, blockId);
+    return { success: true, ...result };
+  } catch (e) {
+    console.error("Error rebuilding chat summary:", e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('reset-chat-summaries', async (event, { chatId }) => {
+  try {
+    const result = resetSummaries(db, chatId);
+    return { success: true, ...result };
+  } catch (e) {
+    console.error("Error resetting chat summaries:", e);
+    return { success: false, error: e.message };
+  }
+});
+
+// Real weight of each summary: the tokens of the history it stores, not the
+// length of the recap the summarizer wrote for the card.
+ipcMain.handle('get-archive-token-totals', async (event, { chatId }) => {
+  try {
+    return { success: true, totals: archiveTokenTotals(db, chatId) };
+  } catch (e) {
+    console.error("Error reading archive token totals:", e);
+    return { success: false, totals: {} };
+  }
+});
+
+ipcMain.handle('set-messages-excluded', async (event, { chatId, messageIds, excluded }) => {
+  try {
+    const result = setMessagesExcluded(db, chatId, messageIds, excluded);
+    return { success: true, ...result };
+  } catch (e) {
+    console.error("Error updating excluded messages:", e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('execute-summarization', async (event, { chatId, selectedMessages, messageIds, excludedMessageIds, customTitle, profileId }) => {
   try {
     const { executeSummarizationInternal } = require('./workflow-runner');
-    const result = await executeSummarizationInternal({ chatId, selectedMessages, newSummarizedIndex, customTitle, profileId });
+    const result = await executeSummarizationInternal({
+      chatId, selectedMessages, messageIds, excludedMessageIds, customTitle, profileId,
+      onProgress: (progress) => {
+        if (!event.sender.isDestroyed()) event.sender.send('summarization-progress', { chatId, ...progress });
+      }
+    });
     return { success: true, ...result };
   } catch (e) {
     console.error("Error executing summarization:", e);
@@ -4055,7 +4155,7 @@ ipcMain.handle('get-settings', async () => {
 
     const defaultSettings = {
       interface: { fontFamily: 'sans', fontSize: 'medium', layout: 'bubbles', blur: true, accentColor: '#FBCB2D', codeTheme: 'github-dark', lineNumbers: false },
-      advanced: { chunkSize: 500, similarity: 0.3, topKKB: 5, topKMemory: 5, executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, archiveSummarization: true, systemOutputLanguage: 'English', taggerMode: 'inherit-system', summarizerMode: 'inherit-system', retrievalPlannerMode: 'profile' }
+      advanced: { chunkSize: 500, similarity: 0.3, topKKB: 5, topKMemory: 8, executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, archiveSummarization: true, systemOutputLanguage: 'English', taggerMode: 'inherit-system', summarizerMode: 'inherit-system', retrievalPlannerMode: 'profile' }
     };
 
     return {
@@ -4742,7 +4842,13 @@ ipcMain.handle('set-chat-kb-block-profiles', async (event, { chatId, blockId, pr
 
 ipcMain.handle('delete-chat-kb-block', async (event, { chatId, block }) => {
   try {
-    if (block.type === 'manual' || block.type === 'summarized') {
+    if (block.type === 'summarized') {
+      // Deleting a summary clears its chunks and drops the messages it covered.
+      // Rebuild is the action that hands them back; a full rebuild is the only
+      // way to recover them once dropped here.
+      deleteSummaryBlock(db, chatId, block.id);
+    }
+    else if (block.type === 'manual') {
       const chatRow = db.prepare('SELECT memoryBlocks FROM chats WHERE id = ?').get(chatId);
       if (chatRow && chatRow.memoryBlocks) {
         let memoryBlocks = JSON.parse(chatRow.memoryBlocks);

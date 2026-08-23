@@ -3,6 +3,8 @@ const entitiesStore = require('./entities');
 const { sendApiRequest } = require('./features/llm/llm.service');
 const { sendApiRequestStream } = require('./features/llm/llm.stream');
 const { applyGenerationHistory, resolveWorkspaceGenerationTarget } = require('./features/chat/generation-target');
+const { selectActiveMessages, selectArchivableMessages, coveredMessageIds, parseMemoryBlocks } = require('./features/chat/archive-coverage');
+const { syncSummarizedIndex, setMessagesExcluded, readMemoryBlocks } = require('./features/chat/archive-store');
 const {
     filterWorkspaceKnowledgeResults,
     filterWorkspaceMemoryResults
@@ -16,11 +18,20 @@ const {
     isUnsupportedNumericDelta
 } = require('./features/worldbuild/entity-update-contract');
 const { buildEntityUpdateSchema, buildEntityLoreSchema } = require('./features/worldbuild/entity-update-schema');
+const {
+    ENRICH_ENUMS,
+    ENRICH_FIELDS,
+    ENRICH_TYPE_GUIDANCE,
+    ENRICH_FIELD_GUIDANCE,
+    entityDataFacts
+} = require('./features/worldbuild/entity-fields');
 const { decodeEntityUpdate, isEntityUpdateShape: isStructuredEntityUpdate } = require('./features/worldbuild/entity-update-protocol');
 const { buildLorePrompt, validateEntityLore } = require('./features/worldbuild/entity-lore');
 const { createEntityUpdateState } = require('./features/worldbuild/entity-update-state');
 const { shouldStopEntityUpdates } = require('./features/worldbuild/entity-update-resilience');
 const { TAGGER_RESPONSE_SCHEMA, parseTaggerResponse, createTaggerBatches, proposalDataForMention } = require('./features/world-index/tagger-response');
+const { matchedEvidence, evidenceText } = require('./features/world-index/evidence-match');
+const { buildCategoryResolver } = require('./features/world-index/category-match');
 const {
     PAYLOAD_BUDGET_CONTRACT,
     assertPayloadWithinLimit,
@@ -149,6 +160,12 @@ function formatActiveHistory(messages, maxTokensAllowed) {
         } else {
             break;
         }
+    }
+    // Anything cut here is live history that was never archived, so there is no
+    // memory chunk to retrieve it from. Worth saying, even if only in the log.
+    const dropped = messages.length - history.length;
+    if (dropped > 0) {
+        console.warn(`[Context] ${dropped} unarchived message(s) did not fit the payload budget and were not sent. Archiving them would keep them searchable.`);
     }
     return history;
 }
@@ -348,11 +365,12 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
         }
 
         const maxContextTokens = normalizeMaxApiPayload(chat?.maxContext);
-        const summarizedIndex = chat ? (chat.summarizedIndex || 0) : 0;
 
         const persistedMessages = db.prepare('SELECT * FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
         const messages = applyGenerationHistory(persistedMessages, { historyEdit, regenerateMessageId });
-        const activeMessages = messages.slice(summarizedIndex);
+        // Live history is whatever no summary covers and the user has not muted,
+        // so a gap left by a deleted summary comes back on its own.
+        const activeMessages = selectActiveMessages(messages, chat?.memoryBlocks);
 
         let currentInput = messageContent;
         let finalOutput = '';
@@ -916,9 +934,41 @@ function safeParseArray(body) {
 // Validate the per-chunk tag array from the classifier. Keep only known categories
 // and in-range chunk indices; explode each category's value list into {tag, value}
 // pairs (create-off: unknown categories dropped). Returns [{chunkIndex, tags:[{tag,value}]}].
-function validateChunkTags(arr, categories, chunkRecords) {
+// Turn the collected rejections into a sentence that names the dominant cause and
+// shows examples, so the failure points at something actionable.
+function describeTagRejections(rejections) {
+    const counts = new Map();
+    const samples = new Map();
+    for (const entry of rejections) {
+        counts.set(entry.reason, (counts.get(entry.reason) || 0) + 1);
+        if (!samples.has(entry.reason)) samples.set(entry.reason, entry.detail);
+    }
+    const wording = {
+        'unknown-category': (n, sample) => `${n} used a category this workspace does not have (for example "${sample}")`,
+        'no-name': (n) => `${n} carried no name`,
+        'evidence-not-found': (n, sample) => `${n} quoted text that is not in the chunk (for example "${sample}")`
+    };
+    const parts = [];
+    for (const [reason, count] of [...counts.entries()].sort((a, b) => b[1] - a[1])) {
+        const describe = wording[reason];
+        if (describe) parts.push(describe(count, samples.get(reason)));
+    }
+    return parts.join('; ');
+}
+
+// `rejections` collects why each mention was dropped. Without it the failure
+// message could only say "category and evidence validation", which names two very
+// different problems and points at neither: an unknown category means the model
+// answered with a type this workspace does not have, while unmatched evidence
+// means it did not quote the chunk. The fixes are opposites.
+function validateChunkTags(arr, categories, chunkRecords, rejections = null) {
+    const reject = (reason, detail) => {
+        if (rejections) rejections.push({ reason, detail });
+    };
     const chunkCount = Array.isArray(chunkRecords) ? chunkRecords.length : Number(chunkRecords) || 0;
-    const byName = new Map(categories.map(c => [c.name.toLowerCase(), c.name]));
+    // Tolerates the label the model actually writes (singular for plural, casing,
+    // accents) while still only ever resolving to a category this workspace has.
+    const resolveCategory = buildCategoryResolver(categories);
     const out = [];
     for (const entry of (Array.isArray(arr) ? arr : [])) {
         if (!entry || typeof entry !== 'object') continue;
@@ -927,15 +977,20 @@ function validateChunkTags(arr, categories, chunkRecords) {
         const tags = [];
         const chunkText = Array.isArray(chunkRecords) ? String(chunkRecords[idx]?.text || '') : '';
         for (const mention of (Array.isArray(entry.mentions) ? entry.mentions : [])) {
-            const name = byName.get(String(mention && (mention.type || mention.tag) || '').toLowerCase());
+            const rawType = String(mention && (mention.type || mention.tag) || '').trim();
+            const name = resolveCategory(rawType);
             const value = String(mention && (mention.canonicalName || mention.value || mention.text) || '').trim();
-            const evidence = String(mention && evidenceText(mention.evidence) || '').trim();
-            if (!name || !value || !evidence || !chunkContainsEvidence(chunkText, evidence)) continue;
+            // Store the excerpt the chunk actually supports, not everything the
+            // model offered: it may answer with several, only some of them real.
+            const evidence = matchedEvidence(chunkText, mention && mention.evidence);
+            if (!name) { reject('unknown-category', rawType || '(empty)'); continue; }
+            if (!value) { reject('no-name', rawType); continue; }
+            if (!evidence) { reject('evidence-not-found', evidenceText(mention && mention.evidence).slice(0, 160)); continue; }
             const proposalKind = String(mention && mention.proposalKind || '').trim().toLowerCase();
             tags.push({ tag: name, value, evidence, proposalKind });
         }
         for (const rt of (Array.isArray(entry.tags) ? entry.tags : [])) {
-            const name = byName.get(String(rt && rt.tag || '').toLowerCase());
+            const name = resolveCategory(rt && rt.tag);
             if (!name) continue;
             const values = Array.isArray(rt.values) ? rt.values : (rt.value ? [rt.value] : []);
             for (const v of values) {
@@ -1016,21 +1071,6 @@ function getSystemAiConfiguration() {
     return { systemAi: resolved.executor, error: resolved.error };
 }
 
-function evidenceText(value) {
-    if (Array.isArray(value)) return value.map(v => String(v || '').trim()).filter(Boolean).join(' ');
-    return value;
-}
-
-function normalizeEvidence(value) {
-    return String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
-}
-
-function chunkContainsEvidence(chunkText, evidence) {
-    const haystack = normalizeEvidence(chunkText);
-    const needle = normalizeEvidence(evidence);
-    return needle.length >= 2 && haystack.includes(needle);
-}
-
 function entityEvidenceExcerpt(text, entityName, limit = 500) {
     const source = String(text || '').trim();
     if (source.length <= limit) return source;
@@ -1060,28 +1100,6 @@ function getSystemLanguageInstruction() {
 // Render a workspace's entity registry as a prompt block so the classifier reuses
 // existing canonical names (and maps titles/variants to them) instead of coining
 // inconsistent values. Empty string when the registry has no entities yet.
-// Serialize an entity's structured `data` fields into a short human-readable clause
-// for the retrieval dossier. Nothing curated into the registry may be lost from
-// retrieval, so every scalar attribute the user set surfaces to the model. Long-form
-// prose (description/content) is skipped here, it rides on the entity's Lore instead.
-const DOSSIER_DATA_FIELDS = [
-    ['status', 'status'], ['itemType', 'type'], ['locationType', 'type'],
-    ['nature', 'nature'], ['scope', 'kind'], ['disposition', 'disposition'],
-    ['rarity', 'abundance'], ['abundance', 'abundance'], ['threat', 'threat'],
-    ['age', 'age'], ['role', 'role'], ['abilities', 'abilities'], ['ownership', 'ownership'],
-];
-function entityDataFacts(data) {
-    if (!data || typeof data !== 'object') return '';
-    const parts = [];
-    for (const [key, label] of DOSSIER_DATA_FIELDS) {
-        const v = data[key];
-        if (v == null) continue;
-        const s = String(v).trim();
-        if (s) parts.push(`${label}: ${s}`);
-    }
-    return parts.join('; ');
-}
-
 function buildEntityVocab(workspaceId, sourceText = '') {
     if (!workspaceId) return '';
     let rows = [];
@@ -1150,7 +1168,47 @@ function notifyTaggingFailure(error) {
     } catch (e) { /* no window (headless/tests): nothing to notify */ }
 }
 
-async function classifyAndTagSegment(chunkRecords, profile, workspaceId = null) {
+// Batches are independent, and each one is mostly time spent waiting on the
+// provider rather than work being done here. Running a few at once overlaps that
+// waiting. Kept low on purpose: this is exactly the shape that earns a 429, so it
+// only pays off together with the backoff below.
+const TAGGER_CONCURRENCY = 3;
+
+// Retry a rate-limited call with growing waits. Same policy the World Index
+// backfill has always used; without it, concurrency would trade time for lost
+// batches.
+async function sendTaggerRequest(payload, tries = 5) {
+    let delay = 2000;
+    for (let attempt = 1; attempt <= tries; attempt++) {
+        try {
+            return await sendApiRequest(payload);
+        } catch (e) {
+            const msg = String((e && e.message) || e);
+            const rateLimited = /too many requests|rate.?limit|429|throttl/i.test(msg);
+            if (attempt === tries || !rateLimited) throw e;
+            await new Promise(resolve => setTimeout(resolve, delay));
+            delay = Math.min(delay * 2, 30000);
+        }
+    }
+}
+
+// Run `worker` over every item, never more than `limit` in flight. Results keep
+// the input order regardless of which call finishes first.
+async function mapWithConcurrency(items, limit, worker) {
+    const results = new Array(items.length);
+    let next = 0;
+    const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+        while (true) {
+            const index = next++;
+            if (index >= items.length) return;
+            results[index] = await worker(items[index], index);
+        }
+    });
+    await Promise.all(runners);
+    return results;
+}
+
+async function classifyAndTagSegment(chunkRecords, profile, workspaceId = null, onProgress = null, { notify = true } = {}) {
     let title = 'Archived Memory';
     let summary = '';
     let chunkTags = [];
@@ -1164,26 +1222,46 @@ async function classifyAndTagSegment(chunkRecords, profile, workspaceId = null) 
     let categories = [];
     try { categories = db.prepare('SELECT name, description FROM tags WHERE isEntity = 1').all(); } catch (e) { categories = []; }
 
-    const numbered = chunkRecords.map((c, i) => `[CHUNK ${i}]\n${c.text}`).join('\n\n');
     const catLines = categories.length
         ? categories.map(c => `- ${c.name}: ${c.description}`).join('\n')
         : '- Characters: People, beings, or named agents present in the scene.';
-    const vocab = buildEntityVocab(workspaceId, numbered);
-    const systemPrompt =
-        getSystemLanguageInstruction() + "\n" +
-        "You tag a text segment that is split into numbered chunks.\n" +
-        "For EACH chunk, identify the specific persistent story entities explicitly named in the text. A persistent entity is something a user would reasonably find and reuse in a world bible.\n" +
-        catLines + "\n" +
-        (vocab ? vocab + "\n" : "") +
-        "Resolve titles, shortened names, and aliases to the supplied canonical name when the text supports that match. Never propose a name already present in Known entities, even under another category. Do not turn generic nouns, unnamed roles, pronouns, descriptive phrases, or ordinary objects into entities. A role alone (for example captain, duke, guard, blacksmith), a generic organization word (order, guild, army), or an ordinary object (sword, spear, cane, coat) is not an entity. Distinctive reusable world-specific items or materials (for example Dragon Mead or Salamander Leather) are valid item types even when they are not unique objects. When identity or category is ambiguous, omit the mention. Every mention must include a short verbatim evidence excerpt copied from that chunk. " +
-        "Use ONLY these category names; skip a chunk when it has no qualifying named entity. " +
-        "Return one valid JSON object and nothing else. Its exact shape is " +
-        "{\"items\": [{\"chunk\": <number>, \"mentions\": [{\"text\": \"<surface text>\", \"canonicalName\": \"<existing canonical name or exact explicit name>\", \"type\": \"<Category>\", \"proposalKind\": \"known|named|world_specific_type\", \"evidence\": \"<verbatim excerpt>\"}]}]}. " +
-        "Use proposalKind=known only for a supplied Known entity, named for a specific proper entity or unique named artifact, and world_specific_type only for a distinctive reusable Items type or material. Never use named for a generic role, category, or ordinary object. " +
-        "Use {\"items\": []} only when none of the chunks contains a qualifying named entity.";
-    try {
+
+    // Archiving a whole history used to go up in a single request: tens of
+    // thousands of tokens in, one 4096-token answer expected back. That was slow
+    // when it worked and truncated when it did not, which is how an archive ended
+    // up stored with no tags at all. createTaggerBatches is the shared policy, so
+    // every tagging path in the app sizes its calls the same way.
+    let offset = 0;
+    const batches = createTaggerBatches(chunkRecords).map(records => {
+        const entry = { start: offset, records };
+        offset += records.length;
+        return entry;
+    });
+
+    // One failed batch no longer costs the whole archive its tags. Whatever came
+    // back is kept, and the first error is reported so the caller can say the pass
+    // was incomplete and offer the re-index.
+    let firstError = null;
+    let chunksDone = 0;
+
+    const runBatch = async ({ start, records }, batchIndex) => {
+        const numbered = records.map((c, i) => `[CHUNK ${i}]\n${c.text}`).join('\n\n');
+        const vocab = buildEntityVocab(workspaceId, numbered);
+        const systemPrompt =
+            getSystemLanguageInstruction() + "\n" +
+            "You tag a text segment that is split into numbered chunks.\n" +
+            "For EACH chunk, identify the specific persistent story entities explicitly named in the text. A persistent entity is something a user would reasonably find and reuse in a world bible.\n" +
+            catLines + "\n" +
+            (vocab ? vocab + "\n" : "") +
+            "Resolve titles, shortened names, and aliases to the supplied canonical name when the text supports that match. Never propose a name already present in Known entities, even under another category. Do not turn generic nouns, unnamed roles, pronouns, descriptive phrases, or ordinary objects into entities. A role alone (for example captain, duke, guard, blacksmith), a generic organization word (order, guild, army), or an ordinary object (sword, spear, cane, coat) is not an entity. Distinctive reusable world-specific items or materials (for example Dragon Mead or Salamander Leather) are valid item types even when they are not unique objects. When identity or category is ambiguous, omit the mention. Every mention must include a short verbatim evidence excerpt copied from that chunk. " +
+            "Use ONLY these category names; skip a chunk when it has no qualifying named entity. " +
+            "Return one valid JSON object and nothing else. Its exact shape is " +
+            "{\"items\": [{\"chunk\": <number>, \"mentions\": [{\"text\": \"<surface text>\", \"canonicalName\": \"<existing canonical name or exact explicit name>\", \"type\": \"<Category>\", \"proposalKind\": \"known|named|world_specific_type\", \"evidence\": \"<verbatim excerpt>\"}]}]}. " +
+            "Use proposalKind=known only for a supplied Known entity, named for a specific proper entity or unique named artifact, and world_specific_type only for a distinctive reusable Items type or material. Never use named for a generic role, category, or ordinary object. " +
+            "Use {\"items\": []} only when none of the chunks contains a qualifying named entity.";
+
         const maxTokens = 4096;
-        const request = (prompt, repair = false) => sendApiRequest({
+        const request = (prompt, repair = false) => sendTaggerRequest({
             apiProfileId, model, systemPrompt,
             chatHistory: [],
             newPrompt: prompt,
@@ -1193,52 +1271,146 @@ async function classifyAndTagSegment(chunkRecords, profile, workspaceId = null) 
             jsonMode: true,
             jsonSchema: TAGGER_RESPONSE_SCHEMA
         });
-        let response = await request(numbered);
-        let structured = parseTaggerResponse(response);
-        let validated = structured.valid ? validateChunkTags(structured.items, categories, chunkRecords) : [];
-        const needsRepair = !structured.valid || (structured.items.length > 0 && validated.length === 0);
-        if (needsRepair) {
-            response = await request(
-                `Repair the response below to the exact required JSON shape. Preserve only mentions supported by the original numbered chunks.\n\nORIGINAL CHUNKS:\n${numbered}\n\nINVALID RESPONSE:\n${String(response || '').slice(0, 12000)}`,
-                true
-            );
-            structured = parseTaggerResponse(response);
-            validated = structured.valid ? validateChunkTags(structured.items, categories, chunkRecords) : [];
+
+        try {
+            let response = await request(numbered);
+            let structured = parseTaggerResponse(response);
+            let rejections = [];
+            let validated = structured.valid ? validateChunkTags(structured.items, categories, records, rejections) : [];
+            const needsRepair = !structured.valid || (structured.items.length > 0 && validated.length === 0);
+            if (needsRepair) {
+                response = await request(
+                    `Repair the response below to the exact required JSON shape. Preserve only mentions supported by the original numbered chunks.\n\nORIGINAL CHUNKS:\n${numbered}\n\nINVALID RESPONSE:\n${String(response || '').slice(0, 12000)}`,
+                    true
+                );
+                structured = parseTaggerResponse(response);
+                rejections = [];
+                validated = structured.valid ? validateChunkTags(structured.items, categories, records, rejections) : [];
+            }
+            if (!structured.valid) throw new Error('The Tagger returned invalid structured JSON after one repair attempt.');
+            if (structured.items.length > 0 && validated.length === 0) {
+                const detail = describeTagRejections(rejections);
+                console.error('[World Index] every mention was rejected:', JSON.stringify(rejections.slice(0, 10), null, 2));
+                throw new Error(detail
+                    ? `The Tagger returned mentions, but none could be used: ${detail}.`
+                    : 'The Tagger returned mentions, but none could be used.');
+            }
+            // Chunk indexes come back relative to the batch; shift them onto the segment.
+            return { tags: validated.map(entry => ({ ...entry, chunkIndex: entry.chunkIndex + start })), error: null, records };
+        } catch (e) {
+            console.error(`[World Index] classify+tag failed on batch ${batchIndex + 1}/${batches.length}:`, e);
+            return { tags: [], error: e, records };
+        } finally {
+            // Reported in chunks, not batches: the caller announced the total in
+            // chunks before the first call, and switching units mid-run reads as a
+            // restart. Counted as batches complete, since they finish out of order.
+            chunksDone += records.length;
+            if (onProgress) onProgress(Math.min(chunksDone, chunkRecords.length), chunkRecords.length);
         }
-        if (!structured.valid) throw new Error('The Tagger returned invalid structured JSON after one repair attempt.');
-        if (structured.items.length > 0 && validated.length === 0) {
-            throw new Error('The Tagger response contained mentions, but none passed category and evidence validation.');
+    };
+
+    const outcomes = await mapWithConcurrency(batches, TAGGER_CONCURRENCY, runBatch);
+    const taggedRecords = [];
+    const failedRecords = [];
+    for (const outcome of outcomes) {
+        if (outcome.error) {
+            if (!firstError) firstError = outcome.error;
+            failedRecords.push(...outcome.records);
+            continue;
         }
-        chunkTags = validated;
-    } catch (e) {
-        console.error("[World Index] classify+tag failed:", e);
-        // Only surface when a System AI is configured: without one, tagging is
-        // intentionally off and this path only produced a title/summary.
-        notifyTaggingFailure(e);
-        return { title, summary, chunkTags, failed: true, error: cleanErrorMessage(e) };
+        chunkTags.push(...outcome.tags);
+        taggedRecords.push(...outcome.records);
     }
-    return { title, summary, chunkTags };
+
+    if (firstError) {
+        // Only surface when a System AI is configured: without one, tagging is
+        // intentionally off and this path only produced a title/summary. Callers
+        // that report the failure themselves pass notify:false, so the user does
+        // not get the same error in two toasts.
+        if (notify) notifyTaggingFailure(firstError);
+        return { title, summary, chunkTags, taggedRecords, failedRecords, failed: true, error: cleanErrorMessage(firstError) };
+    }
+    return { title, summary, chunkTags, taggedRecords, failedRecords };
+}
+
+// The recap is a card for the reader, never material the model writes from. The
+// transcript used to arrive as a bare user prompt, so a story-tuned model read it
+// as its own turn and continued the scene instead of describing it, and whatever
+// came back was stored verbatim. Everything below exists to make that impossible:
+// the transcript is fenced and labelled, and the reply is cut at the first sign
+// that the model started writing prose again.
+const ARCHIVE_FENCE_OPEN = '<<<TRANSCRIPT';
+const ARCHIVE_FENCE_CLOSE = 'END TRANSCRIPT>>>';
+
+// A recap stops at the first heading, horizontal rule, or transcript-style role
+// prefix. None of those belong in two sentences of summary; they are what a model
+// writes once it has stopped summarizing and started narrating.
+function trimArchiveRecap(text) {
+    const lines = String(text || '').trim().split('\n');
+    const kept = [];
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (/^#{1,6}\s/.test(trimmed)) break;
+        if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) break;
+        if (/^(USER|ASSISTANT|SYSTEM)\s*:/i.test(trimmed)) break;
+        kept.push(line);
+    }
+    return kept.join('\n').trim();
+}
+
+// A recap that is empty or still transcript-sized is not a recap. Showing nothing
+// is better than handing the user back their own story as its summary.
+function isUsableRecap(text) {
+    const value = String(text || '').trim();
+    return value.length >= 2 && value.length <= 1200;
 }
 
 async function summarizeArchiveSegment(rawText) {
     const summarizer = getRoleExecutor(ROLE_IDS.SUMMARIZER);
     if (!summarizer.executor) return { title: 'Chat Archive', summary: '', skipped: true, error: summarizer.error };
 
-    const response = await sendApiRequest({
+    const systemPrompt =
+        `${getSystemLanguageInstruction()}\n` +
+        'You write a short archive card describing a conversation that has already happened. ' +
+        'The material between the transcript markers is a record to describe, never a scene to continue. ' +
+        'Never answer it, never roleplay, and never write in any character voice.\n' +
+        'Reply with exactly two lines and nothing else:\n' +
+        'TITLE: <concise 3-word title>\n' +
+        '<two sentences of plain prose covering the consequential facts, decisions, changes, and unresolved threads>\n' +
+        'No headings, no lists, no markdown, no transcript excerpts, and no invented details.';
+
+    const request = (correction = false) => sendApiRequest({
         ...summarizer.executor,
-        systemPrompt: `${getSystemLanguageInstruction()}\nCreate faithful long-term memory from an archived conversation. The first line must be 'TITLE: [concise 3-word title]'. Then write a concise two-sentence summary that preserves consequential facts, decisions, changes, and unresolved threads. Do not invent details.`,
+        systemPrompt: correction
+            ? `${systemPrompt}\nCORRECTION: your previous reply was not an archive card. Return only the TITLE line and two sentences.`
+            : systemPrompt,
         chatHistory: [],
-        newPrompt: rawText,
+        newPrompt: `${ARCHIVE_FENCE_OPEN}\n${rawText}\n${ARCHIVE_FENCE_CLOSE}\n\nWrite the archive card for the transcript above.`,
         temperature: 0.1,
         maxTokens: 500,
         manualMode: false,
         manualJson: null
     });
-    const lines = String(response || '').trim().split('\n');
-    const hasTitle = lines[0]?.toUpperCase().startsWith('TITLE:');
+
+    const read = (response) => {
+        const lines = String(response || '').trim().split('\n');
+        const hasTitle = lines[0] ? lines[0].toUpperCase().startsWith('TITLE:') : false;
+        return {
+            title: hasTitle ? lines[0].slice(6).trim() || 'Chat Archive' : 'Chat Archive',
+            summary: trimArchiveRecap((hasTitle ? lines.slice(1) : lines).join('\n')),
+            hasTitle
+        };
+    };
+
+    let parsed = read(await request());
+    if (!parsed.hasTitle || !isUsableRecap(parsed.summary)) {
+        const retry = read(await request(true));
+        if (isUsableRecap(retry.summary)) parsed = retry;
+    }
+
     return {
-        title: hasTitle ? lines[0].slice(6).trim() || 'Chat Archive' : 'Chat Archive',
-        summary: (hasTitle ? lines.slice(1) : lines).join('\n').trim()
+        title: parsed.title,
+        summary: isUsableRecap(parsed.summary) ? parsed.summary : ''
     };
 }
 
@@ -1639,60 +1811,6 @@ async function retagDocumentChunks(documentId, progressCallback = null) {
     return { tagged, chunks: rows.length };
 }
 
-// Which data fields the enrichment may set per type, and the closed vocabularies for
-// the ones that are enums. Anything outside the allowlist is ignored; enum values that
-// don't match are dropped. Mirrors the WorldbuildView editors.
-const ENRICH_ENUMS = {
-    status: ['alive', 'deceased', 'missing', 'unknown'],
-    disposition: ['hostile', 'neutral', 'friendly', 'unknown'],
-    abundance: ['Unique', 'Rare', 'Uncommon', 'Common', 'Abundant'],
-    threat: ['Harmless', 'Minor', 'Dangerous', 'Deadly', 'Legendary'],
-    itemType: ['Weapon', 'Armor', 'Artifact', 'Resource'],
-};
-// Each list mirrors the scalar `data` fields the WorldbuildView actually renders for
-// that type, nothing else. The AI may only fill what the user can see; it must never
-// invent fields (e.g. a Character has no "role"/"abilities", a Creature has no
-// "description"). Relational fields (owner, race, faction, habitat…) and chapter links
-// are edges, not data, and are handled separately.
-const ENRICH_FIELDS = {
-    Characters: ['status', 'age', 'appearance', 'personality'],
-    Creatures: ['status', 'disposition', 'nature', 'abundance', 'threat', 'abilities', 'appearance', 'personality'],
-    Locations: ['locationType', 'description'],
-    Items: ['itemType', 'abundance', 'description'],
-    Factions: ['description'],
-    Races: ['description'],
-    Events: ['kind', 'description'],
-    System: ['content'],
-};
-
-const ENRICH_TYPE_GUIDANCE = {
-    Characters: 'A specific person or personified agent. Record their current canonical state, not temporary scene circumstances or thematic interpretations.',
-    Creatures: 'An individual creature or a creature group/species. Respect its scope: individuals have status; groups have abundance. Do not convert metaphorical descriptions into biology or powers.',
-    Locations: 'A persistent physical place. Do not treat a temporary scene setting, organization, plane of thought, or mere association as physical containment.',
-    Items: 'A persistent object, artifact, equipment, or resource. Distinguish possession, use, creation, and discovery; they are not interchangeable.',
-    Factions: 'An organized group with shared identity. Describe established goals, structure, or reputation without inferring collective intent from one member.',
-    Races: 'A canonical species, lineage, ancestry, or people. Describe established traits and culture without generalizing from one individual.',
-    Events: 'A named or canonically significant happening. Record what occurred and why it factually matters, not speculative consequences.',
-    System: 'A reusable canonical concept, law, doctrine, magic system, technology, currency, cosmological mechanism, or world rule. Content must explain its operation, scope, limits, terminology, and consequences without turning examples into universal rules.',
-};
-
-const ENRICH_FIELD_GUIDANCE = {
-    status: 'Current state only. alive requires explicit survival or a current direct action that cannot be posthumous. deceased requires explicit confirmation of death or a canonically defined irreversible equivalent. Surrender, defeat, disappearance, transformation, assimilation, imprisonment, incapacitation, or leaving a role are not death. missing means whereabouts are explicitly unknown; unknown means the evidence cannot establish a state.',
-    age: 'A literal current age explicitly stated for this character. Never calculate it from dates, elapsed time, appearance, or life stage.',
-    appearance: 'Stable physical appearance explicitly described for this individual. Do not include temporary clothing, injuries, posture, or scene lighting unless canonically persistent.',
-    personality: 'Stable personality traits directly demonstrated across evidence or explicitly stated. Do not convert one emotional reaction into a permanent trait.',
-    disposition: 'A stable default attitude toward relevant people, not a momentary emotional reaction in one scene.',
-    nature: 'The explicitly established creature category or nature, such as Beast, Spirit, or Deity. Do not infer it from appearance or abilities.',
-    abundance: 'World-level prevalence of a resource or creature group, not the quantity present in one scene.',
-    threat: 'An explicitly established general danger level, not how frightening or powerful one scene makes the entity appear.',
-    abilities: 'Concrete repeatable capabilities or traits explicitly demonstrated or stated. Exclude metaphors, one-time circumstances, equipment, and speculation.',
-    locationType: 'The explicit kind of place, such as continent, city, fortress, or tavern. Do not use its name, owner, atmosphere, or current purpose as its type.',
-    itemType: 'Weapon, Armor, Artifact, or Resource according to the item’s canonical function. Use Resource only for material that can naturally occur, be gathered, or be consumed as a supply.',
-    description: 'A concise factual description built only from established properties, function, appearance, culture, goals, structure, or importance appropriate to this entity type.',
-    kind: 'The explicit category of event, such as Battle, Festival, Holiday, Disaster, or Coronation. Do not use its outcome or emotional tone as its kind.',
-    content: 'A precise canonical explanation of the concept or system: definition, mechanism, scope, constraints, terminology, exceptions, and consequences when supported. Preserve distinctions between related concepts and never universalize a single example.',
-};
-
 const ENRICH_RELATION_GUIDANCE = {
     'Characters.race': 'Only an explicitly established ancestry, species, lineage, or people.',
     'Characters.factions': 'Only explicit membership or formal allegiance, not cooperation, employment, sympathy, or proximity.',
@@ -1730,6 +1848,42 @@ function entityEnrichmentMaxTokens(entity) {
     const minimum = entity.type === 'System' ? 2400 : 1800;
     const maximum = entity.type === 'System' ? 5000 : 4000;
     return Math.min(maximum, Math.max(minimum, 1200 + Math.ceil(currentLoreLength / 3.5)));
+}
+
+// Why an entity update could not be read back. These used to collapse into one
+// "invalid structured JSON" message, which pointed at the model's formatting when
+// the real cause was usually the output budget: reasoning models spend it thinking
+// before they write the object, so a capable model still fails. `budget` and
+// `empty` are retried with a bigger allowance, the others with the same one.
+function describeEntityUpdateFailure(result, parsed) {
+    const content = String(result?.content || '');
+    if (result?.truncated) {
+        return { cause: 'budget', message: 'The System AI response reached its output limit before the entity update was complete.' };
+    }
+    if (parsed) {
+        return { cause: 'shape', message: 'The System AI returned JSON using an unsupported entity update shape.' };
+    }
+    if (!content.includes('{')) {
+        return { cause: 'empty', message: 'The System AI reply contained no JSON object. Reasoning models can spend the whole output budget before answering.' };
+    }
+    return { cause: 'format', message: 'The System AI returned invalid structured JSON.' };
+}
+
+// Retry allowance. A budget failure doubles (capped well above the first ceiling)
+// instead of nudging by half, which was rarely enough to clear a reasoning model.
+function entityUpdateRetryTokens(cause, maxTokens) {
+    if (cause === 'budget' || cause === 'empty') return Math.min(16000, maxTokens * 2);
+    return maxTokens;
+}
+
+// Without the raw reply and the finish reason there is no way to tell these causes
+// apart after the fact.
+function logEntityUpdateFailure(entity, attempt, failure, result) {
+    console.error(
+        `[Entity Update] ${entity.canonicalName} (${entity.type}) ${attempt} failed: ${failure.cause} | finishReason=${result?.finishReason ?? 'unknown'} | truncated=${Boolean(result?.truncated)}
+` +
+        `[Entity Update] raw response (first 1000 chars): ${String(result?.content || '').slice(0, 1000)}`
+    );
 }
 
 // The entity-to-entity edges the enrichment may propose per type, mirroring the relation
@@ -2136,7 +2290,7 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                     manualMode,
                     manualJson,
                     jsonMode: true,
-                    jsonSchema: buildEntityUpdateSchema(),
+                    jsonSchema: buildEntityUpdateSchema(allowed, relBlocks.map(block => block.spec.key)),
                     includeResponseMetadata: true
                 });
                 entityOutputTokens += estimateTokens(requestResult.content);
@@ -2149,12 +2303,12 @@ async function enrichEntities(workspaceId, progressCallback = null) {
             let parsedResult = parseEntityUpdateObject(response);
             let parsed = parsedResult.value;
             if (!isStructuredEntityUpdate(parsed)) {
-                const firstFailure = result.truncated
-                    ? 'The System AI response reached its output limit before the entity update was complete.'
-                    : parsed
-                    ? 'The System AI returned JSON using an unsupported entity update shape.'
-                    : 'The System AI returned invalid structured JSON.';
-                if (result.truncated) {
+                const firstFailure = describeEntityUpdateFailure(result, parsed);
+                logEntityUpdateFailure(ent, 'first attempt', firstFailure, result);
+                // A budget overrun is the one cause a smaller prompt helps with: less
+                // evidence means less to read, less to think about, and more room left
+                // for the object itself.
+                if (firstFailure.cause === 'budget' || firstFailure.cause === 'empty') {
                     const previousActive = activeEvidence;
                     activeEvidence = selectEntityEvidence(evidenceEntries, 3000);
                     const retainedIds = new Set(activeEvidence.map(entry => entry.id));
@@ -2167,7 +2321,7 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                         'token-budget'
                     );
                 }
-                const retryTokens = result.truncated ? Math.min(8000, Math.ceil(maxTokens * 1.5)) : maxTokens;
+                const retryTokens = entityUpdateRetryTokens(firstFailure.cause, maxTokens);
                 retryCount++;
                 result = await requestUpdate(activeEvidence, true, retryTokens);
                 response = result.content;
@@ -2176,12 +2330,10 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                 if (!isStructuredEntityUpdate(parsed)) {
                     failed++;
                     consecutiveStructuredFailures++;
-                    const retryFailure = result.truncated
-                        ? 'The System AI response reached its output limit before the entity update was complete.'
-                        : parsed
-                        ? 'The System AI returned JSON using an unsupported entity update shape.'
-                        : 'The System AI returned invalid structured JSON.';
-                    rememberFailure(ent, `${retryFailure} Automatic retry also failed. First response: ${firstFailure}`);
+                    const retry = describeEntityUpdateFailure(result, parsed);
+                    logEntityUpdateFailure(ent, 'retry', retry, result);
+                    const retryFailure = retry.message;
+                    rememberFailure(ent, `${retryFailure} Automatic retry also failed. First response: ${firstFailure.message}`);
                     updateState.transition(workspaceId, ent.id, activeEvidence, 'deferred', runId, 'structured-output-failure');
                     updateState.updateJob(runId, ent.id, {
                         status: 'failed',
@@ -2394,23 +2546,233 @@ async function enrichEntities(workspaceId, progressCallback = null) {
     return { entities: targets.length, updated, staged, upToDate, noEvidence, failed, failures, evidenceUsed, taggedEvidenceRemaining, textMatchesSkipped, runId, runStatus, runTotals };
 }
 
-async function executeSummarizationInternal({ chatId, selectedMessages, newSummarizedIndex, customTitle, profileId }) {
+// A summary is stored the moment its history is safe, and the slow AI work runs
+// afterwards. Archiving used to hold the window open through all of it, so a long
+// history meant minutes of a frozen dialog, and a crash in the middle left the
+// chunks written with no block pointing at them.
+//
+//   finishing   the history is stored; recap and tags are still being produced
+//   ready       nothing left to do
+//   incomplete  the finishing pass failed or was interrupted; safe to run again
+// The recap and the entity tags are independent pieces of work over the same
+// stored history. They are tracked separately so a tagging failure never costs
+// the recap, and so retrying only redoes the part that is actually missing.
+const SUMMARY_PART = Object.freeze({ PENDING: 'pending', READY: 'ready', FAILED: 'failed', SKIPPED: 'skipped' });
+
+function writeSummaryBlock(chatId, blockId, changes) {
+    const blocks = readMemoryBlocks(db, chatId);
+    const next = blocks.map(block => (block && block.id === blockId ? { ...block, ...changes } : block));
+    db.prepare('UPDATE chats SET memoryBlocks = ? WHERE id = ?').run(JSON.stringify(next), chatId);
+    return next;
+}
+
+// Chunks of this summary that the tagger has not already completed. Coverage is
+// what makes a second finishing pass cheap: it only looks at what is left.
+function pendingBlockChunks(chatId, blockId) {
+    return db.prepare(`
+        SELECT kc.id, kc.text FROM knowledge_chunks kc
+        WHERE kc.ownerId = ? AND kc.ownerType = 'chat_memory' AND kc.memoryBlockId = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM world_index_chunk_status wis
+            WHERE wis.chunkId = kc.id AND wis.status = 'completed'
+          )
+        ORDER BY kc.createdAt ASC
+    `).all(chatId, blockId);
+}
+
+function recordChunkCoverage(records, status, error = null) {
+    if (!Array.isArray(records) || !records.length) return;
+    const save = db.prepare(`
+        INSERT INTO world_index_chunk_status (chunkId, status, tagCount, lastRunId, error, updatedAt)
+        VALUES (?, ?, 0, NULL, ?, ?)
+        ON CONFLICT(chunkId) DO UPDATE SET
+          status = excluded.status,
+          error = excluded.error,
+          updatedAt = excluded.updatedAt
+    `);
+    const now = Date.now();
+    db.transaction(() => {
+        for (const record of records) save.run(record.id, status, error, now);
+    })();
+}
+
+// The finishing pass: writes the recap and the entity tags for a stored summary.
+// Safe to call again on the same block, which is what recovers an interrupted run
+// or a provider failure without archiving anything twice.
+async function finalizeSummaryBlock({ chatId, blockId, onProgress = null }) {
+    const report = (stage, done = 0, total = 0) => {
+        if (onProgress) {
+            try { onProgress({ stage, done, total }); } catch (e) { /* reporting must never break the pass */ }
+        }
+    };
+
+    const block = readMemoryBlocks(db, chatId).find(entry => entry && entry.id === blockId);
+    if (!block) return { success: false, missing: true };
+
+    const messages = Array.isArray(block.messages) ? block.messages : [];
+    const rawText = messages
+        .filter(message => message && message.role)
+        .map(message => `${String(message.role).toUpperCase()}: ${message.content}`)
+        .join('\n\n');
+
+    let title = block.title;
+    let summary = block.summary || '';
+    let recapStatus = block.recapStatus || SUMMARY_PART.PENDING;
+    let recapError = null;
+
+    // The recap runs first and is written on its own, so whatever happens to the
+    // tagging afterwards cannot take it away.
+    if (!isChatArchiveSummarizationEnabled()) {
+        recapStatus = SUMMARY_PART.SKIPPED;
+    } else if (recapStatus !== SUMMARY_PART.READY && rawText) {
+        report('summarizing');
+        try {
+            const result = await summarizeArchiveSegment(rawText);
+            summary = result.summary || summary;
+            // A title the user typed is never overwritten by the summarizer.
+            if (block.autoTitle && result.title) title = result.title;
+            recapStatus = summary ? SUMMARY_PART.READY : SUMMARY_PART.FAILED;
+            if (!summary) recapError = 'The Summarizer did not return a usable recap.';
+        } catch (smErr) {
+            console.error("[Summarizer] archive recap failed (the archive itself is already stored):", smErr);
+            recapStatus = SUMMARY_PART.FAILED;
+            recapError = cleanErrorMessage(smErr) || 'The Summarizer could not write a recap.';
+        }
+    }
+    writeSummaryBlock(chatId, blockId, { title, summary, recapStatus, recapError });
+
+    // Tagging is best-effort so a failure never costs the archive itself, but it
+    // used to fail in silence: the history stayed untagged and retrieval quietly
+    // lost the entity boost that finds a name mentioned in passing.
+    let taggingError = null;
+    const pending = pendingBlockChunks(chatId, blockId);
+    if (pending.length) {
+        report('tagging', 0, pending.length);
+        try {
+            const tagged = await classifyAndTagSegment(
+                pending, null, chatId,
+                (done, total) => report('tagging', done, total),
+                { notify: false }
+            );
+            const written = applyChunkTags(tagged.chunkTags, pending, chatId);
+            recordChunkCoverage(tagged.taggedRecords || [], 'completed');
+            if (tagged.failed) {
+                taggingError = cleanErrorMessage(tagged.error) || 'The Tagger could not process this archive.';
+                recordChunkCoverage(tagged.failedRecords || [], 'failed', taggingError);
+            }
+            console.log(`[Tagger] archive block ${blockId}: ${tagged.chunkTags.length}/${pending.length} chunk(s) tagged, ${written} tag row(s).`);
+        } catch (tagError) {
+            console.error("[Tagger] archive tagging failed (the archive itself is already stored):", tagError);
+            taggingError = cleanErrorMessage(tagError) || 'The Tagger could not process this archive.';
+        }
+    }
+
+    // Truth comes from the chunks, not from whether a call threw: a run where most
+    // batches worked leaves less to do than one where none did, and the card should
+    // be able to say so. Zero left means done, whatever happened along the way.
+    const stillPending = pendingBlockChunks(chatId, blockId).length;
+    const taggedChunks = Math.max(0, (block.tagChunkTotal || pending.length) - stillPending);
+    const taggingStatus = stillPending > 0 ? SUMMARY_PART.FAILED : SUMMARY_PART.READY;
+    const memoryBlocks = writeSummaryBlock(chatId, blockId, {
+        title, summary, recapStatus, recapError,
+        taggingStatus,
+        taggingError: stillPending > 0 ? (taggingError || 'Some passages are still untagged.') : null,
+        tagChunkTotal: block.tagChunkTotal || pending.length,
+        tagChunksPending: stillPending
+    });
+    return {
+        success: true, blockId, title, summary,
+        recapStatus, recapError,
+        taggingStatus, taggingError: stillPending > 0 ? (taggingError || 'Some passages are still untagged.') : null,
+        tagChunksPending: stillPending, taggedChunks,
+        memoryBlocks
+    };
+}
+
+// Any summary left mid-pass by a closed app is not in progress any more. Marking
+// it on startup keeps the memory view honest and offers the finishing pass again
+// instead of showing a spinner nothing is driving.
+function markInterruptedSummaries() {
+    const interrupted = (value) => value === SUMMARY_PART.PENDING;
+    try {
+        const chats = db.prepare('SELECT id, memoryBlocks FROM chats').all();
+        for (const chat of chats) {
+            const blocks = parseMemoryBlocks(chat.memoryBlocks);
+            if (!blocks.some(block => block && (interrupted(block.recapStatus) || interrupted(block.taggingStatus)))) continue;
+            const next = blocks.map(block => {
+                if (!block) return block;
+                const changes = {};
+                if (interrupted(block.recapStatus)) {
+                    changes.recapStatus = SUMMARY_PART.FAILED;
+                    changes.recapError = 'Kallamo closed before the recap was written.';
+                }
+                if (interrupted(block.taggingStatus)) {
+                    changes.taggingStatus = SUMMARY_PART.FAILED;
+                    changes.taggingError = 'Kallamo closed before entity tagging finished.';
+                }
+                return Object.keys(changes).length ? { ...block, ...changes } : block;
+            });
+            db.prepare('UPDATE chats SET memoryBlocks = ? WHERE id = ?').run(JSON.stringify(next), chat.id);
+        }
+    } catch (e) {
+        console.error('Could not mark interrupted summaries:', e);
+    }
+}
+
+// One archiving pass. The caller says which messages go into the summary and
+// which ones it wants muted; both are resolved against the stored history here,
+// so a stale renderer list can never archive a message twice or archive one the
+// user meant to drop.
+// Archiving does real work in three stages, and it used to do all of it in
+// silence: on a long history that reads as a frozen app rather than a slow one.
+// `onProgress` reports the stage and its position so the window can say which
+// part is taking the time.
+async function executeSummarizationInternal({ chatId, selectedMessages, messageIds, excludedMessageIds, customTitle, profileId, onProgress = null }) {
+    const report = (stage, done = 0, total = 0) => {
+        if (onProgress) {
+            try { onProgress({ stage, done, total }); } catch (e) { /* reporting must never break archiving */ }
+        }
+    };
     const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
     if (!chat) throw new Error("Chat not found");
 
-    const rawTextToArchive = selectedMessages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
+    const requestedIds = Array.isArray(messageIds) && messageIds.length
+        ? messageIds
+        : (Array.isArray(selectedMessages) ? selectedMessages : []).map(m => m && m.id);
+    const wanted = new Set(requestedIds.filter(Boolean));
+
+    const excludeIds = (Array.isArray(excludedMessageIds) ? excludedMessageIds : []).filter(Boolean);
+    if (excludeIds.length > 0) {
+        setMessagesExcluded(db, chatId, excludeIds, true);
+    }
+
+    const history = db.prepare('SELECT id, role, content, excluded FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
+    const covered = coveredMessageIds(chat.memoryBlocks);
+    const excludedNow = new Set(excludeIds);
+
+    // Chat order, stored content, nothing already covered, nothing just muted.
+    const archiveMessages = history
+        .filter(m => wanted.has(m.id) && !covered.has(m.id) && !excludedNow.has(m.id) && m.excluded !== 1)
+        .map(m => ({ id: m.id, role: m.role, content: m.content }));
+
+    if (archiveMessages.length === 0) {
+        const summarizedIndex = syncSummarizedIndex(db, chatId);
+        const memoryBlocks = readMemoryBlocks(db, chatId);
+        return { memoryBlocks, summarizedIndex, archivedMessages: 0, excludedMessages: excludeIds.length };
+    }
+
+    const rawTextToArchive = archiveMessages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
     const blockId = `block_${Date.now()}`;
 
     // Narrative memory reads better with fuller scene context per chunk than the old
     // 500-char fragments, so archive chat memory at ~800 (still under the 1000 KB
     // default to keep some retrieval precision). Changing this needs a re-index.
     const chunks = chunkText(rawTextToArchive, 800);
-    const vectors = await vectorizeChunks(chunks, "Chat Archive");
+    report('indexing', 0, chunks.length);
+    const vectors = await vectorizeChunks(chunks, "Chat Archive", (done, total) => report('indexing', done, total));
     vectors.forEach(v => v.blockId = blockId);
 
-    const shouldSummarize = isChatArchiveSummarizationEnabled();
-    let title = customTitle || "Chat Archive";
-    let summary = '';
+    const title = customTitle || "Chat Archive";
 
     // Persist the raw chunks first so they have ids to tag (verbatim tier).
     try {
@@ -2419,38 +2781,30 @@ async function executeSummarizationInternal({ chatId, selectedMessages, newSumma
         console.error("Failed to insert summarized vectors to SQLite:", dbErr);
     }
 
-    if (shouldSummarize) {
-        try {
-            const result = await summarizeArchiveSegment(rawTextToArchive);
-            if (!customTitle && result.title) title = result.title;
-            summary = result.summary || '';
-        } catch (smErr) {
-            console.error("[Summarizer] archive summary failed (archiving continues):", smErr);
-        }
-    }
+    // The block is written now, before any AI call. Everything the user cannot
+    // recreate (the stored history and its vectors) is safe at this point, so
+    // the window can close and the recap and tags can be produced afterwards.
+    const memoryBlocks = readMemoryBlocks(db, chatId);
+    memoryBlocks.push({
+        id: blockId,
+        title,
+        summary: '',
+        type: 'summarized',
+        messages: archiveMessages,
+        autoTitle: !customTitle,
+        recapStatus: SUMMARY_PART.PENDING,
+        taggingStatus: SUMMARY_PART.PENDING
+    });
+    db.prepare('UPDATE chats SET memoryBlocks = ? WHERE id = ?').run(JSON.stringify(memoryBlocks), chatId);
+    const summarizedIndex = syncSummarizedIndex(db, chatId);
 
-    const chunkRecords = vectors.map(v => ({ id: v.id, text: v.text }));
-    try {
-        const taggedResult = await classifyAndTagSegment(chunkRecords, null, chatId);
-        const tagged = applyChunkTags(taggedResult.chunkTags, chunkRecords, chatId);
-        console.log(`[Tagger] archive segment: ${taggedResult.chunkTags.length}/${chunkRecords.length} chunk(s) tagged, ${tagged} tag row(s).`);
-    } catch (tagError) {
-        console.error("[Tagger] archive tagging failed (archiving continues):", tagError);
-    }
-
-    let memoryBlocks = [];
-    if (chat.memoryBlocks) {
-        memoryBlocks = typeof chat.memoryBlocks === 'string' ? JSON.parse(chat.memoryBlocks) : chat.memoryBlocks;
-    }
-    memoryBlocks.push({ id: blockId, title, summary, type: 'summarized', messages: selectedMessages });
-
-    db.prepare('UPDATE chats SET summarizedIndex = ?, memoryBlocks = ? WHERE id = ?').run(
-        newSummarizedIndex,
-        JSON.stringify(memoryBlocks),
-        chatId
-    );
-
-    return { memoryBlocks, summarizedIndex: newSummarizedIndex };
+    return {
+        memoryBlocks,
+        summarizedIndex,
+        blockId,
+        archivedMessages: archiveMessages.length,
+        excludedMessages: excludeIds.length
+    };
 }
 
 async function checkAndAutoSummarize(chatId, profileId, webContents) {
@@ -2459,17 +2813,20 @@ async function checkAndAutoSummarize(chatId, profileId, webContents) {
         if (!chat || chat.autoSummarize !== 1) return;
 
         const archiveThreshold = chat.archiveThreshold || 60000;
-        const summarizedIndex = chat.summarizedIndex || 0;
 
         const messages = db.prepare('SELECT * FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
-        const activeMessages = messages.slice(summarizedIndex);
+        const activeMessages = selectActiveMessages(messages, chat.memoryBlocks);
 
         let tokensUsed = 0;
         activeMessages.forEach(m => {
             tokensUsed += estimateTokens(m.content);
         });
 
-        if (tokensUsed > archiveThreshold) {
+        // Nothing to offer means nagging would be a dead end: everything left is
+        // either already archived or inside the reserved recent window.
+        const archivable = selectArchivableMessages(messages, chat.memoryBlocks);
+
+        if (tokensUsed > archiveThreshold && archivable.length > 0) {
             console.log(`[Auto-Summarize] Active tokens (${tokensUsed}) exceed threshold (${archiveThreshold}). Notifying frontend to show selection modal...`);
             webContents.send('trigger-auto-summarize', { chatId, profileId });
         }
@@ -3271,6 +3628,9 @@ module.exports = {
     resolveErrorDeferred,
     resolveOverflowDeferred,
     executeSummarizationInternal,
+    finalizeSummaryBlock,
+    markInterruptedSummaries,
+    SUMMARY_PART,
     backfillWorldIndex,
     vectorizeDocument,
     retagDocumentChunks,

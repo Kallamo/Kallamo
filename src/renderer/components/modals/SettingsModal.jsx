@@ -77,7 +77,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [chunkSize, setChunkSize] = useState(settings.advanced.chunkSize || 500);
   const [similarity, setSimilarity] = useState(settings.advanced.similarity || 0.3);
   const [topKKB, setTopKKB] = useState(settings.advanced.topKKB || 5);
-  const [topKMemory, setTopKMemory] = useState(settings.advanced.topKMemory || 5);
+  const [topKMemory, setTopKMemory] = useState(settings.advanced.topKMemory || 8);
   const [executionDevice, setExecutionDevice] = useState(settings.advanced.executionDevice || 'cpu');
   const [ragDebug, setRagDebug] = useState(settings.advanced.ragDebug || false);
   const [agenticDebug, setAgenticDebug] = useState(settings.advanced.agenticDebug || false);

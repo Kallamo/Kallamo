@@ -9,6 +9,7 @@ const ENTITY_TYPE_ICON = {
 const entityTypeIcon = (t) => ENTITY_TYPE_ICON[t] || Globe;
 import { useApp } from '../context/AppContext';
 import ImportProgressModal from './modals/ImportProgressModal';
+import { parseMarkdown } from '../utils/markdown';
 import ConfirmDialog from './ui/ConfirmDialog';
 import TextInput from './ui/TextInput';
 import Textarea from './ui/Textarea';
@@ -609,27 +610,29 @@ export default function ChatMemoryView({
     ];
   }, [groupedBlocks, summaryBlocks]);
 
-  // History-summary blocks live in chat.memoryBlocks (not knowledge_chunks), so count
-  // their tokens accurately in the main process rather than guessing in the renderer.
-  const summarySignature = summaryBlocks.map(b => `${b.id}:${(b.summary || '').length}`).join('|');
+  // A summary's weight is the history it stores, not the length of the recap the
+  // summarizer wrote for the card. Those chunks live in knowledge_chunks and are
+  // counted in the main process, next to the file blocks they sit beside.
+  const summarySignature = summaryBlocks.map(b => b.id).join('|');
   useEffect(() => {
-    const items = summaryBlocks.map(b => ({ id: b.id, text: b.summary || '' }));
-    if (items.length === 0 || !electronAPI?.countTokens) {
+    if (summaryBlocks.length === 0 || !electronAPI?.getArchiveTokenTotals || !chat?.id) {
       setSummaryTokens({});
       return;
     }
     let cancelled = false;
     (async () => {
       try {
-        const counts = await electronAPI.countTokens(items.map(i => i.text));
-        if (cancelled) return;
+        const result = await electronAPI.getArchiveTokenTotals(chat.id);
+        if (cancelled || !result?.success) return;
         const map = {};
-        items.forEach((it, idx) => { map[it.id] = counts[idx] || 0; });
+        Object.entries(result.totals || {}).forEach(([blockId, entry]) => {
+          map[blockId] = entry.tokens || 0;
+        });
         setSummaryTokens(map);
       } catch (e) { /* leave counts at 0 on failure */ }
     })();
     return () => { cancelled = true; };
-  }, [summarySignature]);
+  }, [summarySignature, chat?.id]);
 
   // Token budgeting: always-on (constant) context is the part injected into every prompt
   const tokenTotals = React.useMemo(() => {
@@ -863,6 +866,9 @@ export default function ChatMemoryView({
       // Remove deleted item from selected list if present
       setSelectedBlockIds(prev => prev.filter(id => id !== deleteTarget.id));
       setDeleteTarget(null);
+      // Deleting a summary hands its messages back to the live context, so the
+      // chat record has to be re-read for the token bar to tell the truth.
+      await refreshChats(chat.id);
       loadBlocks();
     } catch (err) {
       console.error("Error deleting memory block:", err);
@@ -972,6 +978,7 @@ export default function ChatMemoryView({
 
       setSelectedBlockIds([]);
       setIsBulkDeleteConfirmOpen(false);
+      await refreshChats(chat.id);
       loadBlocks();
     } catch (err) {
       console.error("Error doing bulk delete:", err);
@@ -2195,8 +2202,18 @@ export default function ChatMemoryView({
             <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar bg-[#000508]/40">
               <div className="p-3 bg-[#0a161d]/45 border border-gray-800/80 rounded-xl mb-4">
                 <span className="block text-[8px] font-bold text-gray-500 uppercase tracking-widest mb-1">Block Summary</span>
-                <p className="text-xs text-gray-300 font-sans leading-relaxed select-text">
-                  {selectedSummaryBlock.summary}
+                {selectedSummaryBlock.summary ? (
+                  <div
+                    className="text-xs text-gray-300 font-sans leading-relaxed select-text markdown-content"
+                    dangerouslySetInnerHTML={{ __html: parseMarkdown(selectedSummaryBlock.summary) }}
+                  />
+                ) : (
+                  <p className="text-xs text-gray-500 font-sans italic leading-relaxed select-text">
+                    No recap was written for this archive. The saved history below is complete and searchable either way.
+                  </p>
+                )}
+                <p className="caption mt-2">
+                  A short recap for you. The AI does not read it: it searches the saved history below and pulls back the passages that matter.
                 </p>
               </div>
 

@@ -62,6 +62,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resolvePendingSuggestion: (id) => ipcRenderer.invoke('resolve-pending-suggestion', { id }),
   getWdLastChannel: (workspaceId) => ipcRenderer.invoke('get-wd-last-channel', { workspaceId }),
   setWdLastChannel: (workspaceId, channel) => ipcRenderer.invoke('set-wd-last-channel', { workspaceId, channel }),
+  setChatLastTarget: (chatId, targetId) => ipcRenderer.invoke('set-chat-last-target', { chatId, targetId }),
+  rebuildChatSummary: (chatId, blockId) => ipcRenderer.invoke('rebuild-chat-summary', { chatId, blockId }),
+  finalizeSummaryBlock: (chatId, blockId) => ipcRenderer.invoke('finalize-summary-block', { chatId, blockId }),
+  onSummarizationProgress: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('summarization-progress', handler);
+    return () => ipcRenderer.removeListener('summarization-progress', handler);
+  },
   getDirectives: (workspaceId) => ipcRenderer.invoke('get-directives', { workspaceId }),
   addDirective: (workspaceId, type, text, sourceMessageId) => ipcRenderer.invoke('add-directive', { workspaceId, type, text, sourceMessageId }),
   updateDirective: (id, text) => ipcRenderer.invoke('update-directive', { id, text }),
@@ -138,8 +146,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveMessage: (message) => ipcRenderer.invoke('save-message', message),
   deleteMessage: (messageId, shouldDeleteFiles) => ipcRenderer.invoke('delete-message', messageId, shouldDeleteFiles),
   revertChatToMessage: (chatId, messageId) => ipcRenderer.invoke('revert-chat-to-message', { chatId, messageId }),
-  triggerManualSummarize: (chatId, profileId) => ipcRenderer.invoke('trigger-manual-summarize', { chatId, profileId }),
   executeSummarization: (args) => ipcRenderer.invoke('execute-summarization', args),
+  getArchiveOverview: (chatId) => ipcRenderer.invoke('get-archive-overview', { chatId }),
+  getArchiveTokenTotals: (chatId) => ipcRenderer.invoke('get-archive-token-totals', { chatId }),
+  resetChatSummaries: (chatId) => ipcRenderer.invoke('reset-chat-summaries', { chatId }),
+  setMessagesExcluded: (chatId, messageIds, excluded) => ipcRenderer.invoke('set-messages-excluded', { chatId, messageIds, excluded }),
   onTriggerAutoSummarize: (callback) => {
     const listener = (event, data) => callback(data);
     ipcRenderer.on('trigger-auto-summarize', listener);

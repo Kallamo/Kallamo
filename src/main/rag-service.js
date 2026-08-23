@@ -248,37 +248,91 @@ async function generateEmbeddingVector(text, isQuery = false) {
     }
 }
 
+// How many passages go to the embedder at once. Archiving a long history means
+// hundreds of chunks, and one call each turned a minute of work into many: the
+// local model reloads its graph per call, and an external engine pays a full HTTP
+// round trip per chunk. Kept modest so a large archive cannot spike memory.
+const EMBEDDING_BATCH_SIZE = 16;
+
+// Read the embedding configuration once instead of per chunk.
+function readEmbeddingConfig() {
+    try {
+        const rowAdvanced = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
+        const advanced = rowAdvanced ? JSON.parse(rowAdvanced.value) : {};
+        return {
+            engine: advanced.embeddingEngine || 'local',
+            apiProfileId: advanced.embeddingApiProfileId || '',
+            modelName: advanced.embeddingModelName || ''
+        };
+    } catch (e) {
+        console.error("Error reading embedding settings:", e);
+        return { engine: 'local', apiProfileId: '', modelName: '' };
+    }
+}
+
+// Embed several passages in one pass. Mean pooling honours the attention mask, so
+// a padded batch produces the same vectors a single call would. Any failure falls
+// back to embedding that batch one at a time, so batching can only ever cost time,
+// never results.
+async function generateEmbeddingVectors(texts) {
+    const config = readEmbeddingConfig();
+    if (config.engine !== 'local') {
+        const vectors = [];
+        for (const text of texts) vectors.push(await generateEmbeddingVector(text));
+        return vectors;
+    }
+
+    const prefixed = texts.map(text => `passage: ${text}`);
+    try {
+        const pipe = await getEmbeddingPipeline();
+        const output = await pipe(prefixed, { pooling: 'mean', normalize: true, padding: true, truncation: true });
+        const dims = output.dims || [];
+        const width = dims.length >= 2 ? dims[dims.length - 1] : 0;
+        const flat = Array.from(output.data);
+        if (!width || flat.length !== width * texts.length) throw new Error('Unexpected embedding batch shape');
+        return texts.map((_, index) => flat.slice(index * width, (index + 1) * width));
+    } catch (e) {
+        console.warn('[Embeddings] batch failed, falling back to one at a time:', e.message);
+        const vectors = [];
+        for (const text of texts) vectors.push(await generateEmbeddingVector(text));
+        return vectors;
+    }
+}
+
 async function vectorizeChunks(chunks, sourceFileName, progressCallback, keywords = []) {
     const vectors = [];
     const tagsString = Array.isArray(keywords) && keywords.length > 0 ? `Tags: ${keywords.join(', ')}\n` : '';
 
-    for (let i = 0; i < chunks.length; i++) {
-        const originalChunk = chunks[i];
-        const enrichedText = `Document: ${sourceFileName}\n${tagsString}Content: ${originalChunk}`;
-
-        // EXPERIMENT (boilerplate-raw): embed only the chunk content + tags, NOT the
-        // constant "Document:/Content:" scaffold. That scaffold is identical across every
-        // chunk, so it injects a shared vector component that compresses cosine spread and
-        // makes unrelated chunks look ~0.84 alike. The enrichedText is still stored/shown to
-        // the LLM; only the vector changes. Requires a re-index to take effect.
-        const embeddingInput = `${tagsString}${originalChunk}`;
-
+    // EXPERIMENT (boilerplate-raw): embed only the chunk content + tags, NOT the
+    // constant "Document:/Content:" scaffold. That scaffold is identical across every
+    // chunk, so it injects a shared vector component that compresses cosine spread and
+    // makes unrelated chunks look ~0.84 alike. The enrichedText is still stored/shown to
+    // the LLM; only the vector changes. Requires a re-index to take effect.
+    for (let start = 0; start < chunks.length; start += EMBEDDING_BATCH_SIZE) {
+        const slice = chunks.slice(start, start + EMBEDDING_BATCH_SIZE);
+        let batchVectors;
         try {
-            const vector = await generateEmbeddingVector(embeddingInput);
-            vectors.push({
-                id: `chunk_${Date.now()}_${Math.random().toString(36).substring(2, 7)}_${i}`,
-                source: sourceFileName,
-                text: enrichedText,
-                vector: vector,
-                tokenCount: countTokens(enrichedText)
-            });
+            batchVectors = await generateEmbeddingVectors(slice.map(chunk => `${tagsString}${chunk}`));
         } catch (err) {
-            console.error(`Failed to generate vector for chunk ${i} of ${sourceFileName}:`, err);
+            console.error(`Failed to generate vectors for ${sourceFileName} at chunk ${start}:`, err);
             throw err;
         }
 
+        slice.forEach((originalChunk, offset) => {
+            const index = start + offset;
+            const enrichedText = `Document: ${sourceFileName}
+${tagsString}Content: ${originalChunk}`;
+            vectors.push({
+                id: `chunk_${Date.now()}_${Math.random().toString(36).substring(2, 7)}_${index}`,
+                source: sourceFileName,
+                text: enrichedText,
+                vector: batchVectors[offset],
+                tokenCount: countTokens(enrichedText)
+            });
+        });
+
         if (progressCallback) {
-            progressCallback(i + 1, chunks.length);
+            progressCallback(Math.min(start + slice.length, chunks.length), chunks.length);
         }
     }
     return vectors;
@@ -341,6 +395,10 @@ const ALPHA_DENSE = 0.7;
 const SIMILARITY_FLOOR_MIN = 0.70;
 const SIMILARITY_FLOOR_MAX = 0.88;
 
+// How much of the normal floor a tag-boosted chunk has to clear. Kept as a ratio so
+// it follows the user's strictness setting instead of fighting it.
+const TAGGED_FLOOR_RATIO = 0.7;
+
 // Run the BM25 sparse pass against the FTS table and return a chunkId -> [0,1]
 // normalized relevance map. The FTS table is not owner-filtered, so callers fuse
 // this against an owner-scoped dense set (the dense map drives membership; a
@@ -394,6 +452,11 @@ function computeSparseNormMap(queryText) {
 // in-memory volatile-chapter searches.
 function fuseAndRank(queryVector, candidates, sparseNormMap, threshold = 0.3, k = 5, boostMap = null) {
     const cosineFloor = SIMILARITY_FLOOR_MIN + threshold * (SIMILARITY_FLOOR_MAX - SIMILARITY_FLOOR_MIN);
+    // A chunk carrying an entity the query names is explicit evidence, not a guess,
+    // so it answers to a lower floor. Without this the boost could only reorder what
+    // already survived, and the case it exists for, a character named in a few lines
+    // of a long scene, was cut before the boost was ever applied.
+    const taggedFloor = cosineFloor * TAGGED_FLOOR_RATIO;
 
     const fusedResults = [];
     for (const cand of candidates) {
@@ -403,7 +466,8 @@ function fuseAndRank(queryVector, candidates, sparseNormMap, threshold = 0.3, k 
             : 0;
         const sparseNorm = (sparseNormMap && sparseNormMap.get(cand.id)) || 0;
         // Dynamic-tag boost: a fixed bonus when the chunk carries a tag the query
-        // mentions. Added on top of fusion, never rescues a chunk below the floor.
+        // mentions. Added on top of fusion; a boosted chunk is also judged against
+        // the lower `taggedFloor` above.
         const boost = (boostMap && boostMap.get(cand.id)) || 0;
         const fusionScore = ALPHA_DENSE * cosine + (1 - ALPHA_DENSE) * sparseNorm + boost;
         fusedResults.push({
@@ -420,7 +484,7 @@ function fuseAndRank(queryVector, candidates, sparseNormMap, threshold = 0.3, k 
     }
 
     return fusedResults
-        .filter(r => r.denseScore >= cosineFloor)
+        .filter(r => r.denseScore >= (r.tagBoosted ? taggedFloor : cosineFloor))
         .sort((a, b) => b.fusionScore - a.fusionScore)
         .slice(0, k);
 }
@@ -691,7 +755,7 @@ async function searchChatMemories(queryText, chatId) {
         if (rowAdvanced) {
             const advanced = JSON.parse(rowAdvanced.value);
             threshold = parseFloat(advanced.similarity) || 0.3;
-            k = parseInt(advanced.topKMemory, 10) || 5;
+            k = parseInt(advanced.topKMemory, 10) || 8;
         }
     } catch (e) { }
 

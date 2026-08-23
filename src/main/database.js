@@ -228,6 +228,7 @@ db.exec(`
     wdContextWindow INTEGER DEFAULT 8192,
     wdLastChannel TEXT DEFAULT 'replacement',
     wdUseChatHistory INTEGER DEFAULT 1,
+    lastTargetId TEXT,
     last_modified INTEGER DEFAULT 0,
     syncToCloud INTEGER DEFAULT 0
   );
@@ -654,6 +655,10 @@ try {
     db.exec("ALTER TABLE chats ADD COLUMN wdLastChannel TEXT DEFAULT 'replacement'");
     console.log("Database Migration: Added wdLastChannel column to chats table.");
   }
+  if (!columns.includes('lastTargetId')) {
+    db.exec("ALTER TABLE chats ADD COLUMN lastTargetId TEXT");
+    console.log("Database Migration: Added lastTargetId column to chats table.");
+  }
   if (!columns.includes('wdUseChatHistory')) {
     db.exec("ALTER TABLE chats ADD COLUMN wdUseChatHistory INTEGER DEFAULT 1");
     console.log("Database Migration: Added wdUseChatHistory column to chats table.");
@@ -672,6 +677,10 @@ try {
   if (!msgColumns.includes('last_modified')) {
     db.exec("ALTER TABLE messages ADD COLUMN last_modified INTEGER DEFAULT 0");
     console.log("Database Migration: Added last_modified column to messages table.");
+  }
+  if (!msgColumns.includes('excluded')) {
+    db.exec("ALTER TABLE messages ADD COLUMN excluded INTEGER DEFAULT 0");
+    console.log("Database Migration: Added excluded column to messages table.");
   }
 
   const wpTableInfo = db.pragma("table_info(writing_profiles)");
@@ -1086,37 +1095,68 @@ try {
   console.error("Migration error patching memoryBlocks data:", e);
 }
 
-// Repair summaries created while chat history was limited to the viewport. The
-// stored message ids are authoritative; summarizedIndex must only advance over
-// a contiguous archived prefix so no unarchived history is omitted from context.
+// summarizedIndex is no longer what decides live history (see
+// features/chat/archive-coverage). It is kept in sync here so older readers and
+// exported packages still see a sane value, including chats whose summaries
+// were all deleted, which the previous repair skipped and left permanently
+// unable to archive again.
 try {
-  const chatRows = db.prepare("SELECT id, summarizedIndex, memoryBlocks FROM chats WHERE summarizedIndex > 0 AND memoryBlocks IS NOT NULL AND memoryBlocks != '' AND memoryBlocks != '[]'").all();
+  const { deriveSummarizedIndex } = require('./features/chat/archive-coverage');
+  const chatRows = db.prepare('SELECT id, summarizedIndex, memoryBlocks FROM chats').all();
   const updateSummarizedIndex = db.prepare('UPDATE chats SET summarizedIndex = ? WHERE id = ?');
 
   for (const chat of chatRows) {
     try {
-      const archivedMessageIds = new Set(
-        JSON.parse(chat.memoryBlocks)
-          .filter(block => block.type === 'summarized' && Array.isArray(block.messages))
-          .flatMap(block => block.messages.map(message => message.id).filter(Boolean))
-      );
-      const messages = db.prepare('SELECT id FROM messages WHERE chatId = ? ORDER BY createdAt ASC, id ASC').all(chat.id);
-      let repairedIndex = 0;
+      const messages = db
+        .prepare('SELECT id, excluded FROM messages WHERE chatId = ? ORDER BY createdAt ASC, id ASC')
+        .all(chat.id);
+      const repairedIndex = deriveSummarizedIndex(messages, chat.memoryBlocks);
 
-      while (repairedIndex < messages.length && archivedMessageIds.has(messages[repairedIndex].id)) {
-        repairedIndex += 1;
-      }
-
-      if (repairedIndex !== chat.summarizedIndex) {
+      if (repairedIndex !== (chat.summarizedIndex || 0)) {
         updateSummarizedIndex.run(repairedIndex, chat.id);
-        console.log(`Database Migration: Repaired summarizedIndex for chat ${chat.id}.`);
+        console.log(`Database Migration: Synced summarizedIndex for chat ${chat.id}.`);
       }
     } catch (parseErr) {
-      console.error(`Database Migration: Could not repair summarizedIndex for chat ${chat.id}.`, parseErr);
+      console.error(`Database Migration: Could not sync summarizedIndex for chat ${chat.id}.`, parseErr);
     }
   }
 } catch (e) {
-  console.error("Migration error repairing summarizedIndex values:", e);
+  console.error("Migration error syncing summarizedIndex values:", e);
+}
+
+// Deleting a summary used to leave its vectorized chunks behind, because the
+// delete matched on the block id while the chunks carry their own ids and point
+// back through memoryBlockId. Those orphans stayed searchable-adjacent forever
+// and were re-tagged by World Index backfills.
+try {
+  const { parseMemoryBlocks } = require('./features/chat/archive-coverage');
+  const knownBlockIds = new Set();
+  for (const chat of db.prepare('SELECT memoryBlocks FROM chats').all()) {
+    for (const block of parseMemoryBlocks(chat.memoryBlocks)) {
+      if (block && block.id) knownBlockIds.add(block.id);
+    }
+  }
+
+  const orphans = db
+    .prepare("SELECT id, memoryBlockId FROM knowledge_chunks WHERE ownerType = 'chat_memory' AND memoryBlockId IS NOT NULL")
+    .all()
+    .filter(chunk => !knownBlockIds.has(chunk.memoryBlockId));
+
+  if (orphans.length > 0) {
+    const deleteChunk = db.prepare('DELETE FROM knowledge_chunks WHERE id = ?');
+    const deleteFts = db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId = ?');
+    const deleteTags = db.prepare('DELETE FROM chunk_tags WHERE chunkId = ?');
+    db.transaction(() => {
+      for (const chunk of orphans) {
+        deleteChunk.run(chunk.id);
+        deleteFts.run(chunk.id);
+        deleteTags.run(chunk.id);
+      }
+    })();
+    console.log(`Database Migration: Removed ${orphans.length} orphaned memory chunk(s) from deleted summaries.`);
+  }
+} catch (e) {
+  console.error("Migration error removing orphaned memory chunks:", e);
 }
 
 // Initialize RAG model metadata stamp (used to detect model upgrades)

@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
-import { HelpCircle, Trash2, Plus, Edit, Image as ImageIcon, Check, AlertTriangle, Cpu, Workflow, Brain, PenTool, Palette, Send } from 'lucide-react';
+import { HelpCircle, Trash2, Plus, Edit, Image as ImageIcon, Check, AlertTriangle, Cpu, Workflow, Brain, PenTool, Palette, Send, RotateCcw } from 'lucide-react';
 import ProfileModal from './modals/ProfileModal';
 import WorkflowModal from './modals/WorkflowModal';
 import payloadBudgetContract from '../../shared/payload-budget.json';
+import ConfirmDialog from './ui/ConfirmDialog';
+import { selectActiveMessages, selectArchivableMessages, coverageStats } from '../features/chat/archive-coverage';
 
 const safeParseJson = (str, fallback = []) => {
   if (!str) return fallback;
@@ -49,6 +51,11 @@ export default function ConfigurationView({ onTriggerSummarize }) {
   const [wdContextWindow, setWdContextWindow] = useState(8192);
   const [wdUseChatHistory, setWdUseChatHistory] = useState(true);
   const [archiveThreshold, setArchiveThreshold] = useState(60000);
+  // { kind: 'reset' } | { kind: 'rebuild', block } | { kind: 'delete', block }
+  const [archiveDialog, setArchiveDialog] = useState(null);
+  const [finishingBlockId, setFinishingBlockId] = useState(null);
+  const [blockProgress, setBlockProgress] = useState({}); // { [blockId]: { stage, done, total } }
+  const [archiveBusy, setArchiveBusy] = useState(false);
   const [autoSummarize, setAutoSummarize] = useState(false);
   const [showContextBar, setShowContextBar] = useState(false);
   const [memoryBlocks, setMemoryBlocks] = useState([]);
@@ -177,13 +184,115 @@ export default function ConfigurationView({ onTriggerSummarize }) {
 
   const handleSummarizeNow = () => {
     if (!activeChat) return;
-    const startIndex = activeChat.summarizedIndex || 0;
-    const activeMsgs = activeMessages.slice(startIndex);
-    if (activeMsgs.length === 0) {
-      showToast("All messages are already archived!", 'info');
+    const archivable = selectArchivableMessages(archiveMessages, activeChat.memoryBlocks);
+    if (archivable.length === 0) {
+      const stats = coverageStats(archiveMessages, activeChat.memoryBlocks);
+      showToast(
+        stats.active > 0
+          ? "Only the most recent messages are left, and those stay active for continuity."
+          : "Every message is already archived or dropped.",
+        'info'
+      );
       return;
     }
     if (onTriggerSummarize) onTriggerSummarize();
+  };
+
+  // Rebuild everything: drop every summary and bring the whole conversation back,
+  // including messages an earlier delete dropped. Custom memory and uploaded files
+  // are not touched.
+  const handleResetSummaries = async () => {
+    if (!activeChat || !electronAPI?.resetChatSummaries) return;
+    setArchiveBusy(true);
+    try {
+      const result = await electronAPI.resetChatSummaries(activeChat.id);
+      if (result?.success) {
+        if (refreshChats) await refreshChats(activeChat.id);
+        const parts = [];
+        if (result.removedSummaries > 0) {
+          parts.push(`${result.removedSummaries} ${result.removedSummaries === 1 ? 'summary' : 'summaries'} removed`);
+        }
+        if (result.restoredDropped > 0) {
+          parts.push(`${result.restoredDropped} dropped ${result.restoredDropped === 1 ? 'message' : 'messages'} restored`);
+        }
+        showToast(parts.length ? `${parts.join(', ')}. That history is active again.` : "There was nothing to rebuild.", 'info');
+      } else {
+        showToast(result?.error || "Could not rebuild summaries.", 'error');
+      }
+    } catch (e) {
+      console.error("Failed to reset summaries:", e);
+      showToast("Could not rebuild summaries.", 'error');
+    } finally {
+      setArchiveBusy(false);
+      setArchiveDialog(null);
+    }
+  };
+
+  // Rebuild one summary: it goes away and its own messages return to the
+  // conversation, leaving every other summary untouched.
+  const handleRebuildSummary = async (block) => {
+    if (!activeChat || !electronAPI?.rebuildChatSummary) return;
+    setArchiveBusy(true);
+    try {
+      const result = await electronAPI.rebuildChatSummary(activeChat.id, block.id);
+      if (result?.success) {
+        if (refreshChats) await refreshChats(activeChat.id);
+        showToast(`${result.restoredMessages} ${result.restoredMessages === 1 ? 'message is' : 'messages are'} back in the conversation.`, 'info');
+      } else {
+        showToast(result?.error || "Could not rebuild this summary.", 'error');
+      }
+    } catch (e) {
+      console.error("Failed to rebuild summary:", e);
+      showToast("Could not rebuild this summary.", 'error');
+    } finally {
+      setArchiveBusy(false);
+      setArchiveDialog(null);
+    }
+  };
+
+  // Live position of the finishing pass, per summary. The pass runs after the
+  // archive window has closed, so this is the only place it can report itself.
+  useEffect(() => {
+    if (!electronAPI?.onSummarizationProgress) return;
+    return electronAPI.onSummarizationProgress((payload) => {
+      if (!payload?.blockId || payload.chatId !== activeChat?.id) return;
+      setBlockProgress(prev => ({ ...prev, [payload.blockId]: payload }));
+    });
+  }, [activeChat?.id]);
+
+  // Retry the finishing pass for a summary whose recap or tags did not complete,
+  // including one interrupted by closing the app. The stored history is untouched:
+  // this only fills in what is missing.
+  const handleFinishSummary = async (block) => {
+    if (!activeChat || !electronAPI?.finalizeSummaryBlock) return;
+    setFinishingBlockId(block.id);
+    try {
+      const result = await electronAPI.finalizeSummaryBlock(activeChat.id, block.id);
+      if (refreshChats) await refreshChats(activeChat.id);
+      if (result?.taggingError) showToast(result.taggingError, 'error');
+      else if (result?.success) showToast('Summary finished.', 'info');
+      else showToast(result?.error || 'Could not finish this summary.', 'error');
+    } catch (e) {
+      console.error('Failed to finish summary block:', e);
+      showToast('Could not finish this summary.', 'error');
+    } finally {
+      setFinishingBlockId(null);
+      setBlockProgress(prev => {
+        const next = { ...prev };
+        delete next[block.id];
+        return next;
+      });
+    }
+  };
+
+  const handleDeleteSummary = async (block) => {
+    setArchiveBusy(true);
+    try {
+      await deleteMemoryBlock(block.id);
+    } finally {
+      setArchiveBusy(false);
+      setArchiveDialog(null);
+    }
   };
 
   const activeProfilesList = safeParseJson(activeChat.activeProfiles);
@@ -257,10 +366,10 @@ export default function ConfigurationView({ onTriggerSummarize }) {
 
   let tokensUsed = 0;
   const estimateTokens = (str) => Math.ceil((str || '').length / 4);
-  const startIndex = activeChat.summarizedIndex || 0;
-  const activeMsgs = archiveMessages.slice(startIndex);
+  const activeMsgs = selectActiveMessages(archiveMessages, activeChat.memoryBlocks);
   activeMsgs.forEach(m => { tokensUsed += estimateTokens(m.content); });
   const activeMessageCount = activeMsgs.length;
+  const archiveStats = coverageStats(archiveMessages, activeChat.memoryBlocks);
   const percentage = Math.min((tokensUsed / archiveThreshold) * 100, 100);
 
   const bgImage = activeChat.backgroundImage || '';
@@ -549,6 +658,30 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                 Summarize Now
               </button>
 
+              <div className="flex items-center justify-between mt-2.5 px-0.5">
+                <span className="caption">
+                  {archiveStats.archived} archived
+                  <span className="text-gray-700 mx-1.5">|</span>
+                  {archiveStats.active} active
+                  {archiveStats.excluded > 0 && (
+                    <>
+                      <span className="text-gray-700 mx-1.5">|</span>
+                      {archiveStats.excluded} dropped
+                    </>
+                  )}
+                </span>
+                {(archiveStats.archived > 0 || archiveStats.excluded > 0) && (
+                  <button
+                    onClick={() => setArchiveDialog({ kind: 'reset' })}
+                    title="Bring the whole conversation back and start the archive again"
+                    className="flex items-center space-x-1 text-[0.625rem] font-semibold uppercase tracking-wider text-gray-500 hover:text-gray-300 transition-colors cursor-pointer"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>Rebuild everything</span>
+                  </button>
+                )}
+              </div>
+
               {memoryBlocks.filter(b => b.type !== 'manual').length > 0 && (
                 <div className="space-y-2 mt-4 pt-4 border-t border-gray-800/80">
                   <span className="block text-[9px] font-bold text-gray-500 uppercase tracking-wider mb-1.5">Summarization Blocks</span>
@@ -582,14 +715,33 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                             </div>
                           </div>
                         )}
-                        <p className="caption line-clamp-2">{block.summary}</p>
-                        <button
-                          onClick={() => deleteMemoryBlock(block.id)}
-                          className="absolute top-2 right-2 p-1 text-gray-600 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
-                          title="Delete Memory"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
+                        <SummaryBlockState
+                          block={block}
+                          progress={blockProgress[block.id]}
+                          busy={finishingBlockId === block.id}
+                          onFinish={() => handleFinishSummary(block)}
+                        />
+                        <div className="absolute top-2 right-2 flex items-center space-x-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                          {block.type === 'summarized' && (
+                            <button
+                              onClick={() => setArchiveDialog({ kind: 'rebuild', block })}
+                              className="p-1 text-gray-600 hover:text-accent cursor-pointer"
+                              title="Rebuild this summary"
+                            >
+                              <RotateCcw className="w-3 h-3" />
+                            </button>
+                          )}
+                          <button
+                            onClick={() => {
+                              if (block.type === 'summarized') setArchiveDialog({ kind: 'delete', block });
+                              else deleteMemoryBlock(block.id);
+                            }}
+                            className="p-1 text-gray-600 hover:text-red-500 cursor-pointer"
+                            title="Delete Memory"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -774,6 +926,134 @@ export default function ConfigurationView({ onTriggerSummarize }) {
             await handleSaveChat(updated);
           }}
         />
+      )}
+      {archiveDialog?.kind === 'reset' && (
+        <ConfirmDialog
+          tone="warning"
+          icon={RotateCcw}
+          title="Rebuild the whole archive?"
+          message={
+            <>
+              Every summary in this workspace is deleted and the entire conversation returns to active
+              context, starting from the very first message. Messages dropped by deleting a summary come
+              back too.
+              <br /><br />
+              Nothing is lost, but your context jumps back to its full size and you will have to archive
+              again from scratch. Custom memory and uploaded files are not affected.
+            </>
+          }
+          actions={[
+            { label: 'Cancel', variant: 'ghost', onClick: () => setArchiveDialog(null) },
+            { label: 'Rebuild everything', variant: 'primary', loading: archiveBusy, onClick: handleResetSummaries }
+          ]}
+          onClose={() => setArchiveDialog(null)}
+        />
+      )}
+
+      {archiveDialog?.kind === 'rebuild' && (
+        <ConfirmDialog
+          tone="question"
+          icon={RotateCcw}
+          title={`Rebuild "${archiveDialog.block.title}"?`}
+          message="This summary is deleted and the messages it covered return to the conversation, ready to be archived differently. Your other summaries stay exactly as they are."
+          actions={[
+            { label: 'Cancel', variant: 'ghost', onClick: () => setArchiveDialog(null) },
+            { label: 'Rebuild this summary', variant: 'primary', loading: archiveBusy, onClick: () => handleRebuildSummary(archiveDialog.block) }
+          ]}
+          onClose={() => setArchiveDialog(null)}
+        />
+      )}
+
+      {archiveDialog?.kind === 'delete' && (
+        <ConfirmDialog
+          tone="danger"
+          title={`Delete "${archiveDialog.block.title}"?`}
+          message={
+            <>
+              The recap and the stored history both go, and every message this summary covered is
+              dropped: it stays in your log but never reaches the AI again.
+              <br /><br />
+              Rebuild everything is the only way to bring those messages back. To keep them in the
+              conversation instead, use Rebuild on this summary.
+            </>
+          }
+          actions={[
+            { label: 'Cancel', variant: 'ghost', onClick: () => setArchiveDialog(null) },
+            { label: 'Delete and drop messages', variant: 'danger', loading: archiveBusy, onClick: () => handleDeleteSummary(archiveDialog.block) }
+          ]}
+          onClose={() => setArchiveDialog(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// A summary's recap and its entity tags are separate work over the same stored
+// history, so they report separately: a tagging failure never hides a recap that
+// was written, and Finish only redoes the part that is missing.
+function SummaryBlockState({ block, progress, busy, onFinish }) {
+  if (block.type !== 'summarized') {
+    return (
+      <p className="caption line-clamp-2">
+        {block.summary || <span className="italic text-gray-600">No recap was written for this archive.</span>}
+      </p>
+    );
+  }
+
+  const recapPending = busy || block.recapStatus === 'pending';
+  const recapFailed = block.recapStatus === 'failed';
+  const taggingPending = block.taggingStatus === 'pending';
+  const taggingFailed = block.taggingStatus === 'failed';
+  const needsFinish = !busy && (recapFailed || taggingFailed);
+
+  const tagging = progress?.stage === 'tagging' && progress.total
+    ? `Tagging ${progress.done}/${progress.total}`
+    : progress?.stage === 'summarizing'
+      ? 'Writing recap'
+      : taggingPending ? 'Tagging entities' : null;
+
+  return (
+    <div className="space-y-1.5">
+      <p className="caption line-clamp-2">
+        {block.summary
+          ? block.summary
+          : recapPending
+            ? <span className="italic text-gray-600">Writing recap...</span>
+            : recapFailed
+              ? <span className="italic text-amber-400">{block.recapError || 'The recap could not be written.'}</span>
+              : <span className="italic text-gray-600">No recap was written for this archive.</span>}
+      </p>
+
+      {(taggingPending || taggingFailed) && (
+        <div className="flex items-center justify-between gap-2" title={taggingFailed ? (block.taggingError || '') : ''}>
+          <span className={`flex items-center gap-1.5 caption ${taggingFailed ? 'text-amber-400' : ''}`}>
+            <span
+              className={`w-1.5 h-1.5 rounded-full shrink-0 ${taggingFailed ? 'bg-amber-400' : 'bg-accent animate-pulse'}`}
+            />
+            {taggingFailed
+              ? (block.tagChunksPending > 0 && block.tagChunkTotal
+                  ? `Tags unfinished: ${block.tagChunksPending} of ${block.tagChunkTotal} passages left`
+                  : 'Tags unfinished')
+              : (tagging || 'Tagging entities')}
+          </span>
+          {needsFinish && (
+            <button
+              onClick={onFinish}
+              className="text-[0.625rem] font-bold uppercase tracking-wider text-accent hover:brightness-110 cursor-pointer shrink-0"
+            >
+              Finish
+            </button>
+          )}
+        </div>
+      )}
+
+      {needsFinish && !taggingFailed && !taggingPending && (
+        <button
+          onClick={onFinish}
+          className="text-[0.625rem] font-bold uppercase tracking-wider text-accent hover:brightness-110 cursor-pointer"
+        >
+          Finish
+        </button>
       )}
     </div>
   );

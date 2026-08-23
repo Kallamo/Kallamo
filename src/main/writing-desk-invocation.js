@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const db = require('./database');
+const { selectActiveMessages } = require('./features/chat/archive-coverage');
 const { sendApiRequest } = require('./features/llm/llm.service');
 const {
     countTokens,
@@ -177,12 +178,13 @@ async function gatherRag({ profileId, workspaceId, currentDocId, retrievalQuery,
 
 function loadActiveChatWindow(workspaceId) {
     try {
-        const chat = db.prepare('SELECT summarizedIndex FROM chats WHERE id = ?').get(workspaceId);
-        const summarizedIndex = chat ? (chat.summarizedIndex || 0) : 0;
+        const chat = db.prepare('SELECT memoryBlocks FROM chats WHERE id = ?').get(workspaceId);
         const messages = db.prepare(
-            'SELECT role, content FROM messages WHERE chatId = ? ORDER BY createdAt'
+            'SELECT id, role, content, excluded FROM messages WHERE chatId = ? ORDER BY createdAt'
         ).all(workspaceId);
-        return messages.slice(summarizedIndex);
+        // Same live-history rule the chat itself uses, so the desk never receives
+        // a passage the workspace has already archived or dropped.
+        return selectActiveMessages(messages, chat && chat.memoryBlocks).map(m => ({ role: m.role, content: m.content }));
     } catch (e) {
         return [];
     }

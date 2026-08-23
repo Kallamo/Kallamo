@@ -51,6 +51,44 @@ protocol.registerSchemesAsPrivileged([
 require('./main/database');
 require('./main/ipc-handlers');
 
+// Window size and position, remembered between launches. The app used to maximize
+// on every start regardless of how it was left, which is wrong on a large monitor.
+// Kept as a small JSON file rather than in the database: it is read before the
+// window exists and a corrupt or missing file must never block startup.
+const WINDOW_STATE_FILE = () => path.join(app.getPath('userData'), 'window-state.json');
+
+function readWindowState() {
+  try {
+    const raw = fs.readFileSync(WINDOW_STATE_FILE(), 'utf-8');
+    const state = JSON.parse(raw);
+    if (!state || typeof state !== 'object') return null;
+    const width = Number(state.width);
+    const height = Number(state.height);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width < 600 || height < 400) return null;
+    const x = Number.isFinite(Number(state.x)) ? Number(state.x) : undefined;
+    const y = Number.isFinite(Number(state.y)) ? Number(state.y) : undefined;
+    return { width, height, x, y, isMaximized: Boolean(state.isMaximized) };
+  } catch (e) {
+    return null;
+  }
+}
+
+function saveWindowState(win) {
+  try {
+    if (!win || win.isDestroyed()) return;
+    // getNormalBounds reports the restored size even while maximized, so a maximized
+    // window still remembers something sensible to un-maximize back into.
+    const bounds = win.getNormalBounds();
+    fs.writeFileSync(
+      WINDOW_STATE_FILE(),
+      JSON.stringify({ ...bounds, isMaximized: win.isMaximized() }),
+      'utf-8'
+    );
+  } catch (e) {
+    log.warn('Could not save window state:', e);
+  }
+}
+
 function isViteDevRunning() {
   return new Promise((resolve) => {
     const req = http.get('http://localhost:5173', () => {
@@ -62,9 +100,12 @@ function isViteDevRunning() {
 }
 
 function createWindow () {
+  const savedState = readWindowState();
   const mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    width: savedState?.width ?? 1200,
+    height: savedState?.height ?? 800,
+    x: savedState?.x,
+    y: savedState?.y,
     frame: false,
     backgroundColor: '#011419',
     icon: path.join(__dirname, 'assets/icon.png'),
@@ -77,7 +118,22 @@ function createWindow () {
     }
   });
 
-  mainWindow.maximize();
+  // First launch has no saved state, so the old maximized default still applies.
+  if (!savedState || savedState.isMaximized) mainWindow.maximize();
+
+  let saveStateTimer = null;
+  const scheduleSaveWindowState = () => {
+    clearTimeout(saveStateTimer);
+    saveStateTimer = setTimeout(() => saveWindowState(mainWindow), 400);
+  };
+  mainWindow.on('resize', scheduleSaveWindowState);
+  mainWindow.on('move', scheduleSaveWindowState);
+  mainWindow.on('maximize', scheduleSaveWindowState);
+  mainWindow.on('unmaximize', scheduleSaveWindowState);
+  mainWindow.on('close', () => {
+    clearTimeout(saveStateTimer);
+    saveWindowState(mainWindow);
+  });
 
   // Intercept and open external web links in the default browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -125,6 +181,15 @@ function createWindow () {
 }
 
 app.whenReady().then(() => {
+  // A summary left mid-pass by a closed app is not in progress any more. Marking
+  // those on startup keeps the memory view honest and offers the finishing pass
+  // again, instead of showing work that nothing is driving.
+  try {
+    require('./main/workflow-runner').markInterruptedSummaries();
+  } catch (e) {
+    log.warn('Could not mark interrupted summaries:', e);
+  }
+
   // Handle custom file protocol - reads files directly from filesystem
   protocol.handle('app-file', (request) => {
     try {

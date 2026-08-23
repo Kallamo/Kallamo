@@ -1,8 +1,9 @@
-import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useApp } from '../context/AppContext';
-import { ArrowDown, ArrowLeft, Sliders, Paperclip, Cpu, Workflow, X, MoreVertical, Copy, Edit, RotateCw, Play, ChevronDown, Plus, ChevronLeft, ChevronRight, Brain, Folder, MessageSquare, Trash2, RotateCcw, PenTool, Globe, AlertTriangle } from 'lucide-react';
+import { ArrowDown, ArrowLeft, Sliders, Paperclip, Cpu, Workflow, X, MoreVertical, Copy, Edit, RotateCw, Play, ChevronDown, Plus, ChevronLeft, ChevronRight, Brain, Folder, MessageSquare, Trash2, RotateCcw, PenTool, Globe, AlertTriangle, EyeOff, Eye } from 'lucide-react';
 import ConfigurationView from './ConfigurationView';
 import SummarizeModal from './modals/SummarizeModal';
+import { selectActiveMessages, selectArchivableMessages } from '../features/chat/archive-coverage';
 import ChatFilesView from './ChatFilesView';
 import ChatMemoryView from './ChatMemoryView';
 import WritingDeskView from './WritingDeskView';
@@ -13,6 +14,7 @@ import Popover from './ui/Popover';
 import { parseMarkdown } from '../utils/markdown';
 import ChatInput from '../features/chat/components/ChatInput';
 import MessageMarkdown from '../features/chat/components/MessageMarkdown';
+import MessageEditor from '../features/chat/components/MessageEditor';
 import TypingText from '../features/chat/components/TypingText';
 import { parseMessageContent } from '../features/chat/message-content';
 import { prepareGenerationSubmission, resolveActiveGenerationTarget } from '../features/chat/generation-target';
@@ -80,7 +82,6 @@ export default function ChatWorkspaceView() {
   const [expandedStandardRag, setExpandedStandardRag] = useState({});
 
   const [editingMessageId, setEditingMessageId] = useState(null);
-  const [editingMessageText, setEditingMessageText] = useState('');
 
   const [copiedId, setCopiedId] = useState(null);
   const [copiedRagId, setCopiedRagId] = useState(null);
@@ -97,8 +98,29 @@ export default function ChatWorkspaceView() {
   const dragCounter = useRef(0);
 
   const [summarizeModalOpen, setSummarizeModalOpen] = useState(false);
+  const [summarizeProgress, setSummarizeProgress] = useState(null); // { stage, done, total }
+  const [finishingBlockId, setFinishingBlockId] = useState(null);
+
+  // The default name counts summaries, not memory blocks: custom memory used to
+  // push the count up, so a workspace's first summary could be born as
+  // "Summarization 2". Numbering from the highest one already used also keeps a
+  // deleted summary from handing its number to the next one.
+  const nextSummaryNumber = useMemo(() => {
+    const blocks = safeParseJson(activeChat?.memoryBlocks, []);
+    const used = (Array.isArray(blocks) ? blocks : [])
+      .filter(block => block && block.type === 'summarized')
+      .map(block => {
+        const match = /^\s*Summarization\s+(\d+)\s*$/i.exec(String(block.title || ''));
+        return match ? Number(match[1]) : 0;
+      });
+    const summaryCount = (Array.isArray(blocks) ? blocks : []).filter(block => block && block.type === 'summarized').length;
+    return Math.max(summaryCount, ...used, 0) + 1;
+  }, [activeChat?.memoryBlocks]);
   const [isVectorizing, setIsVectorizing] = useState(false);
   const [archiveMessages, setArchiveMessages] = useState([]);
+  // Bumped whenever archiving changes message state (covered or dropped) without
+  // adding or removing messages, so the full history is read again.
+  const [historyRevision, setHistoryRevision] = useState(0);
   const dismissedAutoSummarizeChatsRef = useRef(new Set());
 
   const activeSubView = activeWorkspaceView;
@@ -276,7 +298,7 @@ export default function ChatWorkspaceView() {
     return () => {
       cancelled = true;
     };
-  }, [activeChat?.id, activeMessages, electronAPI]);
+  }, [activeChat?.id, activeMessages, historyRevision, electronAPI]);
 
   // Prevent default window drag/drop behavior to stop Electron from navigating/opening files
   useEffect(() => {
@@ -316,27 +338,28 @@ export default function ChatWorkspaceView() {
       && !dismissedAutoSummarizeChatsRef.current.has(activeChat.id)
     ) {
       const archiveThreshold = activeChat.archiveThreshold || 60000;
-      const startIndex = activeChat.summarizedIndex || 0;
-      const activeMsgs = archiveMessages.slice(startIndex);
+      const activeMsgs = selectActiveMessages(archiveMessages, activeChat.memoryBlocks);
 
       let tokensUsed = 0;
       const estimateTokens = (str) => Math.ceil((str || '').length / 4);
       activeMsgs.forEach(m => { tokensUsed += estimateTokens(m.content); });
 
-      // Trigger when active tokens exceed the threshold and there are enough messages to archive
-      if (tokensUsed >= archiveThreshold && activeMsgs.length > 2) {
+      // Only nag when the window would actually have something to offer.
+      const archivable = selectArchivableMessages(archiveMessages, activeChat.memoryBlocks);
+      if (tokensUsed >= archiveThreshold && archivable.length > 0) {
         setSummarizeModalOpen(true);
       }
     }
   }, [archiveMessages, activeChat, summarizeModalOpen]);
 
-  const handleExecuteSummarization = async ({ selectedMessages, newSummarizedIndex, customTitle }) => {
-    if (selectedMessages.length === 0) {
-      showToast("Please select at least one message to archive.", 'info');
+  const handleExecuteSummarization = async ({ messageIds, excludedMessageIds, customTitle }) => {
+    if (messageIds.length === 0 && excludedMessageIds.length === 0) {
+      showToast("Pick at least one message to archive or drop.", 'info');
       return;
     }
 
     setIsVectorizing(true);
+    setSummarizeProgress(null);
     try {
       let activeProfileId = '';
       try {
@@ -346,18 +369,21 @@ export default function ChatWorkspaceView() {
 
       const result = await electronAPI.executeSummarization({
         chatId: activeChat.id,
-        selectedMessages,
-        newSummarizedIndex,
+        messageIds,
+        excludedMessageIds,
         customTitle,
         profileId: activeProfileId
       });
 
       if (result && result.success) {
-        // Backend already saved to DB – just refresh the frontend state
-        // to pick up the complete memoryBlocks (with messages and type).
+        // The history is stored at this point, so the window closes here. The recap
+        // and the entity tags are produced afterwards, against the block that is
+        // already saved, and the memory view shows that block finishing.
         await refreshChats(activeChat.id);
+        setHistoryRevision(rev => rev + 1);
         dismissedAutoSummarizeChatsRef.current.delete(activeChat.id);
         setSummarizeModalOpen(false);
+        if (result.blockId) finalizeSummaryBlock(activeChat.id, result.blockId);
       } else {
         showToast(result?.message || "Failed to execute summarization.", 'error');
       }
@@ -366,6 +392,36 @@ export default function ChatWorkspaceView() {
       showToast("An error occurred during summarization.", 'error');
     } finally {
       setIsVectorizing(false);
+      setSummarizeProgress(null);
+    }
+  };
+
+  // The finishing pass. Kept out of the archive flow's await chain on purpose:
+  // nothing here can lose data, and the user should not be waiting on it. The
+  // same call is what retries a summary that failed or was interrupted.
+  const finalizeSummaryBlock = async (chatId, blockId) => {
+    if (!electronAPI?.finalizeSummaryBlock) return;
+    setFinishingBlockId(blockId);
+    try {
+      const result = await electronAPI.finalizeSummaryBlock(chatId, blockId);
+      await refreshChats(chatId);
+      // Archiving succeeds even when tagging fails, and an untagged archive is much
+      // harder to recall from. Say so instead of leaving it to the logs.
+      // The recap and the tags fail independently, and neither costs the archive
+      // itself. Context & Memory shows which part is missing and offers Finish, so
+      // this only needs to point there once rather than repeat the raw error.
+      if (result?.taggingStatus === 'failed' || result?.recapStatus === 'failed') {
+        const missing = result.taggingStatus === 'failed' && result.recapStatus === 'failed'
+          ? 'its recap and entity tags'
+          : result.recapStatus === 'failed' ? 'its recap' : 'its entity tags';
+        showToast(`History archived. Kallamo could not finish ${missing}: open Context & Memory to run it again.`, 'error');
+      }
+    } catch (err) {
+      console.error("Finalize summary error:", err);
+      showToast("The archive was saved, but its recap and tags could not be finished.", 'error');
+    } finally {
+      setFinishingBlockId(null);
+      setSummarizeProgress(null);
     }
   };
 
@@ -432,7 +488,19 @@ export default function ChatWorkspaceView() {
     }
   };
 
-  // Set default profile when activeChat loads, ensuring the target exists in current profiles/workflows
+  // Archiving reports which stage it is in, so a long run can say so instead of
+  // looking frozen.
+  useEffect(() => {
+    if (!electronAPI?.onSummarizationProgress) return;
+    return electronAPI.onSummarizationProgress((payload) => {
+      if (!payload || payload.chatId !== activeChat?.id) return;
+      setSummarizeProgress(payload);
+    });
+  }, [activeChat?.id]);
+
+  // Restore the last target this chat generated with, falling back to the first
+  // active profile. Reopening a chat used to always land on that first entry, which
+  // is rarely the one you were actually using.
   useEffect(() => {
     if (activeChat) {
       const activeProfs = safeParseJson(activeChat.activeProfiles).filter(id => id && id !== 'undefined');
@@ -441,7 +509,14 @@ export default function ChatWorkspaceView() {
       const validActiveProf = activeProfs.find(id => writingProfiles.some(p => p.id === id));
       const validActiveWf = activeWfs.find(id => workflows.some(w => w.id === id));
 
-      if (validActiveProf) {
+      const lastTargetId = activeChat.lastTargetId;
+      const lastStillValid = lastTargetId &&
+        ((activeProfs.includes(lastTargetId) && writingProfiles.some(p => p.id === lastTargetId)) ||
+         (activeWfs.includes(lastTargetId) && workflows.some(w => w.id === lastTargetId)));
+
+      if (lastStillValid) {
+        setSelectedTargetId(lastTargetId);
+      } else if (validActiveProf) {
         setSelectedTargetId(validActiveProf);
       } else if (validActiveWf) {
         setSelectedTargetId(validActiveWf);
@@ -531,6 +606,28 @@ export default function ChatWorkspaceView() {
     setPendingFiles(prev => prev.filter(f => f.name !== name));
   };
 
+  // Dropping a message keeps it in the log but takes it out of every future
+  // payload. Archived messages are already out of context, so they are not
+  // offered here.
+  const handleToggleExcluded = async (messageId, excluded) => {
+    if (!activeChat || !electronAPI?.setMessagesExcluded) return;
+    try {
+      const result = await electronAPI.setMessagesExcluded(activeChat.id, [messageId], excluded);
+      if (!result?.success) {
+        showToast(result?.error || "Could not update this message.", 'error');
+        return;
+      }
+      setActiveMessages(previous => previous.map(item => (
+        item.id === messageId ? { ...item, excluded: excluded ? 1 : 0 } : item
+      )));
+      setHistoryRevision(rev => rev + 1);
+      await refreshChats(activeChat.id);
+    } catch (e) {
+      console.error("Failed to toggle message exclusion:", e);
+      showToast("Could not update this message.", 'error');
+    }
+  };
+
   const handleRevertChat = async (messageId) => {
     try {
       await electronAPI.revertChatToMessage(activeChat.id, messageId);
@@ -582,10 +679,15 @@ export default function ChatWorkspaceView() {
 
   // Active context usage bar (optional, shown at the top of the chat)
   const ctxThreshold = activeChat.archiveThreshold || 60000;
-  const ctxStartIndex = activeChat.summarizedIndex || 0;
   let ctxTokens = 0;
-  archiveMessages.slice(ctxStartIndex).forEach(m => { ctxTokens += Math.ceil((m.content || '').length / 4); });
+  selectActiveMessages(archiveMessages, activeChat.memoryBlocks)
+    .forEach(m => { ctxTokens += Math.ceil((m.content || '').length / 4); });
   const ctxPercentage = Math.min((ctxTokens / ctxThreshold) * 100, 100);
+  // Past the model's payload budget the oldest live messages stop being sent at
+  // all. Unarchived, they would be lost from context with nothing to retrieve
+  // them from, so the header has to say it out loud.
+  const ctxPayloadLimit = activeChat.maxContext || 128000;
+  const ctxOverPayload = ctxTokens > ctxPayloadLimit;
 
   const generatingBubbleStyle = isDocumentMode ? {
     backgroundColor: `rgba(10, 22, 29, ${(activeChat.aiBubbleOpacity ?? 0) / 100})`,
@@ -718,7 +820,20 @@ export default function ChatWorkspaceView() {
             </button>
           </div>
 
-          <div className="flex-1 flex justify-end ml-4">
+          <div className="flex-1 flex justify-end items-center gap-1 ml-4">
+            {/* Past the payload budget the oldest live messages stop being sent at all.
+                It stays a marker rather than a banner: the state persists for as long as
+                the history overflows, and a permanent band would only be noise. */}
+            {activeSubView === 'chat' && ctxOverPayload && (
+              <button
+                onClick={() => setSummarizeModalOpen(true)}
+                data-tooltip="Active history exceeds the payload budget. The oldest messages are being cut. Archive them."
+                aria-label="Active history exceeds the payload budget"
+                className="p-1.5 rounded-md text-red-400 hover:text-red-300 hover:bg-red-950/40 transition-colors cursor-pointer shrink-0"
+              >
+                <AlertTriangle className="w-4 h-4" />
+              </button>
+            )}
             <button
               onClick={() => setActiveSubView('configuration')}
               className={`p-1.5 rounded-md transition-colors cursor-pointer shrink-0 ${activeSubView === 'configuration'
@@ -741,6 +856,7 @@ export default function ChatWorkspaceView() {
             />
           </div>
         )}
+
 
         {activeSubView === 'chat' ? (
           <>
@@ -823,11 +939,19 @@ export default function ChatWorkspaceView() {
                   WebkitBackdropFilter: 'blur(12px)'
                 };
 
+                const isDropped = msg.excluded === 1;
+
                 return (
                   <div
                     key={msg.id}
-                    className={`flex flex-col ${isUser && !isDocumentMode ? 'items-end' : 'items-start'} w-full`}
+                    className={`flex flex-col ${isUser && !isDocumentMode ? 'items-end' : 'items-start'} w-full ${isDropped ? 'opacity-45' : ''}`}
                   >
+                    {isDropped && (
+                      <span className="flex items-center space-x-1 text-[0.5625rem] font-bold uppercase tracking-wider text-gray-500 mb-1 select-none">
+                        <EyeOff className="w-2.5 h-2.5" />
+                        <span>Dropped from context</span>
+                      </span>
+                    )}
                     <div className={`flex w-full ${isUser && !isDocumentMode ? 'justify-end' : 'justify-start'}`}>
                       {isUser ? (
                         <div className={`flex flex-col ${isUser && !isDocumentMode ? 'items-end' : 'items-start'} ${isDocumentMode || editingMessageId === msg.id ? 'w-full' : 'max-w-[80%]'}`}>
@@ -880,36 +1004,21 @@ export default function ChatWorkspaceView() {
                                 }`}
                             >
                               {editingMessageId === msg.id ? (
-                                <div className="flex flex-col gap-3 text-left w-full">
-                                  <textarea
-                                    value={editingMessageText}
-                                    onChange={(e) => setEditingMessageText(e.target.value)}
-                                    autoFocus
-                                    className={`bg-[#051116] border border-gray-700/70 rounded-xl px-3.5 py-3 ${sizeClass} leading-relaxed text-white placeholder-gray-600 focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/40 w-full min-h-[7rem] resize-none shadow-inner`}
-                                  />
-                                  <div className="flex justify-end items-center gap-2 select-none">
-                                    <button
-                                      onClick={() => setEditingMessageId(null)}
-                                      className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-gray-400 hover:text-white transition-colors"
-                                    >
-                                      Cancel
-                                    </button>
-                                    {editingMessageText !== (isAutoGenerated ? '' : msg.content) && (
-                                      <button
-                                        onClick={async () => {
-                                          const targetId = getGenerationTargetId();
-                                          if (!targetId) return;
-                                          setEditingMessageId(null);
-                                          setEditError(null);
-                                          await handleEditUserMessage(msg.id, editingMessageText, targetId);
-                                        }}
-                                        className="px-4 py-1.5 text-[10px] font-bold uppercase tracking-wider bg-accent text-[#011419] rounded-lg shadow-sm hover:brightness-110 transition-all active:scale-95"
-                                      >
-                                        Save & Regenerate
-                                      </button>
-                                    )}
-                                  </div>
-                                </div>
+                                <MessageEditor
+                                  initialValue={isAutoGenerated ? '' : msg.content}
+                                  sizeClass={sizeClass}
+                                  minHeightClass="min-h-[7rem]"
+                                  saveLabel="Save & Regenerate"
+                                  requireChange
+                                  onCancel={() => setEditingMessageId(null)}
+                                  onSave={async (text) => {
+                                    const targetId = getGenerationTargetId();
+                                    if (!targetId) return;
+                                    setEditingMessageId(null);
+                                    setEditError(null);
+                                    await handleEditUserMessage(msg.id, text, targetId);
+                                  }}
+                                />
                               ) : (
                                 <MessageMarkdown content={msg.content} className="select-text text-left markdown-content leading-relaxed" />
                               )}
@@ -936,7 +1045,6 @@ export default function ChatWorkspaceView() {
                                   <button
                                     onClick={() => {
                                       setEditingMessageId(msg.id);
-                                      setEditingMessageText(isAutoGenerated ? '' : msg.content);
                                     }}
                                     className="flex items-center space-x-1 text-gray-300 hover:text-accent transition-colors cursor-pointer"
                                   >
@@ -968,6 +1076,19 @@ export default function ChatWorkspaceView() {
                                     >
                                       <Trash2 className="w-3.5 h-3.5 text-inherit" />
                                       <span>Delete Message</span>
+                                    </button>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setOpenMenuId(null);
+                                        handleToggleExcluded(msg.id, msg.excluded !== 1);
+                                      }}
+                                      className="w-full text-left px-3 py-1.5 text-gray-300 hover:bg-white/5 hover:text-accent transition-colors flex items-center space-x-1.5 cursor-pointer"
+                                    >
+                                      {msg.excluded === 1
+                                        ? <Eye className="w-3.5 h-3.5 text-inherit" />
+                                        : <EyeOff className="w-3.5 h-3.5 text-inherit" />}
+                                      <span>{msg.excluded === 1 ? 'Restore to Context' : 'Drop from Context'}</span>
                                     </button>
                                     <button
                                       onClick={(e) => {
@@ -1097,33 +1218,19 @@ export default function ChatWorkspaceView() {
                                   }`}
                               >
                                 {editingMessageId === msg.id ? (
-                                  <div className="flex flex-col gap-3 text-left w-full">
-                                    <textarea
-                                      value={editingMessageText}
-                                      onChange={(e) => setEditingMessageText(e.target.value)}
-                                      autoFocus
-                                      className={`bg-[#051116] border border-gray-700/70 rounded-xl px-3.5 py-3 ${sizeClass} leading-relaxed text-white placeholder-gray-600 focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/40 w-full min-h-[10rem] resize-none shadow-inner`}
-                                    />
-                                    <div className="flex justify-end items-center gap-2 select-none">
-                                      <button
-                                        onClick={() => setEditingMessageId(null)}
-                                        className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-gray-400 hover:text-white transition-colors"
-                                      >
-                                        Cancel
-                                      </button>
-                                      <button
-                                        onClick={async () => {
-                                          setEditingMessageId(null);
-                                          const updatedMsg = { ...msg, content: editingMessageText };
-                                          await electronAPI.saveMessage(updatedMsg);
-                                          setActiveMessages(prev => prev.map(m => m.id === msg.id ? updatedMsg : m));
-                                        }}
-                                        className="px-4 py-1.5 text-[10px] font-bold uppercase tracking-wider bg-accent text-[#011419] rounded-lg shadow-sm hover:brightness-110 transition-all active:scale-95"
-                                      >
-                                        Save
-                                      </button>
-                                    </div>
-                                  </div>
+                                  <MessageEditor
+                                    initialValue={msg.content}
+                                    sizeClass={sizeClass}
+                                    minHeightClass="min-h-[10rem]"
+                                    saveLabel="Save"
+                                    onCancel={() => setEditingMessageId(null)}
+                                    onSave={async (text) => {
+                                      setEditingMessageId(null);
+                                      const updatedMsg = { ...msg, content: text };
+                                      await electronAPI.saveMessage(updatedMsg);
+                                      setActiveMessages(prev => prev.map(m => m.id === msg.id ? updatedMsg : m));
+                                    }}
+                                  />
                                 ) : (
                                   <>
                                     {/* Custom Alternatives switcher at top right of bubble */}
@@ -1204,7 +1311,6 @@ export default function ChatWorkspaceView() {
                                   <button
                                     onClick={() => {
                                       setEditingMessageId(msg.id);
-                                      setEditingMessageText(msg.content);
                                     }}
                                     className="flex items-center space-x-1 text-gray-300 hover:text-accent transition-colors cursor-pointer"
                                   >
@@ -1249,6 +1355,19 @@ export default function ChatWorkspaceView() {
                                         >
                                           <Trash2 className="w-3.5 h-3.5 text-inherit" />
                                           <span>Delete Message</span>
+                                        </button>
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setOpenMenuId(null);
+                                            handleToggleExcluded(msg.id, msg.excluded !== 1);
+                                          }}
+                                          className="w-full text-left px-3 py-1.5 text-gray-300 hover:bg-white/5 hover:text-accent transition-colors flex items-center space-x-1.5 cursor-pointer"
+                                        >
+                                          {msg.excluded === 1
+                                            ? <Eye className="w-3.5 h-3.5 text-inherit" />
+                                            : <EyeOff className="w-3.5 h-3.5 text-inherit" />}
+                                          <span>{msg.excluded === 1 ? 'Restore to Context' : 'Drop from Context'}</span>
                                         </button>
                                         <button
                                           onClick={(e) => {
@@ -1437,6 +1556,7 @@ export default function ChatWorkspaceView() {
                                     type="button"
                                     onClick={() => {
                                       setSelectedTargetId(p.id);
+                                      electronAPI.setChatLastTarget(activeChat.id, p.id);
                                       setProfileDropdownOpen(false);
                                     }}
                                     className={`w-full flex items-center space-x-2.5 px-2 py-1.5 rounded-md text-left text-xs transition-colors cursor-pointer ${selectedTargetId === p.id
@@ -1484,6 +1604,7 @@ export default function ChatWorkspaceView() {
                                     type="button"
                                     onClick={() => {
                                       setSelectedTargetId(w.id);
+                                      electronAPI.setChatLastTarget(activeChat.id, w.id);
                                       setProfileDropdownOpen(false);
                                     }}
                                     className={`w-full flex items-center space-x-2 px-2 py-1.5 rounded-md text-left text-xs transition-colors cursor-pointer ${selectedTargetId === w.id
@@ -1622,11 +1743,12 @@ export default function ChatWorkspaceView() {
           dismissedAutoSummarizeChatsRef.current.add(activeChat.id);
           setSummarizeModalOpen(false);
         }}
-        messages={archiveMessages}
-        currentSummarizedIndex={activeChat.summarizedIndex || 0}
-        memoryBlocksCount={activeChat.memoryBlocks ? (typeof activeChat.memoryBlocks === 'string' ? JSON.parse(activeChat.memoryBlocks) : activeChat.memoryBlocks).length : 0}
+        chatId={activeChat.id}
+        electronAPI={electronAPI}
+        nextSummaryNumber={nextSummaryNumber}
         onConfirm={handleExecuteSummarization}
         isVectorizing={isVectorizing}
+        progress={summarizeProgress}
       />
 
       <FilePreviewModal
