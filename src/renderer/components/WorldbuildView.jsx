@@ -877,8 +877,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           <Edit label="Abilities & traits" hint="Short, concrete powers the AI can use in a scene."><LTextarea rows={3} placeholder="e.g. flies, breathes fire, immune to steel." value={selected.data.abilities || ''} onChange={(e) => patchData({ abilities: e.target.value })} /></Edit>
           <MultiRelation label="Habitat" hint="Where it is found or dwells." disabled={unsaved} links={rel.foundIn || []} options={byType.Locations} onAdd={(id) => addMulti('found_in', id)} onRemove={removeLink} />
         </> });
-      S.push({ key: 'appearance', title: 'Appearance', icon: User, scalar: true, view: <Prose text={selected.data.appearance} />, edit: <Edit label="Appearance"><LTextarea rows={5} placeholder="Physical presence and distinguishing features." value={selected.data.appearance || ''} onChange={(e) => patchData({ appearance: e.target.value })} /></Edit> });
-      S.push({ key: 'personality', title: 'Personality', icon: Users, scalar: true, view: <Prose text={selected.data.personality} />, edit: <Edit label="Personality"><LTextarea rows={5} placeholder="Temperament, instincts, habits, and values." value={selected.data.personality || ''} onChange={(e) => patchData({ personality: e.target.value })} /></Edit> });
+      // A species has a shared look worth describing, but no single temperament: a
+      // personality belongs to one being, never to every member of a kind.
+      S.push({ key: 'appearance', title: 'Appearance', icon: User, scalar: true, view: <Prose text={selected.data.appearance} />, edit: <Edit label="Appearance" hint={isIndividual ? undefined : 'What members of this kind typically look like.'}><LTextarea rows={5} placeholder={isIndividual ? 'Physical presence and distinguishing features.' : 'Shared build, markings, and distinguishing features.'} value={selected.data.appearance || ''} onChange={(e) => patchData({ appearance: e.target.value })} /></Edit> });
+      if (isIndividual) S.push({ key: 'personality', title: 'Personality', icon: Users, scalar: true, view: <Prose text={selected.data.personality} />, edit: <Edit label="Personality"><LTextarea rows={5} placeholder="Temperament, instincts, habits, and values." value={selected.data.personality || ''} onChange={(e) => patchData({ personality: e.target.value })} /></Edit> });
       S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, view: loreView, edit: loreEdit });
     }
     if (type === 'Factions') {
@@ -933,6 +935,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           </div>
           <SingleRelation label="Race" disabled={unsaved} current={rel.isRace?.entity?.id} options={byType.Races} onSet={(id) => setSingle('is_race', id)} />
         </> },
+      { key: 'appearance', title: 'Appearance', icon: User, scalar: true, view: <Prose text={selected.data.appearance} />, edit: <Edit label="Appearance"><LTextarea rows={5} placeholder="Physical presence and distinguishing features." value={selected.data.appearance || ''} onChange={(e) => patchData({ appearance: e.target.value })} /></Edit> },
+      { key: 'personality', title: 'Personality', icon: Users, scalar: true, view: <Prose text={selected.data.personality} />, edit: <Edit label="Personality"><LTextarea rows={5} placeholder="Temperament, habits, and values." value={selected.data.personality || ''} onChange={(e) => patchData({ personality: e.target.value })} /></Edit> },
       { key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, view: loreView, edit: loreEdit },
     ];
     if (charTab === 'inventory') return [
@@ -1437,6 +1441,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                       <Edit label="Status"><StateSelect map={STATUS} value={selected.data.status || 'unknown'} onChange={(e) => patchData({ status: e.target.value })} /></Edit>
                     </div>
                     <Hint>Race, inventory and connections unlock once you create the character.</Hint>
+                    <Edit label="Appearance"><LTextarea rows={5} placeholder="Physical presence and distinguishing features." value={selected.data.appearance || ''} onChange={(e) => patchData({ appearance: e.target.value })} /></Edit>
+                    <Edit label="Personality"><LTextarea rows={5} placeholder="Temperament, habits, and values." value={selected.data.personality || ''} onChange={(e) => patchData({ personality: e.target.value })} /></Edit>
                     {loreEdit}
                   </Section>
                 )}

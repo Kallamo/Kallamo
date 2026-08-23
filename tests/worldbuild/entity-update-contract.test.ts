@@ -64,3 +64,23 @@ describe('numeric field proposals', () => {
     expect(isUnsupportedNumericDelta(17, 'The current Intelligence score is 17.')).toBe(false);
   });
 });
+
+// A creature is one stored type with two product surfaces. The enrichment may only
+// offer a field the sheet for that scope actually renders.
+describe('creature scope decides which fields the enrichment may set', () => {
+  const creatureFields = ['status', 'disposition', 'nature', 'abundance', 'threat', 'abilities', 'appearance', 'personality'];
+  const forScope = (scope?: string) =>
+    filterUpdateFields({ type: 'Creatures', data: scope ? { scope } : {} }, creatureFields);
+
+  test('a specific being has a life state and a temperament, not a prevalence', () => {
+    expect(forScope('individual')).toEqual(['status', 'disposition', 'nature', 'threat', 'abilities', 'appearance', 'personality']);
+  });
+
+  test('a group has a prevalence and a shared look, but no status or personality', () => {
+    expect(forScope('group')).toEqual(['disposition', 'nature', 'abundance', 'threat', 'abilities', 'appearance']);
+  });
+
+  test('an unset scope is treated as a specific being', () => {
+    expect(forScope()).toEqual(forScope('individual'));
+  });
+});
