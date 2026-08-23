@@ -176,14 +176,14 @@ export default function DashboardView() {
                           className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-[#1a2d32] hover:text-white transition-colors flex items-center space-x-2 cursor-pointer font-medium"
                         >
                           <Pin className="w-3 h-3" />
-                          <span>{chat.isPinned ? 'Desafixar' : 'Fixar'}</span>
+                          <span>{chat.isPinned ? 'Unpin' : 'Pin'}</span>
                         </button>
                         <button 
                           onClick={(e) => openEditModal(e, chat)}
                           className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-[#1a2d32] hover:text-white transition-colors flex items-center space-x-2 cursor-pointer font-medium"
                         >
                           <Edit3 className="w-3 h-3" />
-                          <span>Editar</span>
+                          <span>Edit</span>
                         </button>
                         <div className="h-px bg-gray-800 w-full my-1"></div>
                         <button 
@@ -191,7 +191,7 @@ export default function DashboardView() {
                           className="w-full text-left px-3 py-2 text-xs text-red-400 hover:bg-red-500/10 hover:text-red-300 transition-colors flex items-center space-x-2 cursor-pointer font-medium"
                         >
                           <Trash2 className="w-3 h-3" />
-                          <span>Excluir</span>
+                          <span>Delete</span>
                         </button>
                       </div>
                     )}
