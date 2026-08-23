@@ -1,6 +1,64 @@
 # Changelog
 
-All notable changes to Kallamo are documented in this file. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+All notable changes to Kallamo are documented in this file. Version numbers reflect the size of the change for the people using Kallamo: patch releases fix and refine, minor releases are named milestones, and major releases change what the product is.
+
+## [1.1.6] - 2026-08-23
+
+### Added
+- Archive window now supports three outcomes per message: archive it into the summary, keep it in the active conversation, or drop it from context entirely without deleting it from the log.
+- Dropped messages can be toggled from any message menu and are marked in the chat.
+- Context & Memory shows how the history is split between archived, active, and dropped.
+- Each summary can be rebuilt on its own, returning only its messages to the conversation and leaving the other summaries untouched.
+- Rebuild everything deletes every summary and brings the whole conversation back, including messages dropped by deleting a summary.
+- Rebuilding and deleting a summary now explain what will happen before they run.
+- A marker appears in the chat header when live history no longer fits the payload budget and the oldest messages are being cut. Clicking it opens archiving, and it stays for as long as the history overflows.
+- The archive window can also offer the most recent messages, for when they belong to the chapter being closed.
+
+### Changed
+- Deleting a summary now drops the messages it covered instead of returning them to the conversation. Rebuild is the action that hands them back, and Rebuild everything recovers them once dropped.
+- Live history is now derived from the messages each summary covers rather than a single position marker, so gaps in the middle of a history are valid and repair themselves.
+- The archive window holds back the last 5 messages instead of the last 10. Long roleplay replies made the wider reserve pin far more of the payload than it protected.
+- Archived history that mentions an entity named in the message now clears a lower similarity bar, so a character who appears in only a few lines of a long scene can still be recalled.
+- Chat Memory Top-K now defaults to 8 instead of 5. Five snippets per message proved too narrow for long roleplay histories.
+- A chat now reopens on the AI Profile or Workflow it was last used with, rather than the first active one on the list.
+- The Writing Desk now reads the same live history the chat does, so an invocation no longer receives passages the workspace has already archived or dropped.
+
+### Fixed
+- Archive recaps are no longer written as a continuation of the story. The summarizer receives the transcript as a record to describe, and a reply that turns into prose is discarded instead of stored.
+- Archive recaps render their formatting instead of showing raw markup, and an archive with no usable recap says so.
+- Deleting a summary no longer leaves a workspace unable to archive again.
+- Archiving a non-contiguous selection no longer stores messages in a summary while they stay in the active context, which silently doubled their cost.
+- The archive window no longer offers messages that a summary already covers.
+- Deleting a summary now removes its vectorized chunks, index entries, and tags instead of leaving them behind, and existing orphans are cleaned up on startup.
+- Deleting a message or reverting a chat no longer leaves the archive marker pointing at the wrong position.
+- Summary cards now show how many tokens of history they hold instead of the length of the recap text, matching how uploaded files are measured.
+- Reasoning models no longer break structured AI tasks. Their thinking is kept out of replies that are parsed as JSON, where it could make an otherwise valid response unreadable.
+- Update Entities no longer fails on providers that reject open-ended response schemas. The schema is now built from the fields and relations each entity actually accepts, instead of leaving those sections unconstrained.
+- Update Entities now reports why an update failed, separating an exhausted output budget from a genuinely malformed response, and records the raw reply so the cause can be confirmed.
+- Update Entities now retries with a doubled output allowance when the first attempt ran out of room, instead of a small increase that rarely helped.
+- A failed entity tagging pass during archiving is now reported instead of leaving the history stored without tags and harder to recall from.
+- The archive window now closes as soon as your history is stored. The recap and the entity tags are produced afterwards, and the summary shows its own progress in Context & Memory while that happens.
+- A summary's recap and its entity tags are now tracked separately, so a tagging failure no longer discards or hides a recap that was written, and Finish only redoes the part that is missing.
+- Context & Memory shows a live tagging position for a summary that is still finishing, instead of a single unchanging line.
+- Entity tagging now accepts the category name the AI actually writes, such as "Character" for a workspace category named "Characters". A label written in the singular no longer voids every mention in the batch. Categories that do not exist in the workspace are still rejected.
+- Entity tagging now sizes every call the same way across the app, budgeting by passage length instead of a fixed count, so a batch cannot grow large enough to push the AI's answer past its output limit.
+- When no mention in a batch can be used, the error now names the actual reason and gives an example, instead of reporting category and evidence problems as one indistinguishable failure.
+- A summary that is missing tags now says how many passages are still untagged, so repeated attempts show progress instead of one unchanging warning.
+- Entity tagging no longer discards a whole batch of mentions because the AI retyped a quote instead of copying it. Evidence is now matched past differences that carry no meaning, such as a plain hyphen for a dash, straight quotes for curly ones, or missing accents, and several excerpts are checked individually instead of being joined into one. Invented evidence is still rejected.
+- A failed tagging pass no longer reports the same error in two separate notifications.
+- A summary interrupted by closing the app is marked as unfinished and offers a Finish action, instead of leaving stored history with no recap or tags and no way to complete it.
+- Entity tagging now runs several groups at once and waits out a provider rate limit instead of losing that group.
+- New summaries are numbered by how many summaries exist, not how many memory blocks. A workspace with custom memory no longer names its first summary "Summarization 2".
+- Archiving a long history is substantially faster. Passages are now embedded in batches instead of one at a time, and entity tagging works in bounded groups rather than sending the whole archive in a single request.
+- Entity tagging no longer loses a whole archive to one failed group: whatever was tagged is kept, and the failure is reported.
+- The archive window now shows which stage is running, so a long archive reads as work in progress instead of a frozen window.
+- Editing a message in a long conversation no longer lags while typing.
+- Kallamo now remembers window size and position between launches instead of always starting maximized.
+- The workspace menu on the dashboard is in English.
+- A character's Appearance and Personality are now shown and editable on the character sheet. Update Entities could already propose both fields and stored them when accepted, but the sheet had no section for them, so an accepted change looked like it had been lost. Existing values reappear on their own.
+- Appearance and personality now reach the AI during retrieval, for characters and for individual creatures. A character's dossier previously carried only status and age, so the physical and behavioural description written into the sheet never left it. A creature's sheet already showed both fields, but they did not travel either.
+- An event's Kind now reaches the AI during retrieval as well, for the same reason.
+- A creature recorded as a group or species no longer offers Personality, and Update Entities no longer proposes one for it. A temperament belongs to one being, not to every member of a kind. Appearance stays, and now asks for the look the members share.
 
 ## [1.1.5] - 2026-08-10
 

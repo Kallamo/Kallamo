@@ -98,6 +98,58 @@ const RELEASE_1_1_3 = {
   },
 };
 
+const RELEASE_1_1_6 = {
+  title: 'Memory you can rearrange',
+  sections: {
+    Added: [
+      'The archive window now offers three choices for each message: archive it into the summary, keep it in the active conversation, or drop it from context without deleting it from the log.',
+      'Drop or restore a message from its own menu, with dropped messages marked in the chat.',
+      'Context & Memory shows how your history is split between archived, active, and dropped messages.',
+      'Rebuild a single summary to return only its messages to the conversation, leaving your other summaries untouched.',
+      'Rebuild everything brings the whole conversation back from the very first message, including anything dropped along the way.',
+      'A small mark appears in the chat header when your live history no longer fits the payload budget and the oldest messages are being cut. Click it to archive them.',
+      'The archive window can also include your most recent messages, for when they belong to the chapter you are closing.',
+    ],
+    Changed: [
+      'Kallamo now works out your live history from the messages each summary covers, so summaries can be deleted or rebuilt in any order and the workspace repairs itself.',
+      'Archived history that mentions a character, place, or item named in your message is now easier to recall, so someone who appears in only a few lines of a long scene can still be found.',
+      'Chat Memory now recalls 8 passages per message instead of 5. You can still change this in Settings > Advanced.',
+      'The archive window keeps the last 5 messages active instead of the last 10, since long replies made the wider reserve hold back more of your context than it protected.',
+      'Deleting a summary now drops the messages it covered rather than returning them to the conversation, and says so before it happens. Rebuild is what hands them back.',
+      'A chat reopens on the AI Profile or Workflow you last used in it, rather than the first one on the list.',
+      'The Writing Desk reads the same live history the chat does, so an invocation no longer receives passages you have archived or dropped.',
+    ],
+    Fixed: [
+      'Deleting your only summary no longer leaves a workspace unable to archive again.',
+      'Archiving messages from the middle of a history no longer keeps them in the active context at the same time, which silently doubled their cost.',
+      'The archive window no longer offers messages a summary already covers.',
+      'Deleting a summary now removes its stored history, search entries, and tags. Anything left behind by an earlier version is cleaned up on startup.',
+      'Deleting a message or reverting a chat no longer leaves the archive out of step with your history.',
+      'Summary cards show how much history they hold instead of the length of the recap text, matching how files are measured.',
+      'Archive recaps no longer come back as a continuation of your story. The recap card also shows its formatting properly, and says plainly when no recap could be written.',
+      'Reasoning models no longer break background AI tasks that expect a structured answer.',
+      'Update Entities works with AI providers that require a fully specified response format, which previously refused the request outright.',
+      'Update Entities now tells you why an update failed, separating a response that ran out of room from one that was genuinely malformed, and retries with more room when that was the cause.',
+      'A failed tagging pass while archiving is now reported instead of quietly leaving that history harder to recall.',
+      'The archive window now closes as soon as your history is saved. The recap and entity tags finish in the background, and the summary shows its progress in Context & Memory.',
+      'Entity tagging no longer throws away results when the AI writes a category name in the singular, such as Character instead of Characters.',
+      'Entity tagging is far more reliable on prose with dashes, quotation marks and accents. It no longer throws away correct results because the AI retyped a quote slightly differently.',
+      'A summary recap and its entity tags now succeed or fail independently, so a tagging problem never costs you the recap.',
+      'A summary that is still finishing shows how far along its tagging is, right on its card in Context & Memory.',
+      'A summary left unfinished by closing the app can be completed later instead of being stuck without a recap or tags.',
+      'New summaries are numbered by the summaries you have, so a workspace with custom memory no longer starts at Summarization 2.',
+      'Archiving a long history is much faster, and the window now tells you which stage it is on instead of sitting silent.',
+      'A tagging problem partway through an archive no longer costs the whole archive its entity tags.',
+      'Editing a message in a long conversation no longer lags while you type.',
+      'Kallamo remembers your window size and position between launches instead of always starting maximized.',
+      'The workspace menu on the dashboard is in English.',
+      'A character now has Appearance and Personality on their sheet. Update Entities could already suggest both, and accepting one saved it, but there was nowhere to see it. Anything you accepted before is still there and shows up now.',
+      'What a character looks like and how they behave now reaches the AI when your world is recalled, instead of staying on the sheet. The same goes for what kind of thing an event was.',
+      'A creature saved as a group or species no longer asks for a Personality, since that belongs to one being rather than a whole kind. Appearance stays, and now asks what the members look like.',
+    ],
+  },
+};
+
 export const GLOBAL_WHATS_NEW = {
   version: '1.1',
   title: 'Writing Desk, Worldbuild, and everything since',
@@ -120,6 +172,10 @@ export const GLOBAL_WHATS_NEW = {
     },
   ],
   releases: [
+    {
+      version: '1.1.6',
+      ...RELEASE_1_1_6,
+    },
     {
       version: '1.1.5',
       ...RELEASE_1_1_5,
@@ -186,6 +242,11 @@ export const GLOBAL_WHATS_NEW = {
 };
 
 export const PATCH_WHATS_NEW = {
+  '1.1.6': {
+    ...RELEASE_1_1_6,
+    intro: 'This update rebuilds how a workspace remembers a long story. Summaries can be deleted and rebuilt freely, you decide what each message becomes, and recall reaches further back.',
+    highlights: [],
+  },
   '1.1.5': {
     ...RELEASE_1_1_5,
     intro: 'This focused patch restores dependable local AI connections and corrects the chat paths around sending, retrying, editing, and regenerating.',
