@@ -50,9 +50,15 @@ describe('Tagger batch sizing', () => {
   it('keeps batches within the character budget', () => {
     const records = Array.from({ length: 12 }, (_, index) => ({ id: String(index), text: 'x'.repeat(2300) }));
     const batches = createTaggerBatches(records);
-    expect(batches).toHaveLength(4);
-    expect(batches.every((batch: Array<{ text: string }>) => batch.length <= 3)).toBe(true);
-    expect(batches.every((batch: Array<{ text: string }>) => batch.reduce((sum, item) => sum + item.text.length, 0) <= 7000)).toBe(true);
+    expect(batches).toHaveLength(6);
+    expect(batches.every((batch: Array<{ text: string }>) => batch.length <= 6)).toBe(true);
+    expect(batches.every((batch: Array<{ text: string }>) => batch.reduce((sum, item) => sum + item.text.length, 0) <= 6000)).toBe(true);
+  });
+
+  it('caps by count when the chunks are small', () => {
+    const records = Array.from({ length: 13 }, (_, index) => ({ id: String(index), text: 'x'.repeat(600) }));
+    const batches = createTaggerBatches(records);
+    expect(batches.map((batch: unknown[]) => batch.length)).toEqual([6, 6, 1]);
   });
 
   it('keeps one oversized chunk intact', () => {
