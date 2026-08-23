@@ -152,7 +152,7 @@ graph TD
 ### Prerequisites
 
 - **Node.js** ≥ 18
-- **Python** ≥ 3.10 and C++ Build Tools (required by `better-sqlite3` native compilation)
+- **Python** ≥ 3.10 and C++ Build Tools, only if a prebuilt `better-sqlite3` binary is unavailable for your platform
   - Windows: `npm install --global windows-build-tools` or install Visual Studio Build Tools
   - macOS: `xcode-select --install`
   - Linux: `sudo apt-get install build-essential python3`
@@ -164,11 +164,17 @@ graph TD
 git clone https://github.com/Kallamo/Kallamo.git
 cd Kallamo
 
-# Install dependencies (includes native SQLite rebuild)
+# Install dependencies
 npm install
+```
 
-# Rebuild native modules for Electron
-npx @electron/rebuild
+`npm install` also prepares the two SQLite binaries the project needs. `better-sqlite3`
+is compiled against a V8 ABI, and Electron and Node do not share one, so the app and the
+test runner each get their own copy under `prebuilds/` and neither has to rebuild over
+the other. If that step is skipped or fails, run it on its own:
+
+```bash
+npm run setup:sqlite
 ```
 
 ### Development

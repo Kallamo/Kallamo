@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { runDatabaseMigrations } from '../../src/main/database/migrations.js';
 import { createWorldbuildKnowledgeService } from '../../src/main/features/worldbuild/knowledge-service.js';
+import { openTestDatabase } from '../sqlite-test-database';
 
 describe('Worldbuild awareness Knowledge service', () => {
   let directory: string;
@@ -13,7 +14,7 @@ describe('Worldbuild awareness Knowledge service', () => {
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), 'kallamo-knowledge-cards-'));
-    db = new Database(join(directory, 'cards.db'));
+    db = openTestDatabase(join(directory, 'cards.db'));
     db.pragma('foreign_keys = ON');
     runDatabaseMigrations(db);
     db.exec(`

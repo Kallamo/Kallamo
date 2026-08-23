@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { runDatabaseMigrations } from '../../src/main/database/migrations.js';
 import type { Scene } from '../../src/kanora/contracts';
 import { NarrativeSceneRepository, NarrativeSceneValidationError } from '../../src/kanora/scenes';
+import { openTestDatabase } from '../sqlite-test-database';
 
 const firstScene: Scene = {
   id: 'scene-courtyard',
@@ -26,7 +27,7 @@ describe('narrative scene persistence', () => {
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), 'kanora-scenes-'));
-    db = new Database(join(directory, 'scenes.db'));
+    db = openTestDatabase(join(directory, 'scenes.db'));
     db.pragma('foreign_keys = ON');
     runDatabaseMigrations(db);
     scenes = new NarrativeSceneRepository(db);

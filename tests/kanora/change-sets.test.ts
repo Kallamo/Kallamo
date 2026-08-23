@@ -10,6 +10,7 @@ import {
 } from '../../src/kanora/change-sets';
 import { NarrativeEventLedgerRepository } from '../../src/kanora/ledger';
 import { possessionTransferScenario, secretRevelationScenario } from '../../src/kanora/scenarios';
+import { openTestDatabase } from '../sqlite-test-database';
 
 const APPLIED_AT = '2026-07-18T18:00:00.000Z';
 
@@ -21,7 +22,7 @@ describe('transactional narrative change sets', () => {
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), 'kanora-change-sets-'));
-    db = new Database(join(directory, 'change-sets.db'));
+    db = openTestDatabase(join(directory, 'change-sets.db'));
     db.pragma('foreign_keys = ON');
     runDatabaseMigrations(db);
     ledger = new NarrativeEventLedgerRepository(db);

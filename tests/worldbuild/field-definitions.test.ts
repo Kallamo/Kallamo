@@ -9,6 +9,7 @@ import {
   WorldbuildFieldDefinitionRepository,
   WorldbuildFieldDefinitionValidationError
 } from '../../src/main/features/worldbuild/field-definitions';
+import { openTestDatabase } from '../sqlite-test-database';
 
 const materialField: EntityFieldDefinition = {
   id: 'field-material',
@@ -33,7 +34,7 @@ describe('Worldbuild field definition repository', () => {
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), 'worldbuild-fields-'));
-    db = new Database(join(directory, 'worldbuild.db'));
+    db = openTestDatabase(join(directory, 'worldbuild.db'));
     runDatabaseMigrations(db);
     repository = new WorldbuildFieldDefinitionRepository(db);
   });

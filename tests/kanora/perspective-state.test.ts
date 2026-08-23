@@ -13,6 +13,7 @@ import {
   PerspectiveStateReadError
 } from '../../src/kanora/perspective-state';
 import { deceptiveBeliefScenario } from '../../src/kanora/scenarios';
+import { openTestDatabase } from '../sqlite-test-database';
 
 const PROJECT_ID = deceptiveBeliefScenario.projectId;
 
@@ -26,7 +27,7 @@ describe('belief and dynamic relationship persistence', () => {
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), 'kanora-perspective-state-'));
-    db = new Database(join(directory, 'perspective-state.db'));
+    db = openTestDatabase(join(directory, 'perspective-state.db'));
     db.pragma('foreign_keys = ON');
     runDatabaseMigrations(db);
     ledger = new NarrativeEventLedgerRepository(db);

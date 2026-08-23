@@ -814,8 +814,11 @@ function buildActiveOperation(kind, subjectId, entry, current, eventId, evidence
         accessibility: normalizeAccessibility(entry.accessibility), status: 'active',
         factIds: normalizeIds(entry.factIds),
         // Only hearsay has a teller. Keeping informants off a first-hand record stops a
-        // stale name surviving a switch from reported back to observed.
-        ...(acquisition === 'reported' ? { informantIds: normalizeIds(entry.informantIds) } : {}),
+        // stale name surviving a switch from reported back to observed, and a subject is
+        // never its own informant: naming itself would grant it awareness of itself.
+        ...(acquisition === 'reported'
+          ? { informantIds: normalizeIds(entry.informantIds).filter(id => id !== subjectId) }
+          : {}),
       },
     };
   }

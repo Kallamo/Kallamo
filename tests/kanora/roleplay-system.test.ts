@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { runDatabaseMigrations } from '../../src/main/database/migrations.js';
 import { RoleplaySystem } from '../../src/main/features/kanora/roleplay-system';
+import { openTestDatabase } from '../sqlite-test-database';
 
 describe('Kallamo roleplay system', () => {
   let directory: string;
@@ -13,7 +14,7 @@ describe('Kallamo roleplay system', () => {
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), 'kallamo-roleplay-'));
-    db = new Database(join(directory, 'roleplay.db'));
+    db = openTestDatabase(join(directory, 'roleplay.db'));
     db.pragma('foreign_keys = ON');
     runDatabaseMigrations(db);
     db.exec(`

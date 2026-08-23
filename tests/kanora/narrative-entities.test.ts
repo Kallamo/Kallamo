@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { runDatabaseMigrations } from '../../src/main/database/migrations.js';
 import { NarrativeEntitySystem } from '../../src/main/features/kanora/narrative-entities';
 import { NarrativeContextManifestRepository } from '../../src/main/features/kanora/context-manifest';
+import { openTestDatabase } from '../sqlite-test-database';
 
 describe('Narrative entity identity', () => {
   let directory: string;
@@ -14,7 +15,7 @@ describe('Narrative entity identity', () => {
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), 'kallamo-narrative-entities-'));
-    db = new Database(join(directory, 'identity.db'));
+    db = openTestDatabase(join(directory, 'identity.db'));
     db.pragma('foreign_keys = ON');
     db.exec(`
       CREATE TABLE entities (

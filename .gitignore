@@ -1,4 +1,5 @@
 node_modules/
+prebuilds/
 dist/
 dist-main/
 out/

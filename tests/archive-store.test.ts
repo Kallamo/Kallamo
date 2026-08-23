@@ -1,27 +1,13 @@
 import { createRequire } from 'node:module';
-import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, test } from 'vitest';
+import { openTestDatabase } from './sqlite-test-database';
 
 const require = createRequire(import.meta.url);
 const store = require('../src/main/features/chat/archive-store');
 const { selectActiveMessages } = require('../src/main/features/chat/archive-coverage');
 
-// better-sqlite3 is built against Electron's ABI, so the suite runs the same SQL
-// through node:sqlite behind the small surface archive-store actually uses.
 function createDatabase() {
-  const raw = new DatabaseSync(':memory:');
-  const database: any = {
-    prepare: (sql: string) => {
-      const statement = raw.prepare(sql);
-      return {
-        run: (...args: any[]) => ({ changes: Number(statement.run(...args).changes) }),
-        get: (...args: any[]) => statement.get(...args),
-        all: (...args: any[]) => statement.all(...args)
-      };
-    },
-    transaction: (fn: any) => (...args: any[]) => fn(...args),
-    exec: (sql: string) => raw.exec(sql)
-  };
+  const database: any = openTestDatabase(':memory:');
 
   database.exec(`
     CREATE TABLE chats (id TEXT PRIMARY KEY, summarizedIndex INTEGER DEFAULT 0, memoryBlocks TEXT);

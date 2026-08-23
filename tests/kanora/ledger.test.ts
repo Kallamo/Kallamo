@@ -10,6 +10,7 @@ import {
   NarrativeEventLedgerValidationError
 } from '../../src/kanora/ledger';
 import { possessionTransferScenario, secretRevelationScenario } from '../../src/kanora/scenarios';
+import { openTestDatabase } from '../sqlite-test-database';
 
 describe('Narrative Event Ledger SQLite repository', () => {
   let directory: string;
@@ -18,7 +19,7 @@ describe('Narrative Event Ledger SQLite repository', () => {
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), 'kanora-ledger-'));
-    db = new Database(join(directory, 'ledger.db'));
+    db = openTestDatabase(join(directory, 'ledger.db'));
     db.pragma('foreign_keys = ON');
     runDatabaseMigrations(db);
     repository = new NarrativeEventLedgerRepository(db);
@@ -129,7 +130,7 @@ describe('Narrative Event Ledger SQLite repository', () => {
   test('migrates an existing database without changing its data', () => {
     db!.close();
     const existingPath = join(directory, 'existing.db');
-    db = new Database(existingPath);
+    db = openTestDatabase(existingPath);
     db.exec('CREATE TABLE existing_records (id TEXT PRIMARY KEY, value TEXT NOT NULL)');
     db.exec('CREATE TABLE entity_links (id TEXT PRIMARY KEY, label TEXT)');
     db.prepare('INSERT INTO existing_records (id, value) VALUES (?, ?)').run('legacy', 'preserved');
@@ -175,7 +176,7 @@ describe('Narrative Event Ledger SQLite repository', () => {
   test('upgrades draft knowledge records with normalized subjects and explicit accessibility', () => {
     db!.close();
     const draftPath = join(directory, 'draft-knowledge.db');
-    db = new Database(draftPath);
+    db = openTestDatabase(draftPath);
     db.exec(`
       CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL);
       INSERT INTO schema_migrations (id, applied_at) VALUES

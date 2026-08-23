@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { runDatabaseMigrations } from '../../src/main/database/migrations.js';
 import { createEntityUpdateState } from '../../src/main/features/worldbuild/entity-update-state.js';
+import { openTestDatabase } from '../sqlite-test-database';
 
 describe('entity update evidence lifecycle', () => {
   let directory: string;
@@ -12,7 +13,7 @@ describe('entity update evidence lifecycle', () => {
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), 'entity-update-state-'));
-    db = new Database(join(directory, 'state.db'));
+    db = openTestDatabase(join(directory, 'state.db'));
     db.pragma('foreign_keys = ON');
     runDatabaseMigrations(db);
   });

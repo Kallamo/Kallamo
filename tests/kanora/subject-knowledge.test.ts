@@ -8,6 +8,7 @@ import { NarrativeChangeSetRepository } from '../../src/kanora/change-sets';
 import type { KnowledgeAccessibility, NarrativeOperation, NarrativeProposal } from '../../src/kanora/contracts';
 import { NarrativeEventLedgerRepository } from '../../src/kanora/ledger';
 import { SubjectKnowledgeProjectionRepository } from '../../src/kanora/subject-knowledge';
+import { openTestDatabase } from '../sqlite-test-database';
 
 const PROJECT_ID = 'project-example';
 
@@ -20,7 +21,7 @@ describe('subject-scoped Knowledge projection', () => {
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), 'kanora-subject-knowledge-'));
-    db = new Database(join(directory, 'subject-knowledge.db'));
+    db = openTestDatabase(join(directory, 'subject-knowledge.db'));
     db.pragma('foreign_keys = ON');
     runDatabaseMigrations(db);
     ledger = new NarrativeEventLedgerRepository(db);

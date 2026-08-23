@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { runDatabaseMigrations } from '../../src/main/database/migrations.js';
 import { createWorldbuildDataService } from '../../src/main/features/worldbuild/worldbuild-data.js';
+import { openTestDatabase } from '../sqlite-test-database';
 
 describe('Worldbuild runtime data adapter', () => {
   let directory: string;
@@ -13,7 +14,7 @@ describe('Worldbuild runtime data adapter', () => {
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), 'worldbuild-data-'));
-    db = new Database(join(directory, 'worldbuild.db'));
+    db = openTestDatabase(join(directory, 'worldbuild.db'));
     db.pragma('foreign_keys = ON');
     runDatabaseMigrations(db);
     service = createWorldbuildDataService(db);

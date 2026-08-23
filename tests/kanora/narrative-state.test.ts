@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { runDatabaseMigrations } from '../../src/main/database/migrations.js';
 import { NarrativeStateSystem, type ExtractedNarrativeEvent } from '../../src/main/features/kanora/narrative-state';
+import { openTestDatabase } from '../sqlite-test-database';
 
 describe('Narrative State runtime', () => {
   let directory: string;
@@ -14,7 +15,7 @@ describe('Narrative State runtime', () => {
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), 'kallamo-narrative-state-'));
-    db = new Database(join(directory, 'state.db'));
+    db = openTestDatabase(join(directory, 'state.db'));
     db.pragma('foreign_keys = ON');
     runDatabaseMigrations(db);
     db.exec(`CREATE TABLE entity_links (

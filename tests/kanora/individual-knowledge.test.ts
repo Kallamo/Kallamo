@@ -12,6 +12,7 @@ import {
 } from '../../src/kanora/individual-knowledge';
 import { NarrativeEventLedgerRepository } from '../../src/kanora/ledger';
 import { possessionTransferScenario, secretRevelationScenario } from '../../src/kanora/scenarios';
+import { openTestDatabase } from '../sqlite-test-database';
 
 const APPLIED_AT = '2026-07-18T20:00:00.000Z';
 
@@ -24,7 +25,7 @@ describe('individual knowledge persistence', () => {
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), 'kanora-knowledge-'));
-    db = new Database(join(directory, 'knowledge.db'));
+    db = openTestDatabase(join(directory, 'knowledge.db'));
     db.pragma('foreign_keys = ON');
     runDatabaseMigrations(db);
     ledger = new NarrativeEventLedgerRepository(db);
