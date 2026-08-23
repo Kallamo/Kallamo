@@ -21,7 +21,8 @@ describe('Worldbuild sheet sections', () => {
     const group = sheetSections('Creatures', 'group').map(section => section.id);
 
     expect(individual).toEqual(['details', 'appearance', 'personality', 'lore', 'inv', 'fac', 'rels', 'knowledge']);
-    expect(group).toEqual(['details', 'lore']);
+    // A species has a shared look worth describing, but no single temperament.
+    expect(group).toEqual(['details', 'appearance', 'lore']);
     expect(variantsOf('Creatures')).toEqual(['individual', 'group']);
     expect(variantsOf('Characters')).toEqual([]);
   });

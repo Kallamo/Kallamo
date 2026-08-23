@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useState, useEffect, useRef } from 'react';
 import { useChatSession } from '../features/chat/useChatSession';
-import { isGenerationEventForWorkspace } from '../features/chat/generation-target';
+import { isGenerationEventForWorkspace, isRetryableGenerationError } from '../features/chat/generation-target';
 
 const AppContext = createContext();
 const EMPTY_MESSAGE_PAGE = { messages: [], hasMore: false, oldestCursor: null };
@@ -12,7 +12,7 @@ const api = window.electronAPI || {
   minimize: () => { }, maximize: () => { }, close: () => { },
   getApiProfiles: async () => [], saveApiProfile: async () => { }, deleteApiProfile: async () => { },
   getWritingProfiles: async () => [], saveWritingProfile: async () => { }, deleteWritingProfile: async () => { },
-  getChats: async () => [], saveChat: async () => { }, deleteChat: async () => { }, getChatMessages: async () => [], getChatMessagePage: async () => EMPTY_MESSAGE_PAGE, saveMessage: async () => { }, deleteMessage: async () => { }, revertChatToMessage: async () => ({ success: true }), triggerManualSummarize: async () => { },
+  getChats: async () => [], saveChat: async () => { }, deleteChat: async () => { }, getChatMessages: async () => [], getChatMessagePage: async () => EMPTY_MESSAGE_PAGE, saveMessage: async () => { }, deleteMessage: async () => { }, revertChatToMessage: async () => ({ success: true }),
   getWorkflows: async () => [], saveWorkflow: async () => { }, deleteWorkflow: async () => { },
   getVariables: async () => [], saveVariable: async () => { }, deleteVariable: async () => { },
   getSettings: async () => ({
@@ -399,13 +399,14 @@ export const AppProvider = ({ children }) => {
   };
 
   const handleRespondToError = (decision) => {
+    if (decision !== 'interrupt' && !isRetryableGenerationError(errorData)) return;
     api.respondToError(decision, errorData?.runId);
     setShowErrorModal(false);
     setErrorData(null);
     if (decision === 'interrupt') {
       setIsGenerating(false);
       setGenerationProgress(null);
-    } else {
+    } else if (isRetryableGenerationError(errorData)) {
       setIsGenerating(true);
     }
   };

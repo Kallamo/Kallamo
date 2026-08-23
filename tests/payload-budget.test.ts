@@ -10,6 +10,9 @@ const {
 describe('workspace API payload budget', () => {
   it('normalizes invalid and unsafe workspace limits', () => {
     expect(normalizeMaxApiPayload('invalid')).toBe(128000);
+    expect(normalizeMaxApiPayload(null)).toBe(128000);
+    expect(normalizeMaxApiPayload('')).toBe(128000);
+    expect(normalizeMaxApiPayload(0)).toBe(128000);
     expect(normalizeMaxApiPayload(-10)).toBe(4096);
     expect(normalizeMaxApiPayload(3000000)).toBe(2000000);
   });

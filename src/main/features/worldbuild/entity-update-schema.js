@@ -2,6 +2,8 @@ function strictObject(properties, required = Object.keys(properties)) {
   return { type: 'object', properties, required, additionalProperties: false };
 }
 
+// Every object here stays closed: several providers reject `additionalProperties: true`
+// outright, so a structured update request built on an open object never runs.
 const CHANGE_KINDS = [
   'field',
   'link',

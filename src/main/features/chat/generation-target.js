@@ -51,7 +51,38 @@ function resolveWorkspaceGenerationTarget(database, chatId, targetId) {
   );
 }
 
+function applyGenerationHistory(messages, { historyEdit = null, regenerateMessageId = null } = {}) {
+  if (historyEdit && regenerateMessageId) {
+    throw new GenerationTargetError('invalid-history-operation', 'A generation cannot edit and regenerate history at the same time.');
+  }
+
+  if (historyEdit) {
+    if (typeof historyEdit.messageId !== 'string' || typeof historyEdit.content !== 'string') {
+      throw new GenerationTargetError('invalid-history-edit', 'Invalid edited message history.');
+    }
+    const messageIndex = messages.findIndex(message => message.id === historyEdit.messageId);
+    if (messageIndex < 0 || messages[messageIndex].role !== 'user') {
+      throw new GenerationTargetError('edited-message-not-found', 'Edited user message was not found in this workspace.');
+    }
+    return messages.slice(0, messageIndex).concat({
+      ...messages[messageIndex],
+      content: historyEdit.content
+    });
+  }
+
+  if (regenerateMessageId) {
+    const messageIndex = messages.findIndex(message => message.id === regenerateMessageId);
+    if (messageIndex < 0 || messages[messageIndex].role !== 'ai') {
+      throw new GenerationTargetError('regenerated-message-not-found', 'The AI response being regenerated was not found in this workspace.');
+    }
+    return messages.slice(0, messageIndex);
+  }
+
+  return messages;
+}
+
 module.exports = {
+  applyGenerationHistory,
   GenerationTargetError,
   parseIdList,
   resolveWorkspaceGenerationTarget

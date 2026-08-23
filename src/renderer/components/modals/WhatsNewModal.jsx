@@ -51,12 +51,12 @@ export default function WhatsNewModal({ onClose, type = 'global', version }) {
       </div>
 
       <div className="flex flex-col flex-1 min-h-0 overflow-y-auto custom-scrollbar">
-        <div className="px-6 pt-4">
+        <div className="px-6 pt-4 pb-5">
           <p className="text-sm leading-relaxed text-gray-300">{content.intro}</p>
         </div>
 
         {content.highlights.length > 0 && (
-          <div className="px-6 pt-4 pb-5 grid grid-cols-1 gap-2.5">
+          <div className="px-6 pb-5 grid grid-cols-1 gap-2.5">
             {content.highlights.map((highlight) => {
               const Icon = ICONS[highlight.icon] || Sparkles;
               return (

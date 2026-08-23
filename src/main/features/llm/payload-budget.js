@@ -11,6 +11,12 @@ function estimateTokens(value) {
 }
 
 function normalizeMaxApiPayload(value, fallback = contract.defaultMaxPayloadTokens) {
+  if (value == null || String(value).trim() === '' || Number(value) === 0) {
+    const safeFallback = fallback == null || String(fallback).trim() === '' || Number(fallback) === 0
+      ? contract.defaultMaxPayloadTokens
+      : fallback;
+    return normalizeMaxApiPayload(safeFallback, contract.defaultMaxPayloadTokens);
+  }
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return normalizeMaxApiPayload(fallback, contract.defaultMaxPayloadTokens);
   return Math.min(

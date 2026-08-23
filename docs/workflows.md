@@ -355,7 +355,7 @@ The chunk size (in characters) is configurable via the Settings panel and stored
   "chunkSize": 500,
   "similarity": 0.3,
   "topKKB": 5,
-  "topKMemory": 5
+  "topKMemory": 8
 }
 ```
 
@@ -363,4 +363,4 @@ These parameters control:
 - **chunkSize** — Maximum characters per text chunk during ingestion (default: 500).
 - **similarity** — Minimum cosine similarity threshold for dense search (default: 0.3).
 - **topKKB** — Number of top results returned from knowledge base search (default: 5).
-- **topKMemory** — Number of top results returned from memory search (default: 5).
+- **topKMemory** — Number of top results returned from memory search (default: 8).

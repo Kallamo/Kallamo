@@ -56,7 +56,7 @@ export const TYPE_SECTIONS = {
   ],
   Creatures: [
     section('details', 'Details'),
-    section('appearance', 'Appearance', 'data', { variant: 'individual' }),
+    section('appearance', 'Appearance'),
     section('personality', 'Personality', 'data', { variant: 'individual' }),
     section('lore', 'Lore'),
     section('inv', 'Inventory', 'inventory', { variant: 'individual' }),

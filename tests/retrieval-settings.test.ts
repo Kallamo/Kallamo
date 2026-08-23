@@ -42,7 +42,7 @@ describe('retrieval settings', () => {
       ragDebug: true,
       profileKnowledgeTopK: 5,
       workspaceDocumentsTopK: 5,
-      longTermMemoryTopK: 5
+      longTermMemoryTopK: 8
     });
     expect(normalized).not.toHaveProperty('narrativeContextBudgetPercent');
   });
