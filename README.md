@@ -89,7 +89,7 @@ Export any AI profile (system prompt, knowledge base files, custom memory) as a 
 
 ### 🔌 Bring Your Own Key — Multi-Provider API Engine
 
-Kallamo doesn't sell AI access — you connect your own API keys. Support for **OpenAI**, **Anthropic**, **Google AI**, **Vertex AI**, **AWS Bedrock**, **OpenRouter**, or any **local server** (Ollama, LM Studio). Use the cheapest model for brainstorming and the most powerful one for final output — all within the same workflow. All keys are encrypted at rest using Electron's `safeStorage`. Dynamic variables (`{{variable}}`) are resolved at runtime across all prompts.
+Kallamo doesn't sell AI access — you connect your own API keys. Support for **OpenAI**, **Anthropic**, **Google AI**, **Vertex AI**, **AWS Bedrock**, **OpenRouter**, **ModelRunner**, or any **local server** (Ollama, LM Studio). Use the cheapest model for brainstorming and the most powerful one for final output — all within the same workflow. All keys are encrypted at rest using Electron's `safeStorage`. Dynamic variables (`{{variable}}`) are resolved at runtime across all prompts.
 
 ### 🔄 Silent Auto-Updates
 

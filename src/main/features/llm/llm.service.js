@@ -62,6 +62,9 @@ function resolveOpenAiCompatibleEndpoint(baseUrl, provider, kind) {
     if (normalizedProvider === 'openrouter') {
         return `https://openrouter.ai/api/v1/${kind === 'embeddings' ? 'embeddings' : 'chat/completions'}`;
     }
+    if (normalizedProvider === 'modelrunner') {
+        return `https://queue.modelrunner.run/v1/${kind === 'embeddings' ? 'embeddings' : 'chat/completions'}`;
+    }
     return `https://api.openai.com/v1/${kind === 'embeddings' ? 'embeddings' : 'chat/completions'}`;
 }
 
@@ -194,6 +197,7 @@ function parseResponse(data, provider, jsonMode = false) {
         switch (provider.toLowerCase()) {
             case 'openai':
             case 'openrouter':
+            case 'modelrunner':
             case 'local': {
                 const message = data.choices[0].message;
                 const reasoning = message.reasoning_content || message.reasoning;
@@ -235,6 +239,7 @@ function parseStreamChunk(obj, provider) {
         switch (provider.toLowerCase()) {
             case 'openai':
             case 'openrouter':
+            case 'modelrunner':
             case 'local': {
                 const choice = obj.choices && obj.choices[0];
                 if (!choice) return empty;
@@ -328,6 +333,7 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
     switch (provider) {
         case 'openai':
         case 'openrouter':
+        case 'modelrunner':
         case 'local': {
             endpoint = resolveOpenAiCompatibleEndpoint(baseUrl, provider, 'chat');
             requestHeaders = buildOpenAiCompatibleHeaders(apiKey);
@@ -339,6 +345,7 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
             let userContent = newPrompt;
             if (attachedImages && attachedImages.length > 0) {
                 const isVisionModel = provider === 'openai' || provider === 'openrouter' ||
+                    provider === 'modelrunner' ||
                     (provider === 'local' && (model.toLowerCase().includes('vision') || model.toLowerCase().includes('llava') || model.toLowerCase().includes('vl')));
 
                 if (isVisionModel) {

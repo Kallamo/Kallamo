@@ -652,6 +652,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 focus:outline-none focus:border-accent cursor-pointer"
                         >
                           <option value="OpenRouter">OpenRouter</option>
+                          <option value="ModelRunner">ModelRunner</option>
                           <option value="Anthropic">Anthropic</option>
                           <option value="Google AI">Google AI</option>
                           <option value="OpenAI">OpenAI</option>
@@ -757,7 +758,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                             {(apiProvider === 'Local' || showBaseUrl) && (
                               <>
                                 <p className="caption mb-1.5">
-                                  {['Local', 'OpenAI', 'OpenRouter'].includes(apiProvider)
+                                  {['Local', 'OpenAI', 'OpenRouter', 'ModelRunner'].includes(apiProvider)
                                     ? <>Enter an OpenAI-compatible base ending in <code>/v1</code>, or a full chat or embeddings endpoint. Kallamo resolves the required path for each request.</>
                                     : <>Enter the provider's complete request endpoint. Kallamo uses this URL exactly as entered.</>}
                                 </p>

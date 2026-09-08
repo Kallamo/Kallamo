@@ -2,7 +2,7 @@ function getResponseMetadata(data, provider) {
     const normalizedProvider = String(provider || '').toLowerCase();
     let finishReason = null;
 
-    if (['openai', 'openrouter', 'local'].includes(normalizedProvider)) {
+    if (['openai', 'openrouter', 'modelrunner', 'local'].includes(normalizedProvider)) {
         finishReason = data.choices?.[0]?.finish_reason ?? null;
     } else if (normalizedProvider === 'anthropic') {
         finishReason = data.stop_reason ?? null;

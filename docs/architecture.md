@@ -80,7 +80,7 @@ Stores API provider credentials. Keys are encrypted via Electron `safeStorage`.
 |--------|------|-------------|
 | `id` | TEXT PK | Unique identifier |
 | `name` | TEXT | Display name |
-| `provider` | TEXT | `openai`, `anthropic`, `google ai`, `vertex ai`, `aws bedrock`, `openrouter`, `local` |
+| `provider` | TEXT | `openai`, `anthropic`, `google ai`, `vertex ai`, `aws bedrock`, `openrouter`, `modelrunner`, `local` |
 | `baseUrl` | TEXT | Custom endpoint override |
 | `apiKey` | TEXT | Encrypted API key (prefixed `safe:` + base64) |
 | `customConfig` | TEXT | Encrypted JSON for provider-specific config (GCP project, AWS region, etc.) |
@@ -504,7 +504,7 @@ for message in liveMessages (newest → oldest):
 
 ## API Engine & Provider Matrix
 
-The API engine normalizes request/response formats across 7 providers.
+The API engine normalizes request/response formats across 8 providers.
 
 ### Supported Providers
 
@@ -516,6 +516,7 @@ The API engine normalizes request/response formats across 7 providers.
 | **Vertex AI** | GCP OAuth2 (RS256 JWT) | `generateContent` | ❌ (use Google AI) |
 | **AWS Bedrock** | SigV4 signed requests | `/model/{id}/invoke` | ❌ (use OpenAI) |
 | **OpenRouter** | Bearer token | `/api/v1/chat/completions` | ✅ `/api/v1/embeddings` |
+| **ModelRunner** | Bearer token | `/v1/chat/completions` | ❌ (use OpenAI) |
 | **Local** (Ollama, LM Studio) | Bearer token | Custom `baseUrl` | ✅ Custom `baseUrl` |
 
 ### Role Normalization
@@ -524,7 +525,7 @@ All internal message roles are stored as `user` or `ai`. Before API calls, `ai` 
 
 | Provider | Internal `ai` → | System Prompt Format |
 |----------|-----------------|---------------------|
-| OpenAI / OpenRouter / Local | `assistant` | `{ role: "system", content: "..." }` |
+| OpenAI / OpenRouter / ModelRunner / Local | `assistant` | `{ role: "system", content: "..." }` |
 | Anthropic | `assistant` | Top-level `system` field |
 | Google AI / Vertex AI | `model` | `system_instruction.parts` |
 | AWS Bedrock (Claude) | `assistant` | Top-level `system` field |
