@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit",
     "setup:sqlite": "node tools/setup-sqlite-bindings.cjs",
     "postinstall": "node tools/setup-sqlite-bindings.cjs",
-    "pretest": "node tools/setup-sqlite-bindings.cjs",
+    "pretest": "npm run build:kanora && node tools/setup-sqlite-bindings.cjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:kanora": "vitest run tests/kanora",

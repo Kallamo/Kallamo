@@ -6,6 +6,7 @@ export * from './context-planner';
 export * from './individual-knowledge';
 export * from './ledger';
 export * from './narrative-memory';
+export * from './narrative-taxonomy';
 export * from './scenes';
 export * from './subject-knowledge';
 export * from './validation';

@@ -3,7 +3,7 @@ import { describe, expect, test } from 'vitest';
 import {
   NARRATIVE_STATE_SCHEMA,
   NARRATIVE_TRIAGE_SCHEMA
-} from '../../src/main/features/kanora/narrative-state-schema.js';
+} from '../../src/main/features/kanora/narrative-state-schema';
 
 describe('Narrative State structured output schemas', () => {
   test('accepts the supported triage shape and rejects missing ownership fields', () => {

@@ -16,6 +16,11 @@ import {
   type RelationshipState
 } from './contracts';
 import { isSupportedContractVersion } from './versioning';
+import {
+  KNOWLEDGE_CATEGORIES,
+  MEMORY_CATEGORIES,
+  RELATIONSHIP_CAUSES
+} from './narrative-taxonomy';
 
 export const VALIDATION_ISSUE_CODES = {
   INVALID_TYPE: 'invalid_type',
@@ -45,6 +50,15 @@ const ENTITY_KINDS = ['agent', 'group', 'object', 'location', 'species', 'event'
 const ENTITY_CAPABILITIES = ['appearance', 'personality', 'inventory', 'relationships', 'knowledge', 'beliefs', 'memory', 'perspective'];
 const ENTITY_FIELD_TYPES = ['short-text', 'long-text', 'number', 'range', 'boolean', 'single-choice', 'multiple-choice', 'entity-reference', 'entity-reference-list'];
 const ENTITY_FIELD_KEY = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+const KNOWLEDGE_CATEGORY_VALUES = [...KNOWLEDGE_CATEGORIES];
+const MEMORY_CATEGORY_VALUES = [...MEMORY_CATEGORIES];
+const RELATIONSHIP_CAUSE_VALUES = [...RELATIONSHIP_CAUSES];
+
+/** A taxonomy field is optional on the wire but, when present, has to be one of the known values. */
+function optionalEnum(record: Record<string, unknown>, key: string, values: string[], path: string, issues: ValidationIssue[]): void {
+  if (record[key] === undefined) return;
+  requireEnum(record, key, values, path, issues);
+}
 
 function addIssue(issues: ValidationIssue[], code: ValidationIssueCode, path: string, message: string): void {
   issues.push({ code, path, message });
@@ -200,6 +214,7 @@ function validateKnowledgeValue(value: unknown, path: string, issues: Validation
   requireConfidence(knowledge, 'confidence', path, issues);
   requireEnum(knowledge, 'accessibility', ['available', 'suppressed', 'inaccessible'], path, issues);
   requireEnum(knowledge, 'status', ['active', 'forgotten', 'revoked', 'superseded'], path, issues);
+  optionalEnum(knowledge, 'category', KNOWLEDGE_CATEGORY_VALUES, path, issues);
   if (knowledge.factIds !== undefined) requireStringArray(knowledge, 'factIds', path, issues);
   if (knowledge.informantIds !== undefined) requireStringArray(knowledge, 'informantIds', path, issues);
 }
@@ -225,6 +240,7 @@ function validateBeliefValue(value: unknown, path: string, issues: ValidationIss
   requireConfidence(belief, 'confidence', path, issues);
   requireEnum(belief, 'relationToCanon', ['aligned', 'contradicted', 'uncertain', 'unknown'], path, issues);
   requireEnum(belief, 'status', ['active', 'superseded', 'abandoned'], path, issues);
+  optionalEnum(belief, 'category', KNOWLEDGE_CATEGORY_VALUES, path, issues);
   if (belief.factIds !== undefined) requireStringArray(belief, 'factIds', path, issues);
 }
 
@@ -236,6 +252,7 @@ function validateNarrativeMemoryValue(value: unknown, path: string, issues: Vali
   requireString(memory, 'eventId', path, issues);
   requireString(memory, 'summary', path, issues);
   requireEnum(memory, 'accessibility', ['available', 'suppressed', 'inaccessible'], path, issues);
+  optionalEnum(memory, 'category', MEMORY_CATEGORY_VALUES, path, issues);
   if (memory.status !== undefined) requireEnum(memory, 'status', ['active', 'superseded', 'forgotten'], path, issues);
   if (memory.supersedesMemoryId !== undefined) requireString(memory, 'supersedesMemoryId', path, issues);
   if (memory.relatedEntityIds !== undefined) requireStringArray(memory, 'relatedEntityIds', path, issues);
@@ -256,6 +273,7 @@ function validateRelationshipValue(value: unknown, path: string, issues: Validat
   if (relationship.description !== undefined && typeof relationship.description !== 'string') {
     addIssue(issues, VALIDATION_ISSUE_CODES.INVALID_TYPE, `${path}.description`, 'Expected a string.');
   }
+  optionalEnum(relationship, 'cause', RELATIONSHIP_CAUSE_VALUES, path, issues);
   requireString(relationship, 'sourceEventId', path, issues);
 }
 

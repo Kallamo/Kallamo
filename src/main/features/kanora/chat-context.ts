@@ -19,6 +19,13 @@ import { RoleplaySystem } from './roleplay-system';
 import { createWorldbuildKnowledgeService, type WorldbuildKnowledgeService } from '../worldbuild/knowledge-service';
 import { normalizeRetrievalSettings } from '../../../shared/retrieval-settings-runtime';
 import { EpistemicResolver } from './epistemic-resolver';
+import {
+  KNOWLEDGE_CATEGORY_LABELS,
+  MEMORY_CATEGORY_LABELS,
+  normalizeKnowledgeCategory,
+  normalizeMemoryCategory,
+  statementKey
+} from '../../../kanora/narrative-taxonomy';
 import { canSubjectAccessOccurrence, isFactionOccurrenceMemoryShared } from '../worldbuild/event-occurrences';
 import { NarrativeContextManifestRepository, type NarrativeContextManifest } from './context-manifest';
 import { RoleplayContextOrchestrator } from './roleplay-context-orchestrator';
@@ -953,7 +960,7 @@ function normalizeRecord(
     const predicate = String(proposition?.predicate ?? '').trim();
     if (!predicate || proposition?.object === undefined) return undefined;
     return {
-      content: `${predicate}: ${formatNarrativeValue(proposition.object, nameById)}`,
+      content: withCategory(payload, `${predicate}: ${formatNarrativeValue(proposition.object, nameById)}`),
       epistemic: { kind: 'canon', access: 'public' }
     };
   }
@@ -982,7 +989,7 @@ function normalizeRecord(
     const content = String(payload.summary ?? '').trim();
     if (!content) return undefined;
     return {
-      content,
+      content: withCategory(payload, content),
       epistemic: { kind: 'memory', subjectId, accessibility: accessibility(payload.accessibility) }
     };
   }
@@ -995,7 +1002,7 @@ function normalizeRecord(
   if (row.record_type === 'belief') {
     const relation = payload.relationToCanon;
     return {
-      content,
+      content: withCategory(payload, content),
       epistemic: {
         kind: 'belief',
         subjectId,
@@ -1018,6 +1025,24 @@ function normalizeRecord(
     content: attribution ? `${content}\n${attribution}` : content,
     epistemic: { kind: 'knowledge', subjectId, accessibility: accessibility(payload.accessibility) }
   };
+}
+
+/**
+ * What kind of record this is, said in the prompt. A secret and a piece of world lore read
+ * identically as bare sentences, and the difference is exactly what decides whether a
+ * character may repeat it out loud.
+ */
+function withCategory(payload: Record<string, unknown>, content: string): string {
+  const label = categoryLabel(payload.category);
+  return label ? `${content}
+Kind: ${label}` : content;
+}
+
+function categoryLabel(value: unknown): string | undefined {
+  const category = normalizeKnowledgeCategory(value);
+  if (category) return KNOWLEDGE_CATEGORY_LABELS[category];
+  const memory = normalizeMemoryCategory(value);
+  return memory ? MEMORY_CATEGORY_LABELS[memory] : undefined;
 }
 
 function composeKnownEntity(entity: EntityRow, fields: FieldRow[], knownFieldKeys: Set<string>, knownAs: string | null): string {
@@ -1136,20 +1161,29 @@ function deduplicateCandidates(candidates: ContextCandidate[]): ContextCandidate
   return [...unique.values()];
 }
 
+/**
+ * One statement reaches the prompt once. The same observation is regularly stored several
+ * times under different wordings of the predicate or different acquisitions, and each copy
+ * spends budget saying what the previous copy already said. Collapsing here also keeps every
+ * source id, so provenance survives the merge.
+ */
 function deduplicateStandardEvidence(candidates: ContextCandidate[]): ContextCandidate[] {
   const selected: ContextCandidate[] = [];
   const memoryIndexes = new Map<string, number>();
   for (const candidate of candidates) {
-    if (candidate.epistemic.kind !== 'memory') {
+    const kind = candidate.epistemic.kind;
+    if (kind !== 'memory' && kind !== 'knowledge' && kind !== 'belief') {
       selected.push(candidate);
       continue;
     }
-    const contentKey = candidate.content
-      .replace(/^Narrative sequence:\s*\d+\s*/i, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .toLocaleLowerCase();
-    const key = `memory:${contentKey}`;
+    // Who holds a piece of knowledge is part of what it says, so two subjects knowing the same
+    // thing stay two records. A memory repeated word for word across subjects is collapsed
+    // instead: the sentence is identical and the budget it spends twice is not.
+    const owner = kind === 'memory' || !('subjectId' in candidate.epistemic)
+      ? ''
+      : candidate.epistemic.subjectId;
+    const contentKey = statementKey(candidate.content.replace(/^Narrative sequence:\s*\d+\s*/i, ''));
+    const key = `${kind}:${owner}:${contentKey}`;
     const existingIndex = memoryIndexes.get(key);
     if (existingIndex === undefined) {
       memoryIndexes.set(key, selected.length);

@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { propositionIdentity } from '../../../kanora/narrative-taxonomy';
 
 export type NarrativeRecordType =
   | 'fact'
@@ -76,6 +77,8 @@ export function projectCurrentNarrativeRecords(
   const beliefs = new Map<string, ProjectedNarrativeRecord>();
   const memories = new Map<string, ProjectedNarrativeRecord>();
   const relationships = new Map<string, ProjectedNarrativeRecord>();
+  const knowledgeEntries = new Map<string, string>();
+  const beliefEntries = new Map<string, string>();
   rows.forEach(row => {
     const payload = parseObject(row.payload_json);
     const projected = { row, payload };
@@ -101,12 +104,31 @@ export function projectCurrentNarrativeRecords(
       relationships.set(key, projected);
       return;
     }
+    // Two records that say the same thing about the same subject are one statement, however
+    // they were phrased into a predicate or filed as an acquisition. Keying on the entry id
+    // alone let every re-observation of the same fact stack up and reach the prompt again.
+    // The entry index keeps a hand-edited statement able to replace the text it revises,
+    // which a content key alone could not do.
     const entryId = String(payload.entryId ?? '');
-    const proposition = JSON.stringify(payload.proposition ?? null);
-    const key = entryId || `${row.subject_id}\u0000${proposition}`;
+    const key = statementIdentity(row.subject_id, payload);
     const target = row.record_type === 'knowledge' ? knowledge : beliefs;
-    if (payload.status === 'active') target.set(key, projected);
-    else target.delete(key);
+    const index = row.record_type === 'knowledge' ? knowledgeEntries : beliefEntries;
+    const previousKey = entryId ? index.get(entryId) : undefined;
+    if (previousKey && previousKey !== key) target.delete(previousKey);
+    if (payload.status === 'active') {
+      target.set(key, projected);
+      if (entryId) index.set(entryId, key);
+      return;
+    }
+    // A retirement ends its own record, never a different record that happens to say the
+    // same thing. Two subjects, or two copies retired one by one, would otherwise take the
+    // surviving statement down with them.
+    if (previousKey) {
+      target.delete(previousKey);
+    } else if (isSameRecord(target.get(key), entryId, payload)) {
+      target.delete(key);
+    }
+    if (entryId) index.delete(entryId);
   });
   return [
     ...facts.values(),
@@ -116,6 +138,27 @@ export function projectCurrentNarrativeRecords(
     ...memories.values(),
     ...relationships.values()
   ];
+}
+
+/**
+ * What identifies a statement in the projection: whose perspective it is, who it is about,
+ * and what it says. The predicate is not part of it, because that is the part that drifts.
+ */
+function isSameRecord(
+  holder: ProjectedNarrativeRecord | undefined,
+  entryId: string,
+  payload: Record<string, unknown>
+): boolean {
+  if (!holder) return false;
+  const holderEntryId = String(holder.payload.entryId ?? '');
+  if (entryId && holderEntryId) return holderEntryId === entryId;
+  return String(holder.payload.id ?? '') === String(payload.id ?? '');
+}
+
+function statementIdentity(subjectId: string, payload: Record<string, unknown>): string {
+  const proposition = objectValue(payload.proposition);
+  const aboutId = String(proposition.subjectId ?? '');
+  return `${subjectId}\u0000${propositionIdentity(aboutId, proposition.predicate, proposition.object)}`;
 }
 
 function objectValue(value: unknown): Record<string, unknown> {

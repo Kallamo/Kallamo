@@ -1,3 +1,5 @@
+import type { KnowledgeCategory, MemoryCategory, RelationshipCause } from './narrative-taxonomy';
+
 export const KANORA_CONTRACT_VERSION = '1.0' as const;
 
 export type KanoraContractVersion = typeof KANORA_CONTRACT_VERSION;
@@ -95,6 +97,8 @@ export interface NarrativeFact {
   referenceId?: NarrativeId;
   proposition: Proposition;
   relatedEntityIds?: NarrativeId[];
+  /** What kind of durable statement this is. Absent on records written before the taxonomy. */
+  category?: KnowledgeCategory;
   status: 'active' | 'superseded' | 'retracted';
   evidenceIds: NarrativeId[];
 }
@@ -132,6 +136,12 @@ export interface Knowledge {
   confidence: Confidence;
   accessibility: KnowledgeAccessibility;
   status: 'active' | 'forgotten' | 'revoked' | 'superseded';
+  /**
+   * What kind of knowledge this is. Model-authored records must carry a durable category to
+   * be stored at all; the field stays optional so records written before the taxonomy, and
+   * hand-authored entries, remain valid.
+   */
+  category?: KnowledgeCategory;
   factIds?: NarrativeId[];
   /**
    * Who passed this on, when the subject did not find it out for themselves. Only
@@ -150,6 +160,7 @@ export interface Belief {
   confidence: Confidence;
   relationToCanon: 'aligned' | 'contradicted' | 'uncertain' | 'unknown';
   status: 'active' | 'superseded' | 'abandoned';
+  category?: KnowledgeCategory;
   factIds?: NarrativeId[];
 }
 
@@ -159,6 +170,8 @@ export interface NarrativeMemory {
   eventId: NarrativeId;
   summary: string;
   accessibility: KnowledgeAccessibility;
+  /** Why this is worth remembering. A routine memory is not stored. */
+  category?: MemoryCategory;
   status?: 'active' | 'superseded' | 'forgotten';
   supersedesMemoryId?: NarrativeId;
   relatedEntityIds?: NarrativeId[];
@@ -173,6 +186,8 @@ export interface RelationshipState {
   value: number;
   previousValue?: number;
   description?: string;
+  /** What in the scene actually moved the bar. Courtesy and banter are not causes. */
+  cause?: RelationshipCause;
   sourceEventId: NarrativeId;
 }
 

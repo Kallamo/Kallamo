@@ -151,7 +151,7 @@ describe('Kallamo Kanora Chat context integration', () => {
           excerpt: summary,
           participantIds: [subjectId],
           confidence: 0.99,
-          operations: [{ type: 'memory', subjectId, summary, salience: 0.9 }]
+          operations: [{ type: 'memory', subjectId, summary, category: 'formative', salience: 0.9 }]
         }
       });
     }
@@ -528,7 +528,7 @@ describe('Kallamo Kanora Chat context integration', () => {
       event: {
         type: 'custom', description: 'Selka enters the tavern.', excerpt: 'Selka enters carrying a broken spear.',
         participantIds: ['selka'], confidence: 0.99,
-        operations: [{ type: 'fact', proposition: { subjectId: 'selka', predicate: 'narrative-introduction', object: 'A mercenary carrying a broken spear.' }, confidence: 0.99 }]
+        operations: [{ type: 'fact', proposition: { subjectId: 'selka', predicate: 'narrative-introduction', object: 'A mercenary carrying a broken spear.' }, category: 'identity', confidence: 0.99 }]
       }
     });
     const roleplay = new RoleplaySystem(db);

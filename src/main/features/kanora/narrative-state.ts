@@ -1,37 +1,20 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import { KANORA_CONTRACT_VERSION, type NarrativeOperation, type NarrativeProposal, type Proposition } from '../../../kanora/contracts';
+import { KANORA_CONTRACT_VERSION, type NarrativeOperation, type NarrativeProposal, type Proposition, type RelationshipState } from '../../../kanora/contracts';
 import { validateNarrativeOperation } from '../../../kanora/validation';
+import { propositionIdentity, statementKey } from '../../../kanora/narrative-taxonomy';
 import { NarrativeChangeSetRepository } from '../../../kanora/change-sets';
 import { NarrativeEventLedgerRepository, type NarrativeEventLedgerRecord } from '../../../kanora/ledger';
 import { createWorldbuildKnowledgeService, type WorldbuildKnowledgeService } from '../worldbuild/knowledge-service';
+import {
+  reviewExtractedOperations,
+  type ExtractedNarrativeEvent,
+  type ExtractedNarrativeOperation,
+  type QualityReview
+} from './narrative-quality';
 import type { RoleplayUpdatePolicy } from './roleplay-system';
 
-export interface ExtractedNarrativeEvent {
-  type: 'movement' | 'possession-transfer' | 'revelation' | 'deception' | 'discovery' | 'relationship-change' | 'custom';
-  description: string;
-  excerpt: string;
-  participantIds: string[];
-  participants?: Array<{
-    entityId: string;
-    role: string;
-    audienceType?: 'all-members' | 'selected-members';
-    selectedMemberIds?: string[];
-  }>;
-  worldbuildEventId?: string;
-  occurrenceTitle?: string;
-  worldDate?: Record<string, unknown>;
-  confidence: number;
-  operations: ExtractedNarrativeOperation[];
-}
-
-export type ExtractedNarrativeOperation =
-  | { type: 'fact'; proposition: Proposition; confidence: number }
-  | { type: 'awareness'; subjectId: string; targetId: string; confidence: number }
-  | { type: 'knowledge'; subjectId: string; proposition: Proposition; acquisition: 'participant' | 'witness' | 'reported' | 'inferred'; confidence: number; accessibility?: 'available' | 'suppressed' | 'inaccessible'; informantIds?: string[] }
-  | { type: 'belief'; subjectId: string; proposition: Proposition; confidence: number }
-  | { type: 'memory'; subjectId: string; summary: string; salience: number; accessibility?: 'available' | 'suppressed' | 'inaccessible'; relatedEntityIds?: string[] }
-  | { type: 'relationship'; sourceEntityId: string; targetEntityId: string; dimension: string; value: number; impact?: 'meaningful' | 'significant' | 'drastic'; title?: string; description?: string };
+export type { ExtractedNarrativeEvent, ExtractedNarrativeOperation } from './narrative-quality';
 
 export interface CreateEventInput {
   workspaceId: string;
@@ -47,6 +30,14 @@ export interface CreateEventInput {
   updatePolicy?: RoleplayUpdatePolicy;
   provenanceInterpreter?: 'model' | 'user';
   excludedRelationshipSourceIds?: Set<string>;
+}
+
+export interface CreateEventResult {
+  record?: NarrativeEventLedgerRecord;
+  decision?: 'automatic' | 'review';
+  skipped?: string;
+  /** Operations the quality gate refused, so a turn can explain itself in diagnostics. */
+  rejections?: QualityReview['rejections'];
 }
 
 export interface NarrativeStateMetric {
@@ -74,19 +65,6 @@ const AUTO_CONFIDENCE = 0.9;
 const AUTO_MEMORY_SALIENCE = 0.85;
 const MIN_KNOWLEDGE_CONFIDENCE = 0.8;
 const MIN_RELATIONSHIP_VALUE = 5;
-/**
- * Where someone is and what they are doing right now belong to the scene, which already
- * carries them and is rewritten every turn. Asserting them as canon or as knowledge creates a
- * second source of truth that nothing supersedes, so a character accumulates contradictory
- * positions, and it buries the durable records under a transcript of prose the model already
- * has in the window. Only model-authored operations are filtered: an authored predicate is a
- * title the writer chose and is never rewritten here.
- */
-const SCENE_STATE_PREDICATES = new Set([
-  'current-location', 'current-position', 'current-place', 'current-activity',
-  'current-action', 'current-scene', 'current-state', 'location', 'position',
-  'activity', 'whereabouts', 'present-at', 'presence', 'located-at', 'is-at'
-]);
 const RELATIONSHIP_IMPACT_LIMITS = { meaningful: 5, significant: 15, drastic: 50 } as const;
 const INITIAL_RELATIONSHIP_LIMITS = { meaningful: 25, significant: 50, drastic: 100 } as const;
 interface RelationshipBaseline { exists: boolean; value: number }
@@ -127,12 +105,27 @@ export class NarrativeStateSystem {
     `).run(status, details.deepAnalysis ? 1 : 0, details.fingerprint ?? null, details.inputTokens ?? 0, details.outputTokens ?? 0, details.error ?? null, Date.now(), workspaceId, originId);
   }
 
-  createEvent(input: CreateEventInput): { record?: NarrativeEventLedgerRecord; decision?: 'automatic' | 'review'; skipped?: string } {
-    if ((input.provenanceInterpreter ?? 'model') === 'model' && input.updatePolicy === 'manual') {
+  createEvent(proposed: CreateEventInput): CreateEventResult {
+    if ((proposed.provenanceInterpreter ?? 'model') === 'model' && proposed.updatePolicy === 'manual') {
       return { skipped: 'manual-policy' };
     }
+    // The gate runs before anything is fingerprinted or written, so a turn whose only
+    // content was scene chatter never reaches the ledger at all, and a regenerated turn
+    // that differs only in the chatter still fingerprints to the same event.
+    const review = reviewExtractedOperations(proposed.event.operations, {
+      modelAuthored: isModelAuthored(proposed),
+      eventConfidence: Number(proposed.event.confidence) || 0
+    });
+    if (!review.operations.length) {
+      return { skipped: 'no-durable-operations', ...rejected(review) };
+    }
+    // Everything below works on the gated event. Fingerprinting it rather than the raw one
+    // means a turn regenerated with different scene chatter still resolves to the same event.
+    const input: CreateEventInput = { ...proposed, event: { ...proposed.event, operations: review.operations } };
     const fingerprint = fingerprintEvent(input.workspaceId, input.originId, input.event);
-    if (this.hasFingerprint(input.workspaceId, fingerprint)) return { skipped: 'duplicate' };
+    if (this.hasFingerprint(input.workspaceId, fingerprint)) {
+      return { skipped: 'duplicate', ...rejected(review) };
+    }
     const operations = deduplicateAwarenessOperations(buildOperations(
       input,
       fingerprint,
@@ -141,7 +134,7 @@ export class NarrativeStateSystem {
     )
       .filter(isValidNarrativeOperation)
       .filter(operation => !this.isDuplicateOperation(input.workspaceId, operation)));
-    if (!operations.length) return { skipped: 'no-valid-operations' };
+    if (!operations.length) return { skipped: 'no-valid-operations', ...rejected(review) };
     const eventId = `evt_${fingerprint}`;
     const evidenceId = `evidence_${fingerprint}`;
     const participants = unique(input.event.participantIds).filter(id => input.allowedEntityIds.has(id));
@@ -342,6 +335,12 @@ export class NarrativeStateSystem {
     return this.knowledgeCards.getCard(workspaceId, subjectId, targetId)?.status === 'active';
   }
 
+  /**
+   * Whether this workspace already holds the same statement. The key is the sentence, not the
+   * predicate and not the acquisition: the interpreter renames predicates between turns and
+   * re-files the same observation as witnessed and as reported, and keying on the payload
+   * shape let every one of those through as a separate record.
+   */
   private isDuplicateOperation(workspaceId: string, operation: NarrativeOperation): boolean {
     if (operation.type === 'assert-fact') return this.isDuplicateFact(workspaceId, operation.fact.proposition);
     if (operation.type !== 'record-memory' && operation.type !== 'grant-knowledge' && operation.type !== 'set-belief') return false;
@@ -364,16 +363,17 @@ export class NarrativeStateSystem {
         AND COALESCE(lifecycle.status, 'active') = 'active'
     `).all(workspaceId, recordType, subjectId) as Array<{ payload_json: string }>;
     if (operation.type === 'record-memory') {
-      const summary = normalizeText(operation.memory.summary);
+      const summary = statementKey(operation.memory.summary);
       return rows.some(row => {
         const memory = JSON.parse(row.payload_json) as { summary?: string; status?: string };
-        return (memory.status ?? 'active') === 'active' && normalizeText(memory.summary ?? '') === summary;
+        return (memory.status ?? 'active') === 'active' && statementKey(memory.summary ?? '') === summary;
       });
     }
-    const proposition = JSON.stringify(operation.type === 'grant-knowledge' ? operation.knowledge.proposition : operation.belief.proposition);
+    const proposition = operation.type === 'grant-knowledge' ? operation.knowledge.proposition : operation.belief.proposition;
+    const key = propositionKey(proposition);
     return rows.some(row => {
       const record = JSON.parse(row.payload_json) as { proposition?: Proposition; status?: string };
-      return record.status === 'active' && JSON.stringify(record.proposition) === proposition;
+      return record.status === 'active' && record.proposition !== undefined && propositionKey(record.proposition) === key;
     });
   }
 
@@ -395,12 +395,16 @@ export class NarrativeStateSystem {
       LEFT JOIN kanora_narrative_origin_lifecycle lifecycle
         ON lifecycle.workspace_id = events.workspace_id AND lifecycle.origin_id = evidence.origin_id
       WHERE records.workspace_id = ? AND records.record_type = 'fact'
+        AND json_valid(records.payload_json)
+        AND json_extract(records.payload_json, '$.proposition.subjectId') = ?
         AND COALESCE(lifecycle.status, 'active') = 'active'
-    `).all(workspaceId) as Array<{ payload_json: string }>;
-    const target = JSON.stringify(proposition);
+    `).all(workspaceId, proposition.subjectId) as Array<{ payload_json: string }>;
+    const key = propositionKey(proposition);
     return rows.some(row => {
       const record = JSON.parse(row.payload_json) as { proposition?: Proposition; status?: string };
-      return (record.status ?? 'active') === 'active' && JSON.stringify(record.proposition) === target;
+      return (record.status ?? 'active') === 'active'
+        && record.proposition !== undefined
+        && propositionKey(record.proposition) === key;
     });
   }
 
@@ -516,11 +520,8 @@ function buildOperations(
 ): NarrativeOperation[] {
   const eventId = `evt_${fingerprint}`;
   const evidenceIds = [`evidence_${fingerprint}`];
-  const modelAuthored = (input.provenanceInterpreter ?? 'model') === 'model'
-    && input.originType !== 'worldbuild-update';
   return input.event.operations.flatMap((operation, index): NarrativeOperation[] => {
     if (!isAllowed(operation, input.allowedEntityIds, input.excludedRelationshipSourceIds)) return [];
-    if (modelAuthored && isSceneStateOperation(operation)) return [];
     const suffix = `${fingerprint}_${index}`;
     if (operation.type === 'fact') return [{
       id: `op_${suffix}`,
@@ -529,6 +530,7 @@ function buildOperations(
       fact: {
         id: `fact_${suffix}`,
         proposition: operation.proposition,
+        ...category(operation),
         status: 'active',
         evidenceIds
       }
@@ -576,7 +578,7 @@ function buildOperations(
             sourceEventId: eventId
           }
         } as const] : []),
-        { id: `op_${suffix}`, type: 'grant-knowledge', evidenceIds, knowledge: { id: `knowledge_${suffix}`, entryId: `entry_${suffix}`, subjectId: operation.subjectId, proposition: operation.proposition, sourceEventId: eventId, acquisition: operation.acquisition, confidence: confidence(operation.confidence), accessibility: operation.accessibility ?? 'available', status: 'active', ...informants(operation, input.allowedEntityIds) } }
+        { id: `op_${suffix}`, type: 'grant-knowledge', evidenceIds, knowledge: { id: `knowledge_${suffix}`, entryId: `entry_${suffix}`, subjectId: operation.subjectId, proposition: operation.proposition, sourceEventId: eventId, acquisition: operation.acquisition, confidence: confidence(operation.confidence), accessibility: operation.accessibility ?? 'available', status: 'active', ...category(operation), ...informants(operation, input.allowedEntityIds) } }
       ];
       return operations.every(isValidNarrativeOperation) ? operations : [];
     }
@@ -601,13 +603,12 @@ function buildOperations(
             sourceEventId: eventId
           }
         } as const] : []),
-        { id: `op_${suffix}`, type: 'set-belief', evidenceIds, belief: { id: `belief_${suffix}`, entryId: `entry_${suffix}`, subjectId: operation.subjectId, proposition: operation.proposition, sourceEventId: eventId, confidence: confidence(operation.confidence), relationToCanon: 'unknown', status: 'active' } }
+        { id: `op_${suffix}`, type: 'set-belief', evidenceIds, belief: { id: `belief_${suffix}`, entryId: `entry_${suffix}`, subjectId: operation.subjectId, proposition: operation.proposition, sourceEventId: eventId, confidence: confidence(operation.confidence), relationToCanon: 'unknown', status: 'active', ...category(operation) } }
       ];
       return operations.every(isValidNarrativeOperation) ? operations : [];
     }
-    if (operation.type === 'memory') return [{ id: `op_${suffix}`, type: 'record-memory', evidenceIds, memory: { id: `memory_${suffix}`, subjectId: operation.subjectId, eventId, summary: operation.summary.trim(), accessibility: operation.accessibility ?? 'available', status: 'active', relatedEntityIds: unique(operation.relatedEntityIds ?? []).filter(id => input.allowedEntityIds.has(id)) } }];
-    const valueOnly = (input.provenanceInterpreter ?? 'model') === 'model'
-      && input.originType !== 'worldbuild-update';
+    if (operation.type === 'memory') return [{ id: `op_${suffix}`, type: 'record-memory', evidenceIds, memory: { id: `memory_${suffix}`, subjectId: operation.subjectId, eventId, summary: operation.summary.trim(), accessibility: operation.accessibility ?? 'available', status: 'active', ...category(operation), relatedEntityIds: unique(operation.relatedEntityIds ?? []).filter(id => input.allowedEntityIds.has(id)) } }];
+    const valueOnly = isModelAuthored(input);
     const dimension = valueOnly ? 'overall' : operation.dimension.trim().toLowerCase();
     const baseline = currentRelationshipBaseline(operation.sourceEntityId, operation.targetEntityId, dimension);
     const previousValue = baseline.value;
@@ -655,6 +656,7 @@ function buildOperations(
           dimension,
           value,
           previousValue,
+          ...(operation.cause ? { cause: operation.cause as RelationshipState['cause'] } : {}),
           sourceEventId: eventId,
           ...(!valueOnly && operation.title?.trim() ? { title: operation.title.trim() } : {}),
           ...(!valueOnly && operation.description?.trim() ? { description: operation.description.trim() } : {})
@@ -679,24 +681,28 @@ function informants(
   return ids.length ? { informantIds: ids } : {};
 }
 
+/**
+ * One event moves a given bar once. Awareness is binary, so a second grant for the same pair
+ * says nothing; a relationship is a running value, and two adjustments for the same pair in
+ * the same event race each other, with only the last surviving in the projection while both
+ * stay in the store.
+ */
 function deduplicateAwarenessOperations(operations: NarrativeOperation[]): NarrativeOperation[] {
   const awarenessPairs = new Set<string>();
+  const relationshipPairs = new Set<string>();
   return operations.filter(operation => {
+    if (operation.type === 'set-relationship') {
+      const pair = `${operation.relationship.sourceEntityId}\u0000${operation.relationship.targetEntityId}\u0000${operation.relationship.dimension}`;
+      if (relationshipPairs.has(pair)) return false;
+      relationshipPairs.add(pair);
+      return true;
+    }
     if (operation.type !== 'grant-awareness') return true;
     const pair = `${operation.awareness.subjectId}\u0000${operation.awareness.targetId}`;
     if (awarenessPairs.has(pair)) return false;
     awarenessPairs.add(pair);
     return true;
   });
-}
-
-function isSceneStateOperation(operation: ExtractedNarrativeOperation): boolean {
-  if (operation.type !== 'fact' && operation.type !== 'knowledge' && operation.type !== 'belief') return false;
-  return SCENE_STATE_PREDICATES.has(normalizePredicate(operation.proposition.predicate));
-}
-
-function normalizePredicate(predicate: string): string {
-  return normalizeText(predicate).replace(/[\s_]+/g, '-');
 }
 
 function isAllowed(operation: ExtractedNarrativeOperation, allowed: Set<string>, excludedRelationshipSourceIds = new Set<string>()): boolean {
@@ -717,17 +723,63 @@ function isAllowed(operation: ExtractedNarrativeOperation, allowed: Set<string>,
   return true;
 }
 
+/**
+ * What a person has to see before it becomes campaign truth.
+ *
+ * The taxonomy makes this sharper than "every relationship and every belief". What the gate
+ * already refused never reaches a queue, and what remains can be separated by consequence: a
+ * secret, an identity, a belief and a rupture change what characters may say and do, so they
+ * wait. Ordinary world lore extracted at high confidence does not, and queueing it only
+ * trains the reviewer to approve without reading.
+ */
+const REVIEWED_KNOWLEDGE_CATEGORIES = new Set(['secret', 'identity']);
+const REVIEWED_RELATIONSHIP_CAUSES = new Set(['betrayal', 'sacrifice', 'cruelty', 'humiliation', 'forgiveness', 'rejection']);
+
 function requiresReview(event: ExtractedNarrativeEvent): boolean {
   if (event.confidence < AUTO_CONFIDENCE) return true;
   return event.operations.some(operation => {
-    if (operation.type === 'belief' || operation.type === 'relationship') return true;
+    if (operation.type === 'belief') return true;
+    if (operation.type === 'relationship') {
+      return operation.impact === 'drastic' || REVIEWED_RELATIONSHIP_CAUSES.has(String(operation.cause));
+    }
     if (operation.type === 'memory') return operation.salience < AUTO_MEMORY_SALIENCE;
+    if (operation.type === 'knowledge' && REVIEWED_KNOWLEDGE_CATEGORIES.has(String(operation.category))) return true;
     return operation.confidence < AUTO_CONFIDENCE;
   });
 }
 
 function fingerprintEvent(workspaceId: string, originId: string, event: ExtractedNarrativeEvent): string {
   return createHash('sha256').update(JSON.stringify({ workspaceId, originId, type: event.type, description: event.description.trim().toLowerCase(), operations: event.operations })).digest('hex').slice(0, 24);
+}
+
+/**
+ * Only the interpreter is held to the taxonomy. A worldbuild document update, an import or a
+ * hand-authored entry is already a deliberate act by the author.
+ */
+/** Refusals are only reported when there were any, so a clean turn stays a clean result. */
+function rejected(review: QualityReview): Pick<CreateEventResult, 'rejections'> {
+  return review.rejections.length ? { rejections: review.rejections } : {};
+}
+
+function isModelAuthored(input: CreateEventInput): boolean {
+  return (input.provenanceInterpreter ?? 'model') === 'model' && input.originType !== 'worldbuild-update';
+}
+
+/**
+ * Carries a normalized taxonomy value onto the stored record, and nothing when there is none.
+ * The gate has already narrowed the value to the closed vocabulary, so the cast only tells
+ * the compiler what the runtime check has established.
+ */
+function category<T extends string>(operation: ExtractedNarrativeOperation): { category?: T } {
+  return 'category' in operation && operation.category ? { category: operation.category as T } : {};
+}
+
+/**
+ * What makes two propositions the same claim: who they are about and what they say. The
+ * predicate is deliberately excluded, because it is the part the interpreter rewrites.
+ */
+function propositionKey(proposition: Proposition): string {
+  return propositionIdentity(proposition.subjectId, proposition.predicate, proposition.object);
 }
 
 function unique(values: string[]): string[] { return [...new Set(values.filter(Boolean))]; }

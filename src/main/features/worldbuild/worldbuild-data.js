@@ -1,5 +1,9 @@
 const crypto = require('crypto');
 const { createWorldbuildKnowledgeService } = require('./knowledge-service');
+const {
+  normalizeKnowledgeCategory,
+  normalizeMemoryCategory,
+} = require('../../../../dist-main/kanora/narrative-taxonomy');
 
 const FIELD_TYPES = new Set([
   'short-text', 'long-text', 'number', 'range', 'boolean',
@@ -688,20 +692,21 @@ function summarizeProposedOperation(operation, resolveEntityName) {
   }
   if (operation.type === 'set-relationship') {
     const value = operation.relationship;
-    return { ...common, kind: 'relationship', subjectId: value.sourceEntityId, targetId: value.targetEntityId, title: value.title || value.dimension, summary: value.description || String(value.value) };
+    return { ...common, kind: 'relationship', subjectId: value.sourceEntityId, targetId: value.targetEntityId, cause: value.cause || null, title: value.title || value.dimension, summary: value.description || String(value.value) };
   }
-  if (operation.type === 'grant-knowledge') return { ...common, kind: 'knowledge', subjectId: operation.knowledge.subjectId, targetId: operation.knowledge.proposition?.subjectId, acquisition: operation.knowledge.acquisition, confidence: operation.knowledge.confidence, summary: formatPropositionObject(operation.knowledge.proposition?.object, resolveEntityName) };
-  if (operation.type === 'set-belief') return { ...common, kind: 'belief', subjectId: operation.belief.subjectId, targetId: operation.belief.proposition?.subjectId, confidence: operation.belief.confidence, summary: formatPropositionObject(operation.belief.proposition?.object, resolveEntityName) };
+  if (operation.type === 'grant-knowledge') return { ...common, kind: 'knowledge', subjectId: operation.knowledge.subjectId, targetId: operation.knowledge.proposition?.subjectId, acquisition: operation.knowledge.acquisition, category: operation.knowledge.category || null, confidence: operation.knowledge.confidence, summary: formatPropositionObject(operation.knowledge.proposition?.object, resolveEntityName) };
+  if (operation.type === 'set-belief') return { ...common, kind: 'belief', subjectId: operation.belief.subjectId, targetId: operation.belief.proposition?.subjectId, category: operation.belief.category || null, confidence: operation.belief.confidence, summary: formatPropositionObject(operation.belief.proposition?.object, resolveEntityName) };
   if (operation.type === 'assert-fact') {
     return {
       ...common,
       kind: 'fact',
       targetId: operation.fact.proposition?.subjectId,
+      category: operation.fact.category || null,
       title: humanizePredicate(String(operation.fact.proposition?.predicate || '')),
       summary: formatPropositionObject(operation.fact.proposition?.object, resolveEntityName),
     };
   }
-  return { ...common, kind: 'memory', subjectId: operation.memory.subjectId, summary: operation.memory.summary };
+  return { ...common, kind: 'memory', subjectId: operation.memory.subjectId, category: operation.memory.category || null, summary: operation.memory.summary };
 }
 
 // Where an entry came from. A record written under an Event occurrence's narrative
@@ -748,10 +753,13 @@ function toEntry(row, payload, resolveEntityName) {
       factIds: normalizeIds(payload.factIds),
     };
   }
-  if (row.record_type === 'memory') return { ...common, kind: 'memory', summary: payload.summary };
+  if (row.record_type === 'memory') {
+    return { ...common, kind: 'memory', summary: payload.summary, category: payload.category || null };
+  }
   return {
     ...common,
     kind: row.record_type,
+    category: payload.category || null,
     aboutId: payload.proposition?.subjectId,
     statement: formatPropositionObject(payload.proposition?.object, resolveEntityName),
     confidence: payload.confidence,
@@ -795,6 +803,7 @@ function buildActiveOperation(kind, subjectId, entry, current, eventId, evidence
       memory: {
         id: crypto.randomUUID(), subjectId, eventId, summary,
         accessibility: normalizeAccessibility(entry.accessibility), status: 'active',
+        ...category(normalizeMemoryCategory(entry.category)),
         ...(current ? { supersedesMemoryId: current.payload.id } : {}),
       },
     };
@@ -812,6 +821,7 @@ function buildActiveOperation(kind, subjectId, entry, current, eventId, evidence
         acquisition,
         confidence: normalizeConfidence(entry.confidence),
         accessibility: normalizeAccessibility(entry.accessibility), status: 'active',
+        ...category(normalizeKnowledgeCategory(entry.category)),
         factIds: normalizeIds(entry.factIds),
         // Only hearsay has a teller. Keeping informants off a first-hand record stops a
         // stale name surviving a switch from reported back to observed, and a subject is
@@ -828,9 +838,15 @@ function buildActiveOperation(kind, subjectId, entry, current, eventId, evidence
       id: crypto.randomUUID(), entryId: current?.payload.entryId || current?.payload.id || crypto.randomUUID(),
       subjectId, proposition, sourceEventId: eventId,
       confidence: normalizeConfidence(entry.confidence), relationToCanon: 'unknown', status: 'active',
+      ...category(normalizeKnowledgeCategory(entry.category)),
       factIds: normalizeIds(entry.factIds),
     },
   };
+}
+
+/** Keeps an unset category out of the payload instead of storing an empty value. */
+function category(value) {
+  return value ? { category: value } : {};
 }
 
 function buildRemovalOperation(kind, current, eventId, evidenceId) {

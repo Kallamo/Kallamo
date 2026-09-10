@@ -1,4 +1,59 @@
-const NARRATIVE_TRIAGE_SCHEMA = {
+import {
+  KNOWLEDGE_CATEGORIES,
+  MEMORY_CATEGORIES,
+  RELATIONSHIP_CAUSES
+} from '../../../kanora/narrative-taxonomy';
+
+/** The union of both vocabularies, with the value they share listed once. */
+const OPERATION_CATEGORIES = [...new Set<string>([...KNOWLEDGE_CATEGORIES, ...MEMORY_CATEGORIES])];
+
+/**
+ * The operation shape the interpreter is allowed to return. Declaring the vocabularies here
+ * rather than only in the prompt means a provider with structured output refuses an invented
+ * category at generation time, instead of the runtime discarding the whole record later.
+ * Transient values are part of the enum on purpose: the interpreter needs somewhere honest to
+ * put momentary detail, and the runtime drops those by name.
+ */
+export const NARRATIVE_OPERATION_SCHEMA = {
+  type: 'object',
+  additionalProperties: true,
+  required: ['type'],
+  properties: {
+    type: {
+      type: 'string',
+      enum: ['fact', 'awareness', 'knowledge', 'belief', 'memory', 'relationship'],
+    },
+    subjectId: { type: 'string' },
+    targetId: { type: 'string' },
+    sourceEntityId: { type: 'string' },
+    targetEntityId: { type: 'string' },
+    proposition: {
+      type: 'object',
+      additionalProperties: true,
+      properties: {
+        subjectId: { type: 'string' },
+        predicate: { type: 'string' },
+      },
+    },
+    category: {
+      type: 'string',
+      enum: OPERATION_CATEGORIES,
+    },
+    cause: { type: 'string', enum: [...RELATIONSHIP_CAUSES] },
+    acquisition: { type: 'string', enum: ['participant', 'witness', 'reported', 'inferred'] },
+    accessibility: { type: 'string', enum: ['available', 'suppressed', 'inaccessible'] },
+    impact: { type: 'string', enum: ['meaningful', 'significant', 'drastic'] },
+    informantIds: { type: 'array', items: { type: 'string' } },
+    relatedEntityIds: { type: 'array', items: { type: 'string' } },
+    summary: { type: 'string' },
+    dimension: { type: 'string' },
+    value: { type: 'number', minimum: -100, maximum: 100 },
+    salience: { type: 'number', minimum: 0, maximum: 1 },
+    confidence: { type: 'number', minimum: 0, maximum: 1 },
+  },
+};
+
+export const NARRATIVE_TRIAGE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   required: ['consequential', 'types', 'entityIds', 'confidence', 'evidence', 'requiresFullAnalysis', 'reason', 'timeAdvance'],
@@ -65,7 +120,7 @@ const NARRATIVE_TRIAGE_SCHEMA = {
   },
 };
 
-const NARRATIVE_STATE_SCHEMA = {
+export const NARRATIVE_STATE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   required: ['newEntities', 'identityUpdates', 'resourceChanges', 'scenePatch', 'inventoryChanges', 'events'],
@@ -94,11 +149,9 @@ const NARRATIVE_STATE_SCHEMA = {
           occurrenceTitle: { type: 'string' },
           worldDate: { type: 'object', additionalProperties: true },
           confidence: { type: 'number', minimum: 0, maximum: 1 },
-          operations: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          operations: { type: 'array', items: NARRATIVE_OPERATION_SCHEMA },
         },
       },
     },
   },
 };
-
-module.exports = { NARRATIVE_TRIAGE_SCHEMA, NARRATIVE_STATE_SCHEMA };
