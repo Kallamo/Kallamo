@@ -2283,14 +2283,15 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     const roleplay = new RoleplaySystem(db);
     const scene = roleplay.getScene(workspaceId);
     const startClock = calendarService.getRoleplayClock(db, workspaceId);
-    const recordTimeFrame = (timeAdvance, endLocationId = roleplay.getScene(workspaceId)?.locationId) =>
+    const recordTimeFrame = (timeAdvance, endLocationId = roleplay.getScene(workspaceId)?.locationId, minimumMinutes = 0) =>
         calendarService.applyRoleplayTurnFrame(db, {
             workspaceId,
             originId: provenanceId,
             startClock,
             startLocationId: scene?.locationId,
             endLocationId,
-            timeAdvance
+            timeAdvance,
+            minimumMinutes
         });
 
     const { ROLE_IDS, resolveAiEngineRole } = require('./features/ai-engine/role-resolver');
@@ -2850,10 +2851,18 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         }
     }
     })();
-    const timeFrame = recordTimeFrame(
-        triage?.timeAdvance,
-        (rejectedSceneChange ? null : routedResult.scenePatch?.locationId) || roleplay.getScene(workspaceId)?.locationId
-    );
+    const appliedLocationId = roleplay.getScene(workspaceId)?.locationId;
+    const endLocationId = (rejectedSceneChange ? null : routedResult.scenePatch?.locationId) || appliedLocationId;
+    // The floor is charged for a move that actually happened. A relocation still waiting for
+    // approval is shown in the frame, as it always was, but must not move the campaign clock
+    // for a journey the reviewer may reject.
+    const travelFloorMinutes = resolveTravelFloorMinutes({
+        startLocationId: scene?.locationId,
+        endLocationId: appliedLocationId,
+        locationLinks,
+        timeMatrix
+    });
+    const timeFrame = recordTimeFrame(triage?.timeAdvance, endLocationId, travelFloorMinutes);
     if (timeFrame.advance) changes.push({ kind: 'time', frame: timeFrame });
     const triageInputTokens = estimateTokens(triageSystemPrompt) + estimateTokens(triagePayload);
     const triageOutputTokens = triagePrimaryOutputTokens;
@@ -3149,7 +3158,7 @@ function loadNarrativeLocationInventoryState(workspaceId, locationId, itemIds) {
 
 const NARRATIVE_TRIAGE_SYSTEM_PROMPT = `You route Roleplay turns to durable-state analyzers and estimate elapsed narrative time. Inspect the user action, final narrative, current time, calendar, time matrix, compact scene, named entities, and locally extracted candidate signals. Candidate signals are hints, not conclusions.
 Return JSON only with {"consequential":boolean,"types":["entity","scene","resource","inventory","awareness","knowledge","belief","memory","relationship","fact"],"entityIds":["existing-id"],"confidence":0.0,"evidence":["short verbatim excerpt"],"requiresFullAnalysis":boolean,"reason":"brief","timeAdvance":null}.
-Always evaluate elapsed time, even when no other durable domain is consequential. For an in-world action, timeAdvance is {"actionType":"short_snake_case","basis":"explicit|matrix","duration":{"years":0,"months":0,"days":0,"hours":0,"minutes":0},"targetPosition":null,"confidence":0.0,"evidence":"short verbatim excerpt"}. When the final narrative establishes an absolute ending date or time, set basis to "explicit", copy the complete resulting calendar position into targetPosition, and also return the calculated duration. Use null for out-of-character instructions, corrections, hypothetical actions, or when no in-world time passed. Travel always costs time: when the turn completes a journey between places, timeAdvance is never null, and its duration must match the distance actually crossed rather than the length of the passage describing it.
+Always evaluate elapsed time, even when no other durable domain is consequential. For an in-world action, timeAdvance is {"actionType":"short_snake_case","basis":"explicit|matrix","duration":{"years":0,"months":0,"days":0,"hours":0,"minutes":0},"targetPosition":null,"confidence":0.0,"evidence":"short verbatim excerpt"}. When the final narrative establishes an absolute ending date or time, set basis to "explicit", copy the complete resulting calendar position into targetPosition, and also return the calculated duration. Use null for out-of-character instructions, corrections, hypothetical actions, or when no in-world time passed. A skip of days, months or years is returned in the same duration object and is accepted only when the turn says so in words, so return the span the text states and never one it merely recounts as history: an estimate on its own is held to a week. Travel always costs time: when the turn completes a journey between places, timeAdvance is never null, and its duration must match the distance actually crossed rather than the length of the passage describing it. Walking somewhere is usually described in two lines and still takes as long as the walk takes, so read the duration off the timeMatrix category the journey belongs to and never below that category's minimumMinutes.
 An explicit final position or duration in the narrative wins over the matrix. Reconcile every clock reference with currentTime; do not describe a turn as reaching a later time while returning null or a conflicting duration. Otherwise choose a reasonable value within the supplied matrix: Micro for dialogue lines, combat rounds, lockpicking, and quick scans; Local for same-district walking, wound care, and careful room inspection; Transit for cross-district travel, crowds, minor repairs, and setting camp; Macro for crafting, deep study, rest, and inter-city travel; Timeskip for supported downtime, recovery, waiting, long-distance travel, or another transition spanning one or more calendar days. Do not advance hours during line-by-line dialogue. Do not use a tiny advance for substantial travel. A jump of one day or more must be explicitly supported by the final narrative or by a completed action whose duration is covered by the configured Timeskip range. Return calendar units directly instead of assuming a 24-hour day.
 Mark inventory for explicit pickup, drop, transfer, gift, theft, loss, consumption, equip, unequip, drawing, sheathing, or quantity change. Mark scene for explicit arrival, departure, movement, participation, observer, nearby, object, or location change. Mark epistemic domains only for information actually communicated, perceived, discovered, remembered, believed, or relationally consequential. Mark relationship for a first demonstrated encounter or interaction that must initialize a directional relationship, even when its initial value is 0, and for an event that materially and durably changes an existing value. Direct conversation is mutual interaction. Listening or overhearing is interaction only from the aware listener toward the speaker unless the speaker also perceives the listener. Mere co-presence is not interaction. Ordinary politeness, irritation, banter, compliance, disagreement, or passing mood does not change an existing value. Mark resource for an actual value change, not a price mention or hypothetical. A concrete edition of a supplied recurring Event is consequential when it actually takes place, even if the tradition itself is already known.
 A newly introduced persistent named character, stably identifiable individual creature, named location, or narratively important unique item is consequential even without an existing ID. An unnamed person distinguished only by appearance, ancestry, clothing, age, expression, or scene position may be routed as a sparse entity candidate, but is not yet a Worldbuild identity. Mark false for crowds, atmosphere, repetition, casual dialogue, hypotheticals, offers not completed, item mentions without possession changes, and events without durable consequences. Presence alone never grants awareness or knowledge. Set requiresFullAnalysis only when four or more domains interact or the consequence cannot be safely isolated.`;
@@ -3353,17 +3362,50 @@ function extractExplicitClockTarget(text, startClock, calendar, futureOnly = fal
     } : null;
 }
 
+/**
+ * How long the shortest honest version of this journey takes, in the campaign's own terms.
+ *
+ * The interpreter reads elapsed time out of the prose, and a walk across the city is usually
+ * two lines of prose, so it kept arriving as zero. The turn knows both ends of the move and
+ * the author already wrote a Time Cost Matrix, so the floor is read from the graph rather
+ * than guessed: a room inside its building is a step, a linked neighbour is a local walk, and
+ * anything the map does not join directly is transit.
+ */
+function resolveTravelFloorMinutes({ startLocationId, endLocationId, locationLinks, timeMatrix }) {
+    if (!startLocationId || !endLocationId || startLocationId === endLocationId) return 0;
+    const link = (locationLinks || []).find(candidate =>
+        (candidate.fromId === startLocationId && candidate.toId === endLocationId)
+        || (candidate.fromId === endLocationId && candidate.toId === startLocationId));
+    const categoryId = !link ? 'transit' : link.relType === 'inside' ? 'micro' : 'local';
+    const calendar = require('./features/worldbuild/calendar-service');
+    return calendar.matrixMinimumMinutes(timeMatrix, categoryId)
+        || calendar.matrixMinimumMinutes(timeMatrix, 'local');
+}
+
 function resolveNarrativeTimeAdvance({ timeAdvance, startClock, calendar, userMessage, narrativeResponse }) {
-    const responseTarget = extractExplicitClockTarget(narrativeResponse, startClock, calendar);
-    const requestedTarget = responseTarget || extractExplicitClockTarget(userMessage, startClock, calendar, true);
-    if (!requestedTarget && !timeAdvance) return null;
+    const calendarService = require('./features/worldbuild/calendar-service');
+    // A span written in the turn is evidence, not a hint. It is what authorizes months and
+    // years, and a strongly stated one still moves the clock when the interpreter reported
+    // nothing at all, which is the ordinary case for "passam-se tres meses" typed by the player.
+    const statedSpan = calendarService.extractElapsedSpan(calendar, `${userMessage || ''}
+${narrativeResponse || ''}`);
+    // A stated skip of a day or more outranks a clock reading. The clock parser only ever
+    // produces a position inside the current day, so honouring it here would quietly turn
+    // "three months later, at two in the afternoon" into an afternoon.
+    const spansDays = Boolean(statedSpan) && statedSpan.minutes >= calendar.hoursPerDay * 60;
+    const responseTarget = spansDays ? null : extractExplicitClockTarget(narrativeResponse, startClock, calendar);
+    const requestedTarget = spansDays
+        ? null
+        : responseTarget || extractExplicitClockTarget(userMessage, startClock, calendar, true);
+    if (!requestedTarget && !timeAdvance && !statedSpan) return null;
     const current = timeAdvance && typeof timeAdvance === 'object' && !Array.isArray(timeAdvance)
         ? { ...timeAdvance }
         : {
-            actionType: 'explicit_clock_progression',
+            actionType: statedSpan ? 'stated_time_skip' : 'explicit_clock_progression',
+            basis: 'matrix',
             duration: { years: 0, months: 0, days: 0, hours: 0, minutes: 0 },
             confidence: 1,
-            evidence: ''
+            evidence: statedSpan?.evidence || ''
         };
     if (requestedTarget) {
         current.basis = 'explicit';
@@ -3372,6 +3414,7 @@ function resolveNarrativeTimeAdvance({ timeAdvance, startClock, calendar, userMe
     } else if (!Object.hasOwn(current, 'targetPosition')) {
         current.targetPosition = null;
     }
+    if (statedSpan) current.statedSpan = statedSpan;
     return current;
 }
 

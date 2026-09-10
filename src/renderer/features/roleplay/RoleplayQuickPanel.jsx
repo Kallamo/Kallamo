@@ -894,9 +894,30 @@ function describeRecentChange(change, names, definitions) {
   }
   if (change.kind === 'time') {
     const end = change.frame.end;
-    return [`Time advanced to ${formatTurnDate(end)} at ${String(end.position.hour).padStart(2, '0')}:${String(end.position.minute).padStart(2, '0')}.`];
+    const advance = change.frame.advance;
+    const details = [`Time advanced to ${formatTurnDate(end)} at ${String(end.position.hour).padStart(2, '0')}:${String(end.position.minute).padStart(2, '0')}.`];
+    // A jump of days or more is the one time change worth reading twice, and a bound that
+    // fired is the only sign the campaign clock did not do what the turn asked for.
+    const skipped = describeElapsed(advance?.duration);
+    if (skipped) details.push(`Elapsed: ${skipped}.`);
+    if (advance?.clamped) details.push(`Limited from a requested ${describeElapsed(advance.requestedDuration) || 'longer span'}.`);
+    if (advance?.raisedToMinimum) details.push('Raised to the minimum this move costs.');
+    return details;
   }
   return ['Narrative State updated.'];
+}
+
+/** A duration in words, and nothing at all when it is under a day. */
+function describeElapsed(duration) {
+  if (!duration) return '';
+  const parts = [
+    [duration.years, 'year'],
+    [duration.months, 'month'],
+    [duration.days, 'day'],
+    [duration.hours, 'hour']
+  ].filter(([value]) => value > 0);
+  if (!parts.length || (!duration.years && !duration.months && !duration.days)) return '';
+  return parts.map(([value, unit]) => `${value} ${unit}${value === 1 ? '' : 's'}`).join(', ');
 }
 
 function describeSceneChange(patch, names) {
