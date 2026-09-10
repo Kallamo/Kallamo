@@ -1,3 +1,12 @@
+/** Predicates that name a moment the live scene already carries, never durable canon. */
+const SCENE_PREDICATE_LIST = [
+  'current-location', 'current-position', 'current-place', 'current-activity',
+  'current-action', 'current-scene', 'current-state', 'current-mood',
+  'current-emotion', 'location', 'position', 'activity', 'whereabouts',
+  'present-at', 'presence', 'located-at', 'is-at', 'emotional-state',
+  'emotional-state-reported', 'mood', 'posture', 'stance'
+].map(value => `'${value}'`).join(', ');
+
 const MIGRATIONS = [
   {
     id: 'kanora_narrative_event_ledger_v1',
@@ -943,6 +952,40 @@ const MIGRATIONS = [
       CREATE INDEX IF NOT EXISTS idx_worldbuild_occurrences_origin
         ON worldbuild_event_occurrences (workspace_id, origin_id);
     `)
+  },
+  {
+    /**
+     * Scene state that older extraction wrote as durable canon. The interpreter is no longer
+     * allowed to emit these, but a campaign played before the rule still carries them, and
+     * each one reaches the prompt as a second, permanent answer to a question the live scene
+     * already answers. Only records the model wrote are touched, and only their status: the
+     * rows, their events and their evidence stay for audit.
+     */
+    id: 'kanora_narrative_record_categories_v1',
+    up: (db) => {
+      const hasEvents = db.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'kanora_narrative_events'"
+      ).get();
+      if (!hasEvents) return;
+      const scenePredicates = `(${SCENE_PREDICATE_LIST})`;
+      const retire = (recordTypes, status) => db.prepare(`
+        UPDATE kanora_narrative_records
+        SET payload_json = json_set(payload_json, '$.status', ?)
+        WHERE record_type IN (${recordTypes.map(() => '?').join(', ')})
+          AND json_valid(payload_json)
+          AND COALESCE(json_extract(payload_json, '$.status'), 'active') = 'active'
+          AND lower(replace(
+            COALESCE(json_extract(payload_json, '$.proposition.predicate'), ''), '_', '-'
+          )) IN ${scenePredicates}
+          AND source_event_id IN (
+            SELECT event_id FROM kanora_narrative_events
+            WHERE workspace_id = kanora_narrative_records.workspace_id
+              AND provenance_interpreter = 'model'
+          )
+      `).run(status, ...recordTypes);
+      retire(['fact'], 'retracted');
+      retire(['knowledge', 'belief'], 'superseded');
+    }
   }
 ];
 

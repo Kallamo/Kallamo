@@ -64,6 +64,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resolveNarrativeStateOperations: (workspaceId, eventId, approvedOperationIds, rejectedOperationIds) =>
     ipcRenderer.invoke('resolve-narrative-state-operations', { workspaceId, eventId, approvedOperationIds, rejectedOperationIds }),
   reprocessNarrativeStateTurn: (workspaceId, originId) => ipcRenderer.invoke('reprocess-narrative-state-turn', { workspaceId, originId }),
+  compactNarrativeState: (workspaceId, apply) => ipcRenderer.invoke('compact-narrative-state', { workspaceId, apply }),
   onRoleplayResourceChanges: (callback) => {
     const listener = (event, data) => callback(data);
     ipcRenderer.on('roleplay-resource-changes', listener);
@@ -317,7 +318,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.off('import-progress', listener);
   },
 
-  // --- LOCAL AI ENGINE (v1.0.5) ---
+  // --- LOCAL AI ENGINE ---
   getEngineStatus: () => ipcRenderer.invoke('get-engine-status'),
   downloadEngine: () => ipcRenderer.invoke('download-engine'),
   cancelEngineDownload: () => ipcRenderer.invoke('cancel-engine-download'),

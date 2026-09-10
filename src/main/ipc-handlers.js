@@ -4434,9 +4434,7 @@ ipcMain.handle('execute-summarization', async (event, { chatId, selectedMessages
   }
 });
 
-// ==========================================
 // --- AGENT WORKFLOWS IPC HANDLERS ---
-// ==========================================
 ipcMain.handle('get-workflows', async () => {
   try {
     const rows = db.prepare('SELECT * FROM workflows').all();

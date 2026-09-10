@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { Activity, Check, ChevronDown, Clock3, Eye, Gauge, MapPin, Pencil, Plus, RefreshCw, Shield, Trash2, Users, X } from 'lucide-react';
+import { Activity, Check, ChevronDown, Clock3, Eye, Gauge, MapPin, Pencil, Plus, RefreshCw, Shield, Sparkles, Trash2, Users, X } from 'lucide-react';
 import ColorField from './ui/ColorField';
 import ConfirmDialog from './ui/ConfirmDialog';
 import SearchableSelect from './ui/SearchableSelect';
@@ -41,6 +41,8 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
   const [editingTimeCategoryId, setEditingTimeCategoryId] = useState(null);
   const [assignmentEditorOpen, setAssignmentEditorOpen] = useState(false);
   const [activityOpen, setActivityOpen] = useState(false);
+  const [compaction, setCompaction] = useState(null);
+  const [compactionBusy, setCompactionBusy] = useState(false);
   const presencePanelId = useId();
   const scenarioPanelId = useId();
   const timeCategoryPanelId = useId();
@@ -291,6 +293,39 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
   const pendingScenes = sceneChanges.filter(change => change.status === 'pending');
   const pendingInventory = inventoryChanges.filter(change => change.status === 'pending');
   const pendingEntities = entityChanges.filter(change => change.status === 'pending' || change.status === 'conflicting');
+  // Housekeeping is always previewed before it is applied. It changes what the campaign
+  // considers current, so it is the reviewer's decision and never a silent background sweep.
+  const previewCompaction = async () => {
+    setCompactionBusy(true);
+    try {
+      const result = await api.compactNarrativeState(workspaceId, false);
+      if (!result.success) throw new Error(result.error || 'Could not inspect the stored records.');
+      if (!result.report.retired) {
+        showToast('Nothing to clean up. Every stored record is unique and current.', 'success');
+        return;
+      }
+      setCompaction(result.report);
+    } catch (error) {
+      showToast(error.message || 'Could not inspect the stored records.', 'error');
+    } finally {
+      setCompactionBusy(false);
+    }
+  };
+
+  const applyCompaction = async () => {
+    setCompactionBusy(true);
+    try {
+      const result = await api.compactNarrativeState(workspaceId, true);
+      if (!result.success) throw new Error(result.error || 'Could not clean up the stored records.');
+      setCompaction(null);
+      showToast(`${result.report.retired} redundant record${result.report.retired === 1 ? '' : 's'} retired.`, 'success');
+    } catch (error) {
+      showToast(error.message || 'Could not clean up the stored records.', 'error');
+    } finally {
+      setCompactionBusy(false);
+    }
+  };
+
   const pendingNarrative = narrativeEvents.filter(event => event.status === 'proposed');
   const metricTotals = narrativeMetrics.reduce((total, metric) => ({ turns: total.turns + 1, deep: total.deep + (metric.deepAnalysis ? 1 : 0), tokens: total.tokens + metric.triageInputTokens + metric.triageOutputTokens + metric.deepInputTokens + metric.deepOutputTokens }), { turns: 0, deep: 0, tokens: 0 });
   const narrativeJobStaleAfter = 120000;
@@ -476,6 +511,17 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
           <Metric label="Deep analyses" value={metricTotals.deep} />
           <Metric label="Estimated tokens" value={metricTotals.tokens.toLocaleString()} />
         </div>
+        <div className="mt-4 flex flex-col gap-3 rounded-card border border-border-subtle bg-surface-panel-muted/45 px-3.5 py-3 sm:flex-row sm:items-center">
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-semibold text-text-secondary">Record hygiene</p>
+            <p className="mt-0.5 text-[0.6875rem] leading-relaxed text-text-muted">Find statements stored more than once and momentary scene detail kept as durable canon. You see what would change before anything is applied.</p>
+          </div>
+          <button type="button" onClick={previewCompaction} disabled={compactionBusy} className="inline-flex min-h-9 shrink-0 items-center justify-center gap-1.5 rounded-control border border-border-default px-3 text-[0.6875rem] font-semibold text-text-secondary hover:bg-surface-hover/60 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            <Sparkles aria-hidden="true" className="h-3.5 w-3.5" />
+            Check records
+          </button>
+        </div>
+
         <div className="mt-4">
           <NestedDisclosure
             id={activityPanelId}
@@ -493,6 +539,27 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
         </div>
       </Panel>
     </div>}
+    {compaction && (
+      <ConfirmDialog
+        title="Clean up stored records"
+        message={<>
+          <p><strong className="text-text-primary">{compaction.retired}</strong> of {compaction.scanned} stored records are redundant: {compaction.duplicates} repeated statement{compaction.duplicates === 1 ? '' : 's'}, {compaction.sceneState} piece{compaction.sceneState === 1 ? '' : 's'} of scene detail, {compaction.identifierContent} with unreadable content. The first copy of each statement is kept.</p>
+          {compaction.samples.length > 0 && (
+            <ul className="mt-3 max-h-40 space-y-1 overflow-y-auto text-xs text-text-muted">
+              {compaction.samples.map((sample, index) => (
+                <li key={index} className="truncate"><span className="text-text-subtle">{sample.recordType}</span> · {sample.summary}</li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-3 text-xs text-text-subtle">Nothing is deleted. These records stop being part of the current campaign state and stay in the history.</p>
+        </>}
+        actions={[
+          { label: 'Cancel', variant: 'ghost', onClick: () => { if (!compactionBusy) setCompaction(null); } },
+          { label: 'Clean up', loading: compactionBusy, autoFocus: true, onClick: applyCompaction }
+        ]}
+        onClose={() => { if (!compactionBusy) setCompaction(null); }}
+      />
+    )}
     {deletingResource && (
       <ConfirmDialog
         title="Delete tracked resource"
