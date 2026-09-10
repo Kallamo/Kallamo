@@ -37,6 +37,11 @@ export interface WorldbuildKnowledgeEntry {
   summary?: string;
   confidence?: number;
   acquisition?: 'participant' | 'witness' | 'reported' | 'inferred';
+  /**
+   * What kind of durable record this is, from the shared taxonomy. Null on records written
+   * before categories existed, which stay readable and are shown as unclassified.
+   */
+  category?: string | null;
   /** Who passed it on. Only carried by reported Knowledge; first-hand records have none. */
   informantIds?: string[];
   relationToCanon?: 'aligned' | 'contradicted' | 'unknown';

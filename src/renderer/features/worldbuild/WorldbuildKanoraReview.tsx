@@ -1,6 +1,14 @@
 import { useMemo, useState } from 'react';
 import { AlertTriangle, BookCheck, Check, Eye, Link2, Sparkles, X } from 'lucide-react';
 import Button from '../../components/ui/Button';
+import {
+  KNOWLEDGE_CATEGORY_LABELS,
+  MEMORY_CATEGORY_LABELS,
+  RELATIONSHIP_CAUSE_LABELS,
+  normalizeKnowledgeCategory,
+  normalizeMemoryCategory,
+  normalizeRelationshipCause
+} from '../../../kanora/narrative-taxonomy';
 import type { Toast, WorldbuildApi, WorldbuildEntity } from './worldbuildTypes';
 
 interface ReviewOperation {
@@ -11,7 +19,23 @@ interface ReviewOperation {
   title?: string;
   summary: string;
   method?: string;
+  category?: string | null;
+  cause?: string | null;
   confidence?: number;
+}
+
+/**
+ * What kind of durable record this is, in the reviewer's words. It is the fastest way to see
+ * whether a suggestion belongs in the campaign at all: a secret and a piece of world lore read
+ * the same as bare sentences and are worth very different amounts of attention.
+ */
+function operationTag(operation: ReviewOperation): string | null {
+  const cause = normalizeRelationshipCause(operation.cause);
+  if (cause) return RELATIONSHIP_CAUSE_LABELS[cause];
+  const knowledge = normalizeKnowledgeCategory(operation.category);
+  if (knowledge) return KNOWLEDGE_CATEGORY_LABELS[knowledge];
+  const memory = normalizeMemoryCategory(operation.category);
+  return memory ? MEMORY_CATEGORY_LABELS[memory] : null;
 }
 
 interface ReviewProposal {
@@ -106,12 +130,14 @@ export default function WorldbuildKanoraReview({
                 const scope = operation.kind === 'fact'
                   ? `Global canon${target ? ` · About ${target}` : ''}`
                   : `${source}${target ? ` → ${target}` : ''}`;
+                const tag = operationTag(operation);
                 return (
                   <article key={operation.id} className={`rounded-card border px-4 py-3.5 transition-colors ${decision === 'approved' ? 'border-status-success/30 bg-status-success/[0.06]' : decision === 'rejected' ? 'border-status-danger/25 bg-status-danger/[0.05]' : 'border-border-subtle bg-surface-canvas/30'}`}>
                     <div className="flex items-start justify-between gap-4">
                       <div className="min-w-0 flex-1">
                         <div className="mb-2 flex flex-wrap items-center gap-2">
                           <span className="rounded-full border border-entity-event/20 bg-entity-event/[0.08] px-2 py-0.5 eyebrow text-entity-event">{operation.kind}</span>
+                          {tag && <span className="rounded-full border border-border-subtle bg-surface-hover/50 px-2 py-0.5 eyebrow text-text-secondary">{tag}</span>}
                           <span className="text-xs text-text-muted">{scope}</span>
                         </div>
                         {operation.title && <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-text-muted">{operation.title}</p>}

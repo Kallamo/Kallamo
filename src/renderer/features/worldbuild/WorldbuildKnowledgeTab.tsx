@@ -7,6 +7,14 @@ import Button from '../../components/ui/Button';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import Modal from '../../components/ui/Modal';
 import SearchableSelect from '../../components/ui/SearchableSelect';
+import {
+  DURABLE_KNOWLEDGE_CATEGORIES,
+  KNOWLEDGE_CATEGORY_LABELS,
+  MEMORY_CATEGORY_LABELS,
+  normalizeKnowledgeCategory,
+  normalizeMemoryCategory,
+  type DurableKnowledgeCategory
+} from '../../../kanora/narrative-taxonomy';
 import type {
   KnowledgeEntryKind, Toast, WorldbuildApi, WorldbuildEntity,
   WorldbuildKnowledgeCard, WorldbuildKnowledgeEntry, WorldbuildKnowledgeProjection,
@@ -366,13 +374,42 @@ type Acquisition = NonNullable<WorldbuildKnowledgeEntry['acquisition']>;
 interface StatementDraft {
   kind: 'knowledge' | 'belief';
   statement: string;
+  category: DurableKnowledgeCategory;
   acquisition: Acquisition;
   informantIds: string[];
 }
 
 const emptyStatementDraft = (): StatementDraft => ({
-  kind: 'knowledge', statement: '', acquisition: 'witness', informantIds: [],
+  kind: 'knowledge', statement: '', category: 'world-lore', acquisition: 'witness', informantIds: [],
 });
+
+/* What a statement is, not just what it says. The same sentence can be a piece of public lore
+   or something a character would die before repeating, and only the label separates them. It
+   is also what the Narrative State filters on, so an authored entry speaks the same language
+   as an extracted one. */
+const CATEGORY_HINTS: Record<DurableKnowledgeCategory, string> = {
+  'world-lore': 'How the world, an institution, a material or a custom works.',
+  identity: 'Who or what someone really is.',
+  history: 'A past event and what happened in it.',
+  secret: 'Concealed information whose exposure would change what people do.',
+  capability: 'What a person, item, creature or technique can do.',
+  intent: 'A plan, promise, threat or goal that outlives the scene.',
+  bond: 'What the subject knows about a relationship between others.',
+};
+
+function normalizeDurableCategory(value: unknown): DurableKnowledgeCategory | undefined {
+  const category = normalizeKnowledgeCategory(value);
+  return category && (DURABLE_KNOWLEDGE_CATEGORIES as readonly string[]).includes(category)
+    ? category as DurableKnowledgeCategory
+    : undefined;
+}
+
+export function entryCategoryLabel(value: unknown): string | null {
+  const knowledge = normalizeKnowledgeCategory(value);
+  if (knowledge) return KNOWLEDGE_CATEGORY_LABELS[knowledge];
+  const memory = normalizeMemoryCategory(value);
+  return memory ? MEMORY_CATEGORY_LABELS[memory] : null;
+}
 
 /* Four stored methods, two an author needs to choose between. Observed covers both kinds of
    first-hand acquisition, since the difference between taking part and watching is already
@@ -420,6 +457,24 @@ function KnowledgeCardModal({ workspaceId, owner, card, entity, entities, roster
     ...projection.known.filter(entry => entry.aboutId === card.targetId),
     ...projection.beliefs.filter(entry => entry.aboutId === card.targetId),
   ];
+  const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
+  // Only kinds actually present are offered, and the filter disappears entirely below two of
+  // them: a list of chips that never narrows anything is noise on a card with three entries.
+  const categoryFilters = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const entry of statements) {
+      const key = normalizeKnowledgeCategory(entry.category) ?? 'unclassified';
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return [...counts.entries()].map(([value, count]) => ({
+      value,
+      label: entryCategoryLabel(value) ?? 'Unclassified',
+      count,
+    })).sort((left, right) => right.count - left.count);
+  }, [statements]);
+  const visibleStatements = categoryFilter
+    ? statements.filter(entry => (normalizeKnowledgeCategory(entry.category) ?? 'unclassified') === categoryFilter)
+    : statements;
   const relationships = mergeRelationships(card.availableRelationships, card.knownRelationships);
   const typeMeta = meta(card.targetType);
   const TypeIcon = typeMeta.icon;
@@ -574,6 +629,7 @@ function KnowledgeCardModal({ workspaceId, owner, card, entity, entities, roster
           // higher confidence the extraction path already assigns for the same reason.
           confidence: draft.kind === 'knowledge' && draft.acquisition !== 'reported' ? 0.95 : 0.75,
           accessibility: 'available',
+          category: draft.category,
           acquisition: draft.acquisition,
           informantIds: draft.acquisition === 'reported' ? draft.informantIds : [],
         },
@@ -620,6 +676,9 @@ function KnowledgeCardModal({ workspaceId, owner, card, entity, entities, roster
     setDraft({
       kind: entry.kind as 'knowledge' | 'belief',
       statement: entry.statement || '',
+      // An entry written before categories existed opens on the neutral one rather than on
+      // nothing, so saving it does not silently invent a classification the author skipped.
+      category: normalizeDurableCategory(entry.category) ?? 'world-lore',
       // A record the Narrative State wrote as inferred has no authored equivalent, so the
       // editor opens on the nearest thing an author can express rather than on nothing.
       acquisition: entry.acquisition === 'reported' ? 'reported' : 'witness',
@@ -851,6 +910,25 @@ function KnowledgeCardModal({ workspaceId, owner, card, entity, entities, roster
             </div>
           </fieldset>
 
+          <fieldset className="mb-4">
+            <legend className="eyebrow mb-1.5">Kind of statement</legend>
+            <div className="flex flex-wrap gap-1.5">
+              {DURABLE_KNOWLEDGE_CATEGORIES.map(category => (
+                <button
+                  key={category}
+                  type="button"
+                  aria-pressed={draft.category === category}
+                  data-tooltip={CATEGORY_HINTS[category]}
+                  onClick={() => setDraft(current => ({ ...current, category }))}
+                  className={`min-h-8 rounded-full border px-2.5 py-1 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none ${draft.category === category ? 'border-accent/40 bg-accent/[0.12] text-accent' : 'border-border-subtle text-text-muted hover:bg-surface-hover/60 hover:text-text-secondary'}`}
+                >
+                  {KNOWLEDGE_CATEGORY_LABELS[category]}
+                </button>
+              ))}
+            </div>
+            <p className="caption mt-1.5">{CATEGORY_HINTS[draft.category]}</p>
+          </fieldset>
+
           {/* Only Known carries a route. A belief is what the subject holds regardless of
               where it came from, and forcing a source onto one would invent a witness. */}
           {draft.kind === 'knowledge' && (
@@ -871,10 +949,18 @@ function KnowledgeCardModal({ workspaceId, owner, card, entity, entities, roster
         <section aria-labelledby="recorded-statements-heading">
           <div className="mb-2 flex items-baseline justify-between gap-3">
             <h4 id="recorded-statements-heading" className="eyebrow text-text-secondary">Recorded statements</h4>
-            <span className="text-xs tabular-nums text-text-subtle">{statements.length}</span>
+            <span className="text-xs tabular-nums text-text-subtle">{visibleStatements.length === statements.length ? statements.length : `${visibleStatements.length} / ${statements.length}`}</span>
           </div>
+          {categoryFilters.length > 1 && (
+            <div className="mb-2 flex flex-wrap gap-1.5" role="group" aria-label="Filter statements by kind">
+              <FilterChip label="All" active={!categoryFilter} onClick={() => setCategoryFilter(null)} />
+              {categoryFilters.map(({ value, label, count }) => (
+                <FilterChip key={value} label={`${label} · ${count}`} active={categoryFilter === value} onClick={() => setCategoryFilter(categoryFilter === value ? null : value)} />
+              ))}
+            </div>
+          )}
           <div className="space-y-2">
-            {statements.map(entry => (
+            {visibleStatements.map(entry => (
               <Statement
                 key={entry.id}
                 entry={entry}
@@ -884,6 +970,7 @@ function KnowledgeCardModal({ workspaceId, owner, card, entity, entities, roster
               />
             ))}
             {!statements.length && <p className="rounded-card border border-dashed border-border-subtle px-4 py-8 text-center text-xs text-text-subtle">No Statements recorded.</p>}
+            {Boolean(statements.length) && !visibleStatements.length && <p className="rounded-card border border-dashed border-border-subtle px-4 py-8 text-center text-xs text-text-subtle">No Statements of this kind.</p>}
           </div>
         </section>
       </div>
@@ -900,6 +987,19 @@ function KnowledgeCardModal({ workspaceId, owner, card, entity, entities, roster
       />
     )}
     </>
+  );
+}
+
+function FilterChip({ label, active, onClick }: { label: string; active: boolean; onClick(): void }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className={`min-h-8 rounded-full border px-2.5 py-1 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none ${active ? 'border-accent/40 bg-accent/[0.12] text-accent' : 'border-border-subtle text-text-muted hover:bg-surface-hover/60 hover:text-text-secondary'}`}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -1256,7 +1356,7 @@ function FactionAudience({ roster, entities, audienceType, selectedMemberIds, bu
 }
 
 /* The direction is the part that is easy to get backwards, so the sheet says it outright
-   on both sides of the relationship rather than leaving it to be inferred from behaviour. */
+   on both sides of the relationship rather than leaving it to be inferred from behavior. */
 function SharingRule({ entity, roster, factions, entities }: {
   entity: WorldbuildEntity; roster: string[]; factions: string[]; entities: WorldbuildEntity[];
 }) {
@@ -1559,6 +1659,7 @@ function Statement({ entry, entities = [], onEdit, onDelete, onOpenOrigin }: {
   const origin = ENTRY_ORIGINS[entry.origin?.kind ?? 'authored'] ?? ENTRY_ORIGINS.authored;
   const OriginIcon = origin.icon;
   const occurrenceTitle = entry.origin?.kind === 'occurrence' ? entry.origin.title : '';
+  const categoryLabel = entryCategoryLabel(entry.category);
   const route = entry.kind === 'knowledge' && entry.acquisition ? ACQUISITION_META[entry.acquisition] : null;
   const RouteIcon = route?.icon;
   const tellers = (entry.informantIds ?? [])
@@ -1580,6 +1681,9 @@ function Statement({ entry, entities = [], onEdit, onDelete, onOpenOrigin }: {
           {occurrenceTitle && (onOpenOrigin
             ? <button type="button" onClick={onOpenOrigin} className="max-w-full truncate rounded text-xs text-accent underline decoration-dotted underline-offset-4 transition-colors hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none">{occurrenceTitle}</button>
             : <span className="max-w-full truncate text-xs text-text-muted">{occurrenceTitle}</span>)}
+          {categoryLabel && (
+            <span className="rounded-full border border-border-subtle bg-surface-hover/45 px-2 py-0.5 text-[0.625rem] font-semibold text-text-secondary">{categoryLabel}</span>
+          )}
           {route && RouteIcon && (
             <span className="inline-flex items-center gap-1 rounded-full border border-border-subtle px-2 py-0.5 text-[0.625rem] font-semibold text-text-muted">
               <RouteIcon className="h-3 w-3" aria-hidden="true" />
