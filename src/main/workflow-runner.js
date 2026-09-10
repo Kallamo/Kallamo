@@ -3220,6 +3220,8 @@ function buildNarrativeStateSystemPrompt(domains, languageInstruction = '') {
     const sections = languageInstruction ? [languageInstruction] : [];
     if (domains.length >= 4) {
         sections.push(NARRATIVE_FULL_STATE_SYSTEM_PROMPT);
+        // Events and the durability taxonomy are defined once, in the epistemic prompt.
+        if (hasEpistemicDomain(domains)) sections.push(NARRATIVE_EPISTEMIC_SCOPED_PROMPT);
         sections.push(`Selected domains: ${domains.join(', ')}. Leave unselected domains empty.`);
         return sections.join('\n\n');
     }
