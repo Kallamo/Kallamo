@@ -1283,7 +1283,7 @@ function seedOnboarding() {
     const now = Date.now();
 
     // All three ship agentic-RAG ON (isAgentic=1) with the default agentic loop, no
-    // custom agenticPrompt, so the built-in behaviour drives retrieval.
+    // custom agenticPrompt, so the built-in behavior drives retrieval.
     const profiles = [
       {
         id: seedId('wp'),

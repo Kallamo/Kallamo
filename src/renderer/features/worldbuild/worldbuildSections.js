@@ -112,7 +112,7 @@ export const tabLabel = (typeId, variant, tab) => {
 };
 
 // Only the first tab is authored content. Inventory, connections, knowledge and
-// occurrences are systematic: they carry their own behaviour and the records of other
+// occurrences are systematic: they carry their own behavior and the records of other
 // features, so renaming or hiding them would promise an edit the app cannot honour.
 export const templateSections = (typeId) => nativeSections(typeId).filter(item => item.tab === 'data');
 

@@ -7,16 +7,76 @@ const { getResponseMetadata } = require('../src/main/features/llm/response-metad
 describe('LLM response metadata', () => {
   test('recognizes Bedrock output-limit responses', () => {
     expect(getResponseMetadata({ stop_reason: 'max_tokens', usage: { output_tokens: 1800 } }, 'AWS Bedrock'))
-      .toEqual({ finishReason: 'max_tokens', truncated: true, usage: { output_tokens: 1800 }, inputTokens: 0, outputTokens: 1800 });
+      .toEqual({
+        finishReason: 'max_tokens',
+        truncated: true,
+        usage: { output_tokens: 1800 },
+        inputTokens: 0,
+        outputTokens: 1800,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        uncachedInputTokens: 0
+      });
   });
 
   test('recognizes successful OpenAI-compatible responses', () => {
     expect(getResponseMetadata({ choices: [{ finish_reason: 'stop' }] }, 'OpenRouter'))
-      .toEqual({ finishReason: 'stop', truncated: false, usage: null, inputTokens: 0, outputTokens: 0 });
+      .toEqual({
+        finishReason: 'stop',
+        truncated: false,
+        usage: null,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        uncachedInputTokens: 0
+      });
   });
 
   test('normalizes Google token usage', () => {
     expect(getResponseMetadata({ candidates: [{ finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 120, candidatesTokenCount: 30 } }, 'Google AI'))
       .toEqual(expect.objectContaining({ inputTokens: 120, outputTokens: 30 }));
+  });
+
+  test('reads Anthropic cache counters, which sit beside input_tokens rather than inside it', () => {
+    expect(getResponseMetadata({
+      stop_reason: 'end_turn',
+      usage: {
+        input_tokens: 400,
+        output_tokens: 210,
+        cache_read_input_tokens: 12000,
+        cache_creation_input_tokens: 0
+      }
+    }, 'Anthropic')).toEqual(expect.objectContaining({
+      inputTokens: 400,
+      cacheReadTokens: 12000,
+      cacheWriteTokens: 0,
+      uncachedInputTokens: 400
+    }));
+  });
+
+  test('reads OpenAI cached tokens, which are already counted inside prompt_tokens', () => {
+    expect(getResponseMetadata({
+      choices: [{ finish_reason: 'stop' }],
+      usage: {
+        prompt_tokens: 9000,
+        completion_tokens: 150,
+        prompt_tokens_details: { cached_tokens: 8192 }
+      }
+    }, 'OpenAI')).toEqual(expect.objectContaining({
+      inputTokens: 9000,
+      cacheReadTokens: 8192,
+      uncachedInputTokens: 808
+    }));
+  });
+
+  test('reads Google cached content tokens', () => {
+    expect(getResponseMetadata({
+      candidates: [{ finishReason: 'STOP' }],
+      usageMetadata: { promptTokenCount: 5000, candidatesTokenCount: 40, cachedContentTokenCount: 4000 }
+    }, 'Google AI')).toEqual(expect.objectContaining({
+      cacheReadTokens: 4000,
+      uncachedInputTokens: 1000
+    }));
   });
 });

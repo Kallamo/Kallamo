@@ -51,7 +51,6 @@ export default function ProfileModal({ profile, onClose, onSave }) {
     }
   }, [profile]);
 
-  // Set default model when API connection changes
   const selectedApi = apiProfiles.find(ap => ap.id === apiProfileId);
   const availableModels = selectedApi ? (typeof selectedApi.models === 'string' ? JSON.parse(selectedApi.models) : selectedApi.models) : [];
   // Keep the saved model selectable even if it is no longer in the connection's list,

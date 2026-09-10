@@ -5,6 +5,7 @@ const { fetch: undiciFetch, Agent } = require('undici');
 const { getResponseMetadata } = require('./response-metadata');
 const { openAiResponseFormat, applyBedrockStructuredOutput } = require('./structured-output');
 const { assertPayloadWithinLimit } = require('./payload-budget');
+const { planPromptCache, recordCacheOutcome } = require('./prompt-cache');
 
 function getDatabase() {
     return require('../../database');
@@ -273,10 +274,71 @@ function parseStreamChunk(obj, provider) {
     }
 }
 
+// --- PROMPT CACHE MARKERS ---
+
+const CACHE_CONTROL = Object.freeze({ type: 'ephemeral' });
+
+// Anthropic takes `system` as a string or as an array of text blocks, and only
+// the array form can carry a breakpoint. The stable head becomes its own block
+// so the volatile tail that follows it never invalidates the cached prefix.
+function buildCacheableSystem(stableText, volatileText) {
+    const blocks = [{ type: 'text', text: stableText, cache_control: CACHE_CONTROL }];
+    if (volatileText) blocks.push({ type: 'text', text: volatileText });
+    return blocks;
+}
+
+// Marking the last history entry turns everything up to it into a reusable
+// prefix: the next turn appends to that prefix instead of rewriting it.
+function markLastHistoryMessage(messages) {
+    if (!messages.length) return messages;
+    const last = messages[messages.length - 1];
+    let content;
+    if (typeof last.content === 'string') {
+        content = [{ type: 'text', text: last.content, cache_control: CACHE_CONTROL }];
+    } else if (Array.isArray(last.content) && last.content.length) {
+        content = last.content.map((part, index) => index === last.content.length - 1
+            ? { ...part, cache_control: CACHE_CONTROL }
+            : part);
+    } else {
+        return messages;
+    }
+    return [...messages.slice(0, -1), { ...last, content }];
+}
+
+// Usage reaches a streaming caller in provider-specific frames. Anthropic splits
+// it across message_start (input and cache counters) and message_delta (output),
+// so the stream reader merges what this returns instead of replacing it.
+function parseStreamUsage(obj, provider) {
+    const normalized = String(provider || '').toLowerCase();
+    switch (normalized) {
+        case 'anthropic':
+            if (obj?.type === 'message_start') return obj.message?.usage || null;
+            if (obj?.type === 'message_delta') return obj.usage || null;
+            return null;
+        case 'openai':
+        case 'openrouter':
+        case 'local':
+            return obj?.usage || null;
+        case 'google ai':
+        case 'vertex ai':
+            return obj?.usageMetadata || null;
+        default:
+            return null;
+    }
+}
+
 // --- CORE API REQUESTS ---
 
-async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistory = [], newPrompt = '', temperature, maxTokens, maxPayloadTokens, manualMode, manualJson, attachedImages, stream = false, jsonMode = false, jsonSchema = null }, dependencies = {}) {
+async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistory = [], newPrompt = '', temperature, maxTokens, maxPayloadTokens, manualMode, manualJson, attachedImages, stream = false, jsonMode = false, jsonSchema = null, promptCache = null }, dependencies = {}) {
     const db = dependencies.database || getDatabase();
+
+    // A segmented caller hands over the stable head and the volatile tail apart
+    // so this layer can decide where each one belongs. Callers that still pass a
+    // single systemPrompt keep the exact request they had before.
+    const contextPlacement = promptCache && promptCache.placement === 'turn' ? 'turn' : 'system';
+    let stableSystem = promptCache && promptCache.stable != null ? String(promptCache.stable) : null;
+    let volatileSystem = stableSystem === null ? '' : String(promptCache.volatile || '');
+
     try {
         const variables = db.prepare('SELECT key, value FROM variables').all();
         for (const variable of variables) {
@@ -284,9 +346,25 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
             const regex = new RegExp(`\\{\\{\\s*${safeKey}\\s*\\}\\}`, 'g');
             if (systemPrompt) systemPrompt = systemPrompt.replace(regex, variable.value);
             if (newPrompt) newPrompt = newPrompt.replace(regex, variable.value);
+            if (stableSystem) stableSystem = stableSystem.replace(regex, variable.value);
+            if (volatileSystem) volatileSystem = volatileSystem.replace(regex, variable.value);
         }
     } catch (e) {
         console.error("Error resolving dynamic variables:", e);
+    }
+
+    if (stableSystem !== null) {
+        if (contextPlacement === 'turn') {
+            // The volatile context moves behind the history and in front of the
+            // user's own words, so the history stops being rewritten every turn
+            // while the retrieved material still reads ahead of the request.
+            systemPrompt = stableSystem;
+            newPrompt = volatileSystem.trim()
+                ? `${volatileSystem.trim()}\n\n${newPrompt}`
+                : newPrompt;
+        } else {
+            systemPrompt = stableSystem + volatileSystem;
+        }
     }
 
     const apiProfile = db.prepare('SELECT * FROM api_profiles WHERE id = ?').get(apiProfileId);
@@ -316,6 +394,20 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
         role: msg.role === 'ai' ? 'assistant' : msg.role,
         content: msg.content
     }));
+
+    const cachePlan = planPromptCache({
+        provider,
+        model,
+        policy: promptCache?.policy,
+        placement: contextPlacement,
+        scopeId: promptCache?.scopeId,
+        stableText: stableSystem ?? '',
+        historyChars: cleanHistory.reduce((total, msg) => total + String(msg.content || '').length, 0),
+        historyLength: cleanHistory.length
+    });
+    const markedSystem = cachePlan.systemBreakpoint && stableSystem !== null;
+    const historyForRequest = cachePlan.historyBreakpoint ? markLastHistoryMessage(cleanHistory) : cleanHistory;
+
     assertPayloadWithinLimit({
         maxPayloadTokens,
         systemPrompt,
@@ -366,8 +458,15 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
             requestBody = {
                 model: model,
                 messages: [
-                    { role: "system", content: systemPrompt },
-                    ...cleanHistory,
+                    {
+                        role: "system",
+                        // OpenRouter forwards these parts to Anthropic-backed models;
+                        // every other OpenAI-compatible endpoint reads a plain string.
+                        content: markedSystem && cachePlan.style === 'openai-parts'
+                            ? buildCacheableSystem(stableSystem, contextPlacement === 'system' ? volatileSystem : '')
+                            : systemPrompt
+                    },
+                    ...historyForRequest,
                     { role: "user", content: userContent }
                 ],
                 temperature: temperature ?? 0.7,
@@ -413,8 +512,10 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
 
             requestBody = {
                 model: model,
-                system: systemPrompt,
-                messages: [...cleanHistory, { role: "user", content: userContent }],
+                system: markedSystem
+                    ? buildCacheableSystem(stableSystem, contextPlacement === 'system' ? volatileSystem : '')
+                    : systemPrompt,
+                messages: [...historyForRequest, { role: "user", content: userContent }],
                 temperature: temperature ?? 0.7,
                 max_tokens: maxTokens ?? 1000,
                 stream: false
@@ -621,6 +722,13 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
             endpoint += endpoint.includes('?') ? '&alt=sse' : '?alt=sse';
         } else if (provider !== 'aws bedrock') {
             requestBody.stream = true;
+            // OpenAI and OpenRouter report usage on a stream only when asked, and
+            // usage is where the cache counters live. Local servers are left
+            // alone: the option is not universally implemented there and an
+            // unknown field can fail the request outright.
+            if (provider === 'openai' || provider === 'openrouter') {
+                requestBody.stream_options = { include_usage: true };
+            }
         }
     }
 
@@ -655,11 +763,11 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
         });
     }
 
-    return { endpoint, requestHeaders, requestBodyPayload, provider };
+    return { endpoint, requestHeaders, requestBodyPayload, provider, cachePlan };
 }
 
 async function sendApiRequest(params) {
-    const { endpoint, requestHeaders, requestBodyPayload, provider } = await buildRequest(params);
+    const { endpoint, requestHeaders, requestBodyPayload, provider, cachePlan } = await buildRequest(params);
     const { abortSignal } = params;
 
     try {
@@ -677,8 +785,19 @@ async function sendApiRequest(params) {
 
         const data = await response.json();
         const content = parseResponse(data, provider, Boolean(params.jsonMode));
+        const metadata = getResponseMetadata(data, provider);
+        // Marked requests report back so a scope that keeps paying the write
+        // surcharge without ever reading it can be put on cooldown.
+        if (params.promptCache?.scopeId) {
+            recordCacheOutcome(params.promptCache.scopeId, {
+                cacheReadTokens: metadata.cacheReadTokens,
+                cacheWriteTokens: metadata.cacheWriteTokens,
+                marked: Boolean(cachePlan?.systemBreakpoint || cachePlan?.historyBreakpoint)
+            });
+        }
+        params.onUsage?.(metadata);
         if (!params.includeResponseMetadata) return content;
-        return { content, ...getResponseMetadata(data, provider) };
+        return { content, ...metadata };
 
     } catch (error) {
         console.error("API Request Failed:", error);
@@ -774,6 +893,7 @@ module.exports = {
     getEmbeddings,
     buildRequest,
     parseStreamChunk,
+    parseStreamUsage,
     generationDispatcher,
     buildOpenAiCompatibleHeaders,
     readHttpErrorMessage,

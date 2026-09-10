@@ -12,7 +12,7 @@ const {
     isSearchable
 } = require('./features/chat/workspace-context-scope');
 const { ROLE_IDS, readAdvancedSettings, resolveAiEngineRole } = require('./features/ai-engine/role-resolver');
-const { stripLeadingStoryEvidenceMarkers } = require('./features/kanora/roleplay-history');
+const { formatActiveHistory } = require('./features/chat/history-window');
 const { parseEntityUpdateObject } = require('./features/worldbuild/entity-update-json');
 const {
     buildEstimatedUsage,
@@ -54,7 +54,6 @@ const { TAGGER_RESPONSE_SCHEMA, parseTaggerResponse, createTaggerBatches, propos
 const { matchedEvidence, evidenceText } = require('./features/world-index/evidence-match');
 const { buildCategoryResolver } = require('./features/world-index/category-match');
 const {
-    PAYLOAD_BUDGET_CONTRACT,
     assertPayloadWithinLimit,
     getAvailableHistoryTokens,
     normalizeMaxApiPayload
@@ -213,47 +212,29 @@ function estimateTokens(str) {
     }
 }
 
-// Format history messages into standard list, respecting max context tokens
-function formatActiveHistory(messages, maxTokensAllowed) {
-    let tokensUsed = 0;
-    const history = [];
+// --- WORKFLOW RUNNER ---
 
-    for (let i = messages.length - 1; i >= 0; i--) {
-        const msg = messages[i];
-        let content = stripLeadingStoryEvidenceMarkers(msg.content);
-
-        if (msg.attachedFiles) {
-            let files = [];
-            try {
-                files = typeof msg.attachedFiles === 'string'
-                    ? JSON.parse(msg.attachedFiles)
-                    : msg.attachedFiles;
-            } catch (e) { }
-
-            if (Array.isArray(files) && files.length > 0) {
-                const fileMarkers = files.map(f => `File - ${f.name}`).join('\n');
-                content = `${fileMarkers}\n${content}`;
-            }
-        }
-
-        const msgTokens = estimateTokens(content) + PAYLOAD_BUDGET_CONTRACT.messageOverheadTokens;
-        if (tokensUsed + msgTokens <= maxTokensAllowed) {
-            history.unshift({ role: msg.role, content: content });
-            tokensUsed += msgTokens;
-        } else {
-            break;
-        }
+// Prompt caching is on unless the user turned it off. Turning it off restores
+// the pre-cache request byte for byte: no breakpoints, no anchored window.
+function isPromptCacheEnabled() {
+    try {
+        return readAdvancedSettings().promptCache !== false;
+    } catch (e) {
+        return true;
     }
-    // Anything cut here is live history that was never archived, so there is no
-    // memory chunk to retrieve it from. Worth saying, even if only in the log.
-    const dropped = messages.length - history.length;
-    if (dropped > 0) {
-        console.warn(`[Context] ${dropped} unarchived message(s) did not fit the payload budget and were not sent. Archiving them would keep them searchable.`);
-    }
-    return history;
 }
 
-// --- WORKFLOW RUNNER ---
+// Where the volatile context rides. 'system' keeps it at the end of the system
+// prompt, which is what every existing workspace was tuned against. 'turn' moves
+// it behind the history, in front of the user's message, which is the only
+// arrangement that lets the history itself be cached.
+function getContextPlacement() {
+    try {
+        return readAdvancedSettings().promptCacheContextPlacement === 'turn' ? 'turn' : 'system';
+    } catch (e) {
+        return 'system';
+    }
+}
 
 // Live token streaming is on unless the user turned it off in Advanced settings.
 function isStreamingEnabled() {
@@ -479,6 +460,15 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
         let totalAgenticOutputTokens = 0;
         let totalOutputTokens = 0;
 
+        const promptCacheEnabled = isPromptCacheEnabled();
+        const contextPlacement = getContextPlacement();
+        // The anchor belongs to the conversation, so every profile in a workflow
+        // shares one window. Cooldown state is per profile, since each profile
+        // carries a different stable prefix.
+        const historyCacheScopeId = promptCacheEnabled ? chatId : null;
+        // What the provider actually billed, as opposed to what was estimated.
+        const measuredCache = { read: 0, write: 0, uncachedInput: 0 };
+
         for (let i = 0; i < steps.length; i++) {
             if (currentRun.isCancelled) {
                 console.log("Workflow run cancelled by user.");
@@ -517,7 +507,15 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             });
 
             // --- BUILD CONTEXT ---
-            let compiledSystemPrompt = profile.systemPrompt || '';
+            // The system prompt is assembled in two halves so a provider's prompt
+            // cache can reuse the first one. Everything that holds still across
+            // turns (profile voice, narration policy, workflow instruction,
+            // constant knowledge) belongs to the stable head; anything that moves
+            // with the turn (the clock, retrieval, attachments) belongs to the
+            // volatile tail. Cache matching is a byte prefix, so a single moving
+            // block placed early would invalidate every stable byte after it.
+            let stableSystemPrompt = profile.systemPrompt || '';
+            let volatileSystemPrompt = '';
             let isRoleplayWorkspace = false;
             try {
                 const { getWorkspaceExperienceMode } = require('../../dist-main/main/features/kanora/mode-orchestration');
@@ -526,16 +524,17 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     const { getRoleplayGenerationPolicy } = require('../../dist-main/main/features/kanora/roleplay-generation-policy');
                     const generationPolicy = getRoleplayGenerationPolicy();
                     const { buildRoleplayTemporalContext } = require('./features/worldbuild/calendar-service');
-                    compiledSystemPrompt += `\n\n${generationPolicy}\n\n${buildRoleplayTemporalContext(db, chatId)}`;
+                    stableSystemPrompt += `\n\n${generationPolicy}`;
+                    volatileSystemPrompt += `\n\n${buildRoleplayTemporalContext(db, chatId)}`;
                     generationPolicyId = `sha256:${crypto.createHash('sha256').update(generationPolicy).digest('hex').slice(0, 16)}`;
                 }
             } catch (error) {
                 console.warn('[Roleplay Context] Could not load the narration policy:', error.message);
             }
             if (step.prompt) {
-                compiledSystemPrompt += `\n\nAdditional Instruction: ${step.prompt}`;
+                stableSystemPrompt += `\n\nAdditional Instruction: ${step.prompt}`;
             }
-            const systemInstructionsTokens = estimateTokens(compiledSystemPrompt);
+            const systemInstructionsTokens = estimateTokens(stableSystemPrompt);
 
             let constantKnowledge = '';
             let searchableChunks = [];
@@ -625,20 +624,27 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                 }
             }
 
+            // Constant knowledge is reference material the user pinned, not a
+            // per-turn lookup, so it joins the stable head instead of the
+            // retrieved context that follows it.
+            let stableContextBlock = '';
             let contextBlock = '';
             if (constantKnowledge) {
                 const constantLabel = isRoleplayWorkspace
                     ? 'NARRATOR REFERENCE: CONSTANT CONTEXT'
                     : 'CONSTANT CONTEXT SYSTEM BACKGROUND';
-                contextBlock += `\n\n--- ${constantLabel} ---\n${constantKnowledge}\n`;
+                stableContextBlock += `\n\n--- ${constantLabel} ---\n${constantKnowledge}\n`;
             }
+
+            const composeStableSystem = () => stableSystemPrompt + stableContextBlock;
+            const composeSystemPrompt = () => composeStableSystem() + volatileSystemPrompt + contextBlock;
 
             const attachmentsPayloadContext = attachmentsContext
                 ? `\n\n--- ATTACHED FILES FOR CURRENT MESSAGE ---\n${attachmentsContext}\n`
                 : '';
             assertPayloadWithinLimit({
                 maxPayloadTokens: maxContextTokens,
-                systemPrompt: compiledSystemPrompt + contextBlock + attachmentsPayloadContext,
+                systemPrompt: composeSystemPrompt() + attachmentsPayloadContext,
                 newPrompt: currentInput,
                 attachedImageCount: i === 0 ? attachedImages.length : 0,
                 outputTokens: profile.maxTokens ?? 1000
@@ -650,7 +656,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                 retrievalMode = 'agentic';
                 const initialRemainingTokens = getAvailableHistoryTokens({
                     maxPayloadTokens: maxContextTokens,
-                    systemPrompt: compiledSystemPrompt + contextBlock,
+                    systemPrompt: composeSystemPrompt(),
                     newPrompt: currentInput,
                     attachedImageCount: i === 0 ? attachedImages.length : 0,
                     outputTokens: 4000
@@ -684,7 +690,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                         : '';
                     const kanoraBudget = getAvailableHistoryTokens({
                         maxPayloadTokens: maxContextTokens,
-                        systemPrompt: compiledSystemPrompt + contextBlock + externalPayloadContext + attachmentsPayloadContext,
+                        systemPrompt: composeSystemPrompt() + externalPayloadContext + attachmentsPayloadContext,
                         newPrompt: currentInput,
                         attachedImageCount: i === 0 ? attachedImages.length : 0,
                         outputTokens: profile.maxTokens ?? 1000
@@ -858,7 +864,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                 if (planWorkspaceContext) {
                     const kanoraBudget = getAvailableHistoryTokens({
                         maxPayloadTokens: maxContextTokens,
-                        systemPrompt: compiledSystemPrompt + contextBlock + attachmentsPayloadContext,
+                        systemPrompt: composeSystemPrompt() + attachmentsPayloadContext,
                         newPrompt: currentInput,
                         attachedImageCount: i === 0 ? attachedImages.length : 0,
                         outputTokens: profile.maxTokens ?? 1000
@@ -881,9 +887,9 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                 contextBlock += `\n\n--- ATTACHED FILES FOR CURRENT MESSAGE ---\n${attachmentsContext}\n`;
             }
 
-            if (contextBlock) {
-                compiledSystemPrompt += contextBlock;
-            }
+            const stableSystemSegment = composeStableSystem();
+            const volatileSystemSegment = volatileSystemPrompt + contextBlock;
+            const compiledSystemPrompt = stableSystemSegment + volatileSystemSegment;
 
             const inputTokens = estimateTokens(currentInput);
             const systemTokens = estimateTokens(compiledSystemPrompt);
@@ -905,7 +911,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                         historySource = activeMessages.slice(0, -1);
                     }
                 }
-                chatHistory = formatActiveHistory(historySource, remainingTokens);
+                chatHistory = formatActiveHistory(historySource, remainingTokens, historyCacheScopeId);
             }
 
             let historyMessagesTokens = 0;
@@ -943,7 +949,24 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                         manualMode: profile.manualMode === 1,
                         manualJson: profile.manualJson,
                         abortSignal: currentRun.controller.signal,
-                        attachedImages: (i === 0 ? attachedImages : [])
+                        attachedImages: (i === 0 ? attachedImages : []),
+                        // systemPrompt above stays the authority for the payload
+                        // budget and for providers with no explicit cache
+                        // control; these segments only tell the request layer
+                        // where the reusable half ends.
+                        promptCache: promptCacheEnabled ? {
+                            policy: 'conversation',
+                            placement: contextPlacement,
+                            scopeId: `${chatId}::${profile.id}`,
+                            stable: stableSystemSegment,
+                            volatile: volatileSystemSegment
+                        } : null,
+                        onUsage: (metadata) => {
+                            if (!metadata) return;
+                            measuredCache.read += metadata.cacheReadTokens || 0;
+                            measuredCache.write += metadata.cacheWriteTokens || 0;
+                            measuredCache.uncachedInput += metadata.uncachedInputTokens || 0;
+                        }
                     };
 
                     // Only the final, user-facing generation streams; intermediate
@@ -1013,8 +1036,9 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                 }
             }
 
-            // Handle Context Overflow for intermediates
-            // A threshold of 16,000 characters (roughly 4,000 tokens) checks for large outputs
+            // A large intermediate output would crowd the next step's context, so past roughly
+            // 4,000 tokens (16,000 characters) the run pauses and asks what to do with it. The
+            // last step is exempt: its output goes to the user, not into another prompt.
             const isLastStep = (i === steps.length - 1);
             if (estimateTokens(stepOutput) > 4000 && !isLastStep) {
                 sendRunEvent(webContents, 'workflow-context-overflow', currentRun, {
@@ -1039,7 +1063,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             lastAgenticRagContextGathered = agenticRagContextGathered;
             if (standardRagDebug) lastStandardRagDebug = standardRagDebug;
             lastNarrativeContextRequestId = narrativeContextRequestId;
-            lastFinalContextText = contextBlock;
+            lastFinalContextText = stableContextBlock + contextBlock;
             lastContextBundle = contextBundleDiagnostic;
             lastRetrievalMode = retrievalMode;
             lastAgenticTrace = agenticTrace;
@@ -1115,7 +1139,12 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     chatHistory: totalChatHistoryTokens,
                     output: totalOutputTokens,
                     agenticInput: totalAgenticInputTokens,
-                    agenticOutput: totalAgenticOutputTokens
+                    agenticOutput: totalAgenticOutputTokens,
+                    cache: {
+                        read: measuredCache.read,
+                        write: measuredCache.write,
+                        uncachedInput: measuredCache.uncachedInput
+                    }
                 })
             });
 

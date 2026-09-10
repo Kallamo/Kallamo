@@ -426,7 +426,6 @@ export default function LibraryView() {
                 <EmptyState className="col-span-full" icon={Workflow} title="No workflows yet" subtitle="Chain AI Profiles into a repeatable generation process." action={<Button icon={Plus} onClick={openNewWorkflow}>New Workflow</Button>} />
               ) : (
                 workflows.map(wf => {
-                  // Parse steps count
                   let stepsList = [];
                   try {
                     stepsList = typeof wf.steps === 'string' ? JSON.parse(wf.steps) : (wf.steps || []);

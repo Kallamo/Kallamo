@@ -373,9 +373,7 @@ async function indexChatKnowledgeBase(sender, chatId, knowledgeFilesInput) {
 }
 
 
-// ==========================================
 // --- API CONNECTIONS IPC HANDLERS ---
-// ==========================================
 // Whether an API profile carries usable credentials, accounting for each
 // provider's credential shape (key vs. customConfig vs. none for local). Used to
 // flag writing profiles that point to a keyless connection, they look configured
@@ -447,9 +445,7 @@ ipcMain.handle('delete-api-profile', async (event, id) => {
   }
 });
 
-// ==========================================
 // --- AI/WRITING PROFILES IPC HANDLERS ---
-// ==========================================
 ipcMain.handle('get-writing-profiles', async () => {
   try {
     const rows = db.prepare('SELECT * FROM writing_profiles').all();
@@ -582,7 +578,7 @@ ipcMain.handle('delete-writing-profile', async (event, id) => {
   }
 });
 
-// --- LOCAL AI ENGINE MANAGERS (v1.0.5) ---
+// --- LOCAL AI ENGINE MANAGERS ---
 
 const ENGINE_ASSETS = {
   'win32-x64': {
@@ -709,12 +705,10 @@ async function executeEngineDownload(sender, isBackground = false) {
       throw new Error(`Local AI Engine is not supported on this platform: ${platformKey}`);
     }
 
-    // Ensure runtime directory exists
     if (!fs.existsSync(runtimeDir)) {
       fs.mkdirSync(runtimeDir, { recursive: true });
     }
 
-    // 1. Download
     safeSend(sender, 'download-engine-progress', { status: 'downloading', loaded: 0, total: 100, percent: 0, isBackground });
 
     await downloadFileWithProgress(asset.url, tempZip, (loaded, total) => {
@@ -722,7 +716,6 @@ async function executeEngineDownload(sender, isBackground = false) {
       safeSend(sender, 'download-engine-progress', { status: 'downloading', loaded, total, percent, isBackground });
     }, abortController.signal);
 
-    // 2. Verify Checksum
     safeSend(sender, 'download-engine-progress', { status: 'verifying', percent: 100, isBackground });
 
     if (asset.sha256 && asset.sha256 !== 'mock_sha256_placeholder' && !asset.sha256.startsWith('YOUR_')) {
@@ -734,10 +727,10 @@ async function executeEngineDownload(sender, isBackground = false) {
       console.warn(`[Engine Download] Skipping checksum verification (mock or unset hash).`);
     }
 
-    // 3. Extract to staging directory (atomic install)
+    // Extraction goes to staging first, so a truncated or foreign bundle never lands
+    // on top of a working install.
     safeSend(sender, 'download-engine-progress', { status: 'extracting', percent: 100, isBackground });
 
-    // Clean up any previous staging attempt
     if (fs.existsSync(stagingDir)) {
       fs.rmSync(stagingDir, { recursive: true, force: true });
     }
@@ -747,7 +740,7 @@ async function executeEngineDownload(sender, isBackground = false) {
     const entries = zip.getEntries();
     const hasNestedNodeModules = entries.some(e => e.entryName.startsWith('node_modules/'));
     const stagingTarget = hasNestedNodeModules
-      ? stagingDir  // zip has node_modules/ prefix — extract at staging root
+      ? stagingDir  // zip has node_modules/ prefix, so extract at staging root
       : path.join(stagingDir, 'onnxruntime-node');
 
     if (!fs.existsSync(stagingTarget)) {
@@ -755,7 +748,6 @@ async function executeEngineDownload(sender, isBackground = false) {
     }
     zip.extractAllTo(stagingTarget, true);
 
-    // 4. Verify staged install has the actual native binary
     const stagedOnnxDir = hasNestedNodeModules
       ? path.join(stagingDir, 'node_modules', 'onnxruntime-node')
       : path.join(stagingDir, 'onnxruntime-node');
@@ -765,13 +757,13 @@ async function executeEngineDownload(sender, isBackground = false) {
       throw new Error('Extraction failed: package.json not found in the staged engine package. The zip structure may be invalid.');
     }
 
-    // Check for the native .node binary
     const { findNodeBinary } = require('./rag-service');
     if (typeof findNodeBinary === 'function' && !findNodeBinary(stagedOnnxDir)) {
       throw new Error('Extraction failed: Native .node binary not found in the staged engine package. The bundle may be corrupt or for a different platform.');
     }
 
-    // 5. Atomic swap: remove old install, move staging into place
+    // The swap only runs once staging is verified, which is what keeps a failed download
+    // from leaving the app without an engine.
     const nodeModulesDir = path.join(runtimeDir, 'node_modules');
     if (!fs.existsSync(nodeModulesDir)) {
       fs.mkdirSync(nodeModulesDir, { recursive: true });
@@ -781,7 +773,6 @@ async function executeEngineDownload(sender, isBackground = false) {
     }
     fs.renameSync(stagedOnnxDir, finalDir);
 
-    // 6. Completed
     safeSend(sender, 'download-engine-progress', { status: 'completed', percent: 100, isBackground });
 
     // Trigger startup reindexing now that the engine is installed successfully
@@ -808,13 +799,11 @@ async function executeEngineDownload(sender, isBackground = false) {
     isDownloadingEngine = false;
     activeDownloadAbort = null;
 
-    // Clean up temp zip
     if (fs.existsSync(tempZip)) {
       try { fs.unlinkSync(tempZip); } catch (err) {
         console.error("Failed to delete temp engine zip:", err);
       }
     }
-    // Clean up staging directory
     if (fs.existsSync(stagingDir)) {
       try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch (err) {
         console.error("Failed to delete staging directory:", err);
@@ -1632,9 +1621,7 @@ ipcMain.handle('import-chat-knowledge-base', async (event, { chatId }) => {
   }
 });
 
-// ==========================================
 // --- KNOWLEDGE BASE FILES IPC HANDLERS ---
-// ==========================================
 ipcMain.handle('upload-kb-file', async (event, { profileId, name, path: filePath, size }) => {
   try {
     const profileKbDir = path.join(profilesDir, profileId, 'KnowledgeBase');
@@ -2174,9 +2161,7 @@ ipcMain.handle('add-profile-searchable-file', async (event, { profileId, name, p
   }
 });
 
-// ==========================================
 // --- WORKSPACE CHATS IPC HANDLERS ---
-// ==========================================
 // --- WRITING DESK: DOCUMENTS & FOLDERS ---
 
 // Remove a document's searchable chunks (owner = document) and their FTS rows.
@@ -2465,7 +2450,7 @@ ipcMain.handle('set-wd-last-channel', async (event, { workspaceId, channel }) =>
 
 // The chat's send target follows whatever the user last generated with, instead of
 // resetting to the first active profile every time the chat is reopened. Stored on
-// the chat row; an id that no longer exists simply falls back to the old behaviour.
+// the chat row; an id that no longer exists simply falls back to the old behavior.
 ipcMain.handle('set-chat-last-target', async (event, { chatId, targetId }) => {
   db.prepare('UPDATE chats SET lastTargetId = ? WHERE id = ?').run(targetId || null, chatId);
   return { success: true };
@@ -3718,6 +3703,16 @@ ipcMain.handle('resolve-narrative-state-operations', async (event, {
   }
 });
 
+ipcMain.handle('compact-narrative-state', async (event, { workspaceId, apply = false } = {}) => {
+  try {
+    const { NarrativeMaintenance } = require('../../dist-main/main/features/kanora/narrative-maintenance');
+    const maintenance = new NarrativeMaintenance(db);
+    return { success: true, report: apply ? maintenance.compact(workspaceId) : maintenance.preview(workspaceId) };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 ipcMain.handle('reprocess-narrative-state-turn', async (event, { workspaceId, originId } = {}) => {
   try {
     const { reprocessNarrativeStateTurn } = require('./workflow-runner');
@@ -4781,9 +4776,7 @@ ipcMain.handle('import-workflow', async (event) => {
   }
 });
 
-// ==========================================
 // --- SETTINGS IPC HANDLERS ---
-// ==========================================
 ipcMain.handle('get-settings', async () => {
   try {
     const { withNormalizedRetrievalSettings } = require('../shared/retrieval-settings');
@@ -4792,7 +4785,7 @@ ipcMain.handle('get-settings', async () => {
 
     const defaultSettings = {
       interface: { fontFamily: 'sans', fontSize: 'medium', layout: 'bubbles', blur: true, accentColor: '#FBCB2D', codeTheme: 'github-dark', lineNumbers: false },
-      advanced: { chunkSize: 500, similarity: 0.3, topKKB: 5, topKMemory: 8, executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, narrativeStateDebug: false, archiveSummarization: true, systemOutputLanguage: 'English', taggerMode: 'inherit-system', summarizerMode: 'inherit-system', retrievalPlannerMode: 'profile' }
+      advanced: { chunkSize: 500, similarity: 0.3, topKKB: 5, topKMemory: 8, executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, narrativeStateDebug: false, archiveSummarization: true, promptCache: true, promptCacheContextPlacement: 'system', systemOutputLanguage: 'English', taggerMode: 'inherit-system', summarizerMode: 'inherit-system', retrievalPlannerMode: 'profile' }
     };
 
     return {
@@ -4884,9 +4877,7 @@ ipcMain.handle('mark-whats-new-seen', async (event, { type } = {}) => {
   }
 });
 
-// ==========================================
 // --- UTILITIES IPC HANDLERS ---
-// ==========================================
 ipcMain.on('open-workspace-folder', () => {
   if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
@@ -4894,9 +4885,7 @@ ipcMain.on('open-workspace-folder', () => {
   shell.openPath(dataDir);
 });
 
-// ==========================================
 // --- WORKFLOW GENERATION IPC HANDLERS ---
-// ==========================================
 const { runWorkflow, cancelGeneration, resolveErrorDeferred, resolveOverflowDeferred } = require('./workflow-runner');
 
 ipcMain.handle('send-message', async (event, { chatId, messageContent, targetId, attachedFiles, historyEdit, regenerateMessageId }) => {
@@ -4921,9 +4910,7 @@ ipcMain.on('respond-to-overflow', (event, { decision, editedText, runId } = {}) 
   resolveOverflowDeferred(decision, editedText, runId);
 });
 
-// ==========================================
 // --- UTILITIES SYSTEM DIALOGS HANDLERS ---
-// ==========================================
 ipcMain.handle('backup-workspace', async (event) => {
   try {
     const { BrowserWindow } = require('electron');
@@ -5929,7 +5916,6 @@ async function autoDownloadEngineIfNeeded() {
   try {
     const { isLocalEngineInstalled } = require('./rag-service');
 
-    // 1. Check if embeddingEngine is 'local'
     let embeddingEngine = 'local';
     try {
       const rowAdvanced = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
@@ -5945,7 +5931,6 @@ async function autoDownloadEngineIfNeeded() {
       return;
     }
 
-    // 2. Check if platform is supported
     const platformKey = `${process.platform}-${process.arch}`;
     const asset = ENGINE_ASSETS[platformKey];
     if (!asset) {
@@ -5967,7 +5952,6 @@ async function autoDownloadEngineIfNeeded() {
           advanced.embeddingEngine = 'external';
           db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('advanced', JSON.stringify(advanced));
           
-          // Notify the renderer to refresh settings
           const windows = BrowserWindow.getAllWindows();
           if (windows.length > 0 && !windows[0].webContents.isDestroyed()) {
             windows[0].webContents.send('settings-changed');
@@ -5979,14 +5963,12 @@ async function autoDownloadEngineIfNeeded() {
       return;
     }
 
-    // 3. Check if engine is installed
     if (isLocalEngineInstalled()) {
       console.log('[Auto-Download] Local AI Engine is already installed.');
       performReindexIfNeeded();
       return;
     }
 
-    // 4. Run download in the background
     console.log('[Auto-Download] Local AI Engine is absent. Starting background auto-download...');
     const windows = BrowserWindow.getAllWindows();
     const sender = windows.length > 0 ? windows[0].webContents : null;

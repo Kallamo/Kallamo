@@ -1481,7 +1481,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   };
 
   // Create form: every native section of the Data tab, opened for editing, plus the
-  // template's own fields. Sections made only of relations are left out — links need a
+  // template's own fields. Sections made only of relations are left out: links need a
   // saved id, so they are filled once the sheet exists.
   const renderCreateSection = (s) => {
     if (s.raw) return <React.Fragment key={s.key}>{s.raw}</React.Fragment>;

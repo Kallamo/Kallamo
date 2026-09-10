@@ -88,9 +88,10 @@ const RAG_MODEL_ID = 'Xenova/multilingual-e5-small';
 const RAG_MODEL_DIM = 384;
 
 // Minimum amount of REAL informational content (after stripping scaffold/empty labels)
-// a chunk must have to be indexed. Empty NPC/form skeletons ("Nome:\n● Raça:\n...") are
-// pure structure with no content, yet score high cosine on facet-listing queries
-// ("leaders, factions, population, economy") and poison the top results. Tune with 🔬.
+// a chunk must have to be indexed. Empty character/form skeletons ("Name:\n● Race:\n...")
+// are pure structure with no content, yet score high cosine on facet-listing queries
+// ("leaders, factions, population, economy") and poison the top results. Tuned with the
+// RAG debug panel.
 const MIN_MEANINGFUL_CHARS = 60;
 
 // Length of actual content in a chunk, ignoring bullet markers, lone bullets, and
@@ -386,7 +387,7 @@ function deleteChunksFromDb(ownerId, ownerType, sourceFileName) {
 
 // Weight favoring dense (semantic) similarity over sparse (BM25 keyword) in the
 // fused score. Dense is the trustworthy signal; sparse mainly breaks ties and
-// rescues exact keyword matches. Tuned with the 🔬 debug panel.
+// rescues exact keyword matches. Tuned with the RAG debug panel.
 const ALPHA_DENSE = 0.7;
 
 // Real similarity scores live in a narrow high band (normalized e5 cosines rarely
@@ -513,10 +514,10 @@ function containsWord(queryLower, term) {
 }
 
 // A tag value "mentions" the query when the query contains the whole value OR any of
-// its distinctive tokens (>=4 letters, so honorifics/particles like "de"/"o"/"da"
-// are skipped). This tolerates name variants until the canonical entity registry
-// (Worldbuild tab) makes tag values consistent: tag "Capitã Seraphina Valois" still
-// matches a query that only says "Seraphina Valois".
+// its distinctive tokens (>=4 letters, so short particles and honorifics are skipped in
+// any language). This tolerates name variants until the canonical entity registry
+// (Worldbuild tab) makes tag values consistent: a tag reading "Captain Seraphina Valois"
+// still matches a query that only says "Seraphina Valois".
 function queryMentions(queryLower, needleLower) {
     if (!needleLower || needleLower.length < 2) return false;
     if (containsWord(queryLower, needleLower)) return true;

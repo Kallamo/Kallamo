@@ -32,7 +32,6 @@ export default function DashboardView() {
     (c.title || '').toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // Sort pinned first, then updatedAt descending
   const sortedChats = [...filteredChats].sort((a, b) => {
     if (a.isPinned && !b.isPinned) return -1;
     if (!a.isPinned && b.isPinned) return 1;

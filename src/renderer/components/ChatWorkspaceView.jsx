@@ -969,7 +969,6 @@ export default function ChatWorkspaceView() {
 
   if (!activeChat) return null;
 
-  // Filter dropdown choices based on chat settings
   const activeProfilesList = safeParseJson(activeChat.activeProfiles);
   const activeWorkflowsList = safeParseJson(activeChat.activeWorkflows);
 
@@ -1561,6 +1560,11 @@ export default function ChatWorkspaceView() {
                                         <span className="col-span-3 mt-1 border-t border-gray-800 pt-1 text-gray-500">
                                           Main input: System {(usage?.main.systemInstructions ?? 0).toLocaleString()} · Context {(usage?.main.narrativeContext ?? legacyUsage.knowledgeBase ?? 0).toLocaleString()} · History {(usage?.main.chatHistory ?? legacyUsage.chatHistory ?? 0).toLocaleString()} · Message {(usage?.main.userInput ?? 0).toLocaleString()}
                                         </span>
+                                        {usage?.cache?.active && (
+                                          <span className="col-span-3 border-t border-gray-800 pt-1 text-gray-500">
+                                            Prompt cache (reported by the provider): Read {usage.cache.read.toLocaleString()} · Written {usage.cache.write.toLocaleString()} · Net saving ≈ {(usage.cache.savedTokens - usage.cache.surchargeTokens).toLocaleString()} input tokens
+                                          </span>
+                                        )}
                                       </div>
                                     )}
                                   </div>

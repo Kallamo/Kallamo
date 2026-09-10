@@ -190,7 +190,6 @@ app.whenReady().then(() => {
     log.warn('Could not mark interrupted summaries:', e);
   }
 
-  // Handle custom file protocol - reads files directly from filesystem
   protocol.handle('app-file', (request) => {
     try {
       let rawPath = decodeURIComponent(request.url);

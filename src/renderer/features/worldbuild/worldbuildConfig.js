@@ -3,8 +3,8 @@ import {
   Gem, Ghost, Globe, Hammer, MapPin, Package, Pickaxe, Shield, Sword, User, Users,
 } from 'lucide-react';
 
-// `wash` tints the open sheet's header with the type's colour, so each kind of
-// record is recognisable before its name is read.
+// `wash` tints the open sheet's header with the type's color, so each kind of
+// record is recognizable before its name is read.
 export const TYPES = {
   System: { label: 'System / Concept', icon: BookOpen, medallion: 'bg-entity-concept/15 text-entity-concept border-entity-concept/30', ring: 'border-entity-concept/25', soft: 'text-entity-concept', wash: 'from-entity-concept/12' },
   Locations: { label: 'Location', icon: MapPin, medallion: 'bg-entity-location/15 text-entity-location border-entity-location/30', ring: 'border-entity-location/25', soft: 'text-entity-location', wash: 'from-entity-location/12' },

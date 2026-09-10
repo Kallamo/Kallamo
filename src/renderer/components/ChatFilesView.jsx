@@ -33,13 +33,13 @@ export default function ChatFilesView({
     if (!chat?.id) return;
     setLoading(true);
     try {
-      // 1. Load user files from disk folder
+      // The list is a union of two sources: what sits in the chat folder, and the images
+      // the model produced inline in messages, which never reach that folder.
       let diskFiles = [];
       if (electronAPI.getChatFiles) {
         diskFiles = await electronAPI.getChatFiles(chat.id);
       }
 
-      // 2. Extract AI generated images from messages
       const images = [];
       const imgRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
       messages.forEach((msg, mIdx) => {
@@ -47,9 +47,7 @@ export default function ChatFilesView({
           let match;
           while ((match = imgRegex.exec(msg.content)) !== null) {
             const imgUrl = match[2];
-            // Only add if not already in list and it looks like a local or generated path
             if (!images.some(img => img.url === imgUrl)) {
-              // Convert app-file:// or relative path to a structured file object
               const filename = imgUrl.split('/').pop().split('\\').pop() || 'AI_Generated.png';
               images.push({
                 name: filename,
@@ -121,7 +119,6 @@ export default function ChatFilesView({
         await electronAPI.deleteChatKbFile(chat.id, deleteTarget.name);
       }
 
-      // Update local settings if it was inside knowledgeFiles
       const updatedKbFiles = kbFiles.filter(f => f.name.toLowerCase() !== deleteTarget.name.toLowerCase());
       const updatedPinnedFiles = pinnedFiles.filter(name => name.toLocaleLowerCase() !== deleteTarget.name.toLocaleLowerCase());
       await onSaveChat({
@@ -138,14 +135,11 @@ export default function ChatFilesView({
     }
   };
 
-  // Filtered files calculation
   const filteredFiles = files.filter(f => {
-    // 1. Search Query
     const query = searchQuery.toLowerCase();
     const nameMatch = f.name.toLowerCase().includes(query);
     if (!nameMatch) return false;
 
-    // 2. Tab Category Filter
     if (activeFilter === 'all') return true;
     const type = getFileType(f.name);
     if (activeFilter === 'images' && type === 'image') return true;

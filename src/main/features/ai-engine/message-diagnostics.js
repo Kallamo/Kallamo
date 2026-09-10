@@ -14,6 +14,23 @@ function normalizeNarrativeUsage(value = {}) {
   };
 }
 
+// Cache counters come from the provider, not from the local tokenizer, so they
+// are the only measured numbers in an otherwise estimated report. `savedTokens`
+// is what a read spared at full input price; `surchargeTokens` is the ~25% extra
+// a write costs, so a turn that wrote without reading still shows its price.
+function normalizeCacheUsage(value = {}) {
+  const read = number(value.read);
+  const write = number(value.write);
+  return {
+    read,
+    write,
+    uncachedInput: number(value.uncachedInput),
+    savedTokens: Math.round(read * 0.9),
+    surchargeTokens: Math.round(write * 0.25),
+    active: read > 0 || write > 0
+  };
+}
+
 function buildEstimatedUsage(value = {}) {
   const main = {
     systemInstructions: number(value.systemInstructions),
@@ -42,6 +59,7 @@ function buildEstimatedUsage(value = {}) {
     main,
     agentic,
     narrativeState,
+    cache: normalizeCacheUsage(value.cache),
     total: {
       input: main.input + agentic.input + narrativeState.input,
       output: main.output + agentic.output + narrativeState.output,
@@ -85,6 +103,7 @@ function mergeNarrativeStateDiagnostics(diagnostic, narrativeState) {
     agenticInput: currentUsage.agentic?.input,
     agenticOutput: currentUsage.agentic?.output,
     narrativeState: narrativeState?.usage,
+    cache: currentUsage.cache,
   });
   return next;
 }

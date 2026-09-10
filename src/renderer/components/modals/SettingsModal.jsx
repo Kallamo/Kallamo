@@ -112,6 +112,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [allowAiEntityCreation, setAllowAiEntityCreation] = useState(settings.advanced.allowAiEntityCreation || false);
   const [archiveSummarization, setArchiveSummarization] = useState(settings.advanced.archiveSummarization !== false);
   const [streamingEnabled, setStreamingEnabled] = useState(settings.advanced.streaming !== false);
+  const [promptCache, setPromptCache] = useState(settings.advanced.promptCache !== false);
+  const [promptCacheContextPlacement, setPromptCacheContextPlacement] = useState(settings.advanced.promptCacheContextPlacement === 'turn' ? 'turn' : 'system');
 
   // Models pre-defined on the selected System AI connection (drives the Model dropdown).
   const systemProfileModels = (() => {
@@ -149,7 +151,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage,
     taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName,
     narrativeStateMode, narrativeStateApiProfileId, narrativeStateModelName,
-    retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, allowAiEntityCreation, archiveSummarization
+    retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, allowAiEntityCreation, archiveSummarization,
+    promptCache, promptCacheContextPlacement
   });
 
   useEffect(() => {
@@ -159,13 +162,13 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage,
       taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName,
       narrativeStateMode, narrativeStateApiProfileId, narrativeStateModelName,
-      retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, allowAiEntityCreation, archiveSummarization
+      retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, allowAiEntityCreation, archiveSummarization,
+      promptCache, promptCacheContextPlacement
     };
-  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, smartTypography, streamingEnabled, chunkSize, similarity, profileKnowledgeTopK, workspaceDocumentsTopK, longTermMemoryTopK, worldbuildEntityLimit, worldbuildBreadth, executionDevice, ragDebug, agenticDebug, tokenDebug, narrativeStateDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage, taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName, narrativeStateMode, narrativeStateApiProfileId, narrativeStateModelName, retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, allowAiEntityCreation, archiveSummarization]);
+  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, smartTypography, streamingEnabled, chunkSize, similarity, profileKnowledgeTopK, workspaceDocumentsTopK, longTermMemoryTopK, worldbuildEntityLimit, worldbuildBreadth, executionDevice, ragDebug, agenticDebug, tokenDebug, narrativeStateDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage, taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName, narrativeStateMode, narrativeStateApiProfileId, narrativeStateModelName, retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, allowAiEntityCreation, archiveSummarization, promptCache, promptCacheContextPlacement]);
 
   // Handle immediate save for selects and color choices
   const updateSetting = async (category, key, value) => {
-    // Update local React state instantly
     if (category === 'interface') {
       if (key === 'accentColor') setAccentColor(value);
       if (key === 'fontFamily') setFontFamily(value);
@@ -183,6 +186,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       if (key === 'tokenDebug') setTokenDebug(value);
       if (key === 'narrativeStateDebug') setNarrativeStateDebug(value);
       if (key === 'streaming') setStreamingEnabled(value);
+      if (key === 'promptCache') setPromptCache(value);
+      if (key === 'promptCacheContextPlacement') setPromptCacheContextPlacement(value);
       if (key === 'allowAiEntityCreation') setAllowAiEntityCreation(value);
       if (key === 'archiveSummarization') setArchiveSummarization(value);
       if (key === 'embeddingEngine') setEmbeddingEngine(value);
@@ -234,6 +239,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         tokenDebug: key === 'tokenDebug' ? value : current.tokenDebug,
         narrativeStateDebug: key === 'narrativeStateDebug' ? value : current.narrativeStateDebug,
         streaming: key === 'streaming' ? value : current.streaming,
+        promptCache: key === 'promptCache' ? value : current.promptCache,
+        promptCacheContextPlacement: key === 'promptCacheContextPlacement' ? value : current.promptCacheContextPlacement,
         allowAiEntityCreation: key === 'allowAiEntityCreation' ? value : current.allowAiEntityCreation,
         archiveSummarization: key === 'archiveSummarization' ? value : current.archiveSummarization,
         embeddingEngine: key === 'embeddingEngine' ? value : current.embeddingEngine,
@@ -264,7 +271,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const saveTimeoutRef = useRef(null);
 
   const updateSettingWithDebounce = (key, value) => {
-    // 1. Update visual state immediately for smooth rendering
+    // Visual state moves at once so the slider stays smooth; the database write waits.
     if (key === 'chunkSize') setChunkSize(value);
     if (key === 'similarity') setSimilarity(value);
     if (key === 'profileKnowledgeTopK') setProfileKnowledgeTopK(value);
@@ -275,7 +282,6 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     if (key === 'embeddingModelName') setEmbeddingModelName(value);
     if (key === 'systemModelName') setSystemModelName(value);
 
-    // 2. Debounce database save
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
     }
@@ -310,6 +316,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
           agenticDebug: current.agenticDebug,
           tokenDebug: current.tokenDebug,
           narrativeStateDebug: current.narrativeStateDebug,
+          promptCache: current.promptCache,
+          promptCacheContextPlacement: current.promptCacheContextPlacement,
           allowAiEntityCreation: current.allowAiEntityCreation,
           archiveSummarization: current.archiveSummarization,
           embeddingEngine: current.embeddingEngine,
@@ -1667,6 +1675,39 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           <div className="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
                         </label>
                       </div>
+
+                      <div className="p-4 flex items-center justify-between">
+                        <div className="pr-4">
+                          <span className="block text-sm text-gray-200 font-bold">Prompt Cache</span>
+                          <span className="caption">Keep the unchanging part of every request first so the provider can reuse it instead of charging full price for it again. Cached input is billed at a fraction of the normal rate. Turn this off to send requests exactly as older versions did.</span>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                          <input
+                            type="checkbox"
+                            checked={promptCache}
+                            onChange={(e) => updateSetting('advanced', 'promptCache', e.target.checked)}
+                            className="sr-only peer"
+                          />
+                          <div className="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
+                        </label>
+                      </div>
+
+                      {promptCache && (
+                        <div className="p-4 flex items-center justify-between">
+                          <div className="pr-4">
+                            <span className="block text-sm text-gray-200 font-bold">Retrieved Context Position</span>
+                            <span className="caption">System prompt keeps retrieval, the clock and attachments where they have always been. With the turn, they move to just before your message instead, which lets the conversation history be cached too. That is the larger saving on long chats, and it changes what the model reads, so try it on a workspace you can compare.</span>
+                          </div>
+                          <select
+                            value={promptCacheContextPlacement}
+                            onChange={(e) => updateSetting('advanced', 'promptCacheContextPlacement', e.target.value)}
+                            className="bg-[#0a1b22] border border-gray-800 rounded-lg px-2 py-1 text-xs text-gray-200 shrink-0"
+                          >
+                            <option value="system">System prompt</option>
+                            <option value="turn">With the turn</option>
+                          </select>
+                        </div>
+                      )}
                     </div>
                   </div>
 

@@ -500,7 +500,6 @@ export default function ChatMemoryView({
     setSelectedBlockIds([]);
   }, [activeFilter]);
 
-  // Load per-chunk tags when the file chunk viewer opens; reset the add-tag input.
   useEffect(() => {
     if (viewingFileBlock) {
       loadFileChunkTags();
@@ -545,17 +544,17 @@ export default function ChatMemoryView({
     return () => unsub();
   }, [chat?.id, electronAPI]);
 
-  // Parse KB Files registry from chat record
+  // The chat row stores both registries as JSON text, so every read has to accept a string
+  // as readily as an already-parsed value.
   const kbFiles = chat?.knowledgeFiles
     ? (typeof chat.knowledgeFiles === 'string' ? JSON.parse(chat.knowledgeFiles) : chat.knowledgeFiles)
     : [];
 
-  // Parse Memory Blocks registry from chat record
   const memoryBlocks = chat?.memoryBlocks
     ? (typeof chat.memoryBlocks === 'string' ? JSON.parse(chat.memoryBlocks) : chat.memoryBlocks)
     : [];
 
-  // Parse summary blocks (History Summaries) from database record
+  // History summaries are the memory blocks nobody wrote by hand.
   const summaryBlocks = memoryBlocks.filter(b => b.type !== 'manual').map(b => ({
     id: b.id,
     dbType: 'snippet',
@@ -648,16 +647,13 @@ export default function ChatMemoryView({
     return { alwaysOn, searchable };
   }, [combinedBlocks]);
 
-  // Filter combined blocks list
   const filteredBlocks = combinedBlocks.filter(b => {
-    // 1. Search Query filter
     const query = searchQuery.toLowerCase();
     const titleMatch = (b.title || b.source || '').toLowerCase().includes(query);
     const summaryMatch = (b.summary || b.text || '').toLowerCase().includes(query);
     const chunksMatch = b.type === 'rag_file' && b.chunks.some(c => c.text.toLowerCase().includes(query));
     if (!titleMatch && !summaryMatch && !chunksMatch) return false;
 
-    // 2. Category tab filter
     if (activeFilter === 'all') return true;
     if (activeFilter === 'constants' && b.type === 'constant') return true;
     if (activeFilter === 'rag' && b.type === 'rag_file') return true;
@@ -666,7 +662,6 @@ export default function ChatMemoryView({
     return false;
   });
 
-  // Toggle profile scoping for a block
   const handleToggleProfileScope = async (block, profileId) => {
     try {
       if (block.type === 'rag' || block.type === 'constant' || block.type === 'rag_file') {
@@ -863,7 +858,6 @@ export default function ChatMemoryView({
       };
 
       await electronAPI.deleteChatKbBlock(chat.id, mappedBlock);
-      // Remove deleted item from selected list if present
       setSelectedBlockIds(prev => prev.filter(id => id !== deleteTarget.id));
       setDeleteTarget(null);
       // Deleting a summary hands its messages back to the live context, so the
@@ -916,17 +910,16 @@ export default function ChatMemoryView({
       setIsProcessing(true);
       setProgressMsg(`Deleting file and chunks: ${fileName}...`);
 
-      // 1. Delete physical file & DB chunks
+      // The file lives in three places: on disk with its chunks, in the chat row's JSON
+      // registry, and in the current selection. Missing one leaves the UI offering a ghost.
       await electronAPI.deleteChatKbFile(chat.id, fileName);
 
-      // 2. Remove from JSON metadata registry
       const updatedKbFiles = kbFiles.filter(f => f.name.toLowerCase() !== fileName.toLowerCase());
       await onSaveChat({
         ...chat,
         knowledgeFiles: JSON.stringify(updatedKbFiles)
       });
 
-      // 3. Clean selections of deleted file chunks
       const deletedBlockIds = combinedBlocks.filter(b => b.source === fileName).map(b => b.id);
       setSelectedBlockIds(prev => prev.filter(id => !deletedBlockIds.includes(id)));
 
