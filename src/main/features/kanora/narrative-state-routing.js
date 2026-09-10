@@ -11,6 +11,24 @@ const NARRATIVE_DOMAINS = [
   'fact',
 ];
 
+/**
+ * Domains a local pattern is allowed to decide on its own. These are mechanical: an item
+ * moved, someone walked in, a value changed. The evidence is in the words themselves, and a
+ * miss is visible to the player on the next turn.
+ *
+ * The epistemic domains are deliberately absent. Whether a line of dialogue produced durable
+ * knowledge, a lasting belief or a change of regard is a judgement about consequence, and no
+ * regular expression can make it. Letting one try is what made every turn escalate to the
+ * expensive pass: a quotation mark or the word "explained" was enough to force a full
+ * analysis, and the analysis then correctly found nothing worth storing.
+ */
+const MECHANICAL_DOMAINS = new Set([
+  'entity',
+  'scene',
+  'resource',
+  'inventory',
+]);
+
 const EPISTEMIC_DOMAINS = new Set([
   'awareness',
   'knowledge',
@@ -72,7 +90,7 @@ const SIGNAL_PATTERNS = [
   {
     domain: 'knowledge',
     action: 'disclosure',
-    strong: true,
+    strong: false,
     pattern: /\b(reveal(?:s|ed)?|explain(?:s|ed)?|inform(?:s|ed)?|confess(?:es|ed)?|warn(?:s|ed)?|teach(?:es|t)?|discover(?:s|ed)?|recognize[sd]?|revel(?:a|ei|ou)|explic(?:a|ei|ou)|inform(?:a|ei|ou)|confess(?:a|ei|ou)|avis(?:a|ei|ou)|ensin(?:a|ei|ou)|descobr(?:e|i|iu)|reconhec(?:e|i|eu))\b/i,
   },
   {
@@ -177,10 +195,9 @@ function resolveNarrativeRouting({ triage, signals }) {
   const forceReasons = [];
 
   for (const domain of signals.strongDomains || []) {
-    if (!selectedDomains.has(domain)) {
-      selectedDomains.add(domain);
-      forceReasons.push(`explicit-${domain}-signal`);
-    }
+    if (!MECHANICAL_DOMAINS.has(domain) || selectedDomains.has(domain)) continue;
+    selectedDomains.add(domain);
+    forceReasons.push(`explicit-${domain}-signal`);
   }
 
   const hasIntroduction = (signals.signals || []).some(signal => signal.domain === 'entity' && signal.action === 'introduction');
@@ -209,7 +226,11 @@ function resolveNarrativeRouting({ triage, signals }) {
 
   const domains = NARRATIVE_DOMAINS.filter(domain => selectedDomains.has(domain));
   const requiresFullAnalysis = Boolean(triage?.requiresFullAnalysis) || domains.length >= 4;
-  const forceDeepAnalysis = !triage?.consequential && domains.length > 0;
+  // Overriding the triage costs a full analysis of the turn, so only mechanical evidence
+  // earns it. Without this restriction the override fired on ordinary prose and the deep
+  // pass ran on every single turn.
+  const forceDeepAnalysis = !triage?.consequential
+    && domains.some(domain => MECHANICAL_DOMAINS.has(domain));
 
   return {
     selectedDomains: domains,
@@ -275,6 +296,7 @@ function unique(values) {
 
 module.exports = {
   EPISTEMIC_DOMAINS,
+  MECHANICAL_DOMAINS,
   NARRATIVE_DOMAINS,
   compactNarrativeManifest,
   extractNarrativeSignals,
