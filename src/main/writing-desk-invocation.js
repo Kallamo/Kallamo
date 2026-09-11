@@ -1,20 +1,26 @@
 const crypto = require('crypto');
 const db = require('./database');
 const { selectActiveMessages } = require('./features/chat/archive-coverage');
-const { sendApiRequest } = require('./features/llm/llm.service');
+const { sendApiRequest, getReservedOutputTokens, resolvePayloadLimit } = require('./features/llm/llm.service');
+const {
+    PAYLOAD_BUDGET_CONTRACT,
+    assertPayloadWithinLimit,
+    getAvailableHistoryTokens,
+    normalizeMaxApiPayload
+} = require('./features/llm/payload-budget');
+const { packContextItems, renderContextSections, selectRecentWithinBudget } = require('./features/llm/context-budget');
+const { stripReasoning } = require('./features/chat/message-text');
 const {
     countTokens,
     chunkText,
     generateEmbeddingVector,
+    generateEmbeddingVectors,
     executeHybridSearch,
     executeMultiOwnerSearch,
     fuseAndRank
 } = require('./rag-service');
 
-// Per-channel instruction appended to the system prompt. Replacement/insertion rely
-// on the output fence; analysis is free prose with no fence (nothing to disobey).
-// The marked span is given as Markdown (the default, models read/write it far more
-// reliably than HTML) or HTML (the table fallback). The model returns the same format.
+// Analysis has no fence. The span is sent as Markdown, or HTML for tables; the model answers in kind.
 const MD_RULES =
     `The marked span is Markdown. Return Markdown: # / ## / ### for H1/H2/H3, **bold**, *italic*, ` +
     `- for bullet lists, 1. for ordered lists, > for blockquotes. Do NOT use HTML tags. ` +
@@ -41,21 +47,32 @@ const CHANNEL_INSTRUCTIONS = {
 // Factor applied to the selection's token count to size the output budget: a
 // replacement is roughly the same length as the source, an insertion can be longer.
 const MAXTOKENS_FACTOR = { replacement: 2, insertion: 3.5, analysis: 2 };
-// Per-channel floor. Replacement/analysis scale with the selection, but an insertion's
-// length is independent of the (often tiny) marked span, a small selection must not
-// starve a full new passage, or it truncates on nearly every insert. maxTokens only
-// caps output, so a generous floor costs nothing when the model writes less.
-const MAXTOKENS_MIN = { replacement: 256, insertion: 1024, analysis: 256 };
+// An insertion's length is independent of the selection, so a small span must not starve it.
+// maxTokens only caps output, so a generous floor is free.
+const MAXTOKENS_MIN = { replacement: 256, insertion: 1024, analysis: 1024 };
 const MAXTOKENS_CAP = 4096;
 
-// Tokens kept in reserve beyond the output budget so the prompt + completion don't
-// collide with the context window.
+// Tokens kept in reserve beyond the output budget inside the reading size.
 const BUDGET_MARGIN = 512;
 const DEFAULT_CONTEXT_WINDOW = 8192;
 
 // Characters of bidirectional context kept verbatim around the selection when the
 // whole chapter does not fit the budget; the far parts fall to RAG.
 const WINDOW_CHARS_EACH_SIDE = 4000;
+
+// The chapter always gets at least this much; retrieved notes keep this share.
+const MIN_CHAPTER_TOKENS = 1024;
+const RETRIEVAL_SHARE_OF_READING = 0.2;
+
+const RETRIEVED_CONTEXT_HEADER = '--- RETRIEVED CONTEXT ---';
+const SECTIONS = {
+    profile: '--- PROFILE KNOWLEDGE ---',
+    workspace: '--- WORKSPACE KNOWLEDGE ---',
+    memory: '--- WORKSPACE MEMORY ---',
+    chapters: '--- OTHER CHAPTERS ---',
+    chapter: '--- CURRENT CHAPTER (DISTANT PARTS) ---'
+};
+const SECTION_ORDER = [SECTIONS.profile, SECTIONS.workspace, SECTIONS.memory, SECTIONS.chapters, SECTIONS.chapter];
 
 function makeFence() {
     const suffix = crypto.randomBytes(4).toString('hex');
@@ -67,9 +84,7 @@ function makeFence() {
     };
 }
 
-// Remove any stray fence sentinel (open/close, OUT/KSEL, any suffix) so a malformed
-// or truncated model reply can never carry one into the manuscript. Applied to every
-// proposedText return path as a last line of defense.
+// Last line of defense: no sentinel may ever reach the manuscript.
 const SENTINEL_RE = /⟦\/?(?:OUT|KSEL)_[0-9a-f]+⟧/g;
 function stripSentinels(text) {
     return (text || '').replace(SENTINEL_RE, '').trim();
@@ -91,25 +106,23 @@ function extractFence(raw, outOpen, outClose) {
     const afterOpen = start + outOpen.length;
     const end = raw.indexOf(outClose, afterOpen);
     if (end === -1) {
-        // Open fence present but no close: a length-capped truncation. Keep the partial
-        // body after the open token so the failure path can salvage it instead of the
-        // whole raw reply (which carries the echoed context and the open sentinel).
+        // Truncated reply: keep the partial body so the failure path can salvage it.
         return { content: null, truncated: true, partial: raw.slice(afterOpen).trim() };
     }
     return { content: raw.slice(afterOpen, end).trim(), truncated: false };
 }
 
-// Build the bidirectional chapter context with the selection wrapped in sentinels.
-// Whole chapter when it fits the budget, otherwise a verbatim window around the
-// selection plus freshly-embedded RAG over the chapter's far parts.
+// Whole chapter when it fits, else a verbatim window around the selection plus RAG over the rest.
 async function buildChapterContext({ before, markedSpan, after, selOpen, selClose, queryVector, budgetTokens, threshold }) {
     const whole = `${before}${selOpen}${markedSpan}${selClose}${after}`;
     if (countTokens(whole) <= budgetTokens) {
         return { contextText: whole, farChunks: [] };
     }
 
-    const nearBefore = before.slice(-WINDOW_CHARS_EACH_SIDE);
-    const nearAfter = after.slice(0, WINDOW_CHARS_EACH_SIDE);
+    const roomChars = Math.max(0, budgetTokens - countTokens(markedSpan)) * 3.5;
+    const charsEachSide = Math.min(WINDOW_CHARS_EACH_SIDE, Math.floor(roomChars / 2));
+    const nearBefore = charsEachSide > 0 ? before.slice(-charsEachSide) : '';
+    const nearAfter = after.slice(0, charsEachSide);
     const farBefore = before.slice(0, before.length - nearBefore.length);
     const farAfter = after.slice(nearAfter.length);
 
@@ -117,14 +130,16 @@ async function buildChapterContext({ before, markedSpan, after, selOpen, selClos
     const farText = `${farBefore}\n\n${farAfter}`.trim();
     if (farText.length > 0 && queryVector) {
         const pieces = chunkText(farText);
-        const candidates = [];
-        for (let i = 0; i < pieces.length; i++) {
-            try {
-                const vector = await generateEmbeddingVector(pieces[i]);
-                candidates.push({ id: `live_${i}`, source: 'current chapter', text: pieces[i], createdAt: 0, vector });
-            } catch (e) { }
-        }
-        farChunks = fuseAndRank(queryVector, candidates, null, threshold, 5).map(r => r.text);
+        let vectors = [];
+        try { vectors = await generateEmbeddingVectors(pieces); } catch (e) { vectors = []; }
+        const candidates = pieces.map((text, i) => ({
+            id: `live_${i}`,
+            source: 'current chapter',
+            text,
+            createdAt: 0,
+            vector: vectors[i] || []
+        }));
+        farChunks = fuseAndRank(queryVector, candidates, null, threshold, 5);
     }
 
     const windowText = `${nearBefore}${selOpen}${markedSpan}${selClose}${nearAfter}`;
@@ -142,25 +157,23 @@ function loadDirectives(workspaceId) {
     }
 }
 
-// Retrieval over the persistent channels: profile KB, chat KB, chat memory, and the
-// sibling chapters of the same workspace (cross-chapter). Query = selection +
-// intermediate prompt (the analog of the chat's currentInput).
+// Query = selection + intermediate prompt. Results are budget items, fitted by score.
 async function gatherRag({ profileId, workspaceId, currentDocId, retrievalQuery, threshold }) {
-    const out = [];
+    const items = [];
+    const add = (section, results) => {
+        for (const r of results || []) {
+            if (r && r.text) items.push({ section, text: r.text, tier: 1, score: Number(r.fusionScore ?? r.score) || 0 });
+        }
+    };
     try {
-        const kb = await executeHybridSearch(retrievalQuery, profileId, 'profile_kb', threshold, 5);
-        if (kb.length) out.push(`--- PROFILE KNOWLEDGE ---\n${kb.map(r => r.text).join('\n\n')}`);
+        add(SECTIONS.profile, await executeHybridSearch(retrievalQuery, profileId, 'profile_kb', threshold, 5));
     } catch (e) { }
     try {
-        const chatKb = await executeHybridSearch(retrievalQuery, workspaceId, 'chat_kb', threshold, 5);
-        if (chatKb.length) out.push(`--- WORKSPACE KNOWLEDGE ---\n${chatKb.map(r => r.text).join('\n\n')}`);
+        add(SECTIONS.workspace, await executeHybridSearch(retrievalQuery, workspaceId, 'chat_kb', threshold, 5));
     } catch (e) { }
     try {
-        // Workspace memory is the world-indexed tier: enable the dynamic-tag boost, same
-        // as the chat path (searchChatMemories), so entity mentions in the query surface
-        // the tagged chunks.
-        const mem = await executeHybridSearch(retrievalQuery, workspaceId, 'chat_memory', threshold, 5, true);
-        if (mem.length) out.push(`--- WORKSPACE MEMORY ---\n${mem.map(r => r.text).join('\n\n')}`);
+        // Enable the tag boost, as the chat path does.
+        add(SECTIONS.memory, await executeHybridSearch(retrievalQuery, workspaceId, 'chat_memory', threshold, 5, true));
     } catch (e) { }
     try {
         const siblingIds = db.prepare(
@@ -169,11 +182,10 @@ async function gatherRag({ profileId, workspaceId, currentDocId, retrievalQuery,
         if (siblingIds.length) {
             // Sibling chapters are world-indexed (WD chapter indexing tags their chunks),
             // so ride the tag boost here too, this is the cross-chapter coherence lever.
-            const cross = await executeMultiOwnerSearch(retrievalQuery, siblingIds, 'document', threshold, 5, true);
-            if (cross.length) out.push(`--- OTHER CHAPTERS ---\n${cross.map(r => r.text).join('\n\n')}`);
+            add(SECTIONS.chapters, await executeMultiOwnerSearch(retrievalQuery, siblingIds, 'document', threshold, 5, true));
         }
     } catch (e) { }
-    return out;
+    return items;
 }
 
 function loadActiveChatWindow(workspaceId) {
@@ -182,9 +194,9 @@ function loadActiveChatWindow(workspaceId) {
         const messages = db.prepare(
             'SELECT id, role, content, excluded FROM messages WHERE chatId = ? ORDER BY createdAt'
         ).all(workspaceId);
-        // Same live-history rule the chat itself uses, so the desk never receives
-        // a passage the workspace has already archived or dropped.
-        return selectActiveMessages(messages, chat && chat.memoryBlocks).map(m => ({ role: m.role, content: m.content }));
+        // Same live-history rule as the chat; reasoning never goes back to a model.
+        return selectActiveMessages(messages, chat && chat.memoryBlocks)
+            .map(m => ({ role: m.role, content: stripReasoning(m.content) }));
     } catch (e) {
         return [];
     }
@@ -210,21 +222,22 @@ async function runWritingDeskInvocation({
     const profile = db.prepare('SELECT * FROM writing_profiles WHERE id = ?').get(profileId);
     if (!profile) throw new Error(`Writing profile not found: ${profileId}`);
 
-    // Channel is chosen per-invocation (Invoke modal). Context window is a workspace
+    // Channel is chosen per-invocation (Invoke modal). The reading size is a workspace
     // setting living on the chat row, alongside maxContext. Both fall back sanely.
     const channel = resultChannel || 'replacement';
-    const chatRow = db.prepare('SELECT wdContextWindow, wdUseChatHistory FROM chats WHERE id = ?').get(workspaceId);
-    const contextWindow = (chatRow && chatRow.wdContextWindow) || DEFAULT_CONTEXT_WINDOW;
+    const chatRow = db.prepare('SELECT wdContextWindow, wdUseChatHistory, maxContext FROM chats WHERE id = ?').get(workspaceId);
+    const readingSize = (chatRow && chatRow.wdContextWindow) || DEFAULT_CONTEXT_WINDOW;
     // Default on: the workspace chat rides as history. Off (per-workspace toggle) drops
     // it, the biggest lever against the chat's language/topic bleeding into edits.
     const useChatHistory = !chatRow || chatRow.wdUseChatHistory !== 0;
+    const workspaceLimit = normalizeMaxApiPayload(chatRow && chatRow.maxContext);
+    const payload = resolvePayloadLimit({ apiProfileId: profile.apiProfileId, maxPayloadTokens: workspaceLimit });
     const { selOpen, selClose, outOpen, outClose } = makeFence();
 
     // The model sees + echoes the formatted span, so size the output budget on it.
     const formatRules = format === 'html' ? HTML_RULES : MD_RULES;
     const markedSpan = spanContent || selection;
     const maxTokens = computeMaxTokens(markedSpan, channel);
-    const budgetTokens = contextWindow - maxTokens - BUDGET_MARGIN;
     const threshold = 0.3;
 
     const retrievalQuery = `${selection}\n${intermediatePrompt || ''}`.trim();
@@ -234,107 +247,146 @@ async function runWritingDeskInvocation({
         queryVector = await generateEmbeddingVector(retrievalQuery, true);
     } catch (e) { }
 
-    const { contextText, farChunks } = await buildChapterContext({
-        before, markedSpan, after, selOpen, selClose, queryVector, budgetTokens, threshold
-    });
-
-    const ragBlocks = await gatherRag({
-        profileId: profile.id, workspaceId, currentDocId: documentId, retrievalQuery, threshold
-    });
-    if (farChunks.length) ragBlocks.push(`--- CURRENT CHAPTER (DISTANT PARTS) ---\n${farChunks.join('\n\n')}`);
-
     const directives = loadDirectives(workspaceId);
-    const activeWindow = useChatHistory ? loadActiveChatWindow(workspaceId) : [];
-
-    // Assemble the system prompt: profile prompt + permanent directives + channel
-    // instruction + RAG context. The active chat window rides as chatHistory.
     const channelInstruction = channel === 'analysis'
         ? CHANNEL_INSTRUCTIONS.analysis
         : CHANNEL_INSTRUCTIONS[channel](outOpen, outClose, formatRules);
 
-    // Built once, injected twice: in the system prompt and again just before the
-    // instruction. Directives are user-authored and treated equally (no per-directive
-    // special-casing); restating the whole block by recency is what makes the model
-    // actually honor them against the English scaffold and the chat history.
+    // Injected twice: restating directives near the instruction is what makes the model honor them.
     const directivesBlock = directives.length
         ? `--- PERMANENT DIRECTIVES (always honor) ---\n${directives.map(d => `- ${d}`).join('\n')}`
         : '';
 
-    let systemPrompt = profile.systemPrompt || '';
+    let baseSystemPrompt = profile.systemPrompt || '';
     if (directivesBlock) {
-        systemPrompt += `\n\n${directivesBlock}`;
+        baseSystemPrompt += `\n\n${directivesBlock}`;
     }
-    if (ragBlocks.length) {
-        systemPrompt += `\n\n--- RETRIEVED CONTEXT ---\n${ragBlocks.join('\n\n')}`;
-    }
-    systemPrompt += `\n\n--- TASK ---\n${channelInstruction}`;
-
-    // Fail fast if the always-on context alone overflows the window.
-    const fixedTokens = countTokens(systemPrompt) + countTokens(contextText);
-    if (fixedTokens >= contextWindow) {
-        throw new Error(`Writing Desk: the assembled context (~${fixedTokens} tokens) exceeds the workspace context window of ${contextWindow}. Reduce directives/knowledge or raise the window.`);
-    }
-
-    const newPrompt =
-        `${contextText}` +
+    const taskBlock = `\n\n--- TASK ---\n${channelInstruction}`;
+    const promptTail =
         (directivesBlock ? `\n\n${directivesBlock}` : '') +
         `\n\n--- INSTRUCTION ---\n${intermediatePrompt || 'Apply the profile\'s purpose to the marked span.'}`;
 
-    const callApi = (budget) => sendApiRequest({
+    // The chapter gets what the fixed part leaves, minus the share kept for notes.
+    const coreTokens = countTokens(baseSystemPrompt + taskBlock) + countTokens(promptTail);
+    const retrievalReserve = Math.floor(readingSize * RETRIEVAL_SHARE_OF_READING);
+    const chapterBudget = Math.max(
+        MIN_CHAPTER_TOKENS,
+        readingSize - maxTokens - BUDGET_MARGIN - coreTokens - retrievalReserve
+    );
+
+    const { contextText, farChunks } = await buildChapterContext({
+        before, markedSpan, after, selOpen, selClose, queryVector, budgetTokens: chapterBudget, threshold
+    });
+    const chapterTokens = countTokens(contextText);
+
+    const ragItems = await gatherRag({
+        profileId: profile.id, workspaceId, currentDocId: documentId, retrievalQuery, threshold
+    });
+    for (const chunk of farChunks) {
+        ragItems.push({ section: SECTIONS.chapter, text: chunk.text, tier: 0, score: Number(chunk.fusionScore ?? chunk.score) || 0 });
+    }
+    const retrievalBudget = Math.max(
+        retrievalReserve,
+        readingSize - maxTokens - BUDGET_MARGIN - coreTokens - chapterTokens
+    );
+    const packedRag = packContextItems(ragItems, retrievalBudget, { estimate: countTokens });
+    const retrieved = renderContextSections(packedRag.kept, SECTION_ORDER);
+
+    // Assemble the system prompt: profile prompt + permanent directives + RAG context
+    // + channel instruction. The active chat window rides as chatHistory.
+    let systemPrompt = baseSystemPrompt;
+    if (retrieved) {
+        systemPrompt += `\n\n${RETRIEVED_CONTEXT_HEADER}\n${retrieved}`;
+    }
+    systemPrompt += taskBlock;
+
+    const newPrompt = `${contextText}${promptTail}`;
+    const correctionSuffix = `\n\nIMPORTANT: your previous reply was not wrapped correctly. Return ONLY the result wrapped exactly once in ${outOpen} and ${outClose}.`;
+
+    // Must fit the payload limit with room for the retry at the output cap.
+    const budgetInput = {
+        maxPayloadTokens: payload.limit,
+        limitSource: payload.source,
+        systemPrompt,
+        newPrompt: newPrompt + correctionSuffix,
+        outputTokens: getReservedOutputTokens({ maxTokens: MAXTOKENS_CAP })
+    };
+    assertPayloadWithinLimit({
+        ...budgetInput,
+        breakdown: { fixed: coreTokens + chapterTokens, retrieved: packedRag.usedTokens, history: 0 }
+    });
+
+    // The workspace chat rides as a recent window, never the whole conversation: at
+    // most the reading size, and never more than the payload limit leaves.
+    let activeWindow = [];
+    if (useChatHistory) {
+        const historyBudget = Math.min(readingSize, getAvailableHistoryTokens(budgetInput));
+        activeWindow = selectRecentWithinBudget(loadActiveChatWindow(workspaceId), historyBudget, {
+            estimate: countTokens,
+            overhead: PAYLOAD_BUDGET_CONTRACT.messageOverheadTokens
+        }).selected.map(({ message, text }) => ({ role: message.role, content: text }));
+    }
+
+    const callApi = (budget, prompt = newPrompt) => sendApiRequest({
         apiProfileId: profile.apiProfileId,
         model: profile.model,
         systemPrompt,
         chatHistory: activeWindow,
-        newPrompt,
+        newPrompt: prompt,
         temperature: profile.temperature,
         maxTokens: budget,
+        maxPayloadTokens: workspaceLimit,
         manualMode: profile.manualMode === 1,
         manualJson: profile.manualJson,
-        abortSignal
+        abortSignal,
+        includeResponseMetadata: true
+    });
+    // Reasoning a model returns alongside the reply never reaches the manuscript or a
+    // note, and cannot carry a stray fence token into the parse.
+    const readReply = (result) => ({
+        text: stripReasoning(typeof result === 'string' ? result : (result?.content || '')),
+        truncated: Boolean(result?.truncated)
     });
 
-    let raw = await callApi(maxTokens);
+    let reply = readReply(await callApi(maxTokens));
 
-    // Analysis: free prose, the whole response is the note.
+    // Analysis: the whole response is the note; a truncated one is retried at the cap.
     if (channel === 'analysis') {
-        return { channel, status: 'ok', proposedText: (raw || '').trim(), fromPos, toPos };
+        if (reply.truncated && maxTokens < MAXTOKENS_CAP) {
+            reply = readReply(await callApi(MAXTOKENS_CAP));
+        }
+        const note = reply.text.trim();
+        if (!note) {
+            throw new Error('The model returned an empty analysis. Nothing was saved; try again.');
+        }
+        return {
+            channel,
+            status: reply.truncated ? 'flagged' : 'ok',
+            proposedText: reply.truncated ? `${note}\n\n_This analysis reached the output limit and may be incomplete._` : note,
+            fromPos,
+            toPos
+        };
     }
 
-    let parsed = extractFence(raw, outOpen, outClose);
+    let parsed = extractFence(reply.text, outOpen, outClose);
 
-    // Truncation (open fence, no close) → one retry at the cap. Truncation means the
-    // model wanted more room than we gave, so jump straight to the ceiling rather than
-    // merely doubling and risking a second truncation.
+    // Truncation means it wanted more room: retry straight at the cap.
     if (parsed && parsed.truncated && maxTokens < MAXTOKENS_CAP) {
-        raw = await callApi(MAXTOKENS_CAP);
-        parsed = extractFence(raw, outOpen, outClose);
+        reply = readReply(await callApi(MAXTOKENS_CAP));
+        parsed = extractFence(reply.text, outOpen, outClose);
     }
 
     // No valid fence → one free correction retry asking for the fence explicitly.
     if (!parsed || parsed.content == null) {
         // Hold the truncated body from the earlier attempt in case the retry also fails.
         const priorPartial = parsed && parsed.partial;
-        const correction = await sendApiRequest({
-            apiProfileId: profile.apiProfileId,
-            model: profile.model,
-            systemPrompt,
-            chatHistory: activeWindow,
-            newPrompt: `${newPrompt}\n\nIMPORTANT: your previous reply was not wrapped correctly. Return ONLY the result wrapped exactly once in ${outOpen} and ${outClose}.`,
-            temperature: profile.temperature,
-            maxTokens,
-            manualMode: profile.manualMode === 1,
-            manualJson: profile.manualJson,
-            abortSignal
-        });
-        parsed = extractFence(correction, outOpen, outClose);
+        const correction = readReply(await callApi(maxTokens, `${newPrompt}${correctionSuffix}`));
+        parsed = extractFence(correction.text, outOpen, outClose);
         if (!parsed || parsed.content == null) {
-            // Everything failed. Salvage the cleanest partial we have (a truncated fence
-            // body beats the raw reply, which carries the echoed context), sentinel-
-            // stripped, and flag it so the UI warns the writer it may be incomplete.
-            const salvage = (parsed && parsed.partial) || priorPartial || correction || raw || '';
+            // Salvage the cleanest partial, sentinel-stripped, and flag it as possibly incomplete.
+            const salvage = (parsed && parsed.partial) || priorPartial || correction.text || reply.text || '';
             return { channel, status: 'flagged', proposedText: stripSentinels(salvage), fromPos, toPos };
         }
-        raw = correction;
     }
 
     return { channel, status: 'ok', proposedText: stripSentinels(parsed.content), fromPos, toPos };
