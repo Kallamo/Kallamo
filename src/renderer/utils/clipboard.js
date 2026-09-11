@@ -1,6 +1,4 @@
-// Robust copy for Electron: navigator.clipboard.writeText is permission/focus-gated
-// and throws on programmatic copies, so prefer the ungated main-process clipboard,
-// then fall back to the Web API, then to a DOM execCommand last resort.
+// navigator.clipboard is gated in Electron: main-process clipboard, then the Web API, then execCommand.
 export async function copyText(text) {
   try { if (window.electronAPI?.copyToClipboard) return await window.electronAPI.copyToClipboard(text); } catch (e) {}
   try { return await navigator.clipboard.writeText(text); } catch (e) {}

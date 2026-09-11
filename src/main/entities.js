@@ -1,7 +1,4 @@
-// Per-workspace Worldbuild registry access layer. Backs the entity + relation CRUD
-// exposed over IPC, the derived-list queries (inventory, members…), and the
-// surface-mention -> canonical-id resolver the tagger uses. Reused by ipc-handlers
-// and workflow-runner; keep it free of Electron/IPC concerns.
+// Worldbuild registry access layer. Keep it free of Electron/IPC concerns.
 const db = require('./database');
 const crypto = require('crypto');
 const { discardEnrichPending } = require('./features/worldbuild/entity-review');
@@ -11,9 +8,7 @@ function parseJsonArray(raw) {
   try { const a = JSON.parse(raw); return Array.isArray(a) ? a : []; } catch { return []; }
 }
 
-// Fold typographic punctuation to ASCII before matching, so a curly apostrophe in a
-// canonical name (e.g. seed data: "The Keeper's Logbook") still matches the straight
-// apostrophe a user or the model types. Also trims + lowercases + collapses whitespace.
+// Folds typographic punctuation so a curly apostrophe matches a typed straight one.
 function normalizeName(s) {
   return String(s || '')
     .replace(/[‘’‛ʼ]/g, "'")
@@ -111,12 +106,7 @@ function stripInternal(data) {
   return d;
 }
 
-// Fold one entity into an existing one: the source's name + aliases are absorbed as
-// aliases of the target, its chunk tags and relation edges are repointed to the target,
-// its data + lore are combined with the target's, then the source is deleted. `prefer`
-// decides who wins on conflicting fields, 'target' (the existing entity, default) or
-// 'source' (the folded-in one, e.g. a freshly imported entity). Used both for "this AI
-// proposal is really an alias of X" and for merging an imported duplicate into a real one.
+// `prefer` decides which side wins conflicting fields ('target' by default).
 function mergeEntity(sourceId, targetId, { prefer = 'target' } = {}) {
   if (!sourceId || !targetId || sourceId === targetId) throw new Error('distinct source and target are required');
   const source = db.prepare('SELECT * FROM entities WHERE id = ?').get(sourceId);
@@ -165,13 +155,8 @@ function mergeEntity(sourceId, targetId, { prefer = 'target' } = {}) {
 // Stable identity for a staged link, so the UI can accept/reject one edge at a time.
 function enrichLinkKey(l) { return `${l.relKey}:${l.targetId}:${l.label || ''}`; }
 
-// Resolve part or all of a staged enrichment proposal (data._enrichPending, produced by
-// the 'review' enrichment path). Resolution is incremental: only the items named in
-// `accept`/`reject` leave the pending blob, so accepting one field doesn't discard the
-// rest still under review. Accepted scalars/lore are written to the live record, accepted
-// links become edges, accepted chapters are appended to loreDocumentIds; rejected items
-// are dropped. Once nothing remains staged the blob is removed. `accept`/`reject` each =
-// { fields: [...dataKeys], lore: bool, links: [...linkKeys], chapters: [...docIds] }.
+// Incremental: only items named in accept/reject leave the pending blob.
+// accept/reject = { fields, lore, links, chapters }.
 function resolveEnrichReview(id, { accept = {}, reject = {} } = {}) {
   const cur = getEntity(id);
   if (!cur) throw new Error('entity not found');
@@ -277,10 +262,7 @@ function resolveMention(mention, type = null, workspaceId = null) {
   return null;
 }
 
-// List every entity that could plausibly match a free-text mention, for a human
-// picker (unlike resolveMention, which commits to one winner). A candidate matches
-// when the needle equals or is contained in the canonical name or any alias, so
-// two "Mara"s both surface and the user disambiguates. Exact matches rank first.
+// Unlike resolveMention, returns every plausible match so the user can disambiguate.
 function findCandidates(mention, workspaceId = null, limit = 8) {
   const needle = normalizeName(mention);
   if (!needle || needle.length < 2) return [];
@@ -308,9 +290,7 @@ function findCandidates(mention, workspaceId = null, limit = 8) {
   return out.sort((a, b) => a.rank - b.rank || a.canonicalName.localeCompare(b.canonicalName)).slice(0, limit);
 }
 
-// The chapters (Writing Desk documents) linked to an entity's lore. Reads the
-// multi-value data.loreDocumentIds when present, else falls back to the legacy
-// single loreDocumentId column. Always returns a de-duped array of ids.
+// Falls back to the legacy single loreDocumentId column.
 function linkedLoreDocIds(ent) {
   if (!ent) return [];
   const ids = [];
@@ -357,9 +337,7 @@ function listLinks({ workspaceId, relType = null } = {}) {
   return (relType ? db.prepare(sql).all(workspaceId || null, relType) : db.prepare(sql).all(workspaceId || null));
 }
 
-// Add a directed edge. `single` first clears any existing edge of (fromId, relType),
-// enforcing one-to-one relations (owner, race, parent location…). A null toId just
-// clears (used to unset a single-value relation).
+// `single` clears existing (fromId, relType) edges first; a null toId only clears.
 function setLink({ workspaceId, fromId, relType, toId, single = false, label = null }) {
   if (!fromId || !relType) throw new Error('fromId and relType are required');
   const cleanLabel = label != null && String(label).trim() ? String(label).trim() : null;
@@ -389,10 +367,7 @@ function updateLinkLabel(linkId, label) {
   return { id: linkId, label: clean };
 }
 
-// Serialize a workspace's Worldbuild into a self-contained, portable package: entities
-// (minus transient/workspace-bound bits) and the edges between them. Chapter links
-// (loreDocumentIds) and staged AI proposals (_enrichPending) are intentionally dropped,
-// they point at this workspace's Writing Desk and mean nothing elsewhere.
+// Chapter links and staged proposals are dropped: they only mean something in this workspace.
 function exportWorldbuild(workspaceId) {
   const rows = db.prepare('SELECT * FROM entities WHERE workspaceId IS ? AND status != ?').all(workspaceId || null, 'proposed');
   const ids = new Set(rows.map(r => r.id));
@@ -412,11 +387,8 @@ function exportWorldbuild(workspaceId) {
   return { kallamoWorldbuild: 1, exportedAt: Date.now(), entities, links };
 }
 
-// Bring an exported package into a workspace WITHOUT de-duping by name, a same-named
-// entity is not assumed to be the same entity. Every imported entity lands as a `proposed`
-// row flagged _imported, and its edges are recreated among the imported set. The user then
-// reviews each in the sheet: accept as new, dismiss, or merge into an existing entity
-// (choosing which side's data wins). Returns how many entities/links were staged.
+// No de-dupe by name: a same-named entity is not assumed to be the same one.
+// Everything lands as `proposed` for the user to review.
 function importWorldbuild(workspaceId, payload) {
   if (!payload || payload.kallamoWorldbuild !== 1 || !Array.isArray(payload.entities)) {
     throw new Error('Not a valid Kallamo Worldbuild file.');

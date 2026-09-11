@@ -52,10 +52,7 @@ const EvidenceReferences = ({ excerpts, support = '' }) => {
   );
 };
 
-// Per-entity AI write permission, used by the "Update entities" enrichment pass:
-// open = AI writes directly, review = AI stages changes for approval, locked = the
-// enrichment skips it entirely (still readable by search/tagging). Stored in
-// data.aiPolicy; default 'review'.
+// open writes directly, review stages for approval, locked is skipped. Default 'review'.
 const AI_POLICY = {
   open:   { label: 'Open',   icon: Pencil,      tip: 'AI can edit this entity freely',        active: 'bg-accent/20 text-accent border-accent/40' },
   review: { label: 'Review', icon: ShieldCheck, tip: 'AI edits are staged for your approval', active: 'bg-amber-400/15 text-amber-200 border-amber-400/40' },
@@ -88,10 +85,7 @@ const StateSelect = ({ map, value, onChange }) => (
   </LSelect>
 );
 
-// Free-text field with a themed suggestion dropdown: seed values plus anything the
-// user has typed before. Open-ended yet self-completing, and styled to match. No
-// native datalist (whose popup we cannot theme). onChange receives an event-like
-// object so callers read e.target.value uniformly.
+// No native datalist: its popup can't be themed. onChange receives an event-like object.
 const FreeDatalist = ({ value, onChange, options, placeholder }) => {
   const [open, setOpen] = useState(false);
   const [rect, setRect] = useState(null);
@@ -188,9 +182,7 @@ function Section({ icon: Icon, title, editing, onEdit, showPencil, children }) {
 
 const draftFor = (type) => ({ id: null, type, canonicalName: '', aliases: '', lore: '', loreDocumentId: '', status: 'confirmed', data: {} });
 
-// Relation pickers (single-value and many-to-many), styled to match the light inputs.
-// Links need a saved entity id, so these render nothing until the entity exists,
-// the create form shows only fields that can be filled before the first save.
+// Links need a saved entity id, so these render nothing before the first save.
 function SingleRelation({ label, hint, current, options, onSet, disabled }) {
   if (disabled) return null;
   const currentName = options.find(o => o.id === current)?.canonicalName;
@@ -227,10 +219,7 @@ function MultiRelation({ label, hint, links, options, onAdd, onRemove, disabled 
   );
 }
 
-// Character↔character relationships: a labeled edge from the open sheet's point of
-// view. You pick another character and name how they relate to this one (e.g. their
-// father, their rival). The role is free text and self-completing; it is optional so
-// Add never silently blocks. Reads naturally: "{role} · {name}".
+// Labeled from the open sheet's point of view: "{role} · {name}". Role is optional so Add never blocks.
 function LabeledRelation({ subjectName, links, options, priorLabels, onAdd, onRemove, disabled }) {
   const [toId, setToId] = useState('');
   const [role, setRole] = useState('');
@@ -463,9 +452,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const cancelSection = async () => { const cur = entities.find(e => e.id === selected.id); if (cur) await openEntity(cur); setEditingSection(null); };
   const remove = async () => { if (!selected?.id) { setSelected(null); return; } setSaving(true); try { await electronAPI.deleteEntity(selected.id); setSelected(null); await load(); } finally { setSaving(false); } };
 
-  // Folding a proposal into an existing entity: absorbs the name as an alias, repoints its
-  // tags + relation edges, combines data/lore (with `prefer` deciding conflicts), deletes
-  // the source. Used for AI proposals ("this is really X") and imported duplicates.
+  // `prefer` decides conflicts; used for AI proposals and imported duplicates.
   const mergeInto = async (targetId, prefer = 'target') => {
     if (!selected?.id || !targetId) return;
     setSaving(true);
@@ -501,10 +488,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     } catch (e) { showToast(`Could not change AI permission: ${e.message}`, 'error'); }
   };
 
-  // Update entities: read each non-locked entity's related chunks and let the AI refresh it.
-  // The run lives in the main process, so it outlives this view. On mount we restore the
-  // lock from the main-process status, and a broadcast completion event clears it, so
-  // switching away and back keeps the overlay while the update is still running.
+  // The run lives in the main process; on mount the lock is restored from its status.
   useEffect(() => {
     if (!electronAPI.onEnrichEntitiesProgress) return;
     return electronAPI.onEnrichEntitiesProgress((p) => setEnrichProgress(p));
@@ -523,9 +507,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     return () => { cancelled = true; };
   }, [electronAPI, workspaceId]);
 
-  // Completion is broadcast, so it clears the lock and refreshes even if a different mount
-  // of this view started the run. A ref keeps the handler's closure current without
-  // re-subscribing on every render.
+  // A ref keeps the handler current without re-subscribing every render.
   const onEnrichComplete = async (res) => {
     setEnriching(false); setEnrichProgress(null);
     if (res && res.workspaceId && res.workspaceId !== workspaceId) return;
@@ -609,9 +591,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     showToast(`Imported ${r.entitiesAdded} entit${r.entitiesAdded === 1 ? 'y' : 'ies'}${linkBit} for review. Accept, merge, or dismiss each in the sidebar.`, 'success');
   };
 
-  // Resolve a staged 'review' enrichment proposal (data._enrichPending). Accept applies
-  // the named fields/lore to the live record, reject drops them; the sheet reloads so the
-  // remaining staged bits (if any) stay visible.
+  // The sheet reloads so remaining staged items stay visible.
   const resolveReview = async (accept = {}, reject = {}) => {
     if (!selected?.id) return;
     setSaving(true);
@@ -720,9 +700,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const isItemType = selected?.type === 'Items' && !isUniqueItem;
   const unsaved = isNew;
 
-  // Owner as a single 3-mode choice: the AI decides, it is deliberately lost, or a
-  // character holds it. A character owner is an owned_by edge; the two ownerless modes
-  // live in data.ownership. Picking a character also clears the ownerless flag.
+  // A character owner is an owned_by edge; the ownerless modes live in data.ownership.
   const ownerVal = rel.ownedBy ? rel.ownedBy.entity.id : (selected?.data?.ownership === 'lost' ? 'lost' : 'ai');
   const ownerOptions = [...byType.Characters, ...byType.Creatures.filter(entity => (entity.data?.scope || 'individual') !== 'group')];
   const persistItemDraft = async () => {

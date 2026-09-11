@@ -2,6 +2,46 @@
 
 All notable changes to Kallamo are documented in this file. Version numbers reflect the size of the change for the people using Kallamo: patch releases fix and refine, minor releases are named milestones, and major releases change what the product is.
 
+## [Unreleased]
+
+### Added
+- API connections accept an optional Model Context Window. Every request through that connection stays below it as well as below the workspace's MAX API Payload, which protects local servers that silently cut the start of an oversized prompt.
+- A reply that stopped at the output limit now says so under the message.
+- A reply whose retrieval stopped early after an error now says so under the message.
+
+### Changed
+- Retrieved context now has a budget. Knowledge base results, archived memory and agentic research are ranked and packed into the room left after the profile, constant knowledge and the response reserve, and recent history keeps a guaranteed share. A long conversation with many summaries no longer outgrows the workspace's MAX API Payload.
+- Entity lookups during agentic retrieval return the passages most relevant to the message, at most 12, instead of every passage tagged with the entity.
+- A single file or linked lore read during agentic retrieval takes at most 60% of the retrieval budget, and the retrieval planner reads at most 6,000 tokens of recent conversation.
+- Archived memory now arrives with its neighboring passages from the same scene, joined in reading order, so an answer split across two passages is no longer lost.
+- Keyword search now contributes to ranking and only searches the current workspace.
+- Long search queries are embedded in windows, so text past the model's input limit still counts.
+- Very long paragraphs are split at sentence boundaries when indexed, instead of becoming one oversized passage.
+- Archive recaps of very long histories are written in parts and then combined, so they fit the Summarizer's limit.
+- A long Lore is extended with new paragraphs instead of being rewritten whole.
+- The safety margin kept under the payload limit now scales with the limit.
+- GPT-5 and o-series requests no longer send a temperature, and reasoning models get extra output room for their thinking.
+- Retrieved text and agentic research are stored with a message only while the matching diagnostics option is on.
+
+### Fixed
+- Agentic retrieval no longer sends an empty context when the research cites characters by name. Archive passages were discarded unless the planner listed them under their generic source name.
+- The retrieval planner is instructed to report only facts found in its results.
+- Constant knowledge and full file reads no longer lose the opening paragraph of a file, and its passages are rejoined in their original order without repeated overlap.
+- A request over the payload limit now explains how much came from instructions, retrieved context and history, and no longer offers a Retry that would fail the same way.
+- An empty reply is reported as an error instead of being saved as a blank message.
+- Regenerate and Edit keep the previous reply until the new one has been saved.
+- Provider errors, safety blocks and refusals are reported as errors instead of being saved as the AI's reply.
+- An error in the middle of a streamed reply ends it with an error instead of saving the partial text as complete.
+- Reasoning is kept out of the history, the archives and the input passed between workflow steps.
+- Gemini replies split into several parts are read in full.
+- The Writing Desk sizes the chapter window after instructions and notes, so medium chapters no longer fail with a context window error, and the chat history it reads is limited to the reading size.
+- Writing Desk analysis has an output floor of 1,024 tokens, retries once when cut off, and marks a note that is still incomplete.
+- A Lore update that is cut off or unreadable now appears in the failures panel instead of being dropped silently.
+- The history marker in the chat header uses the number of messages the last reply actually left out.
+- Workspace variables containing `$` patterns are inserted literally.
+- Opening a long chat is faster. Messages load without their diagnostics, and oversized diagnostics already stored are trimmed once on startup.
+- Search reuses parsed vectors between messages, and the Writing Desk embeds distant chapter text in one batch.
+
 ## [1.1.6] - 2026-08-23
 
 ### Added

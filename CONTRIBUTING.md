@@ -113,7 +113,7 @@ fix: sync searchable RAG file chunks to SQLite db
 docs: update CHANGELOG.md for v1.0.3
 ```
 
-Write summaries in English, keep them concise, and describe *what* the change does.
+Write summaries in English, keep them concise, and describe *what* the change does. The reasoning and history behind a change go in the commit body, not in code comments (see [Coding Guidelines](#coding-guidelines)).
 
 ---
 
@@ -143,7 +143,10 @@ The CLA exists to keep the project's licensing clear and to protect both you and
 
 - **Match the surrounding code.** Follow the existing structure, naming, and style of the file you're editing rather than introducing a new pattern.
 - **Write in English.** Code, comments, commit messages, and documentation should all be in English so the whole community can read them.
-- **Keep comments meaningful.** Comment the *why* behind non-obvious decisions, not the obvious *what*. Avoid noise.
+- **Keep comments short and rare.** A comment exists only for what the code cannot say: a non-obvious *why*, an invariant someone could break, or a trap. One or two lines is the norm.
+  - Do not narrate history ("used to", "now", "this fixes", "previously"). That belongs in the commit message.
+  - Do not describe callers, consumers, or what the signature and names already show.
+  - Do not restate the code in prose. If a comment keeps growing, the explanation belongs in the commit or in `docs/`.
 - **Respect the architecture.** The Electron main process (`src/main/`), the secure IPC bridge (`src/preload.js`), and the React renderer (`src/renderer/`) are separated for a reason. Keep that boundary intact. See [docs/architecture.md](docs/architecture.md) for the full picture.
 - **Test before you push.** There's no automated test suite yet, so manual verification of the affected feature is essential.
 

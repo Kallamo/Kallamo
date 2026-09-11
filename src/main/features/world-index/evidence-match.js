@@ -1,16 +1,5 @@
-// Does an excerpt the tagger returned really come from the chunk it points at?
-//
-// This check is what keeps tagging confirmed-only: a mention is accepted only
-// when its evidence is present in the source text, so the model cannot invent an
-// entity and cite nothing. The rule is right; the comparison used to be too
-// literal about it. It lowercased and collapsed whitespace and nothing else, so
-// a model that retyped a passage instead of copying it byte for byte lost every
-// mention in the batch. In practice that meant prose with typographic dashes,
-// curly quotes or accents failed wholesale, and the archive was stored untagged.
-//
-// The normalization below only removes differences that carry no meaning for
-// this question. Two texts that differ solely by how a dash or an accent is
-// encoded are the same sentence.
+// Evidence must appear in the chunk, which keeps tagging confirmed-only.
+// Normalization only drops differences with no meaning here: dashes, quotes, accents, spacing.
 
 const ZERO_WIDTH = /[​-‍﻿]/g;
 
@@ -18,9 +7,7 @@ const ZERO_WIDTH = /[​-‍﻿]/g;
 const PUNCTUATION_MAP = new Map([
   ['‐', '-'], ['‑', '-'], ['‒', '-'], ['–', '-'],
   ['—', '-'], ['―', '-'], ['−', '-'],
-  // Every quote mark folds to one character. A model that answers with single
-  // quotes where the text had double ones is still quoting the text, and an
-  // apostrophe inside a word folds the same way on both sides.
+  // All quote marks fold to one character, on both sides.
   ['“', '"'], ['”', '"'], ['„', '"'], ['‟', '"'],
   ['«', '"'], ['»', '"'],
   ['‘', '"'], ['’', '"'], ['‚', '"'], ['‛', '"'],
@@ -50,9 +37,7 @@ function normalizeEvidence(value) {
     .trim();
 }
 
-// The tagger may answer with one excerpt or with several. Several used to be
-// joined into a single string and looked up as one run of text, which could
-// never match: the pieces come from different places in the chunk.
+// Several excerpts are matched separately: they come from different places in the chunk.
 function evidenceCandidates(value) {
   const list = Array.isArray(value) ? value : [value];
   return list

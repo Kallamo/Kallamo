@@ -32,12 +32,7 @@ const ENTITY_LORE_SCHEMA = strictObject({
   })
 });
 
-// `data` and `links` hold keys that depend on the entity type, which used to be
-// expressed as open objects. Several providers reject an open object outright
-// ("additionalProperties: true is not supported"), so the schema is built per
-// entity from the fields and relations that entity actually accepts. Nothing is
-// lost by closing it: the enrichment already discards any key outside those
-// lists. Both stay optional, since an update that changes nothing is valid.
+// Built per entity: several providers reject open objects (additionalProperties: true).
 function buildEntityUpdateSchema(fieldKeys = [], relationKeys = []) {
   const data = {};
   for (const key of fieldKeys) data[key] = FIELD_PROPOSAL;

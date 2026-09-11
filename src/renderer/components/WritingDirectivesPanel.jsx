@@ -2,10 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { Pin, Plus, Trash2, Check, X, PanelRightClose } from 'lucide-react';
 import Toggle from './ui/Toggle';
 
-// Per-workspace pinned directives: always-on instructions injected verbatim into
-// every AI invocation in this Writing Desk (writing-desk-invocation.js → loadDirectives),
-// immune to summarization. Workspace-scoped, so it lives here (above the per-chapter
-// editor) and stays available no matter which chapter is open.
+// Workspace-scoped directives, injected verbatim into every invocation and immune to summarization.
 export default function WritingDirectivesPanel({ workspaceId, electronAPI, onClose }) {
   const [directives, setDirectives] = useState([]);
   const [draft, setDraft] = useState('');

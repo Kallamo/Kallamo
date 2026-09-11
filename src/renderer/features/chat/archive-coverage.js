@@ -1,14 +1,6 @@
-// Renderer mirror of src/main/features/chat/archive-coverage.js.
-//
-// The context bar, the archive window and the memory view all need to know
-// which messages are still live history. Keeping the logic pure on both sides
-// means the number the user sees is the number the payload will use. Both
-// copies are checked against each other in tests/archive-coverage.test.ts.
+// Renderer mirror of src/main/features/chat/archive-coverage.js, kept equal by tests/archive-coverage.test.ts.
 
-// How many of the newest messages the archive window holds back by default.
-// Roleplay replies run long, so a wider reserve can pin tens of thousands of
-// tokens in the payload for no gain. It is a default, not a rule: the window
-// can offer them, and archiving them takes them out of live history at once.
+// A default, not a rule: long roleplay replies make a wide reserve expensive.
 export const RECENT_MESSAGE_RESERVE = 5;
 
 export function parseMemoryBlocks(value) {

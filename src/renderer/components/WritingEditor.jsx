@@ -166,10 +166,7 @@ function useToolbarTick(editor) {
   const [, force] = useReducer(x => x + 1, 0);
   useEffect(() => {
     if (!editor) return;
-    // Coalesce bursts of editor events into one update per frame. A synchronous
-    // force() here lets a transaction → re-render → (re-mounted BubbleMenu dispatches
-    // a transaction) cycle spin into "Maximum update depth", especially under
-    // StrictMode; deferring to rAF breaks that loop and batches rapid changes.
+    // One update per frame: a synchronous force() can loop into "Maximum update depth".
     let raf = 0;
     const onChange = () => {
       if (raf) return;
@@ -638,9 +635,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
   const wbBtnRef = useRef(null);
   const wbAnchorRef = useRef(null); // where the menu anchors: the ⋯ button OR a clicked entity span
   const [entityHover, setEntityHover] = useState(null); // { name, type, x, y } custom card
-  // Chapter index status: 'done' = vectorized & current, 'outdated' = edited since
-  // last index, 'never' = no index yet, 'error' = last index failed. Editing flips a
-  // 'done' chapter to 'outdated'; vectorizing flips it back.
+  // 'done' | 'outdated' | 'never' | 'error'.
   const [vecStatus, setVecStatus] = useState(doc.vectorized ? 'done' : 'never');
   const [vecBusy, setVecBusy] = useState(false);
   const [vecProgress, setVecProgress] = useState(null);
@@ -649,9 +644,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
   const locked = inFlight || !!pending;
   const pageConfig = pageConfigFromDoc(doc);
 
-  // Chapter index pill: icon + label + color per state. Color carries the meaning
-  // (green = current, amber = the alert, red = failed); the brand accent stays for
-  // interaction only. Click always opens the Index new / Reindex all menu.
+  // Color carries the state; the brand accent stays for interaction only.
   const vecPill = (() => {
     if (vecBusy) {
       const p = vecProgress ? ` ${vecProgress.done}/${vecProgress.total}` : '';
@@ -674,10 +667,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     }
   })();
 
-  // The index menu has two actions on different axes: syncing the memory to the
-  // current TEXT (Index new blocks) vs refreshing entity TAGS on already-indexed text
-  // (Reindex all tags). When the chapter is behind the text, the first is the answer,
-  // emphasize it and pin a contextual note so the menu explains the pill.
+  // When the chapter is behind its text, Index new is the answer, so it is emphasized.
   const needsSync = vecStatus === 'never' || vecStatus === 'outdated' || vecStatus === 'error';
   const vecMenuNote = {
     outdated: "You've edited this chapter since it was last indexed, so the AI is still reading the old version.",
@@ -707,9 +697,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     return off;
   }, [electronAPI, doc.id]);
 
-  // Re-read the authoritative status from the backend (content-vs-index hash compare),
-  // so the pill always tells the truth after an operation instead of guessing. Retag
-  // keeps embeddings, so on an edited chapter it legitimately stays 'outdated'.
+  // Retag keeps embeddings, so an edited chapter legitimately stays 'outdated'.
   const refreshVecStatus = async () => {
     const res = await electronAPI.getDocumentVectorStatus?.(doc.id);
     if (res?.success) setVecStatus(res.status || 'never');
@@ -773,9 +761,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     return () => document.removeEventListener('keydown', onKey);
   }, []);
 
-  // Invocation only offers the profiles ACTIVE in this workspace (the chat's
-  // activeProfiles), not every profile in the app, the Writing Desk inherits the
-  // workspace's active profile set just like the chat does.
+  // Only the workspace's active profiles, same as the chat.
   useEffect(() => {
     let active = true;
     Promise.all([
@@ -833,8 +819,6 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
   }, [editor, doc.id]);
 
 
-  // Best-effort scroll-to-passage for a note's excerpt: find the text in the doc and
-  // bring it into view. No selection, no highlight, just carry the page back to it.
   // No stored anchor, so it can't orphan.
   useEffect(() => {
     if (!jumpRef) return;
@@ -982,10 +966,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
   };
 
   // --- In-text Worldbuild bridge ---
-  // Never guess identity from the name (two "Mara"s must not collapse): the menu reads
-  // only the real mark on the selection. Marked → Open/Unlink that exact entity;
-  // unmarked → Create or Link-to-existing (a deliberate pick). Name-resolution stays in
-  // tagging, never in the text.
+  // Never guess identity from the name: the menu reads only the real mark on the selection.
   const openWorldbuildMenu = async () => {
     if (!editor || locked) return;
     const { from, to } = editor.state.selection;

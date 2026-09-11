@@ -3,9 +3,7 @@ import { Sparkles, X, AlertTriangle } from 'lucide-react';
 import Button from './ui/Button';
 import SearchableSelect from './ui/SearchableSelect';
 
-// The invocation modal: highlighted span + Profile dropdown (swap on the spot) +
-// intermediate prompt (the per-invocation instruction). The result review happens
-// inline in the document (green/red track-changes), not here.
+// Result review happens inline in the document, not here.
 const CHANNELS = ['replacement', 'insertion', 'analysis'];
 
 export function InvokeModal({ selection, profiles, initialChannel, onSubmit, onClose }) {

@@ -1,14 +1,5 @@
-// Resolve the category name a tagger answered with to one this workspace has.
-//
-// The prompt lists the exact category names and asks the model to use only those,
-// and models still answer "Character" where the workspace has "Characters". That
-// is not a wrong answer about the world, it is a wrong answer about a label, and
-// it used to void every mention in the batch: the whole archive then reported
-// that nothing passed validation.
-//
-// Matching stays closed: a name is accepted only when it resolves to a category
-// that already exists. Nothing here invents a category or maps a type onto a
-// different one, so tagging remains confirmed-only.
+// Resolves the label a tagger wrote ("Character" for "Characters") to a workspace category.
+// Closed matching: never invents a category, so tagging stays confirmed-only.
 
 function normalizeName(value) {
   return String(value == null ? '' : value)
@@ -35,9 +26,7 @@ function nameVariants(name) {
   return [...variants];
 }
 
-// A lookup from anything the model might plausibly write to the canonical name.
-// Exact names are registered last so they always win a collision: if one category
-// is "Race" and another "Races", each still resolves to itself.
+// Exact names register last so they win collisions ("Race" vs "Races").
 function buildCategoryResolver(categories) {
   const lookup = new Map();
   const list = Array.isArray(categories) ? categories : [];

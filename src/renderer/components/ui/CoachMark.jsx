@@ -2,9 +2,7 @@ import React from 'react';
 import { Sparkles } from 'lucide-react';
 import Popover from './Popover';
 
-// One-time coach-mark: a small dismissible callout anchored to an element.
-// Presentational only. The caller gates `open` on a persisted UI flag (see
-// uiFlags / dismissHint in AppContext) and calls onDismiss to record it as seen.
+// Presentational only: the caller gates `open` on a persisted UI flag.
 export default function CoachMark({ anchorRef, open, onDismiss, title, children, align = 'left' }) {
   if (!open) return null;
   return (

@@ -38,16 +38,8 @@ function parseTaggerResponse(response) {
   return { valid: false, items: [] };
 }
 
-// One batching policy for every tagging path. Budgeting by characters rather than
-// by a fixed count is what makes it hold across callers: archive chunks run ~800
-// characters and Writing Desk chunks ~1000, so a fixed count would send batches of
-// wildly different sizes to the same output ceiling.
-//
-// The numbers are a balance between two failure modes. Batches that are too large
-// make the model skip chunks and push its answer toward the output limit, where a
-// truncated reply costs the whole batch. Batches that are too small repeat the
-// system prompt and the entity vocabulary on every call, which on a long archive
-// is several times more input than the passages themselves.
+// Budgeted by characters, not count, since chunk sizes differ by caller.
+// Too large truncates the reply and loses the batch; too small repeats the prompt every call.
 function createTaggerBatches(records, { maxChunks = 6, maxChars = 6000 } = {}) {
   const batches = [];
   let batch = [];

@@ -53,9 +53,8 @@ export default function ProfileModal({ profile, onClose, onSave }) {
   // Set default model when API connection changes
   const selectedApi = apiProfiles.find(ap => ap.id === apiProfileId);
   const availableModels = selectedApi ? (typeof selectedApi.models === 'string' ? JSON.parse(selectedApi.models) : selectedApi.models) : [];
-  // Keep the saved model selectable even if it is no longer in the connection's list,
-  // otherwise the controlled <select> silently falls back to the first option while
-  // state keeps the stale value, and the save persists the old model.
+  // Keep the saved model selectable, or the controlled <select> shows the first option
+  // while saving the stale value.
   const modelOptions = (model && !availableModels.includes(model)) ? [model, ...availableModels] : availableModels;
 
   // --- Variable autocomplete & preview (System Prompt) ---
@@ -186,8 +185,7 @@ export default function ProfileModal({ profile, onClose, onSave }) {
   };
 
   // --- Save Profile ---
-  // Knowledge Base (files + agentic RAG) lives in the KB Manager now, so we never
-  // author it here; on edit we carry the profile's existing KB through untouched.
+  // The KB is authored in the KB Manager; carry it through untouched.
   const handleSave = async () => {
     if (!name.trim()) return;
 

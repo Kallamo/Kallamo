@@ -892,9 +892,7 @@ export default function KbManagerModal({ profile, onClose }) {
     return 'SEARCHABLE';
   };
 
-  // Per-type visual identity: an accent hex for the medallion, a matching Badge tone
-  // and a glyph. Always-on memories read amber, custom-searchable emerald, indexed
-  // files blue, so the grid is scannable by color, not just by label.
+  // Color-coded so the grid scans by type, not just label.
   const blockVisual = (block) => {
     const isConst = block.type === 'constant'
       || (block.type === 'manual' && (block.strategy === 'constant' || block.rawItem?.strategy === 'constant'));

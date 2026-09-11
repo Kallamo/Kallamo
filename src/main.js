@@ -32,11 +32,8 @@ const MIME_TYPES = {
   '.wav': 'audio/wav',
 };
 
-// Extensions the app-file protocol is allowed to serve. This is the set of file types the app
-// actually renders/previews (images, media, PDFs, and text/code shown in FilePreviewModal).
-// Anything outside this list (e.g. .db, .sqlite, .env, .pem, key files, executables, or
-// extension-less files) is refused, so a compromised renderer cannot read sensitive files
-// off disk via this protocol.
+// Only types the app renders are served. Anything else (.db, .env, keys) is refused,
+// so a compromised renderer cannot read sensitive files.
 const SERVABLE_EXTENSIONS = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico',
   '.pdf', '.mp4', '.webm', '.mov', '.ogg', '.mp3', '.wav',
@@ -51,10 +48,7 @@ protocol.registerSchemesAsPrivileged([
 require('./main/database');
 require('./main/ipc-handlers');
 
-// Window size and position, remembered between launches. The app used to maximize
-// on every start regardless of how it was left, which is wrong on a large monitor.
-// Kept as a small JSON file rather than in the database: it is read before the
-// window exists and a corrupt or missing file must never block startup.
+// A file, not the DB: it is read before the window exists and must never block startup.
 const WINDOW_STATE_FILE = () => path.join(app.getPath('userData'), 'window-state.json');
 
 function readWindowState() {
@@ -181,9 +175,6 @@ function createWindow () {
 }
 
 app.whenReady().then(() => {
-  // A summary left mid-pass by a closed app is not in progress any more. Marking
-  // those on startup keeps the memory view honest and offers the finishing pass
-  // again, instead of showing work that nothing is driving.
   try {
     require('./main/workflow-runner').markInterruptedSummaries();
   } catch (e) {
@@ -237,12 +228,8 @@ app.whenReady().then(() => {
     }
   });
 
-  // Content-Security-Policy. Applied only in packaged builds, in development the Vite dev
-  // server needs inline scripts, eval and a websocket connection for HMR, which a strict CSP
-  // would block. All runtime assets (fonts, highlight.js themes, JS bundle) are self-hosted,
-  // so production can lock down to the app's own origin. connect-src is intentionally tight:
-  // all external AI API calls happen in the main (Node) process, not the renderer, so even a
-  // compromised renderer cannot exfiltrate data to an arbitrary server.
+  // Packaged builds only: Vite dev needs inline scripts, eval and an HMR websocket.
+  // connect-src stays tight because every AI call happens in the main process.
   if (app.isPackaged) {
     const csp = [
       "default-src 'self'",

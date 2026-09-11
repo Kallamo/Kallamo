@@ -1,13 +1,5 @@
-// The scalar `data` vocabulary of a Worldbuild entity, in one place.
-//
-// A field only works if three separate lists agree on it: what the AI may propose
-// (ENRICH_FIELDS), what the sheet renders, and what retrieval hands back to the model
-// (DOSSIER_DATA_FIELDS). They were three hand-kept lists in two files and drifted three
-// times, each time the same way: a field was proposed, accepted, stored, and then never
-// seen again by either the user or the model. Nothing threw, so nothing surfaced.
-//
-// Two of those lists live here so a test can hold them against each other. The sheet is
-// JSX and cannot be enumerated yet, so that edge is still checked by hand.
+// Scalar `data` fields of a Worldbuild entity. ENRICH_FIELDS and DOSSIER_DATA_FIELDS live together
+// so a test can hold them against each other; the sheet (JSX) is still checked by hand.
 
 // Closed vocabularies for the fields that are enums. A value outside its list is dropped
 // rather than stored.
@@ -19,11 +11,8 @@ const ENRICH_ENUMS = {
     itemType: ['Weapon', 'Armor', 'Artifact', 'Resource'],
 };
 
-// Each list mirrors the scalar `data` fields the WorldbuildView actually renders for
-// that type, nothing else. The AI may only fill what the user can see; it must never
-// invent fields (e.g. a Character has no "role"/"abilities", a Creature has no
-// "description"). Relational fields (owner, race, faction, habitat…) and chapter links
-// are edges, not data, and are handled separately.
+// Mirrors what the sheet renders per type: the AI may only fill what the user can see.
+// Relational fields are edges, handled separately.
 const ENRICH_FIELDS = {
     Characters: ['status', 'age', 'appearance', 'personality'],
     Creatures: ['status', 'disposition', 'nature', 'abundance', 'threat', 'abilities', 'appearance', 'personality'],
@@ -65,9 +54,7 @@ const ENRICH_FIELD_GUIDANCE = {
     content: 'A precise canonical explanation of the concept or system: definition, mechanism, scope, constraints, terminology, exceptions, and consequences when supported. Preserve distinctions between related concepts and never universalize a single example.',
 };
 
-// Serialized into a short human-readable clause for the retrieval dossier. Nothing
-// curated into the registry may be lost from retrieval, so every scalar attribute the
-// user set surfaces to the model. Order here is the order the model reads.
+// Every scalar the user set must reach retrieval. Order is the order the model reads.
 const DOSSIER_DATA_FIELDS = [
     ['status', 'status'], ['itemType', 'type'], ['locationType', 'type'],
     ['nature', 'nature'], ['scope', 'kind'], ['disposition', 'disposition'],
@@ -76,10 +63,7 @@ const DOSSIER_DATA_FIELDS = [
     ['appearance', 'appearance'], ['personality', 'personality'], ['kind', 'kind'],
 ];
 
-// The only enrichable fields allowed to be absent from the clause above, because every
-// caller already emits them beside it. A field belongs here only when it has another
-// carrier into the prompt; "it is long" is not a reason, or a Character would arrive
-// with no description of any kind.
+// Allowed only when another carrier puts the field in the prompt; length is not a reason.
 const DOSSIER_EXEMPT_FIELDS = ['description', 'content'];
 
 function entityDataFacts(data) {
