@@ -4,6 +4,8 @@ const mammoth = require('mammoth');
 const os = require('os');
 const db = require('./database');
 const { encode } = require('gpt-tokenizer/encoding/o200k_base');
+const { chunkText, meaningfulContentLength, MIN_MEANINGFUL_CHARS } = require('./features/knowledge/chunk-text');
+const { buildFtsMatchQuery } = require('./features/knowledge/fts-query');
 
 // Approximate token count using the same encoding the app uses everywhere else.
 // Computed once at write time and stored, so the UI can read it for free.
@@ -86,64 +88,6 @@ function resetLocalEngine() {
 const RAG_MODEL_ID = 'Xenova/multilingual-e5-small';
 const RAG_MODEL_DIM = 384;
 
-// Minimum amount of REAL informational content (after stripping scaffold/empty labels)
-// a chunk must have to be indexed. Empty NPC/form skeletons ("Nome:\n● Raça:\n...") are
-// pure structure with no content, yet score high cosine on facet-listing queries
-// ("leaders, factions, population, economy") and poison the top results. Tune with 🔬.
-const MIN_MEANINGFUL_CHARS = 60;
-
-// Length of actual content in a chunk, ignoring bullet markers, lone bullets, and
-// empty "Label:" lines (a field label with no value after the colon).
-function meaningfulContentLength(text) {
-    if (!text) return 0;
-    const kept = [];
-    for (const rawLine of text.split('\n')) {
-        let line = rawLine.trim();
-        if (!line) continue;
-        // Strip leading bullet/list markers
-        line = line.replace(/^[●○•◦▪‣·\-\*▪○\s]+/, '').trim();
-        if (!line) continue;                 // lone bullet
-        if (/^[^:]{1,40}:\s*$/.test(line)) continue; // empty "Label:" with no value
-        kept.push(line);
-    }
-    return kept.join(' ').replace(/\s+/g, ' ').trim().length;
-}
-
-function chunkText(text, maxChunkSize = 1000) {
-    if (!text || text.trim().length === 0) return [];
-
-    const overlapSize = Math.floor(maxChunkSize * 0.15);
-    const chunks = [];
-    const paragraphs = text.split(/\n\s*\n/);
-    let currentChunk = "";
-
-    for (const para of paragraphs) {
-        const cleanPara = para.trim();
-        if (cleanPara.length === 0) continue;
-
-        if (currentChunk.length + cleanPara.length > maxChunkSize && currentChunk.length > 0) {
-            if (currentChunk.length > 50) {
-                chunks.push(currentChunk.trim());
-            }
-            // Keep the trailing portion as overlap seed for the next chunk
-            const tail = currentChunk.slice(-overlapSize).trim();
-            currentChunk = tail.length > 0 ? tail : "";
-        }
-
-        currentChunk += (currentChunk.length > 0 ? "\n\n" : "") + cleanPara;
-    }
-
-    if (currentChunk.trim().length > 50) {
-        chunks.push(currentChunk.trim());
-    } else if (currentChunk.trim().length > 0 && chunks.length > 0) {
-        chunks[chunks.length - 1] += "\n\n" + currentChunk.trim();
-    }
-
-    // Drop low-information chunks (empty form skeletons, label-only fragments) so they
-    // never enter the index and poison retrieval.
-    return chunks.filter(c => meaningfulContentLength(c) >= MIN_MEANINGFUL_CHARS);
-}
-
 function calculateSimilarity(vecA, vecB) {
     let dotProduct = 0;
     for (let i = 0; i < vecA.length; i++) {
@@ -186,10 +130,7 @@ async function extractTextFromFile(filePath) {
     return fs.readFileSync(filePath, 'utf-8');
 }
 
-// Rich DOCX extraction: convert to HTML so structural formatting (headings,
-// bold/italic, lists, blockquotes, tables) survives, instead of the flat plain
-// text extractTextFromFile produces. Used by the Writing Desk import so imported
-// chapters keep their formatting; the RAG path still uses plain text.
+// HTML keeps formatting for Writing Desk import; RAG still uses plain text.
 async function extractDocxHtml(filePath) {
     const dataBuffer = fs.readFileSync(filePath);
     const result = await mammoth.convertToHtml({ buffer: dataBuffer });
@@ -241,17 +182,57 @@ async function generateEmbeddingVector(text, isQuery = false) {
         }
     } else {
         // E5 models expect 'query: ' or 'passage: ' prefixes
-        const prefixedText = isQuery ? `query: ${text}` : `passage: ${text}`;
         const pipe = await getEmbeddingPipeline();
-        const output = await pipe(prefixedText, { pooling: 'mean', normalize: true });
+        if (isQuery) return embedQueryWindows(pipe, String(text || ''));
+        const output = await pipe(`passage: ${text}`, { pooling: 'mean', normalize: true });
         return Array.from(output.data);
     }
 }
 
-// How many passages go to the embedder at once. Archiving a long history means
-// hundreds of chunks, and one call each turned a minute of work into many: the
-// local model reloads its graph per call, and an external engine pays a full HTTP
-// round trip per chunk. Kept modest so a large archive cannot spike memory.
+// The local model reads at most 512 tokens, so long queries are embedded in windows and averaged.
+const QUERY_WINDOW_CHARS = 1500;
+const MAX_QUERY_WINDOWS = 8;
+
+function splitQueryWindows(text) {
+    if (text.length <= QUERY_WINDOW_CHARS) return [text];
+    const windows = [];
+    let current = '';
+    for (const piece of text.split(/(?<=[.!?…\n])\s+/)) {
+        if (!piece) continue;
+        if (current && current.length + 1 + piece.length > QUERY_WINDOW_CHARS) {
+            windows.push(current);
+            current = '';
+        }
+        if (piece.length > QUERY_WINDOW_CHARS) {
+            for (let i = 0; i < piece.length; i += QUERY_WINDOW_CHARS) windows.push(piece.slice(i, i + QUERY_WINDOW_CHARS));
+            continue;
+        }
+        current = current ? `${current} ${piece}` : piece;
+    }
+    if (current) windows.push(current);
+    // A very long query keeps its end, which is where the request usually is.
+    return windows.length > MAX_QUERY_WINDOWS ? windows.slice(-MAX_QUERY_WINDOWS) : windows;
+}
+
+async function embedQueryWindows(pipe, text) {
+    const windows = splitQueryWindows(text);
+    if (windows.length === 1) {
+        const output = await pipe(`query: ${windows[0]}`, { pooling: 'mean', normalize: true });
+        return Array.from(output.data);
+    }
+    const output = await pipe(windows.map(window => `query: ${window}`), { pooling: 'mean', normalize: true });
+    const dims = output.dims || [];
+    const width = dims[dims.length - 1];
+    const flat = output.data;
+    const mean = new Array(width).fill(0);
+    for (let row = 0; row < windows.length; row++) {
+        for (let col = 0; col < width; col++) mean[col] += flat[row * width + col];
+    }
+    const norm = Math.sqrt(mean.reduce((sum, value) => sum + value * value, 0)) || 1;
+    return mean.map(value => value / norm);
+}
+
+// Kept modest so a large archive cannot spike memory.
 const EMBEDDING_BATCH_SIZE = 16;
 
 // Read the embedding configuration once instead of per chunk.
@@ -270,10 +251,8 @@ function readEmbeddingConfig() {
     }
 }
 
-// Embed several passages in one pass. Mean pooling honours the attention mask, so
-// a padded batch produces the same vectors a single call would. Any failure falls
-// back to embedding that batch one at a time, so batching can only ever cost time,
-// never results.
+// Mean pooling honours the attention mask, so padding doesn't change vectors.
+// A failed batch falls back to one-at-a-time.
 async function generateEmbeddingVectors(texts) {
     const config = readEmbeddingConfig();
     if (config.engine !== 'local') {
@@ -303,11 +282,8 @@ async function vectorizeChunks(chunks, sourceFileName, progressCallback, keyword
     const vectors = [];
     const tagsString = Array.isArray(keywords) && keywords.length > 0 ? `Tags: ${keywords.join(', ')}\n` : '';
 
-    // EXPERIMENT (boilerplate-raw): embed only the chunk content + tags, NOT the
-    // constant "Document:/Content:" scaffold. That scaffold is identical across every
-    // chunk, so it injects a shared vector component that compresses cosine spread and
-    // makes unrelated chunks look ~0.84 alike. The enrichedText is still stored/shown to
-    // the LLM; only the vector changes. Requires a re-index to take effect.
+    // The shared "Document:/Content:" scaffold stays out of the vector: it compresses cosine spread.
+    // Changing this requires a re-index.
     for (let start = 0; start < chunks.length; start += EMBEDDING_BATCH_SIZE) {
         const slice = chunks.slice(start, start + EMBEDDING_BATCH_SIZE);
         let batchVectors;
@@ -363,6 +339,7 @@ function insertChunksToDb(ownerId, ownerType, vectors) {
             insertFts.run(v.id, v.text);
         }
     })();
+    invalidateVectorCache(vectors.map(v => v.id));
 }
 
 function deleteChunksFromDb(ownerId, ownerType, sourceFileName) {
@@ -383,15 +360,10 @@ function deleteChunksFromDb(ownerId, ownerType, sourceFileName) {
 
 // --- HYBRID SEARCH ENGINE ---
 
-// Weight favoring dense (semantic) similarity over sparse (BM25 keyword) in the
-// fused score. Dense is the trustworthy signal; sparse mainly breaks ties and
-// rescues exact keyword matches. Tuned with the 🔬 debug panel.
+// Dense is the trusted signal; sparse breaks ties and rescues exact keywords.
 const ALPHA_DENSE = 0.7;
 
-// Real similarity scores live in a narrow high band (normalized e5 cosines rarely
-// drop below ~0.70 even for unrelated text), so a raw 0-1 threshold is meaningless.
-// The Retrieval Strictness slider sends a 0-1 dial mapped onto this band: the low
-// end only trims obvious off-topic noise, the high end keeps near-exact matches.
+// e5 cosines rarely drop below ~0.70, so the strictness dial maps onto this band.
 const SIMILARITY_FLOOR_MIN = 0.70;
 const SIMILARITY_FLOOR_MAX = 0.88;
 
@@ -399,37 +371,41 @@ const SIMILARITY_FLOOR_MAX = 0.88;
 // it follows the user's strictness setting instead of fighting it.
 const TAGGED_FLOOR_RATIO = 0.7;
 
-// Run the BM25 sparse pass against the FTS table and return a chunkId -> [0,1]
-// normalized relevance map. The FTS table is not owner-filtered, so callers fuse
-// this against an owner-scoped dense set (the dense map drives membership; a
-// sparse-only hit for some other owner never enters the result).
-function computeSparseNormMap(queryText) {
+// Enough keyword hits to rank the owner's chunks; normalization only needs the top.
+const SPARSE_RESULT_LIMIT = 500;
+
+// Restricted to the searched owners so other workspaces never shape the normalization.
+function computeSparseNormMap(queryText, ownerIds = null, ownerType = null) {
     let sparseResults = [];
-    const ftsQuery = queryText.replace(/"/g, '""').trim();
-    if (ftsQuery.length > 0) {
+    const matchQuery = buildFtsMatchQuery(queryText);
+    if (matchQuery) {
         try {
-            sparseResults = db.prepare(`
-                SELECT chunkId, bm25(knowledge_chunks_fts) as rank
-                FROM knowledge_chunks_fts
-                WHERE knowledge_chunks_fts MATCH ?
-            `).all(ftsQuery);
-        } catch (e) {
-            const simpleQuery = ftsQuery.replace(/[^a-zA-Z0-9\s]/g, ' ').trim();
-            if (simpleQuery.length > 0) {
-                try {
-                    sparseResults = db.prepare(`
-                        SELECT chunkId, bm25(knowledge_chunks_fts) as rank
-                        FROM knowledge_chunks_fts
-                        WHERE knowledge_chunks_fts MATCH ?
-                    `).all(simpleQuery);
-                } catch (err) { }
+            if (Array.isArray(ownerIds) && ownerIds.length && ownerType) {
+                const placeholders = ownerIds.map(() => '?').join(', ');
+                sparseResults = db.prepare(`
+                    SELECT knowledge_chunks_fts.chunkId AS chunkId, bm25(knowledge_chunks_fts) AS rank
+                    FROM knowledge_chunks_fts
+                    JOIN knowledge_chunks kc ON kc.id = knowledge_chunks_fts.chunkId
+                    WHERE knowledge_chunks_fts MATCH ? AND kc.ownerType = ? AND kc.ownerId IN (${placeholders})
+                    ORDER BY rank
+                    LIMIT ${SPARSE_RESULT_LIMIT}
+                `).all(matchQuery, ownerType, ...ownerIds);
+            } else {
+                sparseResults = db.prepare(`
+                    SELECT chunkId, bm25(knowledge_chunks_fts) AS rank
+                    FROM knowledge_chunks_fts
+                    WHERE knowledge_chunks_fts MATCH ?
+                    ORDER BY rank
+                    LIMIT ${SPARSE_RESULT_LIMIT}
+                `).all(matchQuery);
             }
+        } catch (e) {
+            console.warn('[RAG] Keyword search failed:', e.message);
+            sparseResults = [];
         }
     }
 
-    // SQLite bm25() returns negative scores (more negative = more relevant).
-    // Convert to positive relevance and min-max normalize to [0,1] within the
-    // result set so it's comparable to the dense cosine (magnitude-aware fusion).
+    // bm25() is negative (lower = better); flip and min-max normalize to match cosine.
     const sparseNormMap = new Map();
     if (sparseResults.length > 0) {
         const relevances = sparseResults.map(r => -r.rank);
@@ -444,18 +420,11 @@ function computeSparseNormMap(queryText) {
     return sparseNormMap;
 }
 
-// Pure ranking core, decoupled from any DB fetch. Given an already-embedded query
-// vector and a list of candidate chunks (each carrying its own vector, either from
-// the DB or freshly embedded in memory), score by cosine, fuse with the optional
-// sparse map, prune by the strictness floor, and return the top k. This is the
-// single fusion path shared by single-owner, multi-owner (cross-chapter), and the
-// in-memory volatile-chapter searches.
+// The single fusion path for single-owner, multi-owner and in-memory searches.
 function fuseAndRank(queryVector, candidates, sparseNormMap, threshold = 0.3, k = 5, boostMap = null) {
     const cosineFloor = SIMILARITY_FLOOR_MIN + threshold * (SIMILARITY_FLOOR_MAX - SIMILARITY_FLOOR_MIN);
-    // A chunk carrying an entity the query names is explicit evidence, not a guess,
-    // so it answers to a lower floor. Without this the boost could only reorder what
-    // already survived, and the case it exists for, a character named in a few lines
-    // of a long scene, was cut before the boost was ever applied.
+    // A chunk carrying an entity the query names is evidence, so it answers to a lower floor;
+    // otherwise a name mentioned in passing is cut before the boost applies.
     const taggedFloor = cosineFloor * TAGGED_FLOOR_RATIO;
 
     const fusedResults = [];
@@ -465,9 +434,7 @@ function fuseAndRank(queryVector, candidates, sparseNormMap, threshold = 0.3, k 
             ? calculateSimilarity(queryVector, vector)
             : 0;
         const sparseNorm = (sparseNormMap && sparseNormMap.get(cand.id)) || 0;
-        // Dynamic-tag boost: a fixed bonus when the chunk carries a tag the query
-        // mentions. Added on top of fusion; a boosted chunk is also judged against
-        // the lower `taggedFloor` above.
+        // Boosted chunks are judged against the lower taggedFloor.
         const boost = (boostMap && boostMap.get(cand.id)) || 0;
         const fusionScore = ALPHA_DENSE * cosine + (1 - ALPHA_DENSE) * sparseNorm + boost;
         fusedResults.push({
@@ -489,14 +456,10 @@ function fuseAndRank(queryVector, candidates, sparseNormMap, threshold = 0.3, k 
         .slice(0, k);
 }
 
-// Fixed bonus added to a chunk's fusion score when the query mentions one of its
-// dynamic tags. Small relative to the cosine band (~0.70–0.90) so it reorders within
-// the surviving set without swamping semantic similarity. Tuned at runtime.
+// Small against the ~0.70-0.90 cosine band: reorders without swamping similarity.
 const TAG_BOOST = 0.05;
 
-// Whole-word containment of `term` in `queryLower`, delimited by non-letter/digit on
-// both sides (Unicode-aware, so accented names work). Avoids a short term like "Ana"
-// matching inside "banana".
+// Unicode-aware whole-word match, so "Ana" doesn't match inside "banana".
 function containsWord(queryLower, term) {
     if (!term || term.length < 2) return false;
     const isWord = (ch) => ch !== undefined && /[\p{L}\p{N}]/u.test(ch);
@@ -511,11 +474,7 @@ function containsWord(queryLower, term) {
     }
 }
 
-// A tag value "mentions" the query when the query contains the whole value OR any of
-// its distinctive tokens (>=4 letters, so honorifics/particles like "de"/"o"/"da"
-// are skipped). This tolerates name variants until the canonical entity registry
-// (Worldbuild tab) makes tag values consistent: tag "Capitã Seraphina Valois" still
-// matches a query that only says "Seraphina Valois".
+// Matches the whole value or any token of 4+ letters, skipping particles like "de".
 function queryMentions(queryLower, needleLower) {
     if (!needleLower || needleLower.length < 2) return false;
     if (containsWord(queryLower, needleLower)) return true;
@@ -526,9 +485,7 @@ function queryMentions(queryLower, needleLower) {
     return false;
 }
 
-// Build chunkId -> boost map for an owner: load the owner's tag vocabulary (entity
-// values, falling back to tag names) and flag every chunk whose tag the query
-// mentions. Fixed boost per chunk (decision: not scaled by match count).
+// Fixed boost per chunk, not scaled by match count.
 function computeTagBoostMap(queryText, ownerId, ownerType) {
     return computeTagBoostMapForOwners(queryText, [ownerId], ownerType);
 }
@@ -568,12 +525,7 @@ function computeTagBoostMapForOwners(queryText, ownerIds, ownerType) {
     return boost;
 }
 
-// Build the world's known-entity vocabulary for an owner: derived from the chunk
-// tags actually present on this owner's chunks (not the whole workspace registry),
-// so the map stays faithful to what is indexed here. Each entry carries the
-// canonical name, its aliases, and how many chunks it appears on (for ranking).
-// Injected into the agentic loop so the agent queries by real names instead of
-// guessing. `limit` caps the block size for large worlds.
+// From tags on this owner's chunks, not the whole registry, so it reflects what is indexed here.
 function getWorldVocabulary(ownerId, ownerType, limit = 40) {
     let rows = [];
     try {
@@ -612,32 +564,69 @@ function getWorldVocabulary(ownerId, ownerType, limit = 40) {
         .slice(0, limit);
 }
 
-// Deterministic entity retrieval: resolve a surface name/alias to its tagged chunks
-// WITHOUT embedding or the similarity floor. This is the agentic "ceiling", given a
-// known entity, return every chunk that carries it, so the agent can pull a full
-// dossier in one exact call instead of tentative semantic searches. Also returns the
-// distinct registry entity ids that matched, so the caller can hop the relation graph
-// and reach the entity's linked lore without re-resolving.
-function lookupEntityChunks(nameOrAlias, ownerId, ownerType) {
+// Parsed vectors by chunk id. Reused only while the stored vector's fingerprint
+// (length + both ends of its JSON) matches, so re-embedded chunks are reloaded.
+const vectorCache = new Map();
+const VECTOR_CACHE_LIMIT = 60000;
+const EMPTY_VECTOR = new Float32Array(0);
+const VECTOR_FINGERPRINT_SQL = "length(vector) || ':' || substr(vector, 1, 32) || substr(vector, -32)";
+
+function cachedVectors(rows) {
+    const missing = rows
+        .filter(row => !vectorCache.has(row.id) || vectorCache.get(row.id).fingerprint !== row.fingerprint)
+        .map(row => row.id);
+    if (missing.length) {
+        if (vectorCache.size + missing.length > VECTOR_CACHE_LIMIT) vectorCache.clear();
+        for (let start = 0; start < missing.length; start += 500) {
+            const batch = missing.slice(start, start + 500);
+            const placeholders = batch.map(() => '?').join(', ');
+            const vectorRows = db.prepare(
+                `SELECT id, vector, ${VECTOR_FINGERPRINT_SQL} AS fingerprint FROM knowledge_chunks WHERE id IN (${placeholders})`
+            ).all(...batch);
+            for (const row of vectorRows) {
+                let parsed = [];
+                try { parsed = JSON.parse(row.vector); } catch (e) { }
+                vectorCache.set(row.id, {
+                    fingerprint: row.fingerprint,
+                    vector: Array.isArray(parsed) && parsed.length ? Float32Array.from(parsed) : EMPTY_VECTOR
+                });
+            }
+        }
+    }
+    return new Map(rows.map(row => [row.id, vectorCache.get(row.id)?.vector || EMPTY_VECTOR]));
+}
+
+function invalidateVectorCache(ids = null) {
+    if (!ids) {
+        vectorCache.clear();
+        return;
+    }
+    for (const id of ids) vectorCache.delete(id);
+}
+
+// A small bonus for recent chunks, so ties in similarity favour the latest scenes.
+const LOOKUP_RECENCY_WEIGHT = 0.02;
+
+// No similarity floor: returns the chunks tagged with a known entity, ranked by `queryVector`
+// (else recency) and capped by `limit`. `idsOnly` skips the chunks.
+function lookupEntityChunks(nameOrAlias, ownerId, ownerType, { queryVector = null, limit = null, idsOnly = false } = {}) {
     const needle = String(nameOrAlias || '').toLowerCase().trim();
-    if (!needle) return { chunks: [], entityIds: [] };
-    let rows = [];
+    if (!needle) return { chunks: [], entityIds: [], total: 0 };
+    let tagRows = [];
     try {
-        rows = db.prepare(
-            `SELECT DISTINCT kc.id AS id, kc.source AS source, kc.text AS text,
-                    kc.memoryBlockId AS memoryBlockId,
-                    ct.tag AS tag, ct.entity AS entity,
+        tagRows = db.prepare(
+            `SELECT DISTINCT ct.tag AS tag, ct.entity AS entity,
                     e.canonicalName AS canonicalName, e.aliases AS aliases
              FROM chunk_tags ct
              JOIN knowledge_chunks kc ON ct.chunkId = kc.id
              LEFT JOIN entities e ON ct.entity = e.id
              WHERE kc.ownerId = ? AND kc.ownerType = ? AND kc.enabled = 1`
         ).all(ownerId, ownerType);
-    } catch (e) { return { chunks: [], entityIds: [] }; }
+    } catch (e) { return { chunks: [], entityIds: [], total: 0 }; }
 
-    const out = new Map();
+    const matchedTags = [];
     const entityIds = new Set();
-    for (const r of rows) {
+    for (const r of tagRows) {
         let names;
         if (r.canonicalName) {
             names = [r.canonicalName];
@@ -650,39 +639,68 @@ function lookupEntityChunks(nameOrAlias, ownerId, ownerType) {
             if (!nl) return false;
             return nl === needle || queryMentions(needle, nl) || queryMentions(nl, needle);
         });
-        if (hit) {
-            if (!out.has(r.id)) out.set(r.id, {
-                id: r.id,
-                source: r.source,
-                text: r.text,
-                memoryBlockId: r.memoryBlockId
-            });
-            // canonicalName present => ct.entity is a real registry id worth hopping from.
-            if (r.canonicalName && r.entity) entityIds.add(r.entity);
-        }
+        if (!hit) continue;
+        matchedTags.push({ tag: r.tag, entity: r.entity });
+        // canonicalName present => ct.entity is a real registry id worth hopping from.
+        if (r.canonicalName && r.entity) entityIds.add(r.entity);
     }
-    return { chunks: Array.from(out.values()), entityIds: Array.from(entityIds) };
+    if (idsOnly || !matchedTags.length) return { chunks: [], entityIds: Array.from(entityIds), total: 0 };
+
+    let rows = [];
+    try {
+        const clause = matchedTags.map(() => '(ct.tag = ? AND ct.entity IS ?)').join(' OR ');
+        rows = db.prepare(
+            `SELECT DISTINCT kc.id AS id, kc.source AS source, kc.text AS text,
+                    kc.memoryBlockId AS memoryBlockId, kc.createdAt AS createdAt,
+                    ${VECTOR_FINGERPRINT_SQL} AS fingerprint
+             FROM chunk_tags ct
+             JOIN knowledge_chunks kc ON ct.chunkId = kc.id
+             WHERE kc.ownerId = ? AND kc.ownerType = ? AND kc.enabled = 1 AND (${clause})`
+        ).all(ownerId, ownerType, ...matchedTags.flatMap(t => [t.tag, t.entity]));
+    } catch (e) { return { chunks: [], entityIds: Array.from(entityIds), total: 0 }; }
+
+    let ranked;
+    if (Array.isArray(queryVector) && queryVector.length) {
+        const vectors = cachedVectors(rows);
+        const times = rows.map(r => Number(r.createdAt) || 0);
+        const newest = times.reduce((max, t) => Math.max(max, t), 0);
+        const oldest = times.reduce((min, t) => Math.min(min, t), newest);
+        ranked = rows.map(r => {
+            const vector = vectors.get(r.id);
+            const cosine = vector && vector.length === queryVector.length ? calculateSimilarity(queryVector, vector) : 0;
+            const recency = newest > oldest ? ((Number(r.createdAt) || 0) - oldest) / (newest - oldest) : 0;
+            return { ...r, score: cosine + LOOKUP_RECENCY_WEIGHT * recency };
+        }).sort((a, b) => b.score - a.score);
+    } else {
+        ranked = rows
+            .map(r => ({ ...r, score: 0 }))
+            .sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
+    }
+    const capped = Number.isInteger(limit) && limit > 0 ? ranked.slice(0, limit) : ranked;
+    return {
+        chunks: capped.map(({ id, source, text, memoryBlockId, score }) => ({ id, source, text, memoryBlockId, score })),
+        entityIds: Array.from(entityIds),
+        total: rows.length
+    };
 }
 
-// Load enabled candidate chunks for the given owners and parse their vectors once.
+// Load enabled candidate chunks for the given owners, with their vectors.
 function loadOwnerCandidates(ownerIds, ownerType) {
     if (!ownerIds || ownerIds.length === 0) return [];
     const placeholders = ownerIds.map(() => '?').join(', ');
     const rows = db.prepare(
-        `SELECT * FROM knowledge_chunks WHERE ownerType = ? AND enabled = 1 AND ownerId IN (${placeholders})`
+        `SELECT id, source, text, createdAt, memoryBlockId, ${VECTOR_FINGERPRINT_SQL} AS fingerprint
+         FROM knowledge_chunks WHERE ownerType = ? AND enabled = 1 AND ownerId IN (${placeholders})`
     ).all(ownerType, ...ownerIds);
-    return rows.map(row => {
-        let vector = [];
-        try { vector = JSON.parse(row.vector); } catch (e) { }
-        return {
-            id: row.id,
-            source: row.source,
-            text: row.text,
-            createdAt: row.createdAt,
-            memoryBlockId: row.memoryBlockId,
-            vector
-        };
-    });
+    const vectors = cachedVectors(rows);
+    return rows.map(row => ({
+        id: row.id,
+        source: row.source,
+        text: row.text,
+        createdAt: row.createdAt,
+        memoryBlockId: row.memoryBlockId,
+        vector: vectors.get(row.id)
+    }));
 }
 
 async function executeHybridSearch(queryText, ownerId, ownerType, threshold = 0.3, k = 5, applyTagBoost = false) {
@@ -690,7 +708,7 @@ async function executeHybridSearch(queryText, ownerId, ownerType, threshold = 0.
         const candidates = loadOwnerCandidates([ownerId], ownerType);
         if (candidates.length === 0) return [];
         const queryVector = await generateEmbeddingVector(queryText, true);
-        const sparseNormMap = computeSparseNormMap(queryText);
+        const sparseNormMap = computeSparseNormMap(queryText, [ownerId], ownerType);
         const boostMap = applyTagBoost ? computeTagBoostMap(queryText, ownerId, ownerType) : null;
         return fuseAndRank(queryVector, candidates, sparseNormMap, threshold, k, boostMap);
     } catch (error) {
@@ -699,16 +717,13 @@ async function executeHybridSearch(queryText, ownerId, ownerType, threshold = 0.
     }
 }
 
-// Cross-owner retrieval: pool the chunks of several owners (e.g. the neighbor
-// chapters of a Writing Desk document), embed the query once, and fuse over the
-// whole pool. Used by the Writing Desk so a select->invoke can reach other
-// chapters without re-embedding the query per owner.
+// Embeds the query once and fuses over several owners' chunks (e.g. neighbor chapters).
 async function executeMultiOwnerSearch(queryText, ownerIds, ownerType, threshold = 0.3, k = 5, applyTagBoost = false) {
     try {
         const candidates = loadOwnerCandidates(ownerIds, ownerType);
         if (candidates.length === 0) return [];
         const queryVector = await generateEmbeddingVector(queryText, true);
-        const sparseNormMap = computeSparseNormMap(queryText);
+        const sparseNormMap = computeSparseNormMap(queryText, ownerIds, ownerType);
         const boostMap = applyTagBoost ? computeTagBoostMapForOwners(queryText, ownerIds, ownerType) : null;
         return fuseAndRank(queryVector, candidates, sparseNormMap, threshold, k, boostMap);
     } catch (error) {
@@ -819,10 +834,27 @@ function tagChunks(chunkIds, tags) {
     })();
 }
 
+// Every enabled chunk of the given archive blocks, without vectors, for neighbor expansion.
+function loadMemoryBlockChunks(ownerId, blockIds) {
+    const ids = [...new Set((blockIds || []).filter(Boolean))];
+    const blocks = new Map();
+    if (!ids.length) return blocks;
+    const placeholders = ids.map(() => '?').join(', ');
+    const rows = db.prepare(
+        `SELECT rowid, id, text, memoryBlockId FROM knowledge_chunks
+         WHERE ownerId = ? AND ownerType = 'chat_memory' AND enabled = 1 AND memoryBlockId IN (${placeholders})`
+    ).all(ownerId, ...ids);
+    for (const row of rows) {
+        if (!blocks.has(row.memoryBlockId)) blocks.set(row.memoryBlockId, []);
+        blocks.get(row.memoryBlockId).push(row);
+    }
+    return blocks;
+}
 
 // --- EXPORTS ---
 
 module.exports = {
+    loadMemoryBlockChunks,
     RAG_MODEL_ID,
     RAG_MODEL_DIM,
     countTokens,
@@ -830,8 +862,11 @@ module.exports = {
     extractTextFromFile,
     extractDocxHtml,
     generateEmbeddingVector,
+    generateEmbeddingVectors,
     getEmbeddingPipeline,
     vectorizeChunks,
+    invalidateVectorCache,
+    calculateSimilarity,
     insertChunksToDb,
     deleteChunksFromDb,
     searchKnowledgeBase,

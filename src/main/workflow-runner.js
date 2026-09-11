@@ -1,6 +1,6 @@
 const db = require('./database');
 const entitiesStore = require('./entities');
-const { sendApiRequest } = require('./features/llm/llm.service');
+const { sendApiRequest, getReservedOutputTokens, resolvePayloadLimit, createPromptVariableResolver } = require('./features/llm/llm.service');
 const { sendApiRequestStream } = require('./features/llm/llm.stream');
 const { applyGenerationHistory, resolveWorkspaceGenerationTarget } = require('./features/chat/generation-target');
 const { selectActiveMessages, selectArchivableMessages, coveredMessageIds, parseMemoryBlocks } = require('./features/chat/archive-coverage');
@@ -26,7 +26,7 @@ const {
     entityDataFacts
 } = require('./features/worldbuild/entity-fields');
 const { decodeEntityUpdate, isEntityUpdateShape: isStructuredEntityUpdate } = require('./features/worldbuild/entity-update-protocol');
-const { buildLorePrompt, validateEntityLore } = require('./features/worldbuild/entity-lore');
+const { buildLorePrompt, buildLoreAppendPrompt, validateEntityLore, validateEntityLoreAppend } = require('./features/worldbuild/entity-lore');
 const { createEntityUpdateState } = require('./features/worldbuild/entity-update-state');
 const { shouldStopEntityUpdates } = require('./features/worldbuild/entity-update-resilience');
 const { TAGGER_RESPONSE_SCHEMA, parseTaggerResponse, createTaggerBatches, proposalDataForMention } = require('./features/world-index/tagger-response');
@@ -36,8 +36,20 @@ const {
     PAYLOAD_BUDGET_CONTRACT,
     assertPayloadWithinLimit,
     getAvailableHistoryTokens,
-    normalizeMaxApiPayload
+    normalizeMaxApiPayload,
+    safetyMarginFor
 } = require('./features/llm/payload-budget');
+const {
+    packContextItems,
+    renderContextSections,
+    selectRecentWithinBudget,
+    splitRetrievalBudget,
+    truncateToTokens
+} = require('./features/llm/context-budget');
+const { stripReasoning } = require('./features/chat/message-text');
+const { reconstructKnowledgeFile } = require('./features/knowledge/kb-reconstruct');
+const { parseCitations, isCitedChunk } = require('./features/knowledge/cited-sources');
+const { buildNeighborPassages } = require('./features/knowledge/passage-neighbors');
 const { encode } = require('gpt-tokenizer/encoding/o200k_base');
 const fs = require('fs');
 const path = require('path');
@@ -53,13 +65,15 @@ const {
     searchKnowledgeBase,
     searchChatKnowledgeBase,
     searchChatMemories,
+    generateEmbeddingVector,
     getWorldVocabulary,
     lookupEntityChunks,
     executeMultiOwnerSearch,
     extractTextFromFile,
     chunkText,
     vectorizeChunks,
-    insertChunksToDb
+    insertChunksToDb,
+    loadMemoryBlockChunks
 } = require('./rag-service');
 
 let activeRun = null;
@@ -130,44 +144,109 @@ function estimateTokens(str) {
     }
 }
 
-// Format history messages into standard list, respecting max context tokens
-function formatActiveHistory(messages, maxTokensAllowed) {
-    let tokensUsed = 0;
-    const history = [];
+// The retrieval planner reads the recent conversation on every research turn. A
+// fixed window keeps that prompt small no matter how long the replies are.
+const PLANNER_HISTORY_BUDGET_TOKENS = 6000;
 
-    for (let i = messages.length - 1; i >= 0; i--) {
-        const msg = messages[i];
-        let content = msg.content || '';
+// A file the agent read, or an entity's lore, may take at most this share of the
+// retrieval budget; the rest stays available for search results.
+const AGENTIC_ITEM_MAX_SHARE = 0.6;
 
-        if (msg.attachedFiles) {
-            let files = [];
-            try {
-                files = typeof msg.attachedFiles === 'string'
-                    ? JSON.parse(msg.attachedFiles)
-                    : msg.attachedFiles;
-            } catch (e) { }
+// Passages lookup_entity hands the agent (and the final context) per call.
+const LOOKUP_ENTITY_CHUNK_LIMIT = 12;
 
-            if (Array.isArray(files) && files.length > 0) {
-                const fileMarkers = files.map(f => `File - ${f.name}`).join('\n');
-                content = `${fileMarkers}\n${content}`;
-            }
-        }
+const PROFILE_RETRIEVAL_HEADER = '--- PROFILE RELEVANT RETRIEVED KNOWLEDGE ---';
+const CHAT_RETRIEVAL_HEADER = '--- CHAT RELEVANT RETRIEVED KNOWLEDGE ---';
+const MEMORY_RETRIEVAL_HEADER = '--- CHAT PERSISTENT SUMMARIZED MEMORIES ---';
 
-        const msgTokens = estimateTokens(content) + PAYLOAD_BUDGET_CONTRACT.messageOverheadTokens;
-        if (tokensUsed + msgTokens <= maxTokensAllowed) {
-            history.unshift({ role: msg.role, content: content });
-            tokensUsed += msgTokens;
-        } else {
-            break;
+// Retrieved text kept on a message for the debug panels, when those are on.
+const DEBUG_TEXT_LIMIT = 60000;
+
+function capDebugText(text) {
+    const value = String(text || '');
+    return value.length > DEBUG_TEXT_LIMIT ? `${value.slice(0, DEBUG_TEXT_LIMIT)}\n[...debug text cut]` : value;
+}
+
+// A reply with no visible text is a failure; reporting it as success lets
+// Regenerate delete the previous reply.
+function emptyResponseError(finishReason, rawOutput) {
+    const reason = String(finishReason || '').toLowerCase();
+    const reasoned = /<think/i.test(String(rawOutput || ''));
+    let message;
+    if (['length', 'max_tokens', 'max_output_tokens'].includes(reason)) {
+        message = reasoned
+            ? 'The model spent its whole output budget reasoning and wrote no reply. Raise Max Tokens on the AI Profile and try again.'
+            : 'The model reached its output limit before writing a visible reply. Raise Max Tokens on the AI Profile and try again.';
+    } else if (reasoned) {
+        message = 'The model returned reasoning but no reply. Try again, or raise Max Tokens on the AI Profile.';
+    } else if (reason && !['stop', 'end_turn', 'stop_sequence'].includes(reason)) {
+        message = `The provider returned no reply (${finishReason}). Nothing was saved.`;
+    } else {
+        message = 'The provider returned an empty reply. Nothing was saved, and the conversation is unchanged.';
+    }
+    const error = new Error(message);
+    error.code = 'EMPTY_RESPONSE';
+    return error;
+}
+
+// Widens archive hits to their neighbors in the same block; falls back to the hits alone.
+function expandMemoryResults(results, chatId) {
+    const list = Array.isArray(results) ? results : [];
+    if (!list.length) return list;
+    try {
+        const blocks = loadMemoryBlockChunks(chatId, list.map(result => result.memoryBlockId));
+        const { passages, unplaced } = buildNeighborPassages(list, blocks);
+        return [...passages, ...unplaced];
+    } catch (e) {
+        console.warn('[RAG] Neighbor expansion failed:', e.message);
+        return list;
+    }
+}
+
+function pushRetrievalItems(items, results, section, origin) {
+    const seen = new Set(items.filter(item => item.section === section).map(item => item.text));
+    for (const result of results || []) {
+        const text = String(result?.text || '');
+        if (!text || seen.has(text)) continue;
+        seen.add(text);
+        items.push({ section, text, tier: 1, score: Number(result.fusionScore ?? result.score) || 0, origin });
+    }
+}
+
+// Reasoning is kept for display but never sent back to a model.
+function messageHistoryText(msg) {
+    let content = stripReasoning(msg.content || '');
+    if (msg.attachedFiles) {
+        let files = [];
+        try {
+            files = typeof msg.attachedFiles === 'string'
+                ? JSON.parse(msg.attachedFiles)
+                : msg.attachedFiles;
+        } catch (e) { }
+
+        if (Array.isArray(files) && files.length > 0) {
+            const fileMarkers = files.map(f => `File - ${f.name}`).join('\n');
+            content = `${fileMarkers}\n${content}`;
         }
     }
-    // Anything cut here is live history that was never archived, so there is no
-    // memory chunk to retrieve it from. Worth saying, even if only in the log.
-    const dropped = messages.length - history.length;
+    return content;
+}
+
+function selectActiveHistory(messages, maxTokensAllowed) {
+    const { selected, tokens, dropped } = selectRecentWithinBudget(messages, maxTokensAllowed, {
+        estimate: estimateTokens,
+        overhead: PAYLOAD_BUDGET_CONTRACT.messageOverheadTokens,
+        toText: messageHistoryText
+    });
+    // Unarchived, so no memory chunk can retrieve what is cut here.
     if (dropped > 0) {
         console.warn(`[Context] ${dropped} unarchived message(s) did not fit the payload budget and were not sent. Archiving them would keep them searchable.`);
     }
-    return history;
+    return { history: selected.map(({ message, text }) => ({ role: message.role, content: text })), tokens, dropped };
+}
+
+function formatActiveHistory(messages, maxTokensAllowed) {
+    return selectActiveHistory(messages, maxTokensAllowed).history;
 }
 
 // --- WORKFLOW RUNNER ---
@@ -183,7 +262,6 @@ function isStreamingEnabled() {
     }
 }
 
-// Orchestrate workflow linear chain execution
 async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, historyEdit, regenerateMessageId, webContents }) {
     let resolvedTarget;
     try {
@@ -365,8 +443,12 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
         }
 
         const maxContextTokens = normalizeMaxApiPayload(chat?.maxContext);
+        // Budgets measure prompts as the provider receives them, variables expanded.
+        const resolveVariables = createPromptVariableResolver(db);
+        const debugSettings = readAdvancedSettings();
 
-        const persistedMessages = db.prepare('SELECT * FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
+        // The debug record is not read here: on older messages it can be very large.
+        const persistedMessages = db.prepare('SELECT id, role, content, attachedFiles, excluded, createdAt FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
         const messages = applyGenerationHistory(persistedMessages, { historyEdit, regenerateMessageId });
         // Live history is whatever no summary covers and the user has not muted,
         // so a gap left by a deleted summary comes back on its own.
@@ -387,6 +469,12 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
         let totalAgenticInputTokens = 0;
         let totalAgenticOutputTokens = 0;
         let totalOutputTokens = 0;
+        let historySent = 0;
+        let historyDropped = 0;
+        let retrievalOmitted = 0;
+        let agenticDegraded = false;
+        let finalTruncated = false;
+        let finalFinishReason = null;
 
         for (let i = 0; i < steps.length; i++) {
             if (currentRun.isCancelled) {
@@ -426,7 +514,6 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             }
 
             let constantKnowledge = '';
-            let searchableChunks = [];
             const knowledgeFiles = JSON.parse(profile.knowledgeFiles || '[]');
 
             for (const file of knowledgeFiles) {
@@ -520,69 +607,82 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             const attachmentsPayloadContext = attachmentsContext
                 ? `\n\n--- ATTACHED FILES FOR CURRENT MESSAGE ---\n${attachmentsContext}\n`
                 : '';
-            assertPayloadWithinLimit({
-                maxPayloadTokens: maxContextTokens,
-                systemPrompt: compiledSystemPrompt + contextBlock + attachmentsPayloadContext,
-                newPrompt: currentInput,
+            const stepLimit = resolvePayloadLimit({ apiProfileId: profile.apiProfileId, maxPayloadTokens: maxContextTokens });
+            const fixedPrompt = resolveVariables(compiledSystemPrompt + contextBlock + attachmentsPayloadContext);
+            const fixedTokens = estimateTokens(fixedPrompt);
+            const budgetInput = {
+                maxPayloadTokens: stepLimit.limit,
+                limitSource: stepLimit.source,
+                newPrompt: resolveVariables(currentInput),
                 attachedImageCount: i === 0 ? attachedImages.length : 0,
-                outputTokens: profile.maxTokens ?? 1000
+                outputTokens: getReservedOutputTokens({ maxTokens: profile.maxTokens })
+            };
+            // Only the fixed part can overflow on its own: retrieval and history are
+            // sized below to whatever it leaves.
+            assertPayloadWithinLimit({
+                ...budgetInput,
+                systemPrompt: fixedPrompt,
+                breakdown: { fixed: fixedTokens, retrieved: 0, history: 0 }
             });
+
+            // History is measured first so retrieval cannot push the conversation out.
+            const availableForContext = getAvailableHistoryTokens({ ...budgetInput, systemPrompt: fixedPrompt });
+            let historySource = [];
+            if (i === 0 || includeChatHistory) {
+                historySource = activeMessages;
+                if (i === 0) {
+                    const last = activeMessages[activeMessages.length - 1];
+                    if (last && last.role === 'user') {
+                        historySource = activeMessages.slice(0, -1);
+                    }
+                }
+            }
+            const historyNeed = selectRecentWithinBudget(historySource, availableForContext, {
+                estimate: estimateTokens,
+                overhead: PAYLOAD_BUDGET_CONTRACT.messageOverheadTokens,
+                toText: messageHistoryText
+            }).tokens;
+            const retrievalBudget = splitRetrievalBudget({ availableTokens: availableForContext, historyTokens: historyNeed });
 
             const retrievalPlanner = getRoleExecutor(ROLE_IDS.RETRIEVAL_PLANNER, profile);
             if (profile.isAgentic === 1 && retrievalPlanner.executor) {
-                const initialRemainingTokens = getAvailableHistoryTokens({
-                    maxPayloadTokens: maxContextTokens,
-                    systemPrompt: compiledSystemPrompt + contextBlock + attachmentsPayloadContext,
-                    newPrompt: currentInput,
-                    attachedImageCount: i === 0 ? attachedImages.length : 0,
-                    outputTokens: profile.maxTokens ?? 1000
-                });
-                const ragActiveMessages = activeMessages.slice(-10);
-
                 let ragChatHistory = [];
                 if (i === 0 || includeChatHistory) {
-                    ragChatHistory = formatActiveHistory(ragActiveMessages, initialRemainingTokens);
+                    ragChatHistory = formatActiveHistory(
+                        activeMessages.slice(-10),
+                        Math.min(availableForContext, PLANNER_HISTORY_BUDGET_TOKENS)
+                    );
                 }
 
                 const agenticResult = await executeAgenticRagLoop(profile, chatId, currentInput, ragChatHistory, webContents, includeChatContext, retrievalPlanner.executor, currentRun);
                 if (agenticResult) {
-                    // If detailed research context was gathered, include only it (prevents duplicate token recitation).
-                    // If NOTHING was retrieved, do NOT pass the agent's 1-sentence summary off as facts, emit an
-                    // explicit notice so the main AI knows retrieval ran and found nothing, instead of hallucinating
-                    // document-based facts (fail-loud degradation).
-                    const noContextNotice = `--- RAG NOTICE ---\nNo relevant context was retrieved from the knowledge base or memory for this request. Answer using only the conversation and the user's instructions; do not fabricate document-based facts.`;
-                    const combinedContext = agenticResult.contextGathered
-                        ? `--- DETAILED RESEARCH CONTEXT ---\n${agenticResult.contextGathered}`
-                        : noContextNotice;
-                    contextBlock += `\n\n${combinedContext}\n`;
+                    const packed = packContextItems(agenticResult.contextItems, retrievalBudget, {
+                        estimate: estimateTokens,
+                        maxItemShare: AGENTIC_ITEM_MAX_SHARE
+                    });
+                    retrievalOmitted += packed.dropped + packed.truncated;
+                    if (agenticResult.degraded) agenticDegraded = true;
+                    const gathered = renderContextSections(packed.kept, agenticResult.contextSections);
+                    // Never pass the agent's summary off as facts; an explicit notice keeps
+                    // the model from inventing document-based answers.
+                    const noContextNotice = packed.total > 0
+                        ? `--- RAG NOTICE ---\nThe retrieved context did not fit this request's payload budget and was left out. Answer using only the conversation and the user's instructions; do not fabricate document-based facts.`
+                        : `--- RAG NOTICE ---\nNo relevant context was retrieved from the knowledge base or memory for this request. Answer using only the conversation and the user's instructions; do not fabricate document-based facts.`;
+                    contextBlock += `\n\n${gathered ? `--- DETAILED RESEARCH CONTEXT ---\n${gathered}` : noContextNotice}\n`;
 
-                    let agenticResponseTokens = 0;
-                    if (!agenticResult.contextGathered) {
-                        agenticResponseTokens = estimateTokens(noContextNotice);
-                    }
-                    const hasProfileTokens = (agenticResult.profileKbTokens || 0) > 0;
-                    const hasChatTokens = (agenticResult.chatKbTokens || 0) > 0;
-
-                    if (hasProfileTokens && hasChatTokens) {
-                        const half = Math.ceil(agenticResponseTokens / 2);
-                        profileKbTokens += (agenticResult.profileKbTokens || 0) + half;
-                        chatKbTokens += (agenticResult.chatKbTokens || 0) + (agenticResponseTokens - half);
-                    } else if (hasChatTokens) {
-                        profileKbTokens += (agenticResult.profileKbTokens || 0);
-                        chatKbTokens += (agenticResult.chatKbTokens || 0) + agenticResponseTokens;
-                    } else {
-                        profileKbTokens += (agenticResult.profileKbTokens || 0) + agenticResponseTokens;
-                        chatKbTokens += (agenticResult.chatKbTokens || 0);
+                    if (!gathered) profileKbTokens += estimateTokens(noContextNotice);
+                    for (const item of packed.kept) {
+                        if (item.origin === 'profile') profileKbTokens += item.tokens;
+                        else chatKbTokens += item.tokens;
                     }
 
                     agenticRagResponse = agenticResult.agenticResponse;
-                    agenticRagContextGathered = agenticResult.contextGathered;
+                    agenticRagContextGathered = gathered;
                     agenticInputTokens = agenticResult.agenticInputTokens || 0;
                     agenticOutputTokens = agenticResult.agenticOutputTokens || 0;
                 }
             } else {
-                let chatKbChunks = [];
-                let chatMemories = [];
+                const retrievalItems = [];
                 let searchQuery = currentInput;
                 const results = await searchKnowledgeBase(searchQuery, profile.id);
                 standardRagDebug += formatRagDebugSection('PROFILE KB', results);
@@ -593,20 +693,17 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                             .map(c => (c.title || '').toLowerCase());
                     } catch (e) { }
 
-                    searchableChunks = results
-                        .filter(r => {
-                            const fileMatch = knowledgeFiles.find(f => f.name.toLowerCase() === r.source.toLowerCase());
-                            if (fileMatch && (fileMatch.strategy === 'constant' || fileMatch.strategy === 'full_context')) {
-                                return false;
-                            }
-                            if (constantSnippetTitles.includes(r.source.toLowerCase())) {
-                                return false;
-                            }
-                            return true;
-                        })
-                        .map(r => r.text);
-                    searchableChunks = Array.from(new Set(searchableChunks));
-                    profileKbTokens += estimateTokens(searchableChunks.join('\n\n'));
+                    const profileResults = results.filter(r => {
+                        const fileMatch = knowledgeFiles.find(f => f.name.toLowerCase() === r.source.toLowerCase());
+                        if (fileMatch && (fileMatch.strategy === 'constant' || fileMatch.strategy === 'full_context')) {
+                            return false;
+                        }
+                        if (constantSnippetTitles.includes(r.source.toLowerCase())) {
+                            return false;
+                        }
+                        return true;
+                    });
+                    pushRetrievalItems(retrievalItems, profileResults, PROFILE_RETRIEVAL_HEADER, 'profile');
                 }
 
                 if (includeChatContext && chat) {
@@ -615,14 +712,12 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                         const chatKbFiles = typeof chat.knowledgeFiles === 'string'
                             ? JSON.parse(chat.knowledgeFiles)
                             : (chat.knowledgeFiles || []);
-                        chatKbChunks = filterWorkspaceKnowledgeResults(
-                            chatKbResults,
-                            chatKbFiles,
-                            profile.id
-                        )
-                            .map(r => r.text);
-                        chatKbChunks = Array.from(new Set(chatKbChunks));
-                        chatKbTokens += estimateTokens(chatKbChunks.join('\n\n'));
+                        pushRetrievalItems(
+                            retrievalItems,
+                            filterWorkspaceKnowledgeResults(chatKbResults, chatKbFiles, profile.id),
+                            CHAT_RETRIEVAL_HEADER,
+                            'chat'
+                        );
                     }
                     standardRagDebug += formatRagDebugSection('CHAT KB', chatKbResults);
                 }
@@ -633,26 +728,25 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                         const blocksList = typeof chat.memoryBlocks === 'string'
                             ? JSON.parse(chat.memoryBlocks)
                             : (chat.memoryBlocks || []);
-                        chatMemories = filterWorkspaceMemoryResults(
-                            memoryResults,
-                            blocksList,
-                            profile.id
-                        )
-                            .map(r => r.text);
-                        chatMemories = Array.from(new Set(chatMemories));
-                        chatKbTokens += estimateTokens(chatMemories.join('\n\n'));
+                        pushRetrievalItems(
+                            retrievalItems,
+                            expandMemoryResults(filterWorkspaceMemoryResults(memoryResults, blocksList, profile.id), chatId),
+                            MEMORY_RETRIEVAL_HEADER,
+                            'chat'
+                        );
                     }
                     standardRagDebug += formatRagDebugSection('CHAT MEMORY', memoryResults);
                 }
 
-                if (searchableChunks.length > 0) {
-                    contextBlock += `\n\n--- PROFILE RELEVANT RETRIEVED KNOWLEDGE ---\n${searchableChunks.join('\n\n')}\n`;
-                }
-                if (chatKbChunks.length > 0) {
-                    contextBlock += `\n\n--- CHAT RELEVANT RETRIEVED KNOWLEDGE ---\n${chatKbChunks.join('\n\n')}\n`;
-                }
-                if (chatMemories.length > 0) {
-                    contextBlock += `\n\n--- CHAT PERSISTENT SUMMARIZED MEMORIES ---\n${chatMemories.join('\n\n')}\n`;
+                const packed = packContextItems(retrievalItems, retrievalBudget, { estimate: estimateTokens });
+                retrievalOmitted += packed.dropped + packed.truncated;
+                for (const section of [PROFILE_RETRIEVAL_HEADER, CHAT_RETRIEVAL_HEADER, MEMORY_RETRIEVAL_HEADER]) {
+                    const texts = packed.kept.filter(item => item.section === section).map(item => item.text);
+                    if (texts.length === 0) continue;
+                    contextBlock += `\n\n${section}\n${texts.join('\n\n')}\n`;
+                    const sectionTokens = estimateTokens(texts.join('\n\n'));
+                    if (section === PROFILE_RETRIEVAL_HEADER) profileKbTokens += sectionTokens;
+                    else chatKbTokens += sectionTokens;
                 }
             }
             if (attachmentsContext) {
@@ -665,24 +759,16 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
 
             const inputTokens = estimateTokens(currentInput);
             const systemTokens = estimateTokens(compiledSystemPrompt);
-            const remainingTokens = getAvailableHistoryTokens({
-                maxPayloadTokens: maxContextTokens,
-                systemPrompt: compiledSystemPrompt,
-                newPrompt: currentInput,
-                attachedImageCount: i === 0 ? attachedImages.length : 0,
-                outputTokens: profile.maxTokens ?? 1000
-            });
+            const measuredSystemPrompt = resolveVariables(compiledSystemPrompt);
+            // Measured against the prompt actually sent, so the request always fits.
+            const remainingTokens = getAvailableHistoryTokens({ ...budgetInput, systemPrompt: measuredSystemPrompt });
 
             let chatHistory = [];
             if (i === 0 || includeChatHistory) {
-                let historySource = activeMessages;
-                if (i === 0) {
-                    const last = activeMessages[activeMessages.length - 1];
-                    if (last && last.role === 'user') {
-                        historySource = activeMessages.slice(0, -1);
-                    }
-                }
-                chatHistory = formatActiveHistory(historySource, remainingTokens);
+                const selection = selectActiveHistory(historySource, remainingTokens);
+                chatHistory = selection.history;
+                historySent = Math.max(historySent, chatHistory.length);
+                historyDropped = Math.max(historyDropped, selection.dropped);
             }
 
             let historyMessagesTokens = 0;
@@ -691,9 +777,16 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             });
             chatHistoryTokens += historyMessagesTokens;
             const totalInputTokens = systemTokens + inputTokens + historyMessagesTokens;
+            const payloadBreakdown = {
+                fixed: fixedTokens,
+                retrieved: Math.max(0, estimateTokens(measuredSystemPrompt) - fixedTokens),
+                history: historyMessagesTokens
+            };
 
             let success = false;
             let stepOutput = '';
+            let stepTruncated = false;
+            let stepFinishReason = null;
 
             while (!success) {
                 if (currentRun.isCancelled) {
@@ -717,6 +810,8 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                         temperature: profile.temperature,
                         maxTokens: profile.maxTokens,
                         maxPayloadTokens: maxContextTokens,
+                        payloadBreakdown,
+                        includeResponseMetadata: true,
                         manualMode: profile.manualMode === 1,
                         manualJson: profile.manualJson,
                         abortSignal: currentRun.controller.signal,
@@ -725,8 +820,9 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
 
                     // Only the final, user-facing generation streams; intermediate
                     // workflow steps are plumbing and stay non-streaming.
+                    let result;
                     if ((i === steps.length - 1) && isStreamingEnabled()) {
-                        stepOutput = await sendApiRequestStream(
+                        result = await sendApiRequestStream(
                             genParams,
                             (delta) => {
                                 sendRunEvent(webContents, 'stream:token', currentRun, {
@@ -741,8 +837,14 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                             return { success: false, cancelled: true };
                         }
                     } else {
-                        stepOutput = await sendApiRequest(genParams);
+                        result = await sendApiRequest(genParams);
                     }
+                    stepOutput = typeof result === 'string' ? result : String(result?.content || '');
+                    if (!stripReasoning(stepOutput).trim()) {
+                        throw emptyResponseError(result?.finishReason, stepOutput);
+                    }
+                    stepTruncated = Boolean(result?.truncated);
+                    stepFinishReason = result?.finishReason ?? null;
                     success = true;
                 } catch (apiError) {
                     if (apiError.name === 'AbortError' || currentRun.isCancelled) {
@@ -750,11 +852,13 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     }
                     console.error(`API Error in step ${i + 1} (${profile.name}):`, apiError);
 
+                    // Retrying a request that failed the payload check sends the same
+                    // payload again, so that error only offers to close.
                     sendRunEvent(webContents, 'workflow-error', currentRun, {
                         step: i + 1,
                         profileName: profile.name,
                         errorMessage: apiError.message || 'API request failed.',
-                        retryable: true,
+                        retryable: apiError.retryable !== false && apiError.code !== 'MAX_API_PAYLOAD_EXCEEDED',
                         isWorkflow: isWorkflow
                     });
 
@@ -790,10 +894,8 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                 }
             }
 
-            // Handle Context Overflow for intermediates
-            // A threshold of 16,000 characters (roughly 4,000 tokens) checks for large outputs
             const isLastStep = (i === steps.length - 1);
-            if (estimateTokens(stepOutput) > 4000 && !isLastStep) {
+            if (estimateTokens(stripReasoning(stepOutput)) > 4000 && !isLastStep) {
                 sendRunEvent(webContents, 'workflow-context-overflow', currentRun, {
                     step: i + 1,
                     profileName: profile.name,
@@ -809,8 +911,13 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                 }
             }
 
-            currentInput = stepOutput;
+            // The next step reads the reply, not the reasoning behind it.
+            currentInput = stripReasoning(stepOutput);
             finalOutput = stepOutput;
+            if (isLastStep) {
+                finalTruncated = stepTruncated;
+                finalFinishReason = stepFinishReason;
+            }
 
             lastAgenticRagResponse = agenticRagResponse;
             lastAgenticRagContextGathered = agenticRagContextGathered;
@@ -829,11 +936,16 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
         if (finalOutput && lastProfileUsed) {
             const aiMsgId = 'msg_' + Math.random().toString(36).substr(2, 9);
 
+            // Stored on every AI message and read per visible message: keep it small.
             const debugObj = {
                 workflowStatus: isWorkflow ? `Workflow complete (${steps.length} steps)` : '',
-                agenticRagResponse: lastAgenticRagResponse,
-                agenticRagContextGathered: lastAgenticRagContextGathered,
-                standardRagContextGathered: lastStandardRagDebug,
+                ...(debugSettings.agenticDebug ? {
+                    agenticRagResponse: capDebugText(lastAgenticRagResponse),
+                    agenticRagContextGathered: capDebugText(lastAgenticRagContextGathered)
+                } : {}),
+                ...(debugSettings.ragDebug ? { standardRagContextGathered: capDebugText(lastStandardRagDebug) } : {}),
+                context: { historySent, historyDropped, retrievalOmitted, agenticDegraded },
+                ...(finalTruncated ? { truncated: true, finishReason: finalFinishReason } : {}),
                 tokens: {
                     knowledgeBase: totalProfileKbTokens + totalChatKbTokens,
                     profileKb: totalProfileKbTokens,
@@ -870,7 +982,16 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             return { success: true, aiMsgId, streamed: didStreamFinalResponse };
         }
 
-        return { success: true };
+        // Every step either produced text or raised an error above; this only keeps an
+        // empty result from ever being reported as success.
+        sendRunEvent(webContents, 'workflow-error', currentRun, {
+            step: steps.length,
+            profileName: lastProfileUsed?.name || 'Generation',
+            errorMessage: 'The provider returned an empty reply. Nothing was saved, and the conversation is unchanged.',
+            retryable: false,
+            isWorkflow: isWorkflow
+        });
+        return { success: false, error: 'empty-response' };
 
     } catch (e) {
         if (e.name === 'AbortError' || currentRun.isCancelled) {
@@ -931,11 +1052,6 @@ function safeParseArray(body) {
     } catch (e) { return []; }
 }
 
-// Validate the per-chunk tag array from the classifier. Keep only known categories
-// and in-range chunk indices; explode each category's value list into {tag, value}
-// pairs (create-off: unknown categories dropped). Returns [{chunkIndex, tags:[{tag,value}]}].
-// Turn the collected rejections into a sentence that names the dominant cause and
-// shows examples, so the failure points at something actionable.
 function describeTagRejections(rejections) {
     const counts = new Map();
     const samples = new Map();
@@ -956,11 +1072,8 @@ function describeTagRejections(rejections) {
     return parts.join('; ');
 }
 
-// `rejections` collects why each mention was dropped. Without it the failure
-// message could only say "category and evidence validation", which names two very
-// different problems and points at neither: an unknown category means the model
-// answered with a type this workspace does not have, while unmatched evidence
-// means it did not quote the chunk. The fixes are opposites.
+// `rejections` records why each mention was dropped: an unknown category and
+// unquoted evidence need opposite fixes, so the error must name which one.
 function validateChunkTags(arr, categories, chunkRecords, rejections = null) {
     const reject = (reason, detail) => {
         if (rejections) rejections.push({ reason, detail });
@@ -1097,9 +1210,7 @@ function getSystemLanguageInstruction() {
     return `Write all generated natural-language content in ${language}. Never translate or transliterate proper nouns, canonical names, titles used as names, identifiers, JSON keys, enum values, control markers, or verbatim evidence. Keep each of them exactly as supplied.`;
 }
 
-// Render a workspace's entity registry as a prompt block so the classifier reuses
-// existing canonical names (and maps titles/variants to them) instead of coining
-// inconsistent values. Empty string when the registry has no entities yet.
+// Lets the classifier reuse canonical names instead of coining variants.
 function buildEntityVocab(workspaceId, sourceText = '') {
     if (!workspaceId) return '';
     let rows = [];
@@ -1123,20 +1234,11 @@ function buildEntityVocab(workspaceId, sourceText = '') {
     return "Known entities (prefer these canonical names; map any variant or title to the canonical form):\n" + lines.join('\n');
 }
 
-// Map a classifier's surface mention to a canonical entity id within a workspace.
-// Returns null on a miss, the tagger only tags entities that already exist in the
-// Worldbuild registry, so unknown names are dropped rather than proposed or stored
-// as loose literal text.
 function resolveEntity(workspaceId, type, value) {
     return entitiesStore.resolveMention(value, type, workspaceId) || null;
 }
 
-// World-index pass: ONE System-AI call over a segment's numbered raw chunks. Returns
-// the block's title + summary AND the per-chunk dynamic tags (which named entities,
-// under which variable category, appear in each chunk). Variable categories = the
-// entity-bearing vocabulary; their descriptions are the classifier criteria.
-// Provider errors often arrive as a JSON string (e.g. '{"message":"..."}'); unwrap
-// to the human-readable text so the toast doesn't show raw JSON.
+// Provider errors often arrive as a JSON string; unwrap to readable text.
 function cleanErrorMessage(error) {
     let msg = (error && error.message) ? error.message : String(error || 'Unknown error');
     const brace = msg.indexOf('{');
@@ -1150,12 +1252,8 @@ function cleanErrorMessage(error) {
     return msg;
 }
 
-// The entity tagger fails silently by design (a broken pass never blocks the chat,
-// summarization, or a document save). But when a System AI IS configured, a silent
-// failure misleads the user into thinking indexing/tagging ran. Notify every time it
-// fails, so a failure that slipped by once is still caught the next time. The renderer
-// keeps a single toast (later sends just refresh it), so repeats don't stack. Broadcast
-// to every window since the main window is not guaranteed to be index 0.
+// Tagging never blocks the caller, so a failure must be announced or it looks like
+// it ran. The renderer dedupes the toast; every window, as the main one isn't index 0.
 function notifyTaggingFailure(error) {
     try {
         const { BrowserWindow } = require('electron');
@@ -1168,15 +1266,9 @@ function notifyTaggingFailure(error) {
     } catch (e) { /* no window (headless/tests): nothing to notify */ }
 }
 
-// Batches are independent, and each one is mostly time spent waiting on the
-// provider rather than work being done here. Running a few at once overlaps that
-// waiting. Kept low on purpose: this is exactly the shape that earns a 429, so it
-// only pays off together with the backoff below.
+// Kept low: higher earns 429s, and it only pays off with the backoff below.
 const TAGGER_CONCURRENCY = 3;
 
-// Retry a rate-limited call with growing waits. Same policy the World Index
-// backfill has always used; without it, concurrency would trade time for lost
-// batches.
 async function sendTaggerRequest(payload, tries = 5) {
     let delay = 2000;
     for (let attempt = 1; attempt <= tries; attempt++) {
@@ -1192,8 +1284,7 @@ async function sendTaggerRequest(payload, tries = 5) {
     }
 }
 
-// Run `worker` over every item, never more than `limit` in flight. Results keep
-// the input order regardless of which call finishes first.
+// Results keep input order regardless of completion order.
 async function mapWithConcurrency(items, limit, worker) {
     const results = new Array(items.length);
     let next = 0;
@@ -1226,11 +1317,6 @@ async function classifyAndTagSegment(chunkRecords, profile, workspaceId = null, 
         ? categories.map(c => `- ${c.name}: ${c.description}`).join('\n')
         : '- Characters: People, beings, or named agents present in the scene.';
 
-    // Archiving a whole history used to go up in a single request: tens of
-    // thousands of tokens in, one 4096-token answer expected back. That was slow
-    // when it worked and truncated when it did not, which is how an archive ended
-    // up stored with no tags at all. createTaggerBatches is the shared policy, so
-    // every tagging path in the app sizes its calls the same way.
     let offset = 0;
     const batches = createTaggerBatches(chunkRecords).map(records => {
         const entry = { start: offset, records };
@@ -1238,9 +1324,7 @@ async function classifyAndTagSegment(chunkRecords, profile, workspaceId = null, 
         return entry;
     });
 
-    // One failed batch no longer costs the whole archive its tags. Whatever came
-    // back is kept, and the first error is reported so the caller can say the pass
-    // was incomplete and offer the re-index.
+    // Successful batches are kept; the first error marks the pass incomplete.
     let firstError = null;
     let chunksDone = 0;
 
@@ -1301,9 +1385,7 @@ async function classifyAndTagSegment(chunkRecords, profile, workspaceId = null, 
             console.error(`[World Index] classify+tag failed on batch ${batchIndex + 1}/${batches.length}:`, e);
             return { tags: [], error: e, records };
         } finally {
-            // Reported in chunks, not batches: the caller announced the total in
-            // chunks before the first call, and switching units mid-run reads as a
-            // restart. Counted as batches complete, since they finish out of order.
+            // In chunks, the unit the caller announced the total in.
             chunksDone += records.length;
             if (onProgress) onProgress(Math.min(chunksDone, chunkRecords.length), chunkRecords.length);
         }
@@ -1323,28 +1405,18 @@ async function classifyAndTagSegment(chunkRecords, profile, workspaceId = null, 
     }
 
     if (firstError) {
-        // Only surface when a System AI is configured: without one, tagging is
-        // intentionally off and this path only produced a title/summary. Callers
-        // that report the failure themselves pass notify:false, so the user does
-        // not get the same error in two toasts.
+        // notify:false is for callers that report the failure themselves.
         if (notify) notifyTaggingFailure(firstError);
         return { title, summary, chunkTags, taggedRecords, failedRecords, failed: true, error: cleanErrorMessage(firstError) };
     }
     return { title, summary, chunkTags, taggedRecords, failedRecords };
 }
 
-// The recap is a card for the reader, never material the model writes from. The
-// transcript used to arrive as a bare user prompt, so a story-tuned model read it
-// as its own turn and continued the scene instead of describing it, and whatever
-// came back was stored verbatim. Everything below exists to make that impossible:
-// the transcript is fenced and labelled, and the reply is cut at the first sign
-// that the model started writing prose again.
+// Fenced so a story-tuned model describes the transcript instead of continuing it.
 const ARCHIVE_FENCE_OPEN = '<<<TRANSCRIPT';
 const ARCHIVE_FENCE_CLOSE = 'END TRANSCRIPT>>>';
 
-// A recap stops at the first heading, horizontal rule, or transcript-style role
-// prefix. None of those belong in two sentences of summary; they are what a model
-// writes once it has stopped summarizing and started narrating.
+// Headings, rules and role prefixes mean the model has started narrating.
 function trimArchiveRecap(text) {
     const lines = String(text || '').trim().split('\n');
     const kept = [];
@@ -1358,14 +1430,46 @@ function trimArchiveRecap(text) {
     return kept.join('\n').trim();
 }
 
-// A recap that is empty or still transcript-sized is not a recap. Showing nothing
-// is better than handing the user back their own story as its summary.
+// A transcript-sized recap is worse than none.
 function isUsableRecap(text) {
     const value = String(text || '').trim();
     return value.length >= 2 && value.length <= 1200;
 }
 
-async function summarizeArchiveSegment(rawText) {
+// Room for the fence, the instruction line and message framing around a segment.
+const ARCHIVE_PROMPT_OVERHEAD_TOKENS = 200;
+const ARCHIVE_RECAP_TOKENS = 500;
+
+function workspacePayloadLimit(chatId) {
+    try {
+        return normalizeMaxApiPayload(db.prepare('SELECT maxContext FROM chats WHERE id = ?').get(chatId)?.maxContext);
+    } catch (e) {
+        return normalizeMaxApiPayload(null);
+    }
+}
+
+// An entry larger than a whole segment is cut to fit, not dropped.
+function segmentTranscript(entries, budgetTokens) {
+    const segments = [];
+    let current = [];
+    let used = 0;
+    for (const entry of entries) {
+        const text = estimateTokens(entry) > budgetTokens ? truncateToTokens(entry, budgetTokens, estimateTokens) : entry;
+        const cost = estimateTokens(text) + PAYLOAD_BUDGET_CONTRACT.messageOverheadTokens;
+        if (current.length && used + cost > budgetTokens) {
+            segments.push(current.join('\n\n'));
+            current = [];
+            used = 0;
+        }
+        current.push(text);
+        used += cost;
+    }
+    if (current.length) segments.push(current.join('\n\n'));
+    return segments;
+}
+
+// Oversized archives are summarized per segment, then the cards are merged.
+async function summarizeArchiveSegment(transcript, { maxPayloadTokens = null } = {}) {
     const summarizer = getRoleExecutor(ROLE_IDS.SUMMARIZER);
     if (!summarizer.executor) return { title: 'Chat Archive', summary: '', skipped: true, error: summarizer.error };
 
@@ -1379,15 +1483,28 @@ async function summarizeArchiveSegment(rawText) {
         '<two sentences of plain prose covering the consequential facts, decisions, changes, and unresolved threads>\n' +
         'No headings, no lists, no markdown, no transcript excerpts, and no invented details.';
 
-    const request = (correction = false) => sendApiRequest({
+    const limit = resolvePayloadLimit({
+        apiProfileId: summarizer.executor.apiProfileId,
+        maxPayloadTokens: normalizeMaxApiPayload(maxPayloadTokens)
+    }).limit;
+    const segmentBudget = Math.max(
+        1024,
+        limit - estimateTokens(systemPrompt) - ARCHIVE_RECAP_TOKENS - safetyMarginFor(limit) - ARCHIVE_PROMPT_OVERHEAD_TOKENS
+    );
+    const entries = (Array.isArray(transcript) ? transcript : [String(transcript || '')])
+        .filter(entry => String(entry || '').trim());
+    const segments = segmentTranscript(entries, segmentBudget);
+
+    const request = (text, { correction = false, instruction = 'Write the archive card for the transcript above.' } = {}) => sendApiRequest({
         ...summarizer.executor,
         systemPrompt: correction
             ? `${systemPrompt}\nCORRECTION: your previous reply was not an archive card. Return only the TITLE line and two sentences.`
             : systemPrompt,
         chatHistory: [],
-        newPrompt: `${ARCHIVE_FENCE_OPEN}\n${rawText}\n${ARCHIVE_FENCE_CLOSE}\n\nWrite the archive card for the transcript above.`,
+        newPrompt: `${ARCHIVE_FENCE_OPEN}\n${text}\n${ARCHIVE_FENCE_CLOSE}\n\n${instruction}`,
         temperature: 0.1,
-        maxTokens: 500,
+        maxTokens: ARCHIVE_RECAP_TOKENS,
+        maxPayloadTokens: limit,
         manualMode: false,
         manualJson: null
     });
@@ -1402,10 +1519,31 @@ async function summarizeArchiveSegment(rawText) {
         };
     };
 
-    let parsed = read(await request());
-    if (!parsed.hasTitle || !isUsableRecap(parsed.summary)) {
-        const retry = read(await request(true));
-        if (isUsableRecap(retry.summary)) parsed = retry;
+    const cardFor = async (text, instruction) => {
+        let card = read(await request(text, { instruction }));
+        if (!card.hasTitle || !isUsableRecap(card.summary)) {
+            const retry = read(await request(text, { correction: true, instruction }));
+            if (isUsableRecap(retry.summary)) card = retry;
+        }
+        return card;
+    };
+
+    let parsed;
+    if (segments.length <= 1) {
+        parsed = await cardFor(segments[0] || '');
+    } else {
+        const cards = [];
+        for (const segment of segments) {
+            const card = await cardFor(segment);
+            if (isUsableRecap(card.summary)) cards.push(card);
+        }
+        if (!cards.length) return { title: 'Chat Archive', summary: '' };
+        const parts = cards.map((card, index) => `PART ${index + 1}: ${card.title}\n${card.summary}`).join('\n\n');
+        parsed = await cardFor(
+            parts,
+            'The transcript above lists archive cards for consecutive parts of one conversation. Write one archive card that covers all of them.'
+        );
+        if (!isUsableRecap(parsed.summary)) parsed = cards[cards.length - 1];
     }
 
     return {
@@ -1414,8 +1552,7 @@ async function summarizeArchiveSegment(rawText) {
     };
 }
 
-// Whether the "let the AI create unregistered entities" opt-in is on. Off by default,
-// so tagging stays confirmed-only unless the user turns it on in Engine & Memory.
+// Off by default: tagging is confirmed-only unless the user opts in.
 function allowAiEntityCreation() {
     try {
         const row = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
@@ -1423,20 +1560,12 @@ function allowAiEntityCreation() {
     } catch (e) { return false; }
 }
 
-// Persist the validated per-chunk tags into chunk_tags, mapping the classifier's
-// chunk index back to the real stored chunk id. Variable tags: tag=category,
-// entity=value. Runs in one transaction; never throws on a bad index.
 function applyChunkTags(chunkTags, chunkRecords, workspaceId = null) {
-    // Tagger may inherit System AI or use a dedicated model. If it is unavailable,
-    // vectorization still succeeds and existing tags remain untouched.
     if (!getRoleExecutor(ROLE_IDS.TAGGER).executor) return 0;
     if (!Array.isArray(chunkTags) || !chunkTags.length) return 0;
     const insert = db.prepare('INSERT OR IGNORE INTO chunk_tags (chunkId, tag, entity, manual) VALUES (?, ?, ?, 0)');
     const isSuppressed = db.prepare('SELECT 1 FROM chunk_tag_suppressions WHERE chunkId = ? AND tag = ? AND entity = ?');
-    // Opt-in: unresolved mentions become empty `proposed` entities instead of being
-    // dropped. Within one run a name is proposed once and reused across chunks (keyed
-    // by workspace|type|normalized-name); across runs resolveEntity finds the proposed
-    // row, so it is never re-proposed.
+    // Within a run the cache dedupes proposals; across runs resolveEntity finds them.
     const allowCreate = allowAiEntityCreation();
     const proposedCache = new Map();
     let rows = 0;
@@ -1444,10 +1573,7 @@ function applyChunkTags(chunkTags, chunkRecords, workspaceId = null) {
         for (const entry of chunkTags) {
             const rec = chunkRecords[entry.chunkIndex];
             if (!rec || !rec.id) continue;
-            // Prefer the caller's authoritative workspace; fall back to the chunk's
-            // ownerId only when it is absent (the all-chats backfill passes null).
-            // For Writing Desk documents ownerId is the documentId, so relying on it
-            // would scope the registry lookup to the wrong id.
+            // Document chunks have ownerId = documentId, so the caller's workspace wins.
             const ws = workspaceId || rec.ownerId;
             for (const t of entry.tags) {
                 let entityRef = resolveEntity(ws, t.tag, t.value);
@@ -1495,10 +1621,7 @@ function applyChunkTags(chunkTags, chunkRecords, workspaceId = null) {
     return rows;
 }
 
-// Backfill the world index over a chat's already-archived raw chunks (or all chats
-// when chatId is null). These predate the per-chunk tagger, so they carry no tags.
-// Batches the chunks through ONE System-AI call each (tagging only, no title/
-// summary) and writes chunk_tags. INSERT OR IGNORE keeps re-runs from duplicating.
+// chatId null backfills every chat.
 async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false, tier = 'archive', chunkIds = null, runId = null, progressCallback = null } = {}) {
     const tagger = getRoleExecutor(ROLE_IDS.TAGGER);
     if (!tagger.executor) throw new Error(tagger.error || 'Tagger is disabled.');
@@ -1511,12 +1634,7 @@ async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false,
     try { categories = db.prepare('SELECT name, description FROM tags WHERE isEntity = 1').all(); } catch (e) { categories = []; }
     if (!categories.length) throw new Error('No entity tag categories seeded');
     const catLines = categories.map(c => `- ${c.name}: ${c.description}`).join('\n');
-    // Scoped vocab only when backfilling a single chat; the all-chats path leaves it
-    // empty to avoid bleeding one workspace's names into another's prompt.
-    // Which slice of a chat's memory this run tags. Each tier maps to its own button:
-    // archive = summarized Chat Archive (also tagged live at summarization); custom =
-    // searchable Custom Memory snippets (manual_/mem_); searchable = uploaded RAG files
-    // (chat_kb, a distinct ownerType).
+    // archive = Chat Archive, custom = Custom Memory snippets, searchable = chat_kb files.
     let ownerType = 'chat_memory';
     let sourceClause = "AND kc.source = 'Chat Archive'";
     if (tier === 'custom') {
@@ -1532,20 +1650,13 @@ async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false,
     const queryParams = [...(chatId ? [chatId] : []), ...selectedIds];
     const scopedWhere = `${where} ${selectedClause}`;
 
-    // full: wipe this scope's existing tags and re-tag every chunk from scratch (the
-    // "Index this Chat's memories" button), so a re-run reflects the current tagger and
-    // entity registry instead of accumulating stale tags. Incremental (default): skip
-    // chunks that already have tags so re-runs only fill gaps (e.g. a rate-limited tail).
     if (full) {
-        // Preserve user-pinned tags (manual=1, e.g. yellow keywords on file chunks);
-        // only the auto tagger's own rows reset.
+        // Manual tags survive a full re-tag.
         const delSql = `DELETE FROM chunk_tags WHERE (manual IS NULL OR manual = 0) AND chunkId IN
                         (SELECT kc.id FROM knowledge_chunks kc WHERE ${scopedWhere})`;
         db.prepare(delSql).run(...queryParams);
     }
-    // Coverage, rather than tag rows, determines whether a chunk is done. A chunk
-    // with no named entity is still a successful World Index result and must not be
-    // sent to the System AI again by every "Tag new" run.
+    // Coverage, not tag rows, marks a chunk done: a chunk with no entity is a result.
     const skipTagged = full ? '' : "AND NOT EXISTS (SELECT 1 FROM world_index_chunk_status wis WHERE wis.chunkId = kc.id AND wis.status = 'completed')";
     const sql = `SELECT kc.id, kc.text, kc.ownerId FROM knowledge_chunks kc WHERE ${scopedWhere}
                  ${skipTagged}
@@ -1635,10 +1746,7 @@ async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false,
 // stray label fragments so they never poison retrieval.
 const DOC_CHUNK_MIN_CHARS = 15;
 
-// One top-level ProseMirror block = one chunk. Splitting on paragraph / scene-break
-// boundaries (instead of a fixed-size window) keeps each chunk's text stable: editing
-// one paragraph only changes that paragraph's hash, so re-vectorization re-embeds just
-// the touched chunk. Presentation (marks, page styling) never enters the text.
+// One top-level block per chunk, so editing a paragraph re-embeds only that chunk.
 function blockToText(node) {
     if (!node) return '';
     if (node.type === 'text') return node.text || '';
@@ -1664,12 +1772,8 @@ function pmDocToChunkUnits(content) {
     return units;
 }
 
-// Whether a chapter's current text matches its stored index, by comparing the block
-// hash sets, the source of truth for the editor's "indexed" indicator. Immune to the
-// mutable vectorized flag (which any save can reset). Returns 'done' | 'stale'.
-// Returns 'done' (index current), 'outdated' (indexed once but content changed
-// since), or 'never' (no index yet). The caller renders these as distinct states,
-// 'never' is neutral, 'outdated' is the alert (AI is reading the old version).
+// Compares block hashes rather than the `vectorized` flag, which any save resets.
+// Returns 'done' | 'outdated' | 'never'.
 function computeDocumentVectorStatus(documentId) {
     const doc = db.prepare('SELECT content FROM documents WHERE id = ?').get(documentId);
     if (!doc) return 'never';
@@ -1679,8 +1783,7 @@ function computeDocumentVectorStatus(documentId) {
     ).all(documentId);
     // No index yet: 'never' unless the chapter is also empty (nothing to index).
     if (!rows.length) return units.length ? 'never' : 'done';
-    // Manually-edited chunks are preserved across re-index, so they don't count toward
-    // the match; compare current blocks against the automated index only.
+    // Manually edited chunks survive re-index, so they are excluded from the match.
     const stored = new Set(rows.filter(r => !r.manuallyEdited && r.content_hash).map(r => r.content_hash));
     const current = new Set(units.map(u => u.hash));
     if (stored.size !== current.size) return 'outdated';
@@ -1688,10 +1791,7 @@ function computeDocumentVectorStatus(documentId) {
     return 'done';
 }
 
-// Vectorize (or re-vectorize) a single chapter into ownerType='document' chunks.
-// Incremental by content hash: unchanged blocks keep their vector + tags untouched,
-// only new/changed blocks are embedded and tagged, removed blocks are deleted. This
-// is what feeds gatherRag's "OTHER CHAPTERS" cross-chapter retrieval. User-triggered.
+// Incremental by content hash: unchanged blocks keep their vectors and tags.
 async function vectorizeDocument(documentId, progressCallback = null) {
     const doc = db.prepare('SELECT id, workspaceId, title, content FROM documents WHERE id = ?').get(documentId);
     if (!doc) throw new Error('Document not found');
@@ -1743,9 +1843,6 @@ async function vectorizeDocument(documentId, progressCallback = null) {
         insertChunksToDb(documentId, 'document', vectors);
         added = vectors.length;
 
-        // Tag only the freshly embedded chunks (World index). Requires a System AI,
-        // without one, indexing only vectorizes and this whole pass is skipped.
-        // Best-effort: a failed pass just leaves the new chunks untagged.
         if (getRoleExecutor(ROLE_IDS.TAGGER).executor) {
                 try {
                     const records = vectors.map(v => ({ id: v.id, text: v.text, ownerId: doc.workspaceId }));
@@ -1771,11 +1868,7 @@ async function vectorizeDocument(documentId, progressCallback = null) {
     return { added, kept: keepOrdinal.length, deleted: toDelete.length, total: units.length };
 }
 
-// Re-tag every already-embedded chunk of a chapter WITHOUT re-embedding (the "Reindex
-// all" variant of the chapter index button). Wipes this document's existing chunk_tags
-// and reclassifies from scratch, so a re-run reflects the current tagger and entity
-// registry. Vectors are left untouched, new/changed blocks are still embedded by
-// vectorizeDocument ("Index new").
+// Re-tags from scratch without re-embedding.
 async function retagDocumentChunks(documentId, progressCallback = null) {
     const doc = db.prepare('SELECT id, workspaceId FROM documents WHERE id = ?').get(documentId);
     if (!doc) throw new Error('Document not found');
@@ -1785,7 +1878,7 @@ async function retagDocumentChunks(documentId, progressCallback = null) {
     ).all(documentId);
     if (!rows.length) return { tagged: 0, chunks: 0 };
 
-    // No System AI → tagging is disabled; don't wipe the existing tags for nothing.
+    // Without a Tagger, keep the existing tags.
     if (!getRoleExecutor(ROLE_IDS.TAGGER).executor) return { tagged: 0, chunks: rows.length, skipped: true };
 
     const del = db.prepare('DELETE FROM chunk_tags WHERE chunkId = ?');
@@ -1843,6 +1936,15 @@ function enrichFieldsForEntity(entity) {
     return filterUpdateFields(entity, ENRICH_FIELDS[entity.type] || []);
 }
 
+// When a full rewrite would not fit the output limit, lore is appended instead.
+const LORE_REWRITE_OVERHEAD_TOKENS = 600;
+
+function loreNeedsAppend(currentLore, outputTokens) {
+    const lore = String(currentLore || '').trim();
+    if (!lore) return false;
+    return Math.ceil(estimateTokens(lore) * 1.15) + LORE_REWRITE_OVERHEAD_TOKENS > outputTokens;
+}
+
 function entityEnrichmentMaxTokens(entity) {
     const currentLoreLength = String(entity.type === 'System' ? entity.data?.content || '' : entity.lore || '').length;
     const minimum = entity.type === 'System' ? 2400 : 1800;
@@ -1850,11 +1952,7 @@ function entityEnrichmentMaxTokens(entity) {
     return Math.min(maximum, Math.max(minimum, 1200 + Math.ceil(currentLoreLength / 3.5)));
 }
 
-// Why an entity update could not be read back. These used to collapse into one
-// "invalid structured JSON" message, which pointed at the model's formatting when
-// the real cause was usually the output budget: reasoning models spend it thinking
-// before they write the object, so a capable model still fails. `budget` and
-// `empty` are retried with a bigger allowance, the others with the same one.
+// Usually the output budget, not formatting: reasoning models spend it thinking.
 function describeEntityUpdateFailure(result, parsed) {
     const content = String(result?.content || '');
     if (result?.truncated) {
@@ -1869,8 +1967,6 @@ function describeEntityUpdateFailure(result, parsed) {
     return { cause: 'format', message: 'The System AI returned invalid structured JSON.' };
 }
 
-// Retry allowance. A budget failure doubles (capped well above the first ceiling)
-// instead of nudging by half, which was rarely enough to clear a reasoning model.
 function entityUpdateRetryTokens(cause, maxTokens) {
     if (cause === 'budget' || cause === 'empty') return Math.min(16000, maxTokens * 2);
     return maxTokens;
@@ -1886,13 +1982,8 @@ function logEntityUpdateFailure(entity, attempt, failure, result) {
     );
 }
 
-// The entity-to-entity edges the enrichment may propose per type, mirroring the relation
-// controls the WorldbuildView renders. `relType`/`single`/`labeled` match entities.setLink;
-// `from` says which end of the edge the entity sits on ('self' = fromId is this entity,
-// 'target' = fromId is the linked entity, e.g. an item owned_by a character). `targetType`
-// narrows name resolution. Only EXISTING entities are linked, enrichment never creates
-// new ones (only the tagger does that, when allowed). Derived-only relations (Race
-// members) are omitted.
+// `from: 'target'` means the edge starts at the linked entity. Enrichment only links
+// existing entities; it never creates them.
 const ENRICH_RELATIONS = {
     Characters: [
         { key: 'race',          label: 'Race',         relType: 'is_race',      targetType: 'Races',      from: 'self',   single: true },
@@ -2037,18 +2128,11 @@ async function loadConstantMemoryChunks(workspaceId) {
     }));
 }
 
-// The "Update entities" enrichment pass. Reads each non-locked, confirmed entity's
-// related chunks in chronological order and lets the System AI refresh the fields valid
-// for that entity type and its links to existing entities. System entities update Concept
-// instead of Lore. Linking a dedicated lore document remains an explicit user decision;
-// ordinary mentions stay in the World Index and never become linked lore documents.
-// Per-entity aiPolicy governs writes: 'open' applies everything directly,
-// 'review' stages it all into data._enrichPending for per-item accept/reject in the sheet
-// (never touches live values), 'locked' is skipped. Best-effort; one failure never aborts.
+// aiPolicy: 'open' applies directly, 'review' stages into data._enrichPending without
+// touching live values, 'locked' is skipped. One entity failing never aborts the run.
 async function enrichEntities(workspaceId, progressCallback = null) {
     if (!workspaceId) throw new Error('workspaceId is required');
-    // Entity enrichment is a precise-extraction task; it runs on the dedicated System AI
-    // only, never on a writing profile. No System AI → the feature is unavailable.
+    // Precise extraction: System AI only, never a writing profile.
     const systemAiConfig = getSystemAiConfiguration();
     const systemAi = systemAiConfig.systemAi;
     if (!systemAi) throw new Error(systemAiConfig.error);
@@ -2182,9 +2266,7 @@ async function enrichEntities(workspaceId, progressCallback = null) {
         const currentData = {};
         for (const f of allowed) if (ent.data && ent.data[f] != null) currentData[f] = ent.data[f];
 
-        // Relation prompt: one line per relation, each with the candidate names the AI may
-        // pick from (drawn from the registry, self excluded). Relations with no candidate
-        // entities are omitted so we never ask for links that can't exist yet.
+        // Relations without candidates are omitted: never ask for links that can't exist.
         const evidencePrefix = crypto.randomBytes(2).toString('hex');
         const evidenceExample = `E_${evidencePrefix}_1`;
         const relBlocks = [];
@@ -2305,9 +2387,7 @@ async function enrichEntities(workspaceId, progressCallback = null) {
             if (!isStructuredEntityUpdate(parsed)) {
                 const firstFailure = describeEntityUpdateFailure(result, parsed);
                 logEntityUpdateFailure(ent, 'first attempt', firstFailure, result);
-                // A budget overrun is the one cause a smaller prompt helps with: less
-                // evidence means less to read, less to think about, and more room left
-                // for the object itself.
+                // Only a budget failure is helped by less evidence.
                 if (firstFailure.cause === 'budget' || firstFailure.cause === 'empty') {
                     const previousActive = activeEvidence;
                     activeEvidence = selectEntityEvidence(evidenceEntries, 3000);
@@ -2366,9 +2446,7 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                 const value = String(raw.value).trim();
                 return value && evidence.length ? { value, evidence, support } : null;
             };
-            // Validate the AI's proposal against the allowlist + enums first, keeping only
-            // fields whose value actually differs from what the entity holds now. `review`
-            // and `open` share this diff; they only differ in where it lands.
+            // Only fields that differ from the current value; shared by both policies.
             const proposedData = {};
             for (const f of allowed) {
                 const proposal = readProposal(incoming[f]);
@@ -2385,8 +2463,6 @@ async function enrichEntities(workspaceId, progressCallback = null) {
             }
             let loreProposal = null;
 
-            // Resolve the AI's link proposals: only listed candidate names, resolved to real
-            // ids of the right type, excluding self and edges that already exist.
             const proposedLinks = [];
             const incomingLinks = (parsed.links && typeof parsed.links === 'object') ? parsed.links : {};
             for (const { spec } of relBlocks) {
@@ -2419,10 +2495,15 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                 }
             }
 
+            let loreFailure = null;
             if (allowLore) {
                 const loreEvidence = activeEvidence.map(entry => entry.prompt).join('\n\n');
-                const loreSystemPrompt = `${getSystemLanguageInstruction()}\nCompose cumulative canonical Lore from validated findings and cited evidence. Return only the requested JSON object.`;
-                const lorePrompt = buildLorePrompt({
+                const loreOutputTokens = entityEnrichmentMaxTokens(ent);
+                const appendLore = loreNeedsAppend(ent.lore, loreOutputTokens);
+                const loreSystemPrompt = `${getSystemLanguageInstruction()}\n${appendLore
+                    ? 'Extend canonical Lore with new paragraphs drawn from validated findings and cited evidence.'
+                    : 'Compose cumulative canonical Lore from validated findings and cited evidence.'} Return only the requested JSON object.`;
+                const lorePrompt = (appendLore ? buildLoreAppendPrompt : buildLorePrompt)({
                     entityName: ent.canonicalName,
                     entityType: ent.type,
                     currentLore: ent.lore,
@@ -2430,26 +2511,34 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                     evidence: loreEvidence
                 });
                 entityInputTokens += estimateTokens(loreSystemPrompt) + estimateTokens(lorePrompt);
-                const loreResponse = await sendApiRequest({
+                const loreResult = await sendApiRequest({
                     apiProfileId,
                     model,
                     systemPrompt: loreSystemPrompt,
                     chatHistory: [],
                     newPrompt: lorePrompt,
                     temperature: 0.1,
-                    maxTokens: entityEnrichmentMaxTokens(ent),
+                    maxTokens: loreOutputTokens,
                     manualMode,
                     manualJson,
                     jsonMode: true,
-                    jsonSchema: buildEntityLoreSchema()
+                    jsonSchema: buildEntityLoreSchema(),
+                    includeResponseMetadata: true
                 });
+                const loreResponse = loreResult.content;
                 entityOutputTokens += estimateTokens(loreResponse);
                 const loreObject = parseEntityUpdateObject(loreResponse).value;
-                loreProposal = validateEntityLore(
-                    loreObject,
-                    ent.lore,
-                    new Set(activeEvidence.map(entry => entry.id))
-                );
+                const loreEvidenceIds = new Set(activeEvidence.map(entry => entry.id));
+                loreProposal = appendLore
+                    ? validateEntityLoreAppend(loreObject, ent.lore, loreEvidenceIds)
+                    : validateEntityLore(loreObject, ent.lore, loreEvidenceIds);
+                // A cut-off or unreadable reply is a failure; a valid no-op stays silent.
+                if (!loreProposal && (loreResult.truncated || !loreObject)) {
+                    loreFailure = loreResult.truncated
+                        ? `The Lore update for ${ent.canonicalName} reached the System AI output limit and was not applied.`
+                        : `The Lore update for ${ent.canonicalName} could not be read and was not applied.`;
+                    console.warn(`[Entity Update] ${loreFailure} finishReason=${loreResult.finishReason ?? 'unknown'}`);
+                }
             }
             const incomingLore = loreProposal?.value || '';
             const loreChanged = Boolean(loreProposal);
@@ -2465,6 +2554,21 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                     }
                 })();
             };
+            // Keep the evidence pending so a later run retries it.
+            if (!hasChange && loreFailure) {
+                failed++;
+                rememberFailure(ent, loreFailure);
+                updateState.transition(workspaceId, ent.id, activeEvidence, 'deferred', runId, 'lore-output-failure');
+                updateState.updateJob(runId, ent.id, {
+                    status: 'failed',
+                    input_tokens: entityInputTokens,
+                    output_tokens: entityOutputTokens,
+                    retry_count: retryCount,
+                    evidence_used: activeEvidence.length,
+                    error: loreFailure
+                });
+                continue;
+            }
             if (!hasChange) {
                 markIncludedProcessed();
                 updateState.transition(workspaceId, ent.id, activeEvidence, 'non-actionable', runId);
@@ -2481,8 +2585,7 @@ async function enrichEntities(workspaceId, progressCallback = null) {
             }
 
             if (policy === 'open') {
-                // Apply everything directly. Only touch what changed, and clear any staged
-                // review left over from when this entity was on the 'review' policy.
+                // Clears any review staged while the entity was on 'review'.
                 const nextData = { ...(ent.data || {}) };
                 delete nextData._enrichPending;
                 for (const [field, proposal] of Object.entries(proposedData)) nextData[field] = proposal.value;
@@ -2492,8 +2595,7 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                 for (const l of proposedLinks) applyProposedLink(ent.id, l, workspaceId);
                 updated++;
             } else {
-                // Review stages everything for per-item accept/reject without touching live values.
-                // Preserve unresolved review items while adding evidence from new chunks.
+                // Unresolved review items are preserved.
                 const previous = (ent.data?._enrichPending && typeof ent.data._enrichPending === 'object') ? ent.data._enrichPending : {};
                 const pending = { ...previous };
                 pending.evidence = {
@@ -2527,6 +2629,7 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                 proposals_created: Object.keys(proposedData).length + proposedLinks.length + (loreChanged ? 1 : 0)
             });
             clearEnrichmentError.run(workspaceId, ent.id);
+            if (loreFailure) rememberFailure(ent, loreFailure);
         } catch (e) {
             console.error(`[Enrich] ${ent.canonicalName} failed (continues):`, e.message);
             failed++;
@@ -2546,17 +2649,8 @@ async function enrichEntities(workspaceId, progressCallback = null) {
     return { entities: targets.length, updated, staged, upToDate, noEvidence, failed, failures, evidenceUsed, taggedEvidenceRemaining, textMatchesSkipped, runId, runStatus, runTotals };
 }
 
-// A summary is stored the moment its history is safe, and the slow AI work runs
-// afterwards. Archiving used to hold the window open through all of it, so a long
-// history meant minutes of a frozen dialog, and a crash in the middle left the
-// chunks written with no block pointing at them.
-//
-//   finishing   the history is stored; recap and tags are still being produced
-//   ready       nothing left to do
-//   incomplete  the finishing pass failed or was interrupted; safe to run again
-// The recap and the entity tags are independent pieces of work over the same
-// stored history. They are tracked separately so a tagging failure never costs
-// the recap, and so retrying only redoes the part that is actually missing.
+// Recap and tags are tracked separately so one failing never costs the other,
+// and a retry redoes only what is missing.
 const SUMMARY_PART = Object.freeze({ PENDING: 'pending', READY: 'ready', FAILED: 'failed', SKIPPED: 'skipped' });
 
 function writeSummaryBlock(chatId, blockId, changes) {
@@ -2566,8 +2660,6 @@ function writeSummaryBlock(chatId, blockId, changes) {
     return next;
 }
 
-// Chunks of this summary that the tagger has not already completed. Coverage is
-// what makes a second finishing pass cheap: it only looks at what is left.
 function pendingBlockChunks(chatId, blockId) {
     return db.prepare(`
         SELECT kc.id, kc.text FROM knowledge_chunks kc
@@ -2596,9 +2688,7 @@ function recordChunkCoverage(records, status, error = null) {
     })();
 }
 
-// The finishing pass: writes the recap and the entity tags for a stored summary.
-// Safe to call again on the same block, which is what recovers an interrupted run
-// or a provider failure without archiving anything twice.
+// Idempotent per block: rerunning recovers an interrupted or failed pass.
 async function finalizeSummaryBlock({ chatId, blockId, onProgress = null }) {
     const report = (stage, done = 0, total = 0) => {
         if (onProgress) {
@@ -2610,24 +2700,23 @@ async function finalizeSummaryBlock({ chatId, blockId, onProgress = null }) {
     if (!block) return { success: false, missing: true };
 
     const messages = Array.isArray(block.messages) ? block.messages : [];
-    const rawText = messages
+    const transcript = messages
         .filter(message => message && message.role)
-        .map(message => `${String(message.role).toUpperCase()}: ${message.content}`)
-        .join('\n\n');
+        .map(message => `${String(message.role).toUpperCase()}: ${stripReasoning(message.content)}`);
+    const rawText = transcript.join('\n\n');
 
     let title = block.title;
     let summary = block.summary || '';
     let recapStatus = block.recapStatus || SUMMARY_PART.PENDING;
     let recapError = null;
 
-    // The recap runs first and is written on its own, so whatever happens to the
-    // tagging afterwards cannot take it away.
+    // Written on its own so a tagging failure cannot take it away.
     if (!isChatArchiveSummarizationEnabled()) {
         recapStatus = SUMMARY_PART.SKIPPED;
     } else if (recapStatus !== SUMMARY_PART.READY && rawText) {
         report('summarizing');
         try {
-            const result = await summarizeArchiveSegment(rawText);
+            const result = await summarizeArchiveSegment(transcript, { maxPayloadTokens: workspacePayloadLimit(chatId) });
             summary = result.summary || summary;
             // A title the user typed is never overwritten by the summarizer.
             if (block.autoTitle && result.title) title = result.title;
@@ -2641,9 +2730,6 @@ async function finalizeSummaryBlock({ chatId, blockId, onProgress = null }) {
     }
     writeSummaryBlock(chatId, blockId, { title, summary, recapStatus, recapError });
 
-    // Tagging is best-effort so a failure never costs the archive itself, but it
-    // used to fail in silence: the history stayed untagged and retrieval quietly
-    // lost the entity boost that finds a name mentioned in passing.
     let taggingError = null;
     const pending = pendingBlockChunks(chatId, blockId);
     if (pending.length) {
@@ -2667,9 +2753,7 @@ async function finalizeSummaryBlock({ chatId, blockId, onProgress = null }) {
         }
     }
 
-    // Truth comes from the chunks, not from whether a call threw: a run where most
-    // batches worked leaves less to do than one where none did, and the card should
-    // be able to say so. Zero left means done, whatever happened along the way.
+    // Status comes from remaining chunks, not from whether a call threw.
     const stillPending = pendingBlockChunks(chatId, blockId).length;
     const taggedChunks = Math.max(0, (block.tagChunkTotal || pending.length) - stillPending);
     const taggingStatus = stillPending > 0 ? SUMMARY_PART.FAILED : SUMMARY_PART.READY;
@@ -2689,9 +2773,7 @@ async function finalizeSummaryBlock({ chatId, blockId, onProgress = null }) {
     };
 }
 
-// Any summary left mid-pass by a closed app is not in progress any more. Marking
-// it on startup keeps the memory view honest and offers the finishing pass again
-// instead of showing a spinner nothing is driving.
+// On startup, a pending pass has nothing driving it; mark it failed so it can rerun.
 function markInterruptedSummaries() {
     const interrupted = (value) => value === SUMMARY_PART.PENDING;
     try {
@@ -2719,14 +2801,8 @@ function markInterruptedSummaries() {
     }
 }
 
-// One archiving pass. The caller says which messages go into the summary and
-// which ones it wants muted; both are resolved against the stored history here,
-// so a stale renderer list can never archive a message twice or archive one the
-// user meant to drop.
-// Archiving does real work in three stages, and it used to do all of it in
-// silence: on a long history that reads as a frozen app rather than a slow one.
-// `onProgress` reports the stage and its position so the window can say which
-// part is taking the time.
+// Ids are resolved against stored history, so a stale renderer list can't archive
+// a message twice or archive one the user muted.
 async function executeSummarizationInternal({ chatId, selectedMessages, messageIds, excludedMessageIds, customTitle, profileId, onProgress = null }) {
     const report = (stage, done = 0, total = 0) => {
         if (onProgress) {
@@ -2761,12 +2837,10 @@ async function executeSummarizationInternal({ chatId, selectedMessages, messageI
         return { memoryBlocks, summarizedIndex, archivedMessages: 0, excludedMessages: excludeIds.length };
     }
 
-    const rawTextToArchive = archiveMessages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
+    const rawTextToArchive = archiveMessages.map(m => `${m.role.toUpperCase()}: ${stripReasoning(m.content)}`).join('\n\n');
     const blockId = `block_${Date.now()}`;
 
-    // Narrative memory reads better with fuller scene context per chunk than the old
-    // 500-char fragments, so archive chat memory at ~800 (still under the 1000 KB
-    // default to keep some retrieval precision). Changing this needs a re-index.
+    // Changing this size needs a re-index.
     const chunks = chunkText(rawTextToArchive, 800);
     report('indexing', 0, chunks.length);
     const vectors = await vectorizeChunks(chunks, "Chat Archive", (done, total) => report('indexing', done, total));
@@ -2781,9 +2855,7 @@ async function executeSummarizationInternal({ chatId, selectedMessages, messageI
         console.error("Failed to insert summarized vectors to SQLite:", dbErr);
     }
 
-    // The block is written now, before any AI call. Everything the user cannot
-    // recreate (the stored history and its vectors) is safe at this point, so
-    // the window can close and the recap and tags can be produced afterwards.
+    // Written before any AI call: recap and tags are produced afterwards.
     const memoryBlocks = readMemoryBlocks(db, chatId);
     memoryBlocks.push({
         id: blockId,
@@ -2814,12 +2886,12 @@ async function checkAndAutoSummarize(chatId, profileId, webContents) {
 
         const archiveThreshold = chat.archiveThreshold || 60000;
 
-        const messages = db.prepare('SELECT * FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
+        const messages = db.prepare('SELECT id, role, content, excluded FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
         const activeMessages = selectActiveMessages(messages, chat.memoryBlocks);
 
         let tokensUsed = 0;
         activeMessages.forEach(m => {
-            tokensUsed += estimateTokens(m.content);
+            tokensUsed += estimateTokens(stripReasoning(m.content));
         });
 
         // Nothing to offer means nagging would be a dead end: everything left is
@@ -2837,15 +2909,9 @@ async function checkAndAutoSummarize(chatId, profileId, webContents) {
 
 function readEntireKbFile(ownerId, fileName) {
     try {
-        const rows = db.prepare('SELECT text FROM knowledge_chunks WHERE ownerId = ? AND source = ? ORDER BY id ASC').all(ownerId, fileName);
+        const rows = db.prepare('SELECT rowid, id, text, ordinal FROM knowledge_chunks WHERE ownerId = ? AND source = ?').all(ownerId, fileName);
         if (rows.length === 0) return "[System: File not found or has no content.]";
-        return rows.map(r => {
-            const lines = r.text.split('\n');
-            if (lines[0] && lines[0].startsWith('Document: ') && lines[1] && lines[1].startsWith('Content: ')) {
-                return lines.slice(2).join('\n');
-            }
-            return r.text;
-        }).join('\n\n');
+        return reconstructKnowledgeFile(rows);
     } catch (e) {
         console.error("Error reading entire KB file from database:", e);
         return `[System: Error reading file: ${e.message}]`;
@@ -2874,6 +2940,20 @@ async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory 
     const retrievedWorldFacts = new Map(); // Deterministic Worldbuild registry facts (lore + relations); exempt from finish-sources pruning.
     const readFiles = new Map();
 
+    // Keeps the best score a chunk reached across tool calls, and whether a search
+    // (not only an entity lookup) found it; both rank it in the final context.
+    const rememberRetrieved = (map, result, origin) => {
+        const score = Number(result.fusionScore ?? result.score) || 0;
+        const previous = map.get(result.id);
+        map.set(result.id, {
+            text: previous?.text ?? result.text,
+            source: result.source,
+            memoryBlockId: previous?.memoryBlockId ?? result.memoryBlockId ?? null,
+            score: Math.max(score, previous?.score ?? 0),
+            origin: previous?.origin === 'search' ? 'search' : origin
+        });
+    };
+
     let historyText = '';
     if (Array.isArray(chatHistory) && chatHistory.length > 0) {
         historyText = chatHistory.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
@@ -2887,16 +2967,9 @@ async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory 
         ? profile.agenticPrompt.trim()
         : defaultAgenticInstruction;
 
-    // World map: the known entities of this chat's world index. Giving the agent the
-    // exact canonical names stops it from guessing keywords and lets it pull a full
-    // dossier via lookup_entity. Only names + aliases are injected (cheap); omitted
-    // entirely when the world has no tagged entities yet, so no empty section leaks.
+    // Exact canonical names keep the agent from guessing keywords.
     let worldMapBlock = '';
     try {
-        // List the curated Worldbuild entities for this workspace straight from the
-        // registry (not only entities that happen to be tagged in chat memory), so the
-        // agent knows the full canonical vocabulary of the world even before anything
-        // has been summarized/tagged.
         const known = includeChatContext ? entitiesStore.listEntities({ workspaceId: chatId }) : [];
         if (known.length > 0) {
             const lines = known.slice(0, 60).map(e => {
@@ -2928,14 +3001,15 @@ AVAILABLE TOOLS:
 3. <tool_call name="search_memories" query="search terms or #tags" />
    Searches the chat's past summarized memory blocks, custom snippets, and manual tags (e.g. query for keywords or exact hashtags like #character, #backstory).
 4. <tool_call name="lookup_entity" query="entity name or alias" />
-   Returns EVERY memory chunk tagged with a known world entity (see KNOWN ENTITIES), by exact name or alias — no semantic guessing. Also lists that entity's RELATED ENTITIES (its graph edges, e.g. "owns → Star Paradox; ally_of → Port Brea"). Prefer this over search_kb/search_memories when the user prompt refers to a known entity and you want its full dossier (traits, relationships, history). Follow a listed relation with another lookup_entity to traverse the world by structure instead of guessing from prose. Use search_kb/search_memories for concepts, scenes, or things not in the entity list.
+   Returns the memory chunks tagged with a known world entity (see KNOWN ENTITIES) that are most relevant to the user prompt, by exact name or alias. Passages that only mention the entity in passing may be untagged, so use search_memories with specific terms (e.g. what was said, a time, a place) when looking for one detail. Also lists that entity's RELATED ENTITIES (its graph edges, e.g. "owns → Star Paradox; ally_of → Port Brea"). Prefer this over search_kb/search_memories when the user prompt refers to a known entity and you want its full dossier (traits, relationships, history). Follow a listed relation with another lookup_entity to traverse the world by structure instead of guessing from prose. Use search_kb/search_memories for concepts, scenes, or things not in the entity list.
 5. <tool_call name="read_lore" query="entity name or alias" />
    For an entity that has a linked lore document (Writing Desk), returns the passages of that document most relevant to the user prompt. Use it when lookup_entity shows an entity has authored lore and you need its canonical background, not just scene mentions. Does nothing if the entity has no linked lore.
 6. <tool_call name="expand" query="R3 or a source name" />
    Re-reads the FULL text of a previously retrieved item that was summarized in an earlier turn (results are shown by a handle like [R3 · source]). Use it only when a summarized item's snippet is not enough to decide. Everything you retrieve is already sent to the writing assistant in full — expand is just for YOUR reasoning.
 7. <finish sources="source1, source2, ...">summary of retrieved facts</finish>
-   Concludes your research. Inside the 'sources' attribute, you MUST list the exact filenames, character names, or document names of the retrieved contexts that were ACTUALLY relevant and helpful to answer the user prompt. Only these sources will be kept in the final context.
-   If no sources are listed or if you omit the attribute, all searched contexts will be included by default.
+   Concludes your research. Inside the 'sources' attribute, list the result handles (e.g. R3, R7) and exact filenames of the retrieved contexts that were ACTUALLY relevant to the user prompt. Listed sources are given priority in the final context.
+   If no sources are listed or if you omit the attribute, all searched contexts are included with equal priority.
+   Only state facts that appear verbatim in the tool results. If the results do not contain the answer, say so instead of guessing.
    
    CRITICAL SUMMARY RULE: Keep the text content inside the <finish> tag extremely short and concise (1-2 sentences maximum, e.g., "Found Jonathan's resume file"). DO NOT write a full summary, quote, or copy the content of the files/chunks inside the tag, as the system automatically retrieves and sends the full raw content of your listed sources to the writing assistant.
 
@@ -2963,15 +3037,14 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
         { role: 'user', content: toolsPrompt }
     ];
 
-    // The final answer is assembled from the retrieved* Maps below, so mid-loop the agent
-    // only needs a coverage view, not the full text of every prior turn. Older turns are
-    // compacted to a digest once the accumulated results exceed a token budget.
+    // Final context comes from the retrieved* maps, so older turns can shrink to a digest.
     const LEAN_AGENT_HISTORY = true;
     const LEAN_HISTORY_BUDGET_TOKENS = 1200;
     const LEAN_HISTORY_KEEP_TURNS = 1; // newest N turns are always kept in full
     const SNIPPET_CHARS = 160;
     const turnLog = [];               // { msgIndex, digestContent, fullTokens, digestTokens, downgraded }
     const itemRegistry = new Map();   // handle -> { source, full }, backs the expand tool
+    const handleIds = new Map();      // handle -> retrieved chunk id, so finish can cite R3
     const coveredSources = new Set();
     const coveredEntities = new Set();
     let handleSeq = 0;
@@ -2983,6 +3056,12 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
     let finishResponse = '';
     let agenticRagInputTokens = 0;
     let agenticRagOutputTokens = 0;
+
+    // One embedding of the request ranks the passages lookup_entity returns.
+    let lookupQueryVector = null;
+    if (includeChatContext) {
+        try { lookupQueryVector = await generateEmbeddingVector(currentInput, true); } catch (e) { lookupQueryVector = null; }
+    }
 
     while (currentTurn <= maxTurns && !finished) {
         throwIfRunCancelled(run);
@@ -3030,8 +3109,7 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
 
             const KNOWN_TOOLS = ['search_kb', 'read_file', 'search_memories', 'lookup_entity', 'read_lore', 'expand'];
 
-            // Tolerant tool_call parsing: self-closing or not, any quote style, any attribute order,
-            // arg under several aliases, or as the element's inner text.
+            // Models vary: accept any quoting, order, arg alias, or inner-text arg.
             const toolCalls = [];
             const toolBlockRegex = /<tool_call\b([^>]*?)\/?>([\s\S]*?<\/tool_call>)?/gi;
             let tb;
@@ -3061,75 +3139,28 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                 finished = true;
 
                 if (sourcesAttr) {
-                    const allowedSources = sourcesAttr.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-                    console.log(`[Agentic RAG] Agent specified relevant sources:`, allowedSources);
-
-                    const checkMatch = (chunk) => {
-                        const sourceLower = (chunk.source || '').toLowerCase();
-                        const textLower = (chunk.text || '').toLowerCase();
-
-                        return allowedSources.some(src => {
-                            const srcLower = src.toLowerCase();
-
-                            if (sourceLower && sourceLower !== 'summarized history' && sourceLower !== 'chat archive') {
-                                if (sourceLower.includes(srcLower) || srcLower.includes(sourceLower)) return true;
-                            }
-
-                            const docMatch = textLower.match(/^document:\s*([^\n]+)/);
-                            if (docMatch) {
-                                const docName = docMatch[1].trim();
-                                if (docName.includes(srcLower) || srcLower.includes(docName)) return true;
-                                const docNameClean = docName.replace(/_/g, ' ');
-                                if (docNameClean.includes(srcLower) || srcLower.includes(docNameClean)) return true;
-                            }
-
-                            const memMatch = textLower.match(/^memory context\s*\[([^\]]+)\]/);
-                            if (memMatch) {
-                                const memTitle = memMatch[1].trim();
-                                if (memTitle.includes(srcLower) || srcLower.includes(memTitle)) return true;
-                            }
-
-                            const firstLine = textLower.split('\n')[0] || '';
-                            if (firstLine.includes(srcLower)) return true;
-
-                            return false;
-                        });
+                    const citations = parseCitations(sourcesAttr);
+                    const allowedSources = citations.names;
+                    const cited = {
+                        names: allowedSources,
+                        ids: new Set([...citations.handles].map(handle => handleIds.get(handle)).filter(Boolean))
                     };
+                    console.log(`[Agentic RAG] Agent specified relevant sources:`, sourcesAttr);
 
-                    for (const [id, chunk] of retrievedProfileChunks.entries()) {
-                        if (!checkMatch(chunk)) {
-                            retrievedProfileChunks.delete(id);
+                    // Uncited results are demoted, never dropped: a citation by character name
+                    // must not empty the context of the archive passages that mention them.
+                    for (const map of [retrievedProfileChunks, retrievedChatChunks, retrievedMemories]) {
+                        for (const [id, chunk] of map.entries()) {
+                            if (!isCitedChunk({ id, ...chunk }, cited)) map.set(id, { ...chunk, uncited: true });
                         }
                     }
-
                     for (const [filename, data] of readFiles.entries()) {
                         const filenameLower = filename.toLowerCase();
-                        const matches = allowedSources.some(src =>
-                            filenameLower.includes(src) ||
-                            src.includes(filenameLower)
-                        );
-                        if (!matches) {
-                            readFiles.delete(filename);
-                        }
+                        const matches = allowedSources.some(src => filenameLower.includes(src) || src.includes(filenameLower));
+                        if (!matches) readFiles.set(filename, { ...data, uncited: true });
                     }
 
-                    for (const [id, chunk] of retrievedChatChunks.entries()) {
-                        if (!checkMatch(chunk)) {
-                            retrievedChatChunks.delete(id);
-                        }
-                    }
-
-                    for (const [id, chunk] of retrievedMemories.entries()) {
-                        if (!checkMatch(chunk)) {
-                            retrievedMemories.delete(id);
-                        }
-                    }
-
-                    // Worldbuild facts prune by ENTITY IDENTITY, not fuzzy chunk matching:
-                    // keep a fact if a listed source resolves to its own name/alias, or names
-                    // a related entity that appears in the fact text (so "Aldous Finn" keeps
-                    // the logbook fact that cites him). Drops facts for entities the agent
-                    // looked up but did not deem relevant, so many-entity queries stay lean.
+                    // Facts prune by entity identity, not fuzzy chunk matching.
                     const norm = entitiesStore.normalizeName;
                     const normalizedSources = allowedSources.map(s => norm(s)).filter(Boolean);
                     for (const [id, fact] of retrievedWorldFacts.entries()) {
@@ -3145,9 +3176,7 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                 break;
             }
 
-            // Malformed turn: neither a valid tool call nor a finish block. Instead of treating raw
-            // THOUGHT text as the final answer (silent zero-retrieval failure), inject a correction
-            // and retry once for free (without consuming a research turn).
+            // Never treat raw THOUGHT text as the answer; correct once, for free.
             if (toolCalls.length === 0) {
                 if (correctionRetries < maxCorrectionRetries) {
                     correctionRetries++;
@@ -3159,8 +3188,6 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                     });
                     continue; // does not increment currentTurn
                 }
-                // Correction budget exhausted: stop, but do NOT pass the raw text off as retrieved facts.
-                // Whatever was gathered in prior turns is preserved; the caller degrades gracefully (Item 5).
                 console.warn('[Agentic RAG] Correction budget exhausted; finishing with whatever context was gathered.');
                 finishResponse = '';
                 finished = true;
@@ -3168,9 +3195,10 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
             }
 
             const turnItems = []; // { kind:'result', handle, source, full, meta } | { kind:'note', text }
-            const pushResult = ({ source, full, meta }) => {
+            const pushResult = ({ id, source, full, meta }) => {
                 const handle = `R${++handleSeq}`;
                 itemRegistry.set(handle, { source, full });
+                if (id) handleIds.set(handle, id);
                 if (source) coveredSources.add(source);
                 turnItems.push({ kind: 'result', handle, source: source || '?', full: full || '', meta: meta || '' });
                 return handle;
@@ -3215,13 +3243,9 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                         profile.id
                     );
 
-                    profileResults.forEach(r => {
-                        retrievedProfileChunks.set(r.id, { text: r.text, source: r.source });
-                    });
+                    profileResults.forEach(r => rememberRetrieved(retrievedProfileChunks, r, 'search'));
                     if (includeChatContext) {
-                        chatKbResults.forEach(r => {
-                            retrievedChatChunks.set(r.id, { text: r.text, source: r.source });
-                        });
+                        chatKbResults.forEach(r => rememberRetrieved(retrievedChatChunks, r, 'search'));
                     }
 
                     const combined = [...profileResults, ...chatKbResults];
@@ -3231,7 +3255,7 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                     } else {
                         pushNote(`Tool [search_kb] for "${call.arg}": ${combined.length} result(s).`);
                         combined.forEach(r => pushResult({
-                            source: r.source, full: r.text,
+                            id: r.id, source: r.source, full: r.text,
                             meta: `search_kb "${call.arg}"${typeof r.score === 'number' ? ` sim=${r.score.toFixed(2)}` : ''}`
                         }));
                     }
@@ -3253,9 +3277,7 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                     );
 
                     if (includeChatContext) {
-                        memResults.forEach(r => {
-                            retrievedMemories.set(r.id, { text: r.text, source: r.source });
-                        });
+                        memResults.forEach(r => rememberRetrieved(retrievedMemories, r, 'search'));
                     }
 
                     if (memResults.length === 0) {
@@ -3263,24 +3285,22 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                     } else {
                         pushNote(`Tool [search_memories] for "${call.arg}": ${memResults.length} match(es).`);
                         memResults.forEach(r => pushResult({
-                            source: r.source, full: r.text,
+                            id: r.id, source: r.source, full: r.text,
                             meta: `search_memories "${call.arg}"${typeof r.score === 'number' ? ` sim=${r.score.toFixed(2)}` : ''}`
                         }));
                     }
                 } else if (call.name === 'lookup_entity') {
-                    // Dossier retrieval by known entity. Two sources, fused: (1) the curated
-                    // Worldbuild registry (authored lore + relations), resolved directly so an
-                    // entity that was never tagged in chat memory is still found; (2) the
-                    // entity's tagged chat_memory chunks (scene mentions). Feeds retrievedMemories
-                    // so pruning/dedup with search_memories is shared; respects includeChatContext.
-                    let entityChunks = [], entityIds = [];
+                    // Registry is resolved directly so never-tagged entities are still found.
+                    let entityChunks = [], entityIds = [], entityChunkTotal = 0;
                     if (includeChatContext) {
-                        const looked = lookupEntityChunks(call.arg, chatId, 'chat_memory');
-                        entityChunks = filterWorkspaceMemoryResults(
+                        const looked = lookupEntityChunks(call.arg, chatId, 'chat_memory', { queryVector: lookupQueryVector });
+                        const available = filterWorkspaceMemoryResults(
                             looked.chunks || [],
                             chat?.memoryBlocks || [],
                             profile.id
                         );
+                        entityChunkTotal = available.length;
+                        entityChunks = available.slice(0, LOOKUP_ENTITY_CHUNK_LIMIT);
                         entityIds = Array.isArray(looked.entityIds) ? [...looked.entityIds] : [];
                     }
                     let registryEntity = null;
@@ -3293,13 +3313,8 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                     } catch (e) { }
 
                     if (includeChatContext) {
-                        entityChunks.forEach(r => {
-                            retrievedMemories.set(r.id, { text: r.text, source: r.source });
-                        });
+                        entityChunks.forEach(r => rememberRetrieved(retrievedMemories, r, 'lookup'));
                     }
-                    // Outgoing relations for every resolved entity (registry + tagged), by
-                    // structure. edgesByEntity keeps each entity's own edges so we can attach
-                    // them to that entity's worldbuild fact.
                     const relLines = [];
                     const edgesByEntity = new Map();
                     let anyLore = false;
@@ -3317,8 +3332,7 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                         }
                     } catch (e) { }
 
-                    // Persist the resolved entity's lore + relations as a deterministic
-                    // worldbuild fact, shown in the final context and exempt from pruning.
+                    // Exempt from finish-sources pruning.
                     if (registryEntity) {
                         const factParts = [];
                         const details = entityDataFacts(registryEntity.data);
@@ -3348,7 +3362,10 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                         if (registryEntity.lore && String(registryEntity.lore).trim()) head += `: ${registryEntity.lore}`;
                         pushResult({ source: registryEntity.canonicalName, full: head, meta: `lookup_entity "${call.arg}"` });
                     }
-                    entityChunks.forEach(r => pushResult({ source: r.source, full: r.text, meta: `lookup_entity "${call.arg}"` }));
+                    entityChunks.forEach(r => pushResult({ id: r.id, source: r.source, full: r.text, meta: `lookup_entity "${call.arg}"` }));
+                    if (entityChunkTotal > entityChunks.length) {
+                        pushNote(`Tool [lookup_entity] for "${call.arg}": showing the ${entityChunks.length} passages most relevant to the request out of ${entityChunkTotal} tagged. Use search_memories with specific terms to reach others.`);
+                    }
                     if (!registryEntity && entityChunks.length === 0 && relLines.length === 0) {
                         pushNote(`Tool [lookup_entity] for "${call.arg}": No known entity matched.`);
                     }
@@ -3359,14 +3376,11 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                         pushNote(`NOTE: this entity has linked lore — call read_lore query="${call.arg}" for its authored background.`);
                     }
                 } else if (call.name === 'read_lore') {
-                    // Semantic top-k over the entity's linked Writing Desk document, scored
-                    // against the user prompt (not a dump). Opt-in + truncated → same cost as
-                    // a search_kb call. chat_memory tier only.
                     let loreResults = [];
                     let docTitle = '';
                     if (includeChatContext) {
                         try {
-                            const looked = lookupEntityChunks(call.arg, chatId, 'chat_memory');
+                            const looked = lookupEntityChunks(call.arg, chatId, 'chat_memory', { idsOnly: true });
                             const ids = Array.isArray(looked.entityIds) ? [...looked.entityIds] : [];
                             try {
                                 const rid = entitiesStore.resolveMention(call.arg, null, chatId);
@@ -3390,8 +3404,8 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                         loreResults.forEach(r => {
                             let text = r.text || '';
                             if (text.length > MAX_AGENT_FILE_CHARS) text = text.slice(0, MAX_AGENT_FILE_CHARS) + '\n[...truncated...]';
-                            retrievedLore.set(r.id, { text, source: r.source || docTitle });
-                            pushResult({ source: r.source || docTitle, full: text, meta: `read_lore "${call.arg}"` });
+                            retrievedLore.set(r.id, { text, source: r.source || docTitle, score: Number(r.fusionScore ?? r.score) || 0 });
+                            pushResult({ id: r.id, source: r.source || docTitle, full: text, meta: `read_lore "${call.arg}"` });
                         });
                     }
                 } else if (call.name === 'read_file') {
@@ -3466,10 +3480,7 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                             readFiles.set(call.arg, { text: fileText, source: fileSource });
                         }
 
-                        // Asymmetric guard: the agent only needs enough to judge relevance, so truncate
-                        // what enters its reasoning history. The FULL text stays in readFiles → final context
-                        // (the writing assistant wants the whole file). Pruning is by filename, so truncation
-                        // here never affects which files survive.
+                        // Truncated for the agent only; readFiles keeps the full text.
                         let agentFileText = fileText;
                         if (fileText.length > MAX_AGENT_FILE_CHARS) {
                             agentFileText = fileText.slice(0, MAX_AGENT_FILE_CHARS) +
@@ -3511,8 +3522,7 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
             });
 
             if (LEAN_AGENT_HISTORY) {
-                // Downgrade oldest→newest until the live results history fits the budget, always
-                // preserving the newest KEEP_TURNS in full. Small loops never trip this.
+                // Oldest first; the newest KEEP_TURNS always stay in full.
                 const liveTokens = () => turnLog.reduce((s, e) => s + (e.downgraded ? e.digestTokens : e.fullTokens), 0);
                 const protectedFrom = turnLog.length - LEAN_HISTORY_KEEP_TURNS;
                 for (let i = 0; i < protectedFrom && liveTokens() > LEAN_HISTORY_BUDGET_TOKENS; i++) {
@@ -3538,82 +3548,47 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
         }
     }
 
-    let gatheredContextParts = [];
-
-    if (retrievedProfileChunks.size > 0) {
-        const profileParts = Array.from(retrievedProfileChunks.values()).map(r => `[Result from Profile KB - ${r.source}]: ${r.text}`);
-        gatheredContextParts.push(`--- PROFILE KNOWLEDGE BASE CHUNKS ---\n${profileParts.join('\n\n')}`);
+    // Tier sets packing priority: facts, read files, search hits, lookup-only passages, uncited.
+    const UNCITED_TIER = 4;
+    const sections = {
+        profile: '--- PROFILE KNOWLEDGE BASE CHUNKS ---',
+        files: '--- READ FILES CONTENT ---',
+        chat: '--- CHAT KNOWLEDGE BASE CHUNKS ---',
+        memory: '--- CHAT SUMMARIZED MEMORIES & SNIPPETS ---',
+        lore: '--- LINKED LORE (WRITING DESK) ---',
+        facts: '--- WORLDBUILD FACTS ---'
+    };
+    const contextItems = [];
+    for (const r of retrievedProfileChunks.values()) {
+        contextItems.push({ section: sections.profile, text: `[Result from Profile KB - ${r.source}]: ${r.text}`, tier: r.uncited ? UNCITED_TIER : 2, score: r.score || 0, origin: 'profile' });
     }
-
-    if (readFiles.size > 0) {
-        const fileParts = Array.from(readFiles.entries()).map(([filename, data]) => `[File Contents: ${filename}]:\n${data.text}`);
-        gatheredContextParts.push(`--- READ FILES CONTENT ---\n${fileParts.join('\n\n')}`);
-    }
-
-    if (retrievedChatChunks.size > 0) {
-        const chatParts = Array.from(retrievedChatChunks.values()).map(r => `[Result from Chat KB - ${r.source}]: ${r.text}`);
-        gatheredContextParts.push(`--- CHAT KNOWLEDGE BASE CHUNKS ---\n${chatParts.join('\n\n')}`);
-    }
-
-    if (retrievedMemories.size > 0) {
-        const memoryParts = Array.from(retrievedMemories.values()).map(r => `[Chat Memory]: ${r.text}`);
-        gatheredContextParts.push(`--- CHAT SUMMARIZED MEMORIES & SNIPPETS ---\n${memoryParts.join('\n\n')}`);
-    }
-
-    if (retrievedLore.size > 0) {
-        const loreParts = Array.from(retrievedLore.values()).map(r => `[Linked Lore - ${r.source}]: ${r.text}`);
-        gatheredContextParts.push(`--- LINKED LORE (WRITING DESK) ---\n${loreParts.join('\n\n')}`);
-    }
-
-    if (retrievedWorldFacts.size > 0) {
-        const factParts = Array.from(retrievedWorldFacts.values()).map(r => `[${r.source}]: ${r.text}`);
-        gatheredContextParts.push(`--- WORLDBUILD FACTS ---\n${factParts.join('\n\n')}`);
-    }
-
-    const finalContextGathered = gatheredContextParts.join('\n\n');
-
-    let loopProfileKbTokens = 0;
-    let loopChatKbTokens = 0;
-
-    if (retrievedProfileChunks.size > 0) {
-        const texts = Array.from(retrievedProfileChunks.values()).map(r => r.text).join('\n\n');
-        loopProfileKbTokens += estimateTokens(texts);
-    }
-
     for (const [filename, data] of readFiles.entries()) {
-        const tokens = estimateTokens(data.text);
-        if (data.source === 'profile') {
-            loopProfileKbTokens += tokens;
-        } else {
-            loopChatKbTokens += tokens;
-        }
+        contextItems.push({
+            section: sections.files,
+            text: `[File Contents: ${filename}]:\n${data.text}`,
+            tier: data.uncited ? UNCITED_TIER : 1,
+            truncatable: true,
+            origin: data.source === 'profile' ? 'profile' : 'chat'
+        });
     }
-
-    if (retrievedLore.size > 0) {
-        const texts = Array.from(retrievedLore.values()).map(r => r.text).join('\n\n');
-        loopChatKbTokens += estimateTokens(texts);
+    for (const r of retrievedChatChunks.values()) {
+        contextItems.push({ section: sections.chat, text: `[Result from Chat KB - ${r.source}]: ${r.text}`, tier: r.uncited ? UNCITED_TIER : 2, score: r.score || 0, origin: 'chat' });
     }
-
-    if (retrievedWorldFacts.size > 0) {
-        const texts = Array.from(retrievedWorldFacts.values()).map(r => r.text).join('\n\n');
-        loopChatKbTokens += estimateTokens(texts);
+    const memoryPassages = expandMemoryResults([...retrievedMemories.entries()].map(([id, r]) => ({ id, ...r })), chatId);
+    for (const r of memoryPassages) {
+        contextItems.push({ section: sections.memory, text: `[Chat Memory]: ${r.text}`, tier: r.uncited ? UNCITED_TIER : (r.origin === 'search' ? 2 : 3), score: r.score || 0, origin: 'chat' });
     }
-
-    if (retrievedChatChunks.size > 0) {
-        const texts = Array.from(retrievedChatChunks.values()).map(r => r.text).join('\n\n');
-        loopChatKbTokens += estimateTokens(texts);
+    for (const r of retrievedLore.values()) {
+        contextItems.push({ section: sections.lore, text: `[Linked Lore - ${r.source}]: ${r.text}`, tier: 2, score: r.score || 0, origin: 'chat' });
     }
-
-    if (retrievedMemories.size > 0) {
-        const texts = Array.from(retrievedMemories.values()).map(r => r.text).join('\n\n');
-        loopChatKbTokens += estimateTokens(texts);
+    for (const r of retrievedWorldFacts.values()) {
+        contextItems.push({ section: sections.facts, text: `[${r.source}]: ${r.text}`, tier: 0, truncatable: true, origin: 'chat' });
     }
 
     return {
         agenticResponse: finishResponse || '[Agent passed context directly — no summary needed]',
-        contextGathered: finalContextGathered.trim(),
-        profileKbTokens: loopProfileKbTokens,
-        chatKbTokens: loopChatKbTokens,
+        contextItems,
+        contextSections: Object.values(sections),
         agenticInputTokens: agenticRagInputTokens,
         agenticOutputTokens: agenticRagOutputTokens,
         degraded: loopDegraded
