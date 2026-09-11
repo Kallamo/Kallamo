@@ -31,13 +31,23 @@ const safeParseJson = (str, fallback = []) => {
   }
 };
 
+// The list re-renders on every streaming tick, so parsed records are cached.
+const debugNoticeCache = new Map();
+const DEBUG_NOTICE_CACHE_LIMIT = 400;
+
 const safeParseDebugNotice = (notice) => {
   if (!notice) return null;
+  const cached = debugNoticeCache.get(notice);
+  if (cached !== undefined) return cached;
+  let parsed;
   try {
-    return JSON.parse(notice);
+    parsed = JSON.parse(notice);
   } catch (e) {
-    return { legacyText: notice };
+    parsed = { legacyText: notice };
   }
+  if (debugNoticeCache.size >= DEBUG_NOTICE_CACHE_LIMIT) debugNoticeCache.clear();
+  debugNoticeCache.set(notice, parsed);
+  return parsed;
 };
 
 export default function ChatWorkspaceView() {
@@ -101,10 +111,7 @@ export default function ChatWorkspaceView() {
   const [summarizeProgress, setSummarizeProgress] = useState(null); // { stage, done, total }
   const [finishingBlockId, setFinishingBlockId] = useState(null);
 
-  // The default name counts summaries, not memory blocks: custom memory used to
-  // push the count up, so a workspace's first summary could be born as
-  // "Summarization 2". Numbering from the highest one already used also keeps a
-  // deleted summary from handing its number to the next one.
+  // Counts summaries only, from the highest number used, so a deleted one never hands its number on.
   const nextSummaryNumber = useMemo(() => {
     const blocks = safeParseJson(activeChat?.memoryBlocks, []);
     const used = (Array.isArray(blocks) ? blocks : [])
@@ -175,9 +182,7 @@ export default function ChatWorkspaceView() {
   const isLastUserMsg = (id) => lastUserMsg && lastUserMsg.id === id;
   const isLastAiMsg = (id) => lastAiMsg && lastAiMsg.id === id;
 
-  // Electron-first copy: navigator.clipboard.writeText is permission/focus-gated in
-  // Electron and throws on programmatic copies (the RAG debug copy hit this). The
-  // main-process clipboard is ungated; DOM execCommand is the last-resort fallback.
+  // navigator.clipboard is gated in Electron: main-process clipboard first, execCommand last.
   const copyText = async (text) => {
     try { if (electronAPI?.copyToClipboard) return await electronAPI.copyToClipboard(text); } catch (e) {}
     try { return await navigator.clipboard.writeText(text); } catch (e) {}
@@ -376,9 +381,7 @@ export default function ChatWorkspaceView() {
       });
 
       if (result && result.success) {
-        // The history is stored at this point, so the window closes here. The recap
-        // and the entity tags are produced afterwards, against the block that is
-        // already saved, and the memory view shows that block finishing.
+        // History is stored; recap and tags finish in the background.
         await refreshChats(activeChat.id);
         setHistoryRevision(rev => rev + 1);
         dismissedAutoSummarizeChatsRef.current.delete(activeChat.id);
@@ -396,20 +399,14 @@ export default function ChatWorkspaceView() {
     }
   };
 
-  // The finishing pass. Kept out of the archive flow's await chain on purpose:
-  // nothing here can lose data, and the user should not be waiting on it. The
-  // same call is what retries a summary that failed or was interrupted.
+  // Not awaited: nothing here can lose data. Also retries failed or interrupted summaries.
   const finalizeSummaryBlock = async (chatId, blockId) => {
     if (!electronAPI?.finalizeSummaryBlock) return;
     setFinishingBlockId(blockId);
     try {
       const result = await electronAPI.finalizeSummaryBlock(chatId, blockId);
       await refreshChats(chatId);
-      // Archiving succeeds even when tagging fails, and an untagged archive is much
-      // harder to recall from. Say so instead of leaving it to the logs.
-      // The recap and the tags fail independently, and neither costs the archive
-      // itself. Context & Memory shows which part is missing and offers Finish, so
-      // this only needs to point there once rather than repeat the raw error.
+      // Recap and tags fail independently; Context & Memory shows what is missing, so point there once.
       if (result?.taggingStatus === 'failed' || result?.recapStatus === 'failed') {
         const missing = result.taggingStatus === 'failed' && result.recapStatus === 'failed'
           ? 'its recap and entity tags'
@@ -498,9 +495,7 @@ export default function ChatWorkspaceView() {
     });
   }, [activeChat?.id]);
 
-  // Restore the last target this chat generated with, falling back to the first
-  // active profile. Reopening a chat used to always land on that first entry, which
-  // is rarely the one you were actually using.
+  // Restore the last target used, else the first active profile.
   useEffect(() => {
     if (activeChat) {
       const activeProfs = safeParseJson(activeChat.activeProfiles).filter(id => id && id !== 'undefined');
@@ -606,9 +601,7 @@ export default function ChatWorkspaceView() {
     setPendingFiles(prev => prev.filter(f => f.name !== name));
   };
 
-  // Dropping a message keeps it in the log but takes it out of every future
-  // payload. Archived messages are already out of context, so they are not
-  // offered here.
+  // Archived messages are already out of context, so they are not offered.
   const handleToggleExcluded = async (messageId, excluded) => {
     if (!activeChat || !electronAPI?.setMessagesExcluded) return;
     try {
@@ -683,11 +676,18 @@ export default function ChatWorkspaceView() {
   selectActiveMessages(archiveMessages, activeChat.memoryBlocks)
     .forEach(m => { ctxTokens += Math.ceil((m.content || '').length / 4); });
   const ctxPercentage = Math.min((ctxTokens / ctxThreshold) * 100, 100);
-  // Past the model's payload budget the oldest live messages stop being sent at
-  // all. Unarchived, they would be lost from context with nothing to retrieve
-  // them from, so the header has to say it out loud.
+  // Unarchived messages past the budget are lost from context, so the header says so.
+  // The last reply's count is authoritative; the estimate is only a fallback.
+  const lastAiMessage = [...activeMessages].reverse().find(message => message.role === 'ai');
+  const lastContext = lastAiMessage ? safeParseDebugNotice(lastAiMessage.debugNotice)?.context : null;
+  const ctxHistoryCut = lastContext ? Number(lastContext.historyDropped) || 0 : 0;
+  const lastArchiveAt = safeParseJson(activeChat.memoryBlocks, [])
+    .filter(block => block && block.type === 'summarized')
+    .reduce((latest, block) => Math.max(latest, Number(String(block.id || '').match(/^block_(\d+)/)?.[1]) || 0), 0);
   const ctxPayloadLimit = activeChat.maxContext || 128000;
-  const ctxOverPayload = ctxTokens > ctxPayloadLimit;
+  const ctxOverPayload = lastContext
+    ? ctxHistoryCut > 0 && !(lastArchiveAt > (lastAiMessage?.createdAt || 0))
+    : ctxTokens > ctxPayloadLimit;
 
   const generatingBubbleStyle = isDocumentMode ? {
     backgroundColor: `rgba(10, 22, 29, ${(activeChat.aiBubbleOpacity ?? 0) / 100})`,
@@ -827,7 +827,9 @@ export default function ChatWorkspaceView() {
             {activeSubView === 'chat' && ctxOverPayload && (
               <button
                 onClick={() => setSummarizeModalOpen(true)}
-                data-tooltip="Active history exceeds the payload budget. The oldest messages are being cut. Archive them."
+                data-tooltip={ctxHistoryCut > 0
+                  ? `${ctxHistoryCut} older ${ctxHistoryCut === 1 ? 'message was' : 'messages were'} left out of the last reply to fit the payload budget. Archive them to keep them searchable.`
+                  : 'Active history exceeds the payload budget. The oldest messages are being cut. Archive them.'}
                 aria-label="Active history exceeds the payload budget"
                 className="p-1.5 rounded-md text-red-400 hover:text-red-300 hover:bg-red-950/40 transition-colors cursor-pointer shrink-0"
               >
@@ -1134,6 +1136,17 @@ export default function ChatWorkspaceView() {
                                   <span className="text-gray-500">)</span>
                                   <span className="text-gray-500">|</span>
                                   <span className="font-bold text-accent">Output: {debugObj.tokens.output + (debugObj.tokens.agenticOutput || 0)}</span>
+                                </div>
+                              )}
+
+                              {debugObj?.truncated && (
+                                <div className="text-[0.625rem] text-orange-300/90 font-mono mb-1 ml-1.5 select-none uppercase tracking-wider">
+                                  Reply cut off at the output limit. Raise Max Tokens on the AI Profile for longer replies.
+                                </div>
+                              )}
+                              {debugObj?.context?.agenticDegraded && (
+                                <div className="text-[0.625rem] text-orange-300/90 font-mono mb-1 ml-1.5 select-none uppercase tracking-wider">
+                                  Retrieval stopped early after an error. This reply used partial context.
                                 </div>
                               )}
 

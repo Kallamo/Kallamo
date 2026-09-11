@@ -263,7 +263,8 @@ export function useChatSession({ api, setChats, setCurrentView }) {
         targetId: selectedProfileOrWorkflowId,
         regenerateMessageId: oldAlternative ? lastMessage.id : null
       });
-      if (response?.success) {
+      // The previous reply is only replaced once a new one was actually saved.
+      if (response?.success && response.aiMsgId) {
         if (oldAlternative) await api.deleteMessage(lastMessage.id);
         const messages = await refreshGeneratedChat(activeChatId, response);
         await saveAlternative(oldAlternative, messages);
@@ -304,7 +305,8 @@ export function useChatSession({ api, setChats, setCurrentView }) {
         attachedFiles,
         historyEdit: createHistoryEdit(messageId, newText)
       });
-      if (!response?.success) throw new Error('Generation was not successful.');
+      // The messages after the edit are only removed once their replacement exists.
+      if (!response?.success || !response.aiMsgId) throw new Error('Generation was not successful.');
 
       await api.saveMessage(updatedMessages[userMessageIndex]);
       for (const message of activeMessages.slice(userMessageIndex + 1)) {
