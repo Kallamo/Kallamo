@@ -48,6 +48,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [apiProvider, setApiProvider] = useState('OpenRouter');
   const [showBaseUrl, setShowBaseUrl] = useState(false);
   const [apiBaseUrl, setApiBaseUrl] = useState('');
+  const [apiContextWindow, setApiContextWindow] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
 
@@ -304,6 +305,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     setApiName('');
     setApiProvider('OpenRouter');
     setApiBaseUrl('');
+    setApiContextWindow('');
     setShowBaseUrl(false);
     setApiKey('');
     setGcpProjectId('');
@@ -322,6 +324,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     setApiName(apiProf.name);
     setApiProvider(apiProf.provider);
     setApiBaseUrl(apiProf.baseUrl || '');
+    setApiContextWindow(apiProf.contextWindow ? String(apiProf.contextWindow) : '');
     setShowBaseUrl(apiProf.provider === 'Local' || !!apiProf.baseUrl);
     setApiKey(apiProf.apiKey || '');
 
@@ -375,6 +378,13 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       }
     }
 
+    const contextWindowText = String(apiContextWindow || '').trim();
+    const contextWindow = contextWindowText ? Number(contextWindowText) : null;
+    if (contextWindowText && (!Number.isInteger(contextWindow) || contextWindow < 4096)) {
+      showToast('Model context window must be a whole number of at least 4096 tokens, or empty.', 'error');
+      return;
+    }
+
     const targetId = editingApiId || 'api_' + Math.random().toString(36).substr(2, 9);
     const customConfigObj = {
       gcpProjectId: gcpProjectId.trim(),
@@ -392,7 +402,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       baseUrl: normalizedBaseUrl,
       apiKey: apiKey.trim(),
       customConfig: JSON.stringify(customConfigObj),
-      models: JSON.stringify(modelsList)
+      models: JSON.stringify(modelsList),
+      contextWindow
     };
 
     await handleSaveApiProfile(apiObject);
@@ -795,6 +806,21 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           </div>
                         </>
                       )}
+
+                      {/* Model context window */}
+                      <div>
+                        <label className="block text-xs font-bold text-gray-400 mb-1">Model Context Window (optional)</label>
+                        <p className="caption mb-1.5">The largest request the model behind this connection accepts, in tokens. Every request sent through it stays under this value or the workspace limit, whichever is smaller. For a local server, use the context length loaded in LM Studio or the num_ctx set in Ollama.</p>
+                        <input
+                          type="number"
+                          min="4096"
+                          step="1024"
+                          value={apiContextWindow}
+                          onChange={(e) => setApiContextWindow(e.target.value)}
+                          placeholder="Empty: no limit for this connection"
+                          className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 focus:outline-none focus:border-accent"
+                        />
+                      </div>
 
                       {/* Models List Management */}
                       <div className="mt-6 border-t border-gray-800/80 pt-4">

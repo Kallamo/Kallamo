@@ -4,23 +4,28 @@ import { describe, expect, test } from 'vitest';
 const require = createRequire(import.meta.url);
 const {
   buildRequest,
+  parseResponse,
+  parseStreamChunk,
+  providerOutputLimit,
   readHttpErrorMessage,
   resolveOpenAiCompatibleEndpoint
 } = require('../src/main/features/llm/llm.service');
 
-function createDatabase({ provider, variables = [], customConfig = null, baseUrl, apiKey = 'api-key' }: {
+function createDatabase({ provider, variables = [], customConfig = null, baseUrl, apiKey = 'api-key', contextWindow = null }: {
   provider: string;
   variables?: Array<{ key: string; value: string }>;
   customConfig?: Record<string, string> | null;
   baseUrl?: string;
   apiKey?: string;
+  contextWindow?: number | null;
 }) {
   const profile = {
     id: 'api-profile',
     provider,
     apiKey: 'encrypted-api-key',
     baseUrl: baseUrl ?? (provider === 'OpenAI' ? 'https://example.test/v1' : ''),
-    customConfig: customConfig ? JSON.stringify(customConfig) : null
+    customConfig: customConfig ? JSON.stringify(customConfig) : null,
+    contextWindow
   };
 
   return {
@@ -78,7 +83,7 @@ describe('LLM request composition', () => {
         { role: 'assistant', content: 'Earlier answer' },
         { role: 'user', content: 'Return the result.' }
       ],
-      max_completion_tokens: 400,
+      max_completion_tokens: 400 + 8192,
       response_format: {
         type: 'json_schema',
         json_schema: { name: 'kallamo_structured_response', strict: false, schema }
@@ -164,5 +169,58 @@ describe('LLM request composition', () => {
       statusText: 'Bad Gateway',
       text: async () => 'koboldcpp is not ready'
     })).resolves.toBe('koboldcpp is not ready');
+  });
+});
+
+describe('reasoning models, provider limits and replies', () => {
+  test('omits temperature for OpenAI reasoning models only', async () => {
+    const database = createDatabase({ provider: 'OpenAI' });
+    const reasoning = JSON.parse((await buildRequest({
+      apiProfileId: 'api-profile', model: 'gpt-5-mini', newPrompt: 'Hi', temperature: 0.2, maxTokens: 500
+    }, { database })).requestBodyPayload);
+    const regular = JSON.parse((await buildRequest({
+      apiProfileId: 'api-profile', model: 'gpt-4.1-mini', newPrompt: 'Hi', temperature: 0.2, maxTokens: 500
+    }, { database })).requestBodyPayload);
+    expect(reasoning).not.toHaveProperty('temperature');
+    expect(reasoning.max_completion_tokens).toBe(500 + 8192);
+    expect(regular.temperature).toBe(0.2);
+    expect(regular.max_tokens).toBe(500);
+  });
+
+  test('gives thinking models output headroom within the provider ceiling', () => {
+    expect(providerOutputLimit('Google AI', 'gemini-2.5-flash', 2048)).toBe(2048 + 8192);
+    expect(providerOutputLimit('Google AI', 'gemini-2.5-pro', 65000)).toBe(65536);
+    expect(providerOutputLimit('Google AI', 'gemini-2.0-flash', 2048)).toBe(2048);
+    expect(providerOutputLimit('Anthropic', 'claude-sonnet-4-5', 2048)).toBe(2048);
+  });
+
+  test('applies the connection context window when it is the smaller limit', async () => {
+    const database = createDatabase({ provider: 'OpenAI', contextWindow: 4096 });
+    await expect(buildRequest({
+      apiProfileId: 'api-profile',
+      model: 'gpt-4.1-mini',
+      systemPrompt: 'lore '.repeat(4000),
+      newPrompt: 'Continue.',
+      maxTokens: 500,
+      maxPayloadTokens: 128000
+    }, { database })).rejects.toMatchObject({ code: 'MAX_API_PAYLOAD_EXCEEDED' });
+  });
+
+  test('reads replies without turning failures into reply text', () => {
+    expect(parseResponse({ content: [{ type: 'thinking', thinking: 'plan' }, { type: 'text', text: 'Hi' }] }, 'anthropic')).toBe('<think>plan</think>Hi');
+    expect(parseResponse({ candidates: [{ content: { parts: [{ text: 'A' }, { text: 'B' }] }, finishReason: 'STOP' }] }, 'google ai')).toBe('AB');
+    expect(parseResponse({ candidates: [{ finishReason: 'MAX_TOKENS', content: {} }] }, 'google ai')).toBe('');
+    expect(() => parseResponse({ candidates: [{ finishReason: 'SAFETY' }] }, 'google ai')).toThrow(/stopped this reply \(SAFETY\)/);
+    expect(() => parseResponse({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } }, 'google ai')).toThrow(/blocked this prompt/);
+    expect(() => parseResponse({ error: { message: 'overloaded' } }, 'openai')).toThrow(/overloaded/);
+    expect(() => parseResponse({ choices: [{ message: { content: null, refusal: 'No.' } }] }, 'openai')).toThrow(/declined/);
+    expect(parseResponse({ choices: [{ message: { content: '', reasoning_content: 'hmm' }, finish_reason: 'length' }] }, 'local')).toBe('<think>hmm</think>');
+  });
+
+  test('reports stream errors and finish reasons', () => {
+    expect(parseStreamChunk({ choices: [{ delta: {}, finish_reason: 'length' }] }, 'openai').finishReason).toBe('length');
+    expect(parseStreamChunk({ type: 'message_delta', delta: { stop_reason: 'max_tokens' } }, 'anthropic').finishReason).toBe('max_tokens');
+    expect(parseStreamChunk({ type: 'error', error: { message: 'Overloaded' } }, 'anthropic').error).toBe('Overloaded');
+    expect(parseStreamChunk({ error: { message: 'bad gateway' } }, 'openrouter').error).toBe('bad gateway');
   });
 });

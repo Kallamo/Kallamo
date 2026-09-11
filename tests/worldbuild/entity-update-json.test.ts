@@ -11,8 +11,8 @@ describe('entity update JSON recovery', () => {
   });
 
   test('repairs missing commas between array elements', () => {
-    expect(parseEntityUpdateObject('{"links":{"relationships":[{"name":"Mara"} {"name":"Elias"}]}}'))
-      .toEqual({ value: { links: { relationships: [{ name: 'Mara' }, { name: 'Elias' }] } }, repaired: true });
+    expect(parseEntityUpdateObject('{"links":{"relationships":[{"name":"Nora"} {"name":"Elias"}]}}'))
+      .toEqual({ value: { links: { relationships: [{ name: 'Nora' }, { name: 'Elias' }] } }, repaired: true });
   });
 
   test('repairs trailing commas and rejects unrecoverable text', () => {

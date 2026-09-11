@@ -4,7 +4,8 @@ const {
   assertPayloadWithinLimit,
   estimatePayloadTokens,
   getAvailableHistoryTokens,
-  normalizeMaxApiPayload
+  normalizeMaxApiPayload,
+  safetyMarginFor
 } = require('../src/main/features/llm/payload-budget');
 
 describe('workspace API payload budget', () => {
@@ -44,6 +45,29 @@ describe('workspace API payload budget', () => {
       expect(error.code).toBe('MAX_API_PAYLOAD_EXCEEDED');
       expect(error.payloadEstimate.totalTokens).toBeGreaterThan(error.payloadEstimate.maxPayloadTokens);
       expect(error.message).toMatch(/stopped before contacting the API/);
+    }
+  });
+
+  it('scales the safety margin with the limit', () => {
+    expect(safetyMarginFor(4096)).toBe(256);
+    expect(safetyMarginFor(128000)).toBe(3840);
+  });
+
+  it('explains an overflow by source and does not offer a retry', () => {
+    try {
+      assertPayloadWithinLimit({
+        maxPayloadTokens: 4096,
+        limitSource: 'connection',
+        systemPrompt: 'lore '.repeat(5000),
+        newPrompt: 'Continue',
+        outputTokens: 1000,
+        breakdown: { fixed: 5000, retrieved: 0, history: 0 }
+      });
+      throw new Error('Expected the payload guard to reject the request.');
+    } catch (error: any) {
+      expect(error.retryable).toBe(false);
+      expect(error.message).toMatch(/context window set on this API connection/);
+      expect(error.message).toMatch(/of retrieved context/);
     }
   });
 });

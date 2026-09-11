@@ -100,9 +100,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
     };
   }, [activeChat?.id, activeMessages, electronAPI]);
 
-  // Scroll-spy: pick the section whose top has crossed a line near the top of the
-  // viewport. Bottom-of-scroll always activates the last section, so short trailing
-  // sections (Appearance) still light up when the user reaches the end.
+  // Bottom of scroll activates the last section so short trailing ones still light up.
   const handleScroll = () => {
     const root = scrollRef.current;
     if (!root) return;
@@ -198,9 +196,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
     if (onTriggerSummarize) onTriggerSummarize();
   };
 
-  // Rebuild everything: drop every summary and bring the whole conversation back,
-  // including messages an earlier delete dropped. Custom memory and uploaded files
-  // are not touched.
+  // Custom memory and uploaded files are not touched.
   const handleResetSummaries = async () => {
     if (!activeChat || !electronAPI?.resetChatSummaries) return;
     setArchiveBusy(true);
@@ -260,9 +256,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
     });
   }, [activeChat?.id]);
 
-  // Retry the finishing pass for a summary whose recap or tags did not complete,
-  // including one interrupted by closing the app. The stored history is untouched:
-  // this only fills in what is missing.
+  // Only fills in what is missing; stored history is untouched.
   const handleFinishSummary = async (block) => {
     if (!activeChat || !electronAPI?.finalizeSummaryBlock) return;
     setFinishingBlockId(block.id);
@@ -572,7 +566,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                 <div>
                   <div className="flex items-center space-x-1.5 mb-1.5">
                     <label className={fieldLabel}>Max API Payload (Tokens)</label>
-                    <HelpCircle className="w-3.5 h-3.5 text-gray-500 cursor-help shrink-0" data-tooltip="The workspace safety limit for estimated input plus the response reserved by the active AI Profile. Older chat history is removed first. If fixed context still cannot fit, Kallamo stops before contacting the API." />
+                    <HelpCircle className="w-3.5 h-3.5 text-gray-500 cursor-help shrink-0" data-tooltip="The workspace limit for each request: instructions, constant knowledge, retrieved context, chat history, and the response reserved by the AI Profile. Retrieved context and older history are trimmed to fit. When an API connection sets a smaller context window, that limit applies. If the fixed context alone cannot fit, Kallamo stops before contacting the API." />
                   </div>
                   <input
                     type="number"
@@ -988,9 +982,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
   );
 }
 
-// A summary's recap and its entity tags are separate work over the same stored
-// history, so they report separately: a tagging failure never hides a recap that
-// was written, and Finish only redoes the part that is missing.
+// Recap and tags report separately so a tagging failure never hides a written recap.
 function SummaryBlockState({ block, progress, busy, onFinish }) {
   if (block.type !== 'summarized') {
     return (

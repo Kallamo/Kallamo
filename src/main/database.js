@@ -128,9 +128,7 @@ if (fs.existsSync(markerPath)) {
   }
 }
 
-// True when no database existed before this boot: a clean first install (as
-// opposed to an upgrade over an existing DB). The What's New modal uses this to
-// stay silent on fresh installs, where onboarding already greets the user.
+// What's New stays silent on fresh installs, where onboarding greets the user.
 const isFreshInstall = !fs.existsSync(dbPath);
 
 const db = new Database(dbPath);
@@ -683,6 +681,42 @@ try {
     console.log("Database Migration: Added excluded column to messages table.");
   }
 
+  // Trims debug records stored before retrieved text was gated on the debug panels.
+  // Isolated so a failure never skips the migrations that follow.
+  const debugTrimKey = 'migration.debugNoticeTrim.v1';
+  try {
+  if (!db.prepare('SELECT 1 FROM settings WHERE key = ?').get(debugTrimKey)) {
+    const heavyFields = ['agenticRagContextGathered', 'standardRagContextGathered', 'agenticRagResponse'];
+    const fieldLimit = 20000;
+    const heavyIds = db.prepare('SELECT id FROM messages WHERE length(debugNotice) > 50000').all().map(row => row.id);
+    const readNotice = db.prepare('SELECT debugNotice FROM messages WHERE id = ?');
+    const writeNotice = db.prepare('UPDATE messages SET debugNotice = ? WHERE id = ?');
+    let trimmed = 0;
+    db.transaction(() => {
+      for (const id of heavyIds) {
+        let notice;
+        try { notice = JSON.parse(readNotice.get(id)?.debugNotice || ''); } catch { continue; }
+        if (!notice || typeof notice !== 'object' || Array.isArray(notice)) continue;
+        let changed = false;
+        for (const field of heavyFields) {
+          if (typeof notice[field] === 'string' && notice[field].length > fieldLimit) {
+            notice[field] = `${notice[field].slice(0, fieldLimit)}\n[...debug text cut]`;
+            changed = true;
+          }
+        }
+        if (changed) {
+          writeNotice.run(JSON.stringify(notice), id);
+          trimmed++;
+        }
+      }
+      db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(debugTrimKey, String(Date.now()));
+    })();
+    if (trimmed) console.log(`Database Migration: Trimmed the debug record of ${trimmed} message(s).`);
+  }
+  } catch (e) {
+    console.error('Database Migration: could not trim message debug records (will retry next launch):', e);
+  }
+
   const wpTableInfo = db.pragma("table_info(writing_profiles)");
   const wpColumns = wpTableInfo.map(col => col.name);
   if (!wpColumns.includes('last_modified')) {
@@ -712,6 +746,12 @@ try {
     db.exec("ALTER TABLE api_profiles ADD COLUMN customConfig TEXT");
     console.log("Database Migration: Added customConfig column to api_profiles table.");
   }
+  // Optional context window of the model behind a connection. Every request sent
+  // through the connection stays under it; NULL means no connection limit.
+  if (!apiProfColumns.includes('contextWindow')) {
+    db.exec("ALTER TABLE api_profiles ADD COLUMN contextWindow INTEGER");
+    console.log("Database Migration: Added contextWindow column to api_profiles table.");
+  }
 
   const kcTableInfo = db.pragma("table_info(knowledge_chunks)");
   const kcColumns = kcTableInfo.map(col => col.name);
@@ -727,9 +767,7 @@ try {
     db.exec("ALTER TABLE knowledge_chunks ADD COLUMN manuallyEdited INTEGER DEFAULT 0");
     console.log("Database Migration: Added manuallyEdited column to knowledge_chunks table.");
   }
-  // content_hash identifies a chunk by its text so document re-vectorization can diff
-  // by content (not position): an unchanged chunk keeps its vector + tags untouched.
-  // ordinal preserves the chunk's order within its owner for context reconstruction.
+  // content_hash lets re-vectorization diff by text, not position.
   if (!kcColumns.includes('content_hash')) {
     db.exec("ALTER TABLE knowledge_chunks ADD COLUMN content_hash TEXT");
     console.log("Database Migration: Added content_hash column to knowledge_chunks table.");
@@ -1025,10 +1063,8 @@ try {
     console.log("Database Migration: Added position column to folders table.");
   }
 
-  // Migrate the early-shape entities table (category NOT NULL / description /
-  // editableByAI) to the per-workspace Worldbuild shape. Its `category NOT NULL`
-  // column can't be dropped by ALTER and would block every new insert (which only
-  // supplies `type`), so the table is rebuilt, preserving any rows.
+  // The old `category NOT NULL` column can't be dropped by ALTER and blocks inserts,
+  // so the table is rebuilt.
   const entityCols = db.pragma("table_info(entities)").map(c => c.name);
   if (entityCols.includes('category')) {
     db.exec(`
@@ -1095,11 +1131,7 @@ try {
   console.error("Migration error patching memoryBlocks data:", e);
 }
 
-// summarizedIndex is no longer what decides live history (see
-// features/chat/archive-coverage). It is kept in sync here so older readers and
-// exported packages still see a sane value, including chats whose summaries
-// were all deleted, which the previous repair skipped and left permanently
-// unable to archive again.
+// Derived from coverage (features/chat/archive-coverage); kept in sync for older readers and exports.
 try {
   const { deriveSummarizedIndex } = require('./features/chat/archive-coverage');
   const chatRows = db.prepare('SELECT id, summarizedIndex, memoryBlocks FROM chats').all();
@@ -1124,10 +1156,7 @@ try {
   console.error("Migration error syncing summarizedIndex values:", e);
 }
 
-// Deleting a summary used to leave its vectorized chunks behind, because the
-// delete matched on the block id while the chunks carry their own ids and point
-// back through memoryBlockId. Those orphans stayed searchable-adjacent forever
-// and were re-tagged by World Index backfills.
+// Removes chunks orphaned by summary deletes (they link through memoryBlockId).
 try {
   const { parseMemoryBlocks } = require('./features/chat/archive-coverage');
   const knownBlockIds = new Set();
@@ -1312,9 +1341,7 @@ function migrateConstantMemoryToSQLite() {
 
 // --- ONBOARDING SEED ---
 
-// ProseMirror node size: text = char count; any other node = its content size + 2
-// (open + close tokens). Used to compute exact document positions for the seeded
-// suggestion so it re-anchors instead of going stale on open.
+// ProseMirror node size: text = char count, other nodes = content + 2.
 function pmNodeSize(node) {
   if (node.type === 'text') return (node.text || '').length;
   return (node.content || []).reduce((s, c) => s + pmNodeSize(c), 0) + 2;
@@ -1322,11 +1349,7 @@ function pmNodeSize(node) {
 
 const seedId = (prefix) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 
-// First-run onboarding: ship three editable AI Profiles (no API key by default) and
-// one example workspace that already contains generated results, a chat exchange, a
-// chapter with a pending AI edit, and canon memories. The point is "value before the
-// key": the user sees real output before any configuration. Idempotent and one-shot,
-// gated by a settings flag, so deleting the example never resurrects it.
+// First-run onboarding. One-shot behind a settings flag, so deleting the example never resurrects it.
 function seedOnboarding() {
   try {
     const seeded = db.prepare("SELECT value FROM settings WHERE key = 'onboarding_seeded'").get();
@@ -1435,9 +1458,7 @@ Rank the problems by how much they break the story, most serious first.
       },
     ];
 
-    // Ship a background image so the example also showcases workspace personalization.
-    // Copied out of the app bundle into the workspace folder and served via app-file://;
-    // best-effort, a failed copy just leaves the workspace without a background.
+    // Best-effort: a failed copy leaves the workspace without a background.
     let backgroundImage = '';
     try {
       const srcBg = path.join(__dirname, '..', 'assets', 'onboarding-bg.svg');
@@ -1452,9 +1473,8 @@ Rank the problems by how much they break the story, most serious first.
       console.error('[Onboarding] Background image copy failed:', bgErr);
     }
 
-    // The chapter (a Writing Desk document) and its seeded pending edit. The target
-    // paragraph is a single un-marked text node so textBetween() returns it verbatim,
-    // which is what the renderer checks before showing the suggestion.
+    // The target paragraph must be one unmarked text node: the renderer checks textBetween()
+    // before showing the suggestion.
     const originalText = 'The lighthouse was very old and it was on a cliff. It was very tall and the light at the top did not work anymore because no one had fixed it for a long time.';
     const proposedText = 'The lighthouse had stood on the cliff for a century, gaunt and weatherbeaten, its lantern long since gone dark. No keeper had climbed those stairs in years.';
 
@@ -1569,9 +1589,6 @@ Rank the problems by how much they break the story, most serious first.
           JSON.stringify(e.data || {}), now, now
         );
       }
-      // Relations that mirror the scene: Mara is connected to Aldous; the logbook was
-      // created by Aldous and is found in the lighthouse. The lighthouse is still his,
-      // missing or not, so Aldous stays its owner/leader.
       insertLink.run(seedId('lnk'), workspaceId, eMara, 'connected_to', eAldous, now);
       insertLink.run(seedId('lnk'), workspaceId, eLogbook, 'created_by', eAldous, now);
       insertLink.run(seedId('lnk'), workspaceId, eLogbook, 'found_in', eLighthouse, now);
