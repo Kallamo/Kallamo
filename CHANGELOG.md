@@ -8,6 +8,8 @@ All notable changes to Kallamo are documented in this file. Version numbers refl
 - API connections accept an optional Model Context Window. Every request through that connection stays below it as well as below the workspace's MAX API Payload, which protects local servers that silently cut the start of an oversized prompt.
 - A reply that stopped at the output limit now says so under the message.
 - A reply whose retrieval stopped early after an error now says so under the message.
+- Entity names and aliases written in a passage are now tagged directly, without calling the Tagger, in any language and script. Existing passages are tagged this way once when Kallamo starts, and creating an entity, renaming it or adding an alias tags the passages that already name it.
+- Worldbuild has a Needs review filter for entities whose names look like common words, numbers, pieces of a longer name or duplicates. Each one can be merged, deleted or kept as is.
 
 ### Changed
 - Retrieved context now has a budget. Knowledge base results, archived memory and agentic research are ranked and packed into the room left after the profile, constant knowledge and the response reserve, and recent history keeps a guaranteed share. A long conversation with many summaries no longer outgrows the workspace's MAX API Payload.
@@ -22,6 +24,10 @@ All notable changes to Kallamo are documented in this file. Version numbers refl
 - The safety margin kept under the payload limit now scales with the limit.
 - GPT-5 and o-series requests no longer send a temperature, and reasoning models get extra output room for their thinking.
 - Retrieved text and agentic research are stored with a message only while the matching diagnostics option is on.
+- The Tagger now handles only what names cannot settle: titles, nicknames, other grammatical forms of a name, roles tied to one entity, and new entities. It writes far less per passage.
+- Archiving, re-tagging, World Index backfill and Writing Desk chapters share one Tagger with the same prompt, batch size and output limit.
+- The Tagger no longer proposes common words, numbers or pieces of existing names as new entities.
+- An entity name resolves regardless of accents and typographic quotes when only one entity matches it, and categories named in any script are recognized.
 
 ### Fixed
 - Agentic retrieval no longer sends an empty context when the research cites characters by name. Archive passages were discarded unless the planner listed them under their generic source name.
@@ -38,6 +44,9 @@ All notable changes to Kallamo are documented in this file. Version numbers refl
 - Writing Desk analysis has an output floor of 1,024 tokens, retries once when cut off, and marks a note that is still incomplete.
 - A Lore update that is cut off or unreadable now appears in the failures panel instead of being dropped silently.
 - The history marker in the chat header uses the number of messages the last reply actually left out.
+- A Tagger reply cut off at the output limit no longer marks its passages as done with no tags. The batch is retried in halves, and passages that still fail are shown as failed.
+- The tagged and untagged passage counts in Memory now match the tags passages actually carry.
+- Re-tagging a Writing Desk chapter keeps the tags added by hand.
 - Workspace variables containing `$` patterns are inserted literally.
 - Opening a long chat is faster. Messages load without their diagnostics, and oversized diagnostics already stored are trimmed once on startup.
 - Search reuses parsed vectors between messages, and the Writing Desk embeds distant chapter text in one batch.
