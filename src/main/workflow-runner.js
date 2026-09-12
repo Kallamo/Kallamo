@@ -29,9 +29,13 @@ const { decodeEntityUpdate, isEntityUpdateShape: isStructuredEntityUpdate } = re
 const { buildLorePrompt, buildLoreAppendPrompt, validateEntityLore, validateEntityLoreAppend } = require('./features/worldbuild/entity-lore');
 const { createEntityUpdateState } = require('./features/worldbuild/entity-update-state');
 const { shouldStopEntityUpdates } = require('./features/worldbuild/entity-update-resilience');
-const { TAGGER_RESPONSE_SCHEMA, parseTaggerResponse, createTaggerBatches, proposalDataForMention } = require('./features/world-index/tagger-response');
-const { matchedEvidence, evidenceText } = require('./features/world-index/evidence-match');
-const { buildCategoryResolver } = require('./features/world-index/category-match');
+const { proposalDataForMention } = require('./features/world-index/tagger-response');
+const { runModelTagger } = require('./features/world-index/tagger');
+const { applyNameTags, createNameMatcher, refreshWorkspaceNameTags, loadWorkspaceEntities } = require('./features/world-index/name-tags');
+const { saveChunkStatus } = require('./features/world-index/chunk-status');
+const { checkProposal } = require('./features/world-index/name-quality');
+const { collectLowercaseWords, findCandidateMentions } = require('./features/world-index/literal-mentions');
+const { foldText } = require('./features/world-index/text-fold');
 const {
     PAYLOAD_BUDGET_CONTRACT,
     assertPayloadWithinLimit,
@@ -1033,119 +1037,6 @@ function resolveOverflowDeferred(decision, editedText, runId = null) {
 
 // --- HYBRID SEARCH Fallback / Helpers ---
 
-// A per-call fenced marker for the structured-items block, so the model can't
-// collide with content. Random suffix, ASCII so it survives any provider.
-function buildItemsFence() {
-    const s = crypto.randomBytes(3).toString('hex');
-    return { open: `<<ITEMS_${s}>>`, close: `<</ITEMS_${s}>>` };
-}
-
-// Tolerant: grab the first [...] block and JSON.parse it. Any failure -> [].
-function safeParseArray(body) {
-    if (!body) return [];
-    try {
-        const start = body.indexOf('[');
-        const end = body.lastIndexOf(']');
-        if (start === -1 || end === -1 || end < start) return [];
-        const parsed = JSON.parse(body.slice(start, end + 1));
-        return Array.isArray(parsed) ? parsed : [];
-    } catch (e) { return []; }
-}
-
-function describeTagRejections(rejections) {
-    const counts = new Map();
-    const samples = new Map();
-    for (const entry of rejections) {
-        counts.set(entry.reason, (counts.get(entry.reason) || 0) + 1);
-        if (!samples.has(entry.reason)) samples.set(entry.reason, entry.detail);
-    }
-    const wording = {
-        'unknown-category': (n, sample) => `${n} used a category this workspace does not have (for example "${sample}")`,
-        'no-name': (n) => `${n} carried no name`,
-        'evidence-not-found': (n, sample) => `${n} quoted text that is not in the chunk (for example "${sample}")`
-    };
-    const parts = [];
-    for (const [reason, count] of [...counts.entries()].sort((a, b) => b[1] - a[1])) {
-        const describe = wording[reason];
-        if (describe) parts.push(describe(count, samples.get(reason)));
-    }
-    return parts.join('; ');
-}
-
-// `rejections` records why each mention was dropped: an unknown category and
-// unquoted evidence need opposite fixes, so the error must name which one.
-function validateChunkTags(arr, categories, chunkRecords, rejections = null) {
-    const reject = (reason, detail) => {
-        if (rejections) rejections.push({ reason, detail });
-    };
-    const chunkCount = Array.isArray(chunkRecords) ? chunkRecords.length : Number(chunkRecords) || 0;
-    // Tolerates the label the model actually writes (singular for plural, casing,
-    // accents) while still only ever resolving to a category this workspace has.
-    const resolveCategory = buildCategoryResolver(categories);
-    const out = [];
-    for (const entry of (Array.isArray(arr) ? arr : [])) {
-        if (!entry || typeof entry !== 'object') continue;
-        const idx = Number(entry.chunk);
-        if (!Number.isInteger(idx) || idx < 0 || idx >= chunkCount) continue;
-        const tags = [];
-        const chunkText = Array.isArray(chunkRecords) ? String(chunkRecords[idx]?.text || '') : '';
-        for (const mention of (Array.isArray(entry.mentions) ? entry.mentions : [])) {
-            const rawType = String(mention && (mention.type || mention.tag) || '').trim();
-            const name = resolveCategory(rawType);
-            const value = String(mention && (mention.canonicalName || mention.value || mention.text) || '').trim();
-            // Store the excerpt the chunk actually supports, not everything the
-            // model offered: it may answer with several, only some of them real.
-            const evidence = matchedEvidence(chunkText, mention && mention.evidence);
-            if (!name) { reject('unknown-category', rawType || '(empty)'); continue; }
-            if (!value) { reject('no-name', rawType); continue; }
-            if (!evidence) { reject('evidence-not-found', evidenceText(mention && mention.evidence).slice(0, 160)); continue; }
-            const proposalKind = String(mention && mention.proposalKind || '').trim().toLowerCase();
-            tags.push({ tag: name, value, evidence, proposalKind });
-        }
-        for (const rt of (Array.isArray(entry.tags) ? entry.tags : [])) {
-            const name = resolveCategory(rt && rt.tag);
-            if (!name) continue;
-            const values = Array.isArray(rt.values) ? rt.values : (rt.value ? [rt.value] : []);
-            for (const v of values) {
-                const val = String(v == null ? '' : v).trim();
-                if (val && val.toLowerCase() !== 'null') tags.push({ tag: name, value: val });
-            }
-        }
-        if (tags.length) out.push({ chunkIndex: idx, tags });
-    }
-    return out;
-}
-
-// Split the model reply into title + summary (the pre-fence head) and the raw body
-// (the fenced JSON, or any trailing array if the fence is missing). Tolerant.
-function splitHeadAndBody(response, fence) {
-    const raw = String(response || '');
-    const openIdx = raw.indexOf(fence.open);
-
-    let body = '';
-    let headEnd;
-    if (openIdx !== -1) {
-        const afterOpen = openIdx + fence.open.length;
-        const closeIdx = raw.indexOf(fence.close, afterOpen);
-        body = raw.slice(afterOpen, closeIdx === -1 ? undefined : closeIdx);
-        headEnd = openIdx;
-    } else {
-        const firstBracket = raw.indexOf('[');
-        body = firstBracket === -1 ? '' : raw.slice(firstBracket);
-        headEnd = firstBracket === -1 ? raw.length : firstBracket;
-    }
-
-    const head = raw.slice(0, headEnd);
-    const lines = head.split('\n');
-    let title = 'Archived Memory';
-    let summary = head.trim();
-    if (lines[0] && lines[0].toUpperCase().startsWith('TITLE:')) {
-        title = lines[0].substring(6).trim() || title;
-        summary = lines.slice(1).join('\n').trim();
-    }
-    return { title, summary, body };
-}
-
 // The designated System AI (api profile + model) for background tasks, read from
 // global settings. Both fields are required so a provider never picks a default model.
 function getLegacySystemAiConfiguration() {
@@ -1217,12 +1108,12 @@ function buildEntityVocab(workspaceId, sourceText = '') {
     try { rows = db.prepare('SELECT type, canonicalName, aliases FROM entities WHERE workspaceId IS ?').all(workspaceId); } catch (e) { return ''; }
     if (!rows.length) return '';
     const byType = new Map();
-    const normalizedSource = entitiesStore.normalizeName(sourceText);
+    const normalizedSource = foldText(sourceText);
     for (const r of rows) {
         let aliases = [];
         try { const a = JSON.parse(r.aliases); if (Array.isArray(a)) aliases = a; } catch (e) { }
         if (normalizedSource) {
-            const names = [r.canonicalName, ...aliases].map(entitiesStore.normalizeName).filter(Boolean);
+            const names = [r.canonicalName, ...aliases].map(foldText).filter(Boolean);
             if (!names.some(name => normalizedSource.includes(name))) continue;
         }
         const label = aliases.length ? `${r.canonicalName} [aka ${aliases.join(', ')}]` : r.canonicalName;
@@ -1266,9 +1157,6 @@ function notifyTaggingFailure(error) {
     } catch (e) { /* no window (headless/tests): nothing to notify */ }
 }
 
-// Kept low: higher earns 429s, and it only pays off with the backoff below.
-const TAGGER_CONCURRENCY = 3;
-
 async function sendTaggerRequest(payload, tries = 5) {
     let delay = 2000;
     for (let attempt = 1; attempt <= tries; attempt++) {
@@ -1284,132 +1172,68 @@ async function sendTaggerRequest(payload, tries = 5) {
     }
 }
 
-// Results keep input order regardless of completion order.
-async function mapWithConcurrency(items, limit, worker) {
-    const results = new Array(items.length);
-    let next = 0;
-    const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
-        while (true) {
-            const index = next++;
-            if (index >= items.length) return;
-            results[index] = await worker(items[index], index);
-        }
-    });
-    await Promise.all(runners);
-    return results;
-}
+// Names first, without a model; then the Tagger only for what names cannot settle.
+// Every chunk ends completed or failed in world_index_chunk_status, with its real tag count.
+// notify:false is for callers that report the failure themselves.
+async function tagChunkRecords(records, workspaceId, { runId = null, onProgress = null, notify = true, matcher = null } = {}) {
+    const list = (Array.isArray(records) ? records : []).filter(record => record && record.id);
+    const result = { taggedRecords: [], failedRecords: [], nameRows: 0, modelRows: 0, error: null, failed: false, skipped: false };
+    if (!list.length) return result;
 
-async function classifyAndTagSegment(chunkRecords, profile, workspaceId = null, onProgress = null, { notify = true } = {}) {
-    let title = 'Archived Memory';
-    let summary = '';
-    let chunkTags = [];
+    const names = workspaceId ? (matcher || createNameMatcher(db, workspaceId)) : { empty: true, entities: [] };
+    const found = applyNameTags(db, workspaceId, list, { matcher: names });
+    result.nameRows = found.rows;
 
     const tagger = getRoleExecutor(ROLE_IDS.TAGGER);
-    if (!tagger.executor) return { title, summary, chunkTags, failed: Boolean(tagger.error), error: tagger.error };
-    const { apiProfileId, model } = tagger.executor;
-    const manualMode = false;
-    const manualJson = null;
+    if (!tagger.executor) {
+        if (onProgress) onProgress(list.length, list.length);
+        if (!tagger.error) return { ...result, skipped: true };
+        saveChunkStatus(db, list, 'failed', { runId, error: tagger.error });
+        if (notify) notifyTaggingFailure(new Error(tagger.error));
+        return { ...result, failedRecords: list, error: tagger.error, failed: true };
+    }
 
     let categories = [];
     try { categories = db.prepare('SELECT name, description FROM tags WHERE isEntity = 1').all(); } catch (e) { categories = []; }
-
-    const catLines = categories.length
-        ? categories.map(c => `- ${c.name}: ${c.description}`).join('\n')
-        : '- Characters: People, beings, or named agents present in the scene.';
-
-    let offset = 0;
-    const batches = createTaggerBatches(chunkRecords).map(records => {
-        const entry = { start: offset, records };
-        offset += records.length;
-        return entry;
+    const labels = new Map((names.entities || []).map(entity => [entity.id, entity.canonicalName]));
+    const hints = new Map([...found.detected].map(([id, mentions]) => [id, mentions.map(mention => labels.get(mention.entityId)).filter(Boolean)]));
+    const candidates = new Map(names.empty ? [] : list.map(record => [record.id,
+        findCandidateMentions(record.text, names.index, { lowercaseWords: names.lowercaseWords })
+            .map(candidate => `${candidate.surface} -> ${candidate.entities.map(entity => `${labels.get(entity.entityId)} (${entity.type})`).join(' or ')}`)]));
+    const { apiProfileId, model } = tagger.executor;
+    const outcome = await runModelTagger({
+        records: list,
+        detected: hints,
+        candidates,
+        categories,
+        vocabFor: text => buildEntityVocab(workspaceId, text),
+        languageInstruction: getSystemLanguageInstruction(),
+        send: payload => sendTaggerRequest({ apiProfileId, model, chatHistory: [], manualMode: false, manualJson: null, ...payload }),
+        onProgress
     });
 
-    // Successful batches are kept; the first error marks the pass incomplete.
-    let firstError = null;
-    let chunksDone = 0;
+    const applied = applyChunkTags(outcome.chunkTags, list, workspaceId, { lowercaseWords: names.lowercaseWords });
+    result.modelRows = applied.rows;
+    if (applied.created.length && workspaceId) refreshWorkspaceNameTags(db, workspaceId, { entityIds: applied.created });
 
-    const runBatch = async ({ start, records }, batchIndex) => {
-        const numbered = records.map((c, i) => `[CHUNK ${i}]\n${c.text}`).join('\n\n');
-        const vocab = buildEntityVocab(workspaceId, numbered);
-        const systemPrompt =
-            getSystemLanguageInstruction() + "\n" +
-            "You tag a text segment that is split into numbered chunks.\n" +
-            "For EACH chunk, identify the specific persistent story entities explicitly named in the text. A persistent entity is something a user would reasonably find and reuse in a world bible.\n" +
-            catLines + "\n" +
-            (vocab ? vocab + "\n" : "") +
-            "Resolve titles, shortened names, and aliases to the supplied canonical name when the text supports that match. Never propose a name already present in Known entities, even under another category. Do not turn generic nouns, unnamed roles, pronouns, descriptive phrases, or ordinary objects into entities. A role alone (for example captain, duke, guard, blacksmith), a generic organization word (order, guild, army), or an ordinary object (sword, spear, cane, coat) is not an entity. Distinctive reusable world-specific items or materials (for example Dragon Mead or Salamander Leather) are valid item types even when they are not unique objects. When identity or category is ambiguous, omit the mention. Every mention must include a short verbatim evidence excerpt copied from that chunk. " +
-            "Use ONLY these category names; skip a chunk when it has no qualifying named entity. " +
-            "Return one valid JSON object and nothing else. Its exact shape is " +
-            "{\"items\": [{\"chunk\": <number>, \"mentions\": [{\"text\": \"<surface text>\", \"canonicalName\": \"<existing canonical name or exact explicit name>\", \"type\": \"<Category>\", \"proposalKind\": \"known|named|world_specific_type\", \"evidence\": \"<verbatim excerpt>\"}]}]}. " +
-            "Use proposalKind=known only for a supplied Known entity, named for a specific proper entity or unique named artifact, and world_specific_type only for a distinctive reusable Items type or material. Never use named for a generic role, category, or ordinary object. " +
-            "Use {\"items\": []} only when none of the chunks contains a qualifying named entity.";
-
-        const maxTokens = 4096;
-        const request = (prompt, repair = false) => sendTaggerRequest({
-            apiProfileId, model, systemPrompt,
-            chatHistory: [],
-            newPrompt: prompt,
-            temperature: repair ? 0 : 0.1,
-            maxTokens,
-            manualMode, manualJson,
-            jsonMode: true,
-            jsonSchema: TAGGER_RESPONSE_SCHEMA
-        });
-
-        try {
-            let response = await request(numbered);
-            let structured = parseTaggerResponse(response);
-            let rejections = [];
-            let validated = structured.valid ? validateChunkTags(structured.items, categories, records, rejections) : [];
-            const needsRepair = !structured.valid || (structured.items.length > 0 && validated.length === 0);
-            if (needsRepair) {
-                response = await request(
-                    `Repair the response below to the exact required JSON shape. Preserve only mentions supported by the original numbered chunks.\n\nORIGINAL CHUNKS:\n${numbered}\n\nINVALID RESPONSE:\n${String(response || '').slice(0, 12000)}`,
-                    true
-                );
-                structured = parseTaggerResponse(response);
-                rejections = [];
-                validated = structured.valid ? validateChunkTags(structured.items, categories, records, rejections) : [];
-            }
-            if (!structured.valid) throw new Error('The Tagger returned invalid structured JSON after one repair attempt.');
-            if (structured.items.length > 0 && validated.length === 0) {
-                const detail = describeTagRejections(rejections);
-                console.error('[World Index] every mention was rejected:', JSON.stringify(rejections.slice(0, 10), null, 2));
-                throw new Error(detail
-                    ? `The Tagger returned mentions, but none could be used: ${detail}.`
-                    : 'The Tagger returned mentions, but none could be used.');
-            }
-            // Chunk indexes come back relative to the batch; shift them onto the segment.
-            return { tags: validated.map(entry => ({ ...entry, chunkIndex: entry.chunkIndex + start })), error: null, records };
-        } catch (e) {
-            console.error(`[World Index] classify+tag failed on batch ${batchIndex + 1}/${batches.length}:`, e);
-            return { tags: [], error: e, records };
-        } finally {
-            // In chunks, the unit the caller announced the total in.
-            chunksDone += records.length;
-            if (onProgress) onProgress(Math.min(chunksDone, chunkRecords.length), chunkRecords.length);
-        }
-    };
-
-    const outcomes = await mapWithConcurrency(batches, TAGGER_CONCURRENCY, runBatch);
-    const taggedRecords = [];
-    const failedRecords = [];
-    for (const outcome of outcomes) {
-        if (outcome.error) {
-            if (!firstError) firstError = outcome.error;
-            failedRecords.push(...outcome.records);
-            continue;
-        }
-        chunkTags.push(...outcome.tags);
-        taggedRecords.push(...outcome.records);
+    result.taggedRecords = list.filter(record => outcome.outcomes.get(record.id)?.status === 'completed');
+    result.failedRecords = list.filter(record => outcome.outcomes.get(record.id)?.status !== 'completed');
+    const rejected = new Map(result.taggedRecords.map(record => [record.id, outcome.outcomes.get(record.id).rejected]));
+    saveChunkStatus(db, result.taggedRecords, 'completed', { runId, rejected });
+    const byError = new Map();
+    for (const record of result.failedRecords) {
+        const error = cleanErrorMessage(outcome.outcomes.get(record.id)?.error || 'The Tagger could not process this passage.');
+        if (!byError.has(error)) byError.set(error, []);
+        byError.get(error).push(record);
     }
-
-    if (firstError) {
-        // notify:false is for callers that report the failure themselves.
-        if (notify) notifyTaggingFailure(firstError);
-        return { title, summary, chunkTags, taggedRecords, failedRecords, failed: true, error: cleanErrorMessage(firstError) };
+    for (const [error, failed] of byError) saveChunkStatus(db, failed, 'failed', { runId, error });
+    if (byError.size) {
+        result.error = [...byError.keys()][0];
+        result.failed = true;
+        console.error(`[Tagger] ${result.failedRecords.length}/${list.length} passage(s) failed: ${result.error}`);
+        if (notify) notifyTaggingFailure(new Error(result.error));
     }
-    return { title, summary, chunkTags, taggedRecords, failedRecords };
+    return result;
 }
 
 // Fenced so a story-tuned model describes the transcript instead of continuing it.
@@ -1560,15 +1384,23 @@ function allowAiEntityCreation() {
     } catch (e) { return false; }
 }
 
-function applyChunkTags(chunkTags, chunkRecords, workspaceId = null) {
-    if (!getRoleExecutor(ROLE_IDS.TAGGER).executor) return 0;
-    if (!Array.isArray(chunkTags) || !chunkTags.length) return 0;
-    const insert = db.prepare('INSERT OR IGNORE INTO chunk_tags (chunkId, tag, entity, manual) VALUES (?, ?, ?, 0)');
-    const isSuppressed = db.prepare('SELECT 1 FROM chunk_tag_suppressions WHERE chunkId = ? AND tag = ? AND entity = ?');
+// Returns the rows written and the ids of entities proposed along the way.
+function applyChunkTags(chunkTags, chunkRecords, workspaceId = null, { lowercaseWords: workspaceWords = null } = {}) {
+    const applied = { rows: 0, created: [], rejectedProposals: 0 };
+    if (!getRoleExecutor(ROLE_IDS.TAGGER).executor) return applied;
+    if (!Array.isArray(chunkTags) || !chunkTags.length) return applied;
+    const insert = db.prepare("INSERT OR IGNORE INTO chunk_tags (chunkId, tag, entity, manual, origin) VALUES (?, ?, ?, 0, 'model')");
+    const isSuppressed = db.prepare('SELECT 1 FROM chunk_tag_suppressions WHERE chunkId = ? AND entity = ?');
     // Within a run the cache dedupes proposals; across runs resolveEntity finds them.
     const allowCreate = allowAiEntityCreation();
     const proposedCache = new Map();
-    let rows = 0;
+    const knownByWorkspace = new Map();
+    const knownEntities = ws => {
+        if (!knownByWorkspace.has(ws)) knownByWorkspace.set(ws, loadWorkspaceEntities(db, ws));
+        return knownByWorkspace.get(ws);
+    };
+    const lowercaseWords = collectLowercaseWords(chunkRecords.map(record => (record && record.text) || ''));
+    if (workspaceWords) for (const word of workspaceWords) lowercaseWords.add(word);
     db.transaction(() => {
         for (const entry of chunkTags) {
             const rec = chunkRecords[entry.chunkIndex];
@@ -1576,15 +1408,29 @@ function applyChunkTags(chunkTags, chunkRecords, workspaceId = null) {
             // Document chunks have ownerId = documentId, so the caller's workspace wins.
             const ws = workspaceId || rec.ownerId;
             for (const t of entry.tags) {
-                let entityRef = resolveEntity(ws, t.tag, t.value);
-                if (!entityRef) entityRef = resolveEntity(ws, null, t.value);
+                let entityRef = resolveEntity(ws, t.tag, t.value) || resolveEntity(ws, null, t.value)
+                    || (t.surface ? resolveEntity(ws, null, t.surface) : null);
                 if (!entityRef && allowCreate) {
                     const proposalData = proposalDataForMention(t.tag, t.proposalKind);
                     if (!proposalData) continue;
-                    const key = `${ws || ''}|${t.tag}|${entitiesStore.normalizeName(t.value)}`;
+                    const key = `${ws || ''}|${t.tag}|${foldText(t.value)}`;
                     if (proposedCache.has(key)) {
                         entityRef = proposedCache.get(key);
                     } else {
+                        const verdict = checkProposal({
+                            value: t.value,
+                            surface: t.surface,
+                            type: t.tag,
+                            proposalKind: t.proposalKind,
+                            chunkText: rec.text,
+                            entities: knownEntities(ws),
+                            siblings: entry.tags.filter(other => other !== t).map(other => ({ value: other.value, type: other.tag })),
+                            lowercaseWords
+                        });
+                        if (!verdict.ok) {
+                            applied.rejectedProposals++;
+                            continue;
+                        }
                         const ent = entitiesStore.createEntity({
                             workspaceId: ws,
                             type: t.tag,
@@ -1598,6 +1444,8 @@ function applyChunkTags(chunkTags, chunkRecords, workspaceId = null) {
                         entityRef = ent && ent.id;
                         if (!entityRef) throw new Error(`Could not create proposed entity: ${t.value}`);
                         proposedCache.set(key, entityRef);
+                        applied.created.push(entityRef);
+                        knownEntities(ws).push({ id: entityRef, type: t.tag, canonicalName: t.value, aliases: [] });
                     }
                 }
                 if (!entityRef) continue;
@@ -1611,29 +1459,23 @@ function applyChunkTags(chunkTags, chunkRecords, workspaceId = null) {
                         });
                     }
                 }
-                if (!isSuppressed.get(rec.id, resolvedTag, entityRef)) {
-                    insert.run(rec.id, resolvedTag, entityRef);
-                    rows++;
-                }
+                if (!isSuppressed.get(rec.id, entityRef)) applied.rows += insert.run(rec.id, resolvedTag, entityRef).changes;
             }
         }
     })();
-    return rows;
+    if (applied.rejectedProposals) console.log(`[Tagger] ${applied.rejectedProposals} proposal(s) did not look like a standalone name and were skipped.`);
+    return applied;
 }
 
+const BACKFILL_SLICE = 24;
+
 // chatId null backfills every chat.
-async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false, tier = 'archive', chunkIds = null, runId = null, progressCallback = null } = {}) {
+async function backfillWorldIndex(chatId = null, { full = false, tier = 'archive', chunkIds = null, runId = null, progressCallback = null } = {}) {
     const tagger = getRoleExecutor(ROLE_IDS.TAGGER);
     if (!tagger.executor) throw new Error(tagger.error || 'Tagger is disabled.');
-    const apiProfileId = tagger.executor.apiProfileId;
-    const model = tagger.executor.model;
-    const manualMode = false;
-    const manualJson = null;
-
-    let categories = [];
-    try { categories = db.prepare('SELECT name, description FROM tags WHERE isEntity = 1').all(); } catch (e) { categories = []; }
-    if (!categories.length) throw new Error('No entity tag categories seeded');
-    const catLines = categories.map(c => `- ${c.name}: ${c.description}`).join('\n');
+    let categoryCount = 0;
+    try { categoryCount = db.prepare('SELECT COUNT(*) AS count FROM tags WHERE isEntity = 1').get().count; } catch (e) { categoryCount = 0; }
+    if (!categoryCount) throw new Error('No entity tag categories seeded');
     // archive = Chat Archive, custom = Custom Memory snippets, searchable = chat_kb files.
     let ownerType = 'chat_memory';
     let sourceClause = "AND kc.source = 'Chat Archive'";
@@ -1664,77 +1506,30 @@ async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false,
     const chunks = db.prepare(sql).all(...queryParams);
     if (!chunks.length) return { chunks: 0, batches: 0, tagged: 0, taggedChunks: 0, processed: 0, empty: 0, failed: 0 };
 
-    const saveCoverage = db.prepare(`
-        INSERT INTO world_index_chunk_status (chunkId, status, tagCount, lastRunId, error, updatedAt)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(chunkId) DO UPDATE SET
-          status = excluded.status,
-          tagCount = excluded.tagCount,
-          lastRunId = excluded.lastRunId,
-          error = excluded.error,
-          updatedAt = excluded.updatedAt
-    `);
-    const countAutomaticTags = db.prepare("SELECT COUNT(*) AS count FROM chunk_tags WHERE chunkId = ? AND (manual IS NULL OR manual = 0)");
-
-    // Retry on provider rate-limits (Bedrock "Too many requests") with exponential
-    // backoff so the run completes instead of dropping batches.
-    const callWithRetry = async (payload, tries = 5) => {
-        let delay = 2000;
-        for (let attempt = 1; attempt <= tries; attempt++) {
-            try {
-                return await sendApiRequest(payload);
-            } catch (e) {
-                const msg = String((e && e.message) || e);
-                const rateLimited = /too many requests|rate.?limit|429|throttl/i.test(msg);
-                if (attempt === tries || !rateLimited) throw e;
-                await new Promise(r => setTimeout(r, delay));
-                delay = Math.min(delay * 2, 30000);
+    const countTags = db.prepare('SELECT COUNT(*) AS count FROM chunk_tags WHERE chunkId = ?');
+    const matchers = new Map();
+    let tagged = 0, batches = 0, processed = 0, taggedChunks = 0, empty = 0, failed = 0, lastError = null;
+    // Slices keep progress moving; each one is recorded before the next starts.
+    for (let i = 0; i < chunks.length; i += BACKFILL_SLICE) {
+        const slice = chunks.slice(i, i + BACKFILL_SLICE);
+        const byOwner = new Map();
+        for (const chunk of slice) {
+            if (!byOwner.has(chunk.ownerId)) byOwner.set(chunk.ownerId, []);
+            byOwner.get(chunk.ownerId).push(chunk);
+        }
+        for (const [ownerId, records] of byOwner) {
+            if (!matchers.has(ownerId)) matchers.set(ownerId, createNameMatcher(db, ownerId));
+            const result = await tagChunkRecords(records, ownerId, { runId, notify: false, matcher: matchers.get(ownerId) });
+            tagged += result.nameRows + result.modelRows;
+            processed += result.taggedRecords.length;
+            failed += result.failedRecords.length;
+            if (result.error) lastError = result.error;
+            for (const record of result.taggedRecords) {
+                if (countTags.get(record.id).count) taggedChunks++; else empty++;
             }
         }
-    };
-
-    let tagged = 0, batches = 0, processed = 0, taggedChunks = 0, empty = 0, failed = 0, lastError = null;
-    for (let i = 0; i < chunks.length; i += batchSize) {
-        if (i > 0) await new Promise(r => setTimeout(r, 600)); // gentle pacing between batches
-        const batch = chunks.slice(i, i + batchSize);
-        const numbered = batch.map((c, idx) => `[CHUNK ${idx}]\n${c.text}`).join('\n\n');
-        const batchVocab = buildEntityVocab(chatId, numbered);
-        const fence = buildItemsFence();
-        const systemPrompt =
-            getSystemLanguageInstruction() + "\n" +
-            "You tag conversation chunks. For EACH numbered chunk, identify persistent story entities explicitly named in the text, grouped under these categories:\n" +
-            catLines + "\n" +
-            (batchVocab ? batchVocab + "\n" : "") +
-            "Resolve aliases to supplied canonical names. Never propose an entity already present in Known entities. Omit generic nouns, unnamed roles, pronouns, descriptive phrases, and ambiguous identities. Every mention must include a short verbatim evidence excerpt copied from that chunk. Use ONLY these category names. " +
-            "Output ONLY a JSON array wrapped exactly once in " + fence.open + " and " + fence.close + ", " +
-            "one element per chunk that has any entity: {\"chunk\": <number>, \"mentions\": [{\"text\": \"<surface text>\", \"canonicalName\": \"<canonical or exact explicit name>\", \"type\": \"<Category>\", \"evidence\": \"<verbatim excerpt>\"}]}. " +
-            "Write nothing else.";
-        try {
-            const response = await callWithRetry({ apiProfileId, model, systemPrompt, chatHistory: [], newPrompt: numbered, temperature: 0.3, maxTokens: 1500, manualMode, manualJson });
-            const head = splitHeadAndBody(response, fence);
-            const chunkTags = validateChunkTags(safeParseArray(head.body), categories, batch);
-            tagged += applyChunkTags(chunkTags, batch, chatId);
-            const now = Date.now();
-            db.transaction(() => {
-                for (const chunk of batch) {
-                    const tagCount = countAutomaticTags.get(chunk.id).count;
-                    saveCoverage.run(chunk.id, 'completed', tagCount, runId, null, now);
-                    if (tagCount) taggedChunks++; else empty++;
-                }
-            })();
-            processed += batch.length;
-        } catch (e) {
-            console.error(`[World Index][backfill] batch ${batches} failed:`, e.message);
-            const now = Date.now();
-            const message = e.message || String(e);
-            db.transaction(() => {
-                for (const chunk of batch) saveCoverage.run(chunk.id, 'failed', 0, runId, message, now);
-            })();
-            failed += batch.length;
-            lastError = message;
-        }
         batches++;
-        console.log(`[World Index][backfill] batch ${batches}: ${Math.min(i + batchSize, chunks.length)}/${chunks.length} chunks, ${tagged} tag row(s) so far.`);
+        console.log(`[World Index][backfill] ${Math.min(i + BACKFILL_SLICE, chunks.length)}/${chunks.length} chunks, ${tagged} tag row(s) so far.`);
         if (progressCallback) progressCallback({ total: chunks.length, processed, tagged, taggedChunks, empty, failed, batches, error: lastError });
     }
     return { chunks: chunks.length, batches, tagged, processed, taggedChunks, empty, failed, error: lastError };
@@ -1843,23 +1638,14 @@ async function vectorizeDocument(documentId, progressCallback = null) {
         insertChunksToDb(documentId, 'document', vectors);
         added = vectors.length;
 
-        if (getRoleExecutor(ROLE_IDS.TAGGER).executor) {
-                try {
-                    const records = vectors.map(v => ({ id: v.id, text: v.text, ownerId: doc.workspaceId }));
-                    const batches = createTaggerBatches(records);
-                    let processed = 0;
-                    for (const batch of batches) {
-                        const cls = await classifyAndTagSegment(batch, null, doc.workspaceId);
-                        if (cls.failed) throw new Error(cls.error || 'Tagger failed.');
-                        applyChunkTags(cls.chunkTags, batch, doc.workspaceId);
-                        processed += batch.length;
-                        if (progressCallback) progressCallback({ phase: 'tagging', done: processed, total: records.length });
-                    }
-                } catch (e) {
-                    console.error('[Vectorize Document] tagging failed (vectorization continues):', e.message);
-                    db.prepare('UPDATE documents SET vectorized = 1 WHERE id = ?').run(documentId);
-                    throw new Error(`Entity tagging failed: ${e.message}. Text embeddings were preserved.`);
-                }
+        const records = vectors.map(v => ({ id: v.id, text: v.text, ownerId: doc.workspaceId }));
+        const tagging = await tagChunkRecords(records, doc.workspaceId, {
+            onProgress: (done, total) => { if (progressCallback) progressCallback({ phase: 'tagging', done, total }); }
+        });
+        if (tagging.failed) {
+            console.error('[Vectorize Document] tagging failed (vectorization continues):', tagging.error);
+            db.prepare('UPDATE documents SET vectorized = 1 WHERE id = ?').run(documentId);
+            throw new Error(`Entity tagging failed: ${tagging.error}. Text embeddings were preserved.`);
         }
     }
 
@@ -1878,30 +1664,24 @@ async function retagDocumentChunks(documentId, progressCallback = null) {
     ).all(documentId);
     if (!rows.length) return { tagged: 0, chunks: 0 };
 
-    // Without a Tagger, keep the existing tags.
-    if (!getRoleExecutor(ROLE_IDS.TAGGER).executor) return { tagged: 0, chunks: rows.length, skipped: true };
+    const records = rows.map(r => ({ id: r.id, text: r.text, ownerId: doc.workspaceId }));
+    // Without a Tagger, existing tags stay and only names are refreshed.
+    if (!getRoleExecutor(ROLE_IDS.TAGGER).executor) {
+        const names = applyNameTags(db, doc.workspaceId, records);
+        return { tagged: names.rows, chunks: rows.length, skipped: true };
+    }
 
-    const del = db.prepare('DELETE FROM chunk_tags WHERE chunkId = ?');
+    const del = db.prepare('DELETE FROM chunk_tags WHERE chunkId = ? AND (manual IS NULL OR manual = 0)');
     db.transaction(() => { for (const r of rows) del.run(r.id); })();
 
-    const profile = db.prepare('SELECT * FROM writing_profiles LIMIT 1').get();
-    const records = rows.map(r => ({ id: r.id, text: r.text, ownerId: doc.workspaceId }));
-    let tagged = 0;
-    const batches = createTaggerBatches(records);
-    let processed = 0;
-    for (const batch of batches) {
-        try {
-            const cls = await classifyAndTagSegment(batch, profile, doc.workspaceId);
-            if (cls.failed) throw new Error(cls.error || 'Tagger failed.');
-            tagged += applyChunkTags(cls.chunkTags, batch, doc.workspaceId);
-            processed += batch.length;
-            if (progressCallback) progressCallback({ phase: 'tagging', done: processed, total: records.length });
-        } catch (e) {
-            console.error('[Retag Document] batch failed:', e.message);
-            throw new Error(`Entity tagging failed: ${e.message}`);
-        }
+    const result = await tagChunkRecords(records, doc.workspaceId, {
+        onProgress: (done, total) => { if (progressCallback) progressCallback({ phase: 'tagging', done, total }); }
+    });
+    if (result.failed) {
+        console.error('[Retag Document] tagging failed:', result.error);
+        throw new Error(`Entity tagging failed: ${result.error}`);
     }
-    return { tagged, chunks: rows.length };
+    return { tagged: result.nameRows + result.modelRows, chunks: rows.length };
 }
 
 const ENRICH_RELATION_GUIDANCE = {
@@ -2672,22 +2452,6 @@ function pendingBlockChunks(chatId, blockId) {
     `).all(chatId, blockId);
 }
 
-function recordChunkCoverage(records, status, error = null) {
-    if (!Array.isArray(records) || !records.length) return;
-    const save = db.prepare(`
-        INSERT INTO world_index_chunk_status (chunkId, status, tagCount, lastRunId, error, updatedAt)
-        VALUES (?, ?, 0, NULL, ?, ?)
-        ON CONFLICT(chunkId) DO UPDATE SET
-          status = excluded.status,
-          error = excluded.error,
-          updatedAt = excluded.updatedAt
-    `);
-    const now = Date.now();
-    db.transaction(() => {
-        for (const record of records) save.run(record.id, status, error, now);
-    })();
-}
-
 // Idempotent per block: rerunning recovers an interrupted or failed pass.
 async function finalizeSummaryBlock({ chatId, blockId, onProgress = null }) {
     const report = (stage, done = 0, total = 0) => {
@@ -2735,18 +2499,12 @@ async function finalizeSummaryBlock({ chatId, blockId, onProgress = null }) {
     if (pending.length) {
         report('tagging', 0, pending.length);
         try {
-            const tagged = await classifyAndTagSegment(
-                pending, null, chatId,
-                (done, total) => report('tagging', done, total),
-                { notify: false }
-            );
-            const written = applyChunkTags(tagged.chunkTags, pending, chatId);
-            recordChunkCoverage(tagged.taggedRecords || [], 'completed');
-            if (tagged.failed) {
-                taggingError = cleanErrorMessage(tagged.error) || 'The Tagger could not process this archive.';
-                recordChunkCoverage(tagged.failedRecords || [], 'failed', taggingError);
-            }
-            console.log(`[Tagger] archive block ${blockId}: ${tagged.chunkTags.length}/${pending.length} chunk(s) tagged, ${written} tag row(s).`);
+            const tagged = await tagChunkRecords(pending, chatId, {
+                onProgress: (done, total) => report('tagging', done, total),
+                notify: false
+            });
+            if (tagged.failed) taggingError = tagged.error || 'The Tagger could not process this archive.';
+            console.log(`[Tagger] archive block ${blockId}: ${tagged.taggedRecords.length}/${pending.length} chunk(s) done, ${tagged.nameRows} tag row(s) by name, ${tagged.modelRows} by the model.`);
         } catch (tagError) {
             console.error("[Tagger] archive tagging failed (the archive itself is already stored):", tagError);
             taggingError = cleanErrorMessage(tagError) || 'The Tagger could not process this archive.';
@@ -3610,7 +3368,7 @@ module.exports = {
     vectorizeDocument,
     retagDocumentChunks,
     enrichEntities,
-    classifyAndTagSegment,
+    tagChunkRecords,
     applyChunkTags,
     computeDocumentVectorStatus,
     checkAndAutoSummarize,
