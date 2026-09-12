@@ -119,6 +119,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteEntity: (id) => ipcRenderer.invoke('delete-entity', { id }),
   mergeEntity: (sourceId, targetId, prefer) => ipcRenderer.invoke('merge-entity', { sourceId, targetId, prefer }),
   resolveEnrichReview: (id, accept, reject) => ipcRenderer.invoke('resolve-enrich-review', { id, accept, reject }),
+  getEntityReview: (workspaceId) => ipcRenderer.invoke('get-entity-review', { workspaceId }),
   summarizeBulkEntities: (workspaceId, ids) => ipcRenderer.invoke('summarize-bulk-entities', { workspaceId, ids }),
   bulkManageEntities: (workspaceId, ids, action, policy) => ipcRenderer.invoke('bulk-manage-entities', { workspaceId, ids, action, policy }),
   exportWorldbuild: (workspaceId) => ipcRenderer.invoke('export-worldbuild', { workspaceId }),

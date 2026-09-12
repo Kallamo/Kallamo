@@ -52,8 +52,8 @@ function getWorldIndexStatus(chatId, tier) {
   const row = db.prepare(`
     SELECT COUNT(*) AS total,
       SUM(CASE WHEN wis.status = 'completed' THEN 1 ELSE 0 END) AS completed,
-      SUM(CASE WHEN wis.status = 'completed' AND wis.tagCount > 0 THEN 1 ELSE 0 END) AS tagged,
-      SUM(CASE WHEN wis.status = 'completed' AND wis.tagCount = 0 THEN 1 ELSE 0 END) AS empty,
+      SUM(CASE WHEN wis.status = 'completed' AND EXISTS (SELECT 1 FROM chunk_tags ct WHERE ct.chunkId = kc.id) THEN 1 ELSE 0 END) AS tagged,
+      SUM(CASE WHEN wis.status = 'completed' AND NOT EXISTS (SELECT 1 FROM chunk_tags ct WHERE ct.chunkId = kc.id) THEN 1 ELSE 0 END) AS empty,
       SUM(CASE WHEN wis.status = 'failed' THEN 1 ELSE 0 END) AS failed
     FROM knowledge_chunks kc
     LEFT JOIN world_index_chunk_status wis ON wis.chunkId = kc.id
@@ -2672,6 +2672,32 @@ ipcMain.handle('set-chunk-tags', async (event, { chunkId, keywords = [], entitie
 
 // --- WORLDBUILD: per-workspace entity registry + relations ---
 
+// A new or changed name tags every passage that already writes it. Never blocks the save.
+function refreshNameTagsFor(workspaceId, entityIds = null) {
+  if (!workspaceId) return;
+  try {
+    const { refreshWorkspaceNameTags } = require('./features/world-index/name-tags');
+    refreshWorkspaceNameTags(db, workspaceId, { entityIds });
+  } catch (e) {
+    console.error('[Name tags] refresh failed (the entity was saved):', e.message);
+  }
+}
+
+const NAME_FIELDS = ['canonicalName', 'aliases', 'type'];
+
+ipcMain.handle('get-entity-review', async (event, { workspaceId } = {}) => {
+  try {
+    const { loadWorkspaceEntities, loadWorkspaceChunks } = require('./features/world-index/name-tags');
+    const { assessEntityNames } = require('./features/world-index/name-quality');
+    const entities = loadWorkspaceEntities(db, workspaceId);
+    const texts = loadWorkspaceChunks(db, workspaceId).map(chunk => chunk.text);
+    return { success: true, items: assessEntityNames(entities, texts) };
+  } catch (e) {
+    console.error('[get-entity-review] failed:', e);
+    return { success: false, error: e.message, items: [] };
+  }
+});
+
 ipcMain.handle('list-entities', async (event, { workspaceId, type } = {}) => {
   try {
     return { success: true, entities: entitiesStore.listEntities({ workspaceId, type: type || null }) };
@@ -2692,7 +2718,9 @@ ipcMain.handle('get-entity', async (event, { id }) => {
 
 ipcMain.handle('create-entity', async (event, payload) => {
   try {
-    return { success: true, entity: entitiesStore.createEntity(payload || {}) };
+    const entity = entitiesStore.createEntity(payload || {});
+    refreshNameTagsFor(entity?.workspaceId, [entity?.id]);
+    return { success: true, entity };
   } catch (e) {
     console.error('[create-entity] failed:', e);
     return { success: false, error: e.message };
@@ -2734,6 +2762,7 @@ ipcMain.handle('add-entity-alias', (event, { id, alias }) => {
       return { success: true, added: false };
     }
     entitiesStore.updateEntity(id, { aliases: [...existing, a] });
+    refreshNameTagsFor(ent.workspaceId, [id]);
     return { success: true, added: true };
   } catch (e) {
     console.error('[add-entity-alias] failed:', e);
@@ -2743,7 +2772,11 @@ ipcMain.handle('add-entity-alias', (event, { id, alias }) => {
 
 ipcMain.handle('update-entity', async (event, { id, fields }) => {
   try {
-    return { success: true, entity: entitiesStore.updateEntity(id, fields || {}) };
+    const before = entitiesStore.getEntity(id);
+    const entity = entitiesStore.updateEntity(id, fields || {});
+    const namesChanged = entity && before && NAME_FIELDS.some(field => JSON.stringify(before[field]) !== JSON.stringify(entity[field]));
+    if (namesChanged) refreshNameTagsFor(entity.workspaceId, [id]);
+    return { success: true, entity };
   } catch (e) {
     console.error('[update-entity] failed:', e);
     return { success: false, error: e.message };
@@ -2761,7 +2794,9 @@ ipcMain.handle('delete-entity', async (event, { id }) => {
 
 ipcMain.handle('merge-entity', async (event, { sourceId, targetId, prefer } = {}) => {
   try {
-    return { success: true, entity: entitiesStore.mergeEntity(sourceId, targetId, { prefer }) };
+    const entity = entitiesStore.mergeEntity(sourceId, targetId, { prefer });
+    refreshNameTagsFor(entity?.workspaceId, [targetId]);
+    return { success: true, entity };
   } catch (e) {
     console.error('[merge-entity] failed:', e);
     return { success: false, error: e.message };
@@ -2893,6 +2928,7 @@ ipcMain.handle('import-worldbuild', async (event, { workspaceId } = {}) => {
       return { success: false, error: 'Could not read the package — it is not a valid Worldbuild file.' };
     }
     const res = entitiesStore.importWorldbuild(workspaceId, payload);
+    refreshNameTagsFor(workspaceId);
     return { success: true, ...res };
   } catch (e) {
     console.error('[import-worldbuild] failed:', e);
@@ -4665,6 +4701,11 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
             );
             insertFts.run(snippetId, chunk.text);
           })();
+          try {
+            require('./features/world-index/name-tags').applyNameTags(db, chatId, [{ id: snippetId, text: chunk.text }]);
+          } catch (e) {
+            console.error('[Custom Memory] name tags failed (save continues):', e.message);
+          }
 
           // Apply explicit entity-tag edits from the editor. World Index tagging itself
           // is intentionally user-triggered through the Memory view.
