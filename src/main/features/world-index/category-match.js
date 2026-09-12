@@ -1,13 +1,11 @@
 // Resolves the label a tagger wrote ("Character" for "Characters") to a workspace category.
 // Closed matching: never invents a category, so tagging stays confirmed-only.
 
+const { foldText } = require('./text-fold');
+
+// Any script: a category named in Japanese or Arabic resolves like an English one.
 function normalizeName(value) {
-  return String(value == null ? '' : value)
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
+  return foldText(value).replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 }
 
 // Both directions of the plural the model is likely to pick: "characters" from

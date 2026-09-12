@@ -2,6 +2,7 @@
 const db = require('./database');
 const crypto = require('crypto');
 const { discardEnrichPending } = require('./features/worldbuild/entity-review');
+const { foldText } = require('./features/world-index/text-fold');
 
 function parseJsonArray(raw) {
   if (!raw) return [];
@@ -103,6 +104,7 @@ function stripInternal(data) {
   delete d._imported;
   delete d.proposalEvidence;
   delete d.loreDocumentIds;
+  delete d.nameReviewDismissed;
   return d;
 }
 
@@ -259,7 +261,10 @@ function resolveMention(mention, type = null, workspaceId = null) {
     if (r.canonicalName && normalizeName(r.canonicalName) === needle) return r.id;
     if (parseJsonArray(r.aliases).some(a => normalizeName(a) === needle)) return r.id;
   }
-  return null;
+  // Accents and typographic variants resolve only when a single entity matches.
+  const folded = foldText(mention);
+  const matches = rows.filter(r => [r.canonicalName, ...parseJsonArray(r.aliases)].some(name => name && foldText(name) === folded));
+  return matches.length === 1 ? matches[0].id : null;
 }
 
 // Unlike resolveMention, returns every plausible match so the user can disambiguate.

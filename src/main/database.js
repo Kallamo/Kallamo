@@ -843,6 +843,11 @@ try {
     db.exec("ALTER TABLE chunk_tags ADD COLUMN manual INTEGER DEFAULT 0");
     console.log("Database Migration: Added manual column to chunk_tags table.");
   }
+  // Where an automatic tag came from: 'name' (found by the registered name) or 'model'.
+  // Only 'name' rows are recomputed when an entity's names change.
+  if (!ctColumns.includes('origin')) {
+    db.exec("ALTER TABLE chunk_tags ADD COLUMN origin TEXT");
+  }
 
   // World Index tags are retrieval metadata, separate from vectorization. Coverage
   // records each chunk the tagger has examined, including valid no-entity results.
@@ -979,6 +984,10 @@ try {
         DELETE FROM entity_enrichment_errors WHERE entityId = OLD.id;
     END;
   `);
+  const wisColumns = db.pragma("table_info(world_index_chunk_status)").map(col => col.name);
+  if (!wisColumns.includes('rejectedMentions')) {
+    db.exec('ALTER TABLE world_index_chunk_status ADD COLUMN rejectedMentions INTEGER NOT NULL DEFAULT 0');
+  }
   const wirColumns = db.pragma("table_info(world_index_runs)").map(col => col.name);
   if (!wirColumns.includes('dismissedAt')) {
     db.exec('ALTER TABLE world_index_runs ADD COLUMN dismissedAt INTEGER');

@@ -1,40 +1,15 @@
 // Evidence must appear in the chunk, which keeps tagging confirmed-only.
 // Normalization only drops differences with no meaning here: dashes, quotes, accents, spacing.
 
-const ZERO_WIDTH = /[​-‍﻿]/g;
-
-// Typographic characters a model commonly substitutes when it retypes a quote.
-const PUNCTUATION_MAP = new Map([
-  ['‐', '-'], ['‑', '-'], ['‒', '-'], ['–', '-'],
-  ['—', '-'], ['―', '-'], ['−', '-'],
-  // All quote marks fold to one character, on both sides.
-  ['“', '"'], ['”', '"'], ['„', '"'], ['‟', '"'],
-  ['«', '"'], ['»', '"'],
-  ['‘', '"'], ['’', '"'], ['‚', '"'], ['‛', '"'],
-  ["'", '"'], ['`', '"'], ['´', '"'],
-  ['…', '...']
-]);
+const { foldText } = require('./text-fold');
 
 // Punctuation a quote often picks up at its edges: an ellipsis marking a trim, a
 // dash opening a line of dialogue, the quote marks around it.
 const EDGE_NOISE = /^[\s"'`.,;:!?()[\]{}<>\-–—…]+|[\s"'`.,;:!?()[\]{}<>\-–—…]+$/g;
 
+// A model that retypes a quote without accents or with straight quotes is still quoting the chunk.
 function normalizeEvidence(value) {
-  const text = String(value == null ? '' : value)
-    .normalize('NFC')
-    .replace(ZERO_WIDTH, '');
-
-  let mapped = '';
-  for (const char of text) mapped += PUNCTUATION_MAP.get(char) ?? char;
-
-  return mapped
-    // Decomposing lets the combining accents be dropped, so "é" and "e" compare
-    // equal. A model that retypes without accents is still quoting the chunk.
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim();
+  return foldText(value);
 }
 
 // Several excerpts are matched separately: they come from different places in the chunk.

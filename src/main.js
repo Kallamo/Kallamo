@@ -180,6 +180,12 @@ app.whenReady().then(() => {
   } catch (e) {
     log.warn('Could not mark interrupted summaries:', e);
   }
+  try {
+    const result = require('./main/features/world-index/name-tags').migrateNameTags(require('./main/database'));
+    if (result) log.info(`Tagged ${result.rows} passage(s) by entity name across ${result.workspaces} workspace(s).`);
+  } catch (e) {
+    log.warn('Could not tag existing passages by entity name:', e);
+  }
 
   // Handle custom file protocol - reads files directly from filesystem
   protocol.handle('app-file', (request) => {

@@ -6,6 +6,7 @@ const db = require('./database');
 const { encode } = require('gpt-tokenizer/encoding/o200k_base');
 const { chunkText, meaningfulContentLength, MIN_MEANINGFUL_CHARS } = require('./features/knowledge/chunk-text');
 const { buildFtsMatchQuery } = require('./features/knowledge/fts-query');
+const { applyNameTags } = require('./features/world-index/name-tags');
 
 // Approximate token count using the same encoding the app uses everywhere else.
 // Computed once at write time and stored, so the UI can read it for free.
@@ -340,6 +341,19 @@ function insertChunksToDb(ownerId, ownerType, vectors) {
         }
     })();
     invalidateVectorCache(vectors.map(v => v.id));
+    tagNamesOnInsert(ownerId, ownerType, vectors);
+}
+
+// Names cost nothing to find, so new passages carry them before any Tagger run.
+function tagNamesOnInsert(ownerId, ownerType, vectors) {
+    try {
+        let workspaceId = null;
+        if (ownerType === 'chat_memory' || ownerType === 'chat_kb') workspaceId = ownerId;
+        else if (ownerType === 'document') workspaceId = db.prepare('SELECT workspaceId FROM documents WHERE id = ?').get(ownerId)?.workspaceId || null;
+        if (workspaceId) applyNameTags(db, workspaceId, vectors.map(v => ({ id: v.id, text: v.text })));
+    } catch (e) {
+        console.error('[Name tags] tagging new passages failed:', e.message);
+    }
 }
 
 function deleteChunksFromDb(ownerId, ownerType, sourceFileName) {
