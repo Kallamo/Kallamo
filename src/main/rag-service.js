@@ -7,6 +7,16 @@ const { encode } = require('gpt-tokenizer/encoding/o200k_base');
 const { chunkText, meaningfulContentLength, MIN_MEANINGFUL_CHARS } = require('./features/knowledge/chunk-text');
 const { buildFtsMatchQuery } = require('./features/knowledge/fts-query');
 const { applyNameTags } = require('./features/world-index/name-tags');
+const retrievalLedger = require('./features/knowledge/retrieval-ledger');
+const {
+    calculateSimilarity,
+    normalizeSparseRanks,
+    queryMentions,
+    fuseAndRank,
+    tagNeedles,
+    buildEntityEvidenceMap,
+    rankLookupChunks
+} = require('./features/knowledge/retrieval-rank');
 
 // Approximate token count using the same encoding the app uses everywhere else.
 // Computed once at write time and stored, so the UI can read it for free.
@@ -88,14 +98,6 @@ function resetLocalEngine() {
 // Current local embedding model identifier (used for version-stamp checks)
 const RAG_MODEL_ID = 'Xenova/multilingual-e5-small';
 const RAG_MODEL_DIM = 384;
-
-function calculateSimilarity(vecA, vecB) {
-    let dotProduct = 0;
-    for (let i = 0; i < vecA.length; i++) {
-        dotProduct += vecA[i] * vecB[i];
-    }
-    return dotProduct;
-}
 
 // --- FILE EXTRACTION ---
 
@@ -342,14 +344,30 @@ function insertChunksToDb(ownerId, ownerType, vectors) {
     })();
     invalidateVectorCache(vectors.map(v => v.id));
     tagNamesOnInsert(ownerId, ownerType, vectors);
+    forgetRetrievalLedger(ownerId, ownerType);
 }
 
 // Names cost nothing to find, so new passages carry them before any Tagger run.
+function workspaceOf(ownerId, ownerType) {
+    if (ownerType === 'chat_memory' || ownerType === 'chat_kb') return ownerId;
+    if (ownerType === 'document') {
+        return db.prepare('SELECT workspaceId FROM documents WHERE id = ?').get(ownerId)?.workspaceId || null;
+    }
+    return null;
+}
+
+// What the retrieval ledger remembers was measured on the old corpus, so new or removed
+// passages retire it.
+function forgetRetrievalLedger(ownerId, ownerType) {
+    try {
+        const workspaceId = workspaceOf(ownerId, ownerType);
+        if (workspaceId) retrievalLedger.clear(workspaceId);
+    } catch (e) { }
+}
+
 function tagNamesOnInsert(ownerId, ownerType, vectors) {
     try {
-        let workspaceId = null;
-        if (ownerType === 'chat_memory' || ownerType === 'chat_kb') workspaceId = ownerId;
-        else if (ownerType === 'document') workspaceId = db.prepare('SELECT workspaceId FROM documents WHERE id = ?').get(ownerId)?.workspaceId || null;
+        const workspaceId = workspaceOf(ownerId, ownerType);
         if (workspaceId) applyNameTags(db, workspaceId, vectors.map(v => ({ id: v.id, text: v.text })));
     } catch (e) {
         console.error('[Name tags] tagging new passages failed:', e.message);
@@ -370,20 +388,10 @@ function deleteChunksFromDb(ownerId, ownerType, sourceFileName) {
             deleteFts.run(id);
         }
     })();
+    forgetRetrievalLedger(ownerId, ownerType);
 }
 
 // --- HYBRID SEARCH ENGINE ---
-
-// Dense is the trusted signal; sparse breaks ties and rescues exact keywords.
-const ALPHA_DENSE = 0.7;
-
-// e5 cosines rarely drop below ~0.70, so the strictness dial maps onto this band.
-const SIMILARITY_FLOOR_MIN = 0.70;
-const SIMILARITY_FLOOR_MAX = 0.88;
-
-// How much of the normal floor a tag-boosted chunk has to clear. Kept as a ratio so
-// it follows the user's strictness setting instead of fighting it.
-const TAGGED_FLOOR_RATIO = 0.7;
 
 // Enough keyword hits to rank the owner's chunks; normalization only needs the top.
 const SPARSE_RESULT_LIMIT = 500;
@@ -419,124 +427,30 @@ function computeSparseNormMap(queryText, ownerIds = null, ownerType = null) {
         }
     }
 
-    // bm25() is negative (lower = better); flip and min-max normalize to match cosine.
-    const sparseNormMap = new Map();
-    if (sparseResults.length > 0) {
-        const relevances = sparseResults.map(r => -r.rank);
-        const minRel = Math.min(...relevances);
-        const maxRel = Math.max(...relevances);
-        const span = maxRel - minRel;
-        sparseResults.forEach((r, i) => {
-            const norm = span > 0 ? (relevances[i] - minRel) / span : 1;
-            sparseNormMap.set(r.chunkId, norm);
-        });
-    }
-    return sparseNormMap;
+    return normalizeSparseRanks(sparseResults);
 }
 
-// The single fusion path for single-owner, multi-owner and in-memory searches.
-function fuseAndRank(queryVector, candidates, sparseNormMap, threshold = 0.3, k = 5, boostMap = null) {
-    const cosineFloor = SIMILARITY_FLOOR_MIN + threshold * (SIMILARITY_FLOOR_MAX - SIMILARITY_FLOOR_MIN);
-    // A chunk carrying an entity the query names is evidence, so it answers to a lower floor;
-    // otherwise a name mentioned in passing is cut before the boost applies.
-    const taggedFloor = cosineFloor * TAGGED_FLOOR_RATIO;
-
-    const fusedResults = [];
-    for (const cand of candidates) {
-        const vector = cand.vector || [];
-        const cosine = vector.length === queryVector.length
-            ? calculateSimilarity(queryVector, vector)
-            : 0;
-        const sparseNorm = (sparseNormMap && sparseNormMap.get(cand.id)) || 0;
-        // Boosted chunks are judged against the lower taggedFloor.
-        const boost = (boostMap && boostMap.get(cand.id)) || 0;
-        const fusionScore = ALPHA_DENSE * cosine + (1 - ALPHA_DENSE) * sparseNorm + boost;
-        fusedResults.push({
-            id: cand.id,
-            source: cand.source,
-            text: cand.text,
-            createdAt: cand.createdAt,
-            memoryBlockId: cand.memoryBlockId,
-            denseScore: cosine,
-            score: cosine,
-            fusionScore,
-            tagBoosted: boost > 0
-        });
-    }
-
-    return fusedResults
-        .filter(r => r.denseScore >= (r.tagBoosted ? taggedFloor : cosineFloor))
-        .sort((a, b) => b.fusionScore - a.fusionScore)
-        .slice(0, k);
-}
-
-// Small against the ~0.70-0.90 cosine band: reorders without swamping similarity.
-const TAG_BOOST = 0.05;
-
-// Unicode-aware whole-word match, so "Ana" doesn't match inside "banana".
-function containsWord(queryLower, term) {
-    if (!term || term.length < 2) return false;
-    const isWord = (ch) => ch !== undefined && /[\p{L}\p{N}]/u.test(ch);
-    let from = 0;
-    while (true) {
-        const i = queryLower.indexOf(term, from);
-        if (i === -1) return false;
-        const before = i > 0 ? queryLower[i - 1] : undefined;
-        const after = i + term.length < queryLower.length ? queryLower[i + term.length] : undefined;
-        if (!isWord(before) && !isWord(after)) return true;
-        from = i + 1;
-    }
-}
-
-// Matches the whole value or any token of 4+ letters, skipping particles like "de".
-function queryMentions(queryLower, needleLower) {
-    if (!needleLower || needleLower.length < 2) return false;
-    if (containsWord(queryLower, needleLower)) return true;
-    const tokens = needleLower.split(/[^\p{L}\p{N}]+/u).filter(t => t.length >= 4);
-    for (const t of tokens) {
-        if (containsWord(queryLower, t)) return true;
-    }
-    return false;
-}
-
-// Fixed boost per chunk, not scaled by match count.
-function computeTagBoostMap(queryText, ownerId, ownerType) {
-    return computeTagBoostMapForOwners(queryText, [ownerId], ownerType);
+function computeTagBoostMap(queryText, ownerId, ownerType, totalChunks = 0) {
+    return computeTagBoostMapForOwners(queryText, [ownerId], ownerType, totalChunks);
 }
 
 // Same as computeTagBoostMap but across several owners (e.g. the sibling chapters of a
 // Writing Desk document), so cross-chapter retrieval also rides the world-index tags.
-function computeTagBoostMapForOwners(queryText, ownerIds, ownerType) {
-    const q = String(queryText || '').toLowerCase();
-    const boost = new Map();
-    if (!q.trim() || !ownerIds || !ownerIds.length) return boost;
+function computeTagBoostMapForOwners(queryText, ownerIds, ownerType, totalChunks = 0) {
+    if (!ownerIds || !ownerIds.length) return new Map();
     const placeholders = ownerIds.map(() => '?').join(',');
     let rows = [];
     try {
         rows = db.prepare(
             `SELECT ct.chunkId AS chunkId, ct.tag AS tag, ct.entity AS entity,
-                    e.canonicalName AS canonicalName, e.aliases AS aliases
+                    e.type AS type, e.canonicalName AS canonicalName, e.aliases AS aliases
              FROM chunk_tags ct
              JOIN knowledge_chunks kc ON ct.chunkId = kc.id
              LEFT JOIN entities e ON ct.entity = e.id
              WHERE kc.ownerId IN (${placeholders}) AND kc.ownerType = ?`
         ).all(...ownerIds, ownerType);
-    } catch (e) { return boost; }
-    for (const r of rows) {
-        // When entity is a canonical id, match against its name + aliases; otherwise
-        // fall back to the literal text (legacy/bootstrap rows that predate the registry).
-        let needles;
-        if (r.canonicalName) {
-            needles = [r.canonicalName];
-            try { const a = JSON.parse(r.aliases); if (Array.isArray(a)) needles.push(...a); } catch (e) { }
-        } else {
-            needles = [r.entity || r.tag || ''];
-        }
-        for (const n of needles) {
-            if (queryMentions(q, String(n).toLowerCase().trim())) { boost.set(r.chunkId, TAG_BOOST); break; }
-        }
-    }
-    return boost;
+    } catch (e) { return new Map(); }
+    return buildEntityEvidenceMap(queryText, rows, { totalChunks });
 }
 
 // From tags on this owner's chunks, not the whole registry, so it reflects what is indexed here.
@@ -618,14 +532,23 @@ function invalidateVectorCache(ids = null) {
     for (const id of ids) vectorCache.delete(id);
 }
 
-// A small bonus for recent chunks, so ties in similarity favour the latest scenes.
-const LOOKUP_RECENCY_WEIGHT = 0.02;
+// Every surface the Tagger marks, so an entity's dossier is not limited to chat archives.
+const WORKSPACE_CHUNK_SCOPE = `((kc.ownerId = ? AND kc.ownerType IN ('chat_memory', 'chat_kb'))
+     OR (kc.ownerType = 'document' AND kc.ownerId IN (SELECT id FROM documents WHERE workspaceId = ?)))`;
+
+function chunkScope(ownerId, ownerType, scope) {
+    return scope === 'workspace'
+        ? { where: WORKSPACE_CHUNK_SCOPE, params: [ownerId, ownerId] }
+        : { where: '(kc.ownerId = ? AND kc.ownerType = ?)', params: [ownerId, ownerType] };
+}
 
 // No similarity floor: returns the chunks tagged with a known entity, ranked by `queryVector`
-// (else recency) and capped by `limit`. `idsOnly` skips the chunks.
-function lookupEntityChunks(nameOrAlias, ownerId, ownerType, { queryVector = null, limit = null, idsOnly = false } = {}) {
+// (else recency) and capped by `limit`. `idsOnly` skips the chunks. With scope 'workspace',
+// `ownerId` is the workspace and `ownerType` is ignored.
+function lookupEntityChunks(nameOrAlias, ownerId, ownerType, { queryVector = null, limit = null, idsOnly = false, scope = 'owner' } = {}) {
     const needle = String(nameOrAlias || '').toLowerCase().trim();
     if (!needle) return { chunks: [], entityIds: [], total: 0 };
+    const { where, params } = chunkScope(ownerId, ownerType, scope);
     let tagRows = [];
     try {
         tagRows = db.prepare(
@@ -634,21 +557,14 @@ function lookupEntityChunks(nameOrAlias, ownerId, ownerType, { queryVector = nul
              FROM chunk_tags ct
              JOIN knowledge_chunks kc ON ct.chunkId = kc.id
              LEFT JOIN entities e ON ct.entity = e.id
-             WHERE kc.ownerId = ? AND kc.ownerType = ? AND kc.enabled = 1`
-        ).all(ownerId, ownerType);
+             WHERE ${where} AND kc.enabled = 1`
+        ).all(...params);
     } catch (e) { return { chunks: [], entityIds: [], total: 0 }; }
 
     const matchedTags = [];
     const entityIds = new Set();
     for (const r of tagRows) {
-        let names;
-        if (r.canonicalName) {
-            names = [r.canonicalName];
-            try { const a = JSON.parse(r.aliases); if (Array.isArray(a)) names.push(...a); } catch (e) { }
-        } else {
-            names = [r.entity || r.tag || ''];
-        }
-        const hit = names.some(n => {
+        const hit = tagNeedles(r).some(n => {
             const nl = String(n).toLowerCase().trim();
             if (!nl) return false;
             return nl === needle || queryMentions(needle, nl) || queryMentions(nl, needle);
@@ -664,35 +580,20 @@ function lookupEntityChunks(nameOrAlias, ownerId, ownerType, { queryVector = nul
     try {
         const clause = matchedTags.map(() => '(ct.tag = ? AND ct.entity IS ?)').join(' OR ');
         rows = db.prepare(
-            `SELECT DISTINCT kc.id AS id, kc.source AS source, kc.text AS text,
+            `SELECT DISTINCT kc.id AS id, kc.source AS source, kc.text AS text, kc.ownerType AS ownerType,
                     kc.memoryBlockId AS memoryBlockId, kc.createdAt AS createdAt,
                     ${VECTOR_FINGERPRINT_SQL} AS fingerprint
              FROM chunk_tags ct
              JOIN knowledge_chunks kc ON ct.chunkId = kc.id
-             WHERE kc.ownerId = ? AND kc.ownerType = ? AND kc.enabled = 1 AND (${clause})`
-        ).all(ownerId, ownerType, ...matchedTags.flatMap(t => [t.tag, t.entity]));
+             WHERE ${where} AND kc.enabled = 1 AND (${clause})`
+        ).all(...params, ...matchedTags.flatMap(t => [t.tag, t.entity]));
     } catch (e) { return { chunks: [], entityIds: Array.from(entityIds), total: 0 }; }
 
-    let ranked;
-    if (Array.isArray(queryVector) && queryVector.length) {
-        const vectors = cachedVectors(rows);
-        const times = rows.map(r => Number(r.createdAt) || 0);
-        const newest = times.reduce((max, t) => Math.max(max, t), 0);
-        const oldest = times.reduce((min, t) => Math.min(min, t), newest);
-        ranked = rows.map(r => {
-            const vector = vectors.get(r.id);
-            const cosine = vector && vector.length === queryVector.length ? calculateSimilarity(queryVector, vector) : 0;
-            const recency = newest > oldest ? ((Number(r.createdAt) || 0) - oldest) / (newest - oldest) : 0;
-            return { ...r, score: cosine + LOOKUP_RECENCY_WEIGHT * recency };
-        }).sort((a, b) => b.score - a.score);
-    } else {
-        ranked = rows
-            .map(r => ({ ...r, score: 0 }))
-            .sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
-    }
+    const vectors = Array.isArray(queryVector) && queryVector.length ? cachedVectors(rows) : null;
+    const ranked = rankLookupChunks(rows, queryVector, id => vectors && vectors.get(id));
     const capped = Number.isInteger(limit) && limit > 0 ? ranked.slice(0, limit) : ranked;
     return {
-        chunks: capped.map(({ id, source, text, memoryBlockId, score }) => ({ id, source, text, memoryBlockId, score })),
+        chunks: capped.map(({ id, source, text, ownerType: chunkOwnerType, memoryBlockId, score }) => ({ id, source, text, ownerType: chunkOwnerType, memoryBlockId, score })),
         entityIds: Array.from(entityIds),
         total: rows.length
     };
@@ -723,7 +624,7 @@ async function executeHybridSearch(queryText, ownerId, ownerType, threshold = 0.
         if (candidates.length === 0) return [];
         const queryVector = await generateEmbeddingVector(queryText, true);
         const sparseNormMap = computeSparseNormMap(queryText, [ownerId], ownerType);
-        const boostMap = applyTagBoost ? computeTagBoostMap(queryText, ownerId, ownerType) : null;
+        const boostMap = applyTagBoost ? computeTagBoostMap(queryText, ownerId, ownerType, candidates.length) : null;
         return fuseAndRank(queryVector, candidates, sparseNormMap, threshold, k, boostMap);
     } catch (error) {
         console.error(`Error in executeHybridSearch for owner ${ownerId}:`, error);
@@ -738,7 +639,7 @@ async function executeMultiOwnerSearch(queryText, ownerIds, ownerType, threshold
         if (candidates.length === 0) return [];
         const queryVector = await generateEmbeddingVector(queryText, true);
         const sparseNormMap = computeSparseNormMap(queryText, ownerIds, ownerType);
-        const boostMap = applyTagBoost ? computeTagBoostMapForOwners(queryText, ownerIds, ownerType) : null;
+        const boostMap = applyTagBoost ? computeTagBoostMapForOwners(queryText, ownerIds, ownerType, candidates.length) : null;
         return fuseAndRank(queryVector, candidates, sparseNormMap, threshold, k, boostMap);
     } catch (error) {
         console.error(`Error in executeMultiOwnerSearch for owners [${(ownerIds || []).join(',')}]:`, error);
@@ -746,50 +647,52 @@ async function executeMultiOwnerSearch(queryText, ownerIds, ownerType, threshold
     }
 }
 
-async function searchKnowledgeBase(queryText, profileId) {
+// Strictness and Top-K as the user set them. `k` may be raised by the caller when the
+// payload budget has room for more passages; it is never lowered below this.
+function readRetrievalSettings(topKKey, fallbackK) {
     let threshold = 0.3;
-    let k = 5;
+    let k = fallbackK;
     try {
         const rowAdvanced = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
         if (rowAdvanced) {
             const advanced = JSON.parse(rowAdvanced.value);
             threshold = parseFloat(advanced.similarity) || 0.3;
-            k = parseInt(advanced.topKKB, 10) || 5;
+            k = parseInt(advanced[topKKey], 10) || fallbackK;
         }
     } catch (e) { }
-
-    return await executeHybridSearch(queryText, profileId, 'profile_kb', threshold, k);
+    return { threshold, k };
 }
 
-async function searchChatKnowledgeBase(queryText, chatId) {
-    let threshold = 0.3;
-    let k = 5;
-    try {
-        const rowAdvanced = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
-        if (rowAdvanced) {
-            const advanced = JSON.parse(rowAdvanced.value);
-            threshold = parseFloat(advanced.similarity) || 0.3;
-            k = parseInt(advanced.topKKB, 10) || 5;
-        }
-    } catch (e) { }
-
-    return await executeHybridSearch(queryText, chatId, 'chat_kb', threshold, k);
+function resolveTopK(configured, override) {
+    const requested = parseInt(override, 10);
+    return Number.isInteger(requested) && requested > 0 ? Math.max(configured, requested) : configured;
 }
 
-async function searchChatMemories(queryText, chatId) {
-    let threshold = 0.3;
-    let k = 5;
-    try {
-        const rowAdvanced = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
-        if (rowAdvanced) {
-            const advanced = JSON.parse(rowAdvanced.value);
-            threshold = parseFloat(advanced.similarity) || 0.3;
-            k = parseInt(advanced.topKMemory, 10) || 8;
-        }
-    } catch (e) { }
+async function searchKnowledgeBase(queryText, profileId, { k: topK = null } = {}) {
+    const { threshold, k } = readRetrievalSettings('topKKB', 5);
+    return await executeHybridSearch(queryText, profileId, 'profile_kb', threshold, resolveTopK(k, topK));
+}
+
+// Workspace files carry world-index tags, so the caller may ask for the same evidence
+// boost the archive gets. Profile files are never tagged, so there is nothing to boost there.
+async function searchChatKnowledgeBase(queryText, chatId, { k: topK = null, boost = false } = {}) {
+    const { threshold, k } = readRetrievalSettings('topKKB', 5);
+    return await executeHybridSearch(queryText, chatId, 'chat_kb', threshold, resolveTopK(k, topK), boost);
+}
+
+// Passages of the documents linked to an entity, under the user's own strictness and Top-K.
+async function searchLoreDocuments(queryText, documentIds, { k: topK = null } = {}) {
+    const ids = Array.isArray(documentIds) ? documentIds.filter(Boolean) : [];
+    if (!ids.length) return [];
+    const { threshold, k } = readRetrievalSettings('topKKB', 5);
+    return await executeMultiOwnerSearch(queryText, ids, 'document', threshold, resolveTopK(k, topK), true);
+}
+
+async function searchChatMemories(queryText, chatId, { k: topK = null } = {}) {
+    const { threshold, k } = readRetrievalSettings('topKMemory', 8);
 
     // Chat memory is the world-indexed tier: enable the dynamic-tag boost.
-    const results = await executeHybridSearch(queryText, chatId, 'chat_memory', threshold, k, true);
+    const results = await executeHybridSearch(queryText, chatId, 'chat_memory', threshold, resolveTopK(k, topK), true);
     // Attach each surviving chunk's tags for debug visibility (which tags it carries).
     try {
         const tagStmt = db.prepare(
@@ -888,6 +791,7 @@ module.exports = {
     searchChatMemories,
     executeHybridSearch,
     executeMultiOwnerSearch,
+    searchLoreDocuments,
     fuseAndRank,
     getWorldVocabulary,
     lookupEntityChunks,
