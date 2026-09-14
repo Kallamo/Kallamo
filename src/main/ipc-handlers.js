@@ -4150,7 +4150,7 @@ ipcMain.handle('get-settings', async () => {
 
     const defaultSettings = {
       interface: { fontFamily: 'sans', fontSize: 'medium', layout: 'bubbles', blur: true, accentColor: '#FBCB2D', codeTheme: 'github-dark', lineNumbers: false },
-      advanced: { chunkSize: 500, similarity: 0.3, topKKB: 5, topKMemory: 8, executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, archiveSummarization: true, systemOutputLanguage: 'English', taggerMode: 'inherit-system', summarizerMode: 'inherit-system', retrievalPlannerMode: 'profile' }
+      advanced: { chunkSize: 500, similarity: 0.3, topKKB: 5, topKMemory: 8, executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, archiveSummarization: true, systemOutputLanguage: 'English', taggerMode: 'inherit-system', summarizerMode: 'inherit-system', retrievalPlannerMode: 'profile', agenticGate: 'auto', agenticToolProtocol: 'auto' }
     };
 
     return {

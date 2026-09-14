@@ -98,6 +98,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [retrievalPlannerMode, setRetrievalPlannerMode] = useState(settings.advanced.retrievalPlannerMode || 'profile');
   const [retrievalPlannerApiProfileId, setRetrievalPlannerApiProfileId] = useState(settings.advanced.retrievalPlannerApiProfileId || '');
   const [retrievalPlannerModelName, setRetrievalPlannerModelName] = useState(settings.advanced.retrievalPlannerModelName || '');
+  const [agenticGate, setAgenticGate] = useState(settings.advanced.agenticGate || 'auto');
+  const [agenticToolProtocol, setAgenticToolProtocol] = useState(settings.advanced.agenticToolProtocol || 'auto');
   const [allowAiEntityCreation, setAllowAiEntityCreation] = useState(settings.advanced.allowAiEntityCreation || false);
   const [archiveSummarization, setArchiveSummarization] = useState(settings.advanced.archiveSummarization !== false);
   const [streamingEnabled, setStreamingEnabled] = useState(settings.advanced.streaming !== false);
@@ -137,7 +139,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug,
     embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage,
     taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName,
-    retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, allowAiEntityCreation, archiveSummarization
+    retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, agenticGate, agenticToolProtocol, allowAiEntityCreation, archiveSummarization
   });
 
   useEffect(() => {
@@ -146,9 +148,9 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug,
       embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage,
       taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName,
-      retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, allowAiEntityCreation, archiveSummarization
+      retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, agenticGate, agenticToolProtocol, allowAiEntityCreation, archiveSummarization
     };
-  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, smartTypography, streamingEnabled, chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage, taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName, retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, allowAiEntityCreation, archiveSummarization]);
+  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, smartTypography, streamingEnabled, chunkSize, similarity, topKKB, topKMemory, executionDevice, ragDebug, agenticDebug, tokenDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage, taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName, retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, agenticGate, agenticToolProtocol, allowAiEntityCreation, archiveSummarization]);
 
   // Handle immediate save for selects and color choices
   const updateSetting = async (category, key, value) => {
@@ -185,6 +187,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       if (key === 'retrievalPlannerMode') setRetrievalPlannerMode(value);
       if (key === 'retrievalPlannerApiProfileId') { setRetrievalPlannerApiProfileId(value); setRetrievalPlannerModelName(''); }
       if (key === 'retrievalPlannerModelName') setRetrievalPlannerModelName(value);
+      if (key === 'agenticGate') setAgenticGate(value);
+      if (key === 'agenticToolProtocol') setAgenticToolProtocol(value);
     }
 
     const current = settingsRef.current;
@@ -228,7 +232,9 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         summarizerModelName: key === 'summarizerModelName' ? value : (key === 'summarizerApiProfileId' ? '' : current.summarizerModelName),
         retrievalPlannerMode: key === 'retrievalPlannerMode' ? value : current.retrievalPlannerMode,
         retrievalPlannerApiProfileId: key === 'retrievalPlannerApiProfileId' ? value : current.retrievalPlannerApiProfileId,
-        retrievalPlannerModelName: key === 'retrievalPlannerModelName' ? value : (key === 'retrievalPlannerApiProfileId' ? '' : current.retrievalPlannerModelName)
+        retrievalPlannerModelName: key === 'retrievalPlannerModelName' ? value : (key === 'retrievalPlannerApiProfileId' ? '' : current.retrievalPlannerModelName),
+        agenticGate: key === 'agenticGate' ? value : current.agenticGate,
+        agenticToolProtocol: key === 'agenticToolProtocol' ? value : current.agenticToolProtocol
       }
     };
 
@@ -293,7 +299,9 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
           summarizerModelName: current.summarizerModelName,
           retrievalPlannerMode: current.retrievalPlannerMode,
           retrievalPlannerApiProfileId: current.retrievalPlannerApiProfileId,
-          retrievalPlannerModelName: current.retrievalPlannerModelName
+          retrievalPlannerModelName: current.retrievalPlannerModelName,
+          agenticGate: current.agenticGate,
+          agenticToolProtocol: current.agenticToolProtocol
         }
       };
       await handleSaveSettings(newSettings);
@@ -1255,6 +1263,30 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                                 </div>
                                 <label className={`relative inline-flex items-center shrink-0 ${taggerMode !== 'disabled' ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
                                   <input type="checkbox" checked={allowAiEntityCreation} disabled={taggerMode === 'disabled'} onChange={(event) => updateSetting('advanced', 'allowAiEntityCreation', event.target.checked)} className="sr-only peer" />
+                                  <div className="w-7 h-4 bg-gray-700 rounded-full peer peer-focus-visible:ring-2 peer-focus-visible:ring-accent/60 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
+                                </label>
+                              </div>
+                            )}
+                            {definition.id === 'retrievalPlanner' && (
+                              <div className={`flex items-center justify-between gap-4 rounded-lg bg-[#021015] px-3.5 py-3 ${retrievalPlannerMode === 'disabled' ? 'opacity-50' : ''}`}>
+                                <div className="min-w-0">
+                                  <span className="block text-xs font-bold text-gray-200">Plan every message</span>
+                                  <p className="mt-1 text-[0.6875rem] leading-relaxed text-gray-500">By default a short continuation with no name and no question skips the planner and uses the free search alone. Turn this on to research every message.</p>
+                                </div>
+                                <label className={`relative inline-flex items-center shrink-0 ${retrievalPlannerMode !== 'disabled' ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
+                                  <input type="checkbox" checked={agenticGate === 'always'} disabled={retrievalPlannerMode === 'disabled'} onChange={(event) => updateSetting('advanced', 'agenticGate', event.target.checked ? 'always' : 'auto')} className="sr-only peer" />
+                                  <div className="w-7 h-4 bg-gray-700 rounded-full peer peer-focus-visible:ring-2 peer-focus-visible:ring-accent/60 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
+                                </label>
+                              </div>
+                            )}
+                            {definition.id === 'retrievalPlanner' && (
+                              <div className={`flex items-center justify-between gap-4 rounded-lg bg-[#021015] px-3.5 py-3 ${retrievalPlannerMode === 'disabled' ? 'opacity-50' : ''}`}>
+                                <div className="min-w-0">
+                                  <span className="block text-xs font-bold text-gray-200">Native tool calling</span>
+                                  <p className="mt-1 text-[0.6875rem] leading-relaxed text-gray-500">Uses the provider's own tool calling when the connection and model support it, and falls back to the text protocol by itself when they do not. Turn this off to always use the text protocol.</p>
+                                </div>
+                                <label className={`relative inline-flex items-center shrink-0 ${retrievalPlannerMode !== 'disabled' ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
+                                  <input type="checkbox" checked={agenticToolProtocol !== 'text'} disabled={retrievalPlannerMode === 'disabled'} onChange={(event) => updateSetting('advanced', 'agenticToolProtocol', event.target.checked ? 'auto' : 'text')} className="sr-only peer" />
                                   <div className="w-7 h-4 bg-gray-700 rounded-full peer peer-focus-visible:ring-2 peer-focus-visible:ring-accent/60 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
                                 </label>
                               </div>

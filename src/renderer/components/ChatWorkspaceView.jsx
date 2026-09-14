@@ -202,8 +202,43 @@ export default function ChatWorkspaceView() {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
+  const formatTrajectory = (trajectory) => {
+    if (!trajectory) return '';
+    const lines = [];
+    if (trajectory.gate) lines.push(`Path: ${trajectory.gate.path} (${trajectory.gate.reason})`);
+    if (trajectory.protocol) {
+      const fallback = trajectory.protocolFallback ? `, fell back from native: ${trajectory.protocolFallback}` : '';
+      lines.push(`Protocol: ${trajectory.finalProtocol || trajectory.protocol}${fallback}`);
+    }
+    if (trajectory.plannerWindow) {
+      const ratio = trajectory.plannerWindow.tokenRatio ? `, token estimate x${Number(trajectory.plannerWindow.tokenRatio).toFixed(2)}` : '';
+      lines.push(`Planner window: ${trajectory.plannerWindow.limit} tokens (${trajectory.plannerWindow.source}), ${trajectory.plannerWindow.outputTokens} reserved for its reply${ratio}`);
+    }
+    if (trajectory.seed) {
+      const seedCalls = (trajectory.seed.calls || []).map(call => `${call.tool} -> ${call.hits}`).join(', ');
+      lines.push(`Pre-search: ${trajectory.seed.items} passage(s) [${seedCalls}]`);
+    }
+    for (const turn of trajectory.turns || []) {
+      const calls = (turn.calls || []).length
+        ? turn.calls.map(call => `${call.tool}("${call.arg}") -> ${call.hits}${call.status === 'ran' ? '' : ` [${call.status}]`}`).join('; ')
+        : (turn.finished ? 'finish' : 'no call');
+      const usage = turn.providerUsage;
+      const reported = usage && usage.inputTokens != null
+        ? ` | provider: ${usage.inputTokens} in${usage.cacheReadTokens != null ? `, ${usage.cacheReadTokens} read from cache` : ''}${usage.cacheWriteTokens ? `, ${usage.cacheWriteTokens} written to cache` : ''}`
+        : '';
+      const learned = turn.tokenRatio ? ` | learned x${Number(turn.tokenRatio).toFixed(2)}` : '';
+      lines.push(`Turn ${turn.turn}: ${calls} | +${turn.newItems} new | ${turn.inputTokens} in / ${turn.outputTokens} out${reported}${learned}`);
+    }
+    if (trajectory.stopped) lines.push(`Stopped: ${trajectory.stopped}`);
+    if (trajectory.packing) {
+      const pack = trajectory.packing;
+      lines.push(`Packed ${pack.kept}/${pack.total} items into ${pack.budget} tokens (${pack.dropped} dropped, ${pack.truncated} cut)`);
+    }
+    return lines.join('\n');
+  };
+
   const handleCopyRagContext = (id, debugObj) => {
-    const textToCopy = `### Agentic RAG Response\n${debugObj.agenticRagResponse || ''}\n\n### Context Gathered\n${debugObj.agenticRagContextGathered || ''}`;
+    const textToCopy = `### Agentic RAG Response\n${debugObj.agenticRagResponse || ''}\n\n### Trajectory\n${formatTrajectory(debugObj.agenticTrajectory)}\n\n### Context Gathered\n${debugObj.agenticRagContextGathered || ''}`;
     copyText(textToCopy);
     setCopiedRagId(id);
     setTimeout(() => setCopiedRagId(null), 2000);
@@ -1151,7 +1186,7 @@ export default function ChatWorkspaceView() {
                               )}
 
                               {/* Agentic RAG Debug Header */}
-                              {settings.advanced.agenticDebug && debugObj?.agenticRagResponse && (
+                              {settings.advanced.agenticDebug && (debugObj?.agenticRagResponse || debugObj?.agenticTrajectory) && (
                                 <div className="mb-1 ml-1.5 select-none">
                                   <div className="flex items-center space-x-2">
                                     <button
@@ -1173,10 +1208,18 @@ export default function ChatWorkspaceView() {
                                   </div>
                                   {expandedAgenticRag[msg.id] && (
                                     <div className="mt-1 p-3 bg-[#051116] border border-gray-800 rounded-lg text-[10px] font-mono text-gray-400 max-w-xl max-h-72 overflow-y-auto custom-scrollbar shadow-md animate-in fade-in duration-200 space-y-3">
-                                      <div>
-                                        <div className="text-accent font-bold uppercase tracking-wider text-[8px] mb-1">Agentic RAG Response</div>
-                                        <div className="pl-2 border-l border-accent/20 text-gray-300 whitespace-pre-wrap">{debugObj.agenticRagResponse}</div>
-                                      </div>
+                                      {debugObj.agenticRagResponse && (
+                                        <div>
+                                          <div className="text-accent font-bold uppercase tracking-wider text-[8px] mb-1">Agentic RAG Response</div>
+                                          <div className="pl-2 border-l border-accent/20 text-gray-300 whitespace-pre-wrap">{debugObj.agenticRagResponse}</div>
+                                        </div>
+                                      )}
+                                      {debugObj.agenticTrajectory && (
+                                        <div>
+                                          <div className="text-gray-500 font-bold uppercase tracking-wider text-[8px] mb-1">Trajectory</div>
+                                          <div className="pl-2 border-l border-gray-800 text-gray-400 whitespace-pre-wrap">{formatTrajectory(debugObj.agenticTrajectory)}</div>
+                                        </div>
+                                      )}
                                       {debugObj.agenticRagContextGathered && (
                                         <div>
                                           <div className="text-gray-500 font-bold uppercase tracking-wider text-[8px] mb-1">Context Gathered</div>
