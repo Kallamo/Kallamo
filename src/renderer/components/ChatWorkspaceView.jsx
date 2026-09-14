@@ -211,8 +211,10 @@ export default function ChatWorkspaceView() {
       lines.push(`Protocol: ${trajectory.finalProtocol || trajectory.protocol}${fallback}`);
     }
     if (trajectory.plannerWindow) {
-      const ratio = trajectory.plannerWindow.tokenRatio ? `, token estimate x${Number(trajectory.plannerWindow.tokenRatio).toFixed(2)}` : '';
-      lines.push(`Planner window: ${trajectory.plannerWindow.limit} tokens (${trajectory.plannerWindow.source}), ${trajectory.plannerWindow.outputTokens} reserved for its reply${ratio}`);
+      const plannerWindow = trajectory.plannerWindow;
+      const configured = plannerWindow.configured && plannerWindow.configured !== plannerWindow.limit ? ` of ${plannerWindow.configured} configured` : '';
+      const ratio = Number(plannerWindow.tokenRatio) > 1 ? `, corrected for a measured x${Number(plannerWindow.tokenRatio).toFixed(2)} token count` : '';
+      lines.push(`Planner window: ${plannerWindow.limit} tokens${configured} (${plannerWindow.source}), ${plannerWindow.outputTokens} reserved for its reply${ratio}`);
     }
     if (trajectory.seed) {
       const seedCalls = (trajectory.seed.calls || []).map(call => `${call.tool} -> ${call.hits}`).join(', ');
