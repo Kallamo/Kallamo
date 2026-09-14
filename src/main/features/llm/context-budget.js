@@ -11,6 +11,14 @@ const TRUNCATION_MARKER = '\n[...cut to fit the context budget]';
 // Retrieval never gets less than this share, so neither side can starve the other.
 const RETRIEVAL_GUARANTEED_SHARE = 0.4;
 
+// What one retrieved passage costs once framed and widened to its neighbours. Used only
+// to decide how many to ask for; packContextItems is what enforces the budget.
+const RETRIEVAL_ITEM_TOKENS = 350;
+
+// Past this, more passages stopped bringing new answers into the context and only cost
+// tokens: measured on the annotated set, every question that could be answered already was.
+const RETRIEVAL_TOP_K_MAX = 20;
+
 function truncateToTokens(text, maxTokens, estimate = estimateTokens) {
   const source = String(text || '');
   const limit = Math.floor(Number(maxTokens) || 0);
@@ -88,6 +96,19 @@ function renderContextSections(kept, sectionOrder = [], separator = '\n\n') {
     .join(separator);
 }
 
+// The configured Top-K is a floor and is never lowered. Retrieval asks for more passages
+// only when the budget can hold them, so a small context window keeps the cost it has today.
+function retrievalTopK(configuredK, budgetTokens, {
+  tiers = 1,
+  itemTokens = RETRIEVAL_ITEM_TOKENS,
+  max = RETRIEVAL_TOP_K_MAX
+} = {}) {
+  const configured = Math.max(1, Math.floor(Number(configuredK) || 1));
+  const budget = Math.max(0, Math.floor(Number(budgetTokens) || 0));
+  const room = Math.floor(budget / Math.max(1, tiers) / Math.max(1, itemTokens));
+  return Math.max(configured, Math.min(Math.max(configured, max), room));
+}
+
 function splitRetrievalBudget({ availableTokens, historyTokens, share = RETRIEVAL_GUARANTEED_SHARE }) {
   const available = Math.max(0, Math.floor(Number(availableTokens) || 0));
   const history = Math.max(0, Math.floor(Number(historyTokens) || 0));
@@ -117,6 +138,9 @@ function selectRecentWithinBudget(messages, budgetTokens, {
 module.exports = {
   ITEM_OVERHEAD_TOKENS,
   RETRIEVAL_GUARANTEED_SHARE,
+  RETRIEVAL_ITEM_TOKENS,
+  RETRIEVAL_TOP_K_MAX,
+  retrievalTopK,
   TRUNCATION_MARKER,
   truncateToTokens,
   packContextItems,

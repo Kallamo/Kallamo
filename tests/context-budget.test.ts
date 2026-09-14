@@ -7,6 +7,9 @@ const {
   renderContextSections,
   selectRecentWithinBudget,
   splitRetrievalBudget,
+  retrievalTopK,
+  RETRIEVAL_ITEM_TOKENS,
+  RETRIEVAL_TOP_K_MAX,
   truncateToTokens
 } = require('../src/main/features/llm/context-budget');
 
@@ -82,5 +85,20 @@ describe('retrieval context budget', () => {
     const cut = truncateToTokens('alpha beta gamma delta '.repeat(200), 50, estimate);
     expect(estimate(cut)).toBeLessThanOrEqual(50);
     expect(cut).toMatch(/cut to fit the context budget/);
+  });
+
+  test('keeps the configured Top-K when the budget has no room for more', () => {
+    expect(retrievalTopK(5, 0)).toBe(5);
+    expect(retrievalTopK(5, RETRIEVAL_ITEM_TOKENS * 2)).toBe(5);
+  });
+
+  test('asks for more passages when the budget can hold them', () => {
+    expect(retrievalTopK(5, RETRIEVAL_ITEM_TOKENS * 12)).toBe(12);
+    expect(retrievalTopK(5, RETRIEVAL_ITEM_TOKENS * 36, { tiers: 3 })).toBe(12);
+  });
+
+  test('never goes past the ceiling, and never below what the user asked for', () => {
+    expect(retrievalTopK(5, RETRIEVAL_ITEM_TOKENS * 500)).toBe(RETRIEVAL_TOP_K_MAX);
+    expect(retrievalTopK(RETRIEVAL_TOP_K_MAX + 10, 0)).toBe(RETRIEVAL_TOP_K_MAX + 10);
   });
 });
