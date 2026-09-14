@@ -5,6 +5,7 @@ const { fetch: undiciFetch, Agent } = require('undici');
 const { getResponseMetadata } = require('./response-metadata');
 const { openAiResponseFormat, applyBedrockStructuredOutput } = require('./structured-output');
 const { assertPayloadWithinLimit, normalizeMaxApiPayload } = require('./payload-budget');
+const { supportsNativeTools, applyConversation, applyCacheBreakpoint, readToolReply, readUsage, flattenConversation } = require('./tool-conversation');
 
 function getDatabase() {
     return require('../../database');
@@ -413,11 +414,14 @@ function parseStreamChunk(obj, provider) {
 
 // --- CORE API REQUESTS ---
 
-async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistory = [], newPrompt = '', temperature, maxTokens, maxPayloadTokens, payloadBreakdown = null, manualMode, manualJson, attachedImages, stream = false, jsonMode = false, jsonSchema = null }, dependencies = {}) {
+async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistory = [], newPrompt = '', temperature, maxTokens, maxPayloadTokens, payloadBreakdown = null, manualMode, manualJson, attachedImages, stream = false, jsonMode = false, jsonSchema = null, conversation = null, tools = null, cachePrefix = false }, dependencies = {}) {
     const db = dependencies.database || getDatabase();
     const resolveVariables = createPromptVariableResolver(db);
     systemPrompt = resolveVariables(systemPrompt);
     newPrompt = resolveVariables(newPrompt);
+    if (Array.isArray(conversation)) {
+        conversation = conversation.map(entry => (entry.role === 'user' ? { ...entry, text: resolveVariables(entry.text) } : entry));
+    }
 
     const apiProfile = db.prepare('SELECT * FROM api_profiles WHERE id = ?').get(apiProfileId);
     if (!apiProfile) {
@@ -453,7 +457,7 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
         limitSource: payloadLimit.source,
         breakdown: payloadBreakdown,
         systemPrompt,
-        chatHistory: cleanHistory,
+        chatHistory: Array.isArray(conversation) ? flattenConversation(conversation, tools) : cleanHistory,
         newPrompt,
         attachedImageCount: attachedImages?.length || 0,
         outputTokens: requestedOutputTokens(maxTokens)
@@ -745,6 +749,17 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
             throw new Error(`The provider '${provider}' is not supported yet.`);
     }
 
+    if (Array.isArray(conversation)) {
+        requestBody = applyConversation(requestBody, provider, model, { systemPrompt, conversation, tools });
+    }
+    // Marking the end of the request lets a growing transcript be read back from cache each turn.
+    // Bedrock's InvokeModel rejects the automatic field, and a custom Anthropic base URL may know neither form.
+    if (cachePrefix && provider === 'anthropic' && !baseUrl) {
+        requestBody.cache_control = { type: 'ephemeral' };
+    } else if (cachePrefix && provider === 'aws bedrock') {
+        requestBody = applyCacheBreakpoint(requestBody, provider, model);
+    }
+
     // Bedrock has no text SSE; streaming falls back before reaching here.
     if (stream) {
         if (provider === 'google ai' || provider === 'vertex ai') {
@@ -815,6 +830,39 @@ async function sendApiRequest(params) {
         console.error("API Request Failed:", error);
         throw error;
     }
+}
+
+// The retrieval planner's transport. It carries either the text protocol or a native tool
+// conversation, and returns what the provider reports about token use, so the effect of
+// caching is read from the provider instead of assumed.
+async function sendAgentRequest(params) {
+    const { endpoint, requestHeaders, requestBodyPayload, provider } = await buildRequest(params);
+    const response = await undiciFetch(endpoint, {
+        method: "POST",
+        headers: requestHeaders,
+        body: requestBodyPayload,
+        signal: params.abortSignal,
+        dispatcher: generationDispatcher
+    });
+    if (!response.ok) {
+        const error = new Error(await readHttpErrorMessage(response));
+        error.status = response.status;
+        throw error;
+    }
+    const data = await response.json();
+    const content = parseResponse(data, provider);
+    return {
+        content,
+        ...readToolReply(provider, data),
+        usage: readUsage(provider, data),
+        ...getResponseMetadata(data, provider),
+        provider
+    };
+}
+
+function nativeToolSupport({ apiProfileId, model }, dependencies = {}) {
+    const apiProfile = loadApiProfile(apiProfileId, dependencies);
+    return Boolean(apiProfile) && supportsNativeTools(apiProfile.provider, model);
 }
 
 // --- EMBEDDINGS ---
@@ -902,6 +950,8 @@ async function getEmbeddings(text, apiProfileId, modelName) {
 
 module.exports = {
     sendApiRequest,
+    sendAgentRequest,
+    nativeToolSupport,
     getEmbeddings,
     buildRequest,
     parseResponse,

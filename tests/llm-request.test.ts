@@ -224,3 +224,87 @@ describe('reasoning models, provider limits and replies', () => {
     expect(parseStreamChunk({ error: { message: 'bad gateway' } }, 'openrouter').error).toBe('bad gateway');
   });
 });
+
+describe('agent conversations', () => {
+  const conversation = [
+    { role: 'user', text: 'Research {{topic}}.' },
+    { role: 'assistant', text: 'THOUGHT: search.', toolCalls: [{ id: 'c1', name: 'search_kb', args: { query: 'When does the inn open?' } }] },
+    { role: 'tool', results: [{ id: 'c1', name: 'search_kb', content: '[R1 · Archive] The inn opens at dawn.' }] },
+    { role: 'user', text: 'TURN 2/3. What is your next step?' }
+  ];
+  const tools = [{
+    name: 'search_kb',
+    description: 'Searches the knowledge base.',
+    parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] }
+  }];
+
+  test('an OpenAI-compatible request carries the transcript, the tools and resolved variables', async () => {
+    const database = createDatabase({ provider: 'Local', baseUrl: 'http://localhost:1234/v1', variables: [{ key: 'topic', value: 'the inn' }] });
+    const request = await buildRequest({ apiProfileId: 'api-profile', model: 'qwen3-8b', systemPrompt: 'Be precise.', conversation, tools, maxTokens: 500 }, { database });
+    const body = JSON.parse(request.requestBodyPayload);
+
+    expect(body.messages[0]).toEqual({ role: 'system', content: 'Be precise.' });
+    expect(body.messages[1]).toEqual({ role: 'user', content: 'Research the inn.' });
+    expect(body.messages[2].tool_calls[0].function.name).toBe('search_kb');
+    expect(body.messages[3]).toEqual({ role: 'tool', tool_call_id: 'c1', content: '[R1 · Archive] The inn opens at dawn.' });
+    expect(body.tools[0].function.name).toBe('search_kb');
+  });
+
+  test('Anthropic prefix caching is requested only on its own endpoint', async () => {
+    const official = await buildRequest(
+      { apiProfileId: 'api-profile', model: 'claude-sonnet-4-6', conversation, tools, maxTokens: 500, cachePrefix: true },
+      { database: createDatabase({ provider: 'Anthropic' }) }
+    );
+    expect(JSON.parse(official.requestBodyPayload).cache_control).toEqual({ type: 'ephemeral' });
+
+    const proxied = await buildRequest(
+      { apiProfileId: 'api-profile', model: 'claude-sonnet-4-6', conversation, tools, maxTokens: 500, cachePrefix: true },
+      { database: createDatabase({ provider: 'Anthropic', baseUrl: 'https://proxy.test/v1/messages' }) }
+    );
+    expect(JSON.parse(proxied.requestBodyPayload)).not.toHaveProperty('cache_control');
+  });
+
+  test('Claude on Bedrock is cached with an explicit breakpoint, never the automatic field', async () => {
+    const database = createDatabase({
+      provider: 'AWS Bedrock',
+      customConfig: { awsRegion: 'us-east-1', awsAccessKeyId: 'AKIDEXAMPLE', awsSecretAccessKey: 'secret' }
+    });
+    const request = await buildRequest(
+      { apiProfileId: 'api-profile', model: 'us.anthropic.claude-sonnet-4-6', systemPrompt: 'Be precise.', conversation, tools, maxTokens: 500, cachePrefix: true },
+      { database }
+    );
+    const body = JSON.parse(request.requestBodyPayload);
+    const last = body.messages[body.messages.length - 1].content;
+    expect(body).not.toHaveProperty('cache_control');
+    expect(last[last.length - 1].cache_control).toEqual({ type: 'ephemeral' });
+    expect(body.anthropic_version).toBe('bedrock-2023-05-31');
+  });
+
+  test('no request carries a cache marker unless it asks for one', async () => {
+    const request = await buildRequest(
+      { apiProfileId: 'api-profile', model: 'claude-sonnet-4-6', newPrompt: 'Hello', maxTokens: 500 },
+      { database: createDatabase({ provider: 'Anthropic' }) }
+    );
+    expect(JSON.parse(request.requestBodyPayload)).not.toHaveProperty('cache_control');
+  });
+
+  test('Google renders function calls and declarations', async () => {
+    const request = await buildRequest(
+      { apiProfileId: 'api-profile', model: 'gemini-2.5-flash', systemPrompt: 'Be precise.', conversation, tools, maxTokens: 500 },
+      { database: createDatabase({ provider: 'Google AI' }) }
+    );
+    const body = JSON.parse(request.requestBodyPayload);
+    expect(body.contents.map((content: any) => content.role)).toEqual(['user', 'model', 'user']);
+    expect(body.tools[0].functionDeclarations[0].name).toBe('search_kb');
+    expect(body.system_instruction.parts[0].text).toBe('Be precise.');
+  });
+
+  test('the payload limit measures the whole transcript, not only the last message', async () => {
+    const database = createDatabase({ provider: 'OpenAI', contextWindow: 4096 });
+    const long = [{ role: 'user', text: 'word '.repeat(6000) }];
+    await expect(buildRequest(
+      { apiProfileId: 'api-profile', model: 'gpt-4.1-mini', conversation: long, tools, maxTokens: 500, maxPayloadTokens: 128000 },
+      { database }
+    )).rejects.toMatchObject({ code: 'MAX_API_PAYLOAD_EXCEEDED' });
+  });
+});
