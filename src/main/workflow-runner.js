@@ -1,6 +1,6 @@
 const db = require('./database');
 const entitiesStore = require('./entities');
-const { sendApiRequest, getReservedOutputTokens, resolvePayloadLimit, createPromptVariableResolver } = require('./features/llm/llm.service');
+const { sendApiRequest, sendAgentRequest, nativeToolSupport, getReservedOutputTokens, resolvePayloadLimit, createPromptVariableResolver } = require('./features/llm/llm.service');
 const { sendApiRequestStream } = require('./features/llm/llm.stream');
 const { applyGenerationHistory, resolveWorkspaceGenerationTarget } = require('./features/chat/generation-target');
 const { selectActiveMessages, selectArchivableMessages, coveredMessageIds, parseMemoryBlocks } = require('./features/chat/archive-coverage');
@@ -39,6 +39,7 @@ const { foldText } = require('./features/world-index/text-fold');
 const {
     PAYLOAD_BUDGET_CONTRACT,
     assertPayloadWithinLimit,
+    estimatePayloadTokens,
     getAvailableHistoryTokens,
     normalizeMaxApiPayload,
     safetyMarginFor
@@ -48,11 +49,26 @@ const {
     renderContextSections,
     selectRecentWithinBudget,
     splitRetrievalBudget,
+    retrievalTopK,
     truncateToTokens
 } = require('./features/llm/context-budget');
 const { stripReasoning } = require('./features/chat/message-text');
 const { reconstructKnowledgeFile } = require('./features/knowledge/kb-reconstruct');
 const { parseCitations, isCitedChunk } = require('./features/knowledge/cited-sources');
+const { parseAgentTurn } = require('./features/knowledge/agent-output');
+const {
+    queryKey,
+    plannerWindowShape,
+    downgradeUntilFits,
+    shouldRunPlanner,
+    entityMentionIds,
+    worldMapBlock,
+    formatCoverage
+} = require('./features/knowledge/agent-planner');
+const retrievalLedger = require('./features/knowledge/retrieval-ledger');
+const { TOOL_NAMES, argOf, plannerToolDefinitions, textToolCatalog, renderTextCall } = require('./features/knowledge/planner-tools');
+const { flattenConversation } = require('./features/llm/tool-conversation');
+const { recordTokenCount, tokenRatio, calibrateTokens } = require('./features/llm/token-calibration');
 const { buildNeighborPassages } = require('./features/knowledge/passage-neighbors');
 const { encode } = require('gpt-tokenizer/encoding/o200k_base');
 const fs = require('fs');
@@ -72,7 +88,7 @@ const {
     generateEmbeddingVector,
     getWorldVocabulary,
     lookupEntityChunks,
-    executeMultiOwnerSearch,
+    searchLoreDocuments,
     extractTextFromFile,
     chunkText,
     vectorizeChunks,
@@ -148,9 +164,11 @@ function estimateTokens(str) {
     }
 }
 
-// The retrieval planner reads the recent conversation on every research turn. A
-// fixed window keeps that prompt small no matter how long the replies are.
-const PLANNER_HISTORY_BUDGET_TOKENS = 6000;
+// Executors that should skip native tool calling for the rest of the session. A failed native
+// request marks one at once; a first reply without any call is one strike, since a capable
+// model may simply have been done.
+const TEXT_PROTOCOL_STRIKES = new Map();
+const TEXT_PROTOCOL_STRIKE_LIMIT = 2;
 
 // A file the agent read, or an entity's lore, may take at most this share of the
 // retrieval budget; the rest stays available for search results.
@@ -158,6 +176,9 @@ const AGENTIC_ITEM_MAX_SHARE = 0.6;
 
 // Passages lookup_entity hands the agent (and the final context) per call.
 const LOOKUP_ENTITY_CHUNK_LIMIT = 12;
+
+// Profile knowledge, workspace files and archived memory each ask for their own passages.
+const RETRIEVAL_TIERS = 3;
 
 const PROFILE_RETRIEVAL_HEADER = '--- PROFILE RELEVANT RETRIEVED KNOWLEDGE ---';
 const CHAT_RETRIEVAL_HEADER = '--- CHAT RELEVANT RETRIEVED KNOWLEDGE ---';
@@ -477,6 +498,9 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
         let historyDropped = 0;
         let retrievalOmitted = 0;
         let agenticDegraded = false;
+        let lastAgenticTrajectory = null;
+        let retrievalPath = '';
+        let retrievalGateReason = '';
         let finalTruncated = false;
         let finalFinishReason = null;
 
@@ -649,16 +673,38 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             const retrievalBudget = splitRetrievalBudget({ availableTokens: availableForContext, historyTokens: historyNeed });
 
             const retrievalPlanner = getRoleExecutor(ROLE_IDS.RETRIEVAL_PLANNER, profile);
-            if (profile.isAgentic === 1 && retrievalPlanner.executor) {
+            const plannerAvailable = profile.isAgentic === 1 && Boolean(retrievalPlanner.executor);
+            // The user's own message decides, not the step input: from step 2 on that input is
+            // generated prose, which says nothing about whether this turn needs research.
+            const plannerGate = plannerAvailable
+                ? resolvePlannerGate(chatId, messageContent || currentInput, {
+                    includeChatContext,
+                    force: String(debugSettings.agenticGate || 'auto') === 'always'
+                })
+                : { plan: false, reason: 'profile is not agentic, or no Retrieval Planner is configured' };
+            if (plannerAvailable) {
+                retrievalPath = plannerGate.plan ? 'agentic' : 'deterministic';
+                retrievalGateReason = plannerGate.reason;
+                console.log(`[Agentic RAG] Gate: ${retrievalPath} (${plannerGate.reason})`);
+            }
+            if (plannerGate.plan) {
                 let ragChatHistory = [];
                 if (i === 0 || includeChatHistory) {
+                    // The planner reads this history, so its own window sizes it, not the writer's.
+                    const plannerLimit = resolvePayloadLimit({ apiProfileId: retrievalPlanner.executor.apiProfileId, maxPayloadTokens: maxContextTokens });
                     ragChatHistory = formatActiveHistory(
                         activeMessages.slice(-10),
-                        Math.min(availableForContext, PLANNER_HISTORY_BUDGET_TOKENS)
+                        plannerWindowShape(plannerLimit.limit).historyTokens
                     );
                 }
 
-                const agenticResult = await executeAgenticRagLoop(profile, chatId, currentInput, ragChatHistory, webContents, includeChatContext, retrievalPlanner.executor, currentRun);
+                const agenticResult = await executeAgenticRagLoop(profile, chatId, currentInput, ragChatHistory, webContents, includeChatContext, retrievalPlanner.executor, currentRun, {
+                    retrievalBudget,
+                    userRequest: messageContent,
+                    knownEntities: plannerGate.entities,
+                    mentionedIds: plannerGate.mentionedIds,
+                    toolProtocol: String(debugSettings.agenticToolProtocol || 'auto') === 'text' ? 'text' : 'auto'
+                });
                 if (agenticResult) {
                     const packed = packContextItems(agenticResult.contextItems, retrievalBudget, {
                         estimate: estimateTokens,
@@ -666,6 +712,22 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     });
                     retrievalOmitted += packed.dropped + packed.truncated;
                     if (agenticResult.degraded) agenticDegraded = true;
+                    // The ids are for the evaluation harness; the message record keeps only counts.
+                    lastAgenticTrajectory = {
+                        anchorQuery: agenticResult.trajectory.anchorQuery,
+                        toolK: agenticResult.trajectory.toolK,
+                        protocol: agenticResult.trajectory.protocol,
+                        finalProtocol: agenticResult.trajectory.finalProtocol,
+                        protocolFallback: agenticResult.trajectory.protocolFallback,
+                        stopped: agenticResult.trajectory.stopped,
+                        plannerWindow: agenticResult.trajectory.plannerWindow,
+                        gate: { path: 'agentic', reason: plannerGate.reason },
+                        seed: agenticResult.trajectory.seed
+                            ? { calls: agenticResult.trajectory.seed.calls, items: agenticResult.trajectory.seed.items }
+                            : null,
+                        turns: agenticResult.trajectory.turns.map(({ newIds, ...turn }) => turn),
+                        packing: { kept: packed.kept.length, dropped: packed.dropped, truncated: packed.truncated, total: packed.total, budget: retrievalBudget }
+                    };
                     const gathered = renderContextSections(packed.kept, agenticResult.contextSections);
                     // Never pass the agent's summary off as facts; an explicit notice keeps
                     // the model from inventing document-based answers.
@@ -686,9 +748,14 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     agenticOutputTokens = agenticResult.agenticOutputTokens || 0;
                 }
             } else {
+                if (plannerAvailable) {
+                    lastAgenticTrajectory = { gate: { path: 'deterministic', reason: plannerGate.reason }, turns: [] };
+                }
                 const retrievalItems = [];
                 let searchQuery = currentInput;
-                const results = await searchKnowledgeBase(searchQuery, profile.id);
+                // Profile knowledge, workspace files and archived memory share the budget.
+                const topK = retrievalTopK(0, retrievalBudget, { tiers: RETRIEVAL_TIERS });
+                const results = await searchKnowledgeBase(searchQuery, profile.id, { k: topK });
                 standardRagDebug += formatRagDebugSection('PROFILE KB', results);
                 if (results && results.length > 0) {
                     let constantSnippetTitles = [];
@@ -711,7 +778,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                 }
 
                 if (includeChatContext && chat) {
-                    const chatKbResults = await searchChatKnowledgeBase(currentInput, chatId);
+                    const chatKbResults = await searchChatKnowledgeBase(currentInput, chatId, { k: topK });
                     if (chatKbResults && chatKbResults.length > 0) {
                         const chatKbFiles = typeof chat.knowledgeFiles === 'string'
                             ? JSON.parse(chat.knowledgeFiles)
@@ -727,7 +794,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                 }
 
                 if (includeChatContext && chat) {
-                    const memoryResults = await searchChatMemories(currentInput, chatId);
+                    const memoryResults = await searchChatMemories(currentInput, chatId, { k: topK });
                     if (memoryResults && memoryResults.length > 0) {
                         const blocksList = typeof chat.memoryBlocks === 'string'
                             ? JSON.parse(chat.memoryBlocks)
@@ -945,10 +1012,11 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                 workflowStatus: isWorkflow ? `Workflow complete (${steps.length} steps)` : '',
                 ...(debugSettings.agenticDebug ? {
                     agenticRagResponse: capDebugText(lastAgenticRagResponse),
-                    agenticRagContextGathered: capDebugText(lastAgenticRagContextGathered)
+                    agenticRagContextGathered: capDebugText(lastAgenticRagContextGathered),
+                    ...(lastAgenticTrajectory ? { agenticTrajectory: lastAgenticTrajectory } : {})
                 } : {}),
                 ...(debugSettings.ragDebug ? { standardRagContextGathered: capDebugText(lastStandardRagDebug) } : {}),
-                context: { historySent, historyDropped, retrievalOmitted, agenticDegraded },
+                context: { historySent, historyDropped, retrievalOmitted, agenticDegraded, retrievalPath, retrievalGateReason },
                 ...(finalTruncated ? { truncated: true, finishReason: finalFinishReason } : {}),
                 tokens: {
                     knowledgeBase: totalProfileKbTokens + totalChatKbTokens,
@@ -1090,6 +1158,19 @@ function getSystemAi() {
 
 function getRoleExecutor(roleId, profile = null) {
     return resolveAiEngineRole(roleId, { profile });
+}
+
+// Deterministic choice between the planner and the free retrieval path. It can only
+// downgrade to the deterministic path, which still fills the context, so a wrong skip
+// costs the multi-hop reach and never the context itself.
+function resolvePlannerGate(chatId, request, { includeChatContext = true, force = false } = {}) {
+    let entities = [];
+    try {
+        entities = includeChatContext ? entitiesStore.listEntities({ workspaceId: chatId }) : [];
+    } catch (e) { entities = []; }
+    const mentionedIds = entityMentionIds(request, entities);
+    const decision = shouldRunPlanner(request, { entityMentions: mentionedIds.size, force });
+    return { ...decision, entities, mentionedIds };
 }
 
 function isChatArchiveSummarizationEnabled() {
@@ -2678,9 +2759,14 @@ function readEntireKbFile(ownerId, fileName) {
 
 // --- AGENTIC RAG SYSTEM ---
 
-async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory = [], webContents = null, includeChatContext = true, executor = profile, run = null) {
+async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory = [], webContents = null, includeChatContext = true, executor = profile, run = null, options = {}) {
     console.log(`[Agentic RAG] Starting autonomous retrieval loop for: ${profile.name}`);
     const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+
+    // What the research is for. A workflow step feeds the previous step's prose as its input,
+    // and ranking passages against generated prose buries the request the user actually made.
+    const anchorQuery = String(options.userRequest || '').trim() || currentInput;
+    const retrievalBudget = Number(options.retrievalBudget) || 0;
 
     let currentTurn = 1;
     // Per-profile configurable depth (clamped 1-5). Higher = better multi-hop reasoning, higher cost.
@@ -2690,13 +2776,45 @@ async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory 
     const maxCorrectionRetries = 1; // Free retry (does not consume a turn) when the model emits neither a tool call nor finish.
     let loopDegraded = false; // True if a retrieval error forced an early break; surfaced to the caller.
     const MAX_AGENT_FILE_CHARS = 5000; // read_file truncation for the agent's reasoning only; full text still flows to final context.
+    // How many results of one call the agent reads in full. The rest arrive as snippets it can
+    // expand, while every one of them still reaches the writing assistant.
+    const AGENT_FULL_RESULTS_PER_CALL = 5;
+    const SEED_FULL_RESULTS = 5;
+
+    // Search width follows the writer's payload budget, because the results feed the writer.
+    // What the planner itself reads is sized by the planner's own window below.
+    const toolK = retrievalBudget > 0 ? retrievalTopK(0, retrievalBudget, { tiers: RETRIEVAL_TIERS }) : null;
+
+    // The planner can run on another connection than the writer, often a smaller local model,
+    // so its requests are measured against its own context window.
+    const plannerLimit = resolvePayloadLimit({ apiProfileId: executor.apiProfileId, maxPayloadTokens: normalizeMaxApiPayload(chat?.maxContext) });
+    const plannerMaximum = normalizeMaxApiPayload(plannerLimit.limit);
+    const plannerWindow = plannerWindowShape(plannerMaximum);
+
+    const executorKey = `${executor.apiProfileId}:${executor.model}`;
+    let protocol = options.toolProtocol !== 'text'
+        && (TEXT_PROTOCOL_STRIKES.get(executorKey) || 0) < TEXT_PROTOCOL_STRIKE_LIMIT
+        && nativeToolSupport({ apiProfileId: executor.apiProfileId, model: executor.model })
+        ? 'native'
+        : 'text';
+    let nativeConfirmed = false;
+    const toolDefinitions = plannerToolDefinitions();
+    // Token counts are learned per protocol too: native tool definitions add their own framing.
+    const calibrationKey = () => `${executorKey}:${protocol}`;
 
     const retrievedProfileChunks = new Map();
     const retrievedChatChunks = new Map();
     const retrievedMemories = new Map();
     const retrievedLore = new Map();
-    const retrievedWorldFacts = new Map(); // Deterministic Worldbuild registry facts (lore + relations); exempt from finish-sources pruning.
+    const retrievedWorldFacts = new Map(); // Deterministic Worldbuild registry facts (lore + relations).
     const readFiles = new Map();
+    // Ids the free deterministic pass found. They are the floor this loop may not fall below.
+    const seededIds = new Set();
+
+    const retrievedIds = () => [
+        ...retrievedProfileChunks.keys(), ...retrievedChatChunks.keys(), ...retrievedMemories.keys(),
+        ...retrievedLore.keys(), ...retrievedWorldFacts.keys(), ...readFiles.keys()
+    ];
 
     // Keeps the best score a chunk reached across tool calls, and whether a search
     // (not only an entity lookup) found it; both rank it in the final context.
@@ -2712,6 +2830,23 @@ async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory 
         });
     };
 
+    let workspaceKbFiles = [];
+    if (includeChatContext && chat && chat.knowledgeFiles) {
+        try {
+            workspaceKbFiles = typeof chat.knowledgeFiles === 'string'
+                ? JSON.parse(chat.knowledgeFiles)
+                : (chat.knowledgeFiles || []);
+        } catch (e) { workspaceKbFiles = []; }
+    }
+    let workspaceMemoryBlocks = [];
+    if (includeChatContext && chat && chat.memoryBlocks) {
+        try {
+            workspaceMemoryBlocks = typeof chat.memoryBlocks === 'string'
+                ? JSON.parse(chat.memoryBlocks)
+                : (chat.memoryBlocks || []);
+        } catch (e) { workspaceMemoryBlocks = []; }
+    }
+
     let historyText = '';
     if (Array.isArray(chatHistory) && chatHistory.length > 0) {
         historyText = chatHistory.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
@@ -2719,92 +2854,85 @@ async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory 
         historyText = 'No previous messages in this chat session.';
     }
 
-    const defaultAgenticInstruction = "You are a search query optimizer. Extract the specific names, proper nouns, and primary search keywords from the user prompt. Always keep specific names and proper nouns intact. Output ONLY the optimized query terms without quotes, introduction, or explanation.";
+    const defaultAgenticInstruction = "You are a retrieval planner. Turn the user's request into complete natural-language questions for the search tools, keeping every proper noun exactly as it is written. The search engine is semantic: a whole question retrieves far more than loose keywords.";
 
     const mainInstruction = profile.agenticPrompt && profile.agenticPrompt.trim()
         ? profile.agenticPrompt.trim()
         : defaultAgenticInstruction;
 
     // Exact canonical names keep the agent from guessing keywords.
-    let worldMapBlock = '';
+    let knownEntities = [];
     try {
-        const known = includeChatContext ? entitiesStore.listEntities({ workspaceId: chatId }) : [];
-        if (known.length > 0) {
-            const lines = known.slice(0, 60).map(e => {
-                const aka = (e.aliases && e.aliases.length) ? ` (aka ${e.aliases.join(', ')})` : '';
-                return `- ${e.canonicalName} [${e.type}]${aka}`;
-            }).join('\n');
-            worldMapBlock = `\nKNOWN ENTITIES IN THIS WORLD (use these EXACT names in your queries; prefer lookup_entity to gather everything known about one of them):\n${lines}\n`;
-        }
-    } catch (e) { }
+        knownEntities = Array.isArray(options.knownEntities)
+            ? options.knownEntities
+            : (includeChatContext ? entitiesStore.listEntities({ workspaceId: chatId }) : []);
+    } catch (e) { knownEntities = []; }
+    const mentionedIds = options.mentionedIds instanceof Set
+        ? options.mentionedIds
+        : entityMentionIds(anchorQuery, knownEntities);
+    const worldMapText = worldMapBlock(knownEntities, {
+        mentionedIds,
+        recentIds: entityMentionIds(historyText, knownEntities),
+        limit: plannerWindow.worldMapLimit
+    });
 
-    const toolsPrompt = `
+    const sharedHead = `
 ${getSystemLanguageInstruction()}
 ${mainInstruction}
 
 You are an expert Research Assistant Agent. Your task is to investigate the knowledge bases and memories of the chat to retrieve all relevant details needed to answer the user's prompt.
-You must run in a loop of THOUGHT and ACTION (tool calls), up to ${maxTurns} turns maximum.
-At each turn, analyze what you have found so far, and output either one or more tool calls OR your final research findings inside the finish block.
+You work in a loop of THOUGHT and ACTION (tool calls), up to ${maxTurns} turns. At each turn, analyze what you have found so far, then either call tools or finish.
 
 CONVERSATION HISTORY:
 ${historyText}
 
 USER PROMPT: "${currentInput}"
-${worldMapBlock}
-AVAILABLE TOOLS:
-1. <tool_call name="search_kb" query="search terms" />
-   Searches the profile's and chat's knowledge base files for matching concepts.
-2. <tool_call name="read_file" filename="filename.txt" />
-   Reads the entire text of a specific file in the knowledge base (useful to get complete code or full lore/character profile).
-3. <tool_call name="search_memories" query="search terms or #tags" />
-   Searches the chat's past summarized memory blocks, custom snippets, and manual tags (e.g. query for keywords or exact hashtags like #character, #backstory).
-4. <tool_call name="lookup_entity" query="entity name or alias" />
-   Returns the memory chunks tagged with a known world entity (see KNOWN ENTITIES) that are most relevant to the user prompt, by exact name or alias. Passages that only mention the entity in passing may be untagged, so use search_memories with specific terms (e.g. what was said, a time, a place) when looking for one detail. Also lists that entity's RELATED ENTITIES (its graph edges, e.g. "owns → Star Paradox; ally_of → Port Brea"). Prefer this over search_kb/search_memories when the user prompt refers to a known entity and you want its full dossier (traits, relationships, history). Follow a listed relation with another lookup_entity to traverse the world by structure instead of guessing from prose. Use search_kb/search_memories for concepts, scenes, or things not in the entity list.
-5. <tool_call name="read_lore" query="entity name or alias" />
-   For an entity that has a linked lore document (Writing Desk), returns the passages of that document most relevant to the user prompt. Use it when lookup_entity shows an entity has authored lore and you need its canonical background, not just scene mentions. Does nothing if the entity has no linked lore.
-6. <tool_call name="expand" query="R3 or a source name" />
-   Re-reads the FULL text of a previously retrieved item that was summarized in an earlier turn (results are shown by a handle like [R3 · source]). Use it only when a summarized item's snippet is not enough to decide. Everything you retrieve is already sent to the writing assistant in full — expand is just for YOUR reasoning.
-7. <finish sources="source1, source2, ...">summary of retrieved facts</finish>
-   Concludes your research. Inside the 'sources' attribute, list the result handles (e.g. R3, R7) and exact filenames of the retrieved contexts that were ACTUALLY relevant to the user prompt. Listed sources are given priority in the final context.
-   If no sources are listed or if you omit the attribute, all searched contexts are included with equal priority.
-   Only state facts that appear verbatim in the tool results. If the results do not contain the answer, say so instead of guessing.
-   
-   CRITICAL SUMMARY RULE: Keep the text content inside the <finish> tag extremely short and concise (1-2 sentences maximum, e.g., "Found Jonathan's resume file"). DO NOT write a full summary, quote, or copy the content of the files/chunks inside the tag, as the system automatically retrieves and sends the full raw content of your listed sources to the writing assistant.
+${worldMapText}`;
 
-CRITICAL DIRECTIVES FOR COST & EFFICIENCY OPTIMIZATION:
-- EARLY EXIT: If you have already found all the necessary details to answer the user's prompt (e.g., character relationships, specific descriptions, context), DO NOT run additional tool calls or turns. Immediately call <finish> to conclude your research and minimize token costs.
-- NO REPETITIVE QUERIES: Do not run search queries with identical or very similar terms that you have already executed. Do not read the same file twice.
-- RELEVANCY ONLY: Only query for concepts directly related to the user's prompt. Do not fetch unrelated files or memories.
+    const textProtocolSection = `
+AVAILABLE TOOLS (write every call exactly in this syntax):
+${textToolCatalog()}
 
 OUTPUT FORMAT:
 Your response MUST contain a THOUGHT section explaining your reasoning, followed by one or more tool calls, OR the <finish> tag.
+Never write tool results yourself. Results arrive in the next message; a reply that calls a tool ends there, and a <finish> written alongside a tool call is ignored.
 Example output:
 THOUGHT: I need to locate where the protagonist meets the dragon and check if the code has a render function.
-<tool_call name="search_kb" query="protagonista dragão encontro" />
-<tool_call name="search_kb" query="render function" />
+<tool_call name="search_kb" query="Where does the protagonist meet the dragon?" />
+<tool_call name="search_kb" query="Which function renders the story on the canvas?" />
 
 If you have collected all necessary information to answer the prompt, call finish:
 THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the render function implementation.
-<finish sources="dragon_lore.txt, render_implementation.js">
-- Dragon met in Chapter 3: "The Dragon of the Mist".
-- Code function renderStory(canvas) uses canvas 2d context to draw.
-</finish>
+<finish sources="R2, render_implementation.js">Found the dragon's first appearance and the render function.</finish>
 `;
 
-    let messages = [
-        { role: 'user', content: toolsPrompt }
-    ];
+    const nativeProtocolSection = `
+TOOLS:
+The tools are provided as functions, and each description says when to use it. Reply with a short THOUGHT and call one or more tools. End the research only by calling finish with the handles of the results that were relevant. A finish called together with other tools is ignored, because their results have not been seen yet.
+`;
 
-    // Final context comes from the retrieved* maps, so older turns can shrink to a digest.
-    const LEAN_AGENT_HISTORY = true;
-    const LEAN_HISTORY_BUDGET_TOKENS = 1200;
-    const LEAN_HISTORY_KEEP_TURNS = 1; // newest N turns are always kept in full
+    const guidance = `
+HOW TO QUERY:
+- Write search_kb and search_memories queries as a whole question or statement, in the language of the material, keeping proper nouns exactly as written. Retrieval is semantic first: "What time did Rowan say the shop opens?" reaches what "Rowan shop time" misses.
+- The free pre-search below already ran the user's own words. If its strongest results already answer the request, finish on this turn and cite them; otherwise ask something it did not.
+
+CRITICAL DIRECTIVES FOR COST & EFFICIENCY OPTIMIZATION:
+- EARLY EXIT: If you have already found all the necessary details to answer the user's prompt (e.g., character relationships, specific descriptions, context), DO NOT run additional tool calls or turns. Finish immediately to minimize token costs.
+- AN EMPTY RESULT IS NOT AN ANSWER: a tool that returns nothing only proves those words were not a match. Before concluding that something is unknown, try one different angle: another wording, another tool, or lookup_entity on a name involved. Say that the answer is missing only once that second angle has also come back empty.
+- NO REPETITIVE QUERIES: Do not run search queries with identical or very similar terms that you have already executed. Do not read the same file twice. A repeat is refused and still costs you a turn.
+- RELEVANCY ONLY: Only query for concepts directly related to the user's prompt. Do not fetch unrelated files or memories.
+`;
+
+    const headFor = mode => `${sharedHead}${mode === 'native' ? nativeProtocolSection : textProtocolSection}${guidance}`;
+    const systemPromptText = `You are a precise researcher. You communicate strictly using the tools specified. ${getSystemLanguageInstruction()}`;
+
     const SNIPPET_CHARS = 160;
-    const turnLog = [];               // { msgIndex, digestContent, fullTokens, digestTokens, downgraded }
     const itemRegistry = new Map();   // handle -> { source, full }, backs the expand tool
     const handleIds = new Map();      // handle -> retrieved chunk id, so finish can cite R3
     const coveredSources = new Set();
     const coveredEntities = new Set();
+    const executedQueries = new Map(); // query key -> { tool, query, hits, handles }, the repeat guard
+    const ledgerEmptyKeys = includeChatContext ? retrievalLedger.emptyQueryKeys(chatId) : new Set();
     let handleSeq = 0;
     const makeSnippet = (t) => {
         const s = String(t || '').replace(/\s+/g, ' ').trim();
@@ -2814,12 +2942,515 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
     let finishResponse = '';
     let agenticRagInputTokens = 0;
     let agenticRagOutputTokens = 0;
+    const trajectory = {
+        anchorQuery,
+        toolK,
+        protocol,
+        finalProtocol: protocol,
+        protocolFallback: null,
+        stopped: null,
+        plannerWindow: { limit: plannerMaximum, source: plannerLimit.source, outputTokens: plannerWindow.outputTokens, tokenRatio: tokenRatio(calibrationKey()) },
+        seed: null,
+        turns: []
+    };
 
     // One embedding of the request ranks the passages lookup_entity returns.
     let lookupQueryVector = null;
     if (includeChatContext) {
-        try { lookupQueryVector = await generateEmbeddingVector(currentInput, true); } catch (e) { lookupQueryVector = null; }
+        try { lookupQueryVector = await generateEmbeddingVector(anchorQuery, true); } catch (e) { lookupQueryVector = null; }
     }
+
+    const coverageLine = () => formatCoverage({
+        entities: [...coveredEntities],
+        sources: [...coveredSources],
+        queries: [...executedQueries.values()].map(entry => ({ tool: entry.tool, query: entry.query, hits: entry.hits })),
+        items: itemRegistry.size
+    });
+    const renderItem = (it, full) => it.kind === 'note'
+        ? it.text
+        : (full && it.preview !== 'digest'
+            ? `[${it.handle} · ${it.source}] ${it.full}`
+            : `[${it.handle} · ${it.source}]${it.meta ? ` (${it.meta})` : ''} ${makeSnippet(it.full)}`);
+    const renderItems = (items, full) => items.map(it => renderItem(it, full)).join(full ? '\n\n' : '\n');
+
+    // Runs one tool call and reports what it yielded. A repeat never reaches the database:
+    // its answer is already in the transcript, and running it again cannot change the context.
+    const runToolCall = async (call, { pushResult, pushNote }) => {
+        const key = queryKey(call.name, call.arg);
+        const seen = executedQueries.get(key);
+        if (seen) {
+            const where = seen.handles.length ? ` See ${seen.handles.join(', ')}.` : '';
+            pushNote(`Tool [${call.name}] for "${call.arg}": already executed, ${seen.hits} result(s).${where} Ask something different.`);
+            return { tool: call.name, arg: call.arg, hits: seen.hits, status: 'repeat' };
+        }
+        if (ledgerEmptyKeys.has(key)) {
+            pushNote(`Tool [${call.name}] for "${call.arg}": this exact query already returned nothing earlier in this conversation. Try another angle.`);
+            executedQueries.set(key, { tool: call.name, query: call.arg, hits: 0, handles: [] });
+            return { tool: call.name, arg: call.arg, hits: 0, status: 'known-empty' };
+        }
+
+        const firstHandle = handleSeq + 1;
+        let hits = 0;
+
+        if (call.name === 'search_kb') {
+            const rawProfileResults = await searchKnowledgeBase(call.arg, profile.id, { k: toolK });
+            const rawChatKbResults = includeChatContext
+                ? await searchChatKnowledgeBase(call.arg, chatId, { k: toolK, boost: true })
+                : [];
+
+            const knowledgeFiles = JSON.parse(profile.knowledgeFiles || '[]');
+            let constantSnippetTitles = [];
+            try {
+                constantSnippetTitles = db.getConstantSnippets(profile.id)
+                    .map(c => (c.title || '').toLowerCase());
+            } catch (e) { }
+
+            const profileResults = rawProfileResults.filter(r => {
+                const fileMatch = knowledgeFiles.find(f => f.name.toLowerCase() === r.source.toLowerCase());
+                if (fileMatch && (fileMatch.strategy === 'constant' || fileMatch.strategy === 'full_context')) {
+                    return false;
+                }
+                if (constantSnippetTitles.includes(r.source.toLowerCase())) {
+                    return false;
+                }
+                return true;
+            });
+
+            const chatKbResults = filterWorkspaceKnowledgeResults(
+                rawChatKbResults,
+                workspaceKbFiles,
+                profile.id
+            );
+
+            profileResults.forEach(r => rememberRetrieved(retrievedProfileChunks, r, 'search'));
+            if (includeChatContext) {
+                chatKbResults.forEach(r => rememberRetrieved(retrievedChatChunks, r, 'search'));
+            }
+
+            const combined = [...profileResults, ...chatKbResults];
+            hits = combined.length;
+
+            if (combined.length === 0) {
+                pushNote(`Tool [search_kb] for "${call.arg}": No matches found.`);
+            } else {
+                pushNote(`Tool [search_kb] for "${call.arg}": ${combined.length} result(s).`);
+                combined.forEach((r, index) => pushResult({
+                    id: r.id, source: r.source, full: r.text, score: r.fusionScore ?? r.score,
+                    preview: index < AGENT_FULL_RESULTS_PER_CALL ? 'full' : 'digest',
+                    meta: `search_kb "${call.arg}"${typeof r.score === 'number' ? ` sim=${r.score.toFixed(2)}` : ''}`
+                }));
+            }
+        } else if (call.name === 'search_memories') {
+            const rawMemResults = includeChatContext ? await searchChatMemories(call.arg, chatId, { k: toolK }) : [];
+
+            const memResults = filterWorkspaceMemoryResults(
+                rawMemResults,
+                workspaceMemoryBlocks,
+                profile.id
+            );
+
+            if (includeChatContext) {
+                memResults.forEach(r => rememberRetrieved(retrievedMemories, r, 'search'));
+            }
+            hits = memResults.length;
+
+            if (memResults.length === 0) {
+                pushNote(`Tool [search_memories] for "${call.arg}": No matches found.`);
+            } else {
+                pushNote(`Tool [search_memories] for "${call.arg}": ${memResults.length} match(es).`);
+                memResults.forEach((r, index) => pushResult({
+                    id: r.id, source: r.source, full: r.text, score: r.fusionScore ?? r.score,
+                    preview: index < AGENT_FULL_RESULTS_PER_CALL ? 'full' : 'digest',
+                    meta: `search_memories "${call.arg}"${typeof r.score === 'number' ? ` sim=${r.score.toFixed(2)}` : ''}`
+                }));
+            }
+        } else if (call.name === 'lookup_entity') {
+            // Registry is resolved directly so never-tagged entities are still found.
+            let entityChunks = [], entityIds = [], entityChunkTotal = 0;
+            if (includeChatContext) {
+                const looked = lookupEntityChunks(call.arg, chatId, 'chat_memory', { queryVector: lookupQueryVector, scope: 'workspace' });
+                const ranked = looked.chunks || [];
+                const allowedMemory = new Set(
+                    filterWorkspaceMemoryResults(ranked.filter(r => r.ownerType === 'chat_memory'), workspaceMemoryBlocks, profile.id)
+                        .map(r => r.id)
+                );
+                const allowedKb = new Set(
+                    filterWorkspaceKnowledgeResults(ranked.filter(r => r.ownerType === 'chat_kb'), workspaceKbFiles, profile.id)
+                        .map(r => r.id)
+                );
+                const available = ranked.filter(r => r.ownerType === 'document' || allowedMemory.has(r.id) || allowedKb.has(r.id));
+                entityChunkTotal = available.length;
+                entityChunks = available.slice(0, LOOKUP_ENTITY_CHUNK_LIMIT);
+                entityIds = Array.isArray(looked.entityIds) ? [...looked.entityIds] : [];
+            }
+            let registryEntity = null;
+            try {
+                const rid = entitiesStore.resolveMention(call.arg, null, chatId);
+                if (rid) {
+                    registryEntity = entitiesStore.getEntity(rid);
+                    if (!entityIds.includes(rid)) entityIds.push(rid);
+                }
+            } catch (e) { }
+
+            if (includeChatContext) {
+                for (const r of entityChunks) {
+                    if (r.ownerType === 'chat_kb') rememberRetrieved(retrievedChatChunks, r, 'lookup');
+                    else if (r.ownerType === 'document') retrievedLore.set(r.id, { text: r.text, source: r.source, score: Number(r.score) || 0 });
+                    else rememberRetrieved(retrievedMemories, r, 'lookup');
+                }
+            }
+            const relLines = [];
+            const edgesByEntity = new Map();
+            let anyLore = false;
+            try {
+                for (const eid of entityIds) {
+                    const ent = entitiesStore.getEntity(eid);
+                    if (!ent) continue;
+                    const links = entitiesStore.getLinksFrom(eid) || [];
+                    if (links.length) {
+                        const edges = links.map(l => `${l.label || l.relType} → ${l.entity ? l.entity.canonicalName : '?'}`).join('; ');
+                        relLines.push(`${ent.canonicalName}: ${edges}`);
+                        edgesByEntity.set(eid, edges);
+                    }
+                    if (entitiesStore.linkedLoreDocIds(ent).length) anyLore = true;
+                }
+            } catch (e) { }
+
+            if (registryEntity) {
+                const factParts = [];
+                const details = entityDataFacts(registryEntity.data);
+                if (details) factParts.push(`Details: ${details}`);
+                const desc = registryEntity.data && (registryEntity.data.description || registryEntity.data.content);
+                if (desc && String(desc).trim()) factParts.push(`Description: ${String(desc).trim()}`);
+                if (registryEntity.lore && String(registryEntity.lore).trim()) factParts.push(`Lore: ${registryEntity.lore}`);
+                const ownEdges = edgesByEntity.get(registryEntity.id);
+                if (ownEdges) factParts.push(`Relations: ${ownEdges}`);
+                if (factParts.length) {
+                    retrievedWorldFacts.set(registryEntity.id, {
+                        text: `${registryEntity.canonicalName} (${registryEntity.type}) — ${factParts.join(' | ')}`,
+                        source: `Worldbuild — ${registryEntity.canonicalName}`,
+                        canonicalName: registryEntity.canonicalName,
+                        aliases: Array.isArray(registryEntity.aliases) ? registryEntity.aliases : []
+                    });
+                }
+            }
+
+            if (registryEntity) {
+                coveredEntities.add(registryEntity.canonicalName);
+                if (includeChatContext) retrievalLedger.recordEntity(chatId, registryEntity.canonicalName);
+                let head = `Worldbuild entity ${registryEntity.canonicalName} (${registryEntity.type})`;
+                const headDetails = entityDataFacts(registryEntity.data);
+                if (headDetails) head += ` [${headDetails}]`;
+                const headDesc = registryEntity.data && (registryEntity.data.description || registryEntity.data.content);
+                if (headDesc && String(headDesc).trim()) head += ` — ${String(headDesc).trim()}`;
+                if (registryEntity.lore && String(registryEntity.lore).trim()) head += `: ${registryEntity.lore}`;
+                pushResult({ source: registryEntity.canonicalName, full: head, meta: `lookup_entity "${call.arg}"` });
+            }
+            entityChunks.forEach((r, index) => pushResult({
+                id: r.id, source: r.source, full: r.text,
+                preview: index < AGENT_FULL_RESULTS_PER_CALL ? 'full' : 'digest',
+                meta: `lookup_entity "${call.arg}"`
+            }));
+            hits = entityChunks.length + (registryEntity ? 1 : 0);
+            if (entityChunkTotal > entityChunks.length) {
+                pushNote(`Tool [lookup_entity] for "${call.arg}": showing the ${entityChunks.length} passages most relevant to the request out of ${entityChunkTotal} tagged. Use search_memories with specific terms to reach others.`);
+            }
+            if (!registryEntity && entityChunks.length === 0 && relLines.length === 0) {
+                pushNote(`Tool [lookup_entity] for "${call.arg}": No known entity matched.`);
+            }
+            if (relLines.length) {
+                pushNote(`RELATED ENTITIES (follow with lookup_entity): ${relLines.join(' | ')}`);
+            }
+            if (anyLore) {
+                pushNote(`NOTE: this entity has linked lore — call read_lore with "${call.arg}" for its authored background.`);
+            }
+        } else if (call.name === 'read_lore') {
+            let loreResults = [];
+            let docTitle = '';
+            if (includeChatContext) {
+                try {
+                    const looked = lookupEntityChunks(call.arg, chatId, 'chat_memory', { idsOnly: true, scope: 'workspace' });
+                    const ids = Array.isArray(looked.entityIds) ? [...looked.entityIds] : [];
+                    try {
+                        const rid = entitiesStore.resolveMention(call.arg, null, chatId);
+                        if (rid && !ids.includes(rid)) ids.push(rid);
+                    } catch (e) { }
+                    let loreDocIds = [];
+                    for (const eid of ids) {
+                        const ent = entitiesStore.getEntity(eid);
+                        const docs = ent ? entitiesStore.linkedLoreDocIds(ent) : [];
+                        if (docs.length) { loreDocIds = docs; docTitle = ent.canonicalName; break; }
+                    }
+                    if (loreDocIds.length) {
+                        loreResults = await searchLoreDocuments(anchorQuery, loreDocIds, { k: toolK });
+                    }
+                } catch (e) { }
+            }
+            hits = loreResults.length;
+            if (loreResults.length === 0) {
+                pushNote(`Tool [read_lore] for "${call.arg}": No linked lore document, or no relevant passages found.`);
+            } else {
+                pushNote(`Tool [read_lore] for "${call.arg}": ${loreResults.length} passage(s) from linked lore of ${docTitle}.`);
+                loreResults.forEach((r, index) => {
+                    const text = r.text || '';
+                    retrievedLore.set(r.id, { text, source: r.source || docTitle, score: Number(r.fusionScore ?? r.score) || 0 });
+                    const agentText = text.length > MAX_AGENT_FILE_CHARS
+                        ? text.slice(0, MAX_AGENT_FILE_CHARS) + '\n[...truncated for agent reasoning; the full passage is preserved for the final context...]'
+                        : text;
+                    pushResult({
+                        id: r.id, source: r.source || docTitle, full: agentText,
+                        preview: index < AGENT_FULL_RESULTS_PER_CALL ? 'full' : 'digest',
+                        meta: `read_lore "${call.arg}"`
+                    });
+                });
+            }
+        } else if (call.name === 'read_file') {
+            let isConstant = false;
+            try {
+                const kbFiles = JSON.parse(profile.knowledgeFiles || '[]');
+                const fileMatch = kbFiles.find(f => f.name.toLowerCase() === call.arg.toLowerCase());
+                if (fileMatch && (!fileMatch.strategy || fileMatch.strategy === 'constant' || fileMatch.strategy === 'full_context')) {
+                    isConstant = true;
+                }
+            } catch (e) { }
+
+            if (!isConstant && includeChatContext) {
+                const fileMatch = workspaceKbFiles.find(f => String(f.name || '').toLowerCase() === call.arg.toLowerCase());
+                if (fileMatch && (!fileMatch.profiles || fileMatch.profiles.length === 0 || fileMatch.profiles.includes(profile.id))
+                    && (!fileMatch.strategy || fileMatch.strategy === 'constant' || fileMatch.strategy === 'full_context')) {
+                    isConstant = true;
+                }
+            }
+
+            if (!isConstant) {
+                try {
+                    const snippetMatch = db.getConstantSnippets(profile.id)
+                        .find(c => (c.title || '').toLowerCase() === call.arg.toLowerCase());
+                    if (snippetMatch) {
+                        isConstant = true;
+                    }
+                } catch (e) { }
+            }
+
+            if (!isConstant && includeChatContext) {
+                const snippetMatch = workspaceMemoryBlocks.find(s => s.type === 'manual'
+                    && (s.title || s.source || '').toLowerCase() === call.arg.toLowerCase()
+                    && (!s.profiles || s.profiles.length === 0 || s.profiles.includes(profile.id))
+                    && s.strategy === 'constant');
+                if (snippetMatch) {
+                    isConstant = true;
+                }
+            }
+
+            if (isConstant) {
+                pushNote(`Tool [read_file] for "${call.arg}": Access Denied — "${call.arg}" is a Constant context block already permanently included in the main prompt.`);
+            } else {
+                let fileText = readEntireKbFile(profile.id, call.arg);
+                let fileSource = 'profile';
+                if (fileText.startsWith("[System: File not found") && includeChatContext) {
+                    const allowed = workspaceKbFiles.some(file =>
+                        String(file.name || '').toLowerCase() === call.arg.toLowerCase()
+                        && file.enabled !== false
+                        && (!file.profiles || file.profiles.length === 0 || file.profiles.includes(profile.id))
+                    );
+                    if (allowed) {
+                        fileText = readEntireKbFile(chatId, call.arg);
+                        fileSource = 'chat';
+                    }
+                }
+
+                if (!fileText.startsWith("[System: File not found")) {
+                    readFiles.set(call.arg, { text: fileText, source: fileSource });
+                    hits = 1;
+                }
+
+                // Truncated for the agent only; readFiles keeps the full text.
+                let agentFileText = fileText;
+                if (fileText.length > MAX_AGENT_FILE_CHARS) {
+                    agentFileText = fileText.slice(0, MAX_AGENT_FILE_CHARS) +
+                        `\n[...truncated at ${MAX_AGENT_FILE_CHARS} chars for agent reasoning; the full file is preserved for the final context...]`;
+                }
+
+                pushResult({ source: call.arg, full: agentFileText, meta: `read_file (${fileSource})` });
+            }
+        } else if (call.name === 'expand') {
+            // Re-read one previously summarized item's full text into THIS turn only.
+            const hit = itemRegistry.get(call.arg) ||
+                [...itemRegistry.values()].find(v => entitiesStore.normalizeName(v.source) === entitiesStore.normalizeName(call.arg));
+            if (hit) {
+                hits = 1;
+                pushNote(`Tool [expand] "${call.arg}":\n[${hit.source}] ${hit.full}`);
+            } else {
+                pushNote(`Tool [expand] "${call.arg}": no such retrieved item.`);
+            }
+        }
+
+        const handles = [];
+        for (let n = firstHandle; n <= handleSeq; n++) handles.push(`R${n}`);
+        executedQueries.set(key, { tool: call.name, query: call.arg, hits, handles });
+        if (includeChatContext && call.name !== 'expand') {
+            retrievalLedger.recordQuery(chatId, { key, tool: call.name, query: call.arg, hits });
+        }
+        return { tool: call.name, arg: call.arg, hits, status: 'ran' };
+    };
+
+    // Collects one tool call's results into renderable items.
+    const createCollector = () => {
+        const turnItems = [];
+        const pushResult = ({ id, source, full, meta, preview, score }) => {
+            const handle = `R${++handleSeq}`;
+            itemRegistry.set(handle, { source, full });
+            if (id) handleIds.set(handle, id);
+            if (source) coveredSources.add(source);
+            turnItems.push({ kind: 'result', handle, source: source || '?', full: full || '', meta: meta || '', preview: preview || 'full', score: Number(score) || 0 });
+            return handle;
+        };
+        const pushNote = (text) => turnItems.push({ kind: 'note', text });
+        return { turnItems, pushResult, pushNote };
+    };
+
+    const nextStepLine = (turnAboutToRun) => (turnAboutToRun >= maxTurns
+        ? `TURN ${turnAboutToRun}/${maxTurns}. This is your LAST turn: finish now. A tool call now still runs and its results still reach the writing assistant, but you will not see them.`
+        : `TURN ${turnAboutToRun}/${maxTurns}. What is your next step?`);
+
+    // The free pass the deterministic path would have made anyway. It is the floor of this
+    // loop, and it keeps turn 1 from spending a model call to rediscover the obvious.
+    let seedBlock = '';
+    try {
+        const seed = createCollector();
+        const seedCalls = [{ name: 'search_kb', arg: anchorQuery }];
+        if (includeChatContext) seedCalls.push({ name: 'search_memories', arg: anchorQuery });
+        const seedRuns = [];
+        for (const call of seedCalls) {
+            seedRuns.push(await runToolCall(call, seed));
+        }
+        for (const map of [retrievedProfileChunks, retrievedChatChunks, retrievedMemories]) {
+            for (const id of map.keys()) seededIds.add(id);
+        }
+        trajectory.seed = { calls: seedRuns, items: seededIds.size, ids: [...seededIds] };
+        if (seed.turnItems.length) {
+            // The strongest passages are shown whole, so a pre-search that already answers lets the
+            // planner finish at once instead of spending a turn to expand them. The preview is bounded
+            // by the planner's window; every seeded passage reaches the writer either way.
+            const ranked = seed.turnItems.filter(it => it.kind === 'result').sort((a, b) => b.score - a.score);
+            const shownInFull = new Set();
+            const fullLines = [];
+            const snippetLines = [];
+            let used = 0;
+            let hidden = 0;
+            for (const it of ranked.slice(0, SEED_FULL_RESULTS)) {
+                const line = `[${it.handle} · ${it.source}] ${it.full}`;
+                const cost = estimateTokens(line);
+                if (used + cost > plannerWindow.seedPreviewTokens) continue;
+                fullLines.push(line);
+                shownInFull.add(it);
+                used += cost;
+            }
+            for (const it of seed.turnItems) {
+                if (shownInFull.has(it)) continue;
+                const line = renderItem(it, false);
+                const cost = estimateTokens(line);
+                if (it.kind === 'result' && used + cost > plannerWindow.seedPreviewTokens) {
+                    hidden++;
+                    continue;
+                }
+                snippetLines.push(line);
+                used += cost;
+            }
+            if (hidden) snippetLines.push(`(${hidden} more pre-search result(s) are already in the final context and not shown here.)`);
+            const strongest = fullLines.length
+                ? `STRONGEST RESULTS, IN FULL (if these already answer the request, finish now and cite them):\n${fullLines.join('\n\n')}\n\n`
+                : '';
+            seedBlock = `PRE-SEARCH RESULTS (free deterministic retrieval for the user's request; already included in the final context):\n${coverageLine()}\n\n${strongest}OTHER RESULTS (snippets you can expand):\n${snippetLines.join('\n')}`;
+        }
+        console.log(`[Agentic RAG] Pre-search seeded ${seededIds.size} passage(s) before turn 1.`);
+    } catch (err) {
+        console.warn('[Agentic RAG] Pre-search failed, continuing without a floor:', err.message);
+    }
+
+    // The transcript is neutral and only grows, so either protocol can render it and a
+    // provider that reuses prefixes reads each earlier turn back from cache.
+    const transcript = [];
+    const firstUserText = mode => `${headFor(mode)}\n${seedBlock ? `${seedBlock}\n\n` : ''}${nextStepLine(1)}`;
+    const resultsOf = (step, joiner) => step.results.map(result => (step.downgraded ? result.digest : result.full)).join(joiner);
+
+    const renderTextMessages = () => {
+        const messages = [{ role: 'user', content: firstUserText('text') }];
+        for (const step of transcript) {
+            if (step.kind === 'correction') {
+                messages.push({ role: 'assistant', content: step.text || '(empty reply)' });
+                messages.push({ role: 'user', content: step.notice });
+                continue;
+            }
+            const assistant = step.textReply != null
+                ? step.textReply
+                : [step.thought, ...step.calls.map(renderTextCall)].filter(Boolean).join('\n');
+            messages.push({ role: 'assistant', content: assistant || '(empty reply)' });
+            const label = step.downgraded ? 'TOOL RESULTS (earlier, summarized)' : 'TOOL RESULTS';
+            messages.push({ role: 'user', content: `${label}:\n${step.coverage}\n\n${resultsOf(step, step.downgraded ? '\n' : '\n\n')}\n\n${step.footer}` });
+        }
+        return messages;
+    };
+
+    const renderNativeConversation = () => {
+        const conversation = [{ role: 'user', text: firstUserText('native') }];
+        for (const step of transcript) {
+            if (step.kind === 'correction') {
+                conversation.push({ role: 'assistant', text: step.text || '(empty reply)', toolCalls: [] });
+                conversation.push({ role: 'user', text: step.notice });
+                continue;
+            }
+            conversation.push({ role: 'assistant', text: step.thought, toolCalls: step.calls, raw: step.raw, rawFormat: step.rawFormat });
+            conversation.push({
+                role: 'tool',
+                results: step.results.map(result => ({ id: result.id, name: result.name, content: step.downgraded ? result.digest : result.full }))
+            });
+            conversation.push({ role: 'user', text: `${step.coverage}\n\n${step.footer}` });
+        }
+        return conversation;
+    };
+
+    const estimateRequest = () => estimatePayloadTokens({
+        systemPrompt: systemPromptText,
+        chatHistory: protocol === 'native' ? flattenConversation(renderNativeConversation(), toolDefinitions) : renderTextMessages(),
+        newPrompt: '',
+        outputTokens: plannerWindow.outputTokens,
+        maxPayloadTokens: plannerMaximum
+    });
+    // Measured with the correction learned from what this model really counted.
+    const fitsPlannerWindow = () => {
+        const estimate = estimateRequest();
+        return calibrateTokens(calibrationKey(), estimate.inputTokens) + estimate.reservedOutputTokens + estimate.safetyMarginTokens <= plannerMaximum;
+    };
+
+    const requestPlannerTurn = () => {
+        const request = {
+            apiProfileId: executor.apiProfileId,
+            model: executor.model,
+            systemPrompt: systemPromptText,
+            temperature: 0.1,
+            maxTokens: plannerWindow.outputTokens,
+            maxPayloadTokens: normalizeMaxApiPayload(chat?.maxContext),
+            manualMode: false,
+            manualJson: '',
+            abortSignal: run?.controller?.signal,
+            cachePrefix: true
+        };
+        if (protocol === 'native') {
+            return sendAgentRequest({ ...request, conversation: renderNativeConversation(), tools: toolDefinitions });
+        }
+        const messages = renderTextMessages();
+        return sendAgentRequest({ ...request, chatHistory: messages.slice(0, -1), newPrompt: messages[messages.length - 1].content });
+    };
+
+    const abandonNative = (reason, permanent) => {
+        protocol = 'text';
+        trajectory.finalProtocol = 'text';
+        trajectory.protocolFallback = reason;
+        const strikes = permanent ? TEXT_PROTOCOL_STRIKE_LIMIT : (TEXT_PROTOCOL_STRIKES.get(executorKey) || 0) + 1;
+        TEXT_PROTOCOL_STRIKES.set(executorKey, strikes);
+        console.warn(`[Agentic RAG] Falling back to the text protocol: ${reason}.`);
+    };
 
     while (currentTurn <= maxTurns && !finished) {
         throwIfRunCancelled(run);
@@ -2831,70 +3462,92 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
             });
         }
 
+        if (!downgradeUntilFits(transcript.filter(step => step.kind === 'turn'), fitsPlannerWindow)) {
+            trajectory.stopped = `the research no longer fits the planner model's context window of ${plannerMaximum} tokens`;
+            console.warn(`[Agentic RAG] Stopping: ${trajectory.stopped}.`);
+            break;
+        }
+
+        const before = new Set(retrievedIds());
+        const turnRecord = { turn: currentTurn, protocol, calls: [], inputTokens: 0, outputTokens: 0, providerUsage: null, newItems: 0, newIds: [], finished: false };
+        trajectory.turns.push(turnRecord);
+
         try {
-            const systemPromptText = `You are a precise researcher. You communicate strictly using the tools specified. ${getSystemLanguageInstruction()}`;
-            const messagesText = JSON.stringify(messages);
-            agenticRagInputTokens += estimateTokens(systemPromptText) + estimateTokens(messagesText);
+            turnRecord.inputTokens = estimateRequest().inputTokens;
+            agenticRagInputTokens += turnRecord.inputTokens;
 
-            const agentOutput = await sendApiRequest({
-                apiProfileId: executor.apiProfileId,
-                model: executor.model,
-                systemPrompt: systemPromptText,
-                chatHistory: [],
-                newPrompt: messagesText,
-                temperature: 0.1,
-                maxTokens: 4000,
-                maxPayloadTokens: normalizeMaxApiPayload(chat?.maxContext),
-                manualMode: false,
-                manualJson: '',
-                abortSignal: run?.controller?.signal
-            });
-
-            agenticRagOutputTokens += estimateTokens(agentOutput);
-
-            console.log(`[Agentic RAG] Agent output:\n${agentOutput}`);
-
-            // Tolerant attribute parser: accepts double quotes, single quotes, or unquoted values, in any order.
-            const parseAttrs = (attrStr) => {
-                const attrs = {};
-                const attrRegex = /([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g;
-                let m;
-                while ((m = attrRegex.exec(attrStr)) !== null) {
-                    attrs[m[1].toLowerCase()] = (m[2] ?? m[3] ?? m[4] ?? '').trim();
-                }
-                return attrs;
-            };
-
-            const KNOWN_TOOLS = ['search_kb', 'read_file', 'search_memories', 'lookup_entity', 'read_lore', 'expand'];
-
-            // Models vary: accept any quoting, order, arg alias, or inner-text arg.
-            const toolCalls = [];
-            const toolBlockRegex = /<tool_call\b([^>]*?)\/?>([\s\S]*?<\/tool_call>)?/gi;
-            let tb;
-            while ((tb = toolBlockRegex.exec(agentOutput)) !== null) {
-                const attrs = parseAttrs(tb[1] || '');
-                const name = (attrs.name || '').toLowerCase();
-                let arg = attrs.query ?? attrs.filename ?? attrs.file ?? attrs.q ?? attrs.term ?? attrs.arg ?? '';
-                if (!arg && tb[2]) {
-                    arg = tb[2].replace(/<\/tool_call>/i, '').trim();
-                }
-                if (KNOWN_TOOLS.includes(name) && arg) {
-                    toolCalls.push({ name, arg });
-                }
+            let reply;
+            try {
+                reply = await requestPlannerTurn();
+            } catch (requestError) {
+                const aborted = Boolean(run?.controller?.signal?.aborted) || requestError?.name === 'AbortError';
+                if (aborted || protocol !== 'native' || nativeConfirmed || requestError?.code === 'MAX_API_PAYLOAD_EXCEEDED') throw requestError;
+                turnRecord.calls.push({ tool: '-', arg: '', hits: 0, status: 'native-request-failed' });
+                abandonNative(`the native request failed: ${String(requestError?.message || requestError).slice(0, 160)}`, true);
+                continue;
             }
 
-            // Tolerant finish parsing: flexible sources quoting.
+            const agentOutput = reply.content || '';
+            turnRecord.outputTokens = estimateTokens(agentOutput) + estimateTokens(reply.toolCalls && reply.toolCalls.length ? JSON.stringify(reply.toolCalls) : '');
+            turnRecord.providerUsage = reply.usage || null;
+            if (reply.usage && reply.usage.totalInputTokens != null) {
+                turnRecord.tokenRatio = recordTokenCount(calibrationKey(), turnRecord.inputTokens, reply.usage.totalInputTokens);
+            }
+            agenticRagOutputTokens += turnRecord.outputTokens;
+
+            console.log(`[Agentic RAG] Agent output:\n${agentOutput}${reply.toolCalls && reply.toolCalls.length ? `\n${JSON.stringify(reply.toolCalls)}` : ''}`);
+
+            // Reasoning is never read as an action, in either protocol.
+            const thought = stripReasoning(agentOutput);
+            let calls = [];
             let finishMatch = null;
-            const finishBlock = /<finish\b([^>]*)>([\s\S]*?)<\/finish>/i.exec(agentOutput);
-            if (finishBlock) {
-                const finishAttrs = parseAttrs(finishBlock[1] || '');
-                finishMatch = { sources: finishAttrs.sources || '', body: finishBlock[2] };
+            let ignoredFinishes = [];
+
+            if (protocol === 'native') {
+                const nativeCalls = (reply.toolCalls || []).map((call, index) => ({
+                    // Google matches responses by name when it sent no id, so none is invented there.
+                    id: call.id || (reply.rawFormat === 'google' ? null : `call_${currentTurn}_${index}`),
+                    name: String(call.name || '').toLowerCase(),
+                    args: call.args || {}
+                }));
+                if (!nativeCalls.length && !nativeConfirmed) {
+                    turnRecord.calls.push({ tool: '-', arg: '', hits: 0, status: 'no-native-call' });
+                    abandonNative('the first native reply called no tool', false);
+                    continue;
+                }
+                if (nativeCalls.length && !nativeConfirmed) {
+                    nativeConfirmed = true;
+                    TEXT_PROTOCOL_STRIKES.delete(executorKey);
+                }
+                const finishes = nativeCalls.filter(call => call.name === 'finish');
+                calls = nativeCalls.filter(call => call.name !== 'finish');
+                if (!nativeCalls.length) {
+                    // After tools have worked once, a plain reply is the model concluding.
+                    finishMatch = { sources: '', body: thought };
+                } else if (!calls.length) {
+                    const args = finishes[0].args || {};
+                    finishMatch = {
+                        sources: Array.isArray(args.sources) ? args.sources.join(', ') : String(args.sources || ''),
+                        body: String(args.summary || '')
+                    };
+                } else if (finishes.length) {
+                    ignoredFinishes = finishes;
+                    console.log('[Agentic RAG] Ignoring a finish called alongside other tools; their results had not been delivered yet.');
+                }
+            } else {
+                const parsed = parseAgentTurn(agentOutput);
+                if (parsed.imaginedFinish) {
+                    console.log('[Agentic RAG] Ignoring a finish written alongside tool calls; the results had not been delivered yet.');
+                }
+                calls = parsed.toolCalls.map(call => ({ id: null, name: call.name, args: { query: call.arg } }));
+                finishMatch = parsed.finish ? { sources: parsed.finish.sources, body: parsed.finish.body } : null;
             }
 
             if (finishMatch) {
                 const sourcesAttr = finishMatch.sources;
-                finishResponse = finishMatch.body.trim();
+                finishResponse = String(finishMatch.body || '').trim();
                 finished = true;
+                turnRecord.finished = true;
 
                 if (sourcesAttr) {
                     const citations = parseCitations(sourcesAttr);
@@ -2907,7 +3560,7 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
 
                     // Uncited results are demoted, never dropped: a citation by character name
                     // must not empty the context of the archive passages that mention them.
-                    for (const map of [retrievedProfileChunks, retrievedChatChunks, retrievedMemories]) {
+                    for (const map of [retrievedProfileChunks, retrievedChatChunks, retrievedMemories, retrievedLore]) {
                         for (const [id, chunk] of map.entries()) {
                             if (!isCitedChunk({ id, ...chunk }, cited)) map.set(id, { ...chunk, uncited: true });
                         }
@@ -2928,368 +3581,69 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                             (fact.aliases || []).some(a => norm(a) === s) ||
                             factText.includes(s)
                         );
-                        if (!keep) retrievedWorldFacts.delete(id);
+                        if (!keep) retrievedWorldFacts.set(id, { ...fact, uncited: true });
                     }
                 }
                 break;
             }
 
-            // Never treat raw THOUGHT text as the answer; correct once, for free.
-            if (toolCalls.length === 0) {
+            // Only the text protocol can produce a reply that is neither a call nor a finish.
+            if (calls.length === 0) {
                 if (correctionRetries < maxCorrectionRetries) {
                     correctionRetries++;
                     console.warn(`[Agentic RAG] Malformed turn (no valid tool_call/finish). Correction retry ${correctionRetries}/${maxCorrectionRetries}.`);
-                    messages.push({ role: 'assistant', content: agentOutput });
-                    messages.push({
-                        role: 'user',
-                        content: `Your last response did not contain a valid <tool_call .../> or <finish>...</finish>. Respond using ONLY the exact tool syntax. Example: <tool_call name="search_kb" query="..." />. If you already have enough information, use <finish sources="...">brief note</finish>.`
+                    turnRecord.calls.push({ tool: '-', arg: '', hits: 0, status: 'malformed' });
+                    transcript.push({
+                        kind: 'correction',
+                        text: thought,
+                        notice: `Your last response did not contain a valid <tool_call .../> or <finish>...</finish>. Respond using ONLY the exact tool syntax. Example: <tool_call name="search_kb" query="..." />. If you already have enough information, use <finish sources="...">brief note</finish>.`
                     });
                     continue; // does not increment currentTurn
                 }
                 console.warn('[Agentic RAG] Correction budget exhausted; finishing with whatever context was gathered.');
+                turnRecord.calls.push({ tool: '-', arg: '', hits: 0, status: 'malformed' });
                 finishResponse = '';
                 finished = true;
                 break;
             }
 
-            const turnItems = []; // { kind:'result', handle, source, full, meta } | { kind:'note', text }
-            const pushResult = ({ id, source, full, meta }) => {
-                const handle = `R${++handleSeq}`;
-                itemRegistry.set(handle, { source, full });
-                if (id) handleIds.set(handle, id);
-                if (source) coveredSources.add(source);
-                turnItems.push({ kind: 'result', handle, source: source || '?', full: full || '', meta: meta || '' });
-                return handle;
-            };
-            const pushNote = (text) => turnItems.push({ kind: 'note', text });
-            for (const call of toolCalls) {
-                console.log(`[Agentic RAG] Executing tool: ${call.name} with: "${call.arg}"`);
-
-                if (call.name === 'search_kb') {
-                    const rawProfileResults = await searchKnowledgeBase(call.arg, profile.id);
-                    const rawChatKbResults = includeChatContext ? await searchChatKnowledgeBase(call.arg, chatId) : [];
-
-                    const knowledgeFiles = JSON.parse(profile.knowledgeFiles || '[]');
-                    let constantSnippetTitles = [];
-                    try {
-                        constantSnippetTitles = db.getConstantSnippets(profile.id)
-                            .map(c => (c.title || '').toLowerCase());
-                    } catch (e) { }
-
-                    const profileResults = rawProfileResults.filter(r => {
-                        const fileMatch = knowledgeFiles.find(f => f.name.toLowerCase() === r.source.toLowerCase());
-                        if (fileMatch && (fileMatch.strategy === 'constant' || fileMatch.strategy === 'full_context')) {
-                            return false;
-                        }
-                        if (constantSnippetTitles.includes(r.source.toLowerCase())) {
-                            return false;
-                        }
-                        return true;
-                    });
-
-                    let chatKbFiles = [];
-                    if (includeChatContext && chat && chat.knowledgeFiles) {
-                        try {
-                            chatKbFiles = typeof chat.knowledgeFiles === 'string'
-                                ? JSON.parse(chat.knowledgeFiles)
-                                : (chat.knowledgeFiles || []);
-                        } catch (e) { }
-                    }
-                    const chatKbResults = filterWorkspaceKnowledgeResults(
-                        rawChatKbResults,
-                        chatKbFiles,
-                        profile.id
-                    );
-
-                    profileResults.forEach(r => rememberRetrieved(retrievedProfileChunks, r, 'search'));
-                    if (includeChatContext) {
-                        chatKbResults.forEach(r => rememberRetrieved(retrievedChatChunks, r, 'search'));
-                    }
-
-                    const combined = [...profileResults, ...chatKbResults];
-
-                    if (combined.length === 0) {
-                        pushNote(`Tool [search_kb] for "${call.arg}": No matches found.`);
-                    } else {
-                        pushNote(`Tool [search_kb] for "${call.arg}": ${combined.length} result(s).`);
-                        combined.forEach(r => pushResult({
-                            id: r.id, source: r.source, full: r.text,
-                            meta: `search_kb "${call.arg}"${typeof r.score === 'number' ? ` sim=${r.score.toFixed(2)}` : ''}`
-                        }));
-                    }
-                } else if (call.name === 'search_memories') {
-                    const rawMemResults = includeChatContext ? await searchChatMemories(call.arg, chatId) : [];
-
-                    let chatMemoryBlocks = [];
-                    if (includeChatContext && chat && chat.memoryBlocks) {
-                        try {
-                            chatMemoryBlocks = typeof chat.memoryBlocks === 'string'
-                                ? JSON.parse(chat.memoryBlocks)
-                                : (chat.memoryBlocks || []);
-                        } catch (e) { }
-                    }
-                    const memResults = filterWorkspaceMemoryResults(
-                        rawMemResults,
-                        chatMemoryBlocks,
-                        profile.id
-                    );
-
-                    if (includeChatContext) {
-                        memResults.forEach(r => rememberRetrieved(retrievedMemories, r, 'search'));
-                    }
-
-                    if (memResults.length === 0) {
-                        pushNote(`Tool [search_memories] for "${call.arg}": No matches found.`);
-                    } else {
-                        pushNote(`Tool [search_memories] for "${call.arg}": ${memResults.length} match(es).`);
-                        memResults.forEach(r => pushResult({
-                            id: r.id, source: r.source, full: r.text,
-                            meta: `search_memories "${call.arg}"${typeof r.score === 'number' ? ` sim=${r.score.toFixed(2)}` : ''}`
-                        }));
-                    }
-                } else if (call.name === 'lookup_entity') {
-                    // Registry is resolved directly so never-tagged entities are still found.
-                    let entityChunks = [], entityIds = [], entityChunkTotal = 0;
-                    if (includeChatContext) {
-                        const looked = lookupEntityChunks(call.arg, chatId, 'chat_memory', { queryVector: lookupQueryVector });
-                        const available = filterWorkspaceMemoryResults(
-                            looked.chunks || [],
-                            chat?.memoryBlocks || [],
-                            profile.id
-                        );
-                        entityChunkTotal = available.length;
-                        entityChunks = available.slice(0, LOOKUP_ENTITY_CHUNK_LIMIT);
-                        entityIds = Array.isArray(looked.entityIds) ? [...looked.entityIds] : [];
-                    }
-                    let registryEntity = null;
-                    try {
-                        const rid = entitiesStore.resolveMention(call.arg, null, chatId);
-                        if (rid) {
-                            registryEntity = entitiesStore.getEntity(rid);
-                            if (!entityIds.includes(rid)) entityIds.push(rid);
-                        }
-                    } catch (e) { }
-
-                    if (includeChatContext) {
-                        entityChunks.forEach(r => rememberRetrieved(retrievedMemories, r, 'lookup'));
-                    }
-                    const relLines = [];
-                    const edgesByEntity = new Map();
-                    let anyLore = false;
-                    try {
-                        for (const eid of entityIds) {
-                            const ent = entitiesStore.getEntity(eid);
-                            if (!ent) continue;
-                            const links = entitiesStore.getLinksFrom(eid) || [];
-                            if (links.length) {
-                                const edges = links.map(l => `${l.label || l.relType} → ${l.entity ? l.entity.canonicalName : '?'}`).join('; ');
-                                relLines.push(`${ent.canonicalName}: ${edges}`);
-                                edgesByEntity.set(eid, edges);
-                            }
-                            if (entitiesStore.linkedLoreDocIds(ent).length) anyLore = true;
-                        }
-                    } catch (e) { }
-
-                    // Exempt from finish-sources pruning.
-                    if (registryEntity) {
-                        const factParts = [];
-                        const details = entityDataFacts(registryEntity.data);
-                        if (details) factParts.push(`Details: ${details}`);
-                        const desc = registryEntity.data && (registryEntity.data.description || registryEntity.data.content);
-                        if (desc && String(desc).trim()) factParts.push(`Description: ${String(desc).trim()}`);
-                        if (registryEntity.lore && String(registryEntity.lore).trim()) factParts.push(`Lore: ${registryEntity.lore}`);
-                        const ownEdges = edgesByEntity.get(registryEntity.id);
-                        if (ownEdges) factParts.push(`Relations: ${ownEdges}`);
-                        if (factParts.length) {
-                            retrievedWorldFacts.set(registryEntity.id, {
-                                text: `${registryEntity.canonicalName} (${registryEntity.type}) — ${factParts.join(' | ')}`,
-                                source: `Worldbuild — ${registryEntity.canonicalName}`,
-                                canonicalName: registryEntity.canonicalName,
-                                aliases: Array.isArray(registryEntity.aliases) ? registryEntity.aliases : []
-                            });
-                        }
-                    }
-
-                    if (registryEntity) coveredEntities.add(registryEntity.canonicalName);
-                    if (registryEntity) {
-                        let head = `Worldbuild entity ${registryEntity.canonicalName} (${registryEntity.type})`;
-                        const headDetails = entityDataFacts(registryEntity.data);
-                        if (headDetails) head += ` [${headDetails}]`;
-                        const headDesc = registryEntity.data && (registryEntity.data.description || registryEntity.data.content);
-                        if (headDesc && String(headDesc).trim()) head += ` — ${String(headDesc).trim()}`;
-                        if (registryEntity.lore && String(registryEntity.lore).trim()) head += `: ${registryEntity.lore}`;
-                        pushResult({ source: registryEntity.canonicalName, full: head, meta: `lookup_entity "${call.arg}"` });
-                    }
-                    entityChunks.forEach(r => pushResult({ id: r.id, source: r.source, full: r.text, meta: `lookup_entity "${call.arg}"` }));
-                    if (entityChunkTotal > entityChunks.length) {
-                        pushNote(`Tool [lookup_entity] for "${call.arg}": showing the ${entityChunks.length} passages most relevant to the request out of ${entityChunkTotal} tagged. Use search_memories with specific terms to reach others.`);
-                    }
-                    if (!registryEntity && entityChunks.length === 0 && relLines.length === 0) {
-                        pushNote(`Tool [lookup_entity] for "${call.arg}": No known entity matched.`);
-                    }
-                    if (relLines.length) {
-                        pushNote(`RELATED ENTITIES (follow with lookup_entity): ${relLines.join(' | ')}`);
-                    }
-                    if (anyLore) {
-                        pushNote(`NOTE: this entity has linked lore — call read_lore query="${call.arg}" for its authored background.`);
-                    }
-                } else if (call.name === 'read_lore') {
-                    let loreResults = [];
-                    let docTitle = '';
-                    if (includeChatContext) {
-                        try {
-                            const looked = lookupEntityChunks(call.arg, chatId, 'chat_memory', { idsOnly: true });
-                            const ids = Array.isArray(looked.entityIds) ? [...looked.entityIds] : [];
-                            try {
-                                const rid = entitiesStore.resolveMention(call.arg, null, chatId);
-                                if (rid && !ids.includes(rid)) ids.push(rid);
-                            } catch (e) { }
-                            let loreDocIds = [];
-                            for (const eid of ids) {
-                                const ent = entitiesStore.getEntity(eid);
-                                const docs = ent ? entitiesStore.linkedLoreDocIds(ent) : [];
-                                if (docs.length) { loreDocIds = docs; docTitle = ent.canonicalName; break; }
-                            }
-                            if (loreDocIds.length) {
-                                loreResults = await executeMultiOwnerSearch(currentInput, loreDocIds, 'document', 0.3, 4);
-                            }
-                        } catch (e) { }
-                    }
-                    if (loreResults.length === 0) {
-                        pushNote(`Tool [read_lore] for "${call.arg}": No linked lore document, or no relevant passages found.`);
-                    } else {
-                        pushNote(`Tool [read_lore] for "${call.arg}": ${loreResults.length} passage(s) from linked lore of ${docTitle}.`);
-                        loreResults.forEach(r => {
-                            let text = r.text || '';
-                            if (text.length > MAX_AGENT_FILE_CHARS) text = text.slice(0, MAX_AGENT_FILE_CHARS) + '\n[...truncated...]';
-                            retrievedLore.set(r.id, { text, source: r.source || docTitle, score: Number(r.fusionScore ?? r.score) || 0 });
-                            pushResult({ id: r.id, source: r.source || docTitle, full: text, meta: `read_lore "${call.arg}"` });
-                        });
-                    }
-                } else if (call.name === 'read_file') {
-                    let isConstant = false;
-                    try {
-                        const kbFiles = JSON.parse(profile.knowledgeFiles || '[]');
-                        const fileMatch = kbFiles.find(f => f.name.toLowerCase() === call.arg.toLowerCase());
-                        if (fileMatch && (!fileMatch.strategy || fileMatch.strategy === 'constant' || fileMatch.strategy === 'full_context')) {
-                            isConstant = true;
-                        }
-                    } catch (e) { }
-
-                    if (!isConstant && includeChatContext && chat && chat.knowledgeFiles) {
-                        try {
-                            const chatKbFiles = typeof chat.knowledgeFiles === 'string'
-                                ? JSON.parse(chat.knowledgeFiles)
-                                : chat.knowledgeFiles;
-                            const fileMatch = chatKbFiles.find(f => f.name.toLowerCase() === call.arg.toLowerCase());
-                            if (fileMatch && (!fileMatch.profiles || fileMatch.profiles.length === 0 || fileMatch.profiles.includes(profile.id))
-                                && (!fileMatch.strategy || fileMatch.strategy === 'constant' || fileMatch.strategy === 'full_context')) {
-                                isConstant = true;
-                            }
-                        } catch (e) { }
-                    }
-
-                    if (!isConstant) {
-                        try {
-                            const snippetMatch = db.getConstantSnippets(profile.id)
-                                .find(c => (c.title || '').toLowerCase() === call.arg.toLowerCase());
-                            if (snippetMatch) {
-                                isConstant = true;
-                            }
-                        } catch (e) { }
-                    }
-
-                    if (!isConstant && includeChatContext && chat && chat.memoryBlocks) {
-                        try {
-                            const snippets = typeof chat.memoryBlocks === 'string'
-                                ? JSON.parse(chat.memoryBlocks)
-                                : chat.memoryBlocks;
-                            const snippetMatch = snippets.find(s => s.type === 'manual'
-                                && (s.title || s.source || '').toLowerCase() === call.arg.toLowerCase()
-                                && (!s.profiles || s.profiles.length === 0 || s.profiles.includes(profile.id))
-                                && s.strategy === 'constant');
-                            if (snippetMatch) {
-                                isConstant = true;
-                            }
-                        } catch (e) { }
-                    }
-
-                    if (isConstant) {
-                        pushNote(`Tool [read_file] for "${call.arg}": Access Denied — "${call.arg}" is a Constant context block already permanently included in the main prompt.`);
-                    } else {
-                        let fileText = readEntireKbFile(profile.id, call.arg);
-                        let fileSource = 'profile';
-                        if (fileText.startsWith("[System: File not found") && includeChatContext) {
-                            const chatFiles = typeof chat?.knowledgeFiles === 'string'
-                                ? JSON.parse(chat.knowledgeFiles || '[]')
-                                : (chat?.knowledgeFiles || []);
-                            const allowed = chatFiles.some(file =>
-                                String(file.name || '').toLowerCase() === call.arg.toLowerCase()
-                                && file.enabled !== false
-                                && (!file.profiles || file.profiles.length === 0 || file.profiles.includes(profile.id))
-                            );
-                            if (allowed) {
-                                fileText = readEntireKbFile(chatId, call.arg);
-                                fileSource = 'chat';
-                            }
-                        }
-
-                        if (!fileText.startsWith("[System: File not found")) {
-                            readFiles.set(call.arg, { text: fileText, source: fileSource });
-                        }
-
-                        // Truncated for the agent only; readFiles keeps the full text.
-                        let agentFileText = fileText;
-                        if (fileText.length > MAX_AGENT_FILE_CHARS) {
-                            agentFileText = fileText.slice(0, MAX_AGENT_FILE_CHARS) +
-                                `\n[...truncated at ${MAX_AGENT_FILE_CHARS} chars for agent reasoning; the full file is preserved for the final context...]`;
-                        }
-
-                        pushResult({ source: call.arg, full: agentFileText, meta: `read_file (${fileSource})` });
-                    }
-                } else if (call.name === 'expand') {
-                    // Re-read one previously summarized item's full text into THIS turn only.
-                    const hit = itemRegistry.get(call.arg) ||
-                        [...itemRegistry.values()].find(v => entitiesStore.normalizeName(v.source) === entitiesStore.normalizeName(call.arg));
-                    if (hit) pushNote(`Tool [expand] "${call.arg}":\n[${hit.source}] ${hit.full}`);
-                    else pushNote(`Tool [expand] "${call.arg}": no such retrieved item.`);
+            const results = [];
+            for (const call of calls) {
+                const collector = createCollector();
+                const arg = argOf(call.name, call.args);
+                if (!TOOL_NAMES.includes(call.name)) {
+                    collector.pushNote(`Tool [${call.name}]: there is no such tool. Use only the tools provided.`);
+                    turnRecord.calls.push({ tool: call.name, arg, hits: 0, status: 'unknown-tool' });
+                } else if (!arg) {
+                    collector.pushNote(`Tool [${call.name}]: the call had no argument, so nothing was searched.`);
+                    turnRecord.calls.push({ tool: call.name, arg: '', hits: 0, status: 'missing-argument' });
+                } else {
+                    console.log(`[Agentic RAG] Executing tool: ${call.name} with: "${arg}"`);
+                    turnRecord.calls.push(await runToolCall({ name: call.name, arg }, collector));
                 }
+                const full = renderItems(collector.turnItems, true);
+                results.push({ id: call.id, name: call.name, full: full || '(no output)', digest: renderItems(collector.turnItems, false) || '(no output)' });
+            }
+            for (const ignored of ignoredFinishes) {
+                const note = 'finish ignored: it was called together with other tools, before their results were seen.';
+                results.push({ id: ignored.id, name: 'finish', full: note, digest: note });
             }
 
-            // This turn is added in full; the digest is what it collapses to once it ages out.
-            const coverageLine = () => {
-                const ents = coveredEntities.size ? [...coveredEntities].join(', ') : '—';
-                const srcs = coveredSources.size ? [...coveredSources].slice(0, 12).join(', ') : '—';
-                return `COVERED SO FAR — entities: ${ents} | sources: ${srcs} | ${itemRegistry.size} items`;
-            };
-            const renderItem = (it, full) => it.kind === 'note'
-                ? it.text
-                : (full
-                    ? `[${it.handle} · ${it.source}] ${it.full}`
-                    : `[${it.handle} · ${it.source}]${it.meta ? ` (${it.meta})` : ''} ${makeSnippet(it.full)}`);
-            const fullContent = `${coverageLine()}\n\n${turnItems.map(it => renderItem(it, true)).join('\n\n')}`;
-            const digestContent = `${coverageLine()}\n${turnItems.map(it => renderItem(it, false)).join('\n')}`;
+            turnRecord.newIds = retrievedIds().filter(id => !before.has(id));
+            turnRecord.newItems = turnRecord.newIds.length;
 
-            messages.push({ role: 'assistant', content: agentOutput });
-            const msgIndex = messages.push({ role: 'user', content: `TOOL RESULTS:\n${fullContent}\n\nWhat is your next step?` }) - 1;
-            turnLog.push({
-                msgIndex, digestContent,
-                fullTokens: estimateTokens(fullContent),
-                digestTokens: estimateTokens(digestContent),
+            transcript.push({
+                kind: 'turn',
+                thought: protocol === 'native' ? thought : '',
+                textReply: protocol === 'text' ? thought : null,
+                calls: [...calls, ...ignoredFinishes],
+                raw: protocol === 'native' ? reply.raw : null,
+                rawFormat: protocol === 'native' ? reply.rawFormat : null,
+                results,
+                coverage: coverageLine(),
+                footer: nextStepLine(currentTurn + 1),
                 downgraded: false
             });
-
-            if (LEAN_AGENT_HISTORY) {
-                // Oldest first; the newest KEEP_TURNS always stay in full.
-                const liveTokens = () => turnLog.reduce((s, e) => s + (e.downgraded ? e.digestTokens : e.fullTokens), 0);
-                const protectedFrom = turnLog.length - LEAN_HISTORY_KEEP_TURNS;
-                for (let i = 0; i < protectedFrom && liveTokens() > LEAN_HISTORY_BUDGET_TOKENS; i++) {
-                    const e = turnLog[i];
-                    if (e.downgraded) continue;
-                    messages[e.msgIndex].content = `TOOL RESULTS (earlier, summarized):\n${e.digestContent}`;
-                    e.downgraded = true;
-                }
-            }
 
             currentTurn++;
 
@@ -3307,7 +3661,11 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
     }
 
     // Tier sets packing priority: facts, read files, search hits, lookup-only passages, uncited.
+    // What the free pre-search found never falls to the bottom tier: the deterministic path
+    // would have sent it, and the agent staying silent about it is not evidence against it.
     const UNCITED_TIER = 4;
+    const SEEDED_UNCITED_TIER = 3;
+    const uncitedTier = (ids) => (ids.some(id => seededIds.has(id)) ? SEEDED_UNCITED_TIER : UNCITED_TIER);
     const sections = {
         profile: '--- PROFILE KNOWLEDGE BASE CHUNKS ---',
         files: '--- READ FILES CONTENT ---',
@@ -3317,30 +3675,32 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
         facts: '--- WORLDBUILD FACTS ---'
     };
     const contextItems = [];
-    for (const r of retrievedProfileChunks.values()) {
-        contextItems.push({ section: sections.profile, text: `[Result from Profile KB - ${r.source}]: ${r.text}`, tier: r.uncited ? UNCITED_TIER : 2, score: r.score || 0, origin: 'profile' });
+    for (const [id, r] of retrievedProfileChunks.entries()) {
+        contextItems.push({ section: sections.profile, ids: [id], text: `[Result from Profile KB - ${r.source}]: ${r.text}`, tier: r.uncited ? uncitedTier([id]) : 2, score: r.score || 0, origin: 'profile' });
     }
     for (const [filename, data] of readFiles.entries()) {
         contextItems.push({
             section: sections.files,
+            ids: [filename],
             text: `[File Contents: ${filename}]:\n${data.text}`,
             tier: data.uncited ? UNCITED_TIER : 1,
             truncatable: true,
             origin: data.source === 'profile' ? 'profile' : 'chat'
         });
     }
-    for (const r of retrievedChatChunks.values()) {
-        contextItems.push({ section: sections.chat, text: `[Result from Chat KB - ${r.source}]: ${r.text}`, tier: r.uncited ? UNCITED_TIER : 2, score: r.score || 0, origin: 'chat' });
+    for (const [id, r] of retrievedChatChunks.entries()) {
+        contextItems.push({ section: sections.chat, ids: [id], text: `[Result from Chat KB - ${r.source}]: ${r.text}`, tier: r.uncited ? uncitedTier([id]) : 2, score: r.score || 0, origin: 'chat' });
     }
     const memoryPassages = expandMemoryResults([...retrievedMemories.entries()].map(([id, r]) => ({ id, ...r })), chatId);
     for (const r of memoryPassages) {
-        contextItems.push({ section: sections.memory, text: `[Chat Memory]: ${r.text}`, tier: r.uncited ? UNCITED_TIER : (r.origin === 'search' ? 2 : 3), score: r.score || 0, origin: 'chat' });
+        const ids = r.ids || [r.id];
+        contextItems.push({ section: sections.memory, ids, text: `[Chat Memory]: ${r.text}`, tier: r.uncited ? uncitedTier(ids) : (r.origin === 'search' ? 2 : 3), score: r.score || 0, origin: 'chat' });
     }
-    for (const r of retrievedLore.values()) {
-        contextItems.push({ section: sections.lore, text: `[Linked Lore - ${r.source}]: ${r.text}`, tier: 2, score: r.score || 0, origin: 'chat' });
+    for (const [id, r] of retrievedLore.entries()) {
+        contextItems.push({ section: sections.lore, ids: [id], text: `[Linked Lore - ${r.source}]: ${r.text}`, tier: r.uncited ? uncitedTier([id]) : 2, score: r.score || 0, origin: 'chat' });
     }
-    for (const r of retrievedWorldFacts.values()) {
-        contextItems.push({ section: sections.facts, text: `[${r.source}]: ${r.text}`, tier: 0, truncatable: true, origin: 'chat' });
+    for (const [id, r] of retrievedWorldFacts.entries()) {
+        contextItems.push({ section: sections.facts, ids: [id], text: `[${r.source}]: ${r.text}`, tier: r.uncited ? SEEDED_UNCITED_TIER : 0, truncatable: true, origin: 'chat' });
     }
 
     return {
@@ -3349,7 +3709,8 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
         contextSections: Object.values(sections),
         agenticInputTokens: agenticRagInputTokens,
         agenticOutputTokens: agenticRagOutputTokens,
-        degraded: loopDegraded
+        degraded: loopDegraded,
+        trajectory
     };
 }
 
@@ -3357,6 +3718,7 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
 
 module.exports = {
     runWorkflow,
+    executeAgenticRagLoop,
     cancelGeneration,
     resolveErrorDeferred,
     resolveOverflowDeferred,
