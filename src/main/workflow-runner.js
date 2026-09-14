@@ -68,7 +68,6 @@ const {
 const retrievalLedger = require('./features/knowledge/retrieval-ledger');
 const { TOOL_NAMES, argOf, plannerToolDefinitions, textToolCatalog, renderTextCall } = require('./features/knowledge/planner-tools');
 const { flattenConversation } = require('./features/llm/tool-conversation');
-const { recordTokenCount, tokenRatio, calibrateTokens } = require('./features/llm/token-calibration');
 const { buildNeighborPassages } = require('./features/knowledge/passage-neighbors');
 const { encode } = require('gpt-tokenizer/encoding/o200k_base');
 const fs = require('fs');
@@ -491,6 +490,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
         let totalChatKbTokens = 0;
         let totalChatHistoryTokens = 0;
         let totalMainInputTokens = 0;
+        let finalPayloadLimit = null;
         let totalAgenticInputTokens = 0;
         let totalAgenticOutputTokens = 0;
         let totalOutputTokens = 0;
@@ -635,11 +635,13 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             const attachmentsPayloadContext = attachmentsContext
                 ? `\n\n--- ATTACHED FILES FOR CURRENT MESSAGE ---\n${attachmentsContext}\n`
                 : '';
-            const stepLimit = resolvePayloadLimit({ apiProfileId: profile.apiProfileId, maxPayloadTokens: maxContextTokens });
+            const stepLimit = resolvePayloadLimit({ apiProfileId: profile.apiProfileId, model: profile.model, maxPayloadTokens: maxContextTokens });
             const fixedPrompt = resolveVariables(compiledSystemPrompt + contextBlock + attachmentsPayloadContext);
             const fixedTokens = estimateTokens(fixedPrompt);
             const budgetInput = {
                 maxPayloadTokens: stepLimit.limit,
+                configuredPayloadTokens: stepLimit.configured,
+                tokenRatio: stepLimit.ratio,
                 limitSource: stepLimit.source,
                 newPrompt: resolveVariables(currentInput),
                 attachedImageCount: i === 0 ? attachedImages.length : 0,
@@ -691,7 +693,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                 let ragChatHistory = [];
                 if (i === 0 || includeChatHistory) {
                     // The planner reads this history, so its own window sizes it, not the writer's.
-                    const plannerLimit = resolvePayloadLimit({ apiProfileId: retrievalPlanner.executor.apiProfileId, maxPayloadTokens: maxContextTokens });
+                    const plannerLimit = resolvePayloadLimit({ apiProfileId: retrievalPlanner.executor.apiProfileId, model: retrievalPlanner.executor.model, maxPayloadTokens: maxContextTokens });
                     ragChatHistory = formatActiveHistory(
                         activeMessages.slice(-10),
                         plannerWindowShape(plannerLimit.limit).historyTokens
@@ -858,6 +860,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             let stepOutput = '';
             let stepTruncated = false;
             let stepFinishReason = null;
+            let stepLearnedRatio = null;
 
             while (!success) {
                 if (currentRun.isCancelled) {
@@ -881,7 +884,10 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                         temperature: profile.temperature,
                         maxTokens: profile.maxTokens,
                         maxPayloadTokens: maxContextTokens,
+                        // History and retrieval were sized on this limit; the final check must use the same one.
+                        payloadLimit: stepLimit,
                         payloadBreakdown,
+                        learnTokenCount: true,
                         includeResponseMetadata: true,
                         manualMode: profile.manualMode === 1,
                         manualJson: profile.manualJson,
@@ -916,6 +922,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     }
                     stepTruncated = Boolean(result?.truncated);
                     stepFinishReason = result?.finishReason ?? null;
+                    stepLearnedRatio = result?.learnedTokenRatio ?? null;
                     success = true;
                 } catch (apiError) {
                     if (apiError.name === 'AbortError' || currentRun.isCancelled) {
@@ -988,6 +995,13 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             if (isLastStep) {
                 finalTruncated = stepTruncated;
                 finalFinishReason = stepFinishReason;
+                finalPayloadLimit = {
+                    limit: stepLimit.limit,
+                    configured: stepLimit.configured,
+                    ratio: stepLimit.ratio,
+                    source: stepLimit.source,
+                    learnedRatio: stepLearnedRatio
+                };
             }
 
             lastAgenticRagResponse = agenticRagResponse;
@@ -1016,7 +1030,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     ...(lastAgenticTrajectory ? { agenticTrajectory: lastAgenticTrajectory } : {})
                 } : {}),
                 ...(debugSettings.ragDebug ? { standardRagContextGathered: capDebugText(lastStandardRagDebug) } : {}),
-                context: { historySent, historyDropped, retrievalOmitted, agenticDegraded, retrievalPath, retrievalGateReason },
+                context: { historySent, historyDropped, retrievalOmitted, agenticDegraded, retrievalPath, retrievalGateReason, payloadLimit: finalPayloadLimit },
                 ...(finalTruncated ? { truncated: true, finishReason: finalFinishReason } : {}),
                 tokens: {
                     knowledgeBase: totalProfileKbTokens + totalChatKbTokens,
@@ -1388,10 +1402,12 @@ async function summarizeArchiveSegment(transcript, { maxPayloadTokens = null } =
         '<two sentences of plain prose covering the consequential facts, decisions, changes, and unresolved threads>\n' +
         'No headings, no lists, no markdown, no transcript excerpts, and no invented details.';
 
-    const limit = resolvePayloadLimit({
+    const payloadLimit = resolvePayloadLimit({
         apiProfileId: summarizer.executor.apiProfileId,
+        model: summarizer.executor.model,
         maxPayloadTokens: normalizeMaxApiPayload(maxPayloadTokens)
-    }).limit;
+    });
+    const limit = payloadLimit.limit;
     const segmentBudget = Math.max(
         1024,
         limit - estimateTokens(systemPrompt) - ARCHIVE_RECAP_TOKENS - safetyMarginFor(limit) - ARCHIVE_PROMPT_OVERHEAD_TOKENS
@@ -1409,7 +1425,7 @@ async function summarizeArchiveSegment(transcript, { maxPayloadTokens = null } =
         newPrompt: `${ARCHIVE_FENCE_OPEN}\n${text}\n${ARCHIVE_FENCE_CLOSE}\n\n${instruction}`,
         temperature: 0.1,
         maxTokens: ARCHIVE_RECAP_TOKENS,
-        maxPayloadTokens: limit,
+        payloadLimit,
         manualMode: false,
         manualJson: null
     });
@@ -2787,10 +2803,6 @@ async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory 
 
     // The planner can run on another connection than the writer, often a smaller local model,
     // so its requests are measured against its own context window.
-    const plannerLimit = resolvePayloadLimit({ apiProfileId: executor.apiProfileId, maxPayloadTokens: normalizeMaxApiPayload(chat?.maxContext) });
-    const plannerMaximum = normalizeMaxApiPayload(plannerLimit.limit);
-    const plannerWindow = plannerWindowShape(plannerMaximum);
-
     const executorKey = `${executor.apiProfileId}:${executor.model}`;
     let protocol = options.toolProtocol !== 'text'
         && (TEXT_PROTOCOL_STRIKES.get(executorKey) || 0) < TEXT_PROTOCOL_STRIKE_LIMIT
@@ -2799,8 +2811,15 @@ async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory 
         : 'text';
     let nativeConfirmed = false;
     const toolDefinitions = plannerToolDefinitions();
-    // Token counts are learned per protocol too: native tool definitions add their own framing.
-    const calibrationKey = () => `${executorKey}:${protocol}`;
+    // Resolved per protocol: native tool definitions add their own framing to what the model counts.
+    const plannerLimitNow = () => resolvePayloadLimit({
+        apiProfileId: executor.apiProfileId,
+        model: executor.model,
+        protocol,
+        maxPayloadTokens: normalizeMaxApiPayload(chat?.maxContext)
+    });
+    const plannerLimit = plannerLimitNow();
+    const plannerWindow = plannerWindowShape(plannerLimit.limit);
 
     const retrievedProfileChunks = new Map();
     const retrievedChatChunks = new Map();
@@ -2949,7 +2968,7 @@ CRITICAL DIRECTIVES FOR COST & EFFICIENCY OPTIMIZATION:
         finalProtocol: protocol,
         protocolFallback: null,
         stopped: null,
-        plannerWindow: { limit: plannerMaximum, source: plannerLimit.source, outputTokens: plannerWindow.outputTokens, tokenRatio: tokenRatio(calibrationKey()) },
+        plannerWindow: { limit: plannerLimit.limit, configured: plannerLimit.configured, source: plannerLimit.source, outputTokens: plannerWindow.outputTokens, tokenRatio: plannerLimit.ratio },
         seed: null,
         turns: []
     };
@@ -3410,17 +3429,18 @@ CRITICAL DIRECTIVES FOR COST & EFFICIENCY OPTIMIZATION:
         return conversation;
     };
 
+    let turnLimit = plannerLimit;
     const estimateRequest = () => estimatePayloadTokens({
         systemPrompt: systemPromptText,
         chatHistory: protocol === 'native' ? flattenConversation(renderNativeConversation(), toolDefinitions) : renderTextMessages(),
         newPrompt: '',
         outputTokens: plannerWindow.outputTokens,
-        maxPayloadTokens: plannerMaximum
+        maxPayloadTokens: turnLimit.limit
     });
-    // Measured with the correction learned from what this model really counted.
+    // The limit already carries the correction for this model's count; the estimate stays raw.
     const fitsPlannerWindow = () => {
-        const estimate = estimateRequest();
-        return calibrateTokens(calibrationKey(), estimate.inputTokens) + estimate.reservedOutputTokens + estimate.safetyMarginTokens <= plannerMaximum;
+        turnLimit = plannerLimitNow();
+        return estimateRequest().totalTokens <= turnLimit.limit;
     };
 
     const requestPlannerTurn = () => {
@@ -3431,6 +3451,8 @@ CRITICAL DIRECTIVES FOR COST & EFFICIENCY OPTIMIZATION:
             temperature: 0.1,
             maxTokens: plannerWindow.outputTokens,
             maxPayloadTokens: normalizeMaxApiPayload(chat?.maxContext),
+            payloadLimit: turnLimit,
+            learnTokenCount: true,
             manualMode: false,
             manualJson: '',
             abortSignal: run?.controller?.signal,
@@ -3463,7 +3485,10 @@ CRITICAL DIRECTIVES FOR COST & EFFICIENCY OPTIMIZATION:
         }
 
         if (!downgradeUntilFits(transcript.filter(step => step.kind === 'turn'), fitsPlannerWindow)) {
-            trajectory.stopped = `the research no longer fits the planner model's context window of ${plannerMaximum} tokens`;
+            const correction = turnLimit.ratio > 1
+                ? ` (${turnLimit.limit} by Kallamo's estimate, as this model counts about ${turnLimit.ratio.toFixed(2)} times as many)`
+                : '';
+            trajectory.stopped = `the research no longer fits the planner model's context window of ${turnLimit.configured} tokens${correction}`;
             console.warn(`[Agentic RAG] Stopping: ${trajectory.stopped}.`);
             break;
         }
@@ -3490,9 +3515,7 @@ CRITICAL DIRECTIVES FOR COST & EFFICIENCY OPTIMIZATION:
             const agentOutput = reply.content || '';
             turnRecord.outputTokens = estimateTokens(agentOutput) + estimateTokens(reply.toolCalls && reply.toolCalls.length ? JSON.stringify(reply.toolCalls) : '');
             turnRecord.providerUsage = reply.usage || null;
-            if (reply.usage && reply.usage.totalInputTokens != null) {
-                turnRecord.tokenRatio = recordTokenCount(calibrationKey(), turnRecord.inputTokens, reply.usage.totalInputTokens);
-            }
+            if (reply.learnedTokenRatio != null) turnRecord.tokenRatio = reply.learnedTokenRatio;
             agenticRagOutputTokens += turnRecord.outputTokens;
 
             console.log(`[Agentic RAG] Agent output:\n${agentOutput}${reply.toolCalls && reply.toolCalls.length ? `\n${JSON.stringify(reply.toolCalls)}` : ''}`);

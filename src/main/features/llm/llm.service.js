@@ -4,7 +4,8 @@ const path = require('path');
 const { fetch: undiciFetch, Agent } = require('undici');
 const { getResponseMetadata } = require('./response-metadata');
 const { openAiResponseFormat, applyBedrockStructuredOutput } = require('./structured-output');
-const { assertPayloadWithinLimit, normalizeMaxApiPayload } = require('./payload-budget');
+const { assertPayloadWithinLimit, estimatePayloadTokens, normalizeMaxApiPayload, safetyMarginFor } = require('./payload-budget');
+const { tokenRatio, recordTokenCount, correctedLimit, useTokenCalibrationStore } = require('./token-calibration');
 const { supportsNativeTools, applyConversation, applyCacheBreakpoint, readToolReply, readUsage, flattenConversation } = require('./tool-conversation');
 
 function getDatabase() {
@@ -76,13 +77,20 @@ function connectionContextWindow(apiProfile) {
     return Number.isFinite(value) && value > 0 ? Math.floor(value) : null;
 }
 
-function payloadLimitFor(apiProfile, maxPayloadTokens) {
+// `configured` is what the user set; `limit` is that number divided by how much more this model
+// counts than the local estimate, so every budget derived from it shrinks together.
+function payloadLimitFor(apiProfile, maxPayloadTokens, { model = null, protocol = 'text' } = {}) {
     const workspace = maxPayloadTokens == null ? null : normalizeMaxApiPayload(maxPayloadTokens);
     const connection = connectionContextWindow(apiProfile);
-    if (connection !== null && (workspace === null || normalizeMaxApiPayload(connection) < workspace)) {
-        return { limit: normalizeMaxApiPayload(connection), source: 'connection' };
-    }
-    return { limit: workspace, source: 'workspace' };
+    const fromConnection = connection !== null && (workspace === null || normalizeMaxApiPayload(connection) < workspace);
+    const configured = fromConnection ? normalizeMaxApiPayload(connection) : workspace;
+    const ratio = configured === null ? 1 : tokenRatio({ apiProfileId: apiProfile?.id, model, protocol });
+    return {
+        limit: correctedLimit(configured, ratio),
+        configured,
+        ratio,
+        source: fromConnection ? 'connection' : 'workspace'
+    };
 }
 
 function loadApiProfile(apiProfileId, dependencies = {}) {
@@ -95,8 +103,26 @@ function loadApiProfile(apiProfileId, dependencies = {}) {
 }
 
 // Budget math outside this module must measure exactly what buildRequest checks.
-function resolvePayloadLimit({ apiProfileId, maxPayloadTokens }, dependencies = {}) {
-    return payloadLimitFor(loadApiProfile(apiProfileId, dependencies), maxPayloadTokens);
+function resolvePayloadLimit({ apiProfileId, model = null, protocol = 'text', maxPayloadTokens }, dependencies = {}) {
+    const database = dependencies.database || getDatabase();
+    useTokenCalibrationStore(database);
+    return payloadLimitFor(loadApiProfile(apiProfileId, { database }), maxPayloadTokens, { model, protocol });
+}
+
+// Images are reserved at a flat size, and Manual JSON and schemas change the body after it is measured.
+function isMeasurableRequest({ attachedImages, manualMode, manualJson, jsonMode, jsonSchema }) {
+    if (attachedImages && attachedImages.length) return false;
+    if (manualMode && String(manualJson || '').trim()) return false;
+    return !jsonMode && !jsonSchema;
+}
+
+// Only a reply the provider accepted teaches the ratio. A count that fills the connection's window
+// may be one the server truncated to fit, which would teach a ratio that is too low.
+function learnFromReportedTokens(tokenSample, reportedInputTokens) {
+    if (!tokenSample || reportedInputTokens == null) return null;
+    const { contextWindow, outputTokens } = tokenSample;
+    if (contextWindow && Number(reportedInputTokens) + outputTokens + safetyMarginFor(contextWindow) >= contextWindow) return null;
+    return recordTokenCount(tokenSample.parts, tokenSample.inputTokens, reportedInputTokens);
 }
 
 function getReservedOutputTokens({ maxTokens }) {
@@ -354,26 +380,32 @@ function textOfParts(parts, thoughts) {
 // Stateless: the reader handles line splitting, `data:` and [DONE].
 // finishReason and error let streaming treat cut-off or failed replies like the non-streaming path.
 function parseStreamChunk(obj, provider) {
-    const empty = { contentDelta: '', reasoningDelta: '', done: false, finishReason: null, error: null };
+    const empty = { contentDelta: '', reasoningDelta: '', done: false, finishReason: null, error: null, inputTokens: null };
     try {
         switch (provider.toLowerCase()) {
             case 'openai':
             case 'openrouter':
             case 'local': {
                 if (obj?.error) return { ...empty, error: providerErrorMessage(obj.error) };
+                // Usage arrives on a chunk with no choice (OpenAI) or on the last choice (llama.cpp).
+                const inputTokens = obj?.usage ? readUsage(provider, obj).totalInputTokens : null;
                 const choice = obj.choices && obj.choices[0];
-                if (!choice) return empty;
+                if (!choice) return { ...empty, inputTokens };
                 const delta = choice.delta || {};
                 return {
                     contentDelta: typeof delta.content === 'string' ? delta.content : '',
                     reasoningDelta: delta.reasoning_content || delta.reasoning || '',
                     done: choice.finish_reason != null,
                     finishReason: choice.finish_reason ?? null,
-                    error: null
+                    error: null,
+                    inputTokens
                 };
             }
             case 'anthropic': {
                 if (obj.type === 'error') return { ...empty, error: providerErrorMessage(obj.error) };
+                if (obj.type === 'message_start') {
+                    return { ...empty, inputTokens: readUsage(provider, obj.message).totalInputTokens };
+                }
                 if (obj.type === 'content_block_delta') {
                     const d = obj.delta || {};
                     return {
@@ -382,17 +414,21 @@ function parseStreamChunk(obj, provider) {
                         reasoningDelta: d.type === 'thinking_delta' ? (d.thinking || '') : ''
                     };
                 }
-                if (obj.type === 'message_delta') return { ...empty, finishReason: obj.delta?.stop_reason ?? null };
+                // Usage on message_delta is cumulative, so when it carries input tokens they supersede message_start.
+                if (obj.type === 'message_delta') {
+                    return { ...empty, finishReason: obj.delta?.stop_reason ?? null, inputTokens: readUsage(provider, obj).totalInputTokens };
+                }
                 if (obj.type === 'message_stop') return { ...empty, done: true };
                 return empty;
             }
             case 'google ai':
             case 'vertex ai': {
                 if (obj?.error) return { ...empty, error: providerErrorMessage(obj.error) };
+                const inputTokens = obj?.usageMetadata ? readUsage(provider, obj).totalInputTokens : null;
                 const cand = obj.candidates && obj.candidates[0];
                 if (!cand) {
                     const blockReason = obj?.promptFeedback?.blockReason;
-                    return blockReason ? { ...empty, error: `The provider blocked this prompt (${blockReason}).` } : empty;
+                    return blockReason ? { ...empty, error: `The provider blocked this prompt (${blockReason}).` } : { ...empty, inputTokens };
                 }
                 const parts = cand.content?.parts;
                 return {
@@ -400,7 +436,8 @@ function parseStreamChunk(obj, provider) {
                     reasoningDelta: textOfParts(parts, true),
                     done: cand.finishReason != null,
                     finishReason: cand.finishReason ?? null,
-                    error: null
+                    error: null,
+                    inputTokens
                 };
             }
             default:
@@ -414,8 +451,9 @@ function parseStreamChunk(obj, provider) {
 
 // --- CORE API REQUESTS ---
 
-async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistory = [], newPrompt = '', temperature, maxTokens, maxPayloadTokens, payloadBreakdown = null, manualMode, manualJson, attachedImages, stream = false, jsonMode = false, jsonSchema = null, conversation = null, tools = null, cachePrefix = false }, dependencies = {}) {
+async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistory = [], newPrompt = '', temperature, maxTokens, maxPayloadTokens, payloadLimit = null, payloadBreakdown = null, learnTokenCount = false, manualMode, manualJson, attachedImages, stream = false, jsonMode = false, jsonSchema = null, conversation = null, tools = null, cachePrefix = false }, dependencies = {}) {
     const db = dependencies.database || getDatabase();
+    useTokenCalibrationStore(db);
     const resolveVariables = createPromptVariableResolver(db);
     systemPrompt = resolveVariables(systemPrompt);
     newPrompt = resolveVariables(newPrompt);
@@ -451,17 +489,33 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
         content: msg.content
     }));
     const outputTokens = providerOutputLimit(provider, model, maxTokens);
-    const payloadLimit = payloadLimitFor(apiProfile, maxPayloadTokens);
-    assertPayloadWithinLimit({
-        maxPayloadTokens: payloadLimit.limit,
-        limitSource: payloadLimit.source,
-        breakdown: payloadBreakdown,
+    const protocol = Array.isArray(conversation) ? 'native' : 'text';
+    // A caller that sized the request on a resolved limit passes it, so a ratio learned
+    // meanwhile cannot make this check disagree with that sizing.
+    const limit = payloadLimit || payloadLimitFor(apiProfile, maxPayloadTokens, { model, protocol });
+    const measured = {
         systemPrompt,
         chatHistory: Array.isArray(conversation) ? flattenConversation(conversation, tools) : cleanHistory,
         newPrompt,
         attachedImageCount: attachedImages?.length || 0,
         outputTokens: requestedOutputTokens(maxTokens)
-    });
+    };
+    const estimate = assertPayloadWithinLimit({
+        ...measured,
+        maxPayloadTokens: limit.limit,
+        configuredPayloadTokens: limit.configured,
+        tokenRatio: limit.ratio,
+        limitSource: limit.source,
+        breakdown: payloadBreakdown
+    }) || estimatePayloadTokens(measured);
+    const tokenSample = learnTokenCount && isMeasurableRequest({ attachedImages, manualMode, manualJson, jsonMode, jsonSchema })
+        ? {
+            parts: { apiProfileId, model, protocol },
+            inputTokens: estimate.inputTokens,
+            contextWindow: connectionContextWindow(apiProfile),
+            outputTokens
+        }
+        : null;
 
     switch (provider) {
         case 'openai':
@@ -767,6 +821,10 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
             endpoint += endpoint.includes('?') ? '&alt=sse' : '?alt=sse';
         } else if (provider !== 'aws bedrock') {
             requestBody.stream = true;
+            // OpenAI streams usage only on request; compatible servers behind a custom URL may reject the field.
+            if (provider === 'openai' && isOfficialOpenAiEndpoint(endpoint)) {
+                requestBody.stream_options = { include_usage: true };
+            }
         }
     }
 
@@ -801,11 +859,19 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
         });
     }
 
-    return { endpoint, requestHeaders, requestBodyPayload, provider };
+    return { endpoint, requestHeaders, requestBodyPayload, provider, tokenSample, payloadLimit: limit };
 }
 
-async function sendApiRequest(params) {
-    const { endpoint, requestHeaders, requestBodyPayload, provider } = await buildRequest(params);
+function isOfficialOpenAiEndpoint(endpoint) {
+    try {
+        return new URL(endpoint).hostname === 'api.openai.com';
+    } catch {
+        return false;
+    }
+}
+
+async function sendApiRequest(params, dependencies = {}) {
+    const { endpoint, requestHeaders, requestBodyPayload, provider, tokenSample } = await buildRequest(params, dependencies);
     const { abortSignal } = params;
 
     try {
@@ -823,8 +889,9 @@ async function sendApiRequest(params) {
 
         const data = await response.json();
         const content = parseResponse(data, provider, Boolean(params.jsonMode));
+        const learnedTokenRatio = learnFromReportedTokens(tokenSample, readUsage(provider, data).totalInputTokens);
         if (!params.includeResponseMetadata) return content;
-        return { content, ...getResponseMetadata(data, provider) };
+        return { content, ...getResponseMetadata(data, provider), learnedTokenRatio };
 
     } catch (error) {
         console.error("API Request Failed:", error);
@@ -835,8 +902,8 @@ async function sendApiRequest(params) {
 // The retrieval planner's transport. It carries either the text protocol or a native tool
 // conversation, and returns what the provider reports about token use, so the effect of
 // caching is read from the provider instead of assumed.
-async function sendAgentRequest(params) {
-    const { endpoint, requestHeaders, requestBodyPayload, provider } = await buildRequest(params);
+async function sendAgentRequest(params, dependencies = {}) {
+    const { endpoint, requestHeaders, requestBodyPayload, provider, tokenSample } = await buildRequest(params, dependencies);
     const response = await undiciFetch(endpoint, {
         method: "POST",
         headers: requestHeaders,
@@ -851,10 +918,12 @@ async function sendAgentRequest(params) {
     }
     const data = await response.json();
     const content = parseResponse(data, provider);
+    const usage = readUsage(provider, data);
     return {
         content,
         ...readToolReply(provider, data),
-        usage: readUsage(provider, data),
+        usage,
+        learnedTokenRatio: learnFromReportedTokens(tokenSample, usage.totalInputTokens),
         ...getResponseMetadata(data, provider),
         provider
     };
@@ -959,7 +1028,9 @@ module.exports = {
     providerOutputLimit,
     requestedOutputTokens,
     getReservedOutputTokens,
+    payloadLimitFor,
     resolvePayloadLimit,
+    learnFromReportedTokens,
     createPromptVariableResolver,
     needsMaxCompletionTokens,
     isGeminiThinkingModel,

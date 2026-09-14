@@ -441,6 +441,8 @@ ipcMain.handle('save-api-profile', async (event, profile) => {
 ipcMain.handle('delete-api-profile', async (event, id) => {
   try {
     db.prepare('DELETE FROM api_profiles WHERE id = ?').run(id);
+    db.prepare('DELETE FROM token_calibration WHERE apiProfileId = ?').run(id);
+    require('./features/llm/token-calibration').forgetTokenCalibration(id);
     return { success: true };
   } catch (e) {
     console.error("Error deleting API profile:", e);

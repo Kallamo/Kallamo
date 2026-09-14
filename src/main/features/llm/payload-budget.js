@@ -25,6 +25,15 @@ function normalizeMaxApiPayload(value, fallback = contract.defaultMaxPayloadToke
   );
 }
 
+// A resolved limit, corrected for how a model counts, may sit below the configurable minimum.
+function payloadCeiling(value) {
+  const parsed = Number(value);
+  if (value != null && String(value).trim() !== '' && Number.isFinite(parsed) && parsed > 0) {
+    return Math.min(contract.maximumMaxPayloadTokens, Math.floor(parsed));
+  }
+  return normalizeMaxApiPayload(value);
+}
+
 // Provider counts can exceed ours, especially outside English, so the margin scales with the limit.
 function safetyMarginFor(maxPayloadTokens) {
   const maximum = Number(maxPayloadTokens);
@@ -53,7 +62,7 @@ function estimatePayloadTokens({
   const reservedOutputTokens = Math.max(0, Math.floor(Number(outputTokens) || 0));
   const safetyMarginTokens = maxPayloadTokens == null
     ? contract.safetyMarginTokens
-    : safetyMarginFor(normalizeMaxApiPayload(maxPayloadTokens));
+    : safetyMarginFor(payloadCeiling(maxPayloadTokens));
   return {
     inputTokens,
     reservedOutputTokens,
@@ -69,7 +78,7 @@ function getAvailableHistoryTokens({
   attachedImageCount = 0,
   outputTokens = 0
 }) {
-  const maximum = normalizeMaxApiPayload(maxPayloadTokens);
+  const maximum = payloadCeiling(maxPayloadTokens);
   const fixed = estimatePayloadTokens({
     systemPrompt,
     newPrompt,
@@ -85,15 +94,20 @@ function formatTokens(value) {
 }
 
 // Retrieval and history are trimmed first, so an overflow means the fixed part alone is too large.
-function describePayloadOverflow({ estimate, maximum, breakdown = null, limitSource = 'workspace' }) {
+function describePayloadOverflow({ estimate, maximum, breakdown = null, limitSource = 'workspace', configured = null, tokenRatio = 1 }) {
   const fromConnection = limitSource === 'connection';
   const limitLabel = fromConnection
     ? 'the context window set on this API connection'
     : "this workspace's MAX API Payload";
+  const corrected = configured != null && Number(tokenRatio) > 1 && configured > maximum;
+  const exceeds = corrected
+    ? `exceeds the ${formatTokens(maximum)} tokens that fit within ${limitLabel} of ${formatTokens(configured)} tokens. ` +
+      `This model counts about ${Number(tokenRatio).toFixed(2)} times the tokens Kallamo estimates, measured from its own usage reports, so the limit was reduced to match.`
+    : `exceeds ${limitLabel} of ${formatTokens(maximum)} tokens.`;
   let message =
     `This request was stopped before contacting the API because its estimated payload ` +
     `(${formatTokens(estimate.totalTokens)} tokens, including ${formatTokens(estimate.reservedOutputTokens)} ` +
-    `reserved for the response) exceeds ${limitLabel} of ${formatTokens(maximum)} tokens.`;
+    `reserved for the response) ${exceeds}`;
   if (breakdown) {
     message +=
       ` It holds about ${formatTokens(breakdown.fixed)} tokens of instructions, constant knowledge and attachments, ` +
@@ -107,20 +121,30 @@ function describePayloadOverflow({ estimate, maximum, breakdown = null, limitSou
 
 function assertPayloadWithinLimit(input) {
   if (input.maxPayloadTokens == null) return null;
-  const maximum = normalizeMaxApiPayload(input.maxPayloadTokens);
+  const maximum = payloadCeiling(input.maxPayloadTokens);
   const estimate = estimatePayloadTokens({ ...input, maxPayloadTokens: maximum });
   if (estimate.totalTokens <= maximum) return { ...estimate, maxPayloadTokens: maximum };
 
+  const configured = input.configuredPayloadTokens ?? null;
+  const tokenRatio = Number(input.tokenRatio) || 1;
   const error = new Error(describePayloadOverflow({
     estimate,
     maximum,
     breakdown: input.breakdown || null,
-    limitSource: input.limitSource
+    limitSource: input.limitSource,
+    configured,
+    tokenRatio
   }));
   error.code = 'MAX_API_PAYLOAD_EXCEEDED';
   // Sending the same request again produces the same estimate.
   error.retryable = false;
-  error.payloadEstimate = { ...estimate, maxPayloadTokens: maximum, breakdown: input.breakdown || null };
+  error.payloadEstimate = {
+    ...estimate,
+    maxPayloadTokens: maximum,
+    configuredPayloadTokens: configured,
+    tokenRatio,
+    breakdown: input.breakdown || null
+  };
   throw error;
 }
 
@@ -131,5 +155,6 @@ module.exports = {
   estimateTokens,
   getAvailableHistoryTokens,
   normalizeMaxApiPayload,
+  payloadCeiling,
   safetyMarginFor
 };

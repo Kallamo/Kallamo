@@ -752,6 +752,18 @@ try {
     db.exec("ALTER TABLE api_profiles ADD COLUMN contextWindow INTEGER");
     console.log("Database Migration: Added contextWindow column to api_profiles table.");
   }
+  // How much more each model counts than the local estimate, so the first request after a
+  // restart is already sized to the model's real count.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS token_calibration (
+      apiProfileId TEXT NOT NULL,
+      model TEXT NOT NULL,
+      protocol TEXT NOT NULL,
+      ratio REAL NOT NULL,
+      updatedAt INTEGER NOT NULL,
+      PRIMARY KEY (apiProfileId, model, protocol)
+    );
+  `);
 
   const kcTableInfo = db.pragma("table_info(knowledge_chunks)");
   const kcColumns = kcTableInfo.map(col => col.name);
@@ -1245,6 +1257,17 @@ function encryptExistingKeys() {
 }
 
 // --- CONSTANT MEMORY HELPERS (manual always-on snippets) ---
+
+db.loadTokenCalibrations = function() {
+  return db.prepare('SELECT apiProfileId, model, protocol, ratio FROM token_calibration').all();
+};
+
+db.saveTokenCalibration = function({ apiProfileId, model, protocol }, ratio) {
+  db.prepare(`
+    INSERT INTO token_calibration (apiProfileId, model, protocol, ratio, updatedAt) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(apiProfileId, model, protocol) DO UPDATE SET ratio = excluded.ratio, updatedAt = excluded.updatedAt
+  `).run(apiProfileId, model, protocol, ratio, Date.now());
+};
 
 db.getConstantSnippets = function(ownerId, ownerType = 'profile') {
   try {

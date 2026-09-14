@@ -231,7 +231,7 @@ async function runWritingDeskInvocation({
     // it, the biggest lever against the chat's language/topic bleeding into edits.
     const useChatHistory = !chatRow || chatRow.wdUseChatHistory !== 0;
     const workspaceLimit = normalizeMaxApiPayload(chatRow && chatRow.maxContext);
-    const payload = resolvePayloadLimit({ apiProfileId: profile.apiProfileId, maxPayloadTokens: workspaceLimit });
+    const payload = resolvePayloadLimit({ apiProfileId: profile.apiProfileId, model: profile.model, maxPayloadTokens: workspaceLimit });
     const { selOpen, selClose, outOpen, outClose } = makeFence();
 
     // The model sees + echoes the formatted span, so size the output budget on it.
@@ -306,6 +306,8 @@ async function runWritingDeskInvocation({
     // Must fit the payload limit with room for the retry at the output cap.
     const budgetInput = {
         maxPayloadTokens: payload.limit,
+        configuredPayloadTokens: payload.configured,
+        tokenRatio: payload.ratio,
         limitSource: payload.source,
         systemPrompt,
         newPrompt: newPrompt + correctionSuffix,
@@ -336,6 +338,7 @@ async function runWritingDeskInvocation({
         temperature: profile.temperature,
         maxTokens: budget,
         maxPayloadTokens: workspaceLimit,
+        payloadLimit: payload,
         manualMode: profile.manualMode === 1,
         manualJson: profile.manualJson,
         abortSignal,

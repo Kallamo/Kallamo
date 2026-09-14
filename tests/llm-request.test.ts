@@ -1,15 +1,24 @@
 import { createRequire } from 'node:module';
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test } from 'vitest';
 
 const require = createRequire(import.meta.url);
 const {
   buildRequest,
+  learnFromReportedTokens,
   parseResponse,
   parseStreamChunk,
   providerOutputLimit,
   readHttpErrorMessage,
-  resolveOpenAiCompatibleEndpoint
+  resolveOpenAiCompatibleEndpoint,
+  resolvePayloadLimit
 } = require('../src/main/features/llm/llm.service');
+const {
+  PAYLOAD_BUDGET_CONTRACT,
+  estimatePayloadTokens,
+  estimateTokens,
+  getAvailableHistoryTokens
+} = require('../src/main/features/llm/payload-budget');
+const { clearTokenCalibration, measuredRatio, recordTokenCount } = require('../src/main/features/llm/token-calibration');
 
 function createDatabase({ provider, variables = [], customConfig = null, baseUrl, apiKey = 'api-key', contextWindow = null }: {
   provider: string;
@@ -306,5 +315,134 @@ describe('agent conversations', () => {
       { apiProfileId: 'api-profile', model: 'gpt-4.1-mini', conversation: long, tools, maxTokens: 500, maxPayloadTokens: 128000 },
       { database }
     )).rejects.toMatchObject({ code: 'MAX_API_PAYLOAD_EXCEEDED' });
+  });
+});
+
+describe('payload limit corrected by what the model counts', () => {
+  const parts = { apiProfileId: 'api-profile', model: 'gpt-4.1-mini', protocol: 'text' };
+  const paragraph = 'The harbour bell rang twice before the ferry left, and nobody on the pier looked up. ';
+  const tools = [{ name: 'search_kb', description: 'Searches.', parameters: { type: 'object', properties: {} } }];
+  afterEach(() => clearTokenCalibration());
+
+  test('without a measurement the limit is exactly the configured one', async () => {
+    const database = createDatabase({ provider: 'OpenAI' });
+    expect(resolvePayloadLimit({ ...parts, maxPayloadTokens: 16000 }, { database }))
+      .toEqual({ limit: 16000, configured: 16000, ratio: 1, source: 'workspace' });
+    const request = await buildRequest({ ...parts, newPrompt: 'Hi', maxTokens: 100, maxPayloadTokens: 16000 }, { database });
+    expect(request.payloadLimit).toEqual({ limit: 16000, configured: 16000, ratio: 1, source: 'workspace' });
+  });
+
+  test('history sized on the corrected limit passes the final check, and one message more does not', async () => {
+    const database = createDatabase({ provider: 'OpenAI' });
+    recordTokenCount(parts, 1000, 1500);
+    const limit = resolvePayloadLimit({ ...parts, maxPayloadTokens: 16000 }, { database });
+    expect(limit.limit).toBe(Math.floor(16000 / 1.5));
+
+    const fixed = { systemPrompt: 'Be precise.', newPrompt: 'Continue.', outputTokens: 1000 };
+    const budget = getAvailableHistoryTokens({ ...fixed, maxPayloadTokens: limit.limit });
+    const message = paragraph.repeat(20);
+    const cost = estimateTokens(message) + PAYLOAD_BUDGET_CONTRACT.messageOverheadTokens;
+    const history = Array.from({ length: Math.floor(budget / cost) }, (_, i) => ({ role: i % 2 ? 'ai' : 'user', content: message }));
+    const request = { ...parts, systemPrompt: fixed.systemPrompt, newPrompt: fixed.newPrompt, maxTokens: 1000, maxPayloadTokens: 16000 };
+
+    await expect(buildRequest({ ...request, chatHistory: history }, { database })).resolves.toBeTruthy();
+    await expect(buildRequest({ ...request, chatHistory: history, payloadLimit: limit }, { database })).resolves.toBeTruthy();
+
+    const overflow = [...history, { role: 'user', content: paragraph.repeat(40) }];
+    // Uncorrected, this would still have been sent.
+    expect(estimatePayloadTokens({ ...fixed, chatHistory: overflow, maxPayloadTokens: 16000 }).totalTokens).toBeLessThanOrEqual(16000);
+    await expect(buildRequest({ ...request, chatHistory: overflow }, { database })).rejects.toThrow(/counts about 1\.50 times/);
+  });
+
+  test('a limit the caller already resolved is never corrected a second time', async () => {
+    const database = createDatabase({ provider: 'OpenAI' });
+    recordTokenCount(parts, 1000, 1500);
+    const limit = resolvePayloadLimit({ ...parts, maxPayloadTokens: 16000 }, { database });
+    const systemPrompt = paragraph.repeat(Math.floor(9000 / estimateTokens(paragraph)));
+    const estimate = estimatePayloadTokens({ systemPrompt, newPrompt: 'Continue.', outputTokens: 500, maxPayloadTokens: limit.limit });
+    // Fits the single correction, and would not fit a double one.
+    expect(estimate.totalTokens).toBeLessThanOrEqual(limit.limit);
+    expect(estimate.totalTokens).toBeGreaterThan(16000 / 1.5 / 1.5);
+
+    const pinned = await buildRequest({ ...parts, systemPrompt, newPrompt: 'Continue.', maxTokens: 500, maxPayloadTokens: 16000, payloadLimit: limit }, { database });
+    expect(pinned.payloadLimit).toBe(limit);
+    const resolvedInside = await buildRequest({ ...parts, systemPrompt, newPrompt: 'Continue.', maxTokens: 500, maxPayloadTokens: 16000 }, { database });
+    expect(resolvedInside.payloadLimit.limit).toBe(limit.limit);
+  });
+
+  test('a native tool conversation uses the ratio learned for its own protocol', async () => {
+    const database = createDatabase({ provider: 'OpenAI' });
+    recordTokenCount({ ...parts, protocol: 'native' }, 1000, 2000);
+    const native = await buildRequest({ ...parts, conversation: [{ role: 'user', text: 'Hi' }], tools, maxTokens: 100, maxPayloadTokens: 16000 }, { database });
+    const text = await buildRequest({ ...parts, newPrompt: 'Hi', maxTokens: 100, maxPayloadTokens: 16000 }, { database });
+    expect(native.payloadLimit).toMatchObject({ limit: 8000, ratio: 2 });
+    expect(text.payloadLimit).toMatchObject({ limit: 16000, ratio: 1 });
+  });
+
+  test('a local connection window is corrected the same way and the error names the window the user set', async () => {
+    const database = createDatabase({ provider: 'Local', baseUrl: 'http://127.0.0.1:1234/v1', apiKey: '', contextWindow: 8192 });
+    const local = { apiProfileId: 'api-profile', model: 'qwen3:8b' };
+    const systemPrompt = paragraph.repeat(Math.floor(6600 / estimateTokens(paragraph)));
+    await expect(buildRequest({ ...local, systemPrompt, newPrompt: 'Continue.', maxTokens: 500, maxPayloadTokens: 128000 }, { database })).resolves.toBeTruthy();
+
+    recordTokenCount(local, 1000, 1300);
+    await expect(buildRequest({ ...local, systemPrompt, newPrompt: 'Continue.', maxTokens: 500, maxPayloadTokens: 128000 }, { database }))
+      .rejects.toThrow(/context window set on this API connection of 8[,.\s ]?192 tokens\. This model counts about 1\.30 times/);
+  });
+});
+
+describe('which requests teach the token ratio', () => {
+  const longPrompt = 'The tide keeps its own calendar, and the harbour keeps its own debts. '.repeat(60);
+  const request = { apiProfileId: 'api-profile', model: 'local-model', systemPrompt: longPrompt, newPrompt: 'Continue.', maxTokens: 200, learnTokenCount: true };
+  afterEach(() => clearTokenCalibration());
+
+  test('only the official OpenAI endpoint is asked to stream usage', async () => {
+    const body = async (provider: string, baseUrl?: string) => JSON.parse((await buildRequest(
+      { ...request, stream: true },
+      { database: createDatabase({ provider, baseUrl, apiKey: provider === 'Local' ? '' : 'key' }) }
+    )).requestBodyPayload);
+    expect((await body('OpenAI', '')).stream_options).toEqual({ include_usage: true });
+    expect(await body('OpenAI', 'https://proxy.example.test/v1')).not.toHaveProperty('stream_options');
+    expect(await body('OpenRouter', '')).not.toHaveProperty('stream_options');
+    expect(await body('Local', 'http://127.0.0.1:1234/v1')).not.toHaveProperty('stream_options');
+    expect((await buildRequest({ ...request }, { database: createDatabase({ provider: 'OpenAI', baseUrl: '' }) })).requestBodyPayload).not.toMatch(/stream_options/);
+  });
+
+  test('images, Manual JSON, schemas and callers that did not ask produce no sample', async () => {
+    const database = createDatabase({ provider: 'Local', baseUrl: 'http://127.0.0.1:1234/v1', apiKey: '' });
+    const sample = async (extra: Record<string, unknown>) => (await buildRequest({ ...request, ...extra }, { database })).tokenSample;
+    expect(await sample({})).toMatchObject({ parts: { apiProfileId: 'api-profile', model: 'local-model', protocol: 'text' } });
+    expect((await sample({})).inputTokens).toBe(estimatePayloadTokens({ systemPrompt: longPrompt, newPrompt: 'Continue.' }).inputTokens);
+    expect(await sample({ attachedImages: [{ name: 'map.png', path: 'map.png' }] })).toBeNull();
+    expect(await sample({ manualMode: true, manualJson: '{"top_p":0.9}' })).toBeNull();
+    expect(await sample({ jsonMode: true })).toBeNull();
+    expect(await sample({ learnTokenCount: false })).toBeNull();
+    expect(await sample({ manualMode: true, manualJson: '   ' })).not.toBeNull();
+  });
+
+  test('a count that fills the declared window may be truncated, so it is not trusted', () => {
+    const sample = { parts: { apiProfileId: 'c', model: 'm', protocol: 'text' }, inputTokens: 1000, contextWindow: 8192, outputTokens: 1000 };
+    expect(learnFromReportedTokens(sample, 7000)).toBeNull();
+    expect(measuredRatio(sample.parts)).toBeNull();
+    expect(learnFromReportedTokens(sample, 1400)).toBeCloseTo(1.4, 5);
+    expect(learnFromReportedTokens({ ...sample, contextWindow: null }, 9000)).toBe(3);
+    expect(learnFromReportedTokens(null, 1400)).toBeNull();
+  });
+
+  test('stream chunks carry the input count in every provider format', () => {
+    expect(parseStreamChunk({ choices: [], usage: { prompt_tokens: 812, completion_tokens: 9 } }, 'openai').inputTokens).toBe(812);
+    const llamaCpp = parseStreamChunk({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 640 } }, 'local');
+    expect(llamaCpp).toMatchObject({ inputTokens: 640, finishReason: 'stop' });
+    expect(parseStreamChunk({ choices: [{ delta: { content: 'Hi' } }] }, 'openrouter').inputTokens).toBeNull();
+    expect(parseStreamChunk({
+      type: 'message_start',
+      message: { usage: { input_tokens: 25, cache_read_input_tokens: 700, cache_creation_input_tokens: 100, output_tokens: 1 } }
+    }, 'anthropic').inputTokens).toBe(825);
+    expect(parseStreamChunk({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 15 } }, 'anthropic').inputTokens).toBeNull();
+    expect(parseStreamChunk({
+      type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { input_tokens: 10682, cache_read_input_tokens: 0, output_tokens: 510 }
+    }, 'anthropic').inputTokens).toBe(10682);
+    expect(parseStreamChunk({ candidates: [{ content: { parts: [{ text: 'A' }] } }], usageMetadata: { promptTokenCount: 930 } }, 'vertex ai').inputTokens).toBe(930);
+    expect(parseStreamChunk({ usageMetadata: { promptTokenCount: 930 } }, 'google ai').inputTokens).toBe(930);
   });
 });

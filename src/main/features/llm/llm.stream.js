@@ -1,5 +1,5 @@
 const { fetch: undiciFetch } = require('undici');
-const { buildRequest, parseStreamChunk, sendApiRequest, generationDispatcher, readHttpErrorMessage } = require('./llm.service');
+const { buildRequest, parseStreamChunk, sendApiRequest, generationDispatcher, readHttpErrorMessage, learnFromReportedTokens } = require('./llm.service');
 
 // Providers with no text-SSE stream fall back to the non-streaming path.
 const STREAM_UNSUPPORTED = new Set(['aws bedrock']);
@@ -20,16 +20,18 @@ function streamError(message, code) {
 
 // Returns the same shape as sendApiRequest, so the saved reply is identical with or without streaming.
 // A provider error event fails the stream instead of saving partial text; an abort returns what arrived.
-async function sendApiRequestStream(params, onDelta, onStreamStart) {
-    const { endpoint, requestHeaders, requestBodyPayload, provider } = await buildRequest({ ...params, stream: true });
+async function sendApiRequestStream(params, onDelta, onStreamStart, dependencies = {}) {
+    const { endpoint, requestHeaders, requestBodyPayload, provider, tokenSample } = await buildRequest({ ...params, stream: true }, dependencies);
 
     if (STREAM_UNSUPPORTED.has(provider)) {
-        return sendApiRequest(params);
+        return sendApiRequest(params, dependencies);
     }
 
     let content = '';
     let reasoning = '';
     let finishReason = null;
+    let reportedInputTokens = null;
+    let learnedTokenRatio = null;
     // Parity with parseResponse: a jsonMode caller parses the reply as an object,
     // so reasoning is dropped instead of being prepended.
     const finalize = () => {
@@ -38,7 +40,8 @@ async function sendApiRequestStream(params, onDelta, onStreamStart) {
         return {
             content: text,
             finishReason,
-            truncated: TRUNCATION_REASONS.has(String(finishReason || '').toLowerCase())
+            truncated: TRUNCATION_REASONS.has(String(finishReason || '').toLowerCase()),
+            learnedTokenRatio
         };
     };
 
@@ -80,6 +83,7 @@ async function sendApiRequestStream(params, onDelta, onStreamStart) {
                 if (chunk.error) {
                     throw streamError(`The provider stopped the reply with an error: ${chunk.error}`, 'PROVIDER_ERROR');
                 }
+                if (chunk.inputTokens != null) reportedInputTokens = chunk.inputTokens;
                 if (chunk.finishReason) finishReason = chunk.finishReason;
                 if (chunk.contentDelta) content += chunk.contentDelta;
                 if (chunk.reasoningDelta) reasoning += chunk.reasoningDelta;
@@ -93,6 +97,7 @@ async function sendApiRequestStream(params, onDelta, onStreamStart) {
         if (!content && BLOCKING_REASONS.has(String(finishReason || '').toLowerCase())) {
             throw streamError(`The provider stopped this reply (${finishReason}).`, 'PROVIDER_BLOCKED');
         }
+        learnedTokenRatio = learnFromReportedTokens(tokenSample, reportedInputTokens);
         return finalize();
 
     } catch (error) {
