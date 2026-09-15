@@ -1378,7 +1378,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           <span className="text-sm text-gray-200 font-bold">Knowledge Base Top-K</span>
                           <span className="text-xs text-accent font-mono font-bold">{topKKB}</span>
                         </div>
-                        <p className="caption mb-2">The maximum number of matching text blocks fetched from the profile's knowledge base to feed the AI prompt.</p>
+                        <p className="caption mb-2">The minimum number of matching passages requested from knowledge bases and workspace files per search. Kallamo asks for more, up to 20, when the payload budget has room.</p>
                         <input
                           type="range"
                           min="1"
@@ -1398,7 +1398,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           <span className="text-sm text-gray-200 font-bold">Chat Memory Top-K</span>
                           <span className="text-xs text-accent font-mono font-bold">{topKMemory}</span>
                         </div>
-                        <p className="caption mb-2">The maximum number of semantic memory snippets recalled from past archived conversations per message.</p>
+                        <p className="caption mb-2">The minimum number of passages requested from archived conversations per search. Kallamo asks for more, up to 20, when the payload budget has room.</p>
                         <input
                           type="range"
                           min="1"
