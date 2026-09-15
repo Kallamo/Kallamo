@@ -150,6 +150,48 @@ const RELEASE_1_1_6 = {
   },
 };
 
+const RELEASE_1_1_7 = {
+  title: 'A better Agentic RAG',
+  sections: {
+    Added: [
+      'Set an optional Model Context Window on an API connection, and every request through it stays inside that window as well as your workspace payload limit.',
+      'The Retrieval Planner can use your provider\'s own tool calling where it is supported, and falls back to its text format on its own when it is not. You can turn this off in Settings.',
+      'The Retrieval Planner starts from the results of the ordinary search, so its research never ends with nothing to work from.',
+      'Short messages such as "continue" skip the Retrieval Planner and use the ordinary search, saving a planning call. Turn on Plan every message in Settings to plan them anyway.',
+      'The Agentic RAG panel shows the path each message took, what every research step searched for and found, and what it cost.',
+      'Character, place, and item names written in your text are tagged right away, in any language, without waiting for an AI pass.',
+      'A Needs review filter in Worldbuild gathers entities whose names look like common words, numbers, or pieces of other names, so you can merge, delete, or keep them.',
+      'A reply cut off at its output limit, or written after retrieval stopped early, now says so under the message.',
+    ],
+    Changed: [
+      'Kallamo learns how each model really counts tokens from what your provider reports, and sizes requests to match once a model has reported its usage.',
+      'Retrieved knowledge and memory now share a budget with your conversation, so a long history with many summaries stays within your payload limit.',
+      'Recall reaches further when there is room: more passages per search, the nearby passages of the same scene, and your workspace files and documents when looking up an entity.',
+      'Names that appear all over your story count for less when ranking passages, so rarer names lead to the scenes that matter.',
+      'Keyword search finds other forms of the same word and stays inside the current workspace.',
+      'The Retrieval Planner fits its own model\'s context window, never repeats a search, and ranks results it did not cite lower instead of discarding them.',
+      'Entity tagging asks the AI only about what names cannot settle, and no longer proposes common words or pieces of existing names as new entities.',
+      'A long Lore grows with new paragraphs instead of being rewritten, so it is never cut short.',
+      'Very long paragraphs, search requests, and archives are handled in parts, so text past a model\'s input limit still counts.',
+    ],
+    Fixed: [
+      'Regenerate and Edit keep your previous reply until the new one is saved.',
+      'Provider errors, safety blocks, refusals, and empty replies are shown as errors instead of being saved as the AI\'s answer, and a streamed reply that fails midway is no longer saved as complete.',
+      'A request too large for your payload limit explains where the size came from and no longer offers a Retry that would fail again.',
+      'Reasoning models no longer fail over temperature settings, and their thinking stays out of your history, archives, and workflow steps.',
+      'Gemini replies that arrive in several parts are read in full.',
+      'The Retrieval Planner no longer comes back empty when it names characters or finishes in the same reply as its searches, and no longer acts on searches it only considered while thinking.',
+      'The Writing Desk handles medium chapters without context window errors, and an analysis still cut off after a retry is marked incomplete.',
+      'Constant knowledge and full file reads keep the opening paragraph of a file.',
+      'Entity tagging no longer marks passages as done when the AI reply was cut off, tag counts in Memory match the real tags, and re-tagging a Writing Desk chapter keeps the tags you added by hand.',
+      'A Lore update that fails now appears in the failures panel instead of disappearing.',
+      'The history marker in the chat header counts the messages your last reply actually left out.',
+      'Workspace variables containing dollar signs are inserted exactly as written.',
+      'Long chats open faster.',
+    ],
+  },
+};
+
 export const GLOBAL_WHATS_NEW = {
   version: '1.1',
   title: 'Writing Desk, Worldbuild, and everything since',
@@ -170,8 +212,17 @@ export const GLOBAL_WHATS_NEW = {
       title: 'A world the AI remembers',
       text: 'Kallamo retrieves the people, places, and knowledge relevant to what you are creating instead of filling every prompt with everything.',
     },
+    {
+      icon: 'Sparkles',
+      title: 'Long conversations within your limits',
+      text: 'Archive, drop, or rebuild any part of a long conversation, while Kallamo fits what it recalls within the limits you set for each workspace and connection.',
+    },
   ],
   releases: [
+    {
+      version: '1.1.7',
+      ...RELEASE_1_1_7,
+    },
     {
       version: '1.1.6',
       ...RELEASE_1_1_6,
@@ -242,6 +293,32 @@ export const GLOBAL_WHATS_NEW = {
 };
 
 export const PATCH_WHATS_NEW = {
+  '1.1.7': {
+    ...RELEASE_1_1_7,
+    intro: 'This update rebuilds Agentic RAG. It skips research when a message does not need it, finds what matters in long stories, and stays inside your payload limit as your history grows.',
+    highlights: [
+      {
+        icon: 'Sparkles',
+        title: 'Agentic RAG plans only when needed',
+        text: 'The Retrieval Planner starts from the ordinary search, skips messages that need no research, uses native tool calling where your provider supports it, and shows every step in the Agentic RAG panel.',
+      },
+      {
+        icon: 'Brain',
+        title: 'Context window per connection',
+        text: 'Set a context window on any connection. Kallamo learns how each model really counts tokens and sizes history and retrieval to match.',
+      },
+      {
+        icon: 'Globe2',
+        title: 'Automatic name tagging',
+        text: 'Entity names in your text are tagged right away in any language, and a Needs review filter helps you clean up names that look like common words.',
+      },
+      {
+        icon: 'PenLine',
+        title: 'Safer Regenerate and clearer errors',
+        text: 'Regenerate keeps your previous reply until a new one is saved, and cut-off, empty, or refused replies say so instead of passing as complete.',
+      },
+    ],
+  },
   '1.1.6': {
     ...RELEASE_1_1_6,
     intro: 'This update rebuilds how a workspace remembers a long story. Summaries can be deleted and rebuilt freely, you decide what each message becomes, and recall reaches further back.',
