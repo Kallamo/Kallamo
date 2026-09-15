@@ -42,7 +42,8 @@ The gate reads the **user's own message**, never the input of a workflow step: f
 that input is generated prose, which says nothing about whether the conversation needs research.
 
 Shape decides, never a word list, so the gate behaves the same in every language. The threshold
-is deliberately low: "continue", "ok", "e aí" are skipped, and almost anything else is planned.
+is deliberately low: short replies such as "continue" or "ok" are skipped, and almost anything
+else is planned.
 
 **Cost of a wrong skip.** A skipped message still runs the deterministic retrieval, which is the
 same search the loop would have seeded itself with. What is lost is the multi-hop reach, never
@@ -94,24 +95,11 @@ Queries are natural-language questions, not keyword lists. Retrieval is 0.7 dens
 sparse, and the dense model reads questions; keywords survive through the FTS side and the
 entity evidence boost either way.
 
-Measured on the annotated workspace set (`scripts/retrieval-eval.js`, 11 questions, real
-database):
-
-| Query style | hit@k | MRR |
-|---|---|---|
-| Full questions | 8/11 | 0.500 |
-| Mild keyword reduction | 7/11 | 0.483 |
-| Names plus three content words | 5/11 | 0.421 |
-
-The misses are ranking misses, not similarity-floor misses: keywords do not fall below the
-floor, they fall down the list and out of Top-K.
-
 ## Budget and width
 
 The loop receives the retrieval budget the step computed and sizes its searches with it, exactly
-like the deterministic path (`retrievalTopK`, three tiers). The user's Top-K stays the floor, so
-a small context window keeps the cost it has today. On the annotated set, moving from k=5 to
-k=20 takes the answering passage from 8/11 to 11/11 in context, at about 5.8K tokens.
+like the deterministic path (`retrievalTopK`, three tiers, at most 20 passages per search). The
+user's Top-K stays the floor, and more is asked for only when the budget can hold it.
 
 Width is for the writing assistant, not for the planner: each call shows the planner the first
 five results in full and the rest as snippets it can expand, while every result reaches the
@@ -150,8 +138,8 @@ On a 128K window the reply reserve, the history and the entity list keep their l
 limits. Search width (`toolK`) still follows the writer's budget, because the results feed the
 writer, not the planner.
 
-The local token count uses one fixed tokenizer, and models count the same text differently: it
-fell 29% to 38% short of Claude Sonnet 4.6 on Portuguese text. `token-calibration.js` learns the
+The local token count uses one fixed tokenizer, and models count the same text differently, so
+the estimate can fall well short of a model's own count. `token-calibration.js` learns the
 real ratio per connection, model and protocol from the input tokens each provider reports, in chat
 replies and in every research turn, and stores it. `payloadLimitFor` divides the configured limit by
 that ratio, so the planner's window checks compare the raw estimate with an already corrected limit
@@ -216,29 +204,15 @@ Claude needs to be asked, and the form depends on where it runs (per the Anthrop
 
 - **Anthropic's own endpoint:** top-level `cache_control: {type: "ephemeral"}`, which places the
   mark on the last block of every request.
-- **Claude on AWS Bedrock:** Kallamo calls InvokeModel, whose integration rejects the top-level
-  field with a 400 on Claude Opus 4.6, Sonnet 4.6 and earlier. The request instead carries an
-  explicit `cache_control` on the last block of the last message, moved forward each turn.
+- **Claude on AWS Bedrock:** Kallamo calls InvokeModel, which rejects the top-level field. The
+  request instead carries an explicit `cache_control` on the last block of the last message,
+  moved forward each turn.
 - **A custom Anthropic base URL:** neither form, since a proxy may not accept them.
 
-A prefix below the model's minimum (1,024 tokens on Sonnet 4.6, 512 to 4,096 depending on the
-model) simply does not cache, with no error. Turn 1 writes the cache (`written to cache` in the
+A prefix below the model's minimum cacheable length simply does not cache, with no error. Turn 1 writes the cache (`written to cache` in the
 panel) and later turns read it (`read from cache`).
 
 Whether and how much other providers reuse a prefix is theirs to decide and is not assumed here.
 The trajectory records what each provider reports for every turn (input tokens and tokens read
-from cache, where the provider reports them), and `agentic-eval` averages it, so the effect is
-read from the provider instead of estimated.
-
-## What is measured
-
-- `scripts/retrieval-eval.js`: ranking and recall of the deterministic path, no model calls.
-- `scripts/agentic-eval.js`: the loop itself, against a copy of the database. It packs the result
-  into a real budget before scoring, reports which stage first retrieved the answer (pre-search,
-  turn 1, turn 2, ...), counts empty and refused calls and unusable replies, reports the protocol
-  used and any fallback, counts runs stopped by the planner window, averages provider-reported
-  input and cache reads, and runs the deterministic baseline on the same questions. `--protocol
-  text` forces the text protocol, so the two can be compared on the same model.
-
-Run it once per model family the product supports. A result on one provider says nothing about
-another.
+from cache, where the provider reports them), so the effect is read from the provider instead of
+estimated.

@@ -76,7 +76,7 @@ npx @electron/rebuild        # rebuild native modules for Electron
 npm run electron:dev         # Vite dev server + Electron with hot reload
 ```
 
-You'll need **Node.js ≥ 18**, **Python ≥ 3.10**, and C++ build tools (required to compile `better-sqlite3`). See the README for the per-OS prerequisites.
+You'll need **Node.js ≥ 22.13**, **Python ≥ 3.10**, and C++ build tools (required to compile `better-sqlite3`). See the README for the per-OS prerequisites.
 
 ---
 
@@ -89,7 +89,7 @@ You'll need **Node.js ≥ 18**, **Python ≥ 3.10**, and C++ build tools (requir
    ```
    Use a short, descriptive name prefixed by the type of work (`fix/`, `feat/`, `docs/`, `refactor/`).
 3. **Make your change** in focused, logically grouped commits.
-4. **Test it locally** by running the app (`npm run electron:dev`) and exercising the affected feature.
+4. **Test it locally** by running `npm test` and the app (`npm run electron:dev`), exercising the affected feature.
 5. **Push** to your fork and open a pull request against `main`.
 
 Keep pull requests focused. Several small, self-contained PRs are easier to review and merge than one large one that mixes unrelated changes.
@@ -148,7 +148,7 @@ The CLA exists to keep the project's licensing clear and to protect both you and
   - Do not describe callers, consumers, or what the signature and names already show.
   - Do not restate the code in prose. If a comment keeps growing, the explanation belongs in the commit or in `docs/`.
 - **Respect the architecture.** The Electron main process (`src/main/`), the secure IPC bridge (`src/preload.js`), and the React renderer (`src/renderer/`) are separated for a reason. Keep that boundary intact. See [docs/architecture.md](docs/architecture.md) for the full picture.
-- **Test before you push.** There's no automated test suite yet, so manual verification of the affected feature is essential.
+- **Test before you push.** Run `npm test`, and verify the affected feature in the app as well: the suite covers core logic, not the interface.
 
 ---
 

@@ -77,7 +77,7 @@ Every AI profile can be backed by a local knowledge base. Feed it your RPG loreb
 
 ### 🤖 Agentic RAG Mode
 
-For profiles that need deeper research, Kallamo can run an autonomous **Thought → Action** retrieval loop. The agent decides which knowledge bases to search, which files to read in full, which entities to look up, and which memories to recall — then synthesizes a research brief before the main generation step. The turn budget is configurable per profile (default 3) to balance depth against cost.
+For profiles that need deeper research, Kallamo can run an autonomous retrieval planner before the main generation step. It starts from the ordinary search, then decides which knowledge bases to search, which files to read in full, which entities to look up, and which memories to recall. It uses the provider's native tool calling where the connection supports it and a text protocol everywhere else. Short messages that need no research skip the planner, and the turn budget is configurable per profile (default 3) to balance depth against cost. See [Agentic Retrieval](docs/agentic-retrieval.md) for how each turn is budgeted.
 
 ### 💾 Smart Chat Memory & Auto-Archiving
 
@@ -136,8 +136,8 @@ graph TD
 | **Preload** | Secure IPC bridge via `contextBridge` | `preload.js` |
 | **IPC Handlers** | CRUD operations, file indexing, import/export | `ipc-handlers.js` |
 | **Workflow Runner** | Orchestrates multi-step prompt chains with error recovery | `workflow-runner.js` |
-| **RAG Service** | Chunking, vectorization, hybrid search, memory management | `rag-service.js` |
-| **API Engine** | Provider-specific request formatting, auth, response parsing | `api-engine.js` |
+| **RAG Service** | Chunking, vectorization, hybrid search, memory management | `rag-service.js`, `features/knowledge/` |
+| **API Engine** | Provider-specific request formatting, auth, response parsing, payload limits | `features/llm/llm.service.js` |
 | **Database** | Schema definition, migrations, encryption helpers | `database.js` |
 
 > 📖 **Deep dive →** [Architecture Documentation](docs/architecture.md) covers the database schema, RAG math, agentic loop internals, and context archiving in full detail.
@@ -151,7 +151,7 @@ graph TD
 
 ### Prerequisites
 
-- **Node.js** ≥ 18
+- **Node.js** ≥ 22.13 (the test suite uses the built-in `node:sqlite` module)
 - **Python** ≥ 3.10 and C++ Build Tools (required by `better-sqlite3` native compilation)
   - Windows: `npm install --global windows-build-tools` or install Visual Studio Build Tools
   - macOS: `xcode-select --install`
@@ -180,6 +180,11 @@ npm run electron:dev
 
 This launches the Vite HMR server on `localhost:5173` and opens Electron pointing to it. Changes to React components are reflected instantly.
 
+```bash
+# Run the test suite (Vitest)
+npm test
+```
+
 ### Building
 
 ```bash
@@ -206,12 +211,17 @@ Kallamo/
 │   ├── preload.js               # Secure IPC bridge (contextBridge)
 │   ├── main/
 │   │   ├── database.js          # SQLite schema, migrations, encryption
-│   │   ├── api-engine.js        # Multi-provider API client
-│   │   ├── workflow-runner.js   # Linear chain executor
+│   │   ├── workflow-runner.js   # Linear chain executor, agentic retrieval loop
 │   │   ├── rag-service.js       # Vector engine & hybrid search
-│   │   ├── entities.js          # Worldbuild entity/relation registry & tagging
+│   │   ├── entities.js          # Worldbuild entity/relation registry
 │   │   ├── writing-desk-invocation.js # AI select→invoke for the Writing Desk
-│   │   └── ipc-handlers.js      # All IPC endpoint definitions
+│   │   ├── ipc-handlers.js      # All IPC endpoint definitions
+│   │   └── features/            # Domain modules
+│   │       ├── llm/             # Multi-provider API client, payload budget, token calibration
+│   │       ├── knowledge/       # Retrieval ranking, context packing, retrieval planner
+│   │       ├── world-index/     # Tagger and entity name tags
+│   │       ├── worldbuild/      # Entity fields, lore and update review
+│   │       └── chat/            # Live history and archive coverage
 │   ├── renderer/
 │   │   ├── App.jsx              # Root layout, global effects
 │   │   ├── main.jsx             # React DOM entry
@@ -223,7 +233,9 @@ Kallamo/
 │   └── assets/                  # Icons and static assets
 ├── docs/
 │   ├── architecture.md          # System architecture deep dive
+│   ├── agentic-retrieval.md     # Retrieval planner design and budgets
 │   └── workflows.md             # Workflow & packaging guide
+├── tests/                       # Vitest suite (npm test)
 ├── release/                     # Build output (installer, unpacked app)
 ├── vite.config.js               # Vite build configuration
 └── package.json
@@ -254,6 +266,7 @@ Kallamo/
 | Document | Description |
 |----------|-------------|
 | [Architecture](docs/architecture.md) | Database schema, RAG internals, agentic loop, context archiving |
+| [Agentic Retrieval](docs/agentic-retrieval.md) | Retrieval planner gate, budgets, tool protocols, token calibration |
 | [Workflows](docs/workflows.md) | Multi-step chains, profile packaging, `.klp` / `.klw` / `.klkb` format |
 
 ---
