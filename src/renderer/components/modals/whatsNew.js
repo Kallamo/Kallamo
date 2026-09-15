@@ -308,11 +308,6 @@ export const PATCH_WHATS_NEW = {
         text: 'Set a context window on any connection. Kallamo learns how each model really counts tokens and sizes history and retrieval to match.',
       },
       {
-        icon: 'Globe2',
-        title: 'Automatic name tagging',
-        text: 'Entity names in your text are tagged right away in any language, and a Needs review filter helps you clean up names that look like common words.',
-      },
-      {
         icon: 'PenLine',
         title: 'Safer Regenerate and clearer errors',
         text: 'Regenerate keeps your previous reply until a new one is saved, and cut-off, empty, or refused replies say so instead of passing as complete.',
