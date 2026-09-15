@@ -191,9 +191,8 @@ function affixIndex(index) {
   return index.affix;
 }
 
-// Words the model should look at: another grammatical form of a single-word name, a name
-// shared by several entities, or a name left untagged at the start of a sentence.
-// Hints only: nothing here becomes a tag without the model confirming it.
+// Hints only: other forms of a name, shared names, or untagged sentence starts.
+// Nothing here becomes a tag without the model confirming it.
 function findCandidateMentions(text, index, { lowercaseWords = null, exclude = null } = {}) {
   const source = String(text == null ? '' : text);
   if (!source || !index || !index.names) return [];

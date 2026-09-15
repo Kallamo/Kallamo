@@ -15,8 +15,7 @@ const RETRIEVAL_GUARANTEED_SHARE = 0.4;
 // to decide how many to ask for; packContextItems is what enforces the budget.
 const RETRIEVAL_ITEM_TOKENS = 350;
 
-// Past this, more passages stopped bringing new answers into the context and only cost
-// tokens: measured on the annotated set, every question that could be answered already was.
+// Past this, more passages add cost without bringing new answers into the context.
 const RETRIEVAL_TOP_K_MAX = 20;
 
 function truncateToTokens(text, maxTokens, estimate = estimateTokens) {
@@ -96,8 +95,8 @@ function renderContextSections(kept, sectionOrder = [], separator = '\n\n') {
     .join(separator);
 }
 
-// The configured Top-K is a floor and is never lowered. Retrieval asks for more passages
-// only when the budget can hold them, so a small context window keeps the cost it has today.
+// The configured Top-K is a floor and is never lowered; more passages are asked for only
+// when the budget can hold them.
 function retrievalTopK(configuredK, budgetTokens, {
   tiers = 1,
   itemTokens = RETRIEVAL_ITEM_TOKENS,

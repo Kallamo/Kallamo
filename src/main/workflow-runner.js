@@ -163,9 +163,8 @@ function estimateTokens(str) {
     }
 }
 
-// Executors that should skip native tool calling for the rest of the session. A failed native
-// request marks one at once; a first reply without any call is one strike, since a capable
-// model may simply have been done.
+// Executors kept on the text protocol for the session. A failed native request reaches the limit
+// at once; a first reply without calls is one strike, since the model may simply be done.
 const TEXT_PROTOCOL_STRIKES = new Map();
 const TEXT_PROTOCOL_STRIKE_LIMIT = 2;
 
@@ -714,7 +713,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     });
                     retrievalOmitted += packed.dropped + packed.truncated;
                     if (agenticResult.degraded) agenticDegraded = true;
-                    // The ids are for the evaluation harness; the message record keeps only counts.
+                    // Stored on the message, so chunk ids are left out and only counts are kept.
                     lastAgenticTrajectory = {
                         anchorQuery: agenticResult.trajectory.anchorQuery,
                         toolK: agenticResult.trajectory.toolK,
@@ -1174,9 +1173,7 @@ function getRoleExecutor(roleId, profile = null) {
     return resolveAiEngineRole(roleId, { profile });
 }
 
-// Deterministic choice between the planner and the free retrieval path. It can only
-// downgrade to the deterministic path, which still fills the context, so a wrong skip
-// costs the multi-hop reach and never the context itself.
+// Can only downgrade to the deterministic path, which still fills the context.
 function resolvePlannerGate(chatId, request, { includeChatContext = true, force = false } = {}) {
     let entities = [];
     try {
@@ -1268,8 +1265,7 @@ async function sendTaggerRequest(payload, tries = 5) {
 }
 
 // Names first, without a model; then the Tagger only for what names cannot settle.
-// Every chunk ends completed or failed in world_index_chunk_status, with its real tag count.
-// notify:false is for callers that report the failure themselves.
+// Every chunk must end completed or failed in world_index_chunk_status, with its real tag count.
 async function tagChunkRecords(records, workspaceId, { runId = null, onProgress = null, notify = true, matcher = null } = {}) {
     const list = (Array.isArray(records) ? records : []).filter(record => record && record.id);
     const result = { taggedRecords: [], failedRecords: [], nameRows: 0, modelRows: 0, error: null, failed: false, skipped: false };
@@ -2798,11 +2794,9 @@ async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory 
     const SEED_FULL_RESULTS = 5;
 
     // Search width follows the writer's payload budget, because the results feed the writer.
-    // What the planner itself reads is sized by the planner's own window below.
     const toolK = retrievalBudget > 0 ? retrievalTopK(0, retrievalBudget, { tiers: RETRIEVAL_TIERS }) : null;
 
-    // The planner can run on another connection than the writer, often a smaller local model,
-    // so its requests are measured against its own context window.
+    // The planner may run on a smaller model than the writer, so it is measured against its own window.
     const executorKey = `${executor.apiProfileId}:${executor.model}`;
     let protocol = options.toolProtocol !== 'text'
         && (TEXT_PROTOCOL_STRIKES.get(executorKey) || 0) < TEXT_PROTOCOL_STRIKE_LIMIT
@@ -2947,7 +2941,7 @@ CRITICAL DIRECTIVES FOR COST & EFFICIENCY OPTIMIZATION:
 
     const SNIPPET_CHARS = 160;
     const itemRegistry = new Map();   // handle -> { source, full }, backs the expand tool
-    const handleIds = new Map();      // handle -> retrieved chunk id, so finish can cite R3
+    const handleIds = new Map();      // handle -> retrieved chunk id, for citations in finish
     const coveredSources = new Set();
     const coveredEntities = new Set();
     const executedQueries = new Map(); // query key -> { tool, query, hits, handles }, the repeat guard
@@ -3313,7 +3307,6 @@ CRITICAL DIRECTIVES FOR COST & EFFICIENCY OPTIMIZATION:
         return { tool: call.name, arg: call.arg, hits, status: 'ran' };
     };
 
-    // Collects one tool call's results into renderable items.
     const createCollector = () => {
         const turnItems = [];
         const pushResult = ({ id, source, full, meta, preview, score }) => {
@@ -3348,9 +3341,8 @@ CRITICAL DIRECTIVES FOR COST & EFFICIENCY OPTIMIZATION:
         }
         trajectory.seed = { calls: seedRuns, items: seededIds.size, ids: [...seededIds] };
         if (seed.turnItems.length) {
-            // The strongest passages are shown whole, so a pre-search that already answers lets the
-            // planner finish at once instead of spending a turn to expand them. The preview is bounded
-            // by the planner's window; every seeded passage reaches the writer either way.
+            // Shown whole so a pre-search that already answers lets the planner finish at once.
+            // The preview is bounded by the planner's window; every seeded passage reaches the writer.
             const ranked = seed.turnItems.filter(it => it.kind === 'result').sort((a, b) => b.score - a.score);
             const shownInFull = new Set();
             const fullLines = [];
@@ -3683,9 +3675,8 @@ CRITICAL DIRECTIVES FOR COST & EFFICIENCY OPTIMIZATION:
         }
     }
 
-    // Tier sets packing priority: facts, read files, search hits, lookup-only passages, uncited.
-    // What the free pre-search found never falls to the bottom tier: the deterministic path
-    // would have sent it, and the agent staying silent about it is not evidence against it.
+    // Pre-search results never fall to the bottom tier: the deterministic path would have sent
+    // them, and the agent staying silent about them is not evidence against them.
     const UNCITED_TIER = 4;
     const SEEDED_UNCITED_TIER = 3;
     const uncitedTier = (ids) => (ids.some(id => seededIds.has(id)) ? SEEDED_UNCITED_TIER : UNCITED_TIER);

@@ -542,9 +542,7 @@ function chunkScope(ownerId, ownerType, scope) {
         : { where: '(kc.ownerId = ? AND kc.ownerType = ?)', params: [ownerId, ownerType] };
 }
 
-// No similarity floor: returns the chunks tagged with a known entity, ranked by `queryVector`
-// (else recency) and capped by `limit`. `idsOnly` skips the chunks. With scope 'workspace',
-// `ownerId` is the workspace and `ownerType` is ignored.
+// No similarity floor. With scope 'workspace', `ownerId` is the workspace and `ownerType` is ignored.
 function lookupEntityChunks(nameOrAlias, ownerId, ownerType, { queryVector = null, limit = null, idsOnly = false, scope = 'owner' } = {}) {
     const needle = String(nameOrAlias || '').toLowerCase().trim();
     if (!needle) return { chunks: [], entityIds: [], total: 0 };
@@ -599,7 +597,6 @@ function lookupEntityChunks(nameOrAlias, ownerId, ownerType, { queryVector = nul
     };
 }
 
-// Load enabled candidate chunks for the given owners, with their vectors.
 function loadOwnerCandidates(ownerIds, ownerType) {
     if (!ownerIds || ownerIds.length === 0) return [];
     const placeholders = ownerIds.map(() => '?').join(', ');
@@ -751,7 +748,6 @@ function tagChunks(chunkIds, tags) {
     })();
 }
 
-// Every enabled chunk of the given archive blocks, without vectors, for neighbor expansion.
 function loadMemoryBlockChunks(ownerId, blockIds) {
     const ids = [...new Set((blockIds || []).filter(Boolean))];
     const blocks = new Map();

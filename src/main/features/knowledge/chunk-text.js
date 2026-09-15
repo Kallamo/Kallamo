@@ -9,7 +9,6 @@ function meaningfulContentLength(text) {
     for (const rawLine of text.split('\n')) {
         let line = rawLine.trim();
         if (!line) continue;
-        // Strip leading bullet/list markers
         line = line.replace(/^[●○•◦▪‣·\-\*▪○\s]+/, '').trim();
         if (!line) continue;                 // lone bullet
         if (/^[^:]{1,40}:\s*$/.test(line)) continue; // empty "Label:" with no value
@@ -83,7 +82,6 @@ function chunkText(text, maxChunkSize = 1000) {
                 if (currentChunk.length > 50) {
                     chunks.push(currentChunk.trim());
                 }
-                // Keep the trailing portion as overlap seed for the next chunk
                 const tail = currentChunk.slice(-overlapSize).trim();
                 currentChunk = tail.length > 0 ? tail : "";
             }

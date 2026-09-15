@@ -10,9 +10,8 @@ const QUERY_TERM_MIN_LENGTH = 3;
 // Entities listed for the agent. Past this the prompt costs more than it steers.
 const WORLD_MAP_LIMIT = 60;
 
-// A message shorter than this in words and characters, with no name and no question mark,
-// has nothing for a planner to research. Scripts written without spaces say as much in far
-// fewer characters and have no word count worth reading, so they get their own floor.
+// Below these, a message with no name and no question mark has nothing to research.
+// Unspaced scripts say more per character and have no usable word count, so they get their own floor.
 const PLANNER_MIN_WORDS = 12;
 const PLANNER_MIN_CHARS = 60;
 const PLANNER_MIN_DENSE_CHARS = 24;

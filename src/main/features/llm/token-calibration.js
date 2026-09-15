@@ -1,6 +1,5 @@
-// How far the local token estimate falls short of what a model really counts, learned per
-// connection, model and protocol from provider-reported usage. The estimate uses one fixed
-// tokenizer, and models split the same text very differently, most of all outside English.
+// The local estimate uses one fixed tokenizer, and models split the same text very differently,
+// so the real ratio is learned per connection, model and protocol from provider-reported usage.
 
 // Until a model has reported its usage, nothing is corrected.
 const UNMEASURED_RATIO = 1;

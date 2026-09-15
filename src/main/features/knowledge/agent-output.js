@@ -17,9 +17,8 @@ function parseAttrs(attrStr) {
   return attrs;
 }
 
-// Each opening tag is read on its own. A call whose argument sits in the inner text is
-// closed by the next </tool_call>, but only when no other call starts first: otherwise a
-// single paired call further down swallows every self-closing call before it.
+// Each opening tag is read on its own: a paired call closed further down must not swallow
+// the self-closing calls written before it.
 function parseToolCalls(text) {
   const source = String(text || '');
   const calls = [];
@@ -46,10 +45,8 @@ function parseFinish(text) {
   return { sources: parseAttrs(block[1] || '').sources || '', body: block[2] };
 }
 
-// A reply that calls a tool cannot also be done: the results it claims to have read were
-// never delivered. The calls run, and the finish waits for a turn that has seen them.
-// Reasoning is the model thinking aloud, so a call or finish written there was considered,
-// not chosen; only the reply outside it is read.
+// A reply that calls a tool is not done: its finish waits for a turn that has seen the results.
+// Calls or finishes inside reasoning were considered, not chosen, so only the reply is read.
 function parseAgentTurn(text) {
   const reply = stripReasoning(text);
   const toolCalls = parseToolCalls(reply);

@@ -1,6 +1,4 @@
-// The retrieval planner's tool surface, written once. The text protocol renders it as tag
-// syntax and native tool calling renders it as function definitions, so both describe the
-// same tools in the same words.
+// Defined once for both protocols, so text tags and native functions describe the same tools.
 
 const PLANNER_TOOLS = [
   {

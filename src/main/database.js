@@ -681,7 +681,7 @@ try {
     console.log("Database Migration: Added excluded column to messages table.");
   }
 
-  // Trims debug records stored before retrieved text was gated on the debug panels.
+  // Caps oversized debug records in stored messages.
   // Isolated so a failure never skips the migrations that follow.
   const debugTrimKey = 'migration.debugNoticeTrim.v1';
   try {

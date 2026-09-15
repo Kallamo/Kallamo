@@ -5,9 +5,7 @@ const { orderKnowledgeChunks, stripChunkHeader, joinChunksWithoutOverlap } = req
 const NEIGHBOR_RADIUS = 1;
 const MAX_PASSAGE_CHUNKS = 6;
 
-// hits: [{ id, memoryBlockId, text, score, uncited, origin, ... }]
-// blocks: Map(blockId -> [{ id, text, rowid }]) holding every enabled chunk of that block.
-// Returns merged passages plus the hits that could not be placed in a block.
+// `blocks` must hold every enabled chunk of each block, or a neighbor is silently missed.
 function buildNeighborPassages(hits, blocks, { radius = NEIGHBOR_RADIUS, maxChunks = MAX_PASSAGE_CHUNKS } = {}) {
   const passages = [];
   const unplaced = [];

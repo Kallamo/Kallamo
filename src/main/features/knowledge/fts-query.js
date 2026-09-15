@@ -3,10 +3,8 @@
 const MAX_TERMS = 32;
 const MIN_TERM_LENGTH = 3;
 
-// A question rarely spells a word the way the passage does ("abriria" against "abrir"),
-// and unicode61 has no stemmer for any language, so every long enough word also matches
-// as a prefix of itself. Shape decides, never a word list: too short a prefix matches
-// everything, and an unspaced script hands the tokenizer one very long run.
+// unicode61 has no stemmer, so a long enough word also matches as a prefix of itself.
+// Length bounds, never a word list: a short prefix matches everything, an unspaced run nothing.
 const PREFIX_MIN_LENGTH = 5;
 const PREFIX_MAX_LENGTH = 24;
 const PREFIX_TRIM = 2;

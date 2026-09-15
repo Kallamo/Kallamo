@@ -292,9 +292,8 @@ function awsSignV4({ accessKeyId, secretAccessKey, region, service, method, path
 
 // --- RESPONSE PARSING ---
 
-// jsonMode never prepends reasoning: braces inside it break object extraction.
-// A withheld or unreadable reply throws; an empty one returns '' so callers can tell an
-// exhausted output budget from a failure.
+// jsonMode never prepends reasoning: braces inside it break object extraction. A withheld reply
+// throws; an empty one returns '' so callers can tell a spent output budget from a failure.
 function parseResponse(data, provider, jsonMode = false) {
     const withReasoning = (reasoning, content) => (reasoning && !jsonMode ? `<think>${reasoning}</think>${content}` : content);
     switch (provider.toLowerCase()) {
@@ -899,9 +898,7 @@ async function sendApiRequest(params, dependencies = {}) {
     }
 }
 
-// The retrieval planner's transport. It carries either the text protocol or a native tool
-// conversation, and returns what the provider reports about token use, so the effect of
-// caching is read from the provider instead of assumed.
+// Returns provider-reported usage, so the effect of caching is read, never assumed.
 async function sendAgentRequest(params, dependencies = {}) {
     const { endpoint, requestHeaders, requestBodyPayload, provider, tokenSample } = await buildRequest(params, dependencies);
     const response = await undiciFetch(endpoint, {

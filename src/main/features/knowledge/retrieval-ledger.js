@@ -1,4 +1,3 @@
-// What retrieval already tried in a workspace, across the chat turns of one session.
 // In process and short lived on purpose: a remembered "nothing found" must never outlive
 // the corpus it was measured on, so indexing clears it and time expires it.
 

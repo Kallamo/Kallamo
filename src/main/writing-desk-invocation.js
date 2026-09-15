@@ -292,8 +292,7 @@ async function runWritingDeskInvocation({
     const packedRag = packContextItems(ragItems, retrievalBudget, { estimate: countTokens });
     const retrieved = renderContextSections(packedRag.kept, SECTION_ORDER);
 
-    // Assemble the system prompt: profile prompt + permanent directives + RAG context
-    // + channel instruction. The active chat window rides as chatHistory.
+    // The active chat window travels as chatHistory, never inside the system prompt.
     let systemPrompt = baseSystemPrompt;
     if (retrieved) {
         systemPrompt += `\n\n${RETRIEVED_CONTEXT_HEADER}\n${retrieved}`;

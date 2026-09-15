@@ -1,12 +1,5 @@
-// One neutral transcript, rendered into each provider's native tool-calling format and read
-// back from each provider's reply, so the retrieval loop never branches on the provider.
-//
-// Transcript entries:
-//   { role: 'user', text }
-//   { role: 'assistant', text, toolCalls: [{ id, name, args }], raw, rawFormat }
-//   { role: 'tool', results: [{ id, name, content }] }
-// `raw` is the provider's own assistant payload, replayed unchanged when the format matches:
-// thinking blocks and thought signatures must come back exactly as they were sent.
+// One neutral transcript for every provider's tool-calling format, so the loop never branches on it.
+// `raw` is replayed unchanged when the format matches: thinking blocks must return exactly as sent.
 
 const OPENAI_COMPATIBLE = new Set(['openai', 'openrouter', 'local']);
 const GOOGLE = new Set(['google ai', 'vertex ai']);
@@ -183,8 +176,7 @@ function readToolReply(provider, data) {
   return { toolCalls: [], raw: null, rawFormat: null };
 }
 
-// What the provider itself reports. The fields mean different things per provider, so they are
-// shown as reported; `totalInputTokens` is the one figure comparable across providers, because
+// Fields are kept as each provider reports them. `totalInputTokens` is the comparable figure:
 // Anthropic counts cache reads and writes apart from the rest of the input.
 function readUsage(provider, data) {
   const p = normalize(provider);
@@ -227,9 +219,8 @@ function readUsage(provider, data) {
   return { inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null, totalInputTokens: null };
 }
 
-// Claude through Bedrock's InvokeModel takes explicit cache breakpoints only, so the end of the
-// request is marked on its last block; moving that mark forward each turn keeps earlier ones readable.
-// Every message is sent as blocks, so a turn is written the same way whether or not it carries the mark.
+// Bedrock's InvokeModel takes explicit cache breakpoints only, moved to the last block each turn.
+// Every message is sent as blocks, so a turn serializes the same with or without the mark.
 function applyCacheBreakpoint(body, provider, model) {
   if (!isBedrockClaude(provider, model) || !Array.isArray(body?.messages) || !body.messages.length) return body;
   const messages = body.messages.map(message => (typeof message.content === 'string'

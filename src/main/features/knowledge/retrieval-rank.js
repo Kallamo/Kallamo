@@ -1,5 +1,4 @@
-// The ranking core of hybrid search, kept free of database and Electron so the
-// evaluation harness can score the exact code the app runs.
+// Ranking core of hybrid search. Must stay free of database and Electron imports.
 
 const { buildNameIndex, findLiteralMentions } = require('../world-index/literal-mentions');
 
@@ -75,9 +74,8 @@ function cosineFloorFor(threshold) {
   return SIMILARITY_FLOOR_MIN + threshold * (SIMILARITY_FLOOR_MAX - SIMILARITY_FLOOR_MIN);
 }
 
-// How far a passage's floor drops, given the share of the query's name evidence it
-// carries. Full evidence earns the old tagged floor; a name written across half the
-// archive earns almost nothing, because it cannot tell two passages apart.
+// How far a passage's floor drops for the share of the query's name evidence it carries.
+// A name written across half the archive earns almost nothing: it cannot tell passages apart.
 function floorFor(cosineFloor, evidence) {
   return cosineFloor - cosineFloor * (1 - TAGGED_FLOOR_RATIO) * Math.min(1, Math.max(0, evidence));
 }
@@ -163,9 +161,8 @@ function entitiesFromTagRows(tagRows) {
   return entities;
 }
 
-// The Tagger's matcher decides which names the query writes, so boundaries hold in every
-// script, including the ones written without spaces. The query is the user's own words,
-// so each name is also registered in lower case and casing never blocks a match.
+// The Tagger's matcher keeps name boundaries in every script, including unspaced ones.
+// Names are also registered in lower case: the query is typed by the user.
 function buildQueryNameIndex(entities) {
   return buildNameIndex([...entities].map(entity => {
     const written = [entity.canonicalName, ...entity.aliases].filter(Boolean);
@@ -178,10 +175,8 @@ function buildQueryNameIndex(entities) {
   }));
 }
 
-// Per chunk, the share of the query's name evidence it carries, between 0 and 1.
-// A name written across a third of the archive says almost nothing about which passage
-// answers the question, so it weighs almost nothing; a name written in five passages
-// weighs a lot. With names tagged everywhere, this is what still discriminates.
+// Per chunk, the 0..1 share of the query's name evidence it carries. Rare names weigh most:
+// a name written across much of the archive cannot tell passages apart.
 function buildEntityEvidenceMap(queryText, tagRows, { totalChunks = 0 } = {}) {
   const evidence = new Map();
   if (!String(queryText || '').trim()) return evidence;
@@ -212,11 +207,8 @@ function buildEntityEvidenceMap(queryText, tagRows, { totalChunks = 0 } = {}) {
   return evidence;
 }
 
-// Ranks the passages an entity lookup found: similarity to the request, plus a recency
-// nudge, or newest first when the request could not be embedded. Adding the request's
-// keywords here was measured and rejected: it lifts the rank of answers that carry the
-// entity by name, but packs the capped list into fewer scenes, and scene expansion is
-// what reaches the passages where the entity acts without being named.
+// No keyword term on purpose: it packs the capped list into fewer scenes, and scene expansion
+// is what reaches passages where the entity acts without being named.
 function rankLookupChunks(rows, queryVector, vectorOf) {
   const list = Array.isArray(rows) ? rows : [];
   if (!Array.isArray(queryVector) || !queryVector.length) {
