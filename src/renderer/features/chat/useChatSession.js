@@ -352,8 +352,9 @@ export function useChatSession({ api, setChats, setCurrentView }) {
         alternatives: JSON.stringify(alternatives)
       };
 
-      await api.deleteMessage(messageId);
+      // The shown reply is only removed once its replacement is saved.
       await api.saveMessage(updatedMessage);
+      await api.deleteMessage(messageId);
       await api.reprocessNarrativeStateTurn?.(activeChatId, updatedMessage.id);
       setActiveMessages(previous => previous.map(item => item.id === messageId ? updatedMessage : item));
     } catch (error) {
