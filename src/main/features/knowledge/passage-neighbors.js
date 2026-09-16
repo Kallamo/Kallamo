@@ -1,6 +1,6 @@
 const { orderKnowledgeChunks, stripChunkHeader, joinChunksWithoutOverlap } = require('./kb-reconstruct');
 
-// Archiving splits one scene across chunks, so a hit often holds the question and
+// Archiving splits one conversation passage across chunks, so a hit often holds the question and
 // its neighbor the answer. Hits are widened to their neighbors in the same block.
 const NEIGHBOR_RADIUS = 1;
 const MAX_PASSAGE_CHUNKS = 6;
@@ -34,7 +34,7 @@ function buildNeighborPassages(hits, blocks, { radius = NEIGHBOR_RADIUS, maxChun
       if (run && index === run[run.length - 1] + 1) run.push(index);
       else contiguous.push([index]);
     }
-    // Long runs split into equal parts, so a cut never strands one chunk of a scene.
+    // Long runs split into equal parts, so a cut never strands one chunk of a passage.
     const runs = [];
     for (const run of contiguous) {
       const size = Math.ceil(run.length / Math.ceil(run.length / maxChunks));
