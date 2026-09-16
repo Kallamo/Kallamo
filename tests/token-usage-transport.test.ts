@@ -7,6 +7,7 @@ const require = createRequire(import.meta.url);
 const { buildRequest, sendAgentRequest, sendApiRequest } = require('../src/main/features/llm/llm.service');
 const { sendApiRequestStream } = require('../src/main/features/llm/llm.stream');
 const { clearTokenCalibration, measuredRatio } = require('../src/main/features/llm/token-calibration');
+const { getScopeStats, resetScope } = require('../src/main/features/llm/prompt-cache');
 
 let server: http.Server;
 let origin = '';
@@ -136,6 +137,31 @@ describe('the chat learns what each provider really counted', () => {
         if (streaming) expect(lastBody).not.toHaveProperty('stream_options');
       });
     }
+  }
+
+  for (const streaming of [false, true]) {
+    test(`a cached Anthropic chat learns from the full count and records the cache once (${streaming ? 'streaming' : 'non-streaming'})`, async () => {
+      const db = database('Anthropic', '/anthropic/v1/messages');
+      const scopeId = `transport-cache-${streaming}`;
+      resetScope(scopeId);
+      const cached = {
+        ...params,
+        promptCache: { policy: 'conversation', placement: 'system', scopeId, stable: params.systemPrompt, volatile: '\n\nRetrieved context.' }
+      };
+      const estimate = await estimatedInput(db, cached);
+      reported = Math.round(estimate * 1.4);
+      const usage: any[] = [];
+      const request = { ...cached, onUsage: (metadata: any) => usage.push(metadata) };
+      const result = streaming
+        ? await sendApiRequestStream(request, () => {}, () => {}, { database: db })
+        : await sendApiRequest(request, { database: db });
+      // input_tokens excludes the 300 cached tokens; the ratio must not.
+      expect(result.learnedTokenRatio).toBeCloseTo(reported / estimate, 5);
+      expect(lastBody.system[0].cache_control).toEqual({ type: 'ephemeral' });
+      expect(usage).toHaveLength(1);
+      expect(usage[0].totalInputTokens).toBe(reported);
+      expect(getScopeStats(scopeId)).toMatchObject({ reads: 200, writes: 100 });
+    });
   }
 
   test('the retrieval planner learns under the native protocol when it sends tools', async () => {

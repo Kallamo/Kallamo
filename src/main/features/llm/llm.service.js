@@ -380,7 +380,8 @@ function textOfParts(parts, thoughts) {
 // Stateless: the reader handles line splitting, `data:` and [DONE].
 // finishReason and error let streaming treat cut-off or failed replies like the non-streaming path.
 function parseStreamChunk(obj, provider) {
-    const empty = { contentDelta: '', reasoningDelta: '', done: false, finishReason: null, error: null, inputTokens: null };
+    // `usage` is the raw frame: Anthropic splits it across message_start and message_delta, so callers merge it.
+    const empty = { contentDelta: '', reasoningDelta: '', done: false, finishReason: null, error: null, inputTokens: null, usage: null };
     try {
         switch (provider.toLowerCase()) {
             case 'openai':
@@ -390,7 +391,8 @@ function parseStreamChunk(obj, provider) {
                 // Usage arrives on a chunk with no choice (OpenAI) or on the last choice (llama.cpp).
                 const inputTokens = obj?.usage ? readUsage(provider, obj).totalInputTokens : null;
                 const choice = obj.choices && obj.choices[0];
-                if (!choice) return { ...empty, inputTokens };
+                const usage = obj?.usage || null;
+                if (!choice) return { ...empty, inputTokens, usage };
                 const delta = choice.delta || {};
                 return {
                     contentDelta: typeof delta.content === 'string' ? delta.content : '',
@@ -398,13 +400,14 @@ function parseStreamChunk(obj, provider) {
                     done: choice.finish_reason != null,
                     finishReason: choice.finish_reason ?? null,
                     error: null,
-                    inputTokens
+                    inputTokens,
+                    usage
                 };
             }
             case 'anthropic': {
                 if (obj.type === 'error') return { ...empty, error: providerErrorMessage(obj.error) };
                 if (obj.type === 'message_start') {
-                    return { ...empty, inputTokens: readUsage(provider, obj.message).totalInputTokens };
+                    return { ...empty, inputTokens: readUsage(provider, obj.message).totalInputTokens, usage: obj.message?.usage || null };
                 }
                 if (obj.type === 'content_block_delta') {
                     const d = obj.delta || {};
@@ -416,7 +419,7 @@ function parseStreamChunk(obj, provider) {
                 }
                 // Usage on message_delta is cumulative, so when it carries input tokens they supersede message_start.
                 if (obj.type === 'message_delta') {
-                    return { ...empty, finishReason: obj.delta?.stop_reason ?? null, inputTokens: readUsage(provider, obj).totalInputTokens };
+                    return { ...empty, finishReason: obj.delta?.stop_reason ?? null, inputTokens: readUsage(provider, obj).totalInputTokens, usage: obj.usage || null };
                 }
                 if (obj.type === 'message_stop') return { ...empty, done: true };
                 return empty;
@@ -425,10 +428,11 @@ function parseStreamChunk(obj, provider) {
             case 'vertex ai': {
                 if (obj?.error) return { ...empty, error: providerErrorMessage(obj.error) };
                 const inputTokens = obj?.usageMetadata ? readUsage(provider, obj).totalInputTokens : null;
+                const usage = obj?.usageMetadata || null;
                 const cand = obj.candidates && obj.candidates[0];
                 if (!cand) {
                     const blockReason = obj?.promptFeedback?.blockReason;
-                    return blockReason ? { ...empty, error: `The provider blocked this prompt (${blockReason}).` } : { ...empty, inputTokens };
+                    return blockReason ? { ...empty, error: `The provider blocked this prompt (${blockReason}).` } : { ...empty, inputTokens, usage };
                 }
                 const parts = cand.content?.parts;
                 return {
@@ -437,7 +441,8 @@ function parseStreamChunk(obj, provider) {
                     done: cand.finishReason != null,
                     finishReason: cand.finishReason ?? null,
                     error: null,
-                    inputTokens
+                    inputTokens,
+                    usage
                 };
             }
             default:
@@ -478,28 +483,6 @@ function markLastHistoryMessage(messages) {
         return messages;
     }
     return [...messages.slice(0, -1), { ...last, content }];
-}
-
-// Usage reaches a streaming caller in provider-specific frames. Anthropic splits
-// it across message_start (input and cache counters) and message_delta (output),
-// so the stream reader merges what this returns instead of replacing it.
-function parseStreamUsage(obj, provider) {
-    const normalized = String(provider || '').toLowerCase();
-    switch (normalized) {
-        case 'anthropic':
-            if (obj?.type === 'message_start') return obj.message?.usage || null;
-            if (obj?.type === 'message_delta') return obj.usage || null;
-            return null;
-        case 'openai':
-        case 'openrouter':
-        case 'local':
-            return obj?.usage || null;
-        case 'google ai':
-        case 'vertex ai':
-            return obj?.usageMetadata || null;
-        default:
-            return null;
-    }
 }
 
 // --- CORE API REQUESTS ---
@@ -1130,7 +1113,6 @@ module.exports = {
     buildRequest,
     parseResponse,
     parseStreamChunk,
-    parseStreamUsage,
     providerOutputLimit,
     requestedOutputTokens,
     getReservedOutputTokens,

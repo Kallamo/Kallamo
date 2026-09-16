@@ -1,6 +1,7 @@
 // One neutral transcript for every provider's tool-calling format, so the loop never branches on it.
 // `raw` is replayed unchanged when the format matches: thinking blocks must return exactly as sent.
 
+const { readUsage } = require('./response-metadata');
 const OPENAI_COMPATIBLE = new Set(['openai', 'openrouter', 'local']);
 const GOOGLE = new Set(['google ai', 'vertex ai']);
 
@@ -174,49 +175,6 @@ function readToolReply(provider, data) {
     return { toolCalls, raw: list, rawFormat: 'google' };
   }
   return { toolCalls: [], raw: null, rawFormat: null };
-}
-
-// Fields are kept as each provider reports them. `totalInputTokens` is the comparable figure:
-// Anthropic counts cache reads and writes apart from the rest of the input.
-function readUsage(provider, data) {
-  const p = normalize(provider);
-  const count = value => (value == null || !Number.isFinite(Number(value)) ? null : Number(value));
-  if (OPENAI_COMPATIBLE.has(p)) {
-    const usage = data?.usage || {};
-    const inputTokens = count(usage.prompt_tokens);
-    return {
-      inputTokens,
-      outputTokens: count(usage.completion_tokens),
-      cacheReadTokens: count(usage.prompt_tokens_details?.cached_tokens),
-      cacheWriteTokens: null,
-      totalInputTokens: inputTokens
-    };
-  }
-  if (p === 'anthropic' || p === 'aws bedrock') {
-    const usage = data?.usage || {};
-    const inputTokens = count(usage.input_tokens);
-    const cacheReadTokens = count(usage.cache_read_input_tokens);
-    const cacheWriteTokens = count(usage.cache_creation_input_tokens);
-    return {
-      inputTokens,
-      outputTokens: count(usage.output_tokens),
-      cacheReadTokens,
-      cacheWriteTokens,
-      totalInputTokens: inputTokens == null ? null : inputTokens + (cacheReadTokens || 0) + (cacheWriteTokens || 0)
-    };
-  }
-  if (GOOGLE.has(p)) {
-    const usage = data?.usageMetadata || {};
-    const inputTokens = count(usage.promptTokenCount);
-    return {
-      inputTokens,
-      outputTokens: count(usage.candidatesTokenCount),
-      cacheReadTokens: count(usage.cachedContentTokenCount),
-      cacheWriteTokens: null,
-      totalInputTokens: inputTokens
-    };
-  }
-  return { inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null, totalInputTokens: null };
 }
 
 // Bedrock's InvokeModel takes explicit cache breakpoints only, moved to the last block each turn.

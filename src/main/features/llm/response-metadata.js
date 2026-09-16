@@ -1,4 +1,50 @@
+const OPENAI_COMPATIBLE = new Set(['openai', 'openrouter', 'local']);
+const GOOGLE = new Set(['google ai', 'vertex ai']);
+
 const OUTPUT_LIMIT_REASONS = new Set(['length', 'max_tokens', 'max_output_tokens', 'model_length', 'finish_reason_length']);
+
+// Fields are kept as each provider reports them. `totalInputTokens` is the comparable figure:
+// Anthropic counts cache reads and writes apart from the rest of the input.
+function readUsage(provider, data) {
+  const p = String(provider || '').toLowerCase();
+  const count = value => (value == null || !Number.isFinite(Number(value)) ? null : Number(value));
+  if (OPENAI_COMPATIBLE.has(p)) {
+    const usage = data?.usage || {};
+    const inputTokens = count(usage.prompt_tokens);
+    return {
+      inputTokens,
+      outputTokens: count(usage.completion_tokens),
+      cacheReadTokens: count(usage.prompt_tokens_details?.cached_tokens),
+      cacheWriteTokens: null,
+      totalInputTokens: inputTokens
+    };
+  }
+  if (p === 'anthropic' || p === 'aws bedrock') {
+    const usage = data?.usage || {};
+    const inputTokens = count(usage.input_tokens);
+    const cacheReadTokens = count(usage.cache_read_input_tokens);
+    const cacheWriteTokens = count(usage.cache_creation_input_tokens);
+    return {
+      inputTokens,
+      outputTokens: count(usage.output_tokens),
+      cacheReadTokens,
+      cacheWriteTokens,
+      totalInputTokens: inputTokens == null ? null : inputTokens + (cacheReadTokens || 0) + (cacheWriteTokens || 0)
+    };
+  }
+  if (GOOGLE.has(p)) {
+    const usage = data?.usageMetadata || {};
+    const inputTokens = count(usage.promptTokenCount);
+    return {
+      inputTokens,
+      outputTokens: count(usage.candidatesTokenCount),
+      cacheReadTokens: count(usage.cachedContentTokenCount),
+      cacheWriteTokens: null,
+      totalInputTokens: inputTokens
+    };
+  }
+  return { inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null, totalInputTokens: null };
+}
 
 function getResponseMetadata(data, provider) {
   const normalizedProvider = String(provider || '').toLowerCase();
@@ -66,10 +112,12 @@ function getResponseMetadata(data, provider) {
     outputTokens: Number.isFinite(outputTokens) ? outputTokens : 0,
     cacheReadTokens: safeRead,
     cacheWriteTokens: safeWrite,
+    // Comparable across providers: what the payload limit calibration learns from.
+    totalInputTokens: readUsage(normalizedProvider, data).totalInputTokens,
     uncachedInputTokens: foldsCacheIntoInput
       ? Math.max(0, safeInput - safeRead)
       : safeInput
   };
 }
 
-module.exports = { getResponseMetadata };
+module.exports = { getResponseMetadata, readUsage };

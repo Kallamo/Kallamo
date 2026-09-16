@@ -15,6 +15,7 @@ describe('LLM response metadata', () => {
         outputTokens: 1800,
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
+        totalInputTokens: null,
         uncachedInputTokens: 0
       });
   });
@@ -29,6 +30,7 @@ describe('LLM response metadata', () => {
         outputTokens: 0,
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
+        totalInputTokens: null,
         uncachedInputTokens: 0
       });
   });
@@ -51,7 +53,8 @@ describe('LLM response metadata', () => {
       inputTokens: 400,
       cacheReadTokens: 12000,
       cacheWriteTokens: 0,
-      uncachedInputTokens: 400
+      uncachedInputTokens: 400,
+      totalInputTokens: 12400
     }));
   });
 

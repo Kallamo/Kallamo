@@ -1,5 +1,5 @@
 const { fetch: undiciFetch } = require('undici');
-const { buildRequest, parseStreamChunk, parseStreamUsage, sendApiRequest, generationDispatcher, readHttpErrorMessage, learnFromReportedTokens } = require('./llm.service');
+const { buildRequest, parseStreamChunk, sendApiRequest, generationDispatcher, readHttpErrorMessage, learnFromReportedTokens } = require('./llm.service');
 const { getResponseMetadata } = require('./response-metadata');
 const { recordCacheOutcome } = require('./prompt-cache');
 
@@ -100,10 +100,8 @@ async function sendApiRequestStream(params, onDelta, onStreamStart, dependencies
                 let obj;
                 try { obj = JSON.parse(data); } catch (e) { continue; }
 
-                const frameUsage = parseStreamUsage(obj, provider);
-                if (frameUsage) usage = { ...(usage || {}), ...frameUsage };
-
                 const chunk = parseStreamChunk(obj, provider);
+                if (chunk.usage) usage = { ...(usage || {}), ...chunk.usage };
                 if (chunk.error) {
                     throw streamError(`The provider stopped the reply with an error: ${chunk.error}`, 'PROVIDER_ERROR');
                 }
