@@ -78,6 +78,30 @@ describe('a request is sized once', () => {
   });
 });
 
+describe('every request is bounded', () => {
+  test('a request that names no limit is still checked against the default workspace limit', async () => {
+    const db = database('Local');
+    const huge = 'The archive remembers every tide. '.repeat(30000);
+    await expect(buildRequest({ apiProfileId: 'conn', model: 'm', systemPrompt: huge, newPrompt: 'Continue.', maxTokens: 500 }, { database: db }))
+      .rejects.toMatchObject({ code: 'MAX_API_PAYLOAD_EXCEEDED', retryable: false });
+  });
+
+  test('the Tagger splits a batch that exceeds the payload limit instead of failing it', async () => {
+    const { runModelTagger } = require('../src/main/features/world-index/tagger');
+    const records = Array.from({ length: 4 }, (_, index) => ({ id: `c${index}`, text: `Passage ${index}. ${'The ferry crossed at dawn. '.repeat(40)}` }));
+    const sent: number[] = [];
+    const send = async ({ newPrompt }: { newPrompt: string }) => {
+      const chunks = (newPrompt.match(/\[CHUNK \d+\]/g) || []).length;
+      sent.push(chunks);
+      if (chunks > 1) throw Object.assign(new Error('over the payload limit'), { code: 'MAX_API_PAYLOAD_EXCEEDED' });
+      return { content: JSON.stringify({ items: [{ chunk: 0, mentions: [] }] }), truncated: false };
+    };
+    const { outcomes } = await runModelTagger({ records, categories: [{ name: 'Characters', description: '' }], send, concurrency: 1 });
+    expect([...outcomes.values()].every(outcome => outcome.status === 'completed')).toBe(true);
+    expect(sent.filter(count => count === 1)).toHaveLength(4);
+  });
+});
+
 describe('the cached prefix survives turns that change retrieval', () => {
   test('the stable head and the history start are byte-identical while the retrieved context and budget move', async () => {
     const db = database('Anthropic');

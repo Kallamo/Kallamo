@@ -189,8 +189,13 @@ async function runModelTagger({
     try {
       result = await attempt(batch);
     } catch (error) {
-      fail(batch, (error && error.message) || String(error));
-      return;
+      // A batch over the payload limit is split like a cut reply: halves are smaller requests.
+      if (error?.code === 'MAX_API_PAYLOAD_EXCEEDED' && batch.length > 1) {
+        result = { cut: true, error: error.message };
+      } else {
+        fail(batch, (error && error.message) || String(error));
+        return;
+      }
     }
     if (result.cut) {
       if (batch.length > 1) {

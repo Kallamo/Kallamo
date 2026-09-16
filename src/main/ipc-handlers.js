@@ -5557,6 +5557,7 @@ ipcMain.handle('test-chat-rag-search', async (event, { chatId, queryText, profil
           newPrompt: queryText,
           temperature: 0.1,
           maxTokens: 100,
+          maxPayloadTokens: db.prepare('SELECT maxContext FROM chats WHERE id = ?').get(chatId)?.maxContext,
           manualMode: false,
           manualJson: ''
         });

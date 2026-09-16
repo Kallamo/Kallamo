@@ -80,12 +80,13 @@ function connectionContextWindow(apiProfile) {
 
 // `configured` is what the user set; `limit` is that number divided by how much more this model
 // counts than the local estimate, so every budget derived from it shrinks together.
+// A caller that names no limit gets the default workspace limit, so no request goes unchecked.
 function payloadLimitFor(apiProfile, maxPayloadTokens, { model = null, protocol = 'text' } = {}) {
-    const workspace = maxPayloadTokens == null ? null : normalizeMaxApiPayload(maxPayloadTokens);
+    const workspace = normalizeMaxApiPayload(maxPayloadTokens);
     const connection = connectionContextWindow(apiProfile);
-    const fromConnection = connection !== null && (workspace === null || normalizeMaxApiPayload(connection) < workspace);
+    const fromConnection = connection !== null && normalizeMaxApiPayload(connection) < workspace;
     const configured = fromConnection ? normalizeMaxApiPayload(connection) : workspace;
-    const ratio = configured === null ? 1 : tokenRatio({ apiProfileId: apiProfile?.id, model, protocol });
+    const ratio = tokenRatio({ apiProfileId: apiProfile?.id, model, protocol });
     return {
         limit: correctedLimit(configured, ratio),
         configured,

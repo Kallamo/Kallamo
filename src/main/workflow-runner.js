@@ -1614,6 +1614,15 @@ function cleanErrorMessage(error) {
     return msg;
 }
 
+// The workspace's MAX API Payload, for background calls that have no step budget of their own.
+function workspacePayloadTokens(workspaceId) {
+    try {
+        return normalizeMaxApiPayload(db.prepare('SELECT maxContext FROM chats WHERE id = ?').get(workspaceId)?.maxContext);
+    } catch (e) {
+        return normalizeMaxApiPayload(null);
+    }
+}
+
 // Tagging never blocks the caller, so a failure must be announced or it looks like
 // it ran. The renderer dedupes the toast; every window, as the main one isn't index 0.
 function notifyTaggingFailure(error) {
@@ -1678,7 +1687,7 @@ async function tagChunkRecords(records, workspaceId, { runId = null, onProgress 
         categories,
         vocabFor: text => buildEntityVocab(workspaceId, text),
         languageInstruction: getSystemLanguageInstruction(),
-        send: payload => sendTaggerRequest({ apiProfileId, model, chatHistory: [], manualMode: false, manualJson: null, ...payload }),
+        send: payload => sendTaggerRequest({ apiProfileId, model, chatHistory: [], manualMode: false, manualJson: null, maxPayloadTokens: workspacePayloadTokens(workspaceId), ...payload }),
         onProgress
     });
 
@@ -2445,6 +2454,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         narrativeResponse
     };
     const triagePayload = JSON.stringify(triagePayloadValue);
+    const narrativePayloadTokens = workspacePayloadTokens(workspaceId);
     const narrativeTelemetry = {
         structuredFallbacks: 0,
         structuredFallbackStages: [],
@@ -2458,7 +2468,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         apiProfileId: role.executor.apiProfileId,
         model: role.executor.model,
         systemPrompt: triageSystemPrompt,
-        chatHistory: [], newPrompt: triagePayload, temperature: 0, maxTokens: 512, manualMode: false, manualJson: null
+        chatHistory: [], newPrompt: triagePayload, temperature: 0, maxTokens: 512, maxPayloadTokens: narrativePayloadTokens, manualMode: false, manualJson: null
     }, NARRATIVE_TRIAGE_SCHEMA, 'Narrative State triage', narrativeTelemetry);
     const triagePrimaryOutputTokens = estimateTokens(triageResponse);
     let triage = safeParseObject(triageResponse);
@@ -2472,6 +2482,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             schema: NARRATIVE_TRIAGE_SCHEMA,
             label: 'Narrative State triage',
             telemetry: narrativeTelemetry,
+            maxPayloadTokens: narrativePayloadTokens,
             languageInstruction: narrativeLanguageInstruction
         });
         repairOutputTokens += estimateTokens(triageResponse);
@@ -2646,12 +2657,23 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         userMessage,
         narrativeResponse
     };
-    const payload = JSON.stringify(payloadValue);
     const narrativeStateSystemPrompt = buildNarrativeStateSystemPrompt(selectedDomains, narrativeLanguageInstruction);
     const stateOutputBudget = Math.min(
         8192,
         Math.max(2048, 1024 + (relevantEntities.length * 64) + (shouldAnalyzeResources ? definitions.length * 96 : 0))
     );
+    // Entity lore is the part of the analysis input that can shrink without losing the turn,
+    // so it is shortened before the request is allowed to exceed the payload limit.
+    const narrativeLimit = resolvePayloadLimit({ apiProfileId: role.executor.apiProfileId, model: role.executor.model, maxPayloadTokens: narrativePayloadTokens });
+    let payload = JSON.stringify(payloadValue);
+    for (const loreChars of [800, 0]) {
+        const estimate = estimatePayloadTokens({ systemPrompt: narrativeStateSystemPrompt, newPrompt: payload, outputTokens: stateOutputBudget, maxPayloadTokens: narrativeLimit.limit });
+        if (estimate.totalTokens <= narrativeLimit.limit || !Array.isArray(payloadValue.availableEntities)) break;
+        payload = JSON.stringify({
+            ...payloadValue,
+            availableEntities: payloadValue.availableEntities.map(entity => (entity?.lore ? { ...entity, lore: String(entity.lore).slice(0, loreChars) } : entity))
+        });
+    }
     let response = await sendNarrativeJson({
         apiProfileId: role.executor.apiProfileId,
         model: role.executor.model,
@@ -2660,6 +2682,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         newPrompt: payload,
         temperature: 0,
         maxTokens: stateOutputBudget,
+        payloadLimit: narrativeLimit,
         manualMode: false,
         manualJson: null
     }, NARRATIVE_STATE_SCHEMA, 'Narrative State analysis', narrativeTelemetry);
@@ -2675,6 +2698,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             schema: NARRATIVE_STATE_SCHEMA,
             label: 'Narrative State analysis',
             telemetry: narrativeTelemetry,
+            maxPayloadTokens: narrativePayloadTokens,
             languageInstruction: narrativeLanguageInstruction
         });
         repairOutputTokens += estimateTokens(response);
@@ -3282,8 +3306,9 @@ async function sendNarrativeJson(params, schema, label, telemetry) {
     }
 }
 
-function repairNarrativeJson({ executor, invalidResponse, schema, label, telemetry, languageInstruction = '' }) {
+function repairNarrativeJson({ executor, invalidResponse, schema, label, telemetry, languageInstruction = '', maxPayloadTokens = null }) {
     return sendNarrativeJson({
+        maxPayloadTokens,
         apiProfileId: executor.apiProfileId,
         model: executor.model,
         systemPrompt: languageInstruction
@@ -4513,7 +4538,8 @@ async function enrichEntities(workspaceId, progressCallback = null) {
             let inputTokenEstimate = 0;
             let outputTokenEstimate = 0;
             let retryCount = 0;
-            const sendJsonRequest = async (params, schema = jsonSchema) => {
+            const sendJsonRequest = async (requestParams, schema = jsonSchema) => {
+                const params = { maxPayloadTokens: workspacePayloadTokens(workspaceId), ...requestParams };
                 const estimatedInput = estimateTokens(`${params.systemPrompt || ''}\n${params.newPrompt || ''}\n${JSON.stringify(schema || {})}`);
                 try {
                     const result = await sendApiRequest({ ...params, jsonMode: true, jsonSchema: schema, includeResponseMetadata: true });
