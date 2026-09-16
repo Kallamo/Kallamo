@@ -20,6 +20,18 @@ function validateEntityLore(value, currentLore, validEvidenceIds) {
   return { value: lore, support, evidence };
 }
 
+// Long entries are extended, not rewritten: a full rewrite stops fitting the output limit.
+function validateEntityLoreAppend(value, currentLore, validEvidenceIds) {
+  if (!isEntityLoreShape(value)) return null;
+  const addition = value.lore.value.trim();
+  const support = value.lore.support.trim();
+  const evidence = value.lore.evidence.map(String).filter(id => validEvidenceIds.has(id));
+  if (!addition || !support || !evidence.length) return null;
+  const current = String(currentLore || '').trim();
+  if (current.includes(addition)) return null;
+  return { value: current ? `${current}\n\n${addition}` : addition, support, evidence };
+}
+
 function buildLorePrompt({ entityName, entityType, currentLore, findings, evidence }) {
   return `CURRENT LORE:\n${String(currentLore || '').trim() || '(none)'}\n\n` +
     `VALIDATED NEW FINDINGS:\n${JSON.stringify(findings)}\n\n` +
@@ -30,4 +42,20 @@ function buildLorePrompt({ entityName, entityType, currentLore, findings, eviden
     `Return only {"lore":{"value":"...","support":"...","evidence":["E_ID"]}}.`;
 }
 
-module.exports = { buildLorePrompt, isEntityLoreShape, validateEntityLore };
+function buildLoreAppendPrompt({ entityName, entityType, currentLore, findings, evidence }) {
+  return `CURRENT LORE (already stored, do not repeat it):\n${String(currentLore || '').trim()}\n\n` +
+    `VALIDATED NEW FINDINGS:\n${JSON.stringify(findings)}\n\n` +
+    `SUPPORTING EVIDENCE:\n${evidence}\n\n` +
+    `The lore entry for ${entityName} (${entityType}) is long, so it is extended instead of rewritten. ` +
+    `Write only the new paragraphs to add at its end: supported history, traits, relationships, transformative events, or changes of current state that the current lore does not already contain. ` +
+    `Do not restate, summarize, or rephrase the current lore. Do not invent motives, causation, or conclusions. When the evidence adds nothing new, return an empty value. ` +
+    `Return only {"lore":{"value":"...","support":"...","evidence":["E_ID"]}}.`;
+}
+
+module.exports = {
+  buildLorePrompt,
+  buildLoreAppendPrompt,
+  isEntityLoreShape,
+  validateEntityLore,
+  validateEntityLoreAppend
+};

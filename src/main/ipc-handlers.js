@@ -1,9 +1,7 @@
 const { ipcMain, shell, dialog, BrowserWindow, clipboard } = require('electron');
 const log = require('electron-log');
 
-// Copy via the main-process clipboard: navigator.clipboard.writeText is gated on
-// focus/permission in Electron and fails for programmatic copies (e.g. the RAG
-// debug copy). The native clipboard has no such gate.
+// navigator.clipboard is focus/permission-gated in Electron; the native clipboard is not.
 ipcMain.handle('copy-to-clipboard', (event, text) => {
   clipboard.writeText(String(text == null ? '' : text));
   return true;
@@ -56,8 +54,8 @@ function getWorldIndexStatus(chatId, tier) {
   const row = db.prepare(`
     SELECT COUNT(*) AS total,
       SUM(CASE WHEN wis.status = 'completed' THEN 1 ELSE 0 END) AS completed,
-      SUM(CASE WHEN wis.status = 'completed' AND wis.tagCount > 0 THEN 1 ELSE 0 END) AS tagged,
-      SUM(CASE WHEN wis.status = 'completed' AND wis.tagCount = 0 THEN 1 ELSE 0 END) AS empty,
+      SUM(CASE WHEN wis.status = 'completed' AND EXISTS (SELECT 1 FROM chunk_tags ct WHERE ct.chunkId = kc.id) THEN 1 ELSE 0 END) AS tagged,
+      SUM(CASE WHEN wis.status = 'completed' AND NOT EXISTS (SELECT 1 FROM chunk_tags ct WHERE ct.chunkId = kc.id) THEN 1 ELSE 0 END) AS empty,
       SUM(CASE WHEN wis.status = 'failed' THEN 1 ELSE 0 END) AS failed
     FROM knowledge_chunks kc
     LEFT JOIN world_index_chunk_status wis ON wis.chunkId = kc.id
@@ -374,10 +372,8 @@ async function indexChatKnowledgeBase(sender, chatId, knowledgeFilesInput) {
 
 
 // --- API CONNECTIONS IPC HANDLERS ---
-// Whether an API profile carries usable credentials, accounting for each
-// provider's credential shape (key vs. customConfig vs. none for local). Used to
-// flag writing profiles that point to a keyless connection, they look configured
-// but fail raw on invocation. Accepts a raw row (encrypted fields).
+// Whether an API profile has usable credentials for its provider's shape (key, customConfig,
+// or none for local). Accepts a raw row (encrypted fields).
 function apiProfileHasCredentials(row) {
   if (!row) return false;
   const provider = (row.provider || '').toLowerCase();
@@ -411,11 +407,20 @@ ipcMain.handle('get-api-profiles', async () => {
   }
 });
 
+// Optional context window of the model behind a connection. Empty means no
+// connection limit; a set value stays inside the bounds of the workspace limit.
+function normalizeConnectionContextWindow(value) {
+  if (value == null || String(value).trim() === '') return null;
+  const parsed = Math.floor(Number(value));
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return normalizeMaxApiPayload(parsed);
+}
+
 ipcMain.handle('save-api-profile', async (event, profile) => {
   try {
     const insert = db.prepare(`
-      INSERT OR REPLACE INTO api_profiles (id, name, provider, baseUrl, apiKey, customConfig, models)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO api_profiles (id, name, provider, baseUrl, apiKey, customConfig, models, contextWindow)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const encryptedKey = db.encryptApiKey(profile.apiKey || '');
     const encryptedConfig = db.encryptApiKey(profile.customConfig || '');
@@ -426,7 +431,8 @@ ipcMain.handle('save-api-profile', async (event, profile) => {
       profile.baseUrl || '',
       encryptedKey,
       encryptedConfig,
-      typeof profile.models === 'string' ? profile.models : JSON.stringify(profile.models || [])
+      typeof profile.models === 'string' ? profile.models : JSON.stringify(profile.models || []),
+      normalizeConnectionContextWindow(profile.contextWindow)
     );
     return { success: true };
   } catch (e) {
@@ -438,6 +444,8 @@ ipcMain.handle('save-api-profile', async (event, profile) => {
 ipcMain.handle('delete-api-profile', async (event, id) => {
   try {
     db.prepare('DELETE FROM api_profiles WHERE id = ?').run(id);
+    db.prepare('DELETE FROM token_calibration WHERE apiProfileId = ?').run(id);
+    require('./features/llm/token-calibration').forgetTokenCalibration(id);
     return { success: true };
   } catch (e) {
     console.error("Error deleting API profile:", e);
@@ -453,9 +461,7 @@ ipcMain.handle('get-writing-profiles', async () => {
     const apiById = new Map(apiRows.map(a => [a.id, a]));
     return rows.map(r => {
       const linkedApi = r.apiProfileId ? apiById.get(r.apiProfileId) : null;
-      // A profile is unusable until it has a linked connection, a model, and that
-      // connection actually carries credentials. Single source of truth consumed by
-      // every active-profile picker and the invocation guard.
+      // Single source of truth for every active-profile picker and the invocation guard.
       const needsSetup = !r.apiProfileId || !r.model || !apiProfileHasCredentials(linkedApi);
       return {
         ...r,
@@ -538,10 +544,7 @@ ipcMain.handle('save-writing-profile', async (event, profile) => {
       );
     }
 
-    // Only (re)index when there is real KB work: files to embed, or an existing
-    // profile whose chunks may need reconciling (e.g. files removed). A brand-new
-    // profile with an empty KB has nothing to vectorize, so we must not kick off
-    // indexing, otherwise it emits a spurious "Vectorization completed" event.
+    // An empty new profile must not index, or it emits a spurious completion event.
     let parsedKb = [];
     try { parsedKb = JSON.parse(newKbStr); } catch (e) { parsedKb = []; }
 
@@ -839,10 +842,8 @@ ipcMain.handle('delete-engine', async (event) => {
   }
 });
 
-// Collect searchable file chunks for any source that has at least one manually-edited
-// chunk. The WHOLE source travels (not just edited chunks) so the importer can
-// restore a consistent chunk set and skip re-chunking that file from disk. Manual
-// snippets (manual_/mem_) travel in manual_blocks.json, so they're excluded here.
+// The whole source travels, so the importer restores a consistent chunk set without re-chunking.
+// Manual snippets travel in manual_blocks.json.
 function collectEditedSearchableChunks(ownerId, ownerType) {
   const editedSources = db.prepare(
     "SELECT DISTINCT source FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ? AND manuallyEdited = 1 AND id NOT LIKE 'manual_%' AND id NOT LIKE 'mem_%'"
@@ -850,7 +851,7 @@ function collectEditedSearchableChunks(ownerId, ownerType) {
   if (editedSources.length === 0) return [];
 
   const selectChunks = db.prepare(
-    "SELECT id, source, text, manuallyEdited FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ? AND source = ? AND id NOT LIKE 'manual_%' AND id NOT LIKE 'mem_%' ORDER BY id"
+    "SELECT id, source, text, manuallyEdited FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ? AND source = ? AND id NOT LIKE 'manual_%' AND id NOT LIKE 'mem_%' ORDER BY createdAt, rowid"
   );
   const out = [];
   for (const source of editedSources) {
@@ -875,13 +876,8 @@ function collectEditedSearchableChunks(ownerId, ownerType) {
   return out;
 }
 
-// Restore searchable chunks carried by an exported KB sidecar. Re-vectorizes each
-// chunk's text with the LOCAL embedding model (so it's model-agnostic across the
-// sender/receiver), preserves the manuallyEdited flag, and marks the owning file
-// 'rag_search' + matching mtime so the background indexer skips re-chunking it (which
-// would discard the edits) and the constant-file handler won't delete the chunks.
-// `renameMap` maps the original exported source name to the (possibly renamed) local
-// file name. `files` is the live knowledgeFiles array (mutated in place).
+// Re-embeds with the local model and marks the file indexed at its mtime, so the indexer
+// won't re-chunk it and discard the edits. `files` is mutated in place.
 async function restoreSearchableChunks(ownerId, ownerType, sidecarChunks, renameMap, files) {
   if (!Array.isArray(sidecarChunks) || sidecarChunks.length === 0) return;
 
@@ -2333,10 +2329,7 @@ ipcMain.handle('delete-document', async (event, { id }) => {
 
 ipcMain.handle('save-document-content', async (event, { id, content }) => {
   const now = Date.now();
-  // Only a genuine content change invalidates the chapter's vector index. An
-  // idempotent save (identical content, e.g. a spurious onUpdate on load, or a
-  // flush on page switch with no edits) must keep vectorized intact, so the indexed
-  // state survives navigating between chapters.
+  // Only a real content change invalidates the index; idempotent saves happen on load and page switch.
   const row = db.prepare('SELECT content FROM documents WHERE id = ?').get(id);
   const changed = !row || row.content !== content;
   if (changed) {
@@ -2378,9 +2371,7 @@ function broadcast(channel, payload) {
   if (wins.length > 0) wins[0].webContents.send(channel, payload);
 }
 
-// Run a select->invoke detached: returns immediately with an invocationId, then
-// emits 'wd-invocation-complete' when the model returns. The result is persisted to
-// pending_suggestions so it survives leaving/reopening the workspace.
+// Detached: returns an invocationId, emits 'wd-invocation-complete', persists to pending_suggestions.
 ipcMain.handle('invoke-writing-desk', async (event, payload) => {
   if (wdInFlight) {
     return { error: 'An AI suggestion is already in progress. Resolve it before starting another.' };
@@ -2448,9 +2439,7 @@ ipcMain.handle('set-wd-last-channel', async (event, { workspaceId, channel }) =>
   return { success: true };
 });
 
-// The chat's send target follows whatever the user last generated with, instead of
-// resetting to the first active profile every time the chat is reopened. Stored on
-// the chat row; an id that no longer exists simply falls back to the old behavior.
+// An id that no longer exists falls back to the first active profile.
 ipcMain.handle('set-chat-last-target', async (event, { chatId, targetId }) => {
   db.prepare('UPDATE chats SET lastTargetId = ? WHERE id = ?').run(targetId || null, chatId);
   return { success: true };
@@ -2518,11 +2507,7 @@ ipcMain.handle('delete-document-note', (event, { id }) => {
   return { success: true };
 });
 
-// World-index backfill: tag a chat's (or all chats') already-archived raw chunks
-// that predate the per-chunk tagger. Returns counts.
-// User-triggered chapter vectorization. Incremental by content hash (see
-// vectorizeDocument): only new/changed blocks are embedded + tagged, so re-running
-// after a small edit is cheap. Emits progress to the caller's window.
+// Incremental by content hash (see vectorizeDocument).
 ipcMain.handle('vectorize-document', async (event, { documentId }) => {
   try {
     const { vectorizeDocument } = require('./workflow-runner');
@@ -2575,9 +2560,7 @@ ipcMain.handle('retag-document', async (event, { documentId }) => {
   }
 });
 
-// Dynamic world-index tags per chat_memory chunk, for the Custom Memory tag markers.
-// Returns { [chunkId]: ["Canonical Name", ...] } resolving entity ids to canonical
-// names (falling back to the raw literal for legacy rows).
+// Falls back to the raw literal for legacy rows.
 ipcMain.handle('get-chat-memory-tags', async (event, { chatId }) => {
   try {
     const rows = db.prepare(
@@ -2641,9 +2624,7 @@ ipcMain.handle('get-chat-kb-tags', async (event, { chatId }) => {
   }
 });
 
-// Replace a single chunk's user-editable tags. keywords = the full yellow set (stored
-// as manual=1 literal rows, preserved across re-tag); entities are kept with their
-// provenance so a point edit never turns automatic tags into manual ones by accident.
+// Keywords are manual rows; entities keep their provenance so a point edit never makes auto tags manual.
 ipcMain.handle('set-chunk-tags', async (event, { chunkId, keywords = [], entities = [] }) => {
   try {
     if (!chunkId) return { success: false, error: 'chunkId required' };
@@ -2657,9 +2638,7 @@ ipcMain.handle('set-chunk-tags', async (event, { chunkId, keywords = [], entitie
       db.prepare('DELETE FROM chunk_tags WHERE chunkId = ? AND entity IS NULL AND manual = 1').run(chunkId);
       const insKw = db.prepare('INSERT OR IGNORE INTO chunk_tags (chunkId, tag, entity, manual) VALUES (?, ?, NULL, 1)');
       for (const kw of cleanKeywords) insKw.run(chunkId, kw);
-      // Blue entities: preserve the origin of tags that remain selected. Removing an
-      // automatic tag adds a suppression, so a later World Index re-tag respects the
-      // user's correction instead of putting the same entity back.
+      // Removing an automatic tag adds a suppression so a re-tag won't restore it.
       const existingEntities = db.prepare('SELECT tag, entity, manual FROM chunk_tags WHERE chunkId = ? AND entity IS NOT NULL').all(chunkId);
       const existingByEntity = new Map(existingEntities.map(row => [row.entity, row]));
       const suppress = db.prepare('INSERT OR IGNORE INTO chunk_tag_suppressions (chunkId, tag, entity) VALUES (?, ?, ?)');
@@ -2757,6 +2736,32 @@ ipcMain.handle('delete-worldbuild-subject-entry', async (event, payload = {}) =>
   }
 });
 
+// A new or changed name tags every passage that already writes it. Never blocks the save.
+function refreshNameTagsFor(workspaceId, entityIds = null) {
+  if (!workspaceId) return;
+  try {
+    const { refreshWorkspaceNameTags } = require('./features/world-index/name-tags');
+    refreshWorkspaceNameTags(db, workspaceId, { entityIds });
+  } catch (e) {
+    console.error('[Name tags] refresh failed (the entity was saved):', e.message);
+  }
+}
+
+const NAME_FIELDS = ['canonicalName', 'aliases', 'type'];
+
+ipcMain.handle('get-entity-review', async (event, { workspaceId } = {}) => {
+  try {
+    const { loadWorkspaceEntities, loadWorkspaceChunks } = require('./features/world-index/name-tags');
+    const { assessEntityNames } = require('./features/world-index/name-quality');
+    const entities = loadWorkspaceEntities(db, workspaceId);
+    const texts = loadWorkspaceChunks(db, workspaceId).map(chunk => chunk.text);
+    return { success: true, items: assessEntityNames(entities, texts) };
+  } catch (e) {
+    console.error('[get-entity-review] failed:', e);
+    return { success: false, error: e.message, items: [] };
+  }
+});
+
 ipcMain.handle('list-entities', async (event, { workspaceId, type } = {}) => {
   try {
     return { success: true, entities: entitiesStore.listEntities({ workspaceId, type: type || null }) };
@@ -2777,7 +2782,9 @@ ipcMain.handle('get-entity', async (event, { id }) => {
 
 ipcMain.handle('create-entity', async (event, payload) => {
   try {
-    return { success: true, entity: entitiesStore.createEntity(payload || {}) };
+    const entity = entitiesStore.createEntity(payload || {});
+    refreshNameTagsFor(entity?.workspaceId, [entity?.id]);
+    return { success: true, entity };
   } catch (e) {
     console.error('[create-entity] failed:', e);
     return { success: false, error: e.message };
@@ -2796,9 +2803,7 @@ ipcMain.handle('resolve-entity-by-name', (event, { workspaceId, name }) => {
   }
 });
 
-// List entity candidates for a free-text mention (human picker for manual blue tags).
-// Returns every plausible match so the user disambiguates (e.g. two "Mara"s), instead
-// of resolveMention's single silent winner.
+// Every plausible match, so the user disambiguates (unlike resolveMention).
 ipcMain.handle('find-entity-candidates', (event, { workspaceId, mention }) => {
   try {
     return { success: true, candidates: entitiesStore.findCandidates(mention, workspaceId || null) };
@@ -2821,6 +2826,7 @@ ipcMain.handle('add-entity-alias', (event, { id, alias }) => {
       return { success: true, added: false };
     }
     entitiesStore.updateEntity(id, { aliases: [...existing, a] });
+    refreshNameTagsFor(ent.workspaceId, [id]);
     return { success: true, added: true };
   } catch (e) {
     console.error('[add-entity-alias] failed:', e);
@@ -2830,7 +2836,11 @@ ipcMain.handle('add-entity-alias', (event, { id, alias }) => {
 
 ipcMain.handle('update-entity', async (event, { id, fields }) => {
   try {
-    return { success: true, entity: entitiesStore.updateEntity(id, fields || {}) };
+    const before = entitiesStore.getEntity(id);
+    const entity = entitiesStore.updateEntity(id, fields || {});
+    const namesChanged = entity && before && NAME_FIELDS.some(field => JSON.stringify(before[field]) !== JSON.stringify(entity[field]));
+    if (namesChanged) refreshNameTagsFor(entity.workspaceId, [id]);
+    return { success: true, entity };
   } catch (e) {
     console.error('[update-entity] failed:', e);
     return { success: false, error: e.message };
@@ -2848,7 +2858,9 @@ ipcMain.handle('delete-entity', async (event, { id }) => {
 
 ipcMain.handle('merge-entity', async (event, { sourceId, targetId, prefer } = {}) => {
   try {
-    return { success: true, entity: entitiesStore.mergeEntity(sourceId, targetId, { prefer }) };
+    const entity = entitiesStore.mergeEntity(sourceId, targetId, { prefer });
+    refreshNameTagsFor(entity?.workspaceId, [targetId]);
+    return { success: true, entity };
   } catch (e) {
     console.error('[merge-entity] failed:', e);
     return { success: false, error: e.message };
@@ -2891,10 +2903,8 @@ ipcMain.handle('bulk-manage-entities', async (event, { workspaceId, ids, action,
   }
 });
 
-// Enrichment runs in the main process; the WorldbuildView that started it can unmount
-// (view switch) while it keeps going. Track the run here so a remounted view can restore
-// the lock overlay via get-enrich-status, and broadcast completion so it clears even if
-// the original caller is gone.
+// Tracked here because the starting view can unmount; a remounted view restores the overlay
+// via get-enrich-status.
 let enrichState = { running: false, workspaceId: null, progress: null };
 
 ipcMain.handle('get-enrich-status', async () => ({ ...enrichState }));
@@ -2998,6 +3008,7 @@ ipcMain.handle('import-worldbuild', async (event, { workspaceId } = {}) => {
       }
     }
     const res = entitiesStore.importWorldbuild(workspaceId, payload);
+    refreshNameTagsFor(workspaceId);
     return { success: true, ...res, calendarImported, calendarConflict };
   } catch (e) {
     console.error('[import-worldbuild] failed:', e);
@@ -3091,10 +3102,7 @@ ipcMain.handle('export-document-pdf', async (event, { html, title, pageSize, pag
 
     const MAX_MICRON = Math.round(200 * 25400); // PDF max page dimension ~200in
     const px2micron = (px) => Math.min(Math.round((px / 96) * 25400), MAX_MICRON);
-    // Margins are set identically in the HTML @page rule AND here (marginType
-    // 'custom', inches). Whichever Chromium gives precedence, the value is the
-    // same, so content margins stay correct (no doubling) and printToPDF still
-    // reserves the bottom band the page-number footer needs.
+    // Margins match the HTML @page rule, so either precedence gives the same result.
     const inch = (v) => (v || 0) / 96;
     const opts = {
       printBackground: true,
@@ -3132,9 +3140,7 @@ ipcMain.handle('export-document-pdf', async (event, { html, title, pageSize, pag
   }
 });
 
-// Export a chapter to .docx. Built from the editor's ProseMirror JSON via the
-// `docx` library (schema-valid OOXML), not html-to-docx (which produced files
-// Word refused to open, especially with tables).
+// Uses `docx`: html-to-docx produced files Word refused to open.
 ipcMain.handle('export-document-docx', async (event, { docJson, title, page, margins, pageNumbers, pageNumberStart }) => {
   try {
     const parent = BrowserWindow.getFocusedWindow();
@@ -3176,9 +3182,7 @@ ipcMain.handle('export-book-docx', async (event, { chapters, title, page, margin
   }
 });
 
-// Step 1 of import: pick a file and extract its content. DOCX returns rich HTML
-// (formatting preserved); pdf/txt/md return plain text. The renderer converts the
-// HTML into ProseMirror JSON against the editor schema, then calls create-document.
+// DOCX returns rich HTML; pdf/txt/md return plain text.
 ipcMain.handle('import-document', async (event, { } = {}) => {
   try {
     const win = BrowserWindow.getFocusedWindow();
@@ -3727,10 +3731,7 @@ ipcMain.handle('save-chat', async (event, chat) => {
     const exists = db.prepare('SELECT id, knowledgeFiles, syncToCloud FROM chats WHERE id = ?').get(chat.id);
     const backdropOpacityDefault = chat.backdropOpacity ?? 75;
 
-    // Preserve server-managed index metadata (lastIndexedMtime) that the renderer doesn't
-    // track. Without this, every chat save (e.g. adding a profile) ships a knowledgeFiles
-    // blob missing lastIndexedMtime, which both makes the comparison below always differ
-    // and wipes the stored mtime, forcing a needless full re-index of every KB file.
+    // The renderer doesn't track lastIndexedMtime; dropping it forces a full re-index of every KB file.
     let incomingKb = typeof chat.knowledgeFiles === 'string'
       ? JSON.parse(chat.knowledgeFiles || '[]')
       : (chat.knowledgeFiles || []);
@@ -3996,9 +3997,12 @@ ipcMain.handle('get-chat-files', async (event, chatId) => {
 });
 
 
+// Excludes the debug record: it can be megabytes per older message and this list reloads often.
 ipcMain.handle('get-chat-messages', async (event, chatId) => {
   try {
-    const rows = db.prepare('SELECT * FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
+    const rows = db.prepare(
+      'SELECT id, chatId, role, content, aiName, aiColor, attachedFiles, alternatives, excluded, createdAt, last_modified FROM messages WHERE chatId = ? ORDER BY createdAt ASC'
+    ).all(chatId);
     return rows.map(r => ({
       ...r,
       attachedFiles: JSON.parse(r.attachedFiles || '[]')
@@ -4116,7 +4120,7 @@ ipcMain.handle('get-world-index-taggable-chunks', async (event, { chatId, tier }
       FROM knowledge_chunks kc
       LEFT JOIN world_index_chunk_status wis ON wis.chunkId = kc.id
       WHERE kc.ownerId = ? AND kc.ownerType = ? ${scope.sourceClause}
-      ORDER BY kc.createdAt ASC
+      ORDER BY kc.createdAt ASC, kc.rowid ASC
     `).all(chatId, scope.ownerType);
     return { success: true, chunks };
   } catch (e) {
@@ -4353,13 +4357,7 @@ ipcMain.handle('get-archive-overview', async (event, { chatId }) => {
   }
 });
 
-// Drops every summary of a workspace so its history can be re-partitioned from
-// scratch. Custom memory and uploaded files are untouched.
-// Rebuild one summary: it disappears and its messages return to the conversation,
-// so a single stretch can be re-archived without touching the others.
-// The finishing pass for a stored summary: writes its recap and entity tags.
-// Runs after the archive window closes, and can be called again for a summary
-// that failed or was interrupted, without archiving anything twice.
+// Safe to call again for a failed or interrupted summary.
 ipcMain.handle('finalize-summary-block', async (event, { chatId, blockId }) => {
   try {
     const { finalizeSummaryBlock } = require('./workflow-runner');
@@ -4783,7 +4781,7 @@ ipcMain.handle('get-settings', async () => {
 
     const defaultSettings = {
       interface: { fontFamily: 'sans', fontSize: 'medium', layout: 'bubbles', blur: true, accentColor: '#FBCB2D', codeTheme: 'github-dark', lineNumbers: false },
-      advanced: { chunkSize: 500, similarity: 0.3, topKKB: 5, topKMemory: 8, executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, narrativeStateDebug: false, archiveSummarization: true, promptCache: true, promptCacheContextPlacement: 'system', systemOutputLanguage: 'English', taggerMode: 'inherit-system', summarizerMode: 'inherit-system', retrievalPlannerMode: 'profile' }
+      advanced: { chunkSize: 500, similarity: 0.3, topKKB: 5, topKMemory: 8, executionDevice: 'cpu', ragDebug: false, agenticDebug: false, tokenDebug: false, narrativeStateDebug: false, archiveSummarization: true, promptCache: true, promptCacheContextPlacement: 'system', systemOutputLanguage: 'English', taggerMode: 'inherit-system', summarizerMode: 'inherit-system', retrievalPlannerMode: 'profile', agenticGate: 'auto', agenticToolProtocol: 'auto' }
     };
 
     return {
@@ -4809,9 +4807,8 @@ ipcMain.handle('save-settings', async (event, settingsObj) => {
   }
 });
 
-// --- UI FLAGS (one-time hints / coach-marks) ---
-// Small persistent booleans stored in the settings table under a `ui_` prefix.
-// Backs first-run coach-marks so a hint shows exactly once, surviving reloads.
+// --- UI FLAGS ---
+// One-time hints stored in settings under a `ui_` prefix.
 ipcMain.handle('get-ui-flags', async () => {
   try {
     const rows = db.prepare("SELECT key, value FROM settings WHERE key LIKE 'ui\\_%' ESCAPE '\\'").all();
@@ -4835,8 +4832,7 @@ ipcMain.handle('set-ui-flag', async (event, key) => {
 });
 
 // --- WHAT'S NEW ---
-// New installs see the release overview once. Existing installs see the notes
-// for each version they update to.
+// Fresh installs see the overview once; updates see each version's notes.
 ipcMain.handle('get-whats-new-state', async () => {
   const { app } = require('electron');
   try {
@@ -5331,6 +5327,11 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
             );
             insertFts.run(snippetId, chunk.text);
           })();
+          try {
+            require('./features/world-index/name-tags').applyNameTags(db, chatId, [{ id: snippetId, text: chunk.text }]);
+          } catch (e) {
+            console.error('[Custom Memory] name tags failed (save continues):', e.message);
+          }
 
           // Apply explicit entity-tag edits from the editor. World Index tagging itself
           // is intentionally user-triggered through the Memory view.
@@ -5418,9 +5419,7 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
   }
 });
 
-// Title-only rename for a Custom Memory snippet. The chunk text is unchanged, so
-// there is no need to re-embed or re-run the world-index tagger, we just update
-// the stored title (knowledge_chunks.source) and the card in memoryBlocks.
+// Title-only: no re-embed or re-tag needed.
 ipcMain.handle('rename-chat-kb-block', async (event, { chatId, blockId, title }) => {
   try {
     const newTitle = (title || '').trim();
@@ -5466,9 +5465,7 @@ ipcMain.handle('set-chat-kb-block-profiles', async (event, { chatId, blockId, pr
 ipcMain.handle('delete-chat-kb-block', async (event, { chatId, block }) => {
   try {
     if (block.type === 'summarized') {
-      // Deleting a summary clears its chunks and drops the messages it covered.
-      // Rebuild is the action that hands them back; a full rebuild is the only
-      // way to recover them once dropped here.
+      // Dropped messages return only through a full rebuild.
       deleteSummaryBlock(db, chatId, block.id);
     }
     else if (block.type === 'manual') {
@@ -5645,8 +5642,7 @@ ipcMain.handle('variables:delete', async (event, id) => {
 });
 
 // --- STARTUP RAG MODEL RE-INDEXING ---
-// Detects when the local embedding model has changed and re-vectorizes
-// all knowledge base content automatically in the background.
+// Re-vectorizes everything when the local embedding model changes.
 const { app } = require('electron');
 
 async function performReindexIfNeeded() {
@@ -5808,9 +5804,7 @@ async function performReindexIfNeeded() {
         const filePath = path.join(baseDir, sourceName);
         let success = false;
 
-        // If any chunk of this file was manually edited, never re-chunk from disk
-        // (that would discard the edits). Fall through to re-embedding the stored
-        // chunk text instead, which still upgrades vectors for the new model.
+        // Edited files are never re-chunked from disk; the stored text is re-embedded instead.
         const editedCount = db.prepare(
           'SELECT COUNT(*) AS c FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ? AND source = ? AND manuallyEdited = 1'
         ).get(owner.ownerId, owner.ownerType, sourceName);
@@ -5990,9 +5984,7 @@ app.whenReady().then(() => {
   try {
     const done = db.prepare("SELECT value FROM settings WHERE key = 'orphan_cleanup_v1'").get();
     if (!done) {
-      // SAFETY GUARD: only proceed if the owner tables are intact.
-      // If both owner tables are empty but chunks exist, the DB is in a degenerate/half-loaded
-      // state, abort rather than mass-delete everything.
+      // Empty owner tables with existing chunks means a half-loaded DB: abort rather than mass-delete.
       const profCount = db.prepare('SELECT COUNT(*) c FROM writing_profiles').get().c;
       const chatCount = db.prepare('SELECT COUNT(*) c FROM chats').get().c;
       const chunkCount = db.prepare('SELECT COUNT(*) c FROM knowledge_chunks').get().c;

@@ -1,28 +1,41 @@
 const { fetch: undiciFetch } = require('undici');
-const { buildRequest, parseStreamChunk, parseStreamUsage, sendApiRequest, generationDispatcher, readHttpErrorMessage } = require('./llm.service');
+const { buildRequest, parseStreamChunk, parseStreamUsage, sendApiRequest, generationDispatcher, readHttpErrorMessage, learnFromReportedTokens } = require('./llm.service');
 const { getResponseMetadata } = require('./response-metadata');
 const { recordCacheOutcome } = require('./prompt-cache');
 
 // Providers with no text-SSE stream fall back to the non-streaming path.
 const STREAM_UNSUPPORTED = new Set(['aws bedrock']);
 
-// Stream a generation token by token. onDelta({ contentDelta, reasoningDelta })
-// fires for each incremental piece so the caller can render live; the full text
-// is accumulated here and returned in the same canonical shape sendApiRequest
-// produces, so the saved artifact is identical whether or not streaming was used.
-// On abort mid-stream the partial text collected so far is returned, not lost.
-async function sendApiRequestStream(params, onDelta, onStreamStart) {
-    const { endpoint, requestHeaders, requestBodyPayload, provider, cachePlan } = await buildRequest({ ...params, stream: true });
+const TRUNCATION_REASONS = new Set(['length', 'max_tokens', 'max_output_tokens']);
+
+// Reasons that mean the provider withheld the reply rather than cut it short.
+const BLOCKING_REASONS = new Set([
+    'content_filter', 'refusal', 'safety', 'recitation', 'blocklist',
+    'prohibited_content', 'spii', 'image_safety', 'language', 'other'
+]);
+
+function streamError(message, code) {
+    const error = new Error(message);
+    error.code = code;
+    return error;
+}
+
+// Returns the same shape as sendApiRequest, so the saved reply is identical with or without streaming.
+// A provider error event fails the stream instead of saving partial text; an abort returns what arrived.
+async function sendApiRequestStream(params, onDelta, onStreamStart, dependencies = {}) {
+    const { endpoint, requestHeaders, requestBodyPayload, provider, tokenSample, cachePlan } = await buildRequest({ ...params, stream: true }, dependencies);
 
     if (STREAM_UNSUPPORTED.has(provider)) {
-        return sendApiRequest(params);
+        return sendApiRequest(params, dependencies);
     }
 
     let content = '';
     let reasoning = '';
-    // Providers spread usage over several frames (Anthropic sends input and cache
-    // counters on message_start, output on message_delta), so they are merged
-    // rather than replaced.
+    let finishReason = null;
+    let reportedInputTokens = null;
+    let learnedTokenRatio = null;
+    // Providers spread usage over several frames (Anthropic sends input and cache counters on
+    // message_start, output on message_delta), so they are merged rather than replaced.
     let usage = null;
 
     const reportUsage = () => {
@@ -42,7 +55,16 @@ async function sendApiRequestStream(params, onDelta, onStreamStart) {
     };
     // Parity with parseResponse: a jsonMode caller parses the reply as an object,
     // so reasoning is dropped instead of being prepended.
-    const finalize = () => (reasoning && !params.jsonMode ? `<think>${reasoning}</think>${content}` : content);
+    const finalize = () => {
+        const text = reasoning && !params.jsonMode ? `<think>${reasoning}</think>${content}` : content;
+        if (!params.includeResponseMetadata) return text;
+        return {
+            content: text,
+            finishReason,
+            truncated: TRUNCATION_REASONS.has(String(finishReason || '').toLowerCase()),
+            learnedTokenRatio
+        };
+    };
 
     try {
         const response = await undiciFetch(endpoint, {
@@ -81,17 +103,26 @@ async function sendApiRequestStream(params, onDelta, onStreamStart) {
                 const frameUsage = parseStreamUsage(obj, provider);
                 if (frameUsage) usage = { ...(usage || {}), ...frameUsage };
 
-                const { contentDelta, reasoningDelta } = parseStreamChunk(obj, provider);
-                if (contentDelta) content += contentDelta;
-                if (reasoningDelta) reasoning += reasoningDelta;
-                if ((contentDelta || reasoningDelta) && onDelta) {
+                const chunk = parseStreamChunk(obj, provider);
+                if (chunk.error) {
+                    throw streamError(`The provider stopped the reply with an error: ${chunk.error}`, 'PROVIDER_ERROR');
+                }
+                if (chunk.inputTokens != null) reportedInputTokens = chunk.inputTokens;
+                if (chunk.finishReason) finishReason = chunk.finishReason;
+                if (chunk.contentDelta) content += chunk.contentDelta;
+                if (chunk.reasoningDelta) reasoning += chunk.reasoningDelta;
+                if ((chunk.contentDelta || chunk.reasoningDelta) && onDelta) {
                     onStreamStart?.();
-                    onDelta({ contentDelta, reasoningDelta });
+                    onDelta({ contentDelta: chunk.contentDelta, reasoningDelta: chunk.reasoningDelta });
                 }
             }
         }
 
         reportUsage();
+        if (!content && BLOCKING_REASONS.has(String(finishReason || '').toLowerCase())) {
+            throw streamError(`The provider stopped this reply (${finishReason}).`, 'PROVIDER_BLOCKED');
+        }
+        learnedTokenRatio = learnFromReportedTokens(tokenSample, reportedInputTokens);
         return finalize();
 
     } catch (error) {

@@ -31,7 +31,9 @@ The Node.js backend handles all privileged operations:
 | **IPC Handlers** | `main/ipc-handlers.js` | 50+ `ipcMain.handle()` endpoints for CRUD, file indexing, import/export |
 | **Workflow Runner** | `main/workflow-runner.js` | Linear chain orchestration, error recovery modals, context overflow detection |
 | **RAG Service** | `main/rag-service.js` | Text chunking, embedding generation, hybrid search, memory persistence |
-| **API Engine** | `main/api-engine.js` | Multi-provider HTTP client with dynamic variable resolution |
+| **API Engine** | `main/features/llm/llm.service.js` | Multi-provider HTTP client, streaming, payload limits, dynamic variable resolution |
+| **Feature Modules** | `main/features/` | Retrieval ranking and planner (`knowledge/`), Tagger and name tags (`world-index/`), Worldbuild fields and updates (`worldbuild/`), live history (`chat/`) |
+| **Writing Desk** | `main/writing-desk-invocation.js` | Select and invoke requests for the Writing Desk |
 
 ### Renderer Process (`src/renderer/`)
 
@@ -41,7 +43,7 @@ A React 19 application built with Vite 8 and Tailwind CSS v4:
 |--------|------|----------------|
 | **App Shell** | `App.jsx` | Global layout, tooltip engine, toast system, modal orchestration |
 | **State** | `context/AppContext.jsx` | Centralized React Context with all application state |
-| **Views** | `components/DashboardView.jsx`, `LibraryView.jsx`, `ChatWorkspaceView.jsx` | Main navigation panels |
+| **Views** | `components/DashboardView.jsx`, `LibraryView.jsx`, `ChatWorkspaceView.jsx`, `WorldbuildView.jsx`, `WritingDeskView.jsx` | Main navigation panels |
 | **Modals** | `components/modals/` | Settings, workflow errors, context overflow prompts |
 
 ### IPC Bridge (`src/preload.js`)
@@ -85,6 +87,7 @@ Stores API provider credentials. Keys are encrypted via Electron `safeStorage`.
 | `apiKey` | TEXT | Encrypted API key (prefixed `safe:` + base64) |
 | `customConfig` | TEXT | Encrypted JSON for provider-specific config (GCP project, AWS region, etc.) |
 | `models` | TEXT | JSON array of available model names |
+| `contextWindow` | INTEGER | Optional context window of the model behind the connection; `NULL` means no connection limit |
 
 #### `writing_profiles`
 
@@ -139,7 +142,7 @@ Individual chat messages with AI attribution.
 | `content` | TEXT | Message body (Markdown supported) |
 | `aiName` | TEXT | Name of the AI profile that generated this message |
 | `aiColor` | TEXT | HEX color of the generating profile |
-| `debugNotice` | TEXT | JSON blob with token usage, RAG diagnostics |
+| `debugNotice` | TEXT | JSON blob with token usage and context diagnostics; retrieved text is kept only while the RAG or Agentic debug option is on |
 | `attachedFiles` | TEXT | JSON array of file attachment metadata |
 | `alternatives` | TEXT | JSON array of alternative AI responses (regenerations) |
 | `excluded` | INTEGER | Boolean flag: message is dropped from every payload while staying in the log |
@@ -172,7 +175,7 @@ Vectorized text chunks for both profile and chat knowledge bases.
 |--------|------|-------------|
 | `id` | TEXT PK | Unique chunk identifier |
 | `ownerId` | TEXT | Profile ID or Chat ID |
-| `ownerType` | TEXT | `profile_kb`, `chat_kb`, or `chat_memory` |
+| `ownerType` | TEXT | `profile_kb`, `chat_kb`, `chat_memory`, or `document` (Writing Desk chapters) |
 | `source` | TEXT | Original filename or memory block title |
 | `text` | TEXT | Enriched text (`Document: <name>\nContent: <text>`) |
 | `vector` | TEXT | JSON-serialized float array (384 dimensions for multilingual-e5-small) |
@@ -201,6 +204,18 @@ User-defined dynamic variables resolved at runtime in prompts via `{{key}}` synt
 | `value` | TEXT | Resolved value |
 | `description` | TEXT | Optional description |
 
+#### `token_calibration`
+
+How much more each model counts than the local token estimate, learned from provider-reported usage (see [Token Estimation](#token-estimation)).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `apiProfileId` | TEXT PK | API connection |
+| `model` | TEXT PK | Model identifier |
+| `protocol` | TEXT PK | `text` or `native` (native tool definitions add their own framing) |
+| `ratio` | REAL | Reported input tokens divided by the local estimate, at least 1 |
+| `updatedAt` | INTEGER | Unix timestamp in milliseconds |
+
 ### Sync Infrastructure
 
 All mutable tables (`chats`, `messages`, `writing_profiles`, `variables`) include:
@@ -217,6 +232,7 @@ The database self-migrates on startup:
 3. **Vector migrations** — Scans `vector_db.json` files from legacy profile/chat directories and inserts them into `knowledge_chunks`.
 4. **Encryption migrations** — Encrypts any plaintext API keys found in `api_profiles` using `safeStorage`.
 5. **Branding migrations** — Auto-renames old data directories (`AI Writer Companion` → `Kalamo` → `Kallamo`).
+6. **One-time data passes**: trim oversized debug records and tag existing passages by entity name. Each records a key in `settings`, so it runs once.
 
 ---
 
@@ -231,7 +247,7 @@ Source File (.pdf, .docx, .txt)
     ↓ extractTextFromFile()
 Raw Text
     ↓ chunkText(text, maxChunkSize=500)
-Text Chunks (paragraph-aware splitting, min 50 chars)
+Text Chunks (paragraph-aware; long paragraphs split at sentence ends; 15% overlap; low-information chunks dropped)
     ↓ vectorizeChunks()
     ↓ Enrich: "Document: <filename>\nTags: <keywords>\nContent: <chunk>"
     ↓ generateEmbeddingVector() → Xenova/multilingual-e5-small (384-dim, quantized, query:/passage: prefixed)
@@ -239,6 +255,7 @@ Vectors + Text
     ↓ insertChunksToDb()
     ↓ INSERT INTO knowledge_chunks (vector as JSON text)
     ↓ INSERT INTO knowledge_chunks_fts (full-text index)
+    ↓ Tag registered entity names written in each chunk (chunk_tags, origin 'name')
 SQLite
 ```
 
@@ -273,18 +290,20 @@ The low end of the dial trims only obvious off-topic noise; the high end keeps n
 #### 2. Sparse Search (Keyword)
 
 ```
-Query text → FTS5 MATCH query
-    ↓
+Query text → buildFtsMatchQuery(query)
+    ↓ every word of 3+ letters is quoted and joined with OR;
+    ↓ words of 5 to 24 letters also match as a prefix (their last 2 letters removed)
 SELECT chunkId, bm25(knowledge_chunks_fts) as rank
-FROM knowledge_chunks_fts
-WHERE knowledge_chunks_fts MATCH ?
+FROM knowledge_chunks_fts JOIN knowledge_chunks
+WHERE MATCH ? AND ownerType = ? AND ownerId IN (searched owners)
+LIMIT 500
     ↓
 relevance = −bm25(rank)          (SQLite bm25() is negative; more negative = more relevant)
     ↓
 min-max normalize relevance into [0,1] within the result set
 ```
 
-If the FTS5 query fails (special characters), the engine falls back to an alphanumeric-only sanitized query. Normalizing the BM25 relevance into `[0,1]` makes it directly comparable in magnitude to the dense cosine, which is what enables weighted fusion instead of rank-only fusion.
+Quoting every word keeps punctuation from breaking the FTS5 syntax, and the prefix match reaches other forms of a word without a stemmer or a word list, in any language. Restricting the query to the searched owners keeps other workspaces from shaping the normalization. If the query still fails, keyword search contributes nothing and dense search continues alone. Normalizing the BM25 relevance into `[0,1]` makes it directly comparable in magnitude to the dense cosine, which is what enables weighted fusion instead of rank-only fusion.
 
 #### 3. Magnitude-Aware Weighted Fusion
 
@@ -294,19 +313,21 @@ The dense candidates and the normalized sparse map are merged in a single scorin
 For each dense candidate chunk:
     cosine     = dense cosine similarity              (drives membership)
     sparseNorm = normalized BM25 relevance, or 0 if absent
-    boost      = tag boost, or 0                       (see below)
+    evidence   = share of the query's entity name evidence it carries, 0..1   (see below)
 
-    fusionScore = 0.7 × cosine + 0.3 × sparseNorm + boost
+    fusionScore = 0.7 × cosine + 0.3 × sparseNorm + 0.05 × evidence
 
-Discard any chunk whose cosine < cosineFloor (the strictness cutoff above).
-Sort by descending fusionScore, truncate to top-K (default: 5).
+Discard any chunk whose cosine is below its floor (cosineFloor, lowered by evidence).
+Sort by descending fusionScore, truncate to k.
 ```
+
+`k` is the user's Top-K (default 5 for knowledge bases, 8 for chat memory), raised by `retrievalTopK` up to 20 when the retrieval budget can hold more passages. It is never lowered.
 
 The strictness floor is checked against the raw `cosine`, not the fused score, so a strong keyword or tag match can reorder results but can never rescue a semantically off-topic chunk.
 
-**Dynamic-tag boost (living-world index).** For the world-indexed tier (chat memory), chunks carry tags for the Worldbuild entities and world variables they mention. When the query mentions one of a chunk's tags (whole-word, Unicode-aware match, so "Ana" doesn't match inside "banana"), a small fixed bonus (`TAG_BOOST = 0.05`) is added to its fusion score. It is deliberately small relative to the cosine band, so it reorders within the surviving set without swamping semantic similarity.
+**Entity evidence (living-world index).** Chunks carry tags for the Worldbuild entities and world variables they mention. The entity names written in the query are found with the Tagger's own matcher, so name boundaries hold in every script. Each chunk gets the share of that name evidence it carries, weighted by how rare each name is in the workspace: a name written across much of the archive counts for little, because it cannot tell passages apart. That share scales a small bonus (`TAG_BOOST = 0.05`), deliberately small relative to the cosine band, so it reorders within the surviving set without swamping semantic similarity.
 
-A tagged chunk also answers to a lower floor: `taggedFloor = cosineFloor * 0.7`. Carrying an entity the query names is explicit evidence rather than a guess, and without this the boost could only reorder what already survived. The case it exists for, a character named in a few lines of a long scene, was cut before the boost was ever applied.
+The same share lowers the chunk's floor, down to `cosineFloor × 0.7` for full evidence. Carrying a rare entity the query names is explicit evidence rather than a guess, so a character named in a few lines of a long scene is not cut before the bonus can apply.
 
 This single `fuseAndRank` path is shared by single-owner search, multi-owner cross-chapter search, and the in-memory volatile-chapter search in the Writing Desk.
 
@@ -318,6 +339,8 @@ Each file in a profile's knowledge base has a `strategy` field:
 |----------|----------|
 | `constant` / `full_context` | Entire file content injected into every prompt as system context |
 | `rag_search` | File is chunked, vectorized, and retrieved only when semantically relevant |
+
+Constant files and full reads during agentic retrieval rebuild the text from its stored chunks, in their original order and without the overlap between neighbors.
 
 ### Embedding Engine Options
 
@@ -331,70 +354,25 @@ Each file in a profile's knowledge base has a `strategy` field:
 
 ## Agentic RAG Loop
 
-When a profile has `isAgentic = 1`, the workflow runner delegates initial context retrieval to an autonomous **researcher agent** before the main generation call.
+When a profile has `isAgentic = 1` and a Retrieval Planner is available, the workflow runner can hand retrieval to a planner model before the main generation call. The full design, with every budget and threshold, is in [Agentic Retrieval](agentic-retrieval.md). In short:
 
-### Loop Mechanics
+- **Gate.** A deterministic check on the user's own message skips the planner when the message names no known entity, asks no question and is short. A skipped message runs the ordinary hybrid search. The Plan every message setting turns the gate off.
+- **Pre-search.** Before turn 1 the loop runs `search_kb` and `search_memories` on the user's request, so everything the ordinary search finds is already in the context.
+- **Tools.** Defined once in `features/knowledge/planner-tools.js` and offered as native function calls where the provider supports them, or as a tag-based text protocol, with automatic fallback to text.
 
-```mermaid
-sequenceDiagram
-    participant WR as Workflow Runner
-    participant Agent as Agentic Researcher (LLM)
-    participant KB as Knowledge Bases
-    participant Mem as Chat Memories
+| Tool | Purpose |
+|------|---------|
+| `search_kb` | Hybrid search across profile and workspace knowledge bases |
+| `search_memories` | Search archived memory, custom memory and manual tags |
+| `read_file` | Read the full text of a knowledge file |
+| `lookup_entity` | The passages tagged with a known Worldbuild entity that are most relevant to the request (at most 12), plus its related entities |
+| `read_lore` | The most relevant passages of an entity's linked lore document |
+| `expand` | Read the full text of a result shown as a snippet |
+| `finish` | End the research, citing the result handles that were relevant |
 
-    WR->>Agent: "Here is the user prompt + available tools"
-    
-    loop Turn 1..N (per-profile budget, default 3)
-        Agent->>Agent: THOUGHT: analyze what's needed
-        
-        alt Tool Call: search_kb
-            Agent->>KB: search_kb(query)
-            KB-->>Agent: Top-K matching chunks
-        else Tool Call: read_file
-            Agent->>KB: read_file(filename)
-            KB-->>Agent: Full file content
-        else Tool Call: search_memories
-            Agent->>Mem: search_memories(query or #tags)
-            Mem-->>Agent: Matching memory blocks
-        else Finish
-            Agent-->>WR: <finish sources="...">summary</finish>
-        end
-    end
-    
-    WR->>WR: Filter retrieved context to only agent-specified sources
-```
-
-### Tool Interface
-
-The agent communicates via structured XML tags embedded in its text output:
-
-| Tool | Syntax | Purpose |
-|------|--------|---------|
-| `search_kb` | `<tool_call name="search_kb" query="..." />` | Hybrid search across profile + chat knowledge bases |
-| `read_file` | `<tool_call name="read_file" filename="..." />` | Read the full text of a specific knowledge base file |
-| `search_memories` | `<tool_call name="search_memories" query="..." />` | Search chat's archived memory blocks, custom memory, and manual tags |
-| `lookup_entity` | `<tool_call name="lookup_entity" query="..." />` | Return every chunk tagged with a known Worldbuild entity (by name/alias) plus its related entities, so the agent can traverse the relation graph instead of guessing from prose |
-| `read_lore` | `<tool_call name="read_lore" query="..." />` | Return the most relevant passages of an entity's linked lore document (Writing Desk), if it has one |
-| `finish` | `<finish sources="file1, file2">findings</finish>` | Conclude research; `sources` attribute filters context to only relevant documents |
-
-### Source Filtering
-
-When the agent specifies a `sources` attribute in the `<finish>` tag, Kallamo filters all retrieved chunks to keep only those matching the listed sources. Matching is performed using a multi-strategy approach:
-
-1. **Source attribute match** — Exact or substring match on the chunk's `source` field (filename).
-2. **Document header match** — Extract the title from `Document: <title>` format in the chunk text.
-3. **Memory title match** — Extract the title from `Memory Context [<title>]:` format.
-4. **First-line fallback** — Check if the source name appears in the first line of the chunk text.
-
-This filtering prevents irrelevant context from inflating the final prompt and consuming unnecessary tokens.
-
-### Cost Controls
-
-- **Bounded turns** — The loop exits after a configurable per-profile turn budget (default 3, clamped 1–5) regardless of tool state.
-- **Early exit** — The agent is instructed to call `<finish>` immediately when sufficient context is found.
-- **No duplicate queries** — The agent is instructed to avoid repeating similar search queries.
-- **Deduplication maps** — Retrieved chunks are deduplicated by ID across all turns using JavaScript `Map` objects.
-- **Low temperature (0.1)** — The researcher agent runs with minimal randomness for consistent retrieval behavior.
+- **Turns.** Up to the profile's turn budget (default 3, clamped 1 to 5), at temperature 0.1. A repeated query is refused, and a query that found nothing is remembered per workspace for 20 minutes.
+- **Budget.** Search width follows the writer's retrieval budget, while everything the planner reads is sized by its own connection's context window. A single file or lore read takes at most 60% of the retrieval budget.
+- **Citations.** Results cited in `finish` keep their priority; uncited results are ranked lower, never dropped. Everything gathered is packed by tier and score into the retrieval budget.
 
 ---
 
@@ -424,7 +402,9 @@ renderer so the number the user sees is the number the payload uses.
 
 ### Token Estimation
 
-Tokens are counted with the `gpt-tokenizer` BPE tokenizer (`encode(text).length`), with a `Math.ceil(text.length / 4)` heuristic as a fallback if encoding fails. The BPE count is accurate for OpenAI models and a close approximation for the other providers, giving reliable context-budget calculations.
+Tokens are counted with the `gpt-tokenizer` BPE tokenizer (`encode(text).length`), with a `Math.ceil(text.length / 4)` heuristic as a fallback if encoding fails.
+
+Models count the same text differently, and the local count can fall well short of a model's own. After each chat reply and research turn, the input tokens the provider reports are compared with the local estimate for that request, per connection, model and protocol (`features/llm/token-calibration.js`, stored in `token_calibration`). Payload limits are divided by the learned ratio. A higher ratio is adopted at once and a lower one is blended in; the ratio never drops below 1, and a model that has not reported usage is not corrected. Small requests, requests with images, Manual JSON or response schemas, and counts that fill a declared context window are never used as samples.
 
 ### Auto-Summarization Trigger
 
@@ -445,22 +425,24 @@ Default threshold: **60,000 tokens**.
 ```
 Selected messages for archival
     ↓
-1. Concatenate: "ROLE: content" for each message
+1. Concatenate: "ROLE: content" for each message, reasoning removed
     ↓
-2. Chunk the concatenated text (chunkSize = 500)
+2. Chunk the concatenated text (chunkSize = 800)
     ↓
 3. Vectorize chunks → embedding vectors
     ↓
-4. AI Summarization: Generate a 2-sentence summary + 3-word title
+4. Persist:
+   a. Insert vectors into knowledge_chunks (ownerType = 'chat_memory'), tagging entity names
+   b. Append the memory block to chat.memoryBlocks JSON (recap and tagging pending)
+   c. Re-derive chat.summarizedIndex from what the blocks now cover
     ↓
-5. Persist:
-   a. Insert vectors into knowledge_chunks (ownerType = 'chat_memory')
-   b. Write vectors to ChatHistory/<chatId>/Memory/vector_db.json
-   c. Append memory block metadata to chat.memoryBlocks JSON
-   d. Re-derive chat.summarizedIndex from what the blocks now cover
+5. In the background:
+   a. Recap (when archive summaries are on): a 3-word title and two sentences;
+      a transcript too long for the Summarizer is recapped in segments, then merged
+   b. Tagging: the Tagger handles only what entity names could not settle
 ```
 
-Steps 3 and 4 run after the block is stored, so the archive window closes as soon as
+Step 5 runs after the block is stored, so the archive window closes as soon as
 the history is safe. `recapStatus` and `taggingStatus` track them independently: a
 tagging failure never costs a recap that was written, and finishing a block again only
 redoes the part that is missing.
@@ -486,19 +468,17 @@ Memory blocks can also be `type: "manual"` — user-created snippets with custom
 
 ### Chat History Windowing
 
-During generation, live history (see above: not covered by a summary, not dropped) is loaded newest-first until the remaining context budget is exhausted:
+During generation, live history (see above: not covered by a summary, not dropped) shares the payload limit with retrieval:
 
 ```
-budget = maxContextTokens - systemPrompt_tokens - userInput_tokens
-history = []
-
-for message in liveMessages (newest → oldest):
-    if budget >= estimateTokens(message.content):
-        history.prepend(message)
-        budget -= estimateTokens(message.content)
-    else:
-        break
+available   = room under the limit after the fixed prompt and the response reserve
+historyNeed = live messages, newest first, that fit in available
+retrieval   = max(40% of available, available − historyNeed)
+    ↓ retrieved items are packed by tier and score into retrieval
+history     = live messages, newest first, that fit in what the compiled prompt leaves
 ```
+
+History is measured first, so retrieval cannot push the conversation out, and retrieval always keeps at least 40% of the room. The window is contiguous: it stops at the first message that does not fit. Messages cut here are unarchived, so no memory chunk can retrieve them, and the chat header marks the overflow.
 
 ---
 
@@ -532,16 +512,23 @@ All internal message roles are stored as `user` or `ai`. Before API calls, `ai` 
 
 ### Dynamic Variables
 
-Before every API call, all `{{variable}}` templates in `systemPrompt` and `newPrompt` are resolved against the `variables` table:
+Before a request is measured or sent, every `{{variable}}` template in its prompts is resolved against the `variables` table (`createPromptVariableResolver`). The key is escaped inside the pattern and the value is inserted through a replacer function, so a value containing `$` patterns is inserted literally:
 
 ```javascript
-const variables = db.prepare('SELECT key, value FROM variables').all();
-for (const variable of variables) {
-    const regex = new RegExp(`\\{\\{\\s*${variable.key}\\s*\\}\\}`, 'g');
-    systemPrompt = systemPrompt.replace(regex, variable.value);
-    newPrompt = newPrompt.replace(regex, variable.value);
-}
+const regex = new RegExp(`\\{\\{\\s*${escapeRegExp(variable.key)}\\s*\\}\\}`, 'g');
+result = result.replace(regex, () => variable.value);
 ```
+
+### Payload Limits
+
+Every request is checked before it is sent, against a limit resolved per connection and model (`resolvePayloadLimit`):
+
+```
+configured = the smaller of the connection's Model Context Window and the workspace's MAX API Payload
+limit      = configured / measured token ratio        (see Token Estimation)
+```
+
+The fixed part (instructions, constant knowledge, attachments and the response reserve) is checked first. History and retrieval are then sized to what it leaves, and the final request is checked against the same limit, keeping a safety margin that scales with it. A request that still does not fit is stopped before contacting the provider: the error says how much came from instructions, retrieved context and history, notes when the limit was reduced by a measured ratio, and does not offer Retry.
 
 ### Manual JSON Override
 

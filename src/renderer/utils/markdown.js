@@ -87,10 +87,8 @@ export function parseMarkdown(text, lineNumbersEnabled = false) {
         const srcAttr = escapeHTML(cleanUrl);
         const altAttr = escapeHTML(alt);
 
-        // Build a value that is safe inside BOTH the double-quoted onclick attribute and the
-        // single-quoted JS string it wraps. Do NOT HTML-entity-escape the apostrophe here: the
-        // browser decodes entities before the JS parser runs, which would re-open the string.
-        // Backslash-escape it for JS, and HTML-escape only the attribute-breaking characters.
+        // Must be safe in both the onclick attribute and its JS string. Don't entity-escape the apostrophe:
+        // the browser decodes entities before the JS parser runs, which would re-open the string.
         const jsUrl = cleanUrl
             .replace(/\\/g, '\\\\')
             .replace(/'/g, "\\'")

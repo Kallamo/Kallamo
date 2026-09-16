@@ -52,6 +52,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [apiProvider, setApiProvider] = useState('OpenRouter');
   const [showBaseUrl, setShowBaseUrl] = useState(false);
   const [apiBaseUrl, setApiBaseUrl] = useState('');
+  const [apiContextWindow, setApiContextWindow] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
 
@@ -109,6 +110,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [retrievalPlannerMode, setRetrievalPlannerMode] = useState(settings.advanced.retrievalPlannerMode || 'profile');
   const [retrievalPlannerApiProfileId, setRetrievalPlannerApiProfileId] = useState(settings.advanced.retrievalPlannerApiProfileId || '');
   const [retrievalPlannerModelName, setRetrievalPlannerModelName] = useState(settings.advanced.retrievalPlannerModelName || '');
+  const [agenticGate, setAgenticGate] = useState(settings.advanced.agenticGate || 'auto');
+  const [agenticToolProtocol, setAgenticToolProtocol] = useState(settings.advanced.agenticToolProtocol || 'auto');
   const [allowAiEntityCreation, setAllowAiEntityCreation] = useState(settings.advanced.allowAiEntityCreation || false);
   const [archiveSummarization, setArchiveSummarization] = useState(settings.advanced.archiveSummarization !== false);
   const [streamingEnabled, setStreamingEnabled] = useState(settings.advanced.streaming !== false);
@@ -151,7 +154,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage,
     taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName,
     narrativeStateMode, narrativeStateApiProfileId, narrativeStateModelName,
-    retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, allowAiEntityCreation, archiveSummarization,
+    retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, agenticGate, agenticToolProtocol, allowAiEntityCreation, archiveSummarization,
     promptCache, promptCacheContextPlacement
   });
 
@@ -162,10 +165,10 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage,
       taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName,
       narrativeStateMode, narrativeStateApiProfileId, narrativeStateModelName,
-      retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, allowAiEntityCreation, archiveSummarization,
+      retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, agenticGate, agenticToolProtocol, allowAiEntityCreation, archiveSummarization,
       promptCache, promptCacheContextPlacement
     };
-  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, smartTypography, streamingEnabled, chunkSize, similarity, profileKnowledgeTopK, workspaceDocumentsTopK, longTermMemoryTopK, worldbuildEntityLimit, worldbuildBreadth, executionDevice, ragDebug, agenticDebug, tokenDebug, narrativeStateDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage, taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName, narrativeStateMode, narrativeStateApiProfileId, narrativeStateModelName, retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, allowAiEntityCreation, archiveSummarization, promptCache, promptCacheContextPlacement]);
+  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, smartTypography, streamingEnabled, chunkSize, similarity, profileKnowledgeTopK, workspaceDocumentsTopK, longTermMemoryTopK, worldbuildEntityLimit, worldbuildBreadth, executionDevice, ragDebug, agenticDebug, tokenDebug, narrativeStateDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage, taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName, narrativeStateMode, narrativeStateApiProfileId, narrativeStateModelName, retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, agenticGate, agenticToolProtocol, allowAiEntityCreation, archiveSummarization, promptCache, promptCacheContextPlacement]);
 
   // Handle immediate save for selects and color choices
   const updateSetting = async (category, key, value) => {
@@ -207,6 +210,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       if (key === 'retrievalPlannerMode') setRetrievalPlannerMode(value);
       if (key === 'retrievalPlannerApiProfileId') { setRetrievalPlannerApiProfileId(value); setRetrievalPlannerModelName(''); }
       if (key === 'retrievalPlannerModelName') setRetrievalPlannerModelName(value);
+      if (key === 'agenticGate') setAgenticGate(value);
+      if (key === 'agenticToolProtocol') setAgenticToolProtocol(value);
     }
 
     const current = settingsRef.current;
@@ -260,7 +265,9 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         narrativeStateModelName: key === 'narrativeStateModelName' ? value : (key === 'narrativeStateApiProfileId' ? '' : current.narrativeStateModelName),
         retrievalPlannerMode: key === 'retrievalPlannerMode' ? value : current.retrievalPlannerMode,
         retrievalPlannerApiProfileId: key === 'retrievalPlannerApiProfileId' ? value : current.retrievalPlannerApiProfileId,
-        retrievalPlannerModelName: key === 'retrievalPlannerModelName' ? value : (key === 'retrievalPlannerApiProfileId' ? '' : current.retrievalPlannerModelName)
+        retrievalPlannerModelName: key === 'retrievalPlannerModelName' ? value : (key === 'retrievalPlannerApiProfileId' ? '' : current.retrievalPlannerModelName),
+        agenticGate: key === 'agenticGate' ? value : current.agenticGate,
+        agenticToolProtocol: key === 'agenticToolProtocol' ? value : current.agenticToolProtocol
       }
     };
 
@@ -337,7 +344,9 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
           narrativeStateModelName: current.narrativeStateModelName,
           retrievalPlannerMode: current.retrievalPlannerMode,
           retrievalPlannerApiProfileId: current.retrievalPlannerApiProfileId,
-          retrievalPlannerModelName: current.retrievalPlannerModelName
+          retrievalPlannerModelName: current.retrievalPlannerModelName,
+          agenticGate: current.agenticGate,
+          agenticToolProtocol: current.agenticToolProtocol
         }
       };
       await handleSaveSettings(newSettings);
@@ -349,6 +358,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     setApiName('');
     setApiProvider('OpenRouter');
     setApiBaseUrl('');
+    setApiContextWindow('');
     setShowBaseUrl(false);
     setApiKey('');
     setGcpProjectId('');
@@ -367,6 +377,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     setApiName(apiProf.name);
     setApiProvider(apiProf.provider);
     setApiBaseUrl(apiProf.baseUrl || '');
+    setApiContextWindow(apiProf.contextWindow ? String(apiProf.contextWindow) : '');
     setShowBaseUrl(apiProf.provider === 'Local' || !!apiProf.baseUrl);
     setApiKey(apiProf.apiKey || '');
 
@@ -420,6 +431,13 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       }
     }
 
+    const contextWindowText = String(apiContextWindow || '').trim();
+    const contextWindow = contextWindowText ? Number(contextWindowText) : null;
+    if (contextWindowText && (!Number.isInteger(contextWindow) || contextWindow < 4096)) {
+      showToast('Model context window must be a whole number of at least 4096 tokens, or empty.', 'error');
+      return;
+    }
+
     const targetId = editingApiId || 'api_' + Math.random().toString(36).substr(2, 9);
     const customConfigObj = {
       gcpProjectId: gcpProjectId.trim(),
@@ -437,7 +455,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       baseUrl: normalizedBaseUrl,
       apiKey: apiKey.trim(),
       customConfig: JSON.stringify(customConfigObj),
-      models: JSON.stringify(modelsList)
+      models: JSON.stringify(modelsList),
+      contextWindow
     };
 
     await handleSaveApiProfile(apiObject);
@@ -840,6 +859,21 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           </div>
                         </>
                       )}
+
+                      {/* Model context window */}
+                      <div>
+                        <label className="block text-xs font-bold text-gray-400 mb-1">Model Context Window (optional)</label>
+                        <p className="caption mb-1.5">The largest request the model behind this connection accepts, in tokens. Every request sent through it stays under this value or the workspace limit, whichever is smaller. For a local server, use the context length loaded in LM Studio or the num_ctx set in Ollama.</p>
+                        <input
+                          type="number"
+                          min="4096"
+                          step="1024"
+                          value={apiContextWindow}
+                          onChange={(e) => setApiContextWindow(e.target.value)}
+                          placeholder="Empty: no limit for this connection"
+                          className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 focus:outline-none focus:border-accent"
+                        />
+                      </div>
 
                       {/* Models List Management */}
                       <div className="mt-6 border-t border-gray-800/80 pt-4">
@@ -1293,6 +1327,30 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                                 </label>
                               </div>
                             )}
+                            {definition.id === 'retrievalPlanner' && (
+                              <div className={`flex items-center justify-between gap-4 rounded-lg bg-[#021015] px-3.5 py-3 ${retrievalPlannerMode === 'disabled' ? 'opacity-50' : ''}`}>
+                                <div className="min-w-0">
+                                  <span className="block text-xs font-bold text-gray-200">Plan every message</span>
+                                  <p className="mt-1 text-[0.6875rem] leading-relaxed text-gray-500">By default a short continuation with no name and no question skips the planner and uses the free search alone. Turn this on to research every message.</p>
+                                </div>
+                                <label className={`relative inline-flex items-center shrink-0 ${retrievalPlannerMode !== 'disabled' ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
+                                  <input type="checkbox" checked={agenticGate === 'always'} disabled={retrievalPlannerMode === 'disabled'} onChange={(event) => updateSetting('advanced', 'agenticGate', event.target.checked ? 'always' : 'auto')} className="sr-only peer" />
+                                  <div className="w-7 h-4 bg-gray-700 rounded-full peer peer-focus-visible:ring-2 peer-focus-visible:ring-accent/60 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
+                                </label>
+                              </div>
+                            )}
+                            {definition.id === 'retrievalPlanner' && (
+                              <div className={`flex items-center justify-between gap-4 rounded-lg bg-[#021015] px-3.5 py-3 ${retrievalPlannerMode === 'disabled' ? 'opacity-50' : ''}`}>
+                                <div className="min-w-0">
+                                  <span className="block text-xs font-bold text-gray-200">Native tool calling</span>
+                                  <p className="mt-1 text-[0.6875rem] leading-relaxed text-gray-500">Uses the provider's own tool calling when the connection and model support it, and falls back to the text protocol by itself when they do not. Turn this off to always use the text protocol.</p>
+                                </div>
+                                <label className={`relative inline-flex items-center shrink-0 ${retrievalPlannerMode !== 'disabled' ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
+                                  <input type="checkbox" checked={agenticToolProtocol !== 'text'} disabled={retrievalPlannerMode === 'disabled'} onChange={(event) => updateSetting('advanced', 'agenticToolProtocol', event.target.checked ? 'auto' : 'text')} className="sr-only peer" />
+                                  <div className="w-7 h-4 bg-gray-700 rounded-full peer peer-focus-visible:ring-2 peer-focus-visible:ring-accent/60 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
+                                </label>
+                              </div>
+                            )}
                             {definition.id === 'summarizer' && (
                               <div className="flex items-center justify-between gap-4 rounded-lg bg-[#021015] px-3.5 py-3">
                                 <div className="min-w-0">
@@ -1379,7 +1437,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           <span className="text-sm text-gray-200 font-bold">Profile Knowledge Top-K</span>
                           <span className="text-xs text-accent font-mono font-bold">{profileKnowledgeTopK}</span>
                         </div>
-                        <p className="caption mb-2">Maximum profile knowledge candidates considered before relevance, access, deduplication, and token budgeting.</p>
+                        <p className="caption mb-2">The minimum number of passages requested from the profile's knowledge base per search. Kallamo asks for more, up to 20, when the payload budget has room.</p>
                         <input
                           type="range"
                           {...rangeProps(RETRIEVAL_SETTING_DEFINITIONS.profileKnowledgeTopK)}
@@ -1397,7 +1455,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           <span className="text-sm text-gray-200 font-bold">Workspace Documents Top-K</span>
                           <span className="text-xs text-accent font-mono font-bold">{workspaceDocumentsTopK}</span>
                         </div>
-                        <p className="caption mb-2">Maximum searchable workspace document candidates considered before final context planning.</p>
+                        <p className="caption mb-2">The minimum number of passages requested from workspace files per search. Kallamo asks for more, up to 20, when the payload budget has room.</p>
                         <input
                           type="range"
                           {...rangeProps(RETRIEVAL_SETTING_DEFINITIONS.workspaceDocumentsTopK)}

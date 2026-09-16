@@ -2,6 +2,71 @@
 
 All notable changes to Kallamo are documented in this file. Version numbers reflect the size of the change for the people using Kallamo: patch releases fix and refine, minor releases are named milestones, and major releases change what the product is.
 
+## [1.1.7] - 2026-09-14
+
+### Added
+- API connections accept an optional Model Context Window. Every request through that connection stays below it as well as below the workspace's MAX API Payload, which protects local servers that silently cut the start of an oversized prompt.
+- Agentic retrieval uses the provider's own tool calling when the connection and model support it: OpenAI and compatible servers, OpenRouter, Anthropic, Google AI, Vertex AI and Claude on AWS Bedrock. Everywhere else it uses the text protocol. A native request that fails moves that connection and model to the text protocol until Kallamo restarts, and so does a second first reply that calls no tool. The Retrieval Planner settings have a Native tool calling switch.
+- Agentic retrieval starts from a free search. The passages the ordinary search finds for the message are in the context before the planner is asked anything, and the strongest of them are shown to the planner in full, so research can no longer end with an empty context and can finish on the first turn when they already answer.
+- A short message that names no known entity and asks no question skips the retrieval planner and uses the ordinary search alone, so replies like "continue" or "ok" no longer pay for a planning call. The Retrieval Planner settings have a Plan every message switch.
+- The Agentic RAG panel shows the trajectory: which path the message took and why, what the free search found, and for each turn the queries, how many results each returned, what it added, what it cost in tokens and what the provider reports about input and cached tokens. It also shows how much of the research was packed out of the budget, and the planner's window with the measured token ratio when that ratio reduced it.
+- The retrieval planner's conversation is sent as real turns that only grow, so a provider that reuses a repeated prompt prefix can reuse every earlier research turn. On Anthropic's own endpoint and for Claude on AWS Bedrock, Kallamo asks for that caching explicitly.
+- Entity names and aliases written in a passage are tagged directly, without calling the Tagger, in any language and script. New passages are tagged this way as they are stored, existing passages once when Kallamo starts, and creating, renaming, merging or importing entities tags the passages that already name them.
+- Worldbuild has a Needs review filter for entities whose names look like common words, numbers, pieces of a longer name or duplicates. Each one can be merged, deleted or kept as is.
+- A reply that stopped at the output limit says so under the message, and so does a reply whose retrieval stopped early after an error.
+
+### Changed
+- Payload limits follow what each model really counts. Kallamo estimates tokens with one fixed tokenizer, which can fall well short of a model's own count and, on a small context window, send a request the model cuts or refuses. The input count a provider reports after a chat reply or a research turn teaches how much more that connection and model count, and the MAX API Payload and the connection's context window are reduced by that ratio for history, retrieval and the final check alike. A model that has not reported its usage is not corrected, and what was learned survives a restart. The payload error says when a limit was corrected and by how much.
+- Retrieved context has a budget. Knowledge base results, archived memory and agentic research are ranked and packed into the room left after the profile, constant knowledge and the response reserve. Recent history is measured first and retrieval always keeps at least 40% of that room, so a long conversation with many summaries no longer outgrows the workspace's MAX API Payload.
+- Retrieval asks for more passages when the budget holds them, up to twenty per search and never fewer than the configured Top-K, in the ordinary search and in the planner's searches alike.
+- Archived memory arrives with its neighboring passages from the same scene, joined in reading order, so an answer split across two passages is no longer lost.
+- A passage that carries an entity named in the message is ranked by how rare that name is in the workspace. A name written across much of the archive counts for little, and the lower similarity bar it earns follows the same measure.
+- Entity names in a message are recognized by the same matcher the Tagger uses on passages, so names in scripts written without spaces are recognized, and a name typed in lower case still counts.
+- Keyword search only searches the workspace being queried, and also matches the beginning of a long word, so other forms of the same word are found in any language and without a word list.
+- An entity lookup reaches the chat archive, the workspace files and the workspace documents, and returns the passages most relevant to the message, at most 12, instead of every passage tagged with the entity.
+- The retrieval planner is measured against its own connection's context window instead of the writing profile's. A small planner gets a shorter history, at most 6,000 tokens, a shorter entity list, a bounded preview of the free search and a smaller reply reserve. Earlier research turns are summarized only when that window requires it, and when a further turn cannot fit, the research stops with what it has instead of failing.
+- A query the planner already ran is refused instead of executed again, and the planner is shown what it already asked and what each query returned. Across messages, a query that found nothing is remembered for twenty minutes per workspace, and indexing or deleting passages clears that memory.
+- The retrieval planner is asked for whole questions instead of keywords, is told which turn it is on and when it is the last one, is told that an empty result is not an answer until a second angle also comes back empty, and is instructed to state only facts that appear in its results.
+- The planner reads the first five results of a call in full and the rest as snippets it can expand, while all of them reach the writing assistant. Workspace files are ranked with the same entity boost the archive gets.
+- Worldbuild facts and passages the planner did not cite are ranked lower instead of being discarded.
+- The list of known entities shown to the planner is ordered by the names written in the message, then the ones in play in recent turns. A large world used to be cut alphabetically, which hid whole types of entity.
+- Linked lore is searched for the user's own request with the configured strictness and Top-K, and is no longer cut to five thousand characters on its way to the writing assistant.
+- A single file or linked lore read during agentic retrieval takes at most 60% of the retrieval budget.
+- The Tagger handles only what names cannot settle: titles, nicknames, other grammatical forms of a name, roles tied to one entity, and new entities. Archiving, re-tagging, World Index backfill and Writing Desk chapters share one Tagger with the same prompt, batch size and output limit.
+- A long Lore is extended with new paragraphs instead of being rewritten whole.
+- Long search queries are embedded in windows, so text past the model's input limit still counts.
+- Very long paragraphs are split at sentence boundaries when indexed, instead of becoming one oversized passage.
+- Archive recaps of very long histories are written in parts and then combined, so they fit the Summarizer's limit.
+- The safety margin kept under the payload limit scales with the limit.
+- Retrieved text and agentic research are stored with a message only while the matching diagnostics option is on.
+- An entity name resolves regardless of accents and typographic quotes when only one entity matches it, and categories named in any script are recognized.
+- Search reuses parsed vectors between messages, and the Writing Desk embeds distant chapter text in one batch.
+
+### Fixed
+- Agentic retrieval no longer returns an empty context when the planner writes its tool calls and its conclusion in the same reply. The calls run, and the conclusion waits for a turn that has actually seen the results.
+- Agentic retrieval no longer sends an empty context when the research cites characters by name. Archive passages were discarded unless the planner listed them under their generic source name.
+- A reasoning model's thinking is no longer read as tool calls. A search or a conclusion the model only considered while thinking used to run.
+- A tool call written with a closing tag no longer hides the calls written before it.
+- Provider errors, safety blocks and refusals are reported as errors instead of being saved as the AI's reply.
+- An error in the middle of a streamed reply ends it with an error instead of saving the partial text as complete.
+- An empty reply is reported as an error instead of being saved as a blank message.
+- Regenerate and Edit keep the previous reply until the new one has been saved.
+- A request over the payload limit explains how much came from instructions, retrieved context and history, and no longer offers a Retry that would fail the same way.
+- GPT-5 and o-series requests no longer send a temperature, which those models reject, and reasoning models get extra output room for their thinking.
+- Gemini replies split into several parts are read in full.
+- Reasoning is kept out of the history, the archives and the input passed between workflow steps.
+- The Writing Desk sizes the chapter window after instructions and notes, so medium chapters no longer fail with a context window error, and the chat history it reads is limited to the reading size.
+- Writing Desk analysis has an output floor of 1,024 tokens, retries once when cut off, and marks a note that is still incomplete.
+- Constant knowledge and full file reads no longer lose the opening paragraph of a file, and its passages are rejoined in their original order without repeated overlap.
+- A Tagger reply cut off at the output limit no longer marks its passages as done with no tags. The batch is retried in halves, and passages that still fail are shown as failed.
+- The Tagger no longer proposes common words, numbers or pieces of existing names as new entities.
+- The tagged and untagged passage counts in Memory match the tags passages actually carry.
+- Re-tagging a Writing Desk chapter keeps the tags added by hand.
+- A Lore update that is cut off or unreadable appears in the failures panel instead of being dropped silently.
+- The history marker in the chat header uses the number of messages the last reply actually left out.
+- Workspace variables containing `$` patterns are inserted literally.
+- Opening a long chat is faster. Messages load without their diagnostics, and oversized diagnostics already stored are trimmed once on startup.
+
 ## [1.1.6] - 2026-08-23
 
 ### Added

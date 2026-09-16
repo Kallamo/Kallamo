@@ -82,38 +82,42 @@ The workflow runner (`workflow-runner.js`) processes steps sequentially with the
 ```
 Step N
   ↓
-1. CONTEXT SEARCH PHASE
-   ├── Load constant knowledge files (strategy: "constant" / "full_context")
-   ├── Load chat-scoped constant files (filtered by profile permissions)
-   ├── If profile.isAgentic:
-   │   └── Execute Agentic RAG Loop (see architecture.md)
-   ├── Else if includeContext:
+1. FIXED PROMPT
+   ├── profile.systemPrompt + step-specific prompt (if any)
+   ├── Constant knowledge files (strategy: "constant" / "full_context")
+   ├── Chat-scoped constant files (filtered by profile permissions)
+   ├── Attached file contents
+   └── Checked on its own against the payload limit
+  ↓
+2. BUDGET
+   ├── Measure the live history that fits under the limit
+   └── Retrieval budget = max(40% of the room, room - history)
+  ↓
+3. CONTEXT SEARCH
+   ├── If profile.isAgentic and a Retrieval Planner is available:
+   │   ├── The planner gate reads the user's own message
+   │   ├── plan → Agentic RAG Loop (see agentic-retrieval.md)
+   │   └── skip → the deterministic search below
+   ├── Deterministic search:
    │   ├── searchKnowledgeBase(query, profileId)    → profile KB chunks
-   │   ├── searchChatKnowledgeBase(query, chatId)   → chat KB chunks
-   │   └── searchChatMemories(query, chatId)        → memory blocks
-   └── Append attached file contents
+   │   ├── searchChatKnowledgeBase(query, chatId)   → chat KB chunks (if includeContext)
+   │   └── searchChatMemories(query, chatId)        → archived passages and neighbors (if includeContext)
+   └── Pack results by tier and score into the retrieval budget
   ↓
-2. SYSTEM PROMPT COMPILATION
-   ├── Base: profile.systemPrompt
-   ├── + Step-specific prompt (if any)
-   └── + All context blocks (constant + retrieved + attachments)
+4. HISTORY WINDOWING
+   └── Load live messages (newest first) into what the compiled prompt leaves
   ↓
-3. HISTORY WINDOWING
-   ├── Calculate remaining token budget
-   │   budget = maxContext - systemPrompt_tokens - userInput_tokens
-   └── Load active messages (newest first) until budget exhausted
-  ↓
-4. API CALL
-   ├── Send to provider via api-engine.js
+5. API CALL
+   ├── Final payload check, then send via features/llm/llm.service.js
    ├── On success: capture output
    └── On failure: trigger error recovery modal
   ↓
-5. CONTEXT OVERFLOW CHECK (non-final steps only)
+6. CONTEXT OVERFLOW CHECK (non-final steps only)
    ├── If output > 4,000 tokens:
    │   └── Show overflow modal → user can edit or send as-is
   ↓
-6. CHAIN OUTPUT
-   └── currentInput = stepOutput → feed to Step N+1
+7. CHAIN OUTPUT
+   └── currentInput = stepOutput with reasoning removed → feed to Step N+1
 ```
 
 ### Progress Notifications
@@ -123,7 +127,7 @@ The runner sends real-time progress events to the renderer via `webContents.send
 | Event | Payload | When |
 |-------|---------|------|
 | `workflow-progress` | `{ step, totalSteps, profileName, status }` | Each phase transition |
-| `workflow-error` | `{ step, profileName, errorMessage }` | API call failure |
+| `workflow-error` | `{ step, profileName, errorMessage, retryable, isWorkflow }` | API call failure |
 | `workflow-context-overflow` | `{ step, profileName, outputText }` | Large intermediate output |
 
 ### Token Diagnostics
@@ -133,19 +137,29 @@ After the final step, a debug object is saved with the AI message:
 ```json
 {
   "workflowStatus": "Workflow complete (3 steps)",
-  "agenticRagResponse": "...",
-  "agenticRagContextGathered": "...",
+  "context": {
+    "historySent": 24,
+    "historyDropped": 0,
+    "retrievalOmitted": 2,
+    "agenticDegraded": false,
+    "retrievalPath": "agentic",
+    "retrievalGateReason": "asks a question",
+    "payloadLimit": { "limit": 100000, "configured": 128000, "ratio": 1.28, "source": "workspace", "learnedRatio": 1.28 }
+  },
   "tokens": {
+    "knowledgeBase": 3650,
     "profileKb": 2450,
     "chatKb": 1200,
     "chatHistory": 8500,
     "totalInput": 14200,
-    "output": 3100
+    "output": 3100,
+    "agenticInput": 5200,
+    "agenticOutput": 400
   }
 }
 ```
 
-This is accessible in the chat UI via the debug panel on each AI message.
+With the Agentic RAG debug option on, the record also keeps `agenticRagResponse`, `agenticRagContextGathered` and `agenticTrajectory`; with the RAG debug option on, `standardRagContextGathered`. A reply cut off at the output limit adds `truncated` and `finishReason`. This is accessible in the chat UI via the debug panels on each AI message.
 
 ---
 
@@ -157,7 +171,7 @@ When an API call fails during workflow execution, the runner pauses and presents
 
 | Action | Behavior |
 |--------|----------|
-| **Retry** | Re-execute the same API call with identical parameters |
+| **Retry** | Re-execute the same API call with identical parameters. Not offered when the request failed the payload check, since the same payload would fail again |
 | **Skip** | Use the previous step's output (or original user input) as this step's output |
 | **Interrupt** | Abort the workflow; save partial output if any previous steps completed |
 
@@ -172,7 +186,7 @@ const decision = await new Promise((resolve) => {
 
 ### Context Overflow Modal
 
-If an intermediate step produces output exceeding ~4,000 tokens (16,000 characters), a context overflow modal allows the user to:
+If an intermediate step produces output exceeding 4,000 tokens (reasoning excluded), a context overflow modal allows the user to:
 
 | Action | Behavior |
 |--------|----------|
@@ -360,7 +374,7 @@ The chunk size (in characters) is configurable via the Settings panel and stored
 ```
 
 These parameters control:
-- **chunkSize** — Maximum characters per text chunk during ingestion (default: 500).
-- **similarity** — Minimum cosine similarity threshold for dense search (default: 0.3).
-- **topKKB** — Number of top results returned from knowledge base search (default: 5).
-- **topKMemory** — Number of top results returned from memory search (default: 8).
+- **chunkSize**: maximum characters per text chunk during file ingestion (default: 500). Chat archives always use 800.
+- **similarity**: Retrieval Strictness, from 0 to 1 (default: 0.3), mapped onto the real cosine band as the dense-search floor (see [architecture.md](architecture.md#hybrid-rag-engine)).
+- **topKKB**: passages returned from knowledge base search (default: 5). A floor: retrieval asks for up to 20 when the payload budget can hold them.
+- **topKMemory**: passages returned from memory search (default: 8), raised the same way.

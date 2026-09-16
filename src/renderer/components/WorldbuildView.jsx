@@ -41,6 +41,25 @@ const LInput = (p) => <input {...p} className={`${FIELD} ${p.className || ''}`} 
 const LTextarea = (p) => <textarea {...p} className={`${FIELD} resize-none leading-relaxed custom-scrollbar ${p.className || ''}`} />;
 const LSelect = ({ children, ...p }) => <select {...p} className={`${FIELD} cursor-pointer ${p.className || ''}`}>{children}</select>;
 
+// Why the name review flagged an entity, as shown on its sheet and in the sidebar tooltip.
+const NAME_REVIEW_TEXT = {
+  'common-word': () => 'Looks like a common word rather than a name, so it can tag ordinary text.',
+  number: () => 'Has no letters, so it cannot be found in the story by name.',
+  fragment: (reason) => `Appears almost only inside “${reason.relatedName}”. It may be a piece of that name; merging keeps it as an alias.`,
+  duplicate: (reason) => `May be the same as “${reason.relatedName}”.`,
+};
+const describeNameReview = (reason) => (NAME_REVIEW_TEXT[reason?.code] || (() => 'Worth a second look.'))(reason);
+
+const matchesReviewFilter = (entity, filter, { nameReview, reviewCounts }) => {
+  if (filter === 'proposed') return entity.status === 'proposed';
+  if (filter === 'updates') {
+    const counts = reviewCounts[entity.id];
+    return entity.status !== 'proposed' && ((counts?.entityUpdates || 0) > 0 || (counts?.kanora || 0) > 0);
+  }
+  if (filter === 'names') return nameReview.has(entity.id);
+  return true;
+};
+
 // A colored state pill (life status, disposition…). `map` is one of STATUS/DISPOSITION.
 const StateTag = ({ map, value }) => {
   const s = map[value]; if (!s) return null;
@@ -65,10 +84,7 @@ const EvidenceReferences = ({ excerpts, support = '' }) => {
   );
 };
 
-// Per-entity AI write permission, used by the "Update entities" enrichment pass:
-// open = AI writes directly, review = AI stages changes for approval, locked = the
-// enrichment skips it entirely (still readable by search/tagging). Stored in
-// data.aiPolicy; default 'review'.
+// open writes directly, review stages for approval, locked is skipped. Default 'review'.
 const AI_POLICY = {
   open:   { label: 'Open',   icon: Pencil,      tip: 'AI can edit this entity freely',        active: 'bg-accent/20 text-accent border-accent/40' },
   review: { label: 'Review', icon: ShieldCheck, tip: 'AI edits are staged for your approval', active: 'bg-status-warning/15 text-status-warning border-status-warning/40' },
@@ -101,10 +117,7 @@ const StateSelect = ({ map, value, onChange }) => (
   </LSelect>
 );
 
-// Free-text field with a themed suggestion dropdown: seed values plus anything the
-// user has typed before. Open-ended yet self-completing, and styled to match. No
-// native datalist (whose popup we cannot theme). onChange receives an event-like
-// object so callers read e.target.value uniformly.
+// No native datalist: its popup can't be themed. onChange receives an event-like object.
 const FreeDatalist = ({ value, onChange, options, placeholder }) => {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef(null);
@@ -199,9 +212,7 @@ function Section({ icon, title, editing, onEdit, showPencil, children }) {
 
 const draftFor = (type, data = {}) => ({ id: null, type, canonicalName: '', aliases: '', lore: '', loreDocumentId: '', status: 'confirmed', data });
 
-// Relation pickers (single-value and many-to-many), styled to match the light inputs.
-// Links need a saved entity id, so these render nothing until the entity exists,
-// the create form shows only fields that can be filled before the first save.
+// Links need a saved entity id, so these render nothing before the first save.
 function SingleRelation({ label, hint, current, options, onSet, disabled }) {
   if (disabled) return null;
   const currentName = options.find(o => o.id === current)?.canonicalName;
@@ -386,6 +397,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState(null);
   const [reviewFilter, setReviewFilter] = useState(null);
+  const [nameReview, setNameReview] = useState(() => new Map());
   const [manageMode, setManageMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const filterStripRef = useRef(null);
@@ -490,19 +502,21 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const load = useCallback(async () => {
     if (!workspaceId) return;
     try {
-      const [entityRes, linkRes, reviewRes, factRes, calendarRes] = await Promise.all([
+      const [entityRes, linkRes, reviewRes, factRes, calendarRes, nameRes] = await Promise.all([
         electronAPI.listEntities(workspaceId),
         electronAPI.listEntityLinks(workspaceId, 'inside'),
         electronAPI.listWorldbuildReviewCounts?.(workspaceId),
         electronAPI.listWorldbuildFacts?.(workspaceId),
         electronAPI.getWorldCalendar?.(workspaceId),
+        electronAPI.getEntityReview ? electronAPI.getEntityReview(workspaceId).catch(() => null) : null,
       ]);
       setEntities(entityRes?.entities || []);
       setInsideLinks(linkRes?.links || []);
       setReviewCounts(reviewRes?.counts || {});
       setFactCount(factRes?.facts?.length || 0);
       setWorldCalendar(calendarRes?.calendar || null);
-    } catch { setEntities([]); setInsideLinks([]); }
+      setNameReview(new Map((nameRes?.items || []).map(item => [item.id, item.reasons])));
+    } catch { setEntities([]); setInsideLinks([]); setNameReview(new Map()); }
     finally { setLoading(false); }
   }, [workspaceId, electronAPI]);
 
@@ -670,9 +684,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const cancelSection = async () => { const cur = entities.find(e => e.id === selected.id); if (cur) await openEntity(cur); setEditingSection(null); };
   const remove = async () => { if (!selected?.id) { setSelected(null); return; } setSaving(true); try { await electronAPI.deleteEntity(selected.id); setSelected(null); await load(); } finally { setSaving(false); } };
 
-  // Folding a proposal into an existing entity: absorbs the name as an alias, repoints its
-  // tags + relation edges, combines data/lore (with `prefer` deciding conflicts), deletes
-  // the source. Used for AI proposals ("this is really X") and imported duplicates.
+  // `prefer` decides conflicts; used for AI proposals and imported duplicates.
   const mergeInto = async (targetId, prefer = 'target') => {
     if (!selected?.id || !targetId) return;
     setSaving(true);
@@ -708,10 +720,19 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     } catch (e) { showToast(`Could not change AI permission: ${e.message}`, 'error'); }
   };
 
-  // Update entities: read each non-locked entity's related chunks and let the AI refresh it.
-  // The run lives in the main process, so it outlives this view. On mount we restore the
-  // lock from the main-process status, and a broadcast completion event clears it, so
-  // switching away and back keeps the overlay while the update is still running.
+  // The review stops flagging this entity; its name and tags stay as they are.
+  const keepName = async () => {
+    if (!selected?.id) return;
+    try {
+      const data = { ...(selected.data || {}), nameReviewDismissed: true };
+      const r = await electronAPI.updateEntity(selected.id, { data });
+      if (!r?.success) { showToast(`Could not update: ${r?.error || 'unknown error'}`, 'error'); return; }
+      patchData({ nameReviewDismissed: true });
+      await load();
+    } catch (e) { showToast(`Could not update: ${e.message}`, 'error'); }
+  };
+
+  // The run lives in the main process; on mount the lock is restored from its status.
   useEffect(() => {
     if (!electronAPI.onEnrichEntitiesProgress) return;
     return electronAPI.onEnrichEntitiesProgress((p) => setEnrichProgress(p));
@@ -730,9 +751,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     return () => { cancelled = true; };
   }, [electronAPI, workspaceId]);
 
-  // Completion is broadcast, so it clears the lock and refreshes even if a different mount
-  // of this view started the run. A ref keeps the handler's closure current without
-  // re-subscribing on every render.
+  // A ref keeps the handler current without re-subscribing every render.
   const onEnrichComplete = async (res) => {
     setEnriching(false); setEnrichProgress(null);
     if (res && res.workspaceId && res.workspaceId !== workspaceId) return;
@@ -825,9 +844,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     showToast(`Imported ${r.entitiesAdded} entit${r.entitiesAdded === 1 ? 'y' : 'ies'}${linkBit} for review. Accept, merge, or dismiss each in the sidebar.${calendarBit}`, r.calendarConflict ? 'info' : 'success');
   };
 
-  // Resolve a staged 'review' enrichment proposal (data._enrichPending). Accept applies
-  // the named fields/lore to the live record, reject drops them; the sheet reloads so the
-  // remaining staged bits (if any) stay visible.
+  // The sheet reloads so remaining staged items stay visible.
   const resolveReview = async (accept = {}, reject = {}) => {
     if (!selected?.id) return;
     setSaving(true);
@@ -919,16 +936,17 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     const q = search.trim().toLowerCase();
     const list = entities.filter(en =>
       (!filterType || en.type === filterType) &&
-      (!reviewFilter || (reviewFilter === 'proposed' ? en.status === 'proposed' : en.status !== 'proposed' && ((reviewCounts[en.id]?.entityUpdates || 0) > 0 || (reviewCounts[en.id]?.kanora || 0) > 0))) &&
+      matchesReviewFilter(en, reviewFilter, { nameReview, reviewCounts }) &&
       (!q || [en.canonicalName, ...(en.aliases || [])].join(' ').toLowerCase().includes(q))
     );
     return list.sort((a, b) => (TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type)) || a.canonicalName.localeCompare(b.canonicalName));
-  }, [entities, search, filterType, reviewFilter, reviewCounts]);
+  }, [entities, search, filterType, reviewFilter, reviewCounts, nameReview]);
   const locationTree = useMemo(() => buildLocationTree(entities, insideLinks), [entities, insideLinks]);
   const useLocationTree = !search.trim() && !reviewFilter && (!filterType || filterType === 'Locations');
   const toggleLocation = (id) => setExpandedLocations(current => ({ ...current, [id]: current[id] === false }));
   const proposedCount = useMemo(() => entities.filter(e => e.status === 'proposed').length, [entities]);
   const pendingUpdateCount = useMemo(() => entities.filter(e => e.status !== 'proposed' && ((reviewCounts[e.id]?.entityUpdates || 0) > 0 || (reviewCounts[e.id]?.kanora || 0) > 0)).length, [entities, reviewCounts]);
+  const nameReviewCount = useMemo(() => entities.filter(e => nameReview.has(e.id)).length, [entities, nameReview]);
   const exportableCount = useMemo(() => entities.filter(e => e.status !== 'proposed').length, [entities]);
   const selectedEntities = useMemo(() => entities.filter(entity => selectedIds.has(entity.id)), [entities, selectedIds]);
   const visibleIds = useMemo(() => new Set(filtered.map(entity => entity.id)), [filtered]);
@@ -940,7 +958,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   useEffect(() => {
     if (reviewFilter === 'proposed' && proposedCount === 0) setReviewFilter(null);
     if (reviewFilter === 'updates' && pendingUpdateCount === 0) setReviewFilter(null);
-  }, [reviewFilter, proposedCount, pendingUpdateCount]);
+    if (reviewFilter === 'names' && nameReviewCount === 0) setReviewFilter(null);
+  }, [reviewFilter, proposedCount, pendingUpdateCount, nameReviewCount]);
 
   const toggleEntitySelection = (id) => setSelectedIds(current => {
     const next = new Set(current);
@@ -998,9 +1017,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const isItemType = selected?.type === 'Items' && !isUniqueItem;
   const unsaved = isNew;
 
-  // Owner as a single 3-mode choice: the AI decides, it is deliberately lost, or a
-  // character holds it. A character owner is an owned_by edge; the two ownerless modes
-  // live in data.ownership. Picking a character also clears the ownerless flag.
+  // A character owner is an owned_by edge; the ownerless modes live in data.ownership.
   const ownerVal = rel.ownedBy ? rel.ownedBy.entity.id : (selected?.data?.ownership === 'lost' ? 'lost' : 'ai');
   const ownerOptions = [...byType.Characters, ...individualCreatures];
   const persistItemDraft = async () => {
@@ -1404,6 +1421,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           {en.status === 'proposed' && <Sparkles className="w-3.5 h-3.5 text-status-warning shrink-0" data-tooltip="AI proposal, needs accept" />}
           {en.status !== 'proposed' && (reviewCounts[en.id]?.entityUpdates || 0) > 0 && <ShieldCheck className="w-3.5 h-3.5 text-status-info shrink-0" data-tooltip={`${reviewCounts[en.id].entityUpdates} entity update suggestions`} />}
           {en.status !== 'proposed' && (reviewCounts[en.id]?.kanora || 0) > 0 && <Sparkles className="w-3.5 h-3.5 text-entity-event shrink-0" data-tooltip={`${reviewCounts[en.id].kanora} Kanora suggestions`} />}
+          {nameReview.has(en.id) && <AlertTriangle className="w-3.5 h-3.5 text-status-warning shrink-0" data-tooltip={describeNameReview(nameReview.get(en.id)[0])} />}
         </button>
       </div>
     );
@@ -1432,6 +1450,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               {entity.status === 'proposed' && <Sparkles className="w-3.5 h-3.5 text-status-warning shrink-0" data-tooltip="AI proposal, needs accept" />}
               {entity.status !== 'proposed' && (reviewCounts[entity.id]?.entityUpdates || 0) > 0 && <ShieldCheck className="w-3.5 h-3.5 text-status-info shrink-0" data-tooltip={`${reviewCounts[entity.id].entityUpdates} entity update suggestions`} />}
               {entity.status !== 'proposed' && (reviewCounts[entity.id]?.kanora || 0) > 0 && <Sparkles className="w-3.5 h-3.5 text-entity-event shrink-0" data-tooltip={`${reviewCounts[entity.id].kanora} Kanora suggestions`} />}
+              {nameReview.has(entity.id) && <AlertTriangle className="w-3.5 h-3.5 text-status-warning shrink-0" data-tooltip={describeNameReview(nameReview.get(entity.id)[0])} />}
             </button>
             {hasChildren && <button type="button" onClick={() => toggleLocation(entity.id)} aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${entity.canonicalName}`} className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-md text-text-subtle hover:text-text-secondary hover:bg-surface-hover/60 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent">
               <ChevronRight className={`w-3.5 h-3.5 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
@@ -1678,11 +1697,12 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             </div>
             <button type="button" onClick={() => moveFilterStrip(1)} aria-label="Move entity filters right" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-text-subtle transition-colors duration-200 ease-standard hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><ChevronRight className="h-3.5 w-3.5" /></button>
           </div>
-          {(proposedCount > 0 || pendingUpdateCount > 0) && (
+          {(proposedCount > 0 || pendingUpdateCount > 0 || nameReviewCount > 0) && (
             <div className="flex items-center gap-1.5 border-t border-border-subtle pt-2">
               <span className="mr-1 shrink-0 eyebrow">AI review</span>
               {proposedCount > 0 && <button onClick={() => setReviewFilter(reviewFilter === 'proposed' ? null : 'proposed')} className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[0.6875rem] font-semibold tracking-wide transition-colors cursor-pointer ${reviewFilter === 'proposed' ? 'bg-status-warning/15 text-status-warning border-status-warning/35' : 'bg-status-warning/[0.05] text-status-warning/80 border-status-warning/20 hover:bg-status-warning/10'}`}><Sparkles className="w-3 h-3" />Proposed</button>}
               {pendingUpdateCount > 0 && <button onClick={() => setReviewFilter(reviewFilter === 'updates' ? null : 'updates')} className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[0.6875rem] font-semibold tracking-wide transition-colors cursor-pointer ${reviewFilter === 'updates' ? 'bg-status-info/15 text-status-info border-status-info/35' : 'bg-status-info/[0.05] text-status-info/80 border-status-info/20 hover:bg-status-info/10'}`}><ShieldCheck className="w-3 h-3" />Reviews</button>}
+              {nameReviewCount > 0 && <button onClick={() => setReviewFilter(reviewFilter === 'names' ? null : 'names')} data-tooltip="Names that look like common words, pieces of other names, or duplicates" className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[0.6875rem] font-semibold tracking-wide transition-colors cursor-pointer ${reviewFilter === 'names' ? 'bg-status-warning/15 text-status-warning border-status-warning/35' : 'bg-status-warning/[0.05] text-status-warning/80 border-status-warning/20 hover:bg-status-warning/10'}`}><AlertTriangle className="w-3 h-3" />Needs review</button>}
             </div>
           )}
         </div>
@@ -1727,6 +1747,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               <button type="button" onClick={selectVisibleEntities} disabled={!filtered.length} className="text-[0.625rem] font-semibold px-2 py-1 rounded-md border border-border-subtle text-text-secondary hover:bg-surface-hover/60 disabled:opacity-40 cursor-pointer">Select visible</button>
               {proposedCount > 0 && <button type="button" onClick={() => selectEntities(entities.filter(entity => entity.status === 'proposed'))} className="text-[0.625rem] font-semibold px-2 py-1 rounded-md border border-status-warning/25 text-status-warning hover:bg-status-warning/10 cursor-pointer">Proposed</button>}
               {pendingUpdateCount > 0 && <button type="button" onClick={() => selectEntities(entities.filter(entity => entity.status !== 'proposed' && ((reviewCounts[entity.id]?.entityUpdates || 0) > 0 || (reviewCounts[entity.id]?.kanora || 0) > 0)))} className="text-[0.625rem] font-semibold px-2 py-1 rounded-md border border-status-info/25 text-status-info hover:bg-status-info/10 cursor-pointer">Reviews</button>}
+              {nameReviewCount > 0 && <button type="button" onClick={() => selectEntities(entities.filter(entity => nameReview.has(entity.id)))} className="text-[0.625rem] font-semibold px-2 py-1 rounded-md border border-status-warning/25 text-status-warning hover:bg-status-warning/10 cursor-pointer">Needs review</button>}
               {Object.keys(AI_POLICY).map(policy => {
                 const matches = entities.filter(entity => entity.status !== 'proposed' && (entity.data?.aiPolicy || 'review') === policy);
                 return <button key={`select-${policy}`} type="button" onClick={() => selectEntities(matches)} disabled={!matches.length} data-tooltip={`Select all entities with the ${AI_POLICY[policy].label} AI policy`} className="text-[0.625rem] font-semibold px-2 py-1 rounded-md border border-border-subtle text-text-muted hover:bg-surface-hover/60 hover:text-text-primary disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer">{AI_POLICY[policy].label} ({matches.length})</button>;
@@ -1806,6 +1827,21 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                       <Button size="sm" variant="ghost" loading={saving} onClick={remove}>Dismiss</Button>
                     </div>
                   )}
+                </div>
+              )}
+              {!isNew && nameReview.has(selected.id) && (
+                <div className="mb-4 flex flex-col gap-2 rounded-card border border-status-warning/30 bg-status-warning/10 px-3 py-2.5">
+                  <div className="flex min-w-0 items-start gap-2 text-xs font-semibold text-text-primary">
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-status-warning" />
+                    <div className="space-y-0.5">{nameReview.get(selected.id).map((reason, i) => <p key={i}>{describeNameReview(reason)}</p>)}</div>
+                  </div>
+                  <div className="flex items-center flex-wrap gap-2">
+                    {nameReview.get(selected.id).filter(reason => reason.relatedId && entities.some(e => e.id === reason.relatedId)).slice(0, 1).map(reason => (
+                      <Button key={reason.relatedId} size="sm" icon={Link2} loading={saving} onClick={() => mergeInto(reason.relatedId, 'target')}>Merge into “{reason.relatedName}”</Button>
+                    ))}
+                    <Button size="sm" variant="danger" icon={Trash2} loading={saving} onClick={() => setConfirmDelete(true)}>Delete</Button>
+                    <Button size="sm" variant="ghost" loading={saving} onClick={keepName}>Keep as is</Button>
+                  </div>
                 </div>
               )}
               {(isNew || editingSection === '__header__') ? (

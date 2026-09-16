@@ -1,6 +1,6 @@
 const db = require('./database');
 const entitiesStore = require('./entities');
-const { sendApiRequest } = require('./features/llm/llm.service');
+const { sendApiRequest, sendAgentRequest, nativeToolSupport, getReservedOutputTokens, resolvePayloadLimit, createPromptVariableResolver } = require('./features/llm/llm.service');
 const { sendApiRequestStream } = require('./features/llm/llm.stream');
 const { applyGenerationHistory, resolveWorkspaceGenerationTarget } = require('./features/chat/generation-target');
 const { selectActiveMessages, selectArchivableMessages, coveredMessageIds, parseMemoryBlocks } = require('./features/chat/archive-coverage');
@@ -12,7 +12,7 @@ const {
     isSearchable
 } = require('./features/chat/workspace-context-scope');
 const { ROLE_IDS, readAdvancedSettings, resolveAiEngineRole } = require('./features/ai-engine/role-resolver');
-const { formatActiveHistory } = require('./features/chat/history-window');
+const { formatActiveHistory, planActiveHistory, selectActiveHistory } = require('./features/chat/history-window');
 const { parseEntityUpdateObject } = require('./features/worldbuild/entity-update-json');
 const {
     buildEstimatedUsage,
@@ -38,7 +38,7 @@ const {
     entityDataFacts
 } = require('./features/worldbuild/entity-fields');
 const { decodeEntityUpdate, isEntityUpdateShape } = require('./features/worldbuild/entity-update-protocol');
-const { buildLorePrompt, validateEntityLore } = require('./features/worldbuild/entity-lore');
+const { buildLorePrompt, buildLoreAppendPrompt, validateEntityLore, validateEntityLoreAppend } = require('./features/worldbuild/entity-lore');
 const { buildNarrativeOptionPalette } = require('./features/worldbuild/narrative-options');
 const { createEntityUpdateState } = require('./features/worldbuild/entity-update-state');
 const { shouldStopEntityUpdates } = require('./features/worldbuild/entity-update-resilience');
@@ -50,14 +50,45 @@ const {
     hasEpistemicDomain,
     resolveNarrativeRouting
 } = require('./features/kanora/narrative-state-routing');
-const { TAGGER_RESPONSE_SCHEMA, parseTaggerResponse, createTaggerBatches, proposalDataForMention } = require('./features/world-index/tagger-response');
-const { matchedEvidence, evidenceText } = require('./features/world-index/evidence-match');
-const { buildCategoryResolver } = require('./features/world-index/category-match');
+const { proposalDataForMention } = require('./features/world-index/tagger-response');
+const { runModelTagger } = require('./features/world-index/tagger');
+const { applyNameTags, createNameMatcher, refreshWorkspaceNameTags, loadWorkspaceEntities } = require('./features/world-index/name-tags');
+const { saveChunkStatus } = require('./features/world-index/chunk-status');
+const { checkProposal } = require('./features/world-index/name-quality');
+const { collectLowercaseWords, findCandidateMentions } = require('./features/world-index/literal-mentions');
+const { foldText } = require('./features/world-index/text-fold');
 const {
+    PAYLOAD_BUDGET_CONTRACT,
     assertPayloadWithinLimit,
+    estimatePayloadTokens,
     getAvailableHistoryTokens,
-    normalizeMaxApiPayload
+    normalizeMaxApiPayload,
+    safetyMarginFor
 } = require('./features/llm/payload-budget');
+const {
+    packContextItems,
+    renderContextSections,
+    splitRetrievalBudget,
+    retrievalTopK,
+    truncateToTokens
+} = require('./features/llm/context-budget');
+const { stripReasoning } = require('./features/chat/message-text');
+const { reconstructKnowledgeFile } = require('./features/knowledge/kb-reconstruct');
+const { parseCitations, isCitedChunk } = require('./features/knowledge/cited-sources');
+const { parseAgentTurn } = require('./features/knowledge/agent-output');
+const {
+    queryKey,
+    plannerWindowShape,
+    downgradeUntilFits,
+    shouldRunPlanner,
+    entityMentionIds,
+    worldMapBlock,
+    formatCoverage
+} = require('./features/knowledge/agent-planner');
+const retrievalLedger = require('./features/knowledge/retrieval-ledger');
+const { argOf, canonicalToolName, plannerToolDefinitions, renderTextCall, textToolCatalog, toolNamesFor } = require('./features/knowledge/planner-tools');
+const { flattenConversation } = require('./features/llm/tool-conversation');
+const { buildNeighborPassages } = require('./features/knowledge/passage-neighbors');
 const { encode } = require('gpt-tokenizer/encoding/o200k_base');
 const fs = require('fs');
 const path = require('path');
@@ -73,13 +104,15 @@ const {
     searchKnowledgeBase,
     searchChatKnowledgeBase,
     searchChatMemories,
+    generateEmbeddingVector,
     getWorldVocabulary,
     lookupEntityChunks,
-    executeMultiOwnerSearch,
+    searchLoreDocuments,
     extractTextFromFile,
     chunkText,
     vectorizeChunks,
-    insertChunksToDb
+    insertChunksToDb,
+    loadMemoryBlockChunks
 } = require('./rag-service');
 
 let activeRun = null;
@@ -212,6 +245,120 @@ function estimateTokens(str) {
     }
 }
 
+// Executors kept on the text protocol for the session. A failed native request reaches the limit
+// at once; a first reply without calls is one strike, since the model may simply be done.
+const TEXT_PROTOCOL_STRIKES = new Map();
+const TEXT_PROTOCOL_STRIKE_LIMIT = 2;
+
+// A file the agent read, or an entity's lore, may take at most this share of the
+// retrieval budget; the rest stays available for search results.
+const AGENTIC_ITEM_MAX_SHARE = 0.6;
+
+// Roleplay tools answered from per-subject records: tool name -> [method, reply outside Roleplay Mode].
+const EPISTEMIC_TOOLS = {
+    scan_scene_awareness: ['scanSceneAwareness', 'Scene Awareness is unavailable outside Roleplay Mode.'],
+    inspect_subject_knowledge: ['inspectSubjectKnowledge', 'Subject Knowledge inspection is unavailable outside Roleplay Mode.'],
+    inspect_subject_evidence: ['inspectSubjectEvidence', 'Subject evidence inspection is unavailable outside Roleplay Mode.'],
+    inspect_subject_relationships: ['inspectSubjectRelationships', 'Subject relationship inspection is unavailable outside Roleplay Mode.'],
+    inspect_subject_memories: ['inspectSubjectMemories', 'Subject memory inspection is unavailable outside Roleplay Mode.']
+};
+
+// Passages lookup_entity hands the agent (and the final context) per call.
+const LOOKUP_ENTITY_CHUNK_LIMIT = 12;
+
+// Profile knowledge, workspace files and archived memory each ask for their own passages.
+const RETRIEVAL_TIERS = 3;
+
+const PROFILE_RETRIEVAL_HEADER = '--- PROFILE RELEVANT RETRIEVED KNOWLEDGE ---';
+const CHAT_RETRIEVAL_HEADER = '--- CHAT RELEVANT RETRIEVED KNOWLEDGE ---';
+const MEMORY_RETRIEVAL_HEADER = '--- CHAT PERSISTENT SUMMARIZED MEMORIES ---';
+
+// Retrieved text kept on a message for the debug panels, when those are on.
+const DEBUG_TEXT_LIMIT = 60000;
+
+function capDebugText(text) {
+    const value = String(text || '');
+    return value.length > DEBUG_TEXT_LIMIT ? `${value.slice(0, DEBUG_TEXT_LIMIT)}\n[...debug text cut]` : value;
+}
+
+// A reply with no visible text is a failure; reporting it as success lets
+// Regenerate delete the previous reply.
+function emptyResponseError(finishReason, rawOutput) {
+    const reason = String(finishReason || '').toLowerCase();
+    const reasoned = /<think/i.test(String(rawOutput || ''));
+    let message;
+    if (['length', 'max_tokens', 'max_output_tokens'].includes(reason)) {
+        message = reasoned
+            ? 'The model spent its whole output budget reasoning and wrote no reply. Raise Max Tokens on the AI Profile and try again.'
+            : 'The model reached its output limit before writing a visible reply. Raise Max Tokens on the AI Profile and try again.';
+    } else if (reasoned) {
+        message = 'The model returned reasoning but no reply. Try again, or raise Max Tokens on the AI Profile.';
+    } else if (reason && !['stop', 'end_turn', 'stop_sequence'].includes(reason)) {
+        message = `The provider returned no reply (${finishReason}). Nothing was saved.`;
+    } else {
+        message = 'The provider returned an empty reply. Nothing was saved, and the conversation is unchanged.';
+    }
+    const error = new Error(message);
+    error.code = 'EMPTY_RESPONSE';
+    return error;
+}
+
+// Widens archive hits to their neighbors in the same block; falls back to the hits alone.
+function expandMemoryResults(results, chatId) {
+    const list = Array.isArray(results) ? results : [];
+    if (!list.length) return list;
+    try {
+        const blocks = loadMemoryBlockChunks(chatId, list.map(result => result.memoryBlockId));
+        const { passages, unplaced } = buildNeighborPassages(list, blocks);
+        return [...passages, ...unplaced];
+    } catch (e) {
+        console.warn('[RAG] Neighbor expansion failed:', e.message);
+        return list;
+    }
+}
+
+function pushRetrievalItems(items, results, section, origin) {
+    const seen = new Set(items.filter(item => item.section === section).map(item => item.text));
+    for (const result of results || []) {
+        const text = String(result?.text || '');
+        if (!text || seen.has(text)) continue;
+        seen.add(text);
+        items.push({ section, text, source: result.source, tier: 1, score: Number(result.fusionScore ?? result.score) || 0, origin });
+    }
+}
+
+// Workspace passages go through the narrative context planner, which applies perspective.
+// Without a planned workspace (narrativeItems null) they are packed like any retrieved text.
+function routeRetrievedResults(results, { retrievalItems, narrativeItems, section, kind }) {
+    if (!narrativeItems) {
+        pushRetrievalItems(retrievalItems, results, section, 'chat');
+        return;
+    }
+    const seen = new Set(narrativeItems.map(item => item.content));
+    for (const result of results || []) {
+        const text = String(result?.text || '');
+        if (!text || seen.has(text)) continue;
+        seen.add(text);
+        narrativeItems.push({ id: result.id, kind, source: result.source, content: text, relevance: Number(result.fusionScore ?? result.score) || 0 });
+    }
+}
+
+// Agentic context items become planner items. Uncited results rank lower instead of being
+// dropped, and one file or lore read keeps the same share cap the packer applies.
+function toNarrativeItems(contextItems, retrievalBudget) {
+    const itemCap = Math.floor(Math.max(0, retrievalBudget) * AGENTIC_ITEM_MAX_SHARE);
+    return (contextItems || []).map((item, index) => ({
+        id: item.ids?.[0] || `agentic-${index}`,
+        kind: item.narrativeKind,
+        source: item.source,
+        content: item.truncatable && estimateTokens(item.text) > itemCap
+            ? truncateToTokens(item.text, itemCap, estimateTokens)
+            : item.text,
+        relevance: (Number(item.score) || 0) * (item.tier >= 3 ? 0.75 : 1),
+        ...(item.entityIds ? { entityIds: item.entityIds } : {})
+    })).filter(item => item.content);
+}
+
 // --- WORKFLOW RUNNER ---
 
 // Prompt caching is on unless the user turned it off. Turning it off restores
@@ -247,7 +394,6 @@ function isStreamingEnabled() {
     }
 }
 
-// Orchestrate workflow linear chain execution
 async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, historyEdit, regenerateMessageId, webContents }) {
     let resolvedTarget;
     try {
@@ -427,8 +573,12 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
         }
 
         const maxContextTokens = normalizeMaxApiPayload(chat?.maxContext);
+        // Budgets measure prompts as the provider receives them, variables expanded.
+        const resolveVariables = createPromptVariableResolver(db);
+        const debugSettings = readAdvancedSettings();
 
-        const persistedMessages = db.prepare('SELECT * FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
+        // The debug record is not read here: on older messages it can be very large.
+        const persistedMessages = db.prepare('SELECT id, role, content, attachedFiles, excluded, createdAt FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
         const messages = applyGenerationHistory(persistedMessages, { historyEdit, regenerateMessageId });
         // Live history is whatever no summary covers and the user has not muted,
         // so a gap left by a deleted summary comes back on its own.
@@ -456,9 +606,19 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
         let totalNarrativeContextTokens = 0;
         let totalUserInputTokens = 0;
         let totalMainInputTokens = 0;
+        let finalPayloadLimit = null;
         let totalAgenticInputTokens = 0;
         let totalAgenticOutputTokens = 0;
         let totalOutputTokens = 0;
+        let historySent = 0;
+        let historyDropped = 0;
+        let retrievalOmitted = 0;
+        let agenticDegraded = false;
+        let lastAgenticTrajectory = null;
+        let retrievalPath = '';
+        let retrievalGateReason = '';
+        let finalTruncated = false;
+        let finalFinishReason = null;
 
         const promptCacheEnabled = isPromptCacheEnabled();
         const contextPlacement = getContextPlacement();
@@ -537,8 +697,6 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             const systemInstructionsTokens = estimateTokens(stableSystemPrompt);
 
             let constantKnowledge = '';
-            let searchableChunks = [];
-            let searchableResults = [];
             const knowledgeFiles = JSON.parse(profile.knowledgeFiles || '[]');
 
             for (const file of knowledgeFiles) {
@@ -642,100 +800,150 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             const attachmentsPayloadContext = attachmentsContext
                 ? `\n\n--- ATTACHED FILES FOR CURRENT MESSAGE ---\n${attachmentsContext}\n`
                 : '';
-            assertPayloadWithinLimit({
-                maxPayloadTokens: maxContextTokens,
-                systemPrompt: composeSystemPrompt() + attachmentsPayloadContext,
-                newPrompt: currentInput,
+            const stepLimit = resolvePayloadLimit({ apiProfileId: profile.apiProfileId, model: profile.model, maxPayloadTokens: maxContextTokens });
+            const fixedPrompt = resolveVariables(composeSystemPrompt() + attachmentsPayloadContext);
+            const fixedTokens = estimateTokens(fixedPrompt);
+            const budgetInput = {
+                maxPayloadTokens: stepLimit.limit,
+                configuredPayloadTokens: stepLimit.configured,
+                tokenRatio: stepLimit.ratio,
+                limitSource: stepLimit.source,
+                newPrompt: resolveVariables(currentInput),
                 attachedImageCount: i === 0 ? attachedImages.length : 0,
-                outputTokens: profile.maxTokens ?? 1000
+                outputTokens: getReservedOutputTokens({ maxTokens: profile.maxTokens })
+            };
+            // Only the fixed part can overflow on its own: retrieval and history are
+            // sized below to whatever it leaves.
+            assertPayloadWithinLimit({
+                ...budgetInput,
+                systemPrompt: fixedPrompt,
+                breakdown: { fixed: fixedTokens, retrieved: 0, history: 0 }
             });
 
-            const retrievalPlanner = getRoleExecutor(ROLE_IDS.RETRIEVAL_PLANNER, profile);
+            // History is measured first so retrieval cannot push the conversation out. The anchored
+            // window is measured, so the room reserved here is the room the final window takes.
+            const availableForContext = getAvailableHistoryTokens({ ...budgetInput, systemPrompt: fixedPrompt });
+            let historySource = [];
+            if (i === 0 || includeChatHistory) {
+                historySource = activeMessages;
+                if (i === 0) {
+                    const last = activeMessages[activeMessages.length - 1];
+                    if (last && last.role === 'user') {
+                        historySource = activeMessages.slice(0, -1);
+                    }
+                }
+            }
+            const historyNeed = planActiveHistory(historySource, availableForContext, historyCacheScopeId).tokens;
+            // Profile knowledge is packed first; what it leaves is the narrative planner's budget.
+            const retrievalBudget = splitRetrievalBudget({ availableTokens: availableForContext, historyTokens: historyNeed });
             const planWorkspaceContext = shouldPlanWorkspaceContext(chatId, includeChatContext);
-            if (profile.isAgentic === 1 && retrievalPlanner.executor) {
-                retrievalMode = 'agentic';
-                const initialRemainingTokens = getAvailableHistoryTokens({
-                    maxPayloadTokens: maxContextTokens,
-                    systemPrompt: composeSystemPrompt(),
-                    newPrompt: currentInput,
-                    attachedImageCount: i === 0 ? attachedImages.length : 0,
-                    outputTokens: 4000
-                });
-                const ragActiveMessages = activeMessages.slice(-10);
+            const profileRetrievalHeader = isRoleplayWorkspace
+                ? '--- NARRATOR REFERENCE: PROFILE RETRIEVAL ---'
+                : PROFILE_RETRIEVAL_HEADER;
 
+            const retrievalPlanner = getRoleExecutor(ROLE_IDS.RETRIEVAL_PLANNER, profile);
+            const plannerAvailable = profile.isAgentic === 1 && Boolean(retrievalPlanner.executor);
+            // The user's own message decides, not the step input: from step 2 on that input is
+            // generated prose, which says nothing about whether this turn needs research.
+            const plannerGate = plannerAvailable
+                ? resolvePlannerGate(chatId, messageContent || currentInput, {
+                    includeChatContext,
+                    force: String(debugSettings.agenticGate || 'auto') === 'always'
+                })
+                : { plan: false, reason: 'profile is not agentic, or no Retrieval Planner is configured' };
+            if (plannerAvailable) {
+                retrievalPath = plannerGate.plan ? 'agentic' : 'deterministic';
+                retrievalGateReason = plannerGate.reason;
+                console.log(`[Agentic RAG] Gate: ${retrievalPath} (${plannerGate.reason})`);
+            }
+            if (plannerGate.plan) {
                 let ragChatHistory = [];
                 if (i === 0 || includeChatHistory) {
-                    ragChatHistory = formatActiveHistory(ragActiveMessages, initialRemainingTokens);
+                    // The planner reads this history, so its own window sizes it, not the writer's.
+                    const plannerLimit = resolvePayloadLimit({ apiProfileId: retrievalPlanner.executor.apiProfileId, model: retrievalPlanner.executor.model, maxPayloadTokens: maxContextTokens });
+                    ragChatHistory = formatActiveHistory(
+                        activeMessages.slice(-10),
+                        plannerWindowShape(plannerLimit.limit).historyTokens
+                    );
                 }
 
-                const agenticResult = await executeAgenticRagLoop(
-                    profile,
-                    chatId,
-                    currentInput,
-                    ragChatHistory,
-                    webContents,
-                    includeChatContext,
-                    retrievalPlanner.executor,
-                    maxContextTokens,
-                    currentRun
-                );
+                const agenticResult = await executeAgenticRagLoop(profile, chatId, currentInput, ragChatHistory, webContents, includeChatContext, retrievalPlanner.executor, currentRun, {
+                    retrievalBudget,
+                    userRequest: messageContent,
+                    knownEntities: plannerGate.entities,
+                    mentionedIds: plannerGate.mentionedIds,
+                    toolProtocol: String(debugSettings.agenticToolProtocol || 'auto') === 'text' ? 'text' : 'auto'
+                });
                 if (agenticResult) {
-                    // If detailed research context was gathered, include only it (prevents duplicate token recitation).
-                    // If NOTHING was retrieved, do NOT pass the agent's 1-sentence summary off as facts, emit an
-                    // explicit notice so the main AI knows retrieval ran and found nothing, instead of hallucinating
-                    // document-based facts (fail-loud degradation).
-                    const noContextNotice = `--- RAG NOTICE ---\nNo relevant context was retrieved from the knowledge base or memory for this request. Answer using only the conversation and the user's instructions; do not fabricate document-based facts.`;
-                    const externalPayloadContext = agenticResult.externalContextGathered
-                        ? `\n\n--- DETAILED RESEARCH CONTEXT ---\n${agenticResult.externalContextGathered}\n`
-                        : '';
-                    const kanoraBudget = getAvailableHistoryTokens({
-                        maxPayloadTokens: maxContextTokens,
-                        systemPrompt: composeSystemPrompt() + externalPayloadContext + attachmentsPayloadContext,
-                        newPrompt: currentInput,
-                        attachedImageCount: i === 0 ? attachedImages.length : 0,
-                        outputTokens: profile.maxTokens ?? 1000
-                    });
-                    const planned = planWorkspaceContext
-                        ? planKanoraContext({
+                    retrievalMode = 'agentic';
+                    // Workspace passages and Worldbuild records go through the narrative planner, which
+                    // applies perspective; profile knowledge is packed on its own first.
+                    const narrativeCandidates = planWorkspaceContext
+                        ? agenticResult.contextItems.filter(item => item.narrativeKind)
+                        : [];
+                    const packed = packContextItems(
+                        planWorkspaceContext ? agenticResult.contextItems.filter(item => !item.narrativeKind) : agenticResult.contextItems,
+                        retrievalBudget,
+                        { estimate: estimateTokens, maxItemShare: AGENTIC_ITEM_MAX_SHARE }
+                    );
+                    retrievalOmitted += packed.dropped + packed.truncated;
+                    if (agenticResult.degraded) agenticDegraded = true;
+                    let planned = null;
+                    if (planWorkspaceContext) {
+                        const narrativeBudget = Math.max(0, retrievalBudget - packed.usedTokens);
+                        planned = planKanoraContext({
                             chatId,
                             query: currentInput,
-                            items: agenticResult.kanoraItems,
-                            tokenBudget: kanoraBudget
-                        })
-                        : null;
-                    if (planned?.manifest?.requestId) narrativeContextRequestId = planned.manifest.requestId;
-                    contextBundleDiagnostic = serializeContextBundle(planned);
-                    const approvedContext = [agenticResult.externalContextGathered, planned?.context]
+                            items: toNarrativeItems(narrativeCandidates, retrievalBudget),
+                            tokenBudget: narrativeBudget
+                        });
+                        if (planned?.manifest?.requestId) narrativeContextRequestId = planned.manifest.requestId;
+                        contextBundleDiagnostic = serializeContextBundle(planned);
+                    }
+                    const narrativeTokens = planned?.plan.package.usedTokens || 0;
+                    // Stored on the message, so chunk ids are left out and only counts are kept.
+                    lastAgenticTrajectory = {
+                        anchorQuery: agenticResult.trajectory.anchorQuery,
+                        toolK: agenticResult.trajectory.toolK,
+                        protocol: agenticResult.trajectory.protocol,
+                        finalProtocol: agenticResult.trajectory.finalProtocol,
+                        protocolFallback: agenticResult.trajectory.protocolFallback,
+                        stopped: agenticResult.trajectory.stopped,
+                        plannerWindow: agenticResult.trajectory.plannerWindow,
+                        gate: { path: 'agentic', reason: plannerGate.reason },
+                        seed: agenticResult.trajectory.seed
+                            ? { calls: agenticResult.trajectory.seed.calls, items: agenticResult.trajectory.seed.items }
+                            : null,
+                        turns: agenticResult.trajectory.turns.map(({ newIds, ...turn }) => turn),
+                        packing: {
+                            kept: packed.kept.length + (planned?.plan.package.items.length || 0),
+                            dropped: packed.dropped,
+                            truncated: packed.truncated,
+                            total: packed.total + narrativeCandidates.length,
+                            budget: retrievalBudget
+                        }
+                    };
+                    const gathered = [renderContextSections(packed.kept, agenticResult.contextSections), planned?.context]
                         .filter(Boolean)
                         .join('\n\n');
-                    const approvedChatTokens = planned?.plan.package.usedTokens || 0;
-                    const combinedContext = approvedContext
-                        ? `--- DETAILED RESEARCH CONTEXT ---\n${approvedContext}`
-                        : noContextNotice;
-                    contextBlock += `\n\n${combinedContext}\n`;
+                    const retrievedAnything = packed.total > 0 || narrativeCandidates.length > 0;
+                    // Never pass the agent's summary off as facts; an explicit notice keeps
+                    // the model from inventing document-based answers.
+                    const noContextNotice = retrievedAnything
+                        ? `--- RAG NOTICE ---\nThe retrieved context did not fit this request's payload budget and was left out. Answer using only the conversation and the user's instructions; do not fabricate document-based facts.`
+                        : `--- RAG NOTICE ---\nNo relevant context was retrieved from the knowledge base or memory for this request. Answer using only the conversation and the user's instructions; do not fabricate document-based facts.`;
+                    contextBlock += `\n\n${gathered ? `--- DETAILED RESEARCH CONTEXT ---\n${gathered}` : noContextNotice}\n`;
 
-                    let agenticResponseTokens = 0;
-                    if (!approvedContext) {
-                        agenticResponseTokens = estimateTokens(noContextNotice);
+                    if (!gathered) profileKbTokens += estimateTokens(noContextNotice);
+                    for (const item of packed.kept) {
+                        if (item.origin === 'profile') profileKbTokens += item.tokens;
+                        else chatKbTokens += item.tokens;
                     }
-                    const hasProfileTokens = (agenticResult.profileKbTokens || 0) > 0;
-                    const hasChatTokens = approvedChatTokens > 0;
-
-                    if (hasProfileTokens && hasChatTokens) {
-                        const half = Math.ceil(agenticResponseTokens / 2);
-                        profileKbTokens += (agenticResult.profileKbTokens || 0) + half;
-                        chatKbTokens += approvedChatTokens + (agenticResponseTokens - half);
-                    } else if (hasChatTokens) {
-                        profileKbTokens += (agenticResult.profileKbTokens || 0);
-                        chatKbTokens += approvedChatTokens + agenticResponseTokens;
-                    } else {
-                        profileKbTokens += (agenticResult.profileKbTokens || 0) + agenticResponseTokens;
-                        chatKbTokens += approvedChatTokens;
-                    }
+                    chatKbTokens += narrativeTokens;
 
                     agenticRagResponse = agenticResult.agenticResponse;
                     agenticRagContextGathered = [
-                        approvedContext,
+                        gathered,
                         planned ? formatContextPlanDebug(planned.plan) : '',
                         formatContextBundleDebug(planned)
                     ].filter(Boolean).join('\n\n');
@@ -750,10 +958,15 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     retrievalFunnel = agenticResult.selection || null;
                 }
             } else {
-                let chatKbChunks = [];
-                let chatMemories = [];
+                if (plannerAvailable) {
+                    lastAgenticTrajectory = { gate: { path: 'deterministic', reason: plannerGate.reason }, turns: [] };
+                }
+                const retrievalItems = [];
+                const narrativeItems = [];
                 let searchQuery = currentInput;
-                const results = await searchKnowledgeBase(searchQuery, profile.id);
+                // Profile knowledge, workspace files and archived memory share the budget.
+                const topK = retrievalTopK(0, retrievalBudget, { tiers: RETRIEVAL_TIERS });
+                const results = await searchKnowledgeBase(searchQuery, profile.id, { k: topK });
                 standardRagDebug += formatRagDebugSection('PROFILE KB', results);
                 if (results && results.length > 0) {
                     let constantSnippetTitles = [];
@@ -762,118 +975,70 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                             .map(c => (c.title || '').toLowerCase());
                     } catch (e) { }
 
-                    searchableResults = results
-                        .filter(r => {
-                            const fileMatch = knowledgeFiles.find(f => f.name.toLowerCase() === r.source.toLowerCase());
-                            if (fileMatch && (fileMatch.strategy === 'constant' || fileMatch.strategy === 'full_context')) {
-                                return false;
-                            }
-                            if (constantSnippetTitles.includes(r.source.toLowerCase())) {
-                                return false;
-                            }
-                            return true;
-                        });
-                    searchableResults = Array.from(
-                        new Map(searchableResults.map(result => [result.text, result])).values()
-                    );
+                    const profileResults = results.filter(r => {
+                        const fileMatch = knowledgeFiles.find(f => f.name.toLowerCase() === r.source.toLowerCase());
+                        if (fileMatch && (fileMatch.strategy === 'constant' || fileMatch.strategy === 'full_context')) {
+                            return false;
+                        }
+                        if (constantSnippetTitles.includes(r.source.toLowerCase())) {
+                            return false;
+                        }
+                        return true;
+                    });
+                    pushRetrievalItems(retrievalItems, profileResults, profileRetrievalHeader, 'profile');
                 }
 
                 if (includeChatContext && chat) {
-                    const chatKbResults = await searchChatKnowledgeBase(currentInput, chatId);
+                    const chatKbResults = await searchChatKnowledgeBase(currentInput, chatId, { k: topK });
                     if (chatKbResults && chatKbResults.length > 0) {
                         const chatKbFiles = typeof chat.knowledgeFiles === 'string'
                             ? JSON.parse(chat.knowledgeFiles)
                             : (chat.knowledgeFiles || []);
-                        chatKbChunks = filterWorkspaceKnowledgeResults(
-                            chatKbResults,
-                            chatKbFiles,
-                            profile.id
+                        routeRetrievedResults(
+                            filterWorkspaceKnowledgeResults(chatKbResults, chatKbFiles, profile.id),
+                            { retrievalItems, narrativeItems: planWorkspaceContext ? narrativeItems : null, section: CHAT_RETRIEVAL_HEADER, kind: 'workspace-text' }
                         );
                     }
-                    standardRagDebug += formatRagDebugSection('CHAT KB', chatKbChunks);
+                    standardRagDebug += formatRagDebugSection('CHAT KB', chatKbResults);
                 }
 
                 if (includeChatContext && chat) {
-                    const memoryResults = await searchChatMemories(currentInput, chatId);
+                    const memoryResults = await searchChatMemories(currentInput, chatId, { k: topK });
                     if (memoryResults && memoryResults.length > 0) {
                         const blocksList = typeof chat.memoryBlocks === 'string'
                             ? JSON.parse(chat.memoryBlocks)
                             : (chat.memoryBlocks || []);
-                        chatMemories = filterWorkspaceMemoryResults(
-                            memoryResults,
-                            blocksList,
-                            profile.id
+                        routeRetrievedResults(
+                            expandMemoryResults(filterWorkspaceMemoryResults(memoryResults, blocksList, profile.id), chatId),
+                            { retrievalItems, narrativeItems: planWorkspaceContext ? narrativeItems : null, section: MEMORY_RETRIEVAL_HEADER, kind: 'workspace-memory' }
                         );
                     }
-                    standardRagDebug += formatRagDebugSection('CHAT MEMORY', chatMemories);
+                    standardRagDebug += formatRagDebugSection('CHAT MEMORY', memoryResults);
                 }
 
-                const standardEntries = [
-                    ...searchableResults.map(result => ({
-                        key: `profile:${result.id}`,
-                        kind: 'profile-knowledge',
-                        source: result.source,
-                        content: result.text,
-                        relevance: result.fusionScore ?? result.score
-                    })),
-                    ...chatKbChunks.map(result => ({
-                        key: `workspace-text:${result.id}`,
-                        kind: 'workspace-text',
-                        source: result.source,
-                        content: result.text,
-                        relevance: result.fusionScore ?? result.score
-                    })),
-                    ...chatMemories.map(result => ({
-                        key: `workspace-memory:${result.id}`,
-                        kind: 'workspace-memory',
-                        source: result.source,
-                        content: result.text,
-                        relevance: result.fusionScore ?? result.score
-                    }))
-                ];
-                const standardSelection = selectRetrievedEntries(currentInput, standardEntries);
-                const selectedStandardKeys = new Set(standardSelection.selected.map(entry => entry.key));
-                searchableResults = searchableResults.filter(result => selectedStandardKeys.has(`profile:${result.id}`));
-                chatKbChunks = chatKbChunks.filter(result => selectedStandardKeys.has(`workspace-text:${result.id}`));
-                chatMemories = chatMemories.filter(result => selectedStandardKeys.has(`workspace-memory:${result.id}`));
-                searchableChunks = searchableResults.map(result => result.text);
-                profileKbTokens += estimateTokens(searchableChunks.join('\n\n'));
-                retrievalFunnel = standardSelection.funnel;
-                if (searchableChunks.length > 0) {
-                    const profileLabel = isRoleplayWorkspace
-                        ? 'NARRATOR REFERENCE: PROFILE RETRIEVAL'
-                        : 'PROFILE RELEVANT RETRIEVED KNOWLEDGE';
-                    contextBlock += `\n\n--- ${profileLabel} ---\n${searchableChunks.join('\n\n')}\n`;
+                // Duplicates are removed across both paths before anything is packed or planned.
+                const selection = selectRetrievedEntries(currentInput, [
+                    ...retrievalItems.map(item => ({ key: item, kind: item.origin === 'profile' ? 'profile-knowledge' : 'workspace-text', source: item.source, content: item.text })),
+                    ...narrativeItems.map(item => ({ key: item, kind: item.kind, source: item.source, content: item.content }))
+                ]);
+                const selectedItems = new Set(selection.selected.map(entry => entry.key));
+                retrievalFunnel = selection.funnel;
+                const packed = packContextItems(retrievalItems.filter(item => selectedItems.has(item)), retrievalBudget, { estimate: estimateTokens });
+                retrievalOmitted += packed.dropped + packed.truncated;
+                for (const section of [profileRetrievalHeader, CHAT_RETRIEVAL_HEADER, MEMORY_RETRIEVAL_HEADER]) {
+                    const texts = packed.kept.filter(item => item.section === section).map(item => item.text);
+                    if (texts.length === 0) continue;
+                    contextBlock += `\n\n${section}\n${texts.join('\n\n')}\n`;
+                    const sectionTokens = estimateTokens(texts.join('\n\n'));
+                    if (section === profileRetrievalHeader) profileKbTokens += sectionTokens;
+                    else chatKbTokens += sectionTokens;
                 }
-                const kanoraItems = [
-                    ...chatKbChunks.map(r => ({
-                        id: r.id,
-                        kind: 'workspace-text',
-                        source: r.source,
-                        content: r.text,
-                        relevance: r.fusionScore ?? r.score
-                    })),
-                    ...chatMemories.map(r => ({
-                        id: r.id,
-                        kind: 'workspace-memory',
-                        source: r.source,
-                        content: r.text,
-                        relevance: r.fusionScore ?? r.score
-                    }))
-                ];
                 if (planWorkspaceContext) {
-                    const kanoraBudget = getAvailableHistoryTokens({
-                        maxPayloadTokens: maxContextTokens,
-                        systemPrompt: composeSystemPrompt() + attachmentsPayloadContext,
-                        newPrompt: currentInput,
-                        attachedImageCount: i === 0 ? attachedImages.length : 0,
-                        outputTokens: profile.maxTokens ?? 1000
-                    });
                     const planned = planKanoraContext({
                         chatId,
                         query: currentInput,
-                        items: kanoraItems,
-                        tokenBudget: kanoraBudget
+                        items: narrativeItems.filter(item => selectedItems.has(item)),
+                        tokenBudget: Math.max(0, retrievalBudget - packed.usedTokens)
                     });
                     if (planned.manifest?.requestId) narrativeContextRequestId = planned.manifest.requestId;
                     contextBundleDiagnostic = serializeContextBundle(planned);
@@ -894,24 +1059,16 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             const inputTokens = estimateTokens(currentInput);
             const systemTokens = estimateTokens(compiledSystemPrompt);
             const narrativeContextTokens = Math.max(0, systemTokens - systemInstructionsTokens);
-            const remainingTokens = getAvailableHistoryTokens({
-                maxPayloadTokens: maxContextTokens,
-                systemPrompt: compiledSystemPrompt,
-                newPrompt: currentInput,
-                attachedImageCount: i === 0 ? attachedImages.length : 0,
-                outputTokens: profile.maxTokens ?? 1000
-            });
+            const measuredSystemPrompt = resolveVariables(compiledSystemPrompt);
+            // Measured against the prompt actually sent, so the request always fits.
+            const remainingTokens = getAvailableHistoryTokens({ ...budgetInput, systemPrompt: measuredSystemPrompt });
 
             let chatHistory = [];
             if (i === 0 || includeChatHistory) {
-                let historySource = activeMessages;
-                if (i === 0) {
-                    const last = activeMessages[activeMessages.length - 1];
-                    if (last && last.role === 'user') {
-                        historySource = activeMessages.slice(0, -1);
-                    }
-                }
-                chatHistory = formatActiveHistory(historySource, remainingTokens, historyCacheScopeId);
+                const selection = selectActiveHistory(historySource, remainingTokens, historyCacheScopeId);
+                chatHistory = selection.history;
+                historySent = Math.max(historySent, chatHistory.length);
+                historyDropped = Math.max(historyDropped, selection.dropped);
             }
 
             let historyMessagesTokens = 0;
@@ -920,9 +1077,17 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             });
             chatHistoryTokens += historyMessagesTokens;
             const totalInputTokens = systemTokens + inputTokens + historyMessagesTokens;
+            const payloadBreakdown = {
+                fixed: fixedTokens,
+                retrieved: Math.max(0, estimateTokens(measuredSystemPrompt) - fixedTokens),
+                history: historyMessagesTokens
+            };
 
             let success = false;
             let stepOutput = '';
+            let stepTruncated = false;
+            let stepFinishReason = null;
+            let stepLearnedRatio = null;
 
             while (!success) {
                 if (currentRun.isCancelled) {
@@ -946,6 +1111,11 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                         temperature: profile.temperature,
                         maxTokens: profile.maxTokens,
                         maxPayloadTokens: maxContextTokens,
+                        // History and retrieval were sized on this limit; the final check must use the same one.
+                        payloadLimit: stepLimit,
+                        payloadBreakdown,
+                        learnTokenCount: true,
+                        includeResponseMetadata: true,
                         manualMode: profile.manualMode === 1,
                         manualJson: profile.manualJson,
                         abortSignal: currentRun.controller.signal,
@@ -971,8 +1141,9 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
 
                     // Only the final, user-facing generation streams; intermediate
                     // workflow steps are plumbing and stay non-streaming.
+                    let result;
                     if ((i === steps.length - 1) && isStreamingEnabled()) {
-                        stepOutput = await sendApiRequestStream(
+                        result = await sendApiRequestStream(
                             genParams,
                             (delta) => {
                                 sendRunEvent(webContents, 'stream:token', currentRun, {
@@ -987,8 +1158,15 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                             return { success: false, cancelled: true };
                         }
                     } else {
-                        stepOutput = await sendApiRequest(genParams);
+                        result = await sendApiRequest(genParams);
                     }
+                    stepOutput = typeof result === 'string' ? result : String(result?.content || '');
+                    if (!stripReasoning(stepOutput).trim()) {
+                        throw emptyResponseError(result?.finishReason, stepOutput);
+                    }
+                    stepTruncated = Boolean(result?.truncated);
+                    stepFinishReason = result?.finishReason ?? null;
+                    stepLearnedRatio = result?.learnedTokenRatio ?? null;
                     success = true;
                 } catch (apiError) {
                     if (apiError.name === 'AbortError' || currentRun.isCancelled) {
@@ -996,11 +1174,13 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     }
                     console.error(`API Error in step ${i + 1} (${profile.name}):`, apiError);
 
+                    // Retrying a request that failed the payload check sends the same
+                    // payload again, so that error only offers to close.
                     sendRunEvent(webContents, 'workflow-error', currentRun, {
                         step: i + 1,
                         profileName: profile.name,
                         errorMessage: apiError.message || 'API request failed.',
-                        retryable: true,
+                        retryable: apiError.retryable !== false && apiError.code !== 'MAX_API_PAYLOAD_EXCEEDED',
                         isWorkflow: isWorkflow
                     });
 
@@ -1036,11 +1216,10 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                 }
             }
 
-            // A large intermediate output would crowd the next step's context, so past roughly
-            // 4,000 tokens (16,000 characters) the run pauses and asks what to do with it. The
-            // last step is exempt: its output goes to the user, not into another prompt.
+            // Past about 4,000 tokens an intermediate output would crowd the next step, so the run
+            // pauses and asks. The last step is exempt: its output goes to the user.
             const isLastStep = (i === steps.length - 1);
-            if (estimateTokens(stepOutput) > 4000 && !isLastStep) {
+            if (estimateTokens(stripReasoning(stepOutput)) > 4000 && !isLastStep) {
                 sendRunEvent(webContents, 'workflow-context-overflow', currentRun, {
                     step: i + 1,
                     profileName: profile.name,
@@ -1056,8 +1235,20 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                 }
             }
 
-            currentInput = stepOutput;
+            // The next step reads the reply, not the reasoning behind it.
+            currentInput = stripReasoning(stepOutput);
             finalOutput = stepOutput;
+            if (isLastStep) {
+                finalTruncated = stepTruncated;
+                finalFinishReason = stepFinishReason;
+                finalPayloadLimit = {
+                    limit: stepLimit.limit,
+                    configured: stepLimit.configured,
+                    ratio: stepLimit.ratio,
+                    source: stepLimit.source,
+                    learnedRatio: stepLearnedRatio
+                };
+            }
 
             lastAgenticRagResponse = agenticRagResponse;
             lastAgenticRagContextGathered = agenticRagContextGathered;
@@ -1087,27 +1278,36 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             let roleplayChanges = [];
 
             const legacyTokens = {
-                    knowledgeBase: totalProfileKbTokens + totalChatKbTokens,
-                    profileKb: totalProfileKbTokens,
-                    chatKb: totalChatKbTokens,
-                    chatHistory: totalChatHistoryTokens,
-                    totalInput: totalMainInputTokens,
-                    output: totalOutputTokens,
-                    agenticInput: totalAgenticInputTokens,
-                    agenticOutput: totalAgenticOutputTokens
-                };
+                knowledgeBase: totalProfileKbTokens + totalChatKbTokens,
+                profileKb: totalProfileKbTokens,
+                chatKb: totalChatKbTokens,
+                chatHistory: totalChatHistoryTokens,
+                totalInput: totalMainInputTokens,
+                output: totalOutputTokens,
+                agenticInput: totalAgenticInputTokens,
+                agenticOutput: totalAgenticOutputTokens
+            };
+            // Stored on every AI message and read per visible message, so retrieved text is kept
+            // only while its debug panel is on, and capped.
+            const keepAgenticText = Boolean(debugSettings.agenticDebug);
+            const keepRetrievalText = Boolean(debugSettings.ragDebug);
             let debugObj = createMessageDiagnostics({
                 workflowStatus: isWorkflow ? `Workflow complete (${steps.length} steps)` : '',
                 legacy: {
-                    agenticRagResponse: lastAgenticRagResponse,
-                    agenticRagContextGathered: lastAgenticRagContextGathered,
-                    standardRagContextGathered: lastStandardRagDebug,
+                    ...(keepAgenticText ? {
+                        agenticRagResponse: capDebugText(lastAgenticRagResponse),
+                        agenticRagContextGathered: capDebugText(lastAgenticRagContextGathered),
+                        ...(lastAgenticTrajectory ? { agenticTrajectory: lastAgenticTrajectory } : {})
+                    } : {}),
+                    ...(keepRetrievalText ? { standardRagContextGathered: capDebugText(lastStandardRagDebug) } : {}),
+                    context: { historySent, historyDropped, retrievalOmitted, agenticDegraded, retrievalPath, retrievalGateReason, payloadLimit: finalPayloadLimit },
+                    ...(finalTruncated ? { truncated: true, finishReason: finalFinishReason } : {}),
                     tokens: legacyTokens
                 },
                 generation: {
                     profileName: lastProfileUsed.name,
                     context: {
-                        exactText: lastFinalContextText,
+                        ...(keepRetrievalText ? { exactText: capDebugText(lastFinalContextText) } : {}),
                         exactTokens: estimateTokens(lastFinalContextText),
                         workflowContextTokens: totalNarrativeContextTokens,
                         manifestRequestId: lastNarrativeContextRequestId
@@ -1117,16 +1317,18 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                 },
                 retrieval: {
                     mode: lastRetrievalMode,
-                    retrievedSourcesText: lastRetrievalMode === 'agentic'
-                        ? lastAgenticRagContextGathered
-                        : lastStandardRagDebug,
-                    finalContextText: lastFinalContextText,
+                    ...(keepRetrievalText ? {
+                        retrievedSourcesText: capDebugText(lastRetrievalMode === 'agentic'
+                            ? lastAgenticRagContextGathered
+                            : lastStandardRagDebug),
+                        finalContextText: capDebugText(lastFinalContextText)
+                    } : {}),
                     bundle: lastContextBundle,
                     selection: lastRetrievalFunnel
                 },
                 agentic: lastAgenticTrace ? {
                     ...lastAgenticTrace,
-                    contextText: lastAgenticRagContextGathered,
+                    ...(keepAgenticText ? { contextText: capDebugText(lastAgenticRagContextGathered) } : {}),
                     usage: {
                         input: totalAgenticInputTokens,
                         output: totalAgenticOutputTokens
@@ -1243,7 +1445,16 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             return { success: true, aiMsgId, streamed: didStreamFinalResponse };
         }
 
-        return { success: true };
+        // Every step either produced text or raised an error above; this only keeps an
+        // empty result from ever being reported as success.
+        sendRunEvent(webContents, 'workflow-error', currentRun, {
+            step: steps.length,
+            profileName: lastProfileUsed?.name || 'Generation',
+            errorMessage: 'The provider returned an empty reply. Nothing was saved, and the conversation is unchanged.',
+            retryable: false,
+            isWorkflow: isWorkflow
+        });
+        return { success: false, error: 'empty-response' };
 
     } catch (e) {
         if (e.name === 'AbortError' || currentRun.isCancelled) {
@@ -1284,127 +1495,6 @@ function resolveOverflowDeferred(decision, editedText, runId = null) {
 }
 
 // --- HYBRID SEARCH Fallback / Helpers ---
-
-// A per-call fenced marker for the structured-items block, so the model can't
-// collide with content. Random suffix, ASCII so it survives any provider.
-function buildItemsFence() {
-    const s = crypto.randomBytes(3).toString('hex');
-    return { open: `<<ITEMS_${s}>>`, close: `<</ITEMS_${s}>>` };
-}
-
-// Tolerant: grab the first [...] block and JSON.parse it. Any failure -> [].
-function safeParseArray(body) {
-    if (!body) return [];
-    try {
-        const start = body.indexOf('[');
-        const end = body.lastIndexOf(']');
-        if (start === -1 || end === -1 || end < start) return [];
-        const parsed = JSON.parse(body.slice(start, end + 1));
-        return Array.isArray(parsed) ? parsed : [];
-    } catch (e) { return []; }
-}
-
-// Validate the per-chunk tag array from the classifier. Keep only known categories
-// and in-range chunk indices; explode each category's value list into {tag, value}
-// pairs (create-off: unknown categories dropped). Returns [{chunkIndex, tags:[{tag,value}]}].
-// Turn the collected rejections into a sentence that names the dominant cause and
-// shows examples, so the failure points at something actionable.
-function describeTagRejections(rejections) {
-    const counts = new Map();
-    const samples = new Map();
-    for (const entry of rejections) {
-        counts.set(entry.reason, (counts.get(entry.reason) || 0) + 1);
-        if (!samples.has(entry.reason)) samples.set(entry.reason, entry.detail);
-    }
-    const wording = {
-        'unknown-category': (n, sample) => `${n} used a category this workspace does not have (for example "${sample}")`,
-        'no-name': (n) => `${n} carried no name`,
-        'evidence-not-found': (n, sample) => `${n} quoted text that is not in the chunk (for example "${sample}")`
-    };
-    const parts = [];
-    for (const [reason, count] of [...counts.entries()].sort((a, b) => b[1] - a[1])) {
-        const describe = wording[reason];
-        if (describe) parts.push(describe(count, samples.get(reason)));
-    }
-    return parts.join('; ');
-}
-
-// `rejections` collects why each mention was dropped. Without it the failure
-// message could only say "category and evidence validation", which names two very
-// different problems and points at neither: an unknown category means the model
-// answered with a type this workspace does not have, while unmatched evidence
-// means it did not quote the chunk. The fixes are opposites.
-function validateChunkTags(arr, categories, chunkRecords, rejections = null) {
-    const reject = (reason, detail) => {
-        if (rejections) rejections.push({ reason, detail });
-    };
-    const chunkCount = Array.isArray(chunkRecords) ? chunkRecords.length : Number(chunkRecords) || 0;
-    // Tolerates the label the model actually writes (singular for plural, casing,
-    // accents) while still only ever resolving to a category this workspace has.
-    const resolveCategory = buildCategoryResolver(categories);
-    const out = [];
-    for (const entry of (Array.isArray(arr) ? arr : [])) {
-        if (!entry || typeof entry !== 'object') continue;
-        const idx = Number(entry.chunk);
-        if (!Number.isInteger(idx) || idx < 0 || idx >= chunkCount) continue;
-        const tags = [];
-        const chunkText = Array.isArray(chunkRecords) ? String(chunkRecords[idx]?.text || '') : '';
-        for (const mention of (Array.isArray(entry.mentions) ? entry.mentions : [])) {
-            const rawType = String(mention && (mention.type || mention.tag) || '').trim();
-            const name = resolveCategory(rawType);
-            const value = String(mention && (mention.canonicalName || mention.value || mention.text) || '').trim();
-            // Store the excerpt the chunk actually supports, not everything the
-            // model offered: it may answer with several, only some of them real.
-            const evidence = matchedEvidence(chunkText, mention && mention.evidence);
-            if (!name) { reject('unknown-category', rawType || '(empty)'); continue; }
-            if (!value) { reject('no-name', rawType); continue; }
-            if (!evidence) { reject('evidence-not-found', evidenceText(mention && mention.evidence).slice(0, 160)); continue; }
-            const proposalKind = String(mention && mention.proposalKind || '').trim().toLowerCase();
-            tags.push({ tag: name, value, evidence, proposalKind });
-        }
-        for (const rt of (Array.isArray(entry.tags) ? entry.tags : [])) {
-            const name = resolveCategory(rt && rt.tag);
-            if (!name) continue;
-            const values = Array.isArray(rt.values) ? rt.values : (rt.value ? [rt.value] : []);
-            for (const v of values) {
-                const val = String(v == null ? '' : v).trim();
-                if (val && val.toLowerCase() !== 'null') tags.push({ tag: name, value: val });
-            }
-        }
-        if (tags.length) out.push({ chunkIndex: idx, tags });
-    }
-    return out;
-}
-
-// Split the model reply into title + summary (the pre-fence head) and the raw body
-// (the fenced JSON, or any trailing array if the fence is missing). Tolerant.
-function splitHeadAndBody(response, fence) {
-    const raw = String(response || '');
-    const openIdx = raw.indexOf(fence.open);
-
-    let body = '';
-    let headEnd;
-    if (openIdx !== -1) {
-        const afterOpen = openIdx + fence.open.length;
-        const closeIdx = raw.indexOf(fence.close, afterOpen);
-        body = raw.slice(afterOpen, closeIdx === -1 ? undefined : closeIdx);
-        headEnd = openIdx;
-    } else {
-        const firstBracket = raw.indexOf('[');
-        body = firstBracket === -1 ? '' : raw.slice(firstBracket);
-        headEnd = firstBracket === -1 ? raw.length : firstBracket;
-    }
-
-    const head = raw.slice(0, headEnd);
-    const lines = head.split('\n');
-    let title = 'Archived Memory';
-    let summary = head.trim();
-    if (lines[0] && lines[0].toUpperCase().startsWith('TITLE:')) {
-        title = lines[0].substring(6).trim() || title;
-        summary = lines.slice(1).join('\n').trim();
-    }
-    return { title, summary, body };
-}
 
 // The designated System AI (api profile + model) for background tasks, read from
 // global settings. Both fields are required so a provider never picks a default model.
@@ -1461,6 +1551,17 @@ function getRoleExecutor(roleId, profile = null) {
     return resolveAiEngineRole(roleId, { profile });
 }
 
+// Can only downgrade to the deterministic path, which still fills the context.
+function resolvePlannerGate(chatId, request, { includeChatContext = true, force = false } = {}) {
+    let entities = [];
+    try {
+        entities = includeChatContext ? entitiesStore.listEntities({ workspaceId: chatId }) : [];
+    } catch (e) { entities = []; }
+    const mentionedIds = entityMentionIds(request, entities);
+    const decision = shouldRunPlanner(request, { entityMentions: mentionedIds.size, force });
+    return { ...decision, entities, mentionedIds };
+}
+
 function isChatArchiveSummarizationEnabled() {
     return readAdvancedSettings().archiveSummarization !== false;
 }
@@ -1470,9 +1571,7 @@ function getSystemLanguageInstruction() {
     return `Write all generated natural-language content in ${language}. Never translate or transliterate proper nouns, canonical names, titles used as names, identifiers, JSON keys, enum values, control markers, or verbatim evidence. Keep each of them exactly as supplied.`;
 }
 
-// Render a workspace's entity registry as a prompt block so the classifier reuses
-// existing canonical names (and maps titles/variants to them) instead of coining
-// inconsistent values. Empty string when the registry has no entities yet.
+// Lets the classifier reuse canonical names instead of coining variants.
 const { edgeDetail } = require('./features/worldbuild/relation-dossier');
 function buildEntityVocab(workspaceId, sourceText = '') {
     if (!workspaceId) return '';
@@ -1480,12 +1579,12 @@ function buildEntityVocab(workspaceId, sourceText = '') {
     try { rows = db.prepare('SELECT type, canonicalName, aliases FROM entities WHERE workspaceId IS ?').all(workspaceId); } catch (e) { return ''; }
     if (!rows.length) return '';
     const byType = new Map();
-    const normalizedSource = entitiesStore.normalizeName(sourceText);
+    const normalizedSource = foldText(sourceText);
     for (const r of rows) {
         let aliases = [];
         try { const a = JSON.parse(r.aliases); if (Array.isArray(a)) aliases = a; } catch (e) { }
         if (normalizedSource) {
-            const names = [r.canonicalName, ...aliases].map(entitiesStore.normalizeName).filter(Boolean);
+            const names = [r.canonicalName, ...aliases].map(foldText).filter(Boolean);
             if (!names.some(name => normalizedSource.includes(name))) continue;
         }
         const label = aliases.length ? `${r.canonicalName} [aka ${aliases.join(', ')}]` : r.canonicalName;
@@ -1497,20 +1596,11 @@ function buildEntityVocab(workspaceId, sourceText = '') {
     return "Known entities (prefer these canonical names; map any variant or title to the canonical form):\n" + lines.join('\n');
 }
 
-// Map a classifier's surface mention to a canonical entity id within a workspace.
-// Returns null on a miss, the tagger only tags entities that already exist in the
-// Worldbuild registry, so unknown names are dropped rather than proposed or stored
-// as loose literal text.
 function resolveEntity(workspaceId, type, value) {
     return entitiesStore.resolveMention(value, type, workspaceId) || null;
 }
 
-// World-index pass: ONE System-AI call over a segment's numbered raw chunks. Returns
-// the block's title + summary AND the per-chunk dynamic tags (which named entities,
-// under which variable category, appear in each chunk). Variable categories = the
-// entity-bearing vocabulary; their descriptions are the classifier criteria.
-// Provider errors often arrive as a JSON string (e.g. '{"message":"..."}'); unwrap
-// to the human-readable text so the toast doesn't show raw JSON.
+// Provider errors often arrive as a JSON string; unwrap to readable text.
 function cleanErrorMessage(error) {
     let msg = (error && error.message) ? error.message : String(error || 'Unknown error');
     const brace = msg.indexOf('{');
@@ -1524,12 +1614,8 @@ function cleanErrorMessage(error) {
     return msg;
 }
 
-// The entity tagger fails silently by design (a broken pass never blocks the chat,
-// summarization, or a document save). But when a System AI IS configured, a silent
-// failure misleads the user into thinking indexing/tagging ran. Notify every time it
-// fails, so a failure that slipped by once is still caught the next time. The renderer
-// keeps a single toast (later sends just refresh it), so repeats don't stack. Broadcast
-// to every window since the main window is not guaranteed to be index 0.
+// Tagging never blocks the caller, so a failure must be announced or it looks like
+// it ran. The renderer dedupes the toast; every window, as the main one isn't index 0.
 function notifyTaggingFailure(error) {
     try {
         const { BrowserWindow } = require('electron');
@@ -1542,15 +1628,6 @@ function notifyTaggingFailure(error) {
     } catch (e) { /* no window (headless/tests): nothing to notify */ }
 }
 
-// Batches are independent, and each one is mostly time spent waiting on the
-// provider rather than work being done here. Running a few at once overlaps that
-// waiting. Kept low on purpose: this is exactly the shape that earns a 429, so it
-// only pays off together with the backoff below.
-const TAGGER_CONCURRENCY = 3;
-
-// Retry a rate-limited call with growing waits. Same policy the World Index
-// backfill has always used; without it, concurrency would trade time for lost
-// batches.
 async function sendTaggerRequest(payload, tries = 5) {
     let delay = 2000;
     for (let attempt = 1; attempt <= tries; attempt++) {
@@ -1566,159 +1643,74 @@ async function sendTaggerRequest(payload, tries = 5) {
     }
 }
 
-// Run `worker` over every item, never more than `limit` in flight. Results keep
-// the input order regardless of which call finishes first.
-async function mapWithConcurrency(items, limit, worker) {
-    const results = new Array(items.length);
-    let next = 0;
-    const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
-        while (true) {
-            const index = next++;
-            if (index >= items.length) return;
-            results[index] = await worker(items[index], index);
-        }
-    });
-    await Promise.all(runners);
-    return results;
-}
+// Names first, without a model; then the Tagger only for what names cannot settle.
+// Every chunk must end completed or failed in world_index_chunk_status, with its real tag count.
+async function tagChunkRecords(records, workspaceId, { runId = null, onProgress = null, notify = true, matcher = null } = {}) {
+    const list = (Array.isArray(records) ? records : []).filter(record => record && record.id);
+    const result = { taggedRecords: [], failedRecords: [], nameRows: 0, modelRows: 0, error: null, failed: false, skipped: false };
+    if (!list.length) return result;
 
-async function classifyAndTagSegment(chunkRecords, profile, workspaceId = null, onProgress = null, { notify = true } = {}) {
-    let title = 'Archived Memory';
-    let summary = '';
-    let chunkTags = [];
+    const names = workspaceId ? (matcher || createNameMatcher(db, workspaceId)) : { empty: true, entities: [] };
+    const found = applyNameTags(db, workspaceId, list, { matcher: names });
+    result.nameRows = found.rows;
 
     const tagger = getRoleExecutor(ROLE_IDS.TAGGER);
-    if (!tagger.executor) return { title, summary, chunkTags, failed: Boolean(tagger.error), error: tagger.error };
-    const { apiProfileId, model } = tagger.executor;
-    const manualMode = false;
-    const manualJson = null;
+    if (!tagger.executor) {
+        if (onProgress) onProgress(list.length, list.length);
+        if (!tagger.error) return { ...result, skipped: true };
+        saveChunkStatus(db, list, 'failed', { runId, error: tagger.error });
+        if (notify) notifyTaggingFailure(new Error(tagger.error));
+        return { ...result, failedRecords: list, error: tagger.error, failed: true };
+    }
 
     let categories = [];
     try { categories = db.prepare('SELECT name, description FROM tags WHERE isEntity = 1').all(); } catch (e) { categories = []; }
-
-    const catLines = categories.length
-        ? categories.map(c => `- ${c.name}: ${c.description}`).join('\n')
-        : '- Characters: People, beings, or named agents present in the scene.';
-
-    // Archiving a whole history used to go up in a single request: tens of
-    // thousands of tokens in, one 4096-token answer expected back. That was slow
-    // when it worked and truncated when it did not, which is how an archive ended
-    // up stored with no tags at all. createTaggerBatches is the shared policy, so
-    // every tagging path in the app sizes its calls the same way.
-    let offset = 0;
-    const batches = createTaggerBatches(chunkRecords).map(records => {
-        const entry = { start: offset, records };
-        offset += records.length;
-        return entry;
+    const labels = new Map((names.entities || []).map(entity => [entity.id, entity.canonicalName]));
+    const hints = new Map([...found.detected].map(([id, mentions]) => [id, mentions.map(mention => labels.get(mention.entityId)).filter(Boolean)]));
+    const candidates = new Map(names.empty ? [] : list.map(record => [record.id,
+        findCandidateMentions(record.text, names.index, { lowercaseWords: names.lowercaseWords })
+            .map(candidate => `${candidate.surface} -> ${candidate.entities.map(entity => `${labels.get(entity.entityId)} (${entity.type})`).join(' or ')}`)]));
+    const { apiProfileId, model } = tagger.executor;
+    const outcome = await runModelTagger({
+        records: list,
+        detected: hints,
+        candidates,
+        categories,
+        vocabFor: text => buildEntityVocab(workspaceId, text),
+        languageInstruction: getSystemLanguageInstruction(),
+        send: payload => sendTaggerRequest({ apiProfileId, model, chatHistory: [], manualMode: false, manualJson: null, ...payload }),
+        onProgress
     });
 
-    // One failed batch no longer costs the whole archive its tags. Whatever came
-    // back is kept, and the first error is reported so the caller can say the pass
-    // was incomplete and offer the re-index.
-    let firstError = null;
-    let chunksDone = 0;
+    const applied = applyChunkTags(outcome.chunkTags, list, workspaceId, { lowercaseWords: names.lowercaseWords });
+    result.modelRows = applied.rows;
+    if (applied.created.length && workspaceId) refreshWorkspaceNameTags(db, workspaceId, { entityIds: applied.created });
 
-    const runBatch = async ({ start, records }, batchIndex) => {
-        const numbered = records.map((c, i) => `[CHUNK ${i}]\n${c.text}`).join('\n\n');
-        const vocab = buildEntityVocab(workspaceId, numbered);
-        const systemPrompt =
-            getSystemLanguageInstruction() + "\n" +
-            "You tag a text segment that is split into numbered chunks.\n" +
-            "For EACH chunk, identify the specific persistent story entities explicitly named in the text. A persistent entity is something a user would reasonably find and reuse in a world bible.\n" +
-            catLines + "\n" +
-            (vocab ? vocab + "\n" : "") +
-            "Resolve titles, shortened names, and aliases to the supplied canonical name when the text supports that match. Never propose a name already present in Known entities, even under another category. Do not turn generic nouns, unnamed roles, pronouns, descriptive phrases, or ordinary objects into entities. A role alone (for example captain, duke, guard, blacksmith), a generic organization word (order, guild, army), or an ordinary object (sword, spear, cane, coat) is not an entity. Distinctive reusable world-specific items or materials (for example Dragon Mead or Salamander Leather) are valid item types even when they are not unique objects. When identity or category is ambiguous, omit the mention. Every mention must include a short verbatim evidence excerpt copied from that chunk. " +
-            "Use ONLY these category names; skip a chunk when it has no qualifying named entity. " +
-            "Return one valid JSON object and nothing else. Its exact shape is " +
-            "{\"items\": [{\"chunk\": <number>, \"mentions\": [{\"text\": \"<surface text>\", \"canonicalName\": \"<existing canonical name or exact explicit name>\", \"type\": \"<Category>\", \"proposalKind\": \"known|named|world_specific_type\", \"evidence\": \"<verbatim excerpt>\"}]}]}. " +
-            "Use proposalKind=known only for a supplied Known entity, named for a specific proper entity or unique named artifact, and world_specific_type only for a distinctive reusable Items type or material. Never use named for a generic role, category, or ordinary object. " +
-            "Use {\"items\": []} only when none of the chunks contains a qualifying named entity.";
-
-        const maxTokens = 4096;
-        const request = (prompt, repair = false) => sendTaggerRequest({
-            apiProfileId, model, systemPrompt,
-            chatHistory: [],
-            newPrompt: prompt,
-            temperature: repair ? 0 : 0.1,
-            maxTokens,
-            manualMode, manualJson,
-            jsonMode: true,
-            jsonSchema: TAGGER_RESPONSE_SCHEMA
-        });
-
-        try {
-            let response = await request(numbered);
-            let structured = parseTaggerResponse(response);
-            let rejections = [];
-            let validated = structured.valid ? validateChunkTags(structured.items, categories, records, rejections) : [];
-            const needsRepair = !structured.valid || (structured.items.length > 0 && validated.length === 0);
-            if (needsRepair) {
-                response = await request(
-                    `Repair the response below to the exact required JSON shape. Preserve only mentions supported by the original numbered chunks.\n\nORIGINAL CHUNKS:\n${numbered}\n\nINVALID RESPONSE:\n${String(response || '').slice(0, 12000)}`,
-                    true
-                );
-                structured = parseTaggerResponse(response);
-                rejections = [];
-                validated = structured.valid ? validateChunkTags(structured.items, categories, records, rejections) : [];
-            }
-            if (!structured.valid) throw new Error('The Tagger returned invalid structured JSON after one repair attempt.');
-            if (structured.items.length > 0 && validated.length === 0) {
-                const detail = describeTagRejections(rejections);
-                console.error('[World Index] every mention was rejected:', JSON.stringify(rejections.slice(0, 10), null, 2));
-                throw new Error(detail
-                    ? `The Tagger returned mentions, but none could be used: ${detail}.`
-                    : 'The Tagger returned mentions, but none could be used.');
-            }
-            // Chunk indexes come back relative to the batch; shift them onto the segment.
-            return { tags: validated.map(entry => ({ ...entry, chunkIndex: entry.chunkIndex + start })), error: null, records };
-        } catch (e) {
-            console.error(`[World Index] classify+tag failed on batch ${batchIndex + 1}/${batches.length}:`, e);
-            return { tags: [], error: e, records };
-        } finally {
-            // Reported in chunks, not batches: the caller announced the total in
-            // chunks before the first call, and switching units mid-run reads as a
-            // restart. Counted as batches complete, since they finish out of order.
-            chunksDone += records.length;
-            if (onProgress) onProgress(Math.min(chunksDone, chunkRecords.length), chunkRecords.length);
-        }
-    };
-
-    const outcomes = await mapWithConcurrency(batches, TAGGER_CONCURRENCY, runBatch);
-    const taggedRecords = [];
-    const failedRecords = [];
-    for (const outcome of outcomes) {
-        if (outcome.error) {
-            if (!firstError) firstError = outcome.error;
-            failedRecords.push(...outcome.records);
-            continue;
-        }
-        chunkTags.push(...outcome.tags);
-        taggedRecords.push(...outcome.records);
+    result.taggedRecords = list.filter(record => outcome.outcomes.get(record.id)?.status === 'completed');
+    result.failedRecords = list.filter(record => outcome.outcomes.get(record.id)?.status !== 'completed');
+    const rejected = new Map(result.taggedRecords.map(record => [record.id, outcome.outcomes.get(record.id).rejected]));
+    saveChunkStatus(db, result.taggedRecords, 'completed', { runId, rejected });
+    const byError = new Map();
+    for (const record of result.failedRecords) {
+        const error = cleanErrorMessage(outcome.outcomes.get(record.id)?.error || 'The Tagger could not process this passage.');
+        if (!byError.has(error)) byError.set(error, []);
+        byError.get(error).push(record);
     }
-
-    if (firstError) {
-        // Only surface when a System AI is configured: without one, tagging is
-        // intentionally off and this path only produced a title/summary. Callers
-        // that report the failure themselves pass notify:false, so the user does
-        // not get the same error in two toasts.
-        if (notify) notifyTaggingFailure(firstError);
-        return { title, summary, chunkTags, taggedRecords, failedRecords, failed: true, error: cleanErrorMessage(firstError) };
+    for (const [error, failed] of byError) saveChunkStatus(db, failed, 'failed', { runId, error });
+    if (byError.size) {
+        result.error = [...byError.keys()][0];
+        result.failed = true;
+        console.error(`[Tagger] ${result.failedRecords.length}/${list.length} passage(s) failed: ${result.error}`);
+        if (notify) notifyTaggingFailure(new Error(result.error));
     }
-    return { title, summary, chunkTags, taggedRecords, failedRecords };
+    return result;
 }
 
-// The recap is a card for the reader, never material the model writes from. The
-// transcript used to arrive as a bare user prompt, so a story-tuned model read it
-// as its own turn and continued the scene instead of describing it, and whatever
-// came back was stored verbatim. Everything below exists to make that impossible:
-// the transcript is fenced and labelled, and the reply is cut at the first sign
-// that the model started writing prose again.
+// Fenced so a story-tuned model describes the transcript instead of continuing it.
 const ARCHIVE_FENCE_OPEN = '<<<TRANSCRIPT';
 const ARCHIVE_FENCE_CLOSE = 'END TRANSCRIPT>>>';
 
-// A recap stops at the first heading, horizontal rule, or transcript-style role
-// prefix. None of those belong in two sentences of summary; they are what a model
-// writes once it has stopped summarizing and started narrating.
+// Headings, rules and role prefixes mean the model has started narrating.
 function trimArchiveRecap(text) {
     const lines = String(text || '').trim().split('\n');
     const kept = [];
@@ -1732,14 +1724,46 @@ function trimArchiveRecap(text) {
     return kept.join('\n').trim();
 }
 
-// A recap that is empty or still transcript-sized is not a recap. Showing nothing
-// is better than handing the user back their own story as its summary.
+// A transcript-sized recap is worse than none.
 function isUsableRecap(text) {
     const value = String(text || '').trim();
     return value.length >= 2 && value.length <= 1200;
 }
 
-async function summarizeArchiveSegment(rawText) {
+// Room for the fence, the instruction line and message framing around a segment.
+const ARCHIVE_PROMPT_OVERHEAD_TOKENS = 200;
+const ARCHIVE_RECAP_TOKENS = 500;
+
+function workspacePayloadLimit(chatId) {
+    try {
+        return normalizeMaxApiPayload(db.prepare('SELECT maxContext FROM chats WHERE id = ?').get(chatId)?.maxContext);
+    } catch (e) {
+        return normalizeMaxApiPayload(null);
+    }
+}
+
+// An entry larger than a whole segment is cut to fit, not dropped.
+function segmentTranscript(entries, budgetTokens) {
+    const segments = [];
+    let current = [];
+    let used = 0;
+    for (const entry of entries) {
+        const text = estimateTokens(entry) > budgetTokens ? truncateToTokens(entry, budgetTokens, estimateTokens) : entry;
+        const cost = estimateTokens(text) + PAYLOAD_BUDGET_CONTRACT.messageOverheadTokens;
+        if (current.length && used + cost > budgetTokens) {
+            segments.push(current.join('\n\n'));
+            current = [];
+            used = 0;
+        }
+        current.push(text);
+        used += cost;
+    }
+    if (current.length) segments.push(current.join('\n\n'));
+    return segments;
+}
+
+// Oversized archives are summarized per segment, then the cards are merged.
+async function summarizeArchiveSegment(transcript, { maxPayloadTokens = null } = {}) {
     const summarizer = getRoleExecutor(ROLE_IDS.SUMMARIZER);
     if (!summarizer.executor) return { title: 'Chat Archive', summary: '', skipped: true, error: summarizer.error };
 
@@ -1753,15 +1777,30 @@ async function summarizeArchiveSegment(rawText) {
         '<two sentences of plain prose covering the consequential facts, decisions, changes, and unresolved threads>\n' +
         'No headings, no lists, no markdown, no transcript excerpts, and no invented details.';
 
-    const request = (correction = false) => sendApiRequest({
+    const payloadLimit = resolvePayloadLimit({
+        apiProfileId: summarizer.executor.apiProfileId,
+        model: summarizer.executor.model,
+        maxPayloadTokens: normalizeMaxApiPayload(maxPayloadTokens)
+    });
+    const limit = payloadLimit.limit;
+    const segmentBudget = Math.max(
+        1024,
+        limit - estimateTokens(systemPrompt) - ARCHIVE_RECAP_TOKENS - safetyMarginFor(limit) - ARCHIVE_PROMPT_OVERHEAD_TOKENS
+    );
+    const entries = (Array.isArray(transcript) ? transcript : [String(transcript || '')])
+        .filter(entry => String(entry || '').trim());
+    const segments = segmentTranscript(entries, segmentBudget);
+
+    const request = (text, { correction = false, instruction = 'Write the archive card for the transcript above.' } = {}) => sendApiRequest({
         ...summarizer.executor,
         systemPrompt: correction
             ? `${systemPrompt}\nCORRECTION: your previous reply was not an archive card. Return only the TITLE line and two sentences.`
             : systemPrompt,
         chatHistory: [],
-        newPrompt: `${ARCHIVE_FENCE_OPEN}\n${rawText}\n${ARCHIVE_FENCE_CLOSE}\n\nWrite the archive card for the transcript above.`,
+        newPrompt: `${ARCHIVE_FENCE_OPEN}\n${text}\n${ARCHIVE_FENCE_CLOSE}\n\n${instruction}`,
         temperature: 0.1,
-        maxTokens: 500,
+        maxTokens: ARCHIVE_RECAP_TOKENS,
+        payloadLimit,
         manualMode: false,
         manualJson: null
     });
@@ -1776,10 +1815,31 @@ async function summarizeArchiveSegment(rawText) {
         };
     };
 
-    let parsed = read(await request());
-    if (!parsed.hasTitle || !isUsableRecap(parsed.summary)) {
-        const retry = read(await request(true));
-        if (isUsableRecap(retry.summary)) parsed = retry;
+    const cardFor = async (text, instruction) => {
+        let card = read(await request(text, { instruction }));
+        if (!card.hasTitle || !isUsableRecap(card.summary)) {
+            const retry = read(await request(text, { correction: true, instruction }));
+            if (isUsableRecap(retry.summary)) card = retry;
+        }
+        return card;
+    };
+
+    let parsed;
+    if (segments.length <= 1) {
+        parsed = await cardFor(segments[0] || '');
+    } else {
+        const cards = [];
+        for (const segment of segments) {
+            const card = await cardFor(segment);
+            if (isUsableRecap(card.summary)) cards.push(card);
+        }
+        if (!cards.length) return { title: 'Chat Archive', summary: '' };
+        const parts = cards.map((card, index) => `PART ${index + 1}: ${card.title}\n${card.summary}`).join('\n\n');
+        parsed = await cardFor(
+            parts,
+            'The transcript above lists archive cards for consecutive parts of one conversation. Write one archive card that covers all of them.'
+        );
+        if (!isUsableRecap(parsed.summary)) parsed = cards[cards.length - 1];
     }
 
     return {
@@ -1788,8 +1848,7 @@ async function summarizeArchiveSegment(rawText) {
     };
 }
 
-// Whether the "let the AI create unregistered entities" opt-in is on. Off by default,
-// so tagging stays confirmed-only unless the user turns it on in Engine & Memory.
+// Off by default: tagging is confirmed-only unless the user opts in.
 function allowAiEntityCreation() {
     try {
         const row = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
@@ -1797,42 +1856,53 @@ function allowAiEntityCreation() {
     } catch (e) { return false; }
 }
 
-// Persist the validated per-chunk tags into chunk_tags, mapping the classifier's
-// chunk index back to the real stored chunk id. Variable tags: tag=category,
-// entity=value. Runs in one transaction; never throws on a bad index.
-function applyChunkTags(chunkTags, chunkRecords, workspaceId = null) {
-    // Tagger may inherit System AI or use a dedicated model. If it is unavailable,
-    // vectorization still succeeds and existing tags remain untouched.
-    if (!getRoleExecutor(ROLE_IDS.TAGGER).executor) return 0;
-    if (!Array.isArray(chunkTags) || !chunkTags.length) return 0;
-    const insert = db.prepare('INSERT OR IGNORE INTO chunk_tags (chunkId, tag, entity, manual) VALUES (?, ?, ?, 0)');
-    const isSuppressed = db.prepare('SELECT 1 FROM chunk_tag_suppressions WHERE chunkId = ? AND tag = ? AND entity = ?');
-    // Opt-in: unresolved mentions become empty `proposed` entities instead of being
-    // dropped. Within one run a name is proposed once and reused across chunks (keyed
-    // by workspace|type|normalized-name); across runs resolveEntity finds the proposed
-    // row, so it is never re-proposed.
+// Returns the rows written and the ids of entities proposed along the way.
+function applyChunkTags(chunkTags, chunkRecords, workspaceId = null, { lowercaseWords: workspaceWords = null } = {}) {
+    const applied = { rows: 0, created: [], rejectedProposals: 0 };
+    if (!getRoleExecutor(ROLE_IDS.TAGGER).executor) return applied;
+    if (!Array.isArray(chunkTags) || !chunkTags.length) return applied;
+    const insert = db.prepare("INSERT OR IGNORE INTO chunk_tags (chunkId, tag, entity, manual, origin) VALUES (?, ?, ?, 0, 'model')");
+    const isSuppressed = db.prepare('SELECT 1 FROM chunk_tag_suppressions WHERE chunkId = ? AND entity = ?');
+    // Within a run the cache dedupes proposals; across runs resolveEntity finds them.
     const allowCreate = allowAiEntityCreation();
     const proposedCache = new Map();
-    let rows = 0;
+    const knownByWorkspace = new Map();
+    const knownEntities = ws => {
+        if (!knownByWorkspace.has(ws)) knownByWorkspace.set(ws, loadWorkspaceEntities(db, ws));
+        return knownByWorkspace.get(ws);
+    };
+    const lowercaseWords = collectLowercaseWords(chunkRecords.map(record => (record && record.text) || ''));
+    if (workspaceWords) for (const word of workspaceWords) lowercaseWords.add(word);
     db.transaction(() => {
         for (const entry of chunkTags) {
             const rec = chunkRecords[entry.chunkIndex];
             if (!rec || !rec.id) continue;
-            // Prefer the caller's authoritative workspace; fall back to the chunk's
-            // ownerId only when it is absent (the all-chats backfill passes null).
-            // For Writing Desk documents ownerId is the documentId, so relying on it
-            // would scope the registry lookup to the wrong id.
+            // Document chunks have ownerId = documentId, so the caller's workspace wins.
             const ws = workspaceId || rec.ownerId;
             for (const t of entry.tags) {
-                let entityRef = resolveEntity(ws, t.tag, t.value);
-                if (!entityRef) entityRef = resolveEntity(ws, null, t.value);
+                let entityRef = resolveEntity(ws, t.tag, t.value) || resolveEntity(ws, null, t.value)
+                    || (t.surface ? resolveEntity(ws, null, t.surface) : null);
                 if (!entityRef && allowCreate) {
                     const proposalData = proposalDataForMention(t.tag, t.proposalKind);
                     if (!proposalData) continue;
-                    const key = `${ws || ''}|${t.tag}|${entitiesStore.normalizeName(t.value)}`;
+                    const key = `${ws || ''}|${t.tag}|${foldText(t.value)}`;
                     if (proposedCache.has(key)) {
                         entityRef = proposedCache.get(key);
                     } else {
+                        const verdict = checkProposal({
+                            value: t.value,
+                            surface: t.surface,
+                            type: t.tag,
+                            proposalKind: t.proposalKind,
+                            chunkText: rec.text,
+                            entities: knownEntities(ws),
+                            siblings: entry.tags.filter(other => other !== t).map(other => ({ value: other.value, type: other.tag })),
+                            lowercaseWords
+                        });
+                        if (!verdict.ok) {
+                            applied.rejectedProposals++;
+                            continue;
+                        }
                         const ent = entitiesStore.createEntity({
                             workspaceId: ws,
                             type: t.tag,
@@ -1846,6 +1916,8 @@ function applyChunkTags(chunkTags, chunkRecords, workspaceId = null) {
                         entityRef = ent && ent.id;
                         if (!entityRef) throw new Error(`Could not create proposed entity: ${t.value}`);
                         proposedCache.set(key, entityRef);
+                        applied.created.push(entityRef);
+                        knownEntities(ws).push({ id: entityRef, type: t.tag, canonicalName: t.value, aliases: [] });
                     }
                 }
                 if (!entityRef) continue;
@@ -1859,38 +1931,24 @@ function applyChunkTags(chunkTags, chunkRecords, workspaceId = null) {
                         });
                     }
                 }
-                if (!isSuppressed.get(rec.id, resolvedTag, entityRef)) {
-                    insert.run(rec.id, resolvedTag, entityRef);
-                    rows++;
-                }
+                if (!isSuppressed.get(rec.id, entityRef)) applied.rows += insert.run(rec.id, resolvedTag, entityRef).changes;
             }
         }
     })();
-    return rows;
+    if (applied.rejectedProposals) console.log(`[Tagger] ${applied.rejectedProposals} proposal(s) did not look like a standalone name and were skipped.`);
+    return applied;
 }
 
-// Backfill the world index over a chat's already-archived raw chunks (or all chats
-// when chatId is null). These predate the per-chunk tagger, so they carry no tags.
-// Batches the chunks through ONE System-AI call each (tagging only, no title/
-// summary) and writes chunk_tags. INSERT OR IGNORE keeps re-runs from duplicating.
-async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false, tier = 'archive', chunkIds = null, runId = null, progressCallback = null } = {}) {
+const BACKFILL_SLICE = 24;
+
+// chatId null backfills every chat.
+async function backfillWorldIndex(chatId = null, { full = false, tier = 'archive', chunkIds = null, runId = null, progressCallback = null } = {}) {
     const tagger = getRoleExecutor(ROLE_IDS.TAGGER);
     if (!tagger.executor) throw new Error(tagger.error || 'Tagger is disabled.');
-    const apiProfileId = tagger.executor.apiProfileId;
-    const model = tagger.executor.model;
-    const manualMode = false;
-    const manualJson = null;
-
-    let categories = [];
-    try { categories = db.prepare('SELECT name, description FROM tags WHERE isEntity = 1').all(); } catch (e) { categories = []; }
-    if (!categories.length) throw new Error('No entity tag categories seeded');
-    const catLines = categories.map(c => `- ${c.name}: ${c.description}`).join('\n');
-    // Scoped vocab only when backfilling a single chat; the all-chats path leaves it
-    // empty to avoid bleeding one workspace's names into another's prompt.
-    // Which slice of a chat's memory this run tags. Each tier maps to its own button:
-    // archive = summarized Chat Archive (also tagged live at summarization); custom =
-    // searchable Custom Memory snippets (manual_/mem_); searchable = uploaded RAG files
-    // (chat_kb, a distinct ownerType).
+    let categoryCount = 0;
+    try { categoryCount = db.prepare('SELECT COUNT(*) AS count FROM tags WHERE isEntity = 1').get().count; } catch (e) { categoryCount = 0; }
+    if (!categoryCount) throw new Error('No entity tag categories seeded');
+    // archive = Chat Archive, custom = Custom Memory snippets, searchable = chat_kb files.
     let ownerType = 'chat_memory';
     let sourceClause = "AND kc.source = 'Chat Archive'";
     if (tier === 'custom') {
@@ -1906,20 +1964,13 @@ async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false,
     const queryParams = [...(chatId ? [chatId] : []), ...selectedIds];
     const scopedWhere = `${where} ${selectedClause}`;
 
-    // full: wipe this scope's existing tags and re-tag every chunk from scratch (the
-    // "Index this Chat's memories" button), so a re-run reflects the current tagger and
-    // entity registry instead of accumulating stale tags. Incremental (default): skip
-    // chunks that already have tags so re-runs only fill gaps (e.g. a rate-limited tail).
     if (full) {
-        // Preserve user-pinned tags (manual=1, e.g. yellow keywords on file chunks);
-        // only the auto tagger's own rows reset.
+        // Manual tags survive a full re-tag.
         const delSql = `DELETE FROM chunk_tags WHERE (manual IS NULL OR manual = 0) AND chunkId IN
                         (SELECT kc.id FROM knowledge_chunks kc WHERE ${scopedWhere})`;
         db.prepare(delSql).run(...queryParams);
     }
-    // Coverage, rather than tag rows, determines whether a chunk is done. A chunk
-    // with no named entity is still a successful World Index result and must not be
-    // sent to the System AI again by every "Tag new" run.
+    // Coverage, not tag rows, marks a chunk done: a chunk with no entity is a result.
     const skipTagged = full ? '' : "AND NOT EXISTS (SELECT 1 FROM world_index_chunk_status wis WHERE wis.chunkId = kc.id AND wis.status = 'completed')";
     const sql = `SELECT kc.id, kc.text, kc.ownerId FROM knowledge_chunks kc WHERE ${scopedWhere}
                  ${skipTagged}
@@ -1927,77 +1978,30 @@ async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false,
     const chunks = db.prepare(sql).all(...queryParams);
     if (!chunks.length) return { chunks: 0, batches: 0, tagged: 0, taggedChunks: 0, processed: 0, empty: 0, failed: 0 };
 
-    const saveCoverage = db.prepare(`
-        INSERT INTO world_index_chunk_status (chunkId, status, tagCount, lastRunId, error, updatedAt)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(chunkId) DO UPDATE SET
-          status = excluded.status,
-          tagCount = excluded.tagCount,
-          lastRunId = excluded.lastRunId,
-          error = excluded.error,
-          updatedAt = excluded.updatedAt
-    `);
-    const countAutomaticTags = db.prepare("SELECT COUNT(*) AS count FROM chunk_tags WHERE chunkId = ? AND (manual IS NULL OR manual = 0)");
-
-    // Retry on provider rate-limits (Bedrock "Too many requests") with exponential
-    // backoff so the run completes instead of dropping batches.
-    const callWithRetry = async (payload, tries = 5) => {
-        let delay = 2000;
-        for (let attempt = 1; attempt <= tries; attempt++) {
-            try {
-                return await sendApiRequest(payload);
-            } catch (e) {
-                const msg = String((e && e.message) || e);
-                const rateLimited = /too many requests|rate.?limit|429|throttl/i.test(msg);
-                if (attempt === tries || !rateLimited) throw e;
-                await new Promise(r => setTimeout(r, delay));
-                delay = Math.min(delay * 2, 30000);
+    const countTags = db.prepare('SELECT COUNT(*) AS count FROM chunk_tags WHERE chunkId = ?');
+    const matchers = new Map();
+    let tagged = 0, batches = 0, processed = 0, taggedChunks = 0, empty = 0, failed = 0, lastError = null;
+    // Slices keep progress moving; each one is recorded before the next starts.
+    for (let i = 0; i < chunks.length; i += BACKFILL_SLICE) {
+        const slice = chunks.slice(i, i + BACKFILL_SLICE);
+        const byOwner = new Map();
+        for (const chunk of slice) {
+            if (!byOwner.has(chunk.ownerId)) byOwner.set(chunk.ownerId, []);
+            byOwner.get(chunk.ownerId).push(chunk);
+        }
+        for (const [ownerId, records] of byOwner) {
+            if (!matchers.has(ownerId)) matchers.set(ownerId, createNameMatcher(db, ownerId));
+            const result = await tagChunkRecords(records, ownerId, { runId, notify: false, matcher: matchers.get(ownerId) });
+            tagged += result.nameRows + result.modelRows;
+            processed += result.taggedRecords.length;
+            failed += result.failedRecords.length;
+            if (result.error) lastError = result.error;
+            for (const record of result.taggedRecords) {
+                if (countTags.get(record.id).count) taggedChunks++; else empty++;
             }
         }
-    };
-
-    let tagged = 0, batches = 0, processed = 0, taggedChunks = 0, empty = 0, failed = 0, lastError = null;
-    for (let i = 0; i < chunks.length; i += batchSize) {
-        if (i > 0) await new Promise(r => setTimeout(r, 600)); // gentle pacing between batches
-        const batch = chunks.slice(i, i + batchSize);
-        const numbered = batch.map((c, idx) => `[CHUNK ${idx}]\n${c.text}`).join('\n\n');
-        const batchVocab = buildEntityVocab(chatId, numbered);
-        const fence = buildItemsFence();
-        const systemPrompt =
-            getSystemLanguageInstruction() + "\n" +
-            "You tag conversation chunks. For EACH numbered chunk, identify persistent story entities explicitly named in the text, grouped under these categories:\n" +
-            catLines + "\n" +
-            (batchVocab ? batchVocab + "\n" : "") +
-            "Resolve aliases to supplied canonical names. Never propose an entity already present in Known entities. Omit generic nouns, unnamed roles, pronouns, descriptive phrases, and ambiguous identities. Every mention must include a short verbatim evidence excerpt copied from that chunk. Use ONLY these category names. " +
-            "Output ONLY a JSON array wrapped exactly once in " + fence.open + " and " + fence.close + ", " +
-            "one element per chunk that has any entity: {\"chunk\": <number>, \"mentions\": [{\"text\": \"<surface text>\", \"canonicalName\": \"<canonical or exact explicit name>\", \"type\": \"<Category>\", \"evidence\": \"<verbatim excerpt>\"}]}. " +
-            "Write nothing else.";
-        try {
-            const response = await callWithRetry({ apiProfileId, model, systemPrompt, chatHistory: [], newPrompt: numbered, temperature: 0.3, maxTokens: 1500, manualMode, manualJson });
-            const head = splitHeadAndBody(response, fence);
-            const chunkTags = validateChunkTags(safeParseArray(head.body), categories, batch);
-            tagged += applyChunkTags(chunkTags, batch, chatId);
-            const now = Date.now();
-            db.transaction(() => {
-                for (const chunk of batch) {
-                    const tagCount = countAutomaticTags.get(chunk.id).count;
-                    saveCoverage.run(chunk.id, 'completed', tagCount, runId, null, now);
-                    if (tagCount) taggedChunks++; else empty++;
-                }
-            })();
-            processed += batch.length;
-        } catch (e) {
-            console.error(`[World Index][backfill] batch ${batches} failed:`, e.message);
-            const now = Date.now();
-            const message = e.message || String(e);
-            db.transaction(() => {
-                for (const chunk of batch) saveCoverage.run(chunk.id, 'failed', 0, runId, message, now);
-            })();
-            failed += batch.length;
-            lastError = message;
-        }
         batches++;
-        console.log(`[World Index][backfill] batch ${batches}: ${Math.min(i + batchSize, chunks.length)}/${chunks.length} chunks, ${tagged} tag row(s) so far.`);
+        console.log(`[World Index][backfill] ${Math.min(i + BACKFILL_SLICE, chunks.length)}/${chunks.length} chunks, ${tagged} tag row(s) so far.`);
         if (progressCallback) progressCallback({ total: chunks.length, processed, tagged, taggedChunks, empty, failed, batches, error: lastError });
     }
     return { chunks: chunks.length, batches, tagged, processed, taggedChunks, empty, failed, error: lastError };
@@ -2009,10 +2013,7 @@ async function backfillWorldIndex(chatId = null, { batchSize = 12, full = false,
 // stray label fragments so they never poison retrieval.
 const DOC_CHUNK_MIN_CHARS = 15;
 
-// One top-level ProseMirror block = one chunk. Splitting on paragraph / scene-break
-// boundaries (instead of a fixed-size window) keeps each chunk's text stable: editing
-// one paragraph only changes that paragraph's hash, so re-vectorization re-embeds just
-// the touched chunk. Presentation (marks, page styling) never enters the text.
+// One top-level block per chunk, so editing a paragraph re-embeds only that chunk.
 function blockToText(node) {
     if (!node) return '';
     if (node.type === 'text') return node.text || '';
@@ -2038,12 +2039,8 @@ function pmDocToChunkUnits(content) {
     return units;
 }
 
-// Whether a chapter's current text matches its stored index, by comparing the block
-// hash sets, the source of truth for the editor's "indexed" indicator. Immune to the
-// mutable vectorized flag (which any save can reset). Returns 'done' | 'stale'.
-// Returns 'done' (index current), 'outdated' (indexed once but content changed
-// since), or 'never' (no index yet). The caller renders these as distinct states,
-// 'never' is neutral, 'outdated' is the alert (AI is reading the old version).
+// Compares block hashes rather than the `vectorized` flag, which any save resets.
+// Returns 'done' | 'outdated' | 'never'.
 function computeDocumentVectorStatus(documentId) {
     const doc = db.prepare('SELECT content FROM documents WHERE id = ?').get(documentId);
     if (!doc) return 'never';
@@ -2053,8 +2050,7 @@ function computeDocumentVectorStatus(documentId) {
     ).all(documentId);
     // No index yet: 'never' unless the chapter is also empty (nothing to index).
     if (!rows.length) return units.length ? 'never' : 'done';
-    // Manually-edited chunks are preserved across re-index, so they don't count toward
-    // the match; compare current blocks against the automated index only.
+    // Manually edited chunks survive re-index, so they are excluded from the match.
     const stored = new Set(rows.filter(r => !r.manuallyEdited && r.content_hash).map(r => r.content_hash));
     const current = new Set(units.map(u => u.hash));
     if (stored.size !== current.size) return 'outdated';
@@ -2062,10 +2058,7 @@ function computeDocumentVectorStatus(documentId) {
     return 'done';
 }
 
-// Vectorize (or re-vectorize) a single chapter into ownerType='document' chunks.
-// Incremental by content hash: unchanged blocks keep their vector + tags untouched,
-// only new/changed blocks are embedded and tagged, removed blocks are deleted. This
-// is what feeds gatherRag's "OTHER CHAPTERS" cross-chapter retrieval. User-triggered.
+// Incremental by content hash: unchanged blocks keep their vectors and tags.
 async function vectorizeDocument(documentId, progressCallback = null) {
     const doc = db.prepare('SELECT id, workspaceId, title, content FROM documents WHERE id = ?').get(documentId);
     if (!doc) throw new Error('Document not found');
@@ -2117,26 +2110,14 @@ async function vectorizeDocument(documentId, progressCallback = null) {
         insertChunksToDb(documentId, 'document', vectors);
         added = vectors.length;
 
-        // Tag only the freshly embedded chunks (World index). Requires a System AI,
-        // without one, indexing only vectorizes and this whole pass is skipped.
-        // Best-effort: a failed pass just leaves the new chunks untagged.
-        if (getRoleExecutor(ROLE_IDS.TAGGER).executor) {
-            try {
-                const records = vectors.map(v => ({ id: v.id, text: v.text, ownerId: doc.workspaceId }));
-                const batches = createTaggerBatches(records);
-                let processed = 0;
-                for (const batch of batches) {
-                    const cls = await classifyAndTagSegment(batch, null, doc.workspaceId);
-                    if (cls.failed) throw new Error(cls.error || 'Tagger failed.');
-                    applyChunkTags(cls.chunkTags, batch, doc.workspaceId);
-                    processed += batch.length;
-                    if (progressCallback) progressCallback({ phase: 'tagging', done: processed, total: records.length });
-                }
-            } catch (e) {
-                console.error('[Vectorize Document] tagging failed (vectorization continues):', e.message);
-                db.prepare('UPDATE documents SET vectorized = 1 WHERE id = ?').run(documentId);
-                throw new Error(`Entity tagging failed: ${e.message}. Text embeddings were preserved.`);
-            }
+        const records = vectors.map(v => ({ id: v.id, text: v.text, ownerId: doc.workspaceId }));
+        const tagging = await tagChunkRecords(records, doc.workspaceId, {
+            onProgress: (done, total) => { if (progressCallback) progressCallback({ phase: 'tagging', done, total }); }
+        });
+        if (tagging.failed) {
+            console.error('[Vectorize Document] tagging failed (vectorization continues):', tagging.error);
+            db.prepare('UPDATE documents SET vectorized = 1 WHERE id = ?').run(documentId);
+            throw new Error(`Entity tagging failed: ${tagging.error}. Text embeddings were preserved.`);
         }
     }
 
@@ -2145,11 +2126,7 @@ async function vectorizeDocument(documentId, progressCallback = null) {
     return { added, kept: keepOrdinal.length, deleted: toDelete.length, total: units.length };
 }
 
-// Re-tag every already-embedded chunk of a chapter WITHOUT re-embedding (the "Reindex
-// all" variant of the chapter index button). Wipes this document's existing chunk_tags
-// and reclassifies from scratch, so a re-run reflects the current tagger and entity
-// registry. Vectors are left untouched, new/changed blocks are still embedded by
-// vectorizeDocument ("Index new").
+// Re-tags from scratch without re-embedding.
 async function retagDocumentChunks(documentId, progressCallback = null) {
     const doc = db.prepare('SELECT id, workspaceId FROM documents WHERE id = ?').get(documentId);
     if (!doc) throw new Error('Document not found');
@@ -2159,33 +2136,74 @@ async function retagDocumentChunks(documentId, progressCallback = null) {
     ).all(documentId);
     if (!rows.length) return { tagged: 0, chunks: 0 };
 
-    // No System AI → tagging is disabled; don't wipe the existing tags for nothing.
-    if (!getRoleExecutor(ROLE_IDS.TAGGER).executor) return { tagged: 0, chunks: rows.length, skipped: true };
+    const records = rows.map(r => ({ id: r.id, text: r.text, ownerId: doc.workspaceId }));
+    // Without a Tagger, existing tags stay and only names are refreshed.
+    if (!getRoleExecutor(ROLE_IDS.TAGGER).executor) {
+        const names = applyNameTags(db, doc.workspaceId, records);
+        return { tagged: names.rows, chunks: rows.length, skipped: true };
+    }
 
-    const del = db.prepare('DELETE FROM chunk_tags WHERE chunkId = ?');
+    const del = db.prepare('DELETE FROM chunk_tags WHERE chunkId = ? AND (manual IS NULL OR manual = 0)');
     db.transaction(() => { for (const r of rows) del.run(r.id); })();
 
-    const profile = db.prepare('SELECT * FROM writing_profiles LIMIT 1').get();
-    const records = rows.map(r => ({ id: r.id, text: r.text, ownerId: doc.workspaceId }));
-    let tagged = 0;
-    const batches = createTaggerBatches(records);
-    let processed = 0;
-    for (const batch of batches) {
-        try {
-            const cls = await classifyAndTagSegment(batch, profile, doc.workspaceId);
-            if (cls.failed) throw new Error(cls.error || 'Tagger failed.');
-            tagged += applyChunkTags(cls.chunkTags, batch, doc.workspaceId);
-            processed += batch.length;
-            if (progressCallback) progressCallback({ phase: 'tagging', done: processed, total: records.length });
-        } catch (e) {
-            console.error('[Retag Document] batch failed:', e.message);
-            throw new Error(`Entity tagging failed: ${e.message}`);
-        }
+    const result = await tagChunkRecords(records, doc.workspaceId, {
+        onProgress: (done, total) => { if (progressCallback) progressCallback({ phase: 'tagging', done, total }); }
+    });
+    if (result.failed) {
+        console.error('[Retag Document] tagging failed:', result.error);
+        throw new Error(`Entity tagging failed: ${result.error}`);
     }
-    return { tagged, chunks: rows.length };
+    return { tagged: result.nameRows + result.modelRows, chunks: rows.length };
 }
 
 // Tolerant object parse: grab the first {...} block and JSON.parse it. null on failure.
+// A per-call random fence, so a reply cannot close the structured block by accident.
+function buildItemsFence() {
+    const s = crypto.randomBytes(3).toString('hex');
+    return { open: `<<ITEMS_${s}>>`, close: `<</ITEMS_${s}>>` };
+}
+
+// The reasoning head before the fence and the structured body inside it.
+function splitHeadAndBody(response, fence) {
+    const raw = String(response || '');
+    const openIdx = raw.indexOf(fence.open);
+
+    let body = '';
+    let headEnd;
+    if (openIdx !== -1) {
+        const afterOpen = openIdx + fence.open.length;
+        const closeIdx = raw.indexOf(fence.close, afterOpen);
+        body = raw.slice(afterOpen, closeIdx === -1 ? undefined : closeIdx);
+        headEnd = openIdx;
+    } else {
+        const firstBracket = raw.indexOf('[');
+        body = firstBracket === -1 ? '' : raw.slice(firstBracket);
+        headEnd = firstBracket === -1 ? raw.length : firstBracket;
+    }
+
+    const head = raw.slice(0, headEnd);
+    const lines = head.split('\n');
+    let title = 'Archived Memory';
+    let summary = head.trim();
+    if (lines[0] && lines[0].toUpperCase().startsWith('TITLE:')) {
+        title = lines[0].substring(6).trim() || title;
+        summary = lines.slice(1).join('\n').trim();
+    }
+    return { title, summary, body };
+}
+
+// First JSON array in a reply body; an unreadable body is an empty list.
+function safeParseArray(body) {
+    if (!body) return [];
+    try {
+        const start = body.indexOf('[');
+        const end = body.lastIndexOf(']');
+        if (start === -1 || end === -1 || end < start) return [];
+        const parsed = JSON.parse(body.slice(start, end + 1));
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (e) { return []; }
+}
+
 function safeParseObject(body) {
     if (!body) return null;
     try {
@@ -3873,6 +3891,15 @@ function describeStructuredObjectFailure(response, fence) {
     return 'The System AI response used an unsupported structured update shape.';
 }
 
+// When a full rewrite would not fit the output limit, lore is appended instead.
+const LORE_REWRITE_OVERHEAD_TOKENS = 600;
+
+function loreNeedsAppend(currentLore, outputTokens) {
+    const lore = String(currentLore || '').trim();
+    if (!lore) return false;
+    return Math.ceil(estimateTokens(lore) * 1.15) + LORE_REWRITE_OVERHEAD_TOKENS > outputTokens;
+}
+
 function entityEnrichmentMaxTokens(entity) {
     const currentLoreLength = String(entity.type === 'System' ? entity.data?.content || '' : entity.lore || '').length;
     const minimum = entity.type === 'System' ? 2400 : 1800;
@@ -3880,10 +3907,7 @@ function entityEnrichmentMaxTokens(entity) {
     return Math.min(maximum, Math.max(minimum, 1200 + Math.ceil(currentLoreLength / 3.5)));
 }
 
-// Why an entity update could not be read back. These used to collapse into one
-// "invalid structured JSON" message, which pointed at the model's formatting when
-// the real cause was usually the output budget: reasoning models spend it thinking
-// before they write the object, so a capable model still fails. `budget` and
+// Usually the output budget, not formatting: reasoning models spend it thinking. `budget` and
 // `empty` are retried with a bigger allowance, the others with the same one.
 function describeEntityUpdateFailure(result, parsed, fence) {
     const content = String(result?.content || '');
@@ -3899,8 +3923,6 @@ function describeEntityUpdateFailure(result, parsed, fence) {
     return { cause: 'format', message: describeStructuredObjectFailure(content, fence) };
 }
 
-// Retry allowance. A budget failure doubles (capped well above the first ceiling)
-// instead of nudging by half, which was rarely enough to clear a reasoning model.
 function entityUpdateRetryTokens(cause, maxTokens) {
     if (cause === 'budget' || cause === 'empty') return Math.min(16000, maxTokens * 2);
     return maxTokens;
@@ -3916,13 +3938,8 @@ function logEntityUpdateFailure(entity, attempt, failure, result) {
     );
 }
 
-// The entity-to-entity edges the enrichment may propose per type, mirroring the relation
-// controls the WorldbuildView renders. `relType`/`single`/`labeled` match entities.setLink;
-// `from` says which end of the edge the entity sits on ('self' = fromId is this entity,
-// 'target' = fromId is the linked entity, e.g. an item owned_by a character). `targetType`
-// narrows name resolution. Only EXISTING entities are linked, enrichment never creates
-// new ones (only the tagger does that, when allowed). Derived-only relations (Race
-// members) are omitted.
+// `from: 'target'` means the edge starts at the linked entity. Enrichment only links
+// existing entities; it never creates them.
 const ENRICH_RELATIONS = {
     Characters: [
         { key: 'race',          label: 'Race',         relType: 'is_race',      targetType: 'Races',      from: 'self',   single: true },
@@ -4188,18 +4205,11 @@ async function loadConstantMemoryChunks(workspaceId) {
     }));
 }
 
-// The "Update entities" enrichment pass. Reads each non-locked, confirmed entity's
-// related chunks in chronological order and lets the System AI refresh the fields valid
-// for that entity type and its links to existing entities. System entities update Concept
-// instead of Lore. Linking a dedicated lore document remains an explicit user decision;
-// ordinary mentions stay in the World Index and never become linked lore documents.
-// Per-entity aiPolicy governs writes: 'open' applies everything directly,
-// 'review' stages it all into data._enrichPending for per-item accept/reject in the sheet
-// (never touches live values), 'locked' is skipped. Best-effort; one failure never aborts.
+// aiPolicy: 'open' applies directly, 'review' stages into data._enrichPending without
+// touching live values, 'locked' is skipped. One entity failing never aborts the run.
 async function enrichEntities(workspaceId, progressCallback = null) {
     if (!workspaceId) throw new Error('workspaceId is required');
-    // Entity enrichment is a precise-extraction task; it runs on the dedicated System AI
-    // only, never on a writing profile. No System AI → the feature is unavailable.
+    // Precise extraction: System AI only, never a writing profile.
     const systemAiConfig = getSystemAiConfiguration();
     const systemAi = systemAiConfig.systemAi;
     if (!systemAi) throw new Error(systemAiConfig.error);
@@ -4674,6 +4684,7 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                 && change.evidence.some(id => validEvidenceIds.has(id))
             );
             let loreProposal = null;
+            let loreFailure = null;
             if (allowLore) {
                 const canonicalFindings = [
                     ...Object.entries(proposedData).map(([key, proposal]) => ({ kind: 'field', key, value: proposal.value, support: proposal.support, evidence: proposal.evidence })),
@@ -4688,8 +4699,12 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                             .map(entry => entry.prompt)
                             .join('\n\n')
                             .slice(0, 6000);
-                        const loreSystemPrompt = `${getSystemLanguageInstruction()}\nYou compose grounded cumulative world-bible lore from validated findings. Never invent or collapse an established entity into one event.`;
-                        const lorePrompt = buildLorePrompt({
+                        // A long lore is extended instead of rewritten: a full rewrite stops fitting the output limit.
+                        const appendLore = loreNeedsAppend(ent.lore, maxTokens);
+                        const loreSystemPrompt = `${getSystemLanguageInstruction()}\n${appendLore
+                            ? 'You extend grounded world-bible lore with new paragraphs from validated findings.'
+                            : 'You compose grounded cumulative world-bible lore from validated findings.'} Never invent or collapse an established entity into one event.`;
+                        const lorePrompt = (appendLore ? buildLoreAppendPrompt : buildLorePrompt)({
                             entityName: ent.canonicalName,
                             entityType: ent.type,
                             currentLore: ent.lore,
@@ -4708,17 +4723,25 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                             manualJson,
                         }, buildEntityLoreSchema());
                         const loreObject = parseEntityUpdateObject(loreResult.content).value;
-                        loreProposal = validateEntityLore(loreObject, ent.lore, validEvidenceIds);
+                        loreProposal = appendLore
+                            ? validateEntityLoreAppend(loreObject, ent.lore, validEvidenceIds)
+                            : validateEntityLore(loreObject, ent.lore, validEvidenceIds);
+                        // A cut-off or unreadable reply is a failure; a valid no-op stays silent.
+                        if (!loreProposal && (loreResult.truncated || !loreObject)) {
+                            loreFailure = loreResult.truncated
+                                ? `The Lore update for ${ent.canonicalName} reached the System AI output limit and was not applied.`
+                                : `The Lore update for ${ent.canonicalName} could not be read and was not applied.`;
+                            console.warn(`[Entity Update] ${loreFailure} finishReason=${loreResult.finishReason ?? 'unknown'}`);
+                        }
                     } catch (error) {
-                        console.warn(`[Enrich] Lore composition skipped for ${ent.canonicalName}:`, error.message);
+                        loreFailure = `The Lore update for ${ent.canonicalName} failed: ${cleanErrorMessage(error)}`;
+                        console.warn(`[Entity Update] ${loreFailure}`);
                     }
                 }
             }
             const incomingLore = loreProposal?.value || '';
             const loreChanged = Boolean(loreProposal);
 
-            // Resolve the AI's link proposals: only listed candidate names, resolved to real
-            // ids of the right type, excluding self and edges that already exist.
             const proposedLinks = [];
             const incomingLinks = (parsed.links && typeof parsed.links === 'object') ? parsed.links : {};
             for (const { spec } of relBlocks) {
@@ -4798,6 +4821,21 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                     error: null,
                 });
             };
+            // Keep the evidence pending so a later run retries it.
+            if (!hasChange && loreFailure) {
+                failed++;
+                rememberFailure(ent, loreFailure);
+                updateState.transition(workspaceId, ent.id, includedEvidence, 'deferred', runId, 'lore-output-failure');
+                updateState.updateJob(runId, ent.id, {
+                    status: 'failed',
+                    input_tokens: inputTokenEstimate,
+                    output_tokens: outputTokenEstimate,
+                    retry_count: retryCount,
+                    evidence_used: includedEvidence.length,
+                    error: loreFailure,
+                });
+                continue;
+            }
             if (!hasChange) {
                 finishEntity(false);
                 clearEnrichmentError.run(workspaceId, ent.id);
@@ -4807,12 +4845,12 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                 staged++;
                 finishEntity(true);
                 clearEnrichmentError.run(workspaceId, ent.id);
+                if (loreFailure) rememberFailure(ent, loreFailure);
                 continue;
             }
 
             if (policy === 'open') {
-                // Apply everything directly. Only touch what changed, and clear any staged
-                // review left over from when this entity was on the 'review' policy.
+                // Clears any review staged while the entity was on 'review'.
                 const nextData = { ...(ent.data || {}) };
                 delete nextData._enrichPending;
                 for (const [field, proposal] of Object.entries(proposedData)) {
@@ -4827,8 +4865,7 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                 for (const l of proposedLinks) applyProposedLink(ent.id, l, workspaceId);
                 updated++;
             } else {
-                // Review stages everything for per-item accept/reject without touching live values.
-                // Preserve unresolved review items while adding evidence from new chunks.
+                // Unresolved review items are preserved.
                 const previous = (ent.data?._enrichPending && typeof ent.data._enrichPending === 'object') ? ent.data._enrichPending : {};
                 const pending = { ...previous };
                 pending.evidence = {
@@ -4853,6 +4890,7 @@ async function enrichEntities(workspaceId, progressCallback = null) {
             }
             finishEntity(true);
             clearEnrichmentError.run(workspaceId, ent.id);
+            if (loreFailure) rememberFailure(ent, loreFailure);
         } catch (e) {
             console.error(`[Enrich] ${ent.canonicalName} failed (continues):`, e.message);
             const systemicStructuredFailure = /compiled grammar|structured output|response.?format|json.?mode|unsupported entity update shape|invalid json|empty response|truncated/i.test(String(e.message || ''));
@@ -4875,17 +4913,8 @@ async function enrichEntities(workspaceId, progressCallback = null) {
     };
 }
 
-// A summary is stored the moment its history is safe, and the slow AI work runs
-// afterwards. Archiving used to hold the window open through all of it, so a long
-// history meant minutes of a frozen dialog, and a crash in the middle left the
-// chunks written with no block pointing at them.
-//
-//   finishing   the history is stored; recap and tags are still being produced
-//   ready       nothing left to do
-//   incomplete  the finishing pass failed or was interrupted; safe to run again
-// The recap and the entity tags are independent pieces of work over the same
-// stored history. They are tracked separately so a tagging failure never costs
-// the recap, and so retrying only redoes the part that is actually missing.
+// Recap and tags are tracked separately so one failing never costs the other,
+// and a retry redoes only what is missing.
 const SUMMARY_PART = Object.freeze({ PENDING: 'pending', READY: 'ready', FAILED: 'failed', SKIPPED: 'skipped' });
 
 function writeSummaryBlock(chatId, blockId, changes) {
@@ -4895,8 +4924,6 @@ function writeSummaryBlock(chatId, blockId, changes) {
     return next;
 }
 
-// Chunks of this summary that the tagger has not already completed. Coverage is
-// what makes a second finishing pass cheap: it only looks at what is left.
 function pendingBlockChunks(chatId, blockId) {
     return db.prepare(`
         SELECT kc.id, kc.text FROM knowledge_chunks kc
@@ -4909,25 +4936,7 @@ function pendingBlockChunks(chatId, blockId) {
     `).all(chatId, blockId);
 }
 
-function recordChunkCoverage(records, status, error = null) {
-    if (!Array.isArray(records) || !records.length) return;
-    const save = db.prepare(`
-        INSERT INTO world_index_chunk_status (chunkId, status, tagCount, lastRunId, error, updatedAt)
-        VALUES (?, ?, 0, NULL, ?, ?)
-        ON CONFLICT(chunkId) DO UPDATE SET
-          status = excluded.status,
-          error = excluded.error,
-          updatedAt = excluded.updatedAt
-    `);
-    const now = Date.now();
-    db.transaction(() => {
-        for (const record of records) save.run(record.id, status, error, now);
-    })();
-}
-
-// The finishing pass: writes the recap and the entity tags for a stored summary.
-// Safe to call again on the same block, which is what recovers an interrupted run
-// or a provider failure without archiving anything twice.
+// Idempotent per block: rerunning recovers an interrupted or failed pass.
 async function finalizeSummaryBlock({ chatId, blockId, onProgress = null }) {
     const report = (stage, done = 0, total = 0) => {
         if (onProgress) {
@@ -4939,24 +4948,23 @@ async function finalizeSummaryBlock({ chatId, blockId, onProgress = null }) {
     if (!block) return { success: false, missing: true };
 
     const messages = Array.isArray(block.messages) ? block.messages : [];
-    const rawText = messages
+    const transcript = messages
         .filter(message => message && message.role)
-        .map(message => `${String(message.role).toUpperCase()}: ${message.content}`)
-        .join('\n\n');
+        .map(message => `${String(message.role).toUpperCase()}: ${stripReasoning(message.content)}`);
+    const rawText = transcript.join('\n\n');
 
     let title = block.title;
     let summary = block.summary || '';
     let recapStatus = block.recapStatus || SUMMARY_PART.PENDING;
     let recapError = null;
 
-    // The recap runs first and is written on its own, so whatever happens to the
-    // tagging afterwards cannot take it away.
+    // Written on its own so a tagging failure cannot take it away.
     if (!isChatArchiveSummarizationEnabled()) {
         recapStatus = SUMMARY_PART.SKIPPED;
     } else if (recapStatus !== SUMMARY_PART.READY && rawText) {
         report('summarizing');
         try {
-            const result = await summarizeArchiveSegment(rawText);
+            const result = await summarizeArchiveSegment(transcript, { maxPayloadTokens: workspacePayloadLimit(chatId) });
             summary = result.summary || summary;
             // A title the user typed is never overwritten by the summarizer.
             if (block.autoTitle && result.title) title = result.title;
@@ -4970,35 +4978,24 @@ async function finalizeSummaryBlock({ chatId, blockId, onProgress = null }) {
     }
     writeSummaryBlock(chatId, blockId, { title, summary, recapStatus, recapError });
 
-    // Tagging is best-effort so a failure never costs the archive itself, but it
-    // used to fail in silence: the history stayed untagged and retrieval quietly
-    // lost the entity boost that finds a name mentioned in passing.
     let taggingError = null;
     const pending = pendingBlockChunks(chatId, blockId);
     if (pending.length) {
         report('tagging', 0, pending.length);
         try {
-            const tagged = await classifyAndTagSegment(
-                pending, null, chatId,
-                (done, total) => report('tagging', done, total),
-                { notify: false }
-            );
-            const written = applyChunkTags(tagged.chunkTags, pending, chatId);
-            recordChunkCoverage(tagged.taggedRecords || [], 'completed');
-            if (tagged.failed) {
-                taggingError = cleanErrorMessage(tagged.error) || 'The Tagger could not process this archive.';
-                recordChunkCoverage(tagged.failedRecords || [], 'failed', taggingError);
-            }
-            console.log(`[Tagger] archive block ${blockId}: ${tagged.chunkTags.length}/${pending.length} chunk(s) tagged, ${written} tag row(s).`);
+            const tagged = await tagChunkRecords(pending, chatId, {
+                onProgress: (done, total) => report('tagging', done, total),
+                notify: false
+            });
+            if (tagged.failed) taggingError = tagged.error || 'The Tagger could not process this archive.';
+            console.log(`[Tagger] archive block ${blockId}: ${tagged.taggedRecords.length}/${pending.length} chunk(s) done, ${tagged.nameRows} tag row(s) by name, ${tagged.modelRows} by the model.`);
         } catch (tagError) {
             console.error("[Tagger] archive tagging failed (the archive itself is already stored):", tagError);
             taggingError = cleanErrorMessage(tagError) || 'The Tagger could not process this archive.';
         }
     }
 
-    // Truth comes from the chunks, not from whether a call threw: a run where most
-    // batches worked leaves less to do than one where none did, and the card should
-    // be able to say so. Zero left means done, whatever happened along the way.
+    // Status comes from remaining chunks, not from whether a call threw.
     const stillPending = pendingBlockChunks(chatId, blockId).length;
     const taggedChunks = Math.max(0, (block.tagChunkTotal || pending.length) - stillPending);
     const taggingStatus = stillPending > 0 ? SUMMARY_PART.FAILED : SUMMARY_PART.READY;
@@ -5018,9 +5015,7 @@ async function finalizeSummaryBlock({ chatId, blockId, onProgress = null }) {
     };
 }
 
-// Any summary left mid-pass by a closed app is not in progress any more. Marking
-// it on startup keeps the memory view honest and offers the finishing pass again
-// instead of showing a spinner nothing is driving.
+// On startup, a pending pass has nothing driving it; mark it failed so it can rerun.
 function markInterruptedSummaries() {
     const interrupted = (value) => value === SUMMARY_PART.PENDING;
     try {
@@ -5048,14 +5043,8 @@ function markInterruptedSummaries() {
     }
 }
 
-// One archiving pass. The caller says which messages go into the summary and
-// which ones it wants muted; both are resolved against the stored history here,
-// so a stale renderer list can never archive a message twice or archive one the
-// user meant to drop.
-// Archiving does real work in three stages, and it used to do all of it in
-// silence: on a long history that reads as a frozen app rather than a slow one.
-// `onProgress` reports the stage and its position so the window can say which
-// part is taking the time.
+// Ids are resolved against stored history, so a stale renderer list can't archive
+// a message twice or archive one the user muted.
 async function executeSummarizationInternal({ chatId, selectedMessages, messageIds, excludedMessageIds, customTitle, profileId, onProgress = null }) {
     const report = (stage, done = 0, total = 0) => {
         if (onProgress) {
@@ -5090,12 +5079,10 @@ async function executeSummarizationInternal({ chatId, selectedMessages, messageI
         return { memoryBlocks, summarizedIndex, archivedMessages: 0, excludedMessages: excludeIds.length };
     }
 
-    const rawTextToArchive = archiveMessages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
+    const rawTextToArchive = archiveMessages.map(m => `${m.role.toUpperCase()}: ${stripReasoning(m.content)}`).join('\n\n');
     const blockId = `block_${Date.now()}`;
 
-    // Narrative memory reads better with fuller scene context per chunk than the old
-    // 500-char fragments, so archive chat memory at ~800 (still under the 1000 KB
-    // default to keep some retrieval precision). Changing this needs a re-index.
+    // Changing this size needs a re-index.
     const chunks = chunkText(rawTextToArchive, 800);
     report('indexing', 0, chunks.length);
     const vectors = await vectorizeChunks(chunks, "Chat Archive", (done, total) => report('indexing', done, total));
@@ -5110,9 +5097,7 @@ async function executeSummarizationInternal({ chatId, selectedMessages, messageI
         console.error("Failed to insert summarized vectors to SQLite:", dbErr);
     }
 
-    // The block is written now, before any AI call. Everything the user cannot
-    // recreate (the stored history and its vectors) is safe at this point, so
-    // the window can close and the recap and tags can be produced afterwards.
+    // Written before any AI call: recap and tags are produced afterwards.
     const memoryBlocks = readMemoryBlocks(db, chatId);
     memoryBlocks.push({
         id: blockId,
@@ -5143,12 +5128,12 @@ async function checkAndAutoSummarize(chatId, profileId, webContents) {
 
         const archiveThreshold = chat.archiveThreshold || 60000;
 
-        const messages = db.prepare('SELECT * FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
+        const messages = db.prepare('SELECT id, role, content, excluded FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
         const activeMessages = selectActiveMessages(messages, chat.memoryBlocks);
 
         let tokensUsed = 0;
         activeMessages.forEach(m => {
-            tokensUsed += estimateTokens(m.content);
+            tokensUsed += estimateTokens(stripReasoning(m.content));
         });
 
         // Nothing to offer means nagging would be a dead end: everything left is
@@ -5166,15 +5151,9 @@ async function checkAndAutoSummarize(chatId, profileId, webContents) {
 
 function readEntireKbFile(ownerId, fileName) {
     try {
-        const rows = db.prepare('SELECT text FROM knowledge_chunks WHERE ownerId = ? AND source = ? ORDER BY id ASC').all(ownerId, fileName);
+        const rows = db.prepare('SELECT rowid, id, text, ordinal FROM knowledge_chunks WHERE ownerId = ? AND source = ?').all(ownerId, fileName);
         if (rows.length === 0) return "[System: File not found or has no content.]";
-        return rows.map(r => {
-            const lines = r.text.split('\n');
-            if (lines[0] && lines[0].startsWith('Document: ') && lines[1] && lines[1].startsWith('Content: ')) {
-                return lines.slice(2).join('\n');
-            }
-            return r.text;
-        }).join('\n\n');
+        return reconstructKnowledgeFile(rows);
     } catch (e) {
         console.error("Error reading entire KB file from database:", e);
         return `[System: Error reading file: ${e.message}]`;
@@ -5183,23 +5162,14 @@ function readEntireKbFile(ownerId, fileName) {
 
 // --- AGENTIC RAG SYSTEM ---
 
-async function executeAgenticRagLoop(
-    profile,
-    chatId,
-    currentInput,
-    chatHistory = [],
-    webContents = null,
-    includeChatContext = true,
-    executor = profile,
-    maxPayloadTokens = null,
-    run = null
-) {
+async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory = [], webContents = null, includeChatContext = true, executor = profile, run = null, options = {}) {
     console.log(`[Agentic RAG] Starting autonomous retrieval loop for: ${profile.name}`);
     const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
     const experienceMode = db.prepare('SELECT mode FROM workspace_experience_modes WHERE workspace_id = ?').get(chatId)?.mode;
+    const isRoleplay = experienceMode === 'roleplay';
     let epistemicTools = null;
     let awarenessOverview = '';
-    if (experienceMode === 'roleplay') {
+    if (isRoleplay) {
         try {
             const { AgenticEpistemicTools } = require('../../dist-main/main/features/kanora/agentic-epistemic-tools');
             epistemicTools = new AgenticEpistemicTools(db);
@@ -5208,6 +5178,12 @@ async function executeAgenticRagLoop(
             console.warn('[Agentic RAG] Awareness scan unavailable:', error.message);
         }
     }
+    const offeredTools = toolNamesFor({ roleplay: isRoleplay });
+
+    // What the research is for. A workflow step feeds the previous step's prose as its input,
+    // and ranking passages against generated prose buries the request the user actually made.
+    const anchorQuery = String(options.userRequest || '').trim() || currentInput;
+    const retrievalBudget = Number(options.retrievalBudget) || 0;
 
     let currentTurn = 1;
     // Per-profile configurable depth (clamped 1-5). Higher = better multi-hop reasoning, higher cost.
@@ -5217,14 +5193,78 @@ async function executeAgenticRagLoop(
     const maxCorrectionRetries = 1; // Free retry (does not consume a turn) when the model emits neither a tool call nor finish.
     let loopDegraded = false; // True if a retrieval error forced an early break; surfaced to the caller.
     const MAX_AGENT_FILE_CHARS = 5000; // read_file truncation for the agent's reasoning only; full text still flows to final context.
+    // How many results of one call the agent reads in full. The rest arrive as snippets it can
+    // expand, while every one of them still reaches the writing assistant.
+    const AGENT_FULL_RESULTS_PER_CALL = 5;
+    const SEED_FULL_RESULTS = 5;
+
+    // Search width follows the writer's payload budget, because the results feed the writer.
+    const toolK = retrievalBudget > 0 ? retrievalTopK(0, retrievalBudget, { tiers: RETRIEVAL_TIERS }) : null;
+
+    // The planner may run on a smaller model than the writer, so it is measured against its own window.
+    const executorKey = `${executor.apiProfileId}:${executor.model}`;
+    let protocol = options.toolProtocol !== 'text'
+        && (TEXT_PROTOCOL_STRIKES.get(executorKey) || 0) < TEXT_PROTOCOL_STRIKE_LIMIT
+        && nativeToolSupport({ apiProfileId: executor.apiProfileId, model: executor.model })
+        ? 'native'
+        : 'text';
+    let nativeConfirmed = false;
+    const toolDefinitions = plannerToolDefinitions({ roleplay: isRoleplay });
+    // Resolved per protocol: native tool definitions add their own framing to what the model counts.
+    const plannerLimitNow = () => resolvePayloadLimit({
+        apiProfileId: executor.apiProfileId,
+        model: executor.model,
+        protocol,
+        maxPayloadTokens: normalizeMaxApiPayload(chat?.maxContext)
+    });
+    const plannerLimit = plannerLimitNow();
+    const plannerWindow = plannerWindowShape(plannerLimit.limit);
 
     const retrievedProfileChunks = new Map();
     const retrievedChatChunks = new Map();
     const retrievedMemories = new Map();
     const retrievedLore = new Map();
-    const retrievedWorldFacts = new Map(); // Deterministic Worldbuild registry facts (lore + relations); exempt from finish-sources pruning.
+    const retrievedWorldFacts = new Map(); // Deterministic Worldbuild registry facts (lore + relations).
     const retrievedNarrativeOptions = new Map();
     const readFiles = new Map();
+    // Ids the free deterministic pass found. They are the floor this loop may not fall below.
+    const seededIds = new Set();
+
+    const retrievedIds = () => [
+        ...retrievedProfileChunks.keys(), ...retrievedChatChunks.keys(), ...retrievedMemories.keys(),
+        ...retrievedLore.keys(), ...retrievedWorldFacts.keys(), ...retrievedNarrativeOptions.keys(), ...readFiles.keys()
+    ];
+
+    // Keeps the best score a chunk reached across tool calls, and whether a search
+    // (not only an entity lookup) found it; both rank it in the final context.
+    const rememberRetrieved = (map, result, origin) => {
+        const score = Number(result.fusionScore ?? result.score) || 0;
+        const previous = map.get(result.id);
+        map.set(result.id, {
+            text: previous?.text ?? result.text,
+            source: result.source,
+            memoryBlockId: previous?.memoryBlockId ?? result.memoryBlockId ?? null,
+            score: Math.max(score, previous?.score ?? 0),
+            origin: previous?.origin === 'search' ? 'search' : origin
+        });
+    };
+
+    let workspaceKbFiles = [];
+    if (includeChatContext && chat && chat.knowledgeFiles) {
+        try {
+            workspaceKbFiles = typeof chat.knowledgeFiles === 'string'
+                ? JSON.parse(chat.knowledgeFiles)
+                : (chat.knowledgeFiles || []);
+        } catch (e) { workspaceKbFiles = []; }
+    }
+    let workspaceMemoryBlocks = [];
+    if (includeChatContext && chat && chat.memoryBlocks) {
+        try {
+            workspaceMemoryBlocks = typeof chat.memoryBlocks === 'string'
+                ? JSON.parse(chat.memoryBlocks)
+                : (chat.memoryBlocks || []);
+        } catch (e) { workspaceMemoryBlocks = []; }
+    }
 
     let historyText = '';
     if (Array.isArray(chatHistory) && chatHistory.length > 0) {
@@ -5233,118 +5273,90 @@ async function executeAgenticRagLoop(
         historyText = 'No previous messages in this chat session.';
     }
 
-    const defaultAgenticInstruction = "You are a search query optimizer. Extract the specific names, proper nouns, and primary search keywords from the user prompt. Always keep specific names and proper nouns intact. Output ONLY the optimized query terms without quotes, introduction, or explanation.";
+    const defaultAgenticInstruction = "You are a retrieval planner. Turn the user's request into complete natural-language questions for the search tools, keeping every proper noun exactly as it is written. The search engine is semantic: a whole question retrieves far more than loose keywords.";
 
     const mainInstruction = profile.agenticPrompt && profile.agenticPrompt.trim()
         ? profile.agenticPrompt.trim()
         : defaultAgenticInstruction;
 
-    // World map: the known entities of this chat's world index. Giving the agent the
-    // exact canonical names stops it from guessing keywords and lets it pull a full
-    // dossier via lookup_entity. Only names + aliases are injected (cheap); omitted
-    // entirely when the world has no tagged entities yet, so no empty section leaks.
-    let worldMapBlock = '';
+    // Exact canonical names keep the agent from guessing keywords.
+    let knownEntities = [];
     try {
-        // List the curated Worldbuild entities for this workspace straight from the
-        // registry (not only entities that happen to be tagged in chat memory), so the
-        // agent knows the full canonical vocabulary of the world even before anything
-        // has been summarized/tagged.
-        const known = includeChatContext
-            ? entitiesStore.listEntities({ workspaceId: chatId })
-            : [];
-        if (known.length > 0) {
-            const lines = known.slice(0, 60).map(e => {
-                const aka = (e.aliases && e.aliases.length) ? ` (aka ${e.aliases.join(', ')})` : '';
-                return `- ${e.canonicalName} [${e.type}]${aka}`;
-            }).join('\n');
-            worldMapBlock = `\nKNOWN ENTITIES IN THIS WORLD (use these EXACT names in your queries; use lookup_world_entity for narrator-authority facts and inspect_subject_knowledge for one subject's knowledge):\n${lines}\n`;
-        }
-    } catch (e) { }
-    const awarenessBlock = awarenessOverview
-        ? `\nSCENE AWARENESS OVERVIEW (cheap first pass; deepen only relevant subject-target pairs):\n${awarenessOverview}\n`
-        : '';
+        knownEntities = Array.isArray(options.knownEntities)
+            ? options.knownEntities
+            : (includeChatContext ? entitiesStore.listEntities({ workspaceId: chatId }) : []);
+    } catch (e) { knownEntities = []; }
+    const mentionedIds = options.mentionedIds instanceof Set
+        ? options.mentionedIds
+        : entityMentionIds(anchorQuery, knownEntities);
+    const worldMapText = worldMapBlock(knownEntities, {
+        mentionedIds,
+        recentIds: entityMentionIds(historyText, knownEntities),
+        limit: plannerWindow.worldMapLimit
+    });
 
-    const toolsPrompt = `
+    const sharedHead = `
 ${getSystemLanguageInstruction()}
 ${mainInstruction}
 
 You are an expert Research Assistant Agent. Your task is to investigate the knowledge bases and memories of the chat to retrieve all relevant details needed to answer the user's prompt.
-You must run in a loop of THOUGHT and ACTION (tool calls), up to ${maxTurns} turns maximum.
-At each turn, analyze what you have found so far, and output either one or more tool calls OR your final research findings inside the finish block.
+You work in a loop of THOUGHT and ACTION (tool calls), up to ${maxTurns} turns. At each turn, analyze what you have found so far, then either call tools or finish.
 
 CONVERSATION HISTORY:
 ${historyText}
 
 USER PROMPT: "${currentInput}"
-${worldMapBlock}
-${awarenessBlock}
-AVAILABLE TOOLS:
-1. <tool_call name="search_kb" query="search terms" />
-   Searches the profile's and chat's knowledge base files for matching concepts.
-2. <tool_call name="read_file" filename="filename.txt" />
-   Reads the entire text of a specific file in the knowledge base (useful to get complete code or full lore/character profile).
-3. <tool_call name="search_memories" query="search terms or #tags" />
-   Searches the chat's past summarized memory blocks, custom snippets, and manual tags (e.g. query for keywords or exact hashtags like #character, #backstory).
-4. <tool_call name="lookup_world_entity" query="entity name or alias" />
-   Retrieves narrator-authority Worldbuild facts, lore, current fields, and structural relations. This does not imply that any character knows those facts. Follow a listed relation with another lookup_world_entity call only when the related entity matters to the current scene.
-5. <tool_call name="read_lore" query="entity name or alias" />
-   For an entity that has a linked lore document (Writing Desk), returns the passages of that document most relevant to the user prompt. Use it when lookup_world_entity shows authored lore and you need canonical background, not just scene mentions. Does nothing if the entity has no linked lore.
-6. <tool_call name="scan_scene_awareness" query="current" />
-   Re-reads the compact Awareness map for the player, scene actors, possible observers, and nearby characters.
-7. <tool_call name="inspect_subject_knowledge" query="subject name | target name" />
-   Deepens one subject-target pair into known fields and active knowledge or beliefs. Use only when Awareness is insufficient for this scene.
-8. <tool_call name="inspect_subject_evidence" query="subject name | target name" />
-   Explains why one pair is confirmed, derived, evidence-candidate, explicitly unaware, or undetermined.
-9. <tool_call name="inspect_subject_relationships" query="subject name" />
-   Reads the subject's outgoing current relationships for private behavior planning.
-10. <tool_call name="inspect_subject_memories" query="subject name | optional topic" />
-   Reads only that subject's relevant active memories.
-11. <tool_call name="expand" query="R3 or a source name" />
-   Re-reads the FULL text of a previously retrieved item that was summarized in an earlier turn (results are shown by a handle like [R3 · source]). Use it only when a summarized item's snippet is not enough to decide. Everything you retrieve is already sent to the writing assistant in full — expand is just for YOUR reasoning.
-12. <tool_call name="explore_worldbuild_options" query="Races | optional scene need" />
-   Roleplay only. Retrieves a bounded palette from one registered Worldbuild category: System, Locations, Items, Races, Factions, Characters, Creatures, or Events. Options are narrator material, not facts already selected for the scene and not automatic character knowledge.
-13. <finish sources="source1, source2, ...">summary of retrieved facts</finish>
-   Concludes your research. Inside the 'sources' attribute, you MUST list the exact filenames, character names, or document names of the retrieved contexts that were ACTUALLY relevant and helpful to answer the user prompt. Only these sources will be kept in the final context.
-   If no sources are listed or if you omit the attribute, all searched contexts will be included by default.
-   
-   CRITICAL SUMMARY RULE: Keep the text content inside the <finish> tag extremely short and concise (1-2 sentences maximum, e.g., "Found Jonathan's resume file"). DO NOT write a full summary, quote, or copy the content of the files/chunks inside the tag, as the system automatically retrieves and sends the full raw content of your listed sources to the writing assistant.
+${worldMapText}${awarenessOverview ? `
+SCENE AWARENESS OVERVIEW (cheap first pass; deepen only relevant subject-target pairs):
+${awarenessOverview}
+` : ''}`;
 
-CRITICAL DIRECTIVES FOR COST & EFFICIENCY OPTIMIZATION:
-- EARLY EXIT: If you have already found all the necessary details to answer the user's prompt (e.g., character relationships, specific descriptions, context), DO NOT run additional tool calls or turns. Immediately call <finish> to conclude your research and minimize token costs.
-- NO REPETITIVE QUERIES: Do not run search queries with identical or very similar terms that you have already executed. Do not read the same file twice.
-- RELEVANCY ONLY: Only query for concepts directly related to the user's prompt. Do not fetch unrelated files or memories.
-${experienceMode === 'roleplay' ? `- CONTROLLED NARRATIVE ENRICHMENT: When the prompt asks the narrator to reveal, distinguish, or choose an undefined detail and a Worldbuild category can supply plausible options, call explore_worldbuild_options before finishing. Also retrieve scene, location, faction, or character canon needed to constrain the choice. Treat the palette as possibilities only. Do not use it for an already established fact, force variety, or assume every option fits the scene.` : ''}
+    const textProtocolSection = `
+AVAILABLE TOOLS (write every call exactly in this syntax):
+${textToolCatalog({ roleplay: isRoleplay })}
 
 OUTPUT FORMAT:
 Your response MUST contain a THOUGHT section explaining your reasoning, followed by one or more tool calls, OR the <finish> tag.
+Never write tool results yourself. Results arrive in the next message; a reply that calls a tool ends there, and a <finish> written alongside a tool call is ignored.
 Example output:
 THOUGHT: I need to locate where the protagonist meets the dragon and check if the code has a render function.
-<tool_call name="search_kb" query="protagonista dragão encontro" />
-<tool_call name="search_kb" query="render function" />
+<tool_call name="search_kb" query="Where does the protagonist meet the dragon?" />
+<tool_call name="search_kb" query="Which function renders the story on the canvas?" />
 
 If you have collected all necessary information to answer the prompt, call finish:
 THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the render function implementation.
-<finish sources="dragon_lore.txt, render_implementation.js">
-- Dragon met in Chapter 3: "The Dragon of the Mist".
-- Code function renderStory(canvas) uses canvas 2d context to draw.
-</finish>
+<finish sources="R2, render_implementation.js">Found the dragon's first appearance and the render function.</finish>
 `;
 
-    let messages = [
-        { role: 'user', content: toolsPrompt }
-    ];
+    const nativeProtocolSection = `
+TOOLS:
+The tools are provided as functions, and each description says when to use it. Reply with a short THOUGHT and call one or more tools. End the research only by calling finish with the handles of the results that were relevant. A finish called together with other tools is ignored, because their results have not been seen yet.
+`;
 
-    // The final answer is assembled from the retrieved* Maps below, so mid-loop the agent
-    // only needs a coverage view, not the full text of every prior turn. Older turns are
-    // compacted to a digest once the accumulated results exceed a token budget.
-    const LEAN_AGENT_HISTORY = true;
-    const LEAN_HISTORY_BUDGET_TOKENS = 1200;
-    const LEAN_HISTORY_KEEP_TURNS = 1; // newest N turns are always kept in full
+    const guidance = `
+HOW TO QUERY:
+- Write search_kb and search_memories queries as a whole question or statement, in the language of the material, keeping proper nouns exactly as written. Retrieval is semantic first: "What time did Rowan say the shop opens?" reaches what "Rowan shop time" misses.
+- The free pre-search below already ran the user's own words. If its strongest results already answer the request, finish on this turn and cite them; otherwise ask something it did not.
+
+CRITICAL DIRECTIVES FOR COST & EFFICIENCY OPTIMIZATION:
+- EARLY EXIT: If you have already found all the necessary details to answer the user's prompt (e.g., character relationships, specific descriptions, context), DO NOT run additional tool calls or turns. Finish immediately to minimize token costs.
+- AN EMPTY RESULT IS NOT AN ANSWER: a tool that returns nothing only proves those words were not a match. Before concluding that something is unknown, try one different angle: another wording, another tool, or lookup_entity on a name involved. Say that the answer is missing only once that second angle has also come back empty.
+- NO REPETITIVE QUERIES: Do not run search queries with identical or very similar terms that you have already executed. Do not read the same file twice. A repeat is refused and still costs you a turn.
+- RELEVANCY ONLY: Only query for concepts directly related to the user's prompt. Do not fetch unrelated files or memories.
+${isRoleplay ? `- PERSPECTIVE: lookup_entity returns what the narrator knows. Use inspect_subject_knowledge for what one character knows about another.
+- CONTROLLED NARRATIVE ENRICHMENT: When the prompt asks the narrator to reveal, distinguish, or choose an undefined detail and a Worldbuild category can supply plausible options, call explore_worldbuild_options before finishing. Also retrieve scene, location, faction, or character canon needed to constrain the choice. Treat the palette as possibilities only. Do not use it for an already established fact, force variety, or assume every option fits the scene.
+` : ''}`;
+
+    const headFor = mode => `${sharedHead}${mode === 'native' ? nativeProtocolSection : textProtocolSection}${guidance}`;
+    const systemPromptText = `You are a precise researcher. You communicate strictly using the tools specified. ${getSystemLanguageInstruction()}`;
+
     const SNIPPET_CHARS = 160;
-    const turnLog = [];               // { msgIndex, digestContent, fullTokens, digestTokens, downgraded }
     const itemRegistry = new Map();   // handle -> { source, full }, backs the expand tool
+    const handleIds = new Map();      // handle -> retrieved chunk id, for citations in finish
     const coveredSources = new Set();
     const coveredEntities = new Set();
+    const executedQueries = new Map(); // query key -> { tool, query, hits, handles }, the repeat guard
+    const ledgerEmptyKeys = includeChatContext ? retrievalLedger.emptyQueryKeys(chatId) : new Set();
     let handleSeq = 0;
     const makeSnippet = (t) => {
         const s = String(t || '').replace(/\s+/g, ' ').trim();
@@ -5354,159 +5366,670 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
     let finishResponse = '';
     let agenticRagInputTokens = 0;
     let agenticRagOutputTokens = 0;
-    const toolTrace = [];
-    let stopReason = 'max-turns';
+    const trajectory = {
+        anchorQuery,
+        toolK,
+        protocol,
+        finalProtocol: protocol,
+        protocolFallback: null,
+        stopped: null,
+        plannerWindow: { limit: plannerLimit.limit, configured: plannerLimit.configured, source: plannerLimit.source, outputTokens: plannerWindow.outputTokens, tokenRatio: plannerLimit.ratio },
+        seed: null,
+        turns: []
+    };
+
+    // One embedding of the request ranks the passages lookup_entity returns.
+    let lookupQueryVector = null;
+    if (includeChatContext) {
+        try { lookupQueryVector = await generateEmbeddingVector(anchorQuery, true); } catch (e) { lookupQueryVector = null; }
+    }
+
+    const coverageLine = () => formatCoverage({
+        entities: [...coveredEntities],
+        sources: [...coveredSources],
+        queries: [...executedQueries.values()].map(entry => ({ tool: entry.tool, query: entry.query, hits: entry.hits })),
+        items: itemRegistry.size
+    });
+    const renderItem = (it, full) => it.kind === 'note'
+        ? it.text
+        : (full && it.preview !== 'digest'
+            ? `[${it.handle} · ${it.source}] ${it.full}`
+            : `[${it.handle} · ${it.source}]${it.meta ? ` (${it.meta})` : ''} ${makeSnippet(it.full)}`);
+    const renderItems = (items, full) => items.map(it => renderItem(it, full)).join(full ? '\n\n' : '\n');
+
+    // Runs one tool call and reports what it yielded. A repeat never reaches the database:
+    // its answer is already in the transcript, and running it again cannot change the context.
+    const runToolCall = async (requested, { pushResult, pushNote }) => {
+        const call = { ...requested, name: canonicalToolName(requested.name) };
+        const key = queryKey(call.name, call.arg);
+        const seen = executedQueries.get(key);
+        if (seen) {
+            const where = seen.handles.length ? ` See ${seen.handles.join(', ')}.` : '';
+            pushNote(`Tool [${call.name}] for "${call.arg}": already executed, ${seen.hits} result(s).${where} Ask something different.`);
+            return { tool: call.name, arg: call.arg, hits: seen.hits, status: 'repeat' };
+        }
+        if (ledgerEmptyKeys.has(key)) {
+            pushNote(`Tool [${call.name}] for "${call.arg}": this exact query already returned nothing earlier in this conversation. Try another angle.`);
+            executedQueries.set(key, { tool: call.name, query: call.arg, hits: 0, handles: [] });
+            return { tool: call.name, arg: call.arg, hits: 0, status: 'known-empty' };
+        }
+
+        const firstHandle = handleSeq + 1;
+        let hits = 0;
+
+        if (call.name === 'search_kb') {
+            const rawProfileResults = await searchKnowledgeBase(call.arg, profile.id, { k: toolK });
+            const rawChatKbResults = includeChatContext
+                ? await searchChatKnowledgeBase(call.arg, chatId, { k: toolK, boost: true })
+                : [];
+
+            const knowledgeFiles = JSON.parse(profile.knowledgeFiles || '[]');
+            let constantSnippetTitles = [];
+            try {
+                constantSnippetTitles = db.getConstantSnippets(profile.id)
+                    .map(c => (c.title || '').toLowerCase());
+            } catch (e) { }
+
+            const profileResults = rawProfileResults.filter(r => {
+                const fileMatch = knowledgeFiles.find(f => f.name.toLowerCase() === r.source.toLowerCase());
+                if (fileMatch && (fileMatch.strategy === 'constant' || fileMatch.strategy === 'full_context')) {
+                    return false;
+                }
+                if (constantSnippetTitles.includes(r.source.toLowerCase())) {
+                    return false;
+                }
+                return true;
+            });
+
+            const chatKbResults = filterWorkspaceKnowledgeResults(
+                rawChatKbResults,
+                workspaceKbFiles,
+                profile.id
+            );
+
+            profileResults.forEach(r => rememberRetrieved(retrievedProfileChunks, r, 'search'));
+            if (includeChatContext) {
+                chatKbResults.forEach(r => rememberRetrieved(retrievedChatChunks, r, 'search'));
+            }
+
+            const combined = [...profileResults, ...chatKbResults];
+            hits = combined.length;
+
+            if (combined.length === 0) {
+                pushNote(`Tool [search_kb] for "${call.arg}": No matches found.`);
+            } else {
+                pushNote(`Tool [search_kb] for "${call.arg}": ${combined.length} result(s).`);
+                combined.forEach((r, index) => pushResult({
+                    id: r.id, source: r.source, full: r.text, score: r.fusionScore ?? r.score,
+                    preview: index < AGENT_FULL_RESULTS_PER_CALL ? 'full' : 'digest',
+                    meta: `search_kb "${call.arg}"${typeof r.score === 'number' ? ` sim=${r.score.toFixed(2)}` : ''}`
+                }));
+            }
+        } else if (call.name === 'search_memories') {
+            const rawMemResults = includeChatContext ? await searchChatMemories(call.arg, chatId, { k: toolK }) : [];
+
+            const memResults = filterWorkspaceMemoryResults(
+                rawMemResults,
+                workspaceMemoryBlocks,
+                profile.id
+            );
+
+            if (includeChatContext) {
+                memResults.forEach(r => rememberRetrieved(retrievedMemories, r, 'search'));
+            }
+            hits = memResults.length;
+
+            if (memResults.length === 0) {
+                pushNote(`Tool [search_memories] for "${call.arg}": No matches found.`);
+            } else {
+                pushNote(`Tool [search_memories] for "${call.arg}": ${memResults.length} match(es).`);
+                memResults.forEach((r, index) => pushResult({
+                    id: r.id, source: r.source, full: r.text, score: r.fusionScore ?? r.score,
+                    preview: index < AGENT_FULL_RESULTS_PER_CALL ? 'full' : 'digest',
+                    meta: `search_memories "${call.arg}"${typeof r.score === 'number' ? ` sim=${r.score.toFixed(2)}` : ''}`
+                }));
+            }
+        } else if (call.name === 'lookup_entity') {
+            // Registry is resolved directly so never-tagged entities are still found.
+            let entityChunks = [], entityIds = [], entityChunkTotal = 0;
+            if (includeChatContext) {
+                const looked = lookupEntityChunks(call.arg, chatId, 'chat_memory', { queryVector: lookupQueryVector, scope: 'workspace' });
+                const ranked = looked.chunks || [];
+                const allowedMemory = new Set(
+                    filterWorkspaceMemoryResults(ranked.filter(r => r.ownerType === 'chat_memory'), workspaceMemoryBlocks, profile.id)
+                        .map(r => r.id)
+                );
+                const allowedKb = new Set(
+                    filterWorkspaceKnowledgeResults(ranked.filter(r => r.ownerType === 'chat_kb'), workspaceKbFiles, profile.id)
+                        .map(r => r.id)
+                );
+                const available = ranked.filter(r => r.ownerType === 'document' || allowedMemory.has(r.id) || allowedKb.has(r.id));
+                entityChunkTotal = available.length;
+                entityChunks = available.slice(0, LOOKUP_ENTITY_CHUNK_LIMIT);
+                entityIds = Array.isArray(looked.entityIds) ? [...looked.entityIds] : [];
+            }
+            let registryEntity = null;
+            try {
+                const rid = entitiesStore.resolveMention(call.arg, null, chatId);
+                if (rid) {
+                    registryEntity = entitiesStore.getEntity(rid);
+                    if (!entityIds.includes(rid)) entityIds.push(rid);
+                }
+            } catch (e) { }
+
+            if (includeChatContext) {
+                for (const r of entityChunks) {
+                    if (r.ownerType === 'chat_kb') rememberRetrieved(retrievedChatChunks, r, 'lookup');
+                    else if (r.ownerType === 'document') retrievedLore.set(r.id, { text: r.text, source: r.source, score: Number(r.score) || 0 });
+                    else rememberRetrieved(retrievedMemories, r, 'lookup');
+                }
+            }
+            const relLines = [];
+            const edgesByEntity = new Map();
+            let anyLore = false;
+            let dossierCalendar = null;
+            try { dossierCalendar = require('./features/worldbuild/calendar-service').getCalendar(db, chatId); } catch (e) { }
+            try {
+                for (const eid of entityIds) {
+                    const ent = entitiesStore.getEntity(eid);
+                    if (!ent) continue;
+                    const links = entitiesStore.getLinksFrom(eid) || [];
+                    if (links.length) {
+                        const edges = links.map(l => `${l.label || l.relType} → ${l.entity ? l.entity.canonicalName : '?'}${edgeDetail(l, dossierCalendar)}`).join('; ');
+                        relLines.push(`${ent.canonicalName}: ${edges}`);
+                        edgesByEntity.set(eid, edges);
+                    }
+                    if (entitiesStore.linkedLoreDocIds(ent).length) anyLore = true;
+                }
+            } catch (e) { }
+
+            if (registryEntity) {
+                const factParts = [];
+                const details = entityDataFacts(registryEntity.data);
+                if (details) factParts.push(`Details: ${details}`);
+                const desc = registryEntity.data && (registryEntity.data.description || registryEntity.data.content);
+                if (desc && String(desc).trim()) factParts.push(`Description: ${String(desc).trim()}`);
+                if (registryEntity.lore && String(registryEntity.lore).trim()) factParts.push(`Lore: ${registryEntity.lore}`);
+                const ownEdges = edgesByEntity.get(registryEntity.id);
+                if (ownEdges) factParts.push(`Relations: ${ownEdges}`);
+                // Recorded even without details, so the narrative planner learns the entity is in play.
+                const detailText = factParts.length ? ` — ${factParts.join(' | ')}` : '';
+                retrievedWorldFacts.set(registryEntity.id, {
+                    text: `${registryEntity.canonicalName} (${registryEntity.type})${detailText}`,
+                    source: `Worldbuild — ${registryEntity.canonicalName}`,
+                    canonicalName: registryEntity.canonicalName,
+                    aliases: Array.isArray(registryEntity.aliases) ? registryEntity.aliases : [],
+                    entityIds: [registryEntity.id]
+                });
+            }
+
+            if (registryEntity) {
+                coveredEntities.add(registryEntity.canonicalName);
+                if (includeChatContext) retrievalLedger.recordEntity(chatId, registryEntity.canonicalName);
+                let head = `Worldbuild entity ${registryEntity.canonicalName} (${registryEntity.type})`;
+                const headDetails = entityDataFacts(registryEntity.data);
+                if (headDetails) head += ` [${headDetails}]`;
+                const headDesc = registryEntity.data && (registryEntity.data.description || registryEntity.data.content);
+                if (headDesc && String(headDesc).trim()) head += ` — ${String(headDesc).trim()}`;
+                if (registryEntity.lore && String(registryEntity.lore).trim()) head += `: ${registryEntity.lore}`;
+                pushResult({ source: registryEntity.canonicalName, full: head, meta: `lookup_entity "${call.arg}"` });
+            }
+            entityChunks.forEach((r, index) => pushResult({
+                id: r.id, source: r.source, full: r.text,
+                preview: index < AGENT_FULL_RESULTS_PER_CALL ? 'full' : 'digest',
+                meta: `lookup_entity "${call.arg}"`
+            }));
+            hits = entityChunks.length + (registryEntity ? 1 : 0);
+            if (entityChunkTotal > entityChunks.length) {
+                pushNote(`Tool [lookup_entity] for "${call.arg}": showing the ${entityChunks.length} passages most relevant to the request out of ${entityChunkTotal} tagged. Use search_memories with specific terms to reach others.`);
+            }
+            if (!registryEntity && entityChunks.length === 0 && relLines.length === 0) {
+                pushNote(`Tool [lookup_entity] for "${call.arg}": No known entity matched.`);
+            }
+            if (relLines.length) {
+                pushNote(`RELATED ENTITIES (follow with lookup_entity): ${relLines.join(' | ')}`);
+            }
+            if (anyLore) {
+                pushNote(`NOTE: this entity has linked lore — call read_lore with "${call.arg}" for its authored background.`);
+            }
+        } else if (call.name === 'read_lore') {
+            let loreResults = [];
+            let docTitle = '';
+            if (includeChatContext) {
+                try {
+                    const looked = lookupEntityChunks(call.arg, chatId, 'chat_memory', { idsOnly: true, scope: 'workspace' });
+                    const ids = Array.isArray(looked.entityIds) ? [...looked.entityIds] : [];
+                    try {
+                        const rid = entitiesStore.resolveMention(call.arg, null, chatId);
+                        if (rid && !ids.includes(rid)) ids.push(rid);
+                    } catch (e) { }
+                    let loreDocIds = [];
+                    for (const eid of ids) {
+                        const ent = entitiesStore.getEntity(eid);
+                        const docs = ent ? entitiesStore.linkedLoreDocIds(ent) : [];
+                        if (docs.length) { loreDocIds = docs; docTitle = ent.canonicalName; break; }
+                    }
+                    if (loreDocIds.length) {
+                        loreResults = await searchLoreDocuments(anchorQuery, loreDocIds, { k: toolK });
+                    }
+                } catch (e) { }
+            }
+            hits = loreResults.length;
+            if (loreResults.length === 0) {
+                pushNote(`Tool [read_lore] for "${call.arg}": No linked lore document, or no relevant passages found.`);
+            } else {
+                pushNote(`Tool [read_lore] for "${call.arg}": ${loreResults.length} passage(s) from linked lore of ${docTitle}.`);
+                loreResults.forEach((r, index) => {
+                    const text = r.text || '';
+                    retrievedLore.set(r.id, { text, source: r.source || docTitle, score: Number(r.fusionScore ?? r.score) || 0 });
+                    const agentText = text.length > MAX_AGENT_FILE_CHARS
+                        ? text.slice(0, MAX_AGENT_FILE_CHARS) + '\n[...truncated for agent reasoning; the full passage is preserved for the final context...]'
+                        : text;
+                    pushResult({
+                        id: r.id, source: r.source || docTitle, full: agentText,
+                        preview: index < AGENT_FULL_RESULTS_PER_CALL ? 'full' : 'digest',
+                        meta: `read_lore "${call.arg}"`
+                    });
+                });
+            }
+        } else if (call.name === 'read_file') {
+            let isConstant = false;
+            let isUnavailable = false;
+            let canReadWorkspaceSource = false;
+            try {
+                const kbFiles = JSON.parse(profile.knowledgeFiles || '[]');
+                const fileMatch = kbFiles.find(f => f.name.toLowerCase() === call.arg.toLowerCase());
+                if (fileMatch?.enabled === false) isUnavailable = true;
+                if (fileMatch && (!fileMatch.strategy || fileMatch.strategy === 'constant' || fileMatch.strategy === 'full_context')) {
+                    isConstant = true;
+                }
+            } catch (e) { }
+
+            if (!isConstant && includeChatContext) {
+                const fileMatch = workspaceKbFiles.find(f => String(f.name || '').toLowerCase() === call.arg.toLowerCase());
+                if (fileMatch) {
+                    isConstant = !isSearchable(fileMatch);
+                    canReadWorkspaceSource = isAvailableToProfile(fileMatch, profile.id) && isSearchable(fileMatch);
+                    if (!canReadWorkspaceSource && !isConstant) isUnavailable = true;
+                }
+            }
+
+            if (!isConstant) {
+                try {
+                    const snippetMatch = db.getConstantSnippets(profile.id)
+                        .find(c => (c.title || '').toLowerCase() === call.arg.toLowerCase());
+                    if (snippetMatch) {
+                        isConstant = true;
+                    }
+                } catch (e) { }
+            }
+
+            if (!isConstant && includeChatContext) {
+                const snippetMatch = workspaceMemoryBlocks.find(s => (s.title || s.source || '').toLowerCase() === call.arg.toLowerCase());
+                if (snippetMatch) {
+                    isConstant = !isSearchable(snippetMatch);
+                    canReadWorkspaceSource = isAvailableToProfile(snippetMatch, profile.id) && isSearchable(snippetMatch);
+                    if (!canReadWorkspaceSource && !isConstant) isUnavailable = true;
+                }
+            }
+
+            if (isConstant) {
+                pushNote(`Tool [read_file] for "${call.arg}": Access Denied — "${call.arg}" is a Constant context block already permanently included in the main prompt.`);
+            } else if (isUnavailable) {
+                pushNote(`Tool [read_file] for "${call.arg}": Access Denied — this source is disabled or outside the current AI Profile scope.`);
+            } else {
+                let fileText = readEntireKbFile(profile.id, call.arg);
+                let fileSource = 'profile';
+                if (fileText.startsWith("[System: File not found") && includeChatContext && canReadWorkspaceSource) {
+                    fileText = readEntireKbFile(chatId, call.arg);
+                    fileSource = 'chat';
+                }
+
+                if (!fileText.startsWith("[System: File not found")) {
+                    readFiles.set(call.arg, { text: fileText, source: fileSource });
+                    hits = 1;
+                }
+
+                // Truncated for the agent only; readFiles keeps the full text.
+                let agentFileText = fileText;
+                if (fileText.length > MAX_AGENT_FILE_CHARS) {
+                    agentFileText = fileText.slice(0, MAX_AGENT_FILE_CHARS) +
+                        `\n[...truncated at ${MAX_AGENT_FILE_CHARS} chars for agent reasoning; the full file is preserved for the final context...]`;
+                }
+
+                pushResult({ source: call.arg, full: agentFileText, meta: `read_file (${fileSource})` });
+            }
+        } else if (call.name === 'explore_worldbuild_options') {
+            if (!isRoleplay || !includeChatContext) {
+                pushNote('Narrative option exploration is available only in Roleplay Mode with workspace context.');
+            } else {
+                const palette = buildNarrativeOptionPalette({
+                    workspaceId: chatId,
+                    query: call.arg,
+                    listEntities: entitiesStore.listEntities
+                });
+                if (palette.error) {
+                    pushNote(`Tool [explore_worldbuild_options]: ${palette.error}`);
+                } else if (!palette.count) {
+                    pushNote(`Tool [explore_worldbuild_options] for "${call.arg}": No registered ${palette.type} options found.`);
+                } else {
+                    retrievedNarrativeOptions.set(palette.type, { text: palette.content, source: palette.source, score: 1 });
+                    hits = palette.count;
+                    pushResult({ source: palette.source, full: palette.content, meta: `explore_worldbuild_options "${call.arg}"` });
+                }
+            }
+        } else if (EPISTEMIC_TOOLS[call.name]) {
+            // Per-subject records stay in the planner's reasoning; the context planner decides what the writer sees.
+            const [method, unavailable] = EPISTEMIC_TOOLS[call.name];
+            const text = epistemicTools
+                ? (call.name === 'scan_scene_awareness'
+                    ? `Scene Awareness:\n${epistemicTools.scanSceneAwareness(chatId)}`
+                    : epistemicTools[method](chatId, call.arg))
+                : unavailable;
+            hits = epistemicTools ? 1 : 0;
+            pushNote(text);
+        } else if (call.name === 'expand') {
+            // Re-read one previously summarized item's full text into THIS turn only.
+            const hit = itemRegistry.get(call.arg) ||
+                [...itemRegistry.values()].find(v => entitiesStore.normalizeName(v.source) === entitiesStore.normalizeName(call.arg));
+            if (hit) {
+                hits = 1;
+                pushNote(`Tool [expand] "${call.arg}":\n[${hit.source}] ${hit.full}`);
+            } else {
+                pushNote(`Tool [expand] "${call.arg}": no such retrieved item.`);
+            }
+        }
+
+        const handles = [];
+        for (let n = firstHandle; n <= handleSeq; n++) handles.push(`R${n}`);
+        executedQueries.set(key, { tool: call.name, query: call.arg, hits, handles });
+        // Scene records change turn by turn, so an empty answer from them is not remembered.
+        if (includeChatContext && call.name !== 'expand' && !EPISTEMIC_TOOLS[call.name] && call.name !== 'explore_worldbuild_options') {
+            retrievalLedger.recordQuery(chatId, { key, tool: call.name, query: call.arg, hits });
+        }
+        return { tool: call.name, arg: call.arg, hits, status: 'ran' };
+    };
+
+    const createCollector = () => {
+        const turnItems = [];
+        const pushResult = ({ id, source, full, meta, preview, score }) => {
+            const handle = `R${++handleSeq}`;
+            itemRegistry.set(handle, { source, full });
+            if (id) handleIds.set(handle, id);
+            if (source) coveredSources.add(source);
+            turnItems.push({ kind: 'result', handle, source: source || '?', full: full || '', meta: meta || '', preview: preview || 'full', score: Number(score) || 0 });
+            return handle;
+        };
+        const pushNote = (text) => turnItems.push({ kind: 'note', text });
+        return { turnItems, pushResult, pushNote };
+    };
+
+    const nextStepLine = (turnAboutToRun) => (turnAboutToRun >= maxTurns
+        ? `TURN ${turnAboutToRun}/${maxTurns}. This is your LAST turn: finish now. A tool call now still runs and its results still reach the writing assistant, but you will not see them.`
+        : `TURN ${turnAboutToRun}/${maxTurns}. What is your next step?`);
+
+    // The free pass the deterministic path would have made anyway. It is the floor of this
+    // loop, and it keeps turn 1 from spending a model call to rediscover the obvious.
+    let seedBlock = '';
+    try {
+        const seed = createCollector();
+        const seedCalls = [{ name: 'search_kb', arg: anchorQuery }];
+        if (includeChatContext) seedCalls.push({ name: 'search_memories', arg: anchorQuery });
+        const seedRuns = [];
+        for (const call of seedCalls) {
+            seedRuns.push(await runToolCall(call, seed));
+        }
+        for (const map of [retrievedProfileChunks, retrievedChatChunks, retrievedMemories]) {
+            for (const id of map.keys()) seededIds.add(id);
+        }
+        trajectory.seed = { calls: seedRuns, items: seededIds.size, ids: [...seededIds] };
+        if (seed.turnItems.length) {
+            // Shown whole so a pre-search that already answers lets the planner finish at once.
+            // The preview is bounded by the planner's window; every seeded passage reaches the writer.
+            const ranked = seed.turnItems.filter(it => it.kind === 'result').sort((a, b) => b.score - a.score);
+            const shownInFull = new Set();
+            const fullLines = [];
+            const snippetLines = [];
+            let used = 0;
+            let hidden = 0;
+            for (const it of ranked.slice(0, SEED_FULL_RESULTS)) {
+                const line = `[${it.handle} · ${it.source}] ${it.full}`;
+                const cost = estimateTokens(line);
+                if (used + cost > plannerWindow.seedPreviewTokens) continue;
+                fullLines.push(line);
+                shownInFull.add(it);
+                used += cost;
+            }
+            for (const it of seed.turnItems) {
+                if (shownInFull.has(it)) continue;
+                const line = renderItem(it, false);
+                const cost = estimateTokens(line);
+                if (it.kind === 'result' && used + cost > plannerWindow.seedPreviewTokens) {
+                    hidden++;
+                    continue;
+                }
+                snippetLines.push(line);
+                used += cost;
+            }
+            if (hidden) snippetLines.push(`(${hidden} more pre-search result(s) are already in the final context and not shown here.)`);
+            const strongest = fullLines.length
+                ? `STRONGEST RESULTS, IN FULL (if these already answer the request, finish now and cite them):\n${fullLines.join('\n\n')}\n\n`
+                : '';
+            seedBlock = `PRE-SEARCH RESULTS (free deterministic retrieval for the user's request; already included in the final context):\n${coverageLine()}\n\n${strongest}OTHER RESULTS (snippets you can expand):\n${snippetLines.join('\n')}`;
+        }
+        console.log(`[Agentic RAG] Pre-search seeded ${seededIds.size} passage(s) before turn 1.`);
+    } catch (err) {
+        console.warn('[Agentic RAG] Pre-search failed, continuing without a floor:', err.message);
+    }
+
+    // The transcript is neutral and only grows, so either protocol can render it and a
+    // provider that reuses prefixes reads each earlier turn back from cache.
+    const transcript = [];
+    const firstUserText = mode => `${headFor(mode)}\n${seedBlock ? `${seedBlock}\n\n` : ''}${nextStepLine(1)}`;
+    const resultsOf = (step, joiner) => step.results.map(result => (step.downgraded ? result.digest : result.full)).join(joiner);
+
+    const renderTextMessages = () => {
+        const messages = [{ role: 'user', content: firstUserText('text') }];
+        for (const step of transcript) {
+            if (step.kind === 'correction') {
+                messages.push({ role: 'assistant', content: step.text || '(empty reply)' });
+                messages.push({ role: 'user', content: step.notice });
+                continue;
+            }
+            const assistant = step.textReply != null
+                ? step.textReply
+                : [step.thought, ...step.calls.map(renderTextCall)].filter(Boolean).join('\n');
+            messages.push({ role: 'assistant', content: assistant || '(empty reply)' });
+            const label = step.downgraded ? 'TOOL RESULTS (earlier, summarized)' : 'TOOL RESULTS';
+            messages.push({ role: 'user', content: `${label}:\n${step.coverage}\n\n${resultsOf(step, step.downgraded ? '\n' : '\n\n')}\n\n${step.footer}` });
+        }
+        return messages;
+    };
+
+    const renderNativeConversation = () => {
+        const conversation = [{ role: 'user', text: firstUserText('native') }];
+        for (const step of transcript) {
+            if (step.kind === 'correction') {
+                conversation.push({ role: 'assistant', text: step.text || '(empty reply)', toolCalls: [] });
+                conversation.push({ role: 'user', text: step.notice });
+                continue;
+            }
+            conversation.push({ role: 'assistant', text: step.thought, toolCalls: step.calls, raw: step.raw, rawFormat: step.rawFormat });
+            conversation.push({
+                role: 'tool',
+                results: step.results.map(result => ({ id: result.id, name: result.name, content: step.downgraded ? result.digest : result.full }))
+            });
+            conversation.push({ role: 'user', text: `${step.coverage}\n\n${step.footer}` });
+        }
+        return conversation;
+    };
+
+    let turnLimit = plannerLimit;
+    const estimateRequest = () => estimatePayloadTokens({
+        systemPrompt: systemPromptText,
+        chatHistory: protocol === 'native' ? flattenConversation(renderNativeConversation(), toolDefinitions) : renderTextMessages(),
+        newPrompt: '',
+        outputTokens: plannerWindow.outputTokens,
+        maxPayloadTokens: turnLimit.limit
+    });
+    // The limit already carries the correction for this model's count; the estimate stays raw.
+    const fitsPlannerWindow = () => {
+        turnLimit = plannerLimitNow();
+        return estimateRequest().totalTokens <= turnLimit.limit;
+    };
+
+    const requestPlannerTurn = () => {
+        const request = {
+            apiProfileId: executor.apiProfileId,
+            model: executor.model,
+            systemPrompt: systemPromptText,
+            temperature: 0.1,
+            maxTokens: plannerWindow.outputTokens,
+            maxPayloadTokens: normalizeMaxApiPayload(chat?.maxContext),
+            payloadLimit: turnLimit,
+            learnTokenCount: true,
+            manualMode: false,
+            manualJson: '',
+            abortSignal: run?.controller?.signal,
+            cachePrefix: true
+        };
+        if (protocol === 'native') {
+            return sendAgentRequest({ ...request, conversation: renderNativeConversation(), tools: toolDefinitions });
+        }
+        const messages = renderTextMessages();
+        return sendAgentRequest({ ...request, chatHistory: messages.slice(0, -1), newPrompt: messages[messages.length - 1].content });
+    };
+
+    const abandonNative = (reason, permanent) => {
+        protocol = 'text';
+        trajectory.finalProtocol = 'text';
+        trajectory.protocolFallback = reason;
+        const strikes = permanent ? TEXT_PROTOCOL_STRIKE_LIMIT : (TEXT_PROTOCOL_STRIKES.get(executorKey) || 0) + 1;
+        TEXT_PROTOCOL_STRIKES.set(executorKey, strikes);
+        console.warn(`[Agentic RAG] Falling back to the text protocol: ${reason}.`);
+    };
 
     while (currentTurn <= maxTurns && !finished) {
         throwIfRunCancelled(run);
         console.log(`[Agentic RAG] Turn ${currentTurn}/${maxTurns}`);
-        sendRunEvent(webContents, 'workflow-progress', run, {
-            profileName: profile.name,
-            status: `Agentic RAG: Investigating... (Turn ${currentTurn}/${maxTurns})`
-        });
+        if (webContents) {
+            sendRunEvent(webContents, 'workflow-progress', run, {
+                profileName: profile.name,
+                status: `Agentic RAG: Investigating... (Turn ${currentTurn}/${maxTurns})`
+            });
+        }
+
+        if (!downgradeUntilFits(transcript.filter(step => step.kind === 'turn'), fitsPlannerWindow)) {
+            const correction = turnLimit.ratio > 1
+                ? ` (${turnLimit.limit} by Kallamo's estimate, as this model counts about ${turnLimit.ratio.toFixed(2)} times as many)`
+                : '';
+            trajectory.stopped = `the research no longer fits the planner model's context window of ${turnLimit.configured} tokens${correction}`;
+            console.warn(`[Agentic RAG] Stopping: ${trajectory.stopped}.`);
+            break;
+        }
+
+        const before = new Set(retrievedIds());
+        const turnRecord = { turn: currentTurn, protocol, calls: [], inputTokens: 0, outputTokens: 0, providerUsage: null, newItems: 0, newIds: [], finished: false };
+        trajectory.turns.push(turnRecord);
 
         try {
-            const systemPromptText = `You are a precise researcher. You communicate strictly using the tools specified. ${getSystemLanguageInstruction()}`;
-            const messagesText = JSON.stringify(messages);
-            agenticRagInputTokens += estimateTokens(systemPromptText) + estimateTokens(messagesText);
+            turnRecord.inputTokens = estimateRequest().inputTokens;
+            agenticRagInputTokens += turnRecord.inputTokens;
 
-            const agentOutput = await sendApiRequest({
-                apiProfileId: executor.apiProfileId,
-                model: executor.model,
-                systemPrompt: systemPromptText,
-                chatHistory: [],
-                newPrompt: messagesText,
-                temperature: 0.1,
-                maxTokens: 4000,
-                maxPayloadTokens,
-                manualMode: false,
-                manualJson: '',
-                abortSignal: run?.controller?.signal
-            });
-
-            agenticRagOutputTokens += estimateTokens(agentOutput);
-
-            console.log(`[Agentic RAG] Agent output:\n${agentOutput}`);
-
-            // Tolerant attribute parser: accepts double quotes, single quotes, or unquoted values, in any order.
-            const parseAttrs = (attrStr) => {
-                const attrs = {};
-                const attrRegex = /([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g;
-                let m;
-                while ((m = attrRegex.exec(attrStr)) !== null) {
-                    attrs[m[1].toLowerCase()] = (m[2] ?? m[3] ?? m[4] ?? '').trim();
-                }
-                return attrs;
-            };
-
-            const KNOWN_TOOLS = [
-                'search_kb', 'read_file', 'search_memories', 'lookup_entity', 'lookup_world_entity',
-                'read_lore', 'scan_scene_awareness', 'inspect_subject_knowledge',
-                'inspect_subject_evidence', 'inspect_subject_relationships',
-                'inspect_subject_memories', 'explore_worldbuild_options', 'expand'
-            ];
-
-            // Tolerant tool_call parsing: self-closing or not, any quote style, any attribute order,
-            // arg under several aliases, or as the element's inner text.
-            const toolCalls = [];
-            const toolBlockRegex = /<tool_call\b([^>]*?)\/?>([\s\S]*?<\/tool_call>)?/gi;
-            let tb;
-            while ((tb = toolBlockRegex.exec(agentOutput)) !== null) {
-                const attrs = parseAttrs(tb[1] || '');
-                const name = (attrs.name || '').toLowerCase();
-                let arg = attrs.query ?? attrs.filename ?? attrs.file ?? attrs.q ?? attrs.term ?? attrs.arg ?? '';
-                if (!arg && tb[2]) {
-                    arg = tb[2].replace(/<\/tool_call>/i, '').trim();
-                }
-                if (KNOWN_TOOLS.includes(name) && arg) {
-                    toolCalls.push({ name, arg });
-                }
+            let reply;
+            try {
+                reply = await requestPlannerTurn();
+            } catch (requestError) {
+                const aborted = Boolean(run?.controller?.signal?.aborted) || requestError?.name === 'AbortError';
+                if (aborted || protocol !== 'native' || nativeConfirmed || requestError?.code === 'MAX_API_PAYLOAD_EXCEEDED') throw requestError;
+                turnRecord.calls.push({ tool: '-', arg: '', hits: 0, status: 'native-request-failed' });
+                abandonNative(`the native request failed: ${String(requestError?.message || requestError).slice(0, 160)}`, true);
+                continue;
             }
 
-            // Tolerant finish parsing: flexible sources quoting.
+            const agentOutput = reply.content || '';
+            turnRecord.outputTokens = estimateTokens(agentOutput) + estimateTokens(reply.toolCalls && reply.toolCalls.length ? JSON.stringify(reply.toolCalls) : '');
+            turnRecord.providerUsage = reply.usage || null;
+            if (reply.learnedTokenRatio != null) turnRecord.tokenRatio = reply.learnedTokenRatio;
+            agenticRagOutputTokens += turnRecord.outputTokens;
+
+            console.log(`[Agentic RAG] Agent output:\n${agentOutput}${reply.toolCalls && reply.toolCalls.length ? `\n${JSON.stringify(reply.toolCalls)}` : ''}`);
+
+            // Reasoning is never read as an action, in either protocol.
+            const thought = stripReasoning(agentOutput);
+            let calls = [];
             let finishMatch = null;
-            const finishBlock = /<finish\b([^>]*)>([\s\S]*?)<\/finish>/i.exec(agentOutput);
-            if (finishBlock) {
-                const finishAttrs = parseAttrs(finishBlock[1] || '');
-                finishMatch = { sources: finishAttrs.sources || '', body: finishBlock[2] };
+            let ignoredFinishes = [];
+
+            if (protocol === 'native') {
+                const nativeCalls = (reply.toolCalls || []).map((call, index) => ({
+                    // Google matches responses by name when it sent no id, so none is invented there.
+                    id: call.id || (reply.rawFormat === 'google' ? null : `call_${currentTurn}_${index}`),
+                    name: String(call.name || '').toLowerCase(),
+                    args: call.args || {}
+                }));
+                if (!nativeCalls.length && !nativeConfirmed) {
+                    turnRecord.calls.push({ tool: '-', arg: '', hits: 0, status: 'no-native-call' });
+                    abandonNative('the first native reply called no tool', false);
+                    continue;
+                }
+                if (nativeCalls.length && !nativeConfirmed) {
+                    nativeConfirmed = true;
+                    TEXT_PROTOCOL_STRIKES.delete(executorKey);
+                }
+                const finishes = nativeCalls.filter(call => call.name === 'finish');
+                calls = nativeCalls.filter(call => call.name !== 'finish');
+                if (!nativeCalls.length) {
+                    // After tools have worked once, a plain reply is the model concluding.
+                    finishMatch = { sources: '', body: thought };
+                } else if (!calls.length) {
+                    const args = finishes[0].args || {};
+                    finishMatch = {
+                        sources: Array.isArray(args.sources) ? args.sources.join(', ') : String(args.sources || ''),
+                        body: String(args.summary || '')
+                    };
+                } else if (finishes.length) {
+                    ignoredFinishes = finishes;
+                    console.log('[Agentic RAG] Ignoring a finish called alongside other tools; their results had not been delivered yet.');
+                }
+            } else {
+                const parsed = parseAgentTurn(agentOutput);
+                if (parsed.imaginedFinish) {
+                    console.log('[Agentic RAG] Ignoring a finish written alongside tool calls; the results had not been delivered yet.');
+                }
+                calls = parsed.toolCalls.map(call => ({ id: null, name: call.name, args: { query: call.arg } }));
+                finishMatch = parsed.finish ? { sources: parsed.finish.sources, body: parsed.finish.body } : null;
             }
 
             if (finishMatch) {
                 const sourcesAttr = finishMatch.sources;
-                finishResponse = finishMatch.body.trim();
+                finishResponse = String(finishMatch.body || '').trim();
                 finished = true;
-                stopReason = 'finished';
+                turnRecord.finished = true;
 
                 if (sourcesAttr) {
-                    const allowedSources = sourcesAttr.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-                    console.log(`[Agentic RAG] Agent specified relevant sources:`, allowedSources);
-
-                    const checkMatch = (chunk) => {
-                        const sourceLower = (chunk.source || '').toLowerCase();
-                        const textLower = (chunk.text || '').toLowerCase();
-
-                        return allowedSources.some(src => {
-                            const srcLower = src.toLowerCase();
-
-                            if (sourceLower && sourceLower !== 'summarized history' && sourceLower !== 'chat archive') {
-                                if (sourceLower.includes(srcLower) || srcLower.includes(sourceLower)) return true;
-                            }
-
-                            const docMatch = textLower.match(/^document:\s*([^\n]+)/);
-                            if (docMatch) {
-                                const docName = docMatch[1].trim();
-                                if (docName.includes(srcLower) || srcLower.includes(docName)) return true;
-                                const docNameClean = docName.replace(/_/g, ' ');
-                                if (docNameClean.includes(srcLower) || srcLower.includes(docNameClean)) return true;
-                            }
-
-                            const memMatch = textLower.match(/^memory context\s*\[([^\]]+)\]/);
-                            if (memMatch) {
-                                const memTitle = memMatch[1].trim();
-                                if (memTitle.includes(srcLower) || srcLower.includes(memTitle)) return true;
-                            }
-
-                            const firstLine = textLower.split('\n')[0] || '';
-                            if (firstLine.includes(srcLower)) return true;
-
-                            return false;
-                        });
+                    const citations = parseCitations(sourcesAttr);
+                    const allowedSources = citations.names;
+                    const cited = {
+                        names: allowedSources,
+                        ids: new Set([...citations.handles].map(handle => handleIds.get(handle)).filter(Boolean))
                     };
+                    console.log(`[Agentic RAG] Agent specified relevant sources:`, sourcesAttr);
 
-                    for (const [id, chunk] of retrievedProfileChunks.entries()) {
-                        if (!checkMatch(chunk)) {
-                            retrievedProfileChunks.delete(id);
+                    // Uncited results are demoted, never dropped: a citation by character name
+                    // must not empty the context of the archive passages that mention them.
+                    for (const map of [retrievedProfileChunks, retrievedChatChunks, retrievedMemories, retrievedLore]) {
+                        for (const [id, chunk] of map.entries()) {
+                            if (!isCitedChunk({ id, ...chunk }, cited)) map.set(id, { ...chunk, uncited: true });
                         }
                     }
-
                     for (const [filename, data] of readFiles.entries()) {
                         const filenameLower = filename.toLowerCase();
-                        const matches = allowedSources.some(src =>
-                            filenameLower.includes(src) ||
-                            src.includes(filenameLower)
-                        );
-                        if (!matches) {
-                            readFiles.delete(filename);
-                        }
+                        const matches = allowedSources.some(src => filenameLower.includes(src) || src.includes(filenameLower));
+                        if (!matches) readFiles.set(filename, { ...data, uncited: true });
                     }
 
-                    for (const [id, chunk] of retrievedChatChunks.entries()) {
-                        if (!checkMatch(chunk)) {
-                            retrievedChatChunks.delete(id);
-                        }
-                    }
-
-                    for (const [id, chunk] of retrievedMemories.entries()) {
-                        if (!checkMatch(chunk)) {
-                            retrievedMemories.delete(id);
-                        }
-                    }
-
-                    // Worldbuild facts prune by ENTITY IDENTITY, not fuzzy chunk matching:
-                    // keep a fact if a listed source resolves to its own name/alias, or names
-                    // a related entity that appears in the fact text (so "Aldous Finn" keeps
-                    // the logbook fact that cites him). Drops facts for entities the agent
-                    // looked up but did not deem relevant, so many-entity queries stay lean.
+                    // Facts prune by entity identity, not fuzzy chunk matching.
                     const norm = entitiesStore.normalizeName;
                     const normalizedSources = allowedSources.map(s => norm(s)).filter(Boolean);
                     for (const [id, fact] of retrievedWorldFacts.entries()) {
@@ -5516,482 +6039,76 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
                             (fact.aliases || []).some(a => norm(a) === s) ||
                             factText.includes(s)
                         );
-                        if (!keep) retrievedWorldFacts.delete(id);
+                        if (!keep) retrievedWorldFacts.set(id, { ...fact, uncited: true });
                     }
                     for (const [id, palette] of retrievedNarrativeOptions.entries()) {
                         const source = String(palette.source || '').toLowerCase();
                         const content = String(palette.text || '').toLowerCase();
                         const keep = allowedSources.some(candidate =>
-                            source.includes(candidate) ||
-                            candidate.includes(source) ||
-                            content.includes(candidate)
-                        );
-                        if (!keep) retrievedNarrativeOptions.delete(id);
+                            source.includes(candidate) || candidate.includes(source) || content.includes(candidate));
+                        if (!keep) retrievedNarrativeOptions.set(id, { ...palette, uncited: true });
                     }
                 }
                 break;
             }
 
-            // Malformed turn: neither a valid tool call nor a finish block. Instead of treating raw
-            // THOUGHT text as the final answer (silent zero-retrieval failure), inject a correction
-            // and retry once for free (without consuming a research turn).
-            if (toolCalls.length === 0) {
+            // Only the text protocol can produce a reply that is neither a call nor a finish.
+            if (calls.length === 0) {
                 if (correctionRetries < maxCorrectionRetries) {
                     correctionRetries++;
                     console.warn(`[Agentic RAG] Malformed turn (no valid tool_call/finish). Correction retry ${correctionRetries}/${maxCorrectionRetries}.`);
-                    messages.push({ role: 'assistant', content: agentOutput });
-                    messages.push({
-                        role: 'user',
-                        content: `Your last response did not contain a valid <tool_call .../> or <finish>...</finish>. Respond using ONLY the exact tool syntax. Example: <tool_call name="search_kb" query="..." />. If you already have enough information, use <finish sources="...">brief note</finish>.`
+                    turnRecord.calls.push({ tool: '-', arg: '', hits: 0, status: 'malformed' });
+                    transcript.push({
+                        kind: 'correction',
+                        text: thought,
+                        notice: `Your last response did not contain a valid <tool_call .../> or <finish>...</finish>. Respond using ONLY the exact tool syntax. Example: <tool_call name="search_kb" query="..." />. If you already have enough information, use <finish sources="...">brief note</finish>.`
                     });
                     continue; // does not increment currentTurn
                 }
-                // Correction budget exhausted: stop, but do NOT pass the raw text off as retrieved facts.
-                // Whatever was gathered in prior turns is preserved; the caller degrades gracefully (Item 5).
                 console.warn('[Agentic RAG] Correction budget exhausted; finishing with whatever context was gathered.');
+                turnRecord.calls.push({ tool: '-', arg: '', hits: 0, status: 'malformed' });
                 finishResponse = '';
                 finished = true;
-                stopReason = 'malformed-output';
                 break;
             }
 
-            const turnItems = []; // { kind:'result', handle, source, full, meta } | { kind:'note', text }
-            const pushResult = ({ source, full, meta }) => {
-                const handle = `R${++handleSeq}`;
-                itemRegistry.set(handle, { source, full });
-                if (source) coveredSources.add(source);
-                turnItems.push({ kind: 'result', handle, source: source || '?', full: full || '', meta: meta || '' });
-                return handle;
-            };
-            const pushNote = (text) => turnItems.push({ kind: 'note', text });
-            for (const call of toolCalls) {
-                throwIfRunCancelled(run);
-                console.log(`[Agentic RAG] Executing tool: ${call.name} with: "${call.arg}"`);
-                const traceStartedAt = Date.now();
-                const traceItemStart = turnItems.length;
-
-                if (call.name === 'search_kb') {
-                    const rawProfileResults = await searchKnowledgeBase(call.arg, profile.id);
-                    const rawChatKbResults = includeChatContext ? await searchChatKnowledgeBase(call.arg, chatId) : [];
-
-                    const knowledgeFiles = JSON.parse(profile.knowledgeFiles || '[]');
-                    let constantSnippetTitles = [];
-                    try {
-                        constantSnippetTitles = db.getConstantSnippets(profile.id)
-                            .map(c => (c.title || '').toLowerCase());
-                    } catch (e) { }
-
-                    const profileResults = rawProfileResults.filter(r => {
-                        const fileMatch = knowledgeFiles.find(f => f.name.toLowerCase() === r.source.toLowerCase());
-                        if (fileMatch && (fileMatch.strategy === 'constant' || fileMatch.strategy === 'full_context')) {
-                            return false;
-                        }
-                        if (constantSnippetTitles.includes(r.source.toLowerCase())) {
-                            return false;
-                        }
-                        return true;
-                    });
-
-                    let chatKbFiles = [];
-                    if (includeChatContext && chat && chat.knowledgeFiles) {
-                        try {
-                            chatKbFiles = typeof chat.knowledgeFiles === 'string'
-                                ? JSON.parse(chat.knowledgeFiles)
-                                : (chat.knowledgeFiles || []);
-                        } catch (e) { }
-                    }
-                    const chatKbResults = filterWorkspaceKnowledgeResults(
-                        rawChatKbResults,
-                        chatKbFiles,
-                        profile.id
-                    );
-
-                    profileResults.forEach(r => {
-                        retrievedProfileChunks.set(r.id, {
-                            text: r.text,
-                            source: r.source,
-                            relevance: r.fusionScore ?? r.score
-                        });
-                    });
-                    if (includeChatContext) {
-                        chatKbResults.forEach(r => {
-                            retrievedChatChunks.set(r.id, {
-                                text: r.text,
-                                source: r.source,
-                                relevance: r.fusionScore ?? r.score
-                            });
-                        });
-                    }
-
-                    const combined = [...profileResults, ...chatKbResults];
-
-                    if (combined.length === 0) {
-                        pushNote(`Tool [search_kb] for "${call.arg}": No matches found.`);
-                    } else {
-                        pushNote(`Tool [search_kb] for "${call.arg}": ${combined.length} result(s).`);
-                        combined.forEach(r => pushResult({
-                            source: r.source, full: r.text,
-                            meta: `search_kb "${call.arg}"${typeof r.score === 'number' ? ` sim=${r.score.toFixed(2)}` : ''}`
-                        }));
-                    }
-                } else if (call.name === 'search_memories') {
-                    const rawMemResults = includeChatContext ? await searchChatMemories(call.arg, chatId) : [];
-
-                    let chatMemoryBlocks = [];
-                    if (includeChatContext && chat && chat.memoryBlocks) {
-                        try {
-                            chatMemoryBlocks = typeof chat.memoryBlocks === 'string'
-                                ? JSON.parse(chat.memoryBlocks)
-                                : (chat.memoryBlocks || []);
-                        } catch (e) { }
-                    }
-                    const memResults = filterWorkspaceMemoryResults(
-                        rawMemResults,
-                        chatMemoryBlocks,
-                        profile.id
-                    );
-
-                    if (includeChatContext) {
-                        memResults.forEach(r => {
-                            retrievedMemories.set(r.id, {
-                                text: r.text,
-                                source: r.source,
-                                relevance: r.fusionScore ?? r.score
-                            });
-                        });
-                    }
-
-                    if (memResults.length === 0) {
-                        pushNote(`Tool [search_memories] for "${call.arg}": No matches found.`);
-                    } else {
-                        pushNote(`Tool [search_memories] for "${call.arg}": ${memResults.length} match(es).`);
-                        memResults.forEach(r => pushResult({
-                            source: r.source, full: r.text,
-                            meta: `search_memories "${call.arg}"${typeof r.score === 'number' ? ` sim=${r.score.toFixed(2)}` : ''}`
-                        }));
-                    }
-                } else if (call.name === 'explore_worldbuild_options') {
-                    if (experienceMode !== 'roleplay' || !includeChatContext) {
-                        pushNote('Narrative option exploration is available only in Roleplay Mode with workspace context.');
-                    } else {
-                        const palette = buildNarrativeOptionPalette({
-                            workspaceId: chatId,
-                            query: call.arg,
-                            listEntities: entitiesStore.listEntities
-                        });
-                        if (palette.error) {
-                            pushNote(`Tool [explore_worldbuild_options]: ${palette.error}`);
-                        } else if (!palette.count) {
-                            pushNote(`Tool [explore_worldbuild_options] for "${call.arg}": No registered ${palette.type} options found.`);
-                        } else {
-                            retrievedNarrativeOptions.set(palette.type, {
-                                text: palette.content,
-                                source: palette.source,
-                                relevance: 1
-                            });
-                            pushResult({
-                                source: palette.source,
-                                full: palette.content,
-                                meta: `explore_worldbuild_options "${call.arg}"`
-                            });
-                        }
-                    }
-                } else if (call.name === 'scan_scene_awareness') {
-                    pushNote(epistemicTools
-                        ? `Scene Awareness:\n${epistemicTools.scanSceneAwareness(chatId)}`
-                        : 'Scene Awareness is unavailable outside Roleplay Mode.');
-                } else if (call.name === 'inspect_subject_knowledge') {
-                    pushNote(epistemicTools
-                        ? epistemicTools.inspectSubjectKnowledge(chatId, call.arg)
-                        : 'Subject Knowledge inspection is unavailable outside Roleplay Mode.');
-                } else if (call.name === 'inspect_subject_evidence') {
-                    pushNote(epistemicTools
-                        ? epistemicTools.inspectSubjectEvidence(chatId, call.arg)
-                        : 'Subject evidence inspection is unavailable outside Roleplay Mode.');
-                } else if (call.name === 'inspect_subject_relationships') {
-                    pushNote(epistemicTools
-                        ? epistemicTools.inspectSubjectRelationships(chatId, call.arg)
-                        : 'Subject relationship inspection is unavailable outside Roleplay Mode.');
-                } else if (call.name === 'inspect_subject_memories') {
-                    pushNote(epistemicTools
-                        ? epistemicTools.inspectSubjectMemories(chatId, call.arg)
-                        : 'Subject memory inspection is unavailable outside Roleplay Mode.');
-                } else if (call.name === 'lookup_entity' || call.name === 'lookup_world_entity') {
-                    // Dossier retrieval by known entity. Two sources, fused: (1) the curated
-                    // Worldbuild registry (authored lore + relations), resolved directly so an
-                    // entity that was never tagged in chat memory is still found; (2) the
-                    // entity's tagged chat_memory chunks (scene mentions). Feeds retrievedMemories
-                    // so pruning/dedup with search_memories is shared; respects includeChatContext.
-                    let entityChunks = [], entityIds = [];
-                    if (includeChatContext) {
-                        const looked = lookupEntityChunks(call.arg, chatId, 'chat_memory');
-                        entityChunks = filterWorkspaceMemoryResults(
-                            looked.chunks || [],
-                            chat?.memoryBlocks,
-                            profile.id
-                        );
-                        entityIds = Array.isArray(looked.entityIds) ? [...looked.entityIds] : [];
-                    }
-                    let registryEntity = null;
-                    try {
-                        const rid = entitiesStore.resolveMention(call.arg, null, chatId);
-                        if (rid) {
-                            registryEntity = entitiesStore.getEntity(rid);
-                            if (!entityIds.includes(rid)) entityIds.push(rid);
-                        }
-                    } catch (e) { }
-
-                    if (includeChatContext) {
-                        entityChunks.forEach(r => {
-                            retrievedMemories.set(r.id, {
-                                text: r.text,
-                                source: r.source,
-                                relevance: r.fusionScore ?? r.score
-                            });
-                        });
-                    }
-                    // Outgoing relations for every resolved entity (registry + tagged), by
-                    // structure. edgesByEntity keeps each entity's own edges so we can attach
-                    // them to that entity's worldbuild fact.
-                    const relLines = [];
-                    const edgesByEntity = new Map();
-                    let anyLore = false;
-                    let dossierCalendar = null;
-                    try { dossierCalendar = require('./features/worldbuild/calendar-service').getCalendar(db, chatId); } catch (e) { }
-                    try {
-                        for (const eid of entityIds) {
-                            const ent = entitiesStore.getEntity(eid);
-                            if (!ent) continue;
-                            const links = entitiesStore.getLinksFrom(eid) || [];
-                            if (links.length) {
-                                const edges = links.map(l => `${l.label || l.relType} → ${l.entity ? l.entity.canonicalName : '?'}${edgeDetail(l, dossierCalendar)}`).join('; ');
-                                relLines.push(`${ent.canonicalName}: ${edges}`);
-                                edgesByEntity.set(eid, edges);
-                            }
-                            if (entitiesStore.linkedLoreDocIds(ent).length) anyLore = true;
-                        }
-                    } catch (e) { }
-
-                    // Persist the resolved entity's lore + relations as a deterministic
-                    // worldbuild fact, shown in the final context and exempt from pruning.
-                    if (registryEntity) {
-                        const factParts = [];
-                        const details = entityDataFacts(registryEntity.data);
-                        if (details) factParts.push(`Details: ${details}`);
-                        const desc = registryEntity.data && (registryEntity.data.description || registryEntity.data.content);
-                        if (desc && String(desc).trim()) factParts.push(`Description: ${String(desc).trim()}`);
-                        if (registryEntity.lore && String(registryEntity.lore).trim()) factParts.push(`Lore: ${registryEntity.lore}`);
-                        const ownEdges = edgesByEntity.get(registryEntity.id);
-                        if (ownEdges) factParts.push(`Relations: ${ownEdges}`);
-                        const detailText = factParts.length ? ` — ${factParts.join(' | ')}` : '';
-                        retrievedWorldFacts.set(registryEntity.id, {
-                            text: `${registryEntity.canonicalName} (${registryEntity.type})${detailText}`,
-                            source: `Worldbuild — ${registryEntity.canonicalName}`,
-                            canonicalName: registryEntity.canonicalName,
-                            aliases: Array.isArray(registryEntity.aliases) ? registryEntity.aliases : [],
-                            entityIds: [registryEntity.id]
-                        });
-                    }
-
-                    if (registryEntity) coveredEntities.add(registryEntity.canonicalName);
-                    if (registryEntity) {
-                        let head = `Worldbuild entity ${registryEntity.canonicalName} (${registryEntity.type})`;
-                        const headDetails = entityDataFacts(registryEntity.data);
-                        if (headDetails) head += ` [${headDetails}]`;
-                        const headDesc = registryEntity.data && (registryEntity.data.description || registryEntity.data.content);
-                        if (headDesc && String(headDesc).trim()) head += ` — ${String(headDesc).trim()}`;
-                        if (registryEntity.lore && String(registryEntity.lore).trim()) head += `: ${registryEntity.lore}`;
-                        pushResult({ source: registryEntity.canonicalName, full: head, meta: `lookup_entity "${call.arg}"` });
-                    }
-                    entityChunks.forEach(r => pushResult({ source: r.source, full: r.text, meta: `lookup_entity "${call.arg}"` }));
-                    if (!registryEntity && entityChunks.length === 0 && relLines.length === 0) {
-                        pushNote(`Tool [lookup_entity] for "${call.arg}": No known entity matched.`);
-                    }
-                    if (relLines.length) {
-                        pushNote(`RELATED ENTITIES (follow with lookup_entity): ${relLines.join(' | ')}`);
-                    }
-                    if (anyLore) {
-                        pushNote(`NOTE: this entity has linked lore — call read_lore query="${call.arg}" for its authored background.`);
-                    }
-                } else if (call.name === 'read_lore') {
-                    // Semantic top-k over the entity's linked Writing Desk document, scored
-                    // against the user prompt (not a dump). Opt-in + truncated → same cost as
-                    // a search_kb call. chat_memory tier only.
-                    let loreResults = [];
-                    let docTitle = '';
-                    if (includeChatContext) {
-                        try {
-                            const looked = lookupEntityChunks(call.arg, chatId, 'chat_memory');
-                            const ids = Array.isArray(looked.entityIds) ? [...looked.entityIds] : [];
-                            try {
-                                const rid = entitiesStore.resolveMention(call.arg, null, chatId);
-                                if (rid && !ids.includes(rid)) ids.push(rid);
-                            } catch (e) { }
-                            let loreDocIds = [];
-                            for (const eid of ids) {
-                                const ent = entitiesStore.getEntity(eid);
-                                const docs = ent ? entitiesStore.linkedLoreDocIds(ent) : [];
-                                if (docs.length) { loreDocIds = docs; docTitle = ent.canonicalName; break; }
-                            }
-                            if (loreDocIds.length) {
-                                loreResults = await executeMultiOwnerSearch(currentInput, loreDocIds, 'document', 0.3, 4);
-                            }
-                        } catch (e) { }
-                    }
-                    if (loreResults.length === 0) {
-                        pushNote(`Tool [read_lore] for "${call.arg}": No linked lore document, or no relevant passages found.`);
-                    } else {
-                        pushNote(`Tool [read_lore] for "${call.arg}": ${loreResults.length} passage(s) from linked lore of ${docTitle}.`);
-                        loreResults.forEach(r => {
-                            let text = r.text || '';
-                            if (text.length > MAX_AGENT_FILE_CHARS) text = text.slice(0, MAX_AGENT_FILE_CHARS) + '\n[...truncated...]';
-                            retrievedLore.set(r.id, {
-                                text,
-                                source: r.source || docTitle,
-                                relevance: r.fusionScore ?? r.score
-                            });
-                            pushResult({ source: r.source || docTitle, full: text, meta: `read_lore "${call.arg}"` });
-                        });
-                    }
-                } else if (call.name === 'read_file') {
-                    let isConstant = false;
-                    let isUnavailable = false;
-                    let canReadWorkspaceSource = false;
-                    try {
-                        const kbFiles = JSON.parse(profile.knowledgeFiles || '[]');
-                        const fileMatch = kbFiles.find(f => f.name.toLowerCase() === call.arg.toLowerCase());
-                        if (fileMatch?.enabled === false) isUnavailable = true;
-                        if (fileMatch && (!fileMatch.strategy || fileMatch.strategy === 'constant' || fileMatch.strategy === 'full_context')) {
-                            isConstant = true;
-                        }
-                    } catch (e) { }
-
-                    if (!isConstant && includeChatContext && chat && chat.knowledgeFiles) {
-                        try {
-                            const chatKbFiles = typeof chat.knowledgeFiles === 'string'
-                                ? JSON.parse(chat.knowledgeFiles)
-                                : chat.knowledgeFiles;
-                            const fileMatch = chatKbFiles.find(f => f.name.toLowerCase() === call.arg.toLowerCase());
-                            if (fileMatch) {
-                                isConstant = !isSearchable(fileMatch);
-                                canReadWorkspaceSource = isAvailableToProfile(fileMatch, profile.id) && isSearchable(fileMatch);
-                                if (!canReadWorkspaceSource && !isConstant) isUnavailable = true;
-                            }
-                        } catch (e) { }
-                    }
-
-                    if (!isConstant) {
-                        try {
-                            const snippetMatch = db.getConstantSnippets(profile.id)
-                                .find(c => (c.title || '').toLowerCase() === call.arg.toLowerCase());
-                            if (snippetMatch) {
-                                isConstant = true;
-                            }
-                        } catch (e) { }
-                    }
-
-                    if (!isConstant && includeChatContext && chat && chat.memoryBlocks) {
-                        try {
-                            const snippets = typeof chat.memoryBlocks === 'string'
-                                ? JSON.parse(chat.memoryBlocks)
-                                : chat.memoryBlocks;
-                            const snippetMatch = snippets.find(s => (s.title || s.source || '').toLowerCase() === call.arg.toLowerCase());
-                            if (snippetMatch) {
-                                isConstant = !isSearchable(snippetMatch);
-                                canReadWorkspaceSource = isAvailableToProfile(snippetMatch, profile.id) && isSearchable(snippetMatch);
-                                if (!canReadWorkspaceSource && !isConstant) isUnavailable = true;
-                            }
-                        } catch (e) { }
-                    }
-
-                    if (isConstant) {
-                        pushNote(`Tool [read_file] for "${call.arg}": Access Denied — "${call.arg}" is a Constant context block already permanently included in the main prompt.`);
-                    } else if (isUnavailable) {
-                        pushNote(`Tool [read_file] for "${call.arg}": Access Denied — this source is disabled or outside the current AI Profile scope.`);
-                    } else {
-                        let fileText = readEntireKbFile(profile.id, call.arg);
-                        let fileSource = 'profile';
-                        if (fileText.startsWith("[System: File not found") && includeChatContext && canReadWorkspaceSource) {
-                            fileText = readEntireKbFile(chatId, call.arg);
-                            fileSource = 'chat';
-                        }
-
-                        if (!fileText.startsWith("[System: File not found")) {
-                            readFiles.set(call.arg, { text: fileText, source: fileSource });
-                        }
-
-                        // Asymmetric guard: the agent only needs enough to judge relevance, so truncate
-                        // what enters its reasoning history. The FULL text stays in readFiles → final context
-                        // (the writing assistant wants the whole file). Pruning is by filename, so truncation
-                        // here never affects which files survive.
-                        let agentFileText = fileText;
-                        if (fileText.length > MAX_AGENT_FILE_CHARS) {
-                            agentFileText = fileText.slice(0, MAX_AGENT_FILE_CHARS) +
-                                `\n[...truncated at ${MAX_AGENT_FILE_CHARS} chars for agent reasoning; the full file is preserved for the final context...]`;
-                        }
-
-                        pushResult({ source: call.arg, full: agentFileText, meta: `read_file (${fileSource})` });
-                    }
-                } else if (call.name === 'expand') {
-                    // Re-read one previously summarized item's full text into THIS turn only.
-                    const hit = itemRegistry.get(call.arg) ||
-                        [...itemRegistry.values()].find(v => entitiesStore.normalizeName(v.source) === entitiesStore.normalizeName(call.arg));
-                    if (hit) pushNote(`Tool [expand] "${call.arg}":\n[${hit.source}] ${hit.full}`);
-                    else pushNote(`Tool [expand] "${call.arg}": no such retrieved item.`);
+            const results = [];
+            for (const call of calls) {
+                const collector = createCollector();
+                const arg = argOf(call.name, call.args);
+                if (!offeredTools.includes(canonicalToolName(call.name))) {
+                    collector.pushNote(`Tool [${call.name}]: there is no such tool. Use only the tools provided.`);
+                    turnRecord.calls.push({ tool: call.name, arg, hits: 0, status: 'unknown-tool' });
+                } else if (!arg) {
+                    collector.pushNote(`Tool [${call.name}]: the call had no argument, so nothing was searched.`);
+                    turnRecord.calls.push({ tool: call.name, arg: '', hits: 0, status: 'missing-argument' });
+                } else {
+                    console.log(`[Agentic RAG] Executing tool: ${call.name} with: "${arg}"`);
+                    turnRecord.calls.push(await runToolCall({ name: call.name, arg }, collector));
                 }
-                const produced = turnItems.slice(traceItemStart);
-                const resultCount = produced.filter(item => item.kind === 'result').length;
-                const summary = produced.map(item => item.kind === 'note'
-                    ? item.text
-                    : `${item.handle} · ${item.source}`).join(' | ');
-                toolTrace.push({
-                    turn: currentTurn,
-                    tool: call.name,
-                    query: String(call.arg).slice(0, 500),
-                    status: /unavailable|access denied/i.test(summary)
-                        ? 'unavailable'
-                        : (/no matches|no known|no such|no relevant/i.test(summary) && resultCount === 0 ? 'empty' : 'completed'),
-                    resultCount,
-                    summary: makeSnippet(summary),
-                    durationMs: Date.now() - traceStartedAt
-                });
+                const full = renderItems(collector.turnItems, true);
+                results.push({ id: call.id, name: call.name, full: full || '(no output)', digest: renderItems(collector.turnItems, false) || '(no output)' });
+            }
+            for (const ignored of ignoredFinishes) {
+                const note = 'finish ignored: it was called together with other tools, before their results were seen.';
+                results.push({ id: ignored.id, name: 'finish', full: note, digest: note });
             }
 
-            // This turn is added in full; the digest is what it collapses to once it ages out.
-            const coverageLine = () => {
-                const ents = coveredEntities.size ? [...coveredEntities].join(', ') : '—';
-                const srcs = coveredSources.size ? [...coveredSources].slice(0, 12).join(', ') : '—';
-                return `COVERED SO FAR — entities: ${ents} | sources: ${srcs} | ${itemRegistry.size} items`;
-            };
-            const renderItem = (it, full) => it.kind === 'note'
-                ? it.text
-                : (full
-                    ? `[${it.handle} · ${it.source}] ${it.full}`
-                    : `[${it.handle} · ${it.source}]${it.meta ? ` (${it.meta})` : ''} ${makeSnippet(it.full)}`);
-            const fullContent = `${coverageLine()}\n\n${turnItems.map(it => renderItem(it, true)).join('\n\n')}`;
-            const digestContent = `${coverageLine()}\n${turnItems.map(it => renderItem(it, false)).join('\n')}`;
+            turnRecord.newIds = retrievedIds().filter(id => !before.has(id));
+            turnRecord.newItems = turnRecord.newIds.length;
 
-            messages.push({ role: 'assistant', content: agentOutput });
-            const msgIndex = messages.push({ role: 'user', content: `TOOL RESULTS:\n${fullContent}\n\nWhat is your next step?` }) - 1;
-            turnLog.push({
-                msgIndex, digestContent,
-                fullTokens: estimateTokens(fullContent),
-                digestTokens: estimateTokens(digestContent),
+            transcript.push({
+                kind: 'turn',
+                thought: protocol === 'native' ? thought : '',
+                textReply: protocol === 'text' ? thought : null,
+                calls: [...calls, ...ignoredFinishes],
+                raw: protocol === 'native' ? reply.raw : null,
+                rawFormat: protocol === 'native' ? reply.rawFormat : null,
+                results,
+                coverage: coverageLine(),
+                footer: nextStepLine(currentTurn + 1),
                 downgraded: false
             });
-
-            if (LEAN_AGENT_HISTORY) {
-                // Downgrade oldest→newest until the live results history fits the budget, always
-                // preserving the newest KEEP_TURNS in full. Small loops never trip this.
-                const liveTokens = () => turnLog.reduce((s, e) => s + (e.downgraded ? e.digestTokens : e.fullTokens), 0);
-                const protectedFrom = turnLog.length - LEAN_HISTORY_KEEP_TURNS;
-                for (let i = 0; i < protectedFrom && liveTokens() > LEAN_HISTORY_BUDGET_TOKENS; i++) {
-                    const e = turnLog[i];
-                    if (e.downgraded) continue;
-                    messages[e.msgIndex].content = `TOOL RESULTS (earlier, summarized):\n${e.digestContent}`;
-                    e.downgraded = true;
-                }
-            }
 
             currentTurn++;
 
@@ -5999,155 +6116,92 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
             if (err.name === 'AbortError' || run?.isCancelled) throw err;
             console.error(`[Agentic RAG] Loop error at turn ${currentTurn}:`, err);
             loopDegraded = true;
-            stopReason = 'retrieval-error';
-            toolTrace.push({
-                turn: currentTurn,
-                tool: 'turn',
-                query: '',
-                status: 'failed',
-                resultCount: 0,
-                summary: String(err.message || err).slice(0, 160),
-                durationMs: 0
-            });
-            sendRunEvent(webContents, 'workflow-progress', run, {
-                profileName: profile.name,
-                status: 'Agentic RAG: retrieval error, continuing with partial context'
-            });
+            if (webContents) {
+                sendRunEvent(webContents, 'workflow-progress', run, {
+                    profileName: profile.name,
+                    status: 'Agentic RAG: retrieval error, continuing with partial context'
+                });
+            }
             break; // preserve whatever was gathered in prior turns
         }
     }
 
-    const selectionEntries = [
-        ...Array.from(retrievedProfileChunks.entries()).map(([id, value]) => ({
-            key: `profile:${id}`, collection: retrievedProfileChunks, id,
-            kind: 'profile-knowledge', source: value.source, content: value.text, relevance: value.relevance
-        })),
-        ...Array.from(retrievedChatChunks.entries()).map(([id, value]) => ({
-            key: `workspace-text:${id}`, collection: retrievedChatChunks, id,
-            kind: 'workspace-text', source: value.source, content: value.text, relevance: value.relevance
-        })),
-        ...Array.from(retrievedMemories.entries()).map(([id, value]) => ({
-            key: `workspace-memory:${id}`, collection: retrievedMemories, id,
-            kind: 'workspace-memory', source: value.source, content: value.text, relevance: value.relevance
-        })),
-        ...Array.from(retrievedLore.entries()).map(([id, value]) => ({
-            key: `worldbuild-lore:${id}`, collection: retrievedLore, id,
-            kind: 'worldbuild-canon', source: value.source, content: value.text, relevance: value.relevance
-        })),
-        ...Array.from(retrievedWorldFacts.entries()).map(([id, value]) => ({
-            key: `worldbuild-fact:${id}`, collection: retrievedWorldFacts, id,
-            kind: 'worldbuild-canon', source: value.source, content: value.text, relevance: 1
-        })),
-        ...Array.from(retrievedNarrativeOptions.entries()).map(([id, value]) => ({
-            key: `worldbuild-options:${id}`, collection: retrievedNarrativeOptions, id,
-            kind: 'worldbuild-canon', source: value.source, content: value.text, relevance: value.relevance
-        })),
-        ...Array.from(readFiles.entries()).map(([id, value]) => ({
-            key: `file:${id}`, collection: readFiles, id,
-            kind: value.source === 'profile' ? 'profile-knowledge' : 'workspace-text',
-            source: id, content: value.text, relevance: 1
-        }))
-    ];
-    const selection = selectRetrievedEntries(currentInput, selectionEntries);
+    // Pre-search results never fall to the bottom tier: the deterministic path would have sent
+    // them, and the agent staying silent about them is not evidence against them.
+    const UNCITED_TIER = 4;
+    const SEEDED_UNCITED_TIER = 3;
+    const uncitedTier = (ids) => (ids.some(id => seededIds.has(id)) ? SEEDED_UNCITED_TIER : UNCITED_TIER);
+
+    // The same passage reached by two tools is sent once.
+    const selection = selectRetrievedEntries(anchorQuery, [
+        ...[...retrievedProfileChunks.entries()].map(([id, r]) => ({ collection: retrievedProfileChunks, id, kind: 'profile-knowledge', source: r.source, content: r.text })),
+        ...[...retrievedChatChunks.entries()].map(([id, r]) => ({ collection: retrievedChatChunks, id, kind: 'workspace-text', source: r.source, content: r.text })),
+        ...[...retrievedMemories.entries()].map(([id, r]) => ({ collection: retrievedMemories, id, kind: 'workspace-memory', source: r.source, content: r.text })),
+        ...[...retrievedLore.entries()].map(([id, r]) => ({ collection: retrievedLore, id, kind: 'worldbuild-canon', source: r.source, content: r.text })),
+        ...[...retrievedWorldFacts.entries()].map(([id, r]) => ({ collection: retrievedWorldFacts, id, kind: 'worldbuild-canon', source: r.source, content: r.text })),
+        ...[...retrievedNarrativeOptions.entries()].map(([id, r]) => ({ collection: retrievedNarrativeOptions, id, kind: 'worldbuild-canon', source: r.source, content: r.text })),
+        ...[...readFiles.entries()].map(([id, r]) => ({ collection: readFiles, id, kind: r.source === 'profile' ? 'profile-knowledge' : 'workspace-text', source: id, content: r.text }))
+    ]);
     selection.excluded.forEach(({ entry }) => entry.collection.delete(entry.id));
-    const externalContextParts = [];
 
-    if (retrievedProfileChunks.size > 0) {
-        const profileParts = Array.from(retrievedProfileChunks.values()).map(r => `[Result from Profile KB - ${r.source}]: ${r.text}`);
-        externalContextParts.push(`--- PROFILE KNOWLEDGE BASE CHUNKS ---\n${profileParts.join('\n\n')}`);
+    // narrativeKind marks what the narrative context planner receives when the workspace is
+    // planned; profile knowledge carries none and is packed directly.
+    const sections = {
+        profile: '--- PROFILE KNOWLEDGE BASE CHUNKS ---',
+        files: '--- READ FILES CONTENT ---',
+        chat: '--- CHAT KNOWLEDGE BASE CHUNKS ---',
+        memory: '--- CHAT SUMMARIZED MEMORIES & SNIPPETS ---',
+        lore: '--- LINKED LORE (WRITING DESK) ---',
+        facts: '--- WORLDBUILD FACTS ---',
+        options: '--- WORLDBUILD OPTIONS ---'
+    };
+    const contextItems = [];
+    for (const [id, r] of retrievedProfileChunks.entries()) {
+        contextItems.push({ section: sections.profile, ids: [id], source: r.source, text: `[Result from Profile KB - ${r.source}]: ${r.text}`, tier: r.uncited ? uncitedTier([id]) : 2, score: r.score || 0, origin: 'profile' });
     }
-
-    if (readFiles.size > 0) {
-        const fileParts = Array.from(readFiles.entries())
-            .filter(([, data]) => data.source === 'profile')
-            .map(([filename, data]) => `[File Contents: ${filename}]:\n${data.text}`);
-        if (fileParts.length) {
-            externalContextParts.push(`--- READ FILES CONTENT ---\n${fileParts.join('\n\n')}`);
-        }
-    }
-
-    const kanoraItems = [
-        ...Array.from(readFiles.entries())
-            .filter(([, data]) => data.source !== 'profile')
-            .map(([filename, data]) => ({
-                id: `file:${filename}`, kind: 'workspace-text', source: filename, content: data.text
-            })),
-        ...Array.from(retrievedChatChunks.entries()).map(([id, value]) => ({
-            id, kind: 'workspace-text', source: value.source, content: value.text,
-            relevance: value.relevance
-        })),
-        ...Array.from(retrievedMemories.entries()).map(([id, value]) => ({
-            id, kind: 'workspace-memory', source: value.source || 'Chat Memory', content: value.text,
-            relevance: value.relevance
-        })),
-        ...Array.from(retrievedLore.entries()).map(([id, value]) => ({
-            id, kind: 'worldbuild-canon', source: value.source, content: value.text
-        })),
-        ...Array.from(retrievedWorldFacts.entries()).map(([id, value]) => ({
-            id, kind: 'worldbuild-canon', source: value.source, content: value.text,
-            entityIds: value.entityIds || [id]
-        })),
-        ...Array.from(retrievedNarrativeOptions.entries()).map(([id, value]) => ({
-            id: `narrative-options:${id}`,
-            kind: 'worldbuild-canon',
-            source: value.source,
-            content: value.text
-        }))
-    ];
-    const externalContextGathered = externalContextParts.join('\n\n').trim();
-
-    let loopProfileKbTokens = 0;
-    let loopChatKbTokens = 0;
-
-    if (retrievedProfileChunks.size > 0) {
-        const texts = Array.from(retrievedProfileChunks.values()).map(r => r.text).join('\n\n');
-        loopProfileKbTokens += estimateTokens(texts);
-    }
-
     for (const [filename, data] of readFiles.entries()) {
-        const tokens = estimateTokens(data.text);
-        if (data.source === 'profile') {
-            loopProfileKbTokens += tokens;
-        } else {
-            loopChatKbTokens += tokens;
-        }
+        contextItems.push({
+            section: sections.files,
+            ids: [filename],
+            source: filename,
+            text: `[File Contents: ${filename}]:\n${data.text}`,
+            tier: data.uncited ? UNCITED_TIER : 1,
+            score: 1,
+            truncatable: true,
+            origin: data.source === 'profile' ? 'profile' : 'chat',
+            ...(data.source === 'profile' ? {} : { narrativeKind: 'workspace-text' })
+        });
+    }
+    for (const [id, r] of retrievedChatChunks.entries()) {
+        contextItems.push({ section: sections.chat, ids: [id], source: r.source, text: `[Result from Chat KB - ${r.source}]: ${r.text}`, tier: r.uncited ? uncitedTier([id]) : 2, score: r.score || 0, origin: 'chat', narrativeKind: 'workspace-text' });
+    }
+    const memoryPassages = expandMemoryResults([...retrievedMemories.entries()].map(([id, r]) => ({ id, ...r })), chatId);
+    for (const r of memoryPassages) {
+        const ids = r.ids || [r.id];
+        contextItems.push({ section: sections.memory, ids, source: r.source || 'Chat Memory', text: `[Chat Memory]: ${r.text}`, tier: r.uncited ? uncitedTier(ids) : (r.origin === 'search' ? 2 : 3), score: r.score || 0, origin: 'chat', narrativeKind: 'workspace-memory' });
+    }
+    for (const [id, r] of retrievedLore.entries()) {
+        contextItems.push({ section: sections.lore, ids: [id], source: r.source, text: `[Linked Lore - ${r.source}]: ${r.text}`, tier: r.uncited ? uncitedTier([id]) : 2, score: r.score || 0, origin: 'chat', narrativeKind: 'worldbuild-canon' });
+    }
+    for (const [id, r] of retrievedWorldFacts.entries()) {
+        contextItems.push({ section: sections.facts, ids: [id], source: r.source, text: `[${r.source}]: ${r.text}`, tier: r.uncited ? SEEDED_UNCITED_TIER : 0, score: 1, truncatable: true, origin: 'chat', narrativeKind: 'worldbuild-canon', entityIds: r.entityIds || [id] });
+    }
+    for (const [id, r] of retrievedNarrativeOptions.entries()) {
+        contextItems.push({ section: sections.options, ids: [`narrative-options:${id}`], source: r.source, text: r.text, tier: r.uncited ? UNCITED_TIER : 2, score: 1, truncatable: true, origin: 'chat', narrativeKind: 'worldbuild-canon' });
     }
 
-    if (retrievedLore.size > 0) {
-        const texts = Array.from(retrievedLore.values()).map(r => r.text).join('\n\n');
-        loopChatKbTokens += estimateTokens(texts);
-    }
-
-    if (retrievedWorldFacts.size > 0) {
-        const texts = Array.from(retrievedWorldFacts.values()).map(r => r.text).join('\n\n');
-        loopChatKbTokens += estimateTokens(texts);
-    }
-
-    if (retrievedNarrativeOptions.size > 0) {
-        const texts = Array.from(retrievedNarrativeOptions.values()).map(r => r.text).join('\n\n');
-        loopChatKbTokens += estimateTokens(texts);
-    }
-
-    if (retrievedChatChunks.size > 0) {
-        const texts = Array.from(retrievedChatChunks.values()).map(r => r.text).join('\n\n');
-        loopChatKbTokens += estimateTokens(texts);
-    }
-
-    if (retrievedMemories.size > 0) {
-        const texts = Array.from(retrievedMemories.values()).map(r => r.text).join('\n\n');
-        loopChatKbTokens += estimateTokens(texts);
-    }
-
+    const stopReason = finished
+        ? 'finished'
+        : (trajectory.stopped ? 'planner-window' : (loopDegraded ? 'retrieval-error' : 'max-turns'));
     return {
         agenticResponse: finishResponse || '[Agent passed context directly — no summary needed]',
-        externalContextGathered,
-        kanoraItems,
-        profileKbTokens: loopProfileKbTokens,
-        chatKbTokens: loopChatKbTokens,
+        contextItems,
+        contextSections: Object.values(sections),
         agenticInputTokens: agenticRagInputTokens,
         agenticOutputTokens: agenticRagOutputTokens,
         degraded: loopDegraded,
-        trace: toolTrace,
+        trajectory,
+        trace: trajectory.turns.map(({ newIds, ...turn }) => turn),
         stopReason,
         selection: selection.funnel
     };
@@ -6157,6 +6211,7 @@ THOUGHT: I have retrieved the lore about the dragon from chapter 3 and the rende
 
 module.exports = {
     runWorkflow,
+    executeAgenticRagLoop,
     cancelGeneration,
     resolveErrorDeferred,
     resolveOverflowDeferred,
@@ -6168,7 +6223,7 @@ module.exports = {
     vectorizeDocument,
     retagDocumentChunks,
     enrichEntities,
-    classifyAndTagSegment,
+    tagChunkRecords,
     applyChunkTags,
     computeDocumentVectorStatus,
     checkAndAutoSummarize,

@@ -10,9 +10,7 @@ import { Fragment } from '@tiptap/pm/model';
 import { Markdown } from 'tiptap-markdown';
 import { diffWords } from 'diff';
 
-// Keep the selection visible when focus leaves the editor for a toolbar input.
-// The native highlight moves away, so the range is painted with a decoration
-// while blurred and dropped on refocus.
+// Paints the selection while blurred so it stays visible behind toolbar inputs.
 const persistSelectionKey = new PluginKey('persistSelection');
 export const PersistSelection = Extension.create({
   name: 'persistSelection',
@@ -78,9 +76,7 @@ export const BlockStyle = Extension.create({
   },
 });
 
-// Per-cell background color. Lives as an attribute on tableCell/tableHeader
-// (cells are NOT rendered by the table node view, so attribute renderHTML applies
-// cleanly) and travels in the content + export. Font color stays on the toolbar.
+// Cells aren't rendered by the table node view, so attribute renderHTML applies cleanly.
 export const CellBackground = Extension.create({
   name: 'cellBackground',
   addGlobalAttributes() {
@@ -103,9 +99,7 @@ export const CellBackground = Extension.create({
 });
 
 // --- AI SELECT->INVOKE: inline suggestion overlay ---
-// Non-destructive track-changes painted with ProseMirror decorations: the original
-// text stays in the doc, removed parts get a red strikethrough inline decoration,
-// and added parts are green widget spans. Accept/Reject mutate the doc afterwards.
+// Decorations only: the original text stays in the doc until Accept/Reject.
 export const suggestionKey = new PluginKey('wdSuggestion');
 export const SuggestionDecorations = Extension.create({
   name: 'wdSuggestion',
@@ -126,9 +120,7 @@ export const SuggestionDecorations = Extension.create({
 });
 
 // --- FIND & REPLACE: match highlighting ---
-// Collect every occurrence of `query` in the doc, accumulating inline text per
-// textblock so a match can span mark boundaries (e.g. a partially-bold word).
-// Returns ProseMirror {from,to} ranges in document coordinates.
+// Text accumulates per textblock so a match can span mark boundaries.
 export function collectSearchMatches(doc, query, caseSensitive) {
   const matches = [];
   if (!query) return matches;
@@ -158,9 +150,7 @@ export function collectSearchMatches(doc, query, caseSensitive) {
   return matches;
 }
 
-// Paints search matches as inline decorations. The plugin is dumb: the React panel
-// computes matches and pushes {matches, current} via meta; between pushes the set is
-// mapped through edits so highlights survive a replace.
+// Matches come from the React panel; between pushes they are mapped through edits.
 export const searchKey = new PluginKey('wdSearch');
 export const SearchHighlight = Extension.create({
   name: 'wdSearch',
@@ -197,9 +187,7 @@ function sanitizeHtml(html) {
   return tmp.innerHTML;
 }
 
-// Green block holding the full proposal as HTML (so bold/italic/headings/lists in
-// the AI output are previewed faithfully), rendered right after the original span.
-// Block-level, not interleaved per word, so paragraph breaks can't desync it.
+// Block-level, not per word, so paragraph breaks can't desync it.
 function addedBlock(pos, html, channel) {
   return Decoration.widget(pos, () => {
     const wrap = document.createElement('div');
@@ -218,9 +206,6 @@ function addedBlock(pos, html, channel) {
   }, { side: 1, key: `addblk-${pos}-${String(html).length}` });
 }
 
-// Build the decoration set for a pending suggestion (replacement/insertion):
-// the whole original span struck through in red, the full proposal in a green
-// block below it. No per-word mapping, so paragraph breaks can't desync it.
 export function buildSuggestionDecorations(doc, suggestion) {
   if (!suggestion || suggestion.channel === 'analysis') return DecorationSet.empty;
   const { fromPos, toPos } = suggestion;
@@ -254,11 +239,7 @@ export function suggestionCharDelta(suggestion) {
   return { added, removed };
 }
 
-// Inline reference to a Worldbuild entity. Presentational + navigational ONLY: it
-// tags a span with the entity id (and a display name for dangling-ref fallback) and
-// renders as a dotted-underline span. Retrieval still runs off chunk_tags, this mark
-// is never a source of truth for what the AI sees. Rides in the doc JSON, so it tracks
-// the text through edits and persists with saveDocumentContent.
+// Presentational and navigational only: retrieval runs off chunk_tags, never this mark.
 export const EntityRef = Mark.create({
   name: 'entityRef',
   inclusive: false,
@@ -292,9 +273,7 @@ export const EntityRef = Mark.create({
   },
 });
 
-// Single source of truth for the editor schema. Shared between the live editor
-// (useEditor) and offline conversions like generateJSON() for rich imports, so
-// imported content is parsed against exactly the marks/nodes the editor renders.
+// Single source of truth for the schema, shared with generateJSON() imports.
 export const writingExtensions = [
   StarterKit, // includes Underline + Link in TipTap v3
   TextStyle, Color, FontFamily, FontSize, BlockStyle,
@@ -303,9 +282,7 @@ export const writingExtensions = [
   CellBackground, EntityRef,
 ];
 
-// Dashes convert only once a trailing space is typed, so `--`/`---` don't fire
-// mid-word and the writer can still reach the long em dash: `-- ` → en (–),
-// `--- ` → em (—). The lookbehind keeps the en rule from matching inside `---`.
+// Convert only after a trailing space, so `--`/`---` don't fire mid-word. `-- ` → en, `--- ` → em.
 const SmartDashes = Extension.create({
   name: 'smartDashes',
   addInputRules() {
@@ -316,17 +293,11 @@ const SmartDashes = Extension.create({
   },
 });
 
-// The live editor adds Smart Typography (curly quotes, ellipsis, ©™…) plus the
-// space-triggered dashes, when enabled in Settings → Interface → Writing Desk.
-// Input-rule-only, so omitted from the import schema (generateJSON never types).
-// Document-only, never touches chat. Typography's own immediate `--`→— rule is
-// disabled in favor of SmartDashes.
+// Input rules only, so omitted from the import schema. Typography's own `--` rule is off for SmartDashes.
 export function getEditorExtensions({ smartTypography = true } = {}) {
   const base = [
     ...writingExtensions, PersistSelection, SuggestionDecorations, SearchHighlight,
-    // Markdown is the interchange format for AI invocations: the model reads + writes
-    // Markdown (which it does far more reliably than HTML). html:true lets the table
-    // fallback pass raw HTML through. Copy/paste behavior is left untouched.
+    // Models handle Markdown far more reliably than HTML; html:true passes the table fallback.
     Markdown.configure({ html: true, tightLists: true, transformPastedText: false, transformCopiedText: false }),
   ];
   return smartTypography
@@ -370,9 +341,7 @@ function escapeHtml(s) {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// Best-effort plain text → HTML: blank-line separated blocks become paragraphs;
-// a short, heading-like lone line (no terminal punctuation) is promoted to <h2>.
-// PDF/txt/md imports go through here since they carry no reliable structure.
+// Blank-line blocks become paragraphs; a short lone line without end punctuation becomes <h2>.
 function textToHtml(text) {
   const blocks = String(text || '').split(/\n\s*\n/).map(b => b.trim()).filter(Boolean);
   if (!blocks.length) return '<p></p>';
@@ -384,9 +353,6 @@ function textToHtml(text) {
   }).join('');
 }
 
-// Convert an import-document result into ProseMirror JSON against the editor
-// schema. DOCX arrives as rich HTML (formatting preserved); text is structured
-// heuristically. generateJSON parses with the same marks/nodes the editor renders.
 export function importedContentToJson(res) {
   const html = res?.kind === 'html' ? (res.html || '') : textToHtml(res?.text || '');
   return generateJSON(html, writingExtensions);

@@ -1,13 +1,8 @@
-// Shared HTML/CSS builders for Writing Desk export and its faithful preview.
-// The export document and the on-screen preview consume the SAME prose CSS so
-// line-breaking / pagination measured in the modal closely matches the output.
+// Export and preview share the same prose CSS so pagination matches.
 
 const HEADING_SIZES = { h1: 28, h2: 20, h3: 16 };
 
-// Prose styling scoped under a root selector ('body' for export, a class for
-// the preview). Margins are intentionally NOT included here, the exporter
-// (printToPDF / html-to-docx) applies page margins, and the preview applies
-// them as page-box padding, so both avoid double margins.
+// Margins excluded: the exporter and the preview each apply them, avoiding doubles.
 export function proseCss(rootSel, page) {
   const fontFamily = page.defaultFont || 'Arial';
   const fontSize = page.defaultFontSize || 18;
@@ -41,11 +36,8 @@ function pageSizeCss(page) {
   return sizeCss;
 }
 
-// Self-contained HTML document fed to the PDF exporter. Margins are baked into
-// the CSS `@page` rule (Chromium honors these deterministically, per page) rather
-// than via printToPDF's margins option, which silently fell back to defaults.
-// `opts.paginate === false` produces a single continuous page; `opts.contentHeight`
-// (px, including margins) sizes it. `opts.margins` = {top,right,bottom,left} px.
+// Margins live in the CSS @page rule: printToPDF's margins option silently falls back to defaults.
+// paginate === false gives one continuous page sized by contentHeight.
 export function buildExportHtml(bodyHtml, page, opts = {}) {
   const m = opts.margins || {};
   const mCss = `${m.top ?? 96}px ${m.right ?? 96}px ${m.bottom ?? 96}px ${m.left ?? 96}px`;

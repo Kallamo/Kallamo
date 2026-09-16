@@ -1,9 +1,6 @@
 import { memo, useState } from 'react';
 
-// The edit box owns its own draft text. It used to live in ChatWorkspaceView, which
-// meant every keystroke re-rendered the whole message list: each message re-ran its
-// content parsing, its attachment parsing and its class strings, and long chats
-// turned typing into a visible lag. Nothing here reaches the parent until save.
+// Owns its draft so keystrokes don't re-render the whole message list.
 export default memo(function MessageEditor({
   initialValue,
   sizeClass,

@@ -4,7 +4,9 @@ const path = require('path');
 const { fetch: undiciFetch, Agent } = require('undici');
 const { getResponseMetadata } = require('./response-metadata');
 const { openAiResponseFormat, applyBedrockStructuredOutput } = require('./structured-output');
-const { assertPayloadWithinLimit } = require('./payload-budget');
+const { assertPayloadWithinLimit, estimatePayloadTokens, normalizeMaxApiPayload, safetyMarginFor } = require('./payload-budget');
+const { tokenRatio, recordTokenCount, correctedLimit, useTokenCalibrationStore } = require('./token-calibration');
+const { supportsNativeTools, applyConversation, applyCacheBreakpoint, readToolReply, readUsage, flattenConversation } = require('./tool-conversation');
 const { planPromptCache, recordCacheOutcome } = require('./prompt-cache');
 
 function getDatabase() {
@@ -30,9 +32,7 @@ function getMimeType(filePath) {
     }
 }
 
-// The gpt-5 series and reasoning models (o1/o3/o4...) reject `max_tokens` and
-// require `max_completion_tokens` instead. Matched by name so future variants
-// are covered without a fixed ID list.
+// gpt-5 and o-series reject max_tokens; matched by name so new variants are covered.
 function needsMaxCompletionTokens(model) {
     if (!model) return false;
     // Strip a provider prefix like "openai/" (OpenRouter uses vendor-slugged ids).
@@ -40,9 +40,116 @@ function needsMaxCompletionTokens(model) {
     return m.startsWith('gpt-5') || /^o[1-9]($|[-.])/.test(m);
 }
 
-// A custom Base URL may be entered as a bare base (e.g. ".../v1") or as a full
-// endpoint. Normalize it to the full endpoint for the given kind so both forms
-// work. kind = 'chat' | 'embeddings'.
+// Reasoning models count thinking inside the output limit, so they get headroom on top.
+// Only generated tokens are billed, so unused headroom is free.
+const REASONING_OUTPUT_HEADROOM = 8192;
+const GEMINI_MAX_OUTPUT_TOKENS = 65536;
+const DEFAULT_OUTPUT_TOKENS = 1000;
+
+function isGeminiThinkingModel(model) {
+    if (!model) return false;
+    const m = String(model).toLowerCase().split('/').pop();
+    return /^gemini-(?:2\.5|[3-9])(?:[.-]|$)/.test(m);
+}
+
+// Excludes reasoning headroom, which would block small-limit workspaces.
+function requestedOutputTokens(maxTokens) {
+    return Number.isFinite(Number(maxTokens)) && Number(maxTokens) > 0
+        ? Math.floor(Number(maxTokens))
+        : DEFAULT_OUTPUT_TOKENS;
+}
+
+// The output limit actually sent to the provider.
+function providerOutputLimit(provider, model, maxTokens) {
+    const requested = requestedOutputTokens(maxTokens);
+    const normalizedProvider = String(provider || '').toLowerCase();
+    if (['openai', 'openrouter', 'local'].includes(normalizedProvider) && needsMaxCompletionTokens(model)) {
+        return requested + REASONING_OUTPUT_HEADROOM;
+    }
+    if (['google ai', 'vertex ai'].includes(normalizedProvider) && isGeminiThinkingModel(model)) {
+        return Math.min(GEMINI_MAX_OUTPUT_TOKENS, requested + REASONING_OUTPUT_HEADROOM);
+    }
+    return requested;
+}
+
+// The effective limit is the smaller of the connection window and the workspace limit.
+function connectionContextWindow(apiProfile) {
+    const value = Number(apiProfile?.contextWindow);
+    return Number.isFinite(value) && value > 0 ? Math.floor(value) : null;
+}
+
+// `configured` is what the user set; `limit` is that number divided by how much more this model
+// counts than the local estimate, so every budget derived from it shrinks together.
+function payloadLimitFor(apiProfile, maxPayloadTokens, { model = null, protocol = 'text' } = {}) {
+    const workspace = maxPayloadTokens == null ? null : normalizeMaxApiPayload(maxPayloadTokens);
+    const connection = connectionContextWindow(apiProfile);
+    const fromConnection = connection !== null && (workspace === null || normalizeMaxApiPayload(connection) < workspace);
+    const configured = fromConnection ? normalizeMaxApiPayload(connection) : workspace;
+    const ratio = configured === null ? 1 : tokenRatio({ apiProfileId: apiProfile?.id, model, protocol });
+    return {
+        limit: correctedLimit(configured, ratio),
+        configured,
+        ratio,
+        source: fromConnection ? 'connection' : 'workspace'
+    };
+}
+
+function loadApiProfile(apiProfileId, dependencies = {}) {
+    const db = dependencies.database || getDatabase();
+    try {
+        return db.prepare('SELECT * FROM api_profiles WHERE id = ?').get(apiProfileId) || null;
+    } catch (e) {
+        return null;
+    }
+}
+
+// Budget math outside this module must measure exactly what buildRequest checks.
+function resolvePayloadLimit({ apiProfileId, model = null, protocol = 'text', maxPayloadTokens }, dependencies = {}) {
+    const database = dependencies.database || getDatabase();
+    useTokenCalibrationStore(database);
+    return payloadLimitFor(loadApiProfile(apiProfileId, { database }), maxPayloadTokens, { model, protocol });
+}
+
+// Images are reserved at a flat size, and Manual JSON and schemas change the body after it is measured.
+function isMeasurableRequest({ attachedImages, manualMode, manualJson, jsonMode, jsonSchema }) {
+    if (attachedImages && attachedImages.length) return false;
+    if (manualMode && String(manualJson || '').trim()) return false;
+    return !jsonMode && !jsonSchema;
+}
+
+// Only a reply the provider accepted teaches the ratio. A count that fills the connection's window
+// may be one the server truncated to fit, which would teach a ratio that is too low.
+function learnFromReportedTokens(tokenSample, reportedInputTokens) {
+    if (!tokenSample || reportedInputTokens == null) return null;
+    const { contextWindow, outputTokens } = tokenSample;
+    if (contextWindow && Number(reportedInputTokens) + outputTokens + safetyMarginFor(contextWindow) >= contextWindow) return null;
+    return recordTokenCount(tokenSample.parts, tokenSample.inputTokens, reportedInputTokens);
+}
+
+function getReservedOutputTokens({ maxTokens }) {
+    return requestedOutputTokens(maxTokens);
+}
+
+// Workspace variables ({{name}}) are expanded before a request is measured or sent.
+function createPromptVariableResolver(database) {
+    let variables = [];
+    try {
+        variables = database.prepare('SELECT key, value FROM variables').all().map(variable => ({
+            regex: new RegExp(`\\{\\{\\s*${String(variable.key).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\}\\}`, 'g'),
+            value: String(variable.value ?? '')
+        }));
+    } catch (e) {
+        console.error("Error resolving dynamic variables:", e);
+    }
+    return (text) => {
+        if (!text || !variables.length) return text;
+        let result = text;
+        for (const variable of variables) result = result.replace(variable.regex, () => variable.value);
+        return result;
+    };
+}
+
+// Accepts a bare base (.../v1) or a full endpoint. kind = 'chat' | 'embeddings'.
 function resolveEndpoint(baseUrl, kind) {
     if (!baseUrl) return null;
     const want = kind === 'embeddings' ? '/embeddings' : '/chat/completions';
@@ -186,84 +293,152 @@ function awsSignV4({ accessKeyId, secretAccessKey, region, service, method, path
 
 // --- RESPONSE PARSING ---
 
-// `jsonMode` callers parse the reply as a JSON object, so reasoning must never be
-// prepended: the object extractor scans for the first '{', and a model that thinks
-// about the schema writes braces inside its reasoning, which makes a perfectly
-// valid response unparseable.
+// jsonMode never prepends reasoning: braces inside it break object extraction. A withheld reply
+// throws; an empty one returns '' so callers can tell a spent output budget from a failure.
 function parseResponse(data, provider, jsonMode = false) {
-    try {
-        switch (provider.toLowerCase()) {
-            case 'openai':
-            case 'openrouter':
-            case 'local': {
-                const message = data.choices[0].message;
-                const reasoning = message.reasoning_content || message.reasoning;
-                const content = message.content || '';
-                return reasoning && !jsonMode ? `<think>${reasoning}</think>${content}` : content;
+    const withReasoning = (reasoning, content) => (reasoning && !jsonMode ? `<think>${reasoning}</think>${content}` : content);
+    switch (provider.toLowerCase()) {
+        case 'openai':
+        case 'openrouter':
+        case 'local': {
+            if (data?.error) throw responseError(`The provider returned an error: ${providerErrorMessage(data.error)}`, 'PROVIDER_ERROR');
+            const choice = data?.choices?.[0];
+            const message = choice?.message;
+            if (!message) throw responseError('The provider response contained no message.', 'MALFORMED_RESPONSE');
+            const content = typeof message.content === 'string' ? message.content : textOfParts(message.content, false);
+            if (!content && message.refusal) throw responseError(`The model declined to answer: ${message.refusal}`, 'MODEL_REFUSAL');
+            if (!content && String(choice.finish_reason || '').toUpperCase() === 'CONTENT_FILTER') {
+                throw responseError('The provider filtered this reply (content_filter).', 'PROVIDER_BLOCKED');
             }
-            case 'anthropic':
-                return data.content[0].text;
-            case 'google ai':
-            case 'vertex ai':
-                if (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) {
-                    return data.candidates[0].content.parts[0].text;
-                }
-                throw new Error("Invalid Gemini response format");
-            case 'aws bedrock':
-                if (data.content && data.content[0] && data.content[0].text) {
-                    return data.content[0].text;
-                }
-                if (data.generation) {
-                    return data.generation;
-                }
-                throw new Error("Invalid AWS Bedrock response format");
-            default:
-                return "Could not parse response for this provider.";
+            return withReasoning(message.reasoning_content || message.reasoning, content);
         }
-    } catch (error) {
-        console.error("Failed to parse API response:", error, data);
-        return "[Error]: Received an unexpected response format from the API.";
+        case 'anthropic': {
+            if (data?.type === 'error' || data?.error) throw responseError(`The provider returned an error: ${providerErrorMessage(data.error)}`, 'PROVIDER_ERROR');
+            if (!Array.isArray(data?.content)) throw responseError('The provider response contained no content.', 'MALFORMED_RESPONSE');
+            const text = data.content.filter(block => block?.type === 'text').map(block => block.text || '').join('');
+            const thinking = data.content.filter(block => block?.type === 'thinking').map(block => block.thinking || '').join('');
+            if (!text && String(data.stop_reason || '').toUpperCase() === 'REFUSAL') {
+                throw responseError('The model declined to answer.', 'MODEL_REFUSAL');
+            }
+            return withReasoning(thinking, text);
+        }
+        case 'google ai':
+        case 'vertex ai': {
+            if (data?.error) throw responseError(`The provider returned an error: ${providerErrorMessage(data.error)}`, 'PROVIDER_ERROR');
+            const candidate = data?.candidates?.[0];
+            if (!candidate) {
+                const blockReason = data?.promptFeedback?.blockReason;
+                throw blockReason
+                    ? responseError(`The provider blocked this prompt (${blockReason}).`, 'PROVIDER_BLOCKED')
+                    : responseError('The provider response contained no candidates.', 'MALFORMED_RESPONSE');
+            }
+            const parts = candidate.content?.parts;
+            const text = textOfParts(parts, false);
+            const reason = String(candidate.finishReason || '').toUpperCase();
+            if (!text && BLOCKING_FINISH_REASONS.has(reason)) {
+                throw responseError(`The provider stopped this reply (${reason}).`, 'PROVIDER_BLOCKED');
+            }
+            return withReasoning(textOfParts(parts, true), text);
+        }
+        case 'aws bedrock': {
+            if (Array.isArray(data?.content)) {
+                return data.content.filter(block => typeof block?.text === 'string').map(block => block.text).join('');
+            }
+            if (typeof data?.generation === 'string') return data.generation;
+            throw responseError('The AWS Bedrock response had an unexpected format.', 'MALFORMED_RESPONSE');
+        }
+        default:
+            throw responseError(`Responses from the provider '${provider}' cannot be read.`, 'MALFORMED_RESPONSE');
     }
 }
 
-// Decode ONE already-JSON-parsed SSE event into normalized deltas. Stateless:
-// the stream reader owns line-splitting, the `data:` prefix and the [DONE]
-// sentinel, so this only maps a provider's chunk shape to a common
-// { contentDelta, reasoningDelta, done }. The streaming mirror of parseResponse.
+// Finish reasons that mean the provider withheld the reply, as opposed to cutting
+// it short at the output limit.
+const BLOCKING_FINISH_REASONS = new Set([
+    'SAFETY', 'RECITATION', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII', 'IMAGE_SAFETY', 'LANGUAGE', 'OTHER'
+]);
+
+function responseError(message, code) {
+    const error = new Error(message);
+    error.code = code;
+    return error;
+}
+
+function providerErrorMessage(error) {
+    if (!error) return 'unknown error';
+    if (typeof error === 'string') return error;
+    return error.message || error.status || JSON.stringify(error);
+}
+
+function textOfParts(parts, thoughts) {
+    return (Array.isArray(parts) ? parts : [])
+        .filter(part => Boolean(part?.thought) === thoughts)
+        .map(part => (typeof part?.text === 'string' ? part.text : ''))
+        .join('');
+}
+
+// Stateless: the reader handles line splitting, `data:` and [DONE].
+// finishReason and error let streaming treat cut-off or failed replies like the non-streaming path.
 function parseStreamChunk(obj, provider) {
-    const empty = { contentDelta: '', reasoningDelta: '', done: false };
+    const empty = { contentDelta: '', reasoningDelta: '', done: false, finishReason: null, error: null, inputTokens: null };
     try {
         switch (provider.toLowerCase()) {
             case 'openai':
             case 'openrouter':
             case 'local': {
+                if (obj?.error) return { ...empty, error: providerErrorMessage(obj.error) };
+                // Usage arrives on a chunk with no choice (OpenAI) or on the last choice (llama.cpp).
+                const inputTokens = obj?.usage ? readUsage(provider, obj).totalInputTokens : null;
                 const choice = obj.choices && obj.choices[0];
-                if (!choice) return empty;
+                if (!choice) return { ...empty, inputTokens };
                 const delta = choice.delta || {};
                 return {
-                    contentDelta: delta.content || '',
+                    contentDelta: typeof delta.content === 'string' ? delta.content : '',
                     reasoningDelta: delta.reasoning_content || delta.reasoning || '',
-                    done: choice.finish_reason != null
+                    done: choice.finish_reason != null,
+                    finishReason: choice.finish_reason ?? null,
+                    error: null,
+                    inputTokens
                 };
             }
             case 'anthropic': {
+                if (obj.type === 'error') return { ...empty, error: providerErrorMessage(obj.error) };
+                if (obj.type === 'message_start') {
+                    return { ...empty, inputTokens: readUsage(provider, obj.message).totalInputTokens };
+                }
                 if (obj.type === 'content_block_delta') {
                     const d = obj.delta || {};
                     return {
+                        ...empty,
                         contentDelta: d.type === 'text_delta' ? (d.text || '') : '',
-                        reasoningDelta: d.type === 'thinking_delta' ? (d.thinking || '') : '',
-                        done: false
+                        reasoningDelta: d.type === 'thinking_delta' ? (d.thinking || '') : ''
                     };
+                }
+                // Usage on message_delta is cumulative, so when it carries input tokens they supersede message_start.
+                if (obj.type === 'message_delta') {
+                    return { ...empty, finishReason: obj.delta?.stop_reason ?? null, inputTokens: readUsage(provider, obj).totalInputTokens };
                 }
                 if (obj.type === 'message_stop') return { ...empty, done: true };
                 return empty;
             }
             case 'google ai':
             case 'vertex ai': {
+                if (obj?.error) return { ...empty, error: providerErrorMessage(obj.error) };
+                const inputTokens = obj?.usageMetadata ? readUsage(provider, obj).totalInputTokens : null;
                 const cand = obj.candidates && obj.candidates[0];
-                if (!cand || !cand.content || !cand.content.parts) return empty;
-                const text = cand.content.parts.map(p => p.text || '').join('');
-                return { contentDelta: text, reasoningDelta: '', done: cand.finishReason != null };
+                if (!cand) {
+                    const blockReason = obj?.promptFeedback?.blockReason;
+                    return blockReason ? { ...empty, error: `The provider blocked this prompt (${blockReason}).` } : { ...empty, inputTokens };
+                }
+                const parts = cand.content?.parts;
+                return {
+                    contentDelta: textOfParts(parts, false),
+                    reasoningDelta: textOfParts(parts, true),
+                    done: cand.finishReason != null,
+                    finishReason: cand.finishReason ?? null,
+                    error: null,
+                    inputTokens
+                };
             }
             default:
                 return empty;
@@ -329,28 +504,20 @@ function parseStreamUsage(obj, provider) {
 
 // --- CORE API REQUESTS ---
 
-async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistory = [], newPrompt = '', temperature, maxTokens, maxPayloadTokens, manualMode, manualJson, attachedImages, stream = false, jsonMode = false, jsonSchema = null, promptCache = null }, dependencies = {}) {
+async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistory = [], newPrompt = '', temperature, maxTokens, maxPayloadTokens, payloadLimit = null, payloadBreakdown = null, learnTokenCount = false, manualMode, manualJson, attachedImages, stream = false, jsonMode = false, jsonSchema = null, conversation = null, tools = null, cachePrefix = false, promptCache = null }, dependencies = {}) {
     const db = dependencies.database || getDatabase();
+    useTokenCalibrationStore(db);
+    const resolveVariables = createPromptVariableResolver(db);
 
-    // A segmented caller hands over the stable head and the volatile tail apart
-    // so this layer can decide where each one belongs. Callers that still pass a
-    // single systemPrompt keep the exact request they had before.
+    // A segmented caller hands over the stable head and the volatile tail apart so this layer
+    // decides where each belongs. A single systemPrompt keeps the request it had before.
     const contextPlacement = promptCache && promptCache.placement === 'turn' ? 'turn' : 'system';
-    let stableSystem = promptCache && promptCache.stable != null ? String(promptCache.stable) : null;
-    let volatileSystem = stableSystem === null ? '' : String(promptCache.volatile || '');
-
-    try {
-        const variables = db.prepare('SELECT key, value FROM variables').all();
-        for (const variable of variables) {
-            const safeKey = variable.key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const regex = new RegExp(`\\{\\{\\s*${safeKey}\\s*\\}\\}`, 'g');
-            if (systemPrompt) systemPrompt = systemPrompt.replace(regex, variable.value);
-            if (newPrompt) newPrompt = newPrompt.replace(regex, variable.value);
-            if (stableSystem) stableSystem = stableSystem.replace(regex, variable.value);
-            if (volatileSystem) volatileSystem = volatileSystem.replace(regex, variable.value);
-        }
-    } catch (e) {
-        console.error("Error resolving dynamic variables:", e);
+    const stableSystem = promptCache && promptCache.stable != null ? resolveVariables(String(promptCache.stable)) : null;
+    const volatileSystem = stableSystem === null ? '' : resolveVariables(String(promptCache.volatile || ''));
+    systemPrompt = resolveVariables(systemPrompt);
+    newPrompt = resolveVariables(newPrompt);
+    if (Array.isArray(conversation)) {
+        conversation = conversation.map(entry => (entry.role === 'user' ? { ...entry, text: resolveVariables(entry.text) } : entry));
     }
 
     if (stableSystem !== null) {
@@ -394,6 +561,11 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
         role: msg.role === 'ai' ? 'assistant' : msg.role,
         content: msg.content
     }));
+    const outputTokens = providerOutputLimit(provider, model, maxTokens);
+    const protocol = Array.isArray(conversation) ? 'native' : 'text';
+    // A caller that sized the request on a resolved limit passes it, so a ratio learned
+    // meanwhile cannot make this check disagree with that sizing.
+    const limit = payloadLimit || payloadLimitFor(apiProfile, maxPayloadTokens, { model, protocol });
 
     const cachePlan = planPromptCache({
         provider,
@@ -408,14 +580,30 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
     const markedSystem = cachePlan.systemBreakpoint && stableSystem !== null;
     const historyForRequest = cachePlan.historyBreakpoint ? markLastHistoryMessage(cleanHistory) : cleanHistory;
 
-    assertPayloadWithinLimit({
-        maxPayloadTokens,
+    // Cache markers add no text, so the plain history is what gets measured.
+    const measured = {
         systemPrompt,
-        chatHistory: cleanHistory,
+        chatHistory: Array.isArray(conversation) ? flattenConversation(conversation, tools) : cleanHistory,
         newPrompt,
         attachedImageCount: attachedImages?.length || 0,
-        outputTokens: maxTokens ?? 1000
-    });
+        outputTokens: requestedOutputTokens(maxTokens)
+    };
+    const estimate = assertPayloadWithinLimit({
+        ...measured,
+        maxPayloadTokens: limit.limit,
+        configuredPayloadTokens: limit.configured,
+        tokenRatio: limit.ratio,
+        limitSource: limit.source,
+        breakdown: payloadBreakdown
+    }) || estimatePayloadTokens(measured);
+    const tokenSample = learnTokenCount && isMeasurableRequest({ attachedImages, manualMode, manualJson, jsonMode, jsonSchema })
+        ? {
+            parts: { apiProfileId, model, protocol },
+            inputTokens: estimate.inputTokens,
+            contextWindow: connectionContextWindow(apiProfile),
+            outputTokens
+        }
+        : null;
 
     switch (provider) {
         case 'openai':
@@ -469,14 +657,16 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
                     ...historyForRequest,
                     { role: "user", content: userContent }
                 ],
-                temperature: temperature ?? 0.7,
                 stream: false
             };
+            // Reasoning models accept only their default temperature and reject the
+            // request otherwise. Manual JSON can still set one explicitly.
+            if (!needsMaxCompletionTokens(model)) requestBody.temperature = temperature ?? 0.7;
             if (jsonMode && provider !== 'local') requestBody.response_format = openAiResponseFormat(jsonSchema);
             if (needsMaxCompletionTokens(model)) {
-                requestBody.max_completion_tokens = maxTokens ?? 1000;
+                requestBody.max_completion_tokens = outputTokens;
             } else {
-                requestBody.max_tokens = maxTokens ?? 1000;
+                requestBody.max_tokens = outputTokens;
             }
             break;
         }
@@ -517,7 +707,7 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
                     : systemPrompt,
                 messages: [...historyForRequest, { role: "user", content: userContent }],
                 temperature: temperature ?? 0.7,
-                max_tokens: maxTokens ?? 1000,
+                max_tokens: outputTokens,
                 stream: false
             };
             break;
@@ -564,7 +754,7 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
                 contents: geminiContents,
                 generationConfig: {
                     temperature: temperature ?? 0.7,
-                    maxOutputTokens: maxTokens ?? 1000,
+                    maxOutputTokens: outputTokens,
                     ...(jsonMode ? { responseMimeType: 'application/json' } : {})
                 }
             };
@@ -617,7 +807,7 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
                 contents: vertexContents,
                 generationConfig: {
                     temperature: temperature ?? 0.7,
-                    maxOutputTokens: maxTokens ?? 1000,
+                    maxOutputTokens: outputTokens,
                     ...(jsonMode ? { responseMimeType: 'application/json' } : {})
                 }
             };
@@ -626,11 +816,8 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
 
         case 'aws bedrock': {
             const awsRegion = customConfig.awsRegion || 'us-east-1';
-            // Send the raw model id in the URL (colon and all). AWS canonicalizes the
-            // received path by URI-encoding it once, so the SigV4 canonical URI below
-            // must be encoded ONCE (':' -> '%3A') while the request URL stays raw.
-            // Encoding both would make AWS double-encode ('%253A') and the signature
-            // would not match.
+            // AWS encodes the received path once, so the canonical URI is encoded once and the URL stays raw.
+            // Encoding both breaks the signature.
             endpoint = `https://bedrock-runtime.${awsRegion}.amazonaws.com/model/${model}/invoke`;
             requestHeaders = {
                 "Content-Type": "application/json",
@@ -663,7 +850,7 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
 
                 requestBody = {
                     anthropic_version: "bedrock-2023-05-31",
-                    max_tokens: maxTokens ?? 1000,
+                    max_tokens: outputTokens,
                     system: systemPrompt,
                     messages: bedrockMessages,
                     temperature: temperature ?? 0.7
@@ -690,7 +877,7 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
 
                 requestBody = {
                     prompt: compiledPrompt,
-                    max_gen_len: maxTokens ?? 1000,
+                    max_gen_len: outputTokens,
                     temperature: temperature ?? 0.7
                 };
             } else {
@@ -702,7 +889,7 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
 
                 requestBody = {
                     prompt: bedrockPrompt,
-                    max_tokens: maxTokens ?? 1000,
+                    max_tokens: outputTokens,
                     temperature: temperature ?? 0.7
                 };
             }
@@ -713,20 +900,26 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
             throw new Error(`The provider '${provider}' is not supported yet.`);
     }
 
-    // Streaming toggles, inert when stream is false. Bedrock has no text-SSE
-    // stream, so the streaming entry point falls back to the non-streaming path
-    // for it and never builds a streaming request here.
+    if (Array.isArray(conversation)) {
+        requestBody = applyConversation(requestBody, provider, model, { systemPrompt, conversation, tools });
+    }
+    // Marking the end of the request lets a growing transcript be read back from cache each turn.
+    // Bedrock's InvokeModel rejects the automatic field, and a custom Anthropic base URL may know neither form.
+    if (cachePrefix && provider === 'anthropic' && !baseUrl) {
+        requestBody.cache_control = { type: 'ephemeral' };
+    } else if (cachePrefix && provider === 'aws bedrock') {
+        requestBody = applyCacheBreakpoint(requestBody, provider, model);
+    }
+
+    // Bedrock has no text SSE; streaming falls back before reaching here.
     if (stream) {
         if (provider === 'google ai' || provider === 'vertex ai') {
             endpoint = endpoint.replace(':generateContent', ':streamGenerateContent');
             endpoint += endpoint.includes('?') ? '&alt=sse' : '?alt=sse';
         } else if (provider !== 'aws bedrock') {
             requestBody.stream = true;
-            // OpenAI and OpenRouter report usage on a stream only when asked, and
-            // usage is where the cache counters live. Local servers are left
-            // alone: the option is not universally implemented there and an
-            // unknown field can fail the request outright.
-            if (provider === 'openai' || provider === 'openrouter') {
+            // OpenAI streams usage only on request; compatible servers behind a custom URL may reject the field.
+            if (provider === 'openai' && isOfficialOpenAiEndpoint(endpoint)) {
                 requestBody.stream_options = { include_usage: true };
             }
         }
@@ -763,11 +956,19 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
         });
     }
 
-    return { endpoint, requestHeaders, requestBodyPayload, provider, cachePlan };
+    return { endpoint, requestHeaders, requestBodyPayload, provider, tokenSample, payloadLimit: limit, cachePlan };
 }
 
-async function sendApiRequest(params) {
-    const { endpoint, requestHeaders, requestBodyPayload, provider, cachePlan } = await buildRequest(params);
+function isOfficialOpenAiEndpoint(endpoint) {
+    try {
+        return new URL(endpoint).hostname === 'api.openai.com';
+    } catch {
+        return false;
+    }
+}
+
+async function sendApiRequest(params, dependencies = {}) {
+    const { endpoint, requestHeaders, requestBodyPayload, provider, tokenSample, cachePlan } = await buildRequest(params, dependencies);
     const { abortSignal } = params;
 
     try {
@@ -786,8 +987,8 @@ async function sendApiRequest(params) {
         const data = await response.json();
         const content = parseResponse(data, provider, Boolean(params.jsonMode));
         const metadata = getResponseMetadata(data, provider);
-        // Marked requests report back so a scope that keeps paying the write
-        // surcharge without ever reading it can be put on cooldown.
+        const learnedTokenRatio = learnFromReportedTokens(tokenSample, readUsage(provider, data).totalInputTokens);
+        // A scope that keeps paying the write surcharge without reading it back is put on cooldown.
         if (params.promptCache?.scopeId) {
             recordCacheOutcome(params.promptCache.scopeId, {
                 cacheReadTokens: metadata.cacheReadTokens,
@@ -797,12 +998,45 @@ async function sendApiRequest(params) {
         }
         params.onUsage?.(metadata);
         if (!params.includeResponseMetadata) return content;
-        return { content, ...metadata };
+        return { content, ...metadata, learnedTokenRatio };
 
     } catch (error) {
         console.error("API Request Failed:", error);
         throw error;
     }
+}
+
+// Returns provider-reported usage, so the effect of caching is read, never assumed.
+async function sendAgentRequest(params, dependencies = {}) {
+    const { endpoint, requestHeaders, requestBodyPayload, provider, tokenSample } = await buildRequest(params, dependencies);
+    const response = await undiciFetch(endpoint, {
+        method: "POST",
+        headers: requestHeaders,
+        body: requestBodyPayload,
+        signal: params.abortSignal,
+        dispatcher: generationDispatcher
+    });
+    if (!response.ok) {
+        const error = new Error(await readHttpErrorMessage(response));
+        error.status = response.status;
+        throw error;
+    }
+    const data = await response.json();
+    const content = parseResponse(data, provider);
+    const usage = readUsage(provider, data);
+    return {
+        content,
+        ...readToolReply(provider, data),
+        usage,
+        learnedTokenRatio: learnFromReportedTokens(tokenSample, usage.totalInputTokens),
+        ...getResponseMetadata(data, provider),
+        provider
+    };
+}
+
+function nativeToolSupport({ apiProfileId, model }, dependencies = {}) {
+    const apiProfile = loadApiProfile(apiProfileId, dependencies);
+    return Boolean(apiProfile) && supportsNativeTools(apiProfile.provider, model);
 }
 
 // --- EMBEDDINGS ---
@@ -890,10 +1124,23 @@ async function getEmbeddings(text, apiProfileId, modelName) {
 
 module.exports = {
     sendApiRequest,
+    sendAgentRequest,
+    nativeToolSupport,
     getEmbeddings,
     buildRequest,
+    parseResponse,
     parseStreamChunk,
     parseStreamUsage,
+    providerOutputLimit,
+    requestedOutputTokens,
+    getReservedOutputTokens,
+    payloadLimitFor,
+    resolvePayloadLimit,
+    learnFromReportedTokens,
+    createPromptVariableResolver,
+    needsMaxCompletionTokens,
+    isGeminiThinkingModel,
+    REASONING_OUTPUT_HEADROOM,
     generationDispatcher,
     buildOpenAiCompatibleHeaders,
     readHttpErrorMessage,

@@ -1,9 +1,11 @@
 const { estimateTokens, PAYLOAD_BUDGET_CONTRACT } = require('../llm/payload-budget');
 const { stripLeadingStoryEvidenceMarkers } = require('../kanora/roleplay-history');
+const { stripReasoning } = require('./message-text');
 const { PROMPT_CACHE_CONTRACT, readHistoryAnchor, writeHistoryAnchor } = require('../llm/prompt-cache');
 
+// Reasoning is kept for display but never sent back to a model.
 function prepareHistoryEntry(msg) {
-    let content = stripLeadingStoryEvidenceMarkers(msg.content);
+    let content = stripReasoning(stripLeadingStoryEvidenceMarkers(msg.content || ''));
 
     if (msg.attachedFiles) {
         let files = [];
@@ -40,16 +42,14 @@ function findWindowStart(entries, limit) {
     return start;
 }
 
-// Format history messages into a standard list, respecting max context tokens.
+// The window that would be sent, without moving the anchor. The budget measures history
+// with this before retrieval runs, so what it reserves is what the final window takes.
 //
-// With a cache scope the window is anchored: the first message stays put across
-// turns so the message prefix a provider already cached is still a prefix of the
-// next request. Without an anchor the window takes the longest fitting suffix
-// every time, and since the budget moves with the size of the retrieved context,
-// the first message moves with it and rewrites the prefix even on turns where
-// nothing actually had to be dropped.
-function formatActiveHistory(messages, maxTokensAllowed, cacheScopeId = null) {
-    const entries = messages.map(prepareHistoryEntry);
+// With a cache scope the first message stays put across turns so a cached message prefix
+// is still a prefix of the next request; without one the longest fitting suffix is taken.
+function planActiveHistory(messages, maxTokensAllowed, cacheScopeId = null) {
+    const entries = (Array.isArray(messages) ? messages : []).map(prepareHistoryEntry);
+    const limit = Math.max(0, Math.floor(Number(maxTokensAllowed) || 0));
     const anchorId = cacheScopeId ? readHistoryAnchor(cacheScopeId) : null;
 
     let start = -1;
@@ -59,37 +59,44 @@ function formatActiveHistory(messages, maxTokensAllowed, cacheScopeId = null) {
             const anchoredCost = entries
                 .slice(anchorIndex)
                 .reduce((total, entry) => total + entry.tokens, 0);
-            if (anchoredCost <= maxTokensAllowed) start = anchorIndex;
+            if (anchoredCost <= limit) start = anchorIndex;
         }
     }
 
     if (start < 0) {
-        // Re-anchoring releases a slice of the budget in one step. Dropping a
-        // single message per turn instead would keep the window fitting while
-        // moving its first byte every turn, which is the one shape a prefix
-        // cache can never reuse.
+        // Re-anchoring releases a slice of the budget in one step. Dropping one message per
+        // turn would move the first byte every turn, which a prefix cache can never reuse.
         const headroom = cacheScopeId
-            ? Math.floor(maxTokensAllowed * (1 - PROMPT_CACHE_CONTRACT.reanchorHeadroomRatio))
-            : maxTokensAllowed;
+            ? Math.floor(limit * (1 - PROMPT_CACHE_CONTRACT.reanchorHeadroomRatio))
+            : limit;
         start = findWindowStart(entries, headroom);
         // Never let the headroom empty a window the full budget could carry.
         if (start >= entries.length && entries.length > 0) {
-            start = findWindowStart(entries, maxTokensAllowed);
+            start = findWindowStart(entries, limit);
         }
     }
 
-    const history = entries.slice(start).map(entry => ({ role: entry.role, content: entry.content }));
-    if (cacheScopeId) {
-        writeHistoryAnchor(cacheScopeId, entries[start]?.id || null);
-    }
-
-    // Anything cut here is live history that was never archived, so there is no
-    // memory chunk to retrieve it from. Worth saying, even if only in the log.
-    const dropped = messages.length - history.length;
-    if (dropped > 0) {
-        console.warn(`[Context] ${dropped} unarchived message(s) did not fit the payload budget and were not sent. Archiving them would keep them searchable.`);
-    }
-    return history;
+    const kept = entries.slice(start);
+    return {
+        anchorId: entries[start]?.id || null,
+        history: kept.map(entry => ({ role: entry.role, content: entry.content })),
+        tokens: kept.reduce((total, entry) => total + entry.tokens, 0),
+        dropped: entries.length - kept.length
+    };
 }
 
-module.exports = { findWindowStart, formatActiveHistory, prepareHistoryEntry };
+function selectActiveHistory(messages, maxTokensAllowed, cacheScopeId = null) {
+    const plan = planActiveHistory(messages, maxTokensAllowed, cacheScopeId);
+    if (cacheScopeId) writeHistoryAnchor(cacheScopeId, plan.anchorId);
+    // Unarchived, so no memory chunk can retrieve what is cut here.
+    if (plan.dropped > 0) {
+        console.warn(`[Context] ${plan.dropped} unarchived message(s) did not fit the payload budget and were not sent. Archiving them would keep them searchable.`);
+    }
+    return { history: plan.history, tokens: plan.tokens, dropped: plan.dropped };
+}
+
+function formatActiveHistory(messages, maxTokensAllowed, cacheScopeId = null) {
+    return selectActiveHistory(messages, maxTokensAllowed, cacheScopeId).history;
+}
+
+module.exports = { findWindowStart, formatActiveHistory, planActiveHistory, prepareHistoryEntry, selectActiveHistory };

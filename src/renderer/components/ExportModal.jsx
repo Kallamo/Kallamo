@@ -40,10 +40,7 @@ function Toggle({ checked, onChange, label, disabled }) {
   );
 }
 
-// Greedy block-level pagination: walk the rendered top-level blocks and break to
-// a new page when a whole block would overflow the page content box, keeping
-// blocks intact. A `.wd-chapter-start` block always forces a new page, mirroring
-// the `page-break-before:always` that the PDF export honors natively.
+// Whole blocks never split; `.wd-chapter-start` forces a page, like the PDF's page-break-before.
 function paginateBlocks(container, pageContentHeight) {
   const children = Array.from(container.children);
   if (!children.length) return [''];

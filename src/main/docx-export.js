@@ -63,9 +63,7 @@ function blockBase(attrs, page) {
   return o;
 }
 
-// One context per document (or per chapter, in the book export) so list
-// numbering references accumulate. refPrefix keeps numbering refs globally
-// unique across chapters when several converters feed one Document.
+// refPrefix keeps numbering refs unique when several chapters feed one Document.
 function createConverter(page, refPrefix = '') {
   const numbering = [];
   const baseRun = {
@@ -226,9 +224,7 @@ async function buildDocxBuffer(docJson, page, opts = {}) {
   return Packer.toBuffer(doc);
 }
 
-// Whole-folder ("book") export: one Document, one section per chapter (docx
-// sections always start on a new page) plus an optional leading TOC section.
-// chapters = [{ title, docJson }], position-ordered. `page` is the shared page geometry.
+// One section per chapter (docx sections always start a new page).
 async function buildBookDocxBuffer(chapters, page, opts = {}) {
   const margins = opts.margins || {};
   const basePage = {
@@ -272,9 +268,8 @@ async function buildBookDocxBuffer(chapters, page, opts = {}) {
   const hideEarly = wantNumbers && opts.pageNumberStart && opts.pageNumberStart > 1;
   const emptyFooter = { default: new Footer({ children: [new Paragraph({ children: [] })] }) };
 
-  // Static TOC mirroring the PDF look: title hyperlink, dotted leader, PAGEREF page
-  // number. Avoids docx's TableOfContents field, which prompts about external files
-  // and stays empty until Update Field; PAGEREF is internal and fills on open.
+  // Static TOC: docx's TableOfContents field prompts about external files and stays empty
+  // until Update Field.
   if (opts.toc) {
     const tocChildren = [
       new Paragraph({

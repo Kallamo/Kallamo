@@ -91,9 +91,7 @@ export default function ChatMemoryView({
     } catch (e) { /* markers stay empty on failure */ }
   };
 
-  // World-index a memory tier. full=false tags only chunks that carry no tags yet
-  // ("index new"); full=true drops the tier's tags and re-tags from scratch ("reindex
-  // all"), so a re-run reflects the current tagger and entity registry.
+  // full=false tags only untagged chunks; full=true drops the tier's tags and re-tags.
   const handleIndexMemories = async (tier, full) => {
     if (typeof electronAPI?.startWorldIndexTagging !== 'function') {
       showToast('Tagging unavailable. Fully restart the app (close and reopen Electron).', 'error');
@@ -609,9 +607,7 @@ export default function ChatMemoryView({
     ];
   }, [groupedBlocks, summaryBlocks]);
 
-  // A summary's weight is the history it stores, not the length of the recap the
-  // summarizer wrote for the card. Those chunks live in knowledge_chunks and are
-  // counted in the main process, next to the file blocks they sit beside.
+  // Weighed by stored history (counted in the main process), not recap length.
   const summarySignature = summaryBlocks.map(b => b.id).join('|');
   useEffect(() => {
     if (summaryBlocks.length === 0 || !electronAPI?.getArchiveTokenTotals || !chat?.id) {

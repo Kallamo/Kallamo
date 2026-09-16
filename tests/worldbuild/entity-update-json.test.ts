@@ -11,8 +11,8 @@ describe('entity update JSON recovery', () => {
   });
 
   test('repairs missing commas between array elements', () => {
-    const result = parseEntityUpdateObject('{"links":{"relationships":[{"name":"Mara"} {"name":"Elias"}]}}');
-    expect(result).toEqual({ value: { links: { relationships: [{ name: 'Mara' }, { name: 'Elias' }] } }, repaired: true });
+    const result = parseEntityUpdateObject('{"links":{"relationships":[{"name":"Nora"} {"name":"Elias"}]}}');
+    expect(result).toEqual({ value: { links: { relationships: [{ name: 'Nora' }, { name: 'Elias' }] } }, repaired: true });
   });
 
   test('repairs adjacent array elements without whitespace', () => {

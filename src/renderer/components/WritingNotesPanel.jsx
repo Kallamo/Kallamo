@@ -3,11 +3,7 @@ import { StickyNote, Plus, Trash2, Check, X, PanelRightClose, RotateCcw, CornerD
 import { parseMarkdown } from '../utils/markdown';
 import ConfirmDialog from './ui/ConfirmDialog';
 
-// Per-chapter review notes. A note is an editorial pending ("adjust the temporal weight
-// here", "check coherence with Aldous") that outlives the moment. It carries the excerpt
-// it was about (click to scroll back to it) and, when it came from an AI Analysis, the
-// profile + instruction that produced it. Notes render minimized; a freshly added AI note
-// (expandId) opens expanded once. Scoped to the open chapter → lives in the right rail.
+// Per-chapter review notes, with their excerpt and, for AI notes, provenance.
 export default function WritingNotesPanel({ documentId, workspaceId, electronAPI, onClose, onJump, refreshKey, expandId }) {
   const [notes, setNotes] = useState([]);
   const [profiles, setProfiles] = useState({});

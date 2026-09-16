@@ -1,21 +1,7 @@
-// Which messages a workspace still sends as live history, and which ones its
-// summaries already cover.
-//
-// The archive used to be described by a single number (chats.summarizedIndex,
-// "everything before N is archived"). A number cannot describe a gap, so any
-// operation that produced one (deleting a summary, archiving a non-contiguous
-// selection, deleting a message) left the marker disagreeing with the summary
-// blocks. Coverage is now derived from the message ids the blocks already
-// store; summarizedIndex is kept only as a derived value for older readers and
-// for exported packages.
-//
-// Mirrored in src/renderer/features/chat/archive-coverage.js. Both copies are
-// pure and are checked against each other in tests/archive-coverage.test.ts.
+// Live history is derived from the message ids summary blocks store.
+// Mirrored in src/renderer/features/chat/archive-coverage.js; tests/archive-coverage.test.ts keeps them equal.
 
-// How many of the newest messages the archive window holds back by default.
-// Roleplay replies run long, so a wider reserve can pin tens of thousands of
-// tokens in the payload for no gain. It is a default, not a rule: the window
-// can offer them, and archiving them takes them out of live history at once.
+// A default, not a rule: long roleplay replies make a wide reserve expensive.
 const RECENT_MESSAGE_RESERVE = 5;
 
 function parseMemoryBlocks(value) {
@@ -65,9 +51,7 @@ function selectArchivableMessages(messages, memoryBlocks, reserveRecent = RECENT
   return selectActiveMessages(list, memoryBlocks).filter(message => !reserved.has(message.id));
 }
 
-// Legacy marker: how many messages from the start are already out of live
-// history. Only meaningful while that run is contiguous, which is exactly the
-// case the old model could represent.
+// Legacy marker; only meaningful while the archived run is contiguous.
 function deriveSummarizedIndex(messages, memoryBlocks) {
   const covered = coveredMessageIds(memoryBlocks);
   const list = messages || [];

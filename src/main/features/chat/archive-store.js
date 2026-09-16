@@ -1,6 +1,4 @@
-// Database side of chat archiving. Every mutation that can change which
-// messages are live history goes through here, so the derived summarizedIndex
-// and the vectorized chunks can never drift away from the summary blocks.
+// Every mutation of live history goes through here so summarizedIndex and chunks can't drift.
 
 const { parseMemoryBlocks, deriveSummarizedIndex } = require('./archive-coverage');
 
@@ -79,9 +77,7 @@ function rebuildSummaryBlock(database, chatId, blockId) {
   return { removedChunks, restoredMessages: messageIds.length, summarizedIndex };
 }
 
-// Delete one summary: the recap and the stored history both go, and the messages
-// it covered are dropped rather than returned to the conversation. They stay in
-// the log, and a full rebuild is what brings them back.
+// Covered messages are dropped, not returned; only a full rebuild brings them back.
 function deleteSummaryBlock(database, chatId, blockId) {
   const { messageIds, removedChunks } = removeSummaryBlock(database, chatId, blockId);
   const dropped = markExcluded(database, chatId, messageIds, true);
@@ -89,10 +85,7 @@ function deleteSummaryBlock(database, chatId, blockId) {
   return { removedChunks, droppedMessages: dropped, summarizedIndex };
 }
 
-// Full rebuild: every summary goes and the whole conversation comes back,
-// including messages dropped by an earlier delete. This is the one way out of
-// any archive state, so it must leave nothing muted behind. Custom memory
-// snippets and uploaded files are left alone.
+// The one way out of any archive state, so it must leave nothing muted.
 function resetSummaries(database, chatId) {
   const blocks = readMemoryBlocks(database, chatId);
   const summaryIds = blocks.filter(block => block && block.type === 'summarized').map(block => block.id);
@@ -105,9 +98,7 @@ function resetSummaries(database, chatId) {
   return { removedSummaries: summaryIds.length, removedChunks, restoredDropped, summarizedIndex };
 }
 
-// Excluded messages stay visible in the log but leave the payload for good.
-// A message that a summary already covers cannot be excluded: it is archived,
-// and muting it would only hide it from a place it no longer occupies.
+// A covered message can't be excluded: it is already out of the payload.
 function markExcluded(database, chatId, messageIds, excluded) {
   const ids = (Array.isArray(messageIds) ? messageIds : [messageIds]).filter(Boolean);
   if (ids.length === 0) return 0;

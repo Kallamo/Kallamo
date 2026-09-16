@@ -3,10 +3,7 @@ import { createPortal } from 'react-dom';
 import { X, ChevronUp, ChevronDown, CaseSensitive, Replace, ReplaceAll } from 'lucide-react';
 import { searchKey, collectSearchMatches } from './writingExtensions';
 
-// Find & Replace overlay for one chapter. The ProseMirror SearchHighlight plugin
-// only paints; this panel owns the match list, the current index, and the edits.
-// Replace is disabled while the chapter is locked (a suggestion in flight/under
-// review), so it can't desync the positions a pending suggestion is anchored to.
+// Replace is disabled while the chapter is locked, so it can't desync a pending suggestion's anchors.
 export default function WritingFindReplace({ editor, locked, onClose }) {
   const [query, setQuery] = useState('');
   const [replacement, setReplacement] = useState('');
@@ -43,9 +40,7 @@ export default function WritingFindReplace({ editor, locked, onClose }) {
     editor.view.dispatch(editor.state.tr.setMeta(searchKey, { matches: list, current: idx }));
   }, [editor]);
 
-  // Keep the find input focused while centering the active match in the Writing Desk
-  // viewport. ProseMirror's transaction scroll flag alone does not reliably move the
-  // outer chapter scroller when focus remains in the overlay.
+  // ProseMirror's scroll flag alone doesn't move the outer scroller while focus stays here.
   const scrollTo = useCallback((match) => {
     if (!editor || !match) return;
     editor.commands.setTextSelection({ from: match.from, to: match.to });

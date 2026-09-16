@@ -39,9 +39,7 @@ function hsvToRgb(h, s, v) {
   return { r: (r + m) * 255, g: (g + m) * 255, b: (b + m) * 255 };
 }
 
-// Self-contained color picker (saturation/value square + hue slider + hex field) in the
-// app's design, replacing the OS-native color dialog. onChange fires live; onChangeEnd
-// fires when an interaction settles (good for recording recent colors).
+// onChange fires live; onChangeEnd when an interaction settles.
 export default function ColorPicker({ value, onChange, onChangeEnd }) {
   const lastEmitted = useRef(value);
   const [hsv, setHsv] = useState(() => { const { r, g, b } = hexToRgb(value || '#000000'); return rgbToHsv(r, g, b); });

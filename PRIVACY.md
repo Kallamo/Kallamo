@@ -1,6 +1,6 @@
 # Kallamo Privacy Policy
 
-_Last updated: 2026-07-04_
+_Last updated: 2026-09-14_
 
 Kallamo is a desktop application that runs entirely on your own computer. It is
 designed around a simple principle: **your data stays yours, on your machine.**
@@ -46,7 +46,13 @@ LM Studio), no data leaves your machine at all.
 
 The only network connections Kallamo initiates on its own are:
 
-- **Requests to the AI provider you configured**, when you send a prompt.
+- **Requests to the AI provider you configured**, when you send a prompt or use a
+  feature that relies on it, such as archiving, entity tagging, Worldbuild updates,
+  or retrieval planning.
+- **Downloading the Local AI Engine and its embedding model**, when you install the
+  engine and the first time it is used. The engine comes from the project's public
+  GitHub Releases and the model files from Hugging Face. Only public files are
+  downloaded, and no personal data is transmitted.
 - **Automatic update checks** against the project's public GitHub Releases, to
   notify you when a new version is available. These checks download only public
   release metadata and do not transmit any personal data.

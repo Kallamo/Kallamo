@@ -141,9 +141,7 @@ export default function ExportBookModal({ folderTitle, documents, electronAPI, o
   const contentWidth = pw - mLeft - mRight;
   const pageContentHeight = ph - mTop - mBottom;
 
-  // Chapter blocks must be flat siblings (not wrapped per chapter), or paginateBlocks
-  // treats a whole chapter as one atomic block. A TOC takes the first page(s), so the
-  // first chapter must also break after it; without a TOC it stays on page 1.
+  // Chapter blocks must be flat siblings, or paginateBlocks treats a chapter as one atomic block.
   const tocPrecedes = includeToc && activeChapters.length >= 2;
   const bodyHtml = useMemo(() => {
     if (!activeChapters.length) return '';

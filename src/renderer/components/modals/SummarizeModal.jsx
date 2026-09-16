@@ -1,11 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { X, Check, CheckSquare, Square, Info, Archive, MessageSquare, EyeOff, AlertTriangle } from 'lucide-react';
 
-// Three things can happen to a message in this window, and only one of them at
-// a time. "archive" folds it into the new summary and out of live history;
-// "keep" leaves it whole in the payload; "drop" mutes it for good. A message can
-// never be archived and live at the same time, which is what used to make the
-// token bar and the summary card disagree.
+// Each message is exactly one of archive, keep or drop, so the token bar and summary card agree.
 const ARCHIVE = 'archive';
 const KEEP = 'keep';
 const DROP = 'drop';
