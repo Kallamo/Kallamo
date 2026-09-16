@@ -3,6 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { X, Plus, Key, Link2, Eye, EyeOff, Monitor, Settings, Layout, Layers, HardDrive, Trash2, FolderOpen, RefreshCw, Cpu, Database, Palette, Type, PenLine, AlertTriangle, Sparkles, SlidersHorizontal, Languages, ChevronDown } from 'lucide-react';
 import Logo, { Logotype } from '../../logo';
 import AiEngineRoleCard from '../../features/ai-engine/AiEngineRoleCard';
+import Toggle from '../ui/Toggle';
 import { AI_ENGINE_ROLE_DEFINITIONS, SYSTEM_AI_LANGUAGES } from '../../../shared/contracts/ai-engine-roles';
 import retrievalSettingsContract from '../../../shared/retrieval-settings.json';
 
@@ -862,7 +863,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
 
                       {/* Model context window */}
                       <div>
-                        <label className="block text-xs font-bold text-gray-400 mb-1">Model Context Window (optional)</label>
+                        <label className="mb-1 block text-xs font-bold text-text-muted">Model Context Window (optional)</label>
                         <p className="caption mb-1.5">The largest request the model behind this connection accepts, in tokens. Every request sent through it stays under this value or the workspace limit, whichever is smaller. For a local server, use the context length loaded in LM Studio or the num_ctx set in Ollama.</p>
                         <input
                           type="number"
@@ -870,8 +871,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           step="1024"
                           value={apiContextWindow}
                           onChange={(e) => setApiContextWindow(e.target.value)}
-                          placeholder="Empty: no limit for this connection"
-                          className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 focus:outline-none focus:border-accent"
+                          placeholder="Empty: the workspace limit applies"
+                          className="field-input px-3 py-2 text-sm"
                         />
                       </div>
 
@@ -1328,27 +1329,21 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                               </div>
                             )}
                             {definition.id === 'retrievalPlanner' && (
-                              <div className={`flex items-center justify-between gap-4 rounded-lg bg-[#021015] px-3.5 py-3 ${retrievalPlannerMode === 'disabled' ? 'opacity-50' : ''}`}>
-                                <div className="min-w-0">
-                                  <span className="block text-xs font-bold text-gray-200">Plan every message</span>
-                                  <p className="mt-1 text-[0.6875rem] leading-relaxed text-gray-500">By default a short continuation with no name and no question skips the planner and uses the free search alone. Turn this on to research every message.</p>
-                                </div>
-                                <label className={`relative inline-flex items-center shrink-0 ${retrievalPlannerMode !== 'disabled' ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
-                                  <input type="checkbox" checked={agenticGate === 'always'} disabled={retrievalPlannerMode === 'disabled'} onChange={(event) => updateSetting('advanced', 'agenticGate', event.target.checked ? 'always' : 'auto')} className="sr-only peer" />
-                                  <div className="w-7 h-4 bg-gray-700 rounded-full peer peer-focus-visible:ring-2 peer-focus-visible:ring-accent/60 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
-                                </label>
-                              </div>
-                            )}
-                            {definition.id === 'retrievalPlanner' && (
-                              <div className={`flex items-center justify-between gap-4 rounded-lg bg-[#021015] px-3.5 py-3 ${retrievalPlannerMode === 'disabled' ? 'opacity-50' : ''}`}>
-                                <div className="min-w-0">
-                                  <span className="block text-xs font-bold text-gray-200">Native tool calling</span>
-                                  <p className="mt-1 text-[0.6875rem] leading-relaxed text-gray-500">Uses the provider's own tool calling when the connection and model support it, and falls back to the text protocol by itself when they do not. Turn this off to always use the text protocol.</p>
-                                </div>
-                                <label className={`relative inline-flex items-center shrink-0 ${retrievalPlannerMode !== 'disabled' ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
-                                  <input type="checkbox" checked={agenticToolProtocol !== 'text'} disabled={retrievalPlannerMode === 'disabled'} onChange={(event) => updateSetting('advanced', 'agenticToolProtocol', event.target.checked ? 'auto' : 'text')} className="sr-only peer" />
-                                  <div className="w-7 h-4 bg-gray-700 rounded-full peer peer-focus-visible:ring-2 peer-focus-visible:ring-accent/60 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
-                                </label>
+                              <div className={`space-y-3 rounded-card border border-border-subtle bg-surface-input px-3.5 py-3 ${retrievalPlannerMode === 'off' ? 'opacity-50' : ''}`}>
+                                <Toggle
+                                  label="Plan every message"
+                                  description="By default a short continuation with no name and no question skips the planner and uses the free search alone. Turn this on to research every message."
+                                  checked={agenticGate === 'always'}
+                                  disabled={retrievalPlannerMode === 'off'}
+                                  onChange={(checked) => updateSetting('advanced', 'agenticGate', checked ? 'always' : 'auto')}
+                                />
+                                <Toggle
+                                  label="Native tool calling"
+                                  description="Uses the provider's own tool calling when the connection and model support it, and falls back to the text protocol by itself when they do not. Turn this off to always use the text protocol."
+                                  checked={agenticToolProtocol !== 'text'}
+                                  disabled={retrievalPlannerMode === 'off'}
+                                  onChange={(checked) => updateSetting('advanced', 'agenticToolProtocol', checked ? 'auto' : 'text')}
+                                />
                               </div>
                             )}
                             {definition.id === 'summarizer' && (
@@ -1473,7 +1468,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           <span className="text-sm text-gray-200 font-bold">Long-term Memory Top-K</span>
                           <span className="text-xs text-accent font-mono font-bold">{longTermMemoryTopK}</span>
                         </div>
-                        <p className="caption mb-2">Maximum archived conversation memories considered before final context planning.</p>
+                        <p className="caption mb-2">The minimum number of passages requested from archived conversations per search. Kallamo asks for more, up to 20, when the payload budget has room.</p>
                         <input
                           type="range"
                           {...rangeProps(RETRIEVAL_SETTING_DEFINITIONS.longTermMemoryTopK)}
