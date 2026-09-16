@@ -271,7 +271,7 @@ describe('prompt cache request composition', () => {
     expect(JSON.parse(plain.requestBodyPayload).messages[0].content).toBe(`${STABLE}${VOLATILE}`);
   });
 
-  test('Bedrock is left on the plain schema on purpose', async () => {
+  test('Claude on Bedrock marks the stable head as blocks, like Anthropic', async () => {
     const request = await buildRequest({
       apiProfileId: 'api-profile',
       model: 'anthropic.claude-3-5-sonnet-20240620-v1:0',
@@ -295,6 +295,9 @@ describe('prompt cache request composition', () => {
       }
     });
 
-    expect(JSON.parse(request.requestBodyPayload).system).toBe(`${STABLE}${VOLATILE}`);
+    const system = JSON.parse(request.requestBodyPayload).system;
+    expect(system[0]).toEqual({ type: 'text', text: STABLE, cache_control: { type: 'ephemeral' } });
+    expect(system[1]).toEqual({ type: 'text', text: VOLATILE });
+    expect(JSON.parse(request.requestBodyPayload)).not.toHaveProperty('cache_control');
   });
 });

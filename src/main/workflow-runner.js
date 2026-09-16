@@ -5891,7 +5891,7 @@ ${isRoleplay ? `- PERSPECTIVE: lookup_entity returns what the narrator knows. Us
             manualMode: false,
             manualJson: '',
             abortSignal: run?.controller?.signal,
-            cachePrefix: true
+            promptCache: { policy: 'transcript' }
         };
         if (protocol === 'native') {
             return sendAgentRequest({ ...request, conversation: renderNativeConversation(), tools: toolDefinitions });

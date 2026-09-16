@@ -487,7 +487,7 @@ function markLastHistoryMessage(messages) {
 
 // --- CORE API REQUESTS ---
 
-async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistory = [], newPrompt = '', temperature, maxTokens, maxPayloadTokens, payloadLimit = null, payloadBreakdown = null, learnTokenCount = false, manualMode, manualJson, attachedImages, stream = false, jsonMode = false, jsonSchema = null, conversation = null, tools = null, cachePrefix = false, promptCache = null }, dependencies = {}) {
+async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistory = [], newPrompt = '', temperature, maxTokens, maxPayloadTokens, payloadLimit = null, payloadBreakdown = null, learnTokenCount = false, manualMode, manualJson, attachedImages, stream = false, jsonMode = false, jsonSchema = null, conversation = null, tools = null, promptCache = null }, dependencies = {}) {
     const db = dependencies.database || getDatabase();
     useTokenCalibrationStore(db);
     const resolveVariables = createPromptVariableResolver(db);
@@ -553,6 +553,7 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
     const cachePlan = planPromptCache({
         provider,
         model,
+        baseUrl,
         policy: promptCache?.policy,
         placement: contextPlacement,
         scopeId: promptCache?.scopeId,
@@ -808,7 +809,7 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
             };
 
             if (model.toLowerCase().includes("claude")) {
-                let bedrockMessages = [...cleanHistory];
+                let bedrockMessages = [...historyForRequest];
                 let userContent = newPrompt;
                 if (attachedImages && attachedImages.length > 0) {
                     userContent = [{ type: "text", text: newPrompt }];
@@ -834,7 +835,9 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
                 requestBody = {
                     anthropic_version: "bedrock-2023-05-31",
                     max_tokens: outputTokens,
-                    system: systemPrompt,
+                    system: markedSystem
+                        ? buildCacheableSystem(stableSystem, contextPlacement === 'system' ? volatileSystem : '')
+                        : systemPrompt,
                     messages: bedrockMessages,
                     temperature: temperature ?? 0.7
                 };
@@ -887,11 +890,10 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
         requestBody = applyConversation(requestBody, provider, model, { systemPrompt, conversation, tools });
     }
     // Marking the end of the request lets a growing transcript be read back from cache each turn.
-    // Bedrock's InvokeModel rejects the automatic field, and a custom Anthropic base URL may know neither form.
-    if (cachePrefix && provider === 'anthropic' && !baseUrl) {
-        requestBody.cache_control = { type: 'ephemeral' };
-    } else if (cachePrefix && provider === 'aws bedrock') {
-        requestBody = applyCacheBreakpoint(requestBody, provider, model);
+    if (cachePlan.transcriptBreakpoint) {
+        requestBody = cachePlan.style === 'bedrock'
+            ? applyCacheBreakpoint(requestBody, provider, model)
+            : { ...requestBody, cache_control: CACHE_CONTROL };
     }
 
     // Bedrock has no text SSE; streaming falls back before reaching here.

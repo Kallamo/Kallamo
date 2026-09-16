@@ -261,13 +261,13 @@ describe('agent conversations', () => {
 
   test('Anthropic prefix caching is requested only on its own endpoint', async () => {
     const official = await buildRequest(
-      { apiProfileId: 'api-profile', model: 'claude-sonnet-4-6', conversation, tools, maxTokens: 500, cachePrefix: true },
+      { apiProfileId: 'api-profile', model: 'claude-sonnet-4-6', conversation, tools, maxTokens: 500, promptCache: { policy: 'transcript' } },
       { database: createDatabase({ provider: 'Anthropic' }) }
     );
     expect(JSON.parse(official.requestBodyPayload).cache_control).toEqual({ type: 'ephemeral' });
 
     const proxied = await buildRequest(
-      { apiProfileId: 'api-profile', model: 'claude-sonnet-4-6', conversation, tools, maxTokens: 500, cachePrefix: true },
+      { apiProfileId: 'api-profile', model: 'claude-sonnet-4-6', conversation, tools, maxTokens: 500, promptCache: { policy: 'transcript' } },
       { database: createDatabase({ provider: 'Anthropic', baseUrl: 'https://proxy.test/v1/messages' }) }
     );
     expect(JSON.parse(proxied.requestBodyPayload)).not.toHaveProperty('cache_control');
@@ -279,7 +279,7 @@ describe('agent conversations', () => {
       customConfig: { awsRegion: 'us-east-1', awsAccessKeyId: 'AKIDEXAMPLE', awsSecretAccessKey: 'secret' }
     });
     const request = await buildRequest(
-      { apiProfileId: 'api-profile', model: 'us.anthropic.claude-sonnet-4-6', systemPrompt: 'Be precise.', conversation, tools, maxTokens: 500, cachePrefix: true },
+      { apiProfileId: 'api-profile', model: 'us.anthropic.claude-sonnet-4-6', systemPrompt: 'Be precise.', conversation, tools, maxTokens: 500, promptCache: { policy: 'transcript' } },
       { database }
     );
     const body = JSON.parse(request.requestBodyPayload);

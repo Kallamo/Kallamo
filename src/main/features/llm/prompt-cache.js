@@ -51,12 +51,12 @@ function normalizeProvider(provider) {
 // - 'openai-parts': OpenAI-compatible content parts, which OpenRouter forwards
 //   to Anthropic-backed models. Every other model it serves caches
 //   automatically and ignores the field, so the model id is checked first.
-// Bedrock is deliberately absent: its Anthropic passthrough validates the body
-// schema and support varies by model and region, so an unknown field there is a
-// hard request failure rather than a silent no-op.
+// - 'bedrock': Claude on AWS Bedrock, which takes explicit breakpoints on the same
+//   blocks but never the automatic top-level field.
 function cacheStyleFor(provider, model) {
     const normalized = normalizeProvider(provider);
     if (normalized === 'anthropic') return 'anthropic';
+    if (normalized === 'aws bedrock') return String(model || '').toLowerCase().includes('claude') ? 'bedrock' : null;
     if (normalized === 'openrouter') {
         const id = String(model || '').toLowerCase();
         return id.includes('claude') || id.includes('anthropic') ? 'openai-parts' : null;
@@ -98,9 +98,12 @@ function resetAllScopes() {
 // Decide the breakpoints for one request. `placement` says where the volatile
 // context ends up: 'system' keeps today's composition, 'turn' moves it behind
 // the history so the history itself becomes a reusable prefix.
+// Policy 'conversation' marks a chat; 'transcript' marks the end of a research
+// transcript that only grows, so each planner turn reads the earlier ones back.
 function planPromptCache({
     provider,
     model,
+    baseUrl = '',
     policy = 'none',
     placement = 'system',
     scopeId = '',
@@ -109,7 +112,13 @@ function planPromptCache({
     historyLength = 0
 } = {}) {
     const style = cacheStyleFor(provider, model);
-    const inert = { style: null, systemBreakpoint: false, historyBreakpoint: false, reason: '' };
+    const inert = { style: null, systemBreakpoint: false, historyBreakpoint: false, transcriptBreakpoint: false, reason: '' };
+
+    if (policy === 'transcript') {
+        // The automatic field is Anthropic's own endpoint only; a custom base URL may know neither form.
+        const marks = style === 'bedrock' || (style === 'anthropic' && !baseUrl);
+        return marks ? { ...inert, style, transcriptBreakpoint: true, reason: 'marked' } : { ...inert, reason: 'provider-automatic' };
+    }
 
     // Only conversational traffic opts in. A one-shot utility call (triage,
     // summarization, tagging) never sees its prefix again, so marking it would
@@ -141,6 +150,7 @@ function planPromptCache({
         style,
         systemBreakpoint,
         historyBreakpoint,
+        transcriptBreakpoint: false,
         reason: 'marked'
     };
 }
