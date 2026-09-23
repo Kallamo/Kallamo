@@ -1385,7 +1385,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
 
           {/* While in flight: gray the page out and block clicks, so it reads as locked. */}
           {inFlight && (
-            <div className="absolute inset-0 rounded-xl bg-gray-600/40 flex items-center justify-center cursor-not-allowed" style={{ backdropFilter: 'grayscale(0.85)' }}>
+            <div data-keep-backdrop className="absolute inset-0 rounded-xl bg-gray-600/40 flex items-center justify-center cursor-not-allowed" style={{ backdropFilter: 'grayscale(0.85)' }}>
               <div className="flex items-center gap-2 bg-[#0a161d] text-accent text-xs font-medium px-3 py-2 rounded-lg shadow-2xl">
                 <Loader2 className="w-4 h-4 animate-spin" /> AI is rewriting your selection…
               </div>

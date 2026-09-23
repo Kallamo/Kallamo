@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { createHistoryEdit } from './generation-target';
+import { reconcileMessages } from './message-reconcile';
+import { preloadMessageFrames, preloadPresentation } from './workspace-presentation';
+import { createStore } from '../../utils/store';
+import { perfStart } from '../../utils/perf';
+import { ChatWorkspaceView } from '../../views';
 
 const STREAM_DISPLAY_INTERVAL_MS = 48;
 const STREAM_DISPLAY_CHARACTERS_PER_TICK = 48;
@@ -55,8 +60,9 @@ export function useChatSession({ api, setChats, setCurrentView }) {
   const [isGenerating, setIsGenerating] = useState(false);
   const [editError, setEditError] = useState(null);
   const [lastGeneratedMessageId, setLastGeneratedMessageId] = useState(null);
-  const [streamingContent, setStreamingContent] = useState('');
-  const [streamingReasoning, setStreamingReasoning] = useState('');
+  // Streamed text changes every tick; keeping it out of React state means only the
+  // bubble that shows it re-renders, not the provider and everything under it.
+  const [streamDisplayStore] = useState(() => createStore({ content: '', reasoning: '' }));
   const streamContentQueueRef = useRef('');
   const streamReasoningQueueRef = useRef('');
   const streamDisplayTimerRef = useRef(null);
@@ -69,8 +75,12 @@ export function useChatSession({ api, setChats, setCurrentView }) {
     streamContentQueueRef.current = streamContentQueueRef.current.slice(contentDelta.length);
     streamReasoningQueueRef.current = streamReasoningQueueRef.current.slice(reasoningDelta.length);
 
-    if (contentDelta) setStreamingContent(previous => previous + contentDelta);
-    if (reasoningDelta) setStreamingReasoning(previous => previous + reasoningDelta);
+    if (contentDelta || reasoningDelta) {
+      streamDisplayStore.set(previous => ({
+        content: previous.content + contentDelta,
+        reasoning: previous.reasoning + reasoningDelta
+      }));
+    }
 
     if (streamContentQueueRef.current || streamReasoningQueueRef.current) {
       streamDisplayTimerRef.current = setTimeout(flushStreamDisplay, STREAM_DISPLAY_INTERVAL_MS);
@@ -90,8 +100,7 @@ export function useChatSession({ api, setChats, setCurrentView }) {
     streamReasoningQueueRef.current = '';
     if (streamDisplayTimerRef.current) clearTimeout(streamDisplayTimerRef.current);
     streamDisplayTimerRef.current = null;
-    setStreamingContent('');
-    setStreamingReasoning('');
+    streamDisplayStore.set({ content: '', reasoning: '' });
   };
 
   useEffect(() => {
@@ -102,7 +111,7 @@ export function useChatSession({ api, setChats, setCurrentView }) {
 
   const loadLatestChatMessages = async (chatId) => {
     const page = await api.getChatMessagePage({ chatId });
-    setActiveMessages(page.messages);
+    setActiveMessages(previous => reconcileMessages(previous, page.messages));
     setHasOlderMessages(page.hasMore);
     setOldestMessageCursor(page.oldestCursor);
     return page.messages;
@@ -147,8 +156,14 @@ export function useChatSession({ api, setChats, setCurrentView }) {
   };
 
   const handleSelectChat = async (chatId) => {
+    perfStart('workspace-open');
     setActiveChatId(chatId);
-    await loadLatestChatMessages(chatId);
+    const [messages] = await Promise.all([
+      loadLatestChatMessages(chatId),
+      preloadPresentation(api, chatId),
+      ChatWorkspaceView.preload().catch(() => undefined)
+    ]);
+    await preloadMessageFrames(api, chatId, messages);
     setCurrentView('chat');
   };
 
@@ -185,7 +200,7 @@ export function useChatSession({ api, setChats, setCurrentView }) {
   const refreshGeneratedChat = async (chatId, response) => {
     const page = await api.getChatMessagePage({ chatId });
     const chats = await api.getChats();
-    setActiveMessages(page.messages);
+    setActiveMessages(previous => reconcileMessages(previous, page.messages));
     setHasOlderMessages(page.hasMore);
     setOldestMessageCursor(page.oldestCursor);
     if (response.aiMsgId && !response.streamed) setLastGeneratedMessageId(response.aiMsgId);
@@ -352,10 +367,18 @@ export function useChatSession({ api, setChats, setCurrentView }) {
         alternatives: JSON.stringify(alternatives)
       };
 
-      // The shown reply is only removed once its replacement is saved.
+      // The shown reply is only removed once its replacement is saved, and the copy is
+      // withdrawn if the story cannot let go of the shown reply.
       await api.saveMessage(updatedMessage);
-      await api.deleteMessage(messageId);
-      await api.reprocessNarrativeStateTurn?.(activeChatId, updatedMessage.id);
+      try {
+        await api.deleteMessage(messageId);
+      } catch (error) {
+        await api.deleteMessage(updatedMessage.id);
+        throw error;
+      }
+      // Narrative State analyzes the kept reply once, when the story continues.
+      const deferred = await api.deferNarrativeStateTurn?.(activeChatId, updatedMessage.id);
+      if (deferred?.success) updatedMessage.debugNotice = deferred.debugNotice;
       setActiveMessages(previous => previous.map(item => item.id === messageId ? updatedMessage : item));
     } catch (error) {
       console.error('Error switching alternative response:', error);
@@ -391,8 +414,7 @@ export function useChatSession({ api, setChats, setCurrentView }) {
     setIsGenerating,
     generationProgress,
     setGenerationProgress,
-    streamingContent,
-    streamingReasoning,
+    streamDisplayStore,
     enqueueStreamDisplay,
     clearStreamDisplay,
     handleCancelGeneration,

@@ -1,11 +1,16 @@
 import React, { createContext, useCallback, useContext, useState, useEffect, useRef } from 'react';
 import { useChatSession } from '../features/chat/useChatSession';
 import { isGenerationEventForWorkspace, isRetryableGenerationError } from '../features/chat/generation-target';
+import { createStore, useStore } from '../utils/store';
 
 const AppContext = createContext();
 const EMPTY_MESSAGE_PAGE = { messages: [], hasMore: false, oldestCursor: null };
 
 export const useApp = () => useContext(AppContext);
+export const useToast = () => useStore(useContext(AppContext).toastStore);
+export const useReindexingProgress = () => useStore(useContext(AppContext).reindexStore);
+export const useEngineDownloadProgress = () => useStore(useContext(AppContext).engineDownloadStore);
+export const useStreamingText = () => useStore(useContext(AppContext).streamDisplayStore);
 
 // Helper for safe electronAPI calls
 const api = window.electronAPI || {
@@ -86,18 +91,22 @@ export const AppProvider = ({ children }) => {
   const [updateStatus, setUpdateStatus] = useState('idle'); // 'idle' | 'available' | 'downloaded'
   const [updateVersion, setUpdateVersion] = useState('');
 
-  // --- RAG RE-INDEX STATE ---
-  const [reindexingProgress, setReindexingProgress] = useState(null); // { status, message, ... }
+  // Progress and toasts update often and are read only by their overlays, so they live
+  // in stores; an update re-renders the overlay, not every consumer of this context.
+  const [reindexStore] = useState(() => createStore(null)); // { status, message, ... }
+  const setReindexingProgress = reindexStore.set;
 
   // --- PLATFORM UPDATE OUTDATED STATE ---
   const [updateOutdatedUrl, setUpdateOutdatedUrl] = useState('');
 
   // --- LOCAL ENGINE DOWNLOADER STATE ---
   const [engineStatus, setEngineStatus] = useState({ installed: false, platform: '', arch: '' });
-  const [engineDownloadProgress, setEngineDownloadProgress] = useState(null); // { status: 'idle'|'downloading'|'verifying'|'extracting'|'completed'|'error', loaded, total, percent, error }
+  const [engineDownloadStore] = useState(() => createStore(null)); // { status: 'idle'|'downloading'|'verifying'|'extracting'|'completed'|'error', loaded, total, percent, error }
+  const setEngineDownloadProgress = engineDownloadStore.set;
 
   // --- TOAST NOTIFICATIONS ---
-  const [toast, setToast] = useState(null); // { message, type: 'success' | 'error' | 'info', show: boolean, action?: { label, onClick } }
+  const [toastStore] = useState(() => createStore(null)); // { message, type: 'success' | 'error' | 'info', show: boolean, action?: { label, onClick } }
+  const setToast = toastStore.set;
   const toastTimeoutRef = useRef(null);
 
   const showToast = useCallback((message, type = 'info', duration = null, action = null) => {
@@ -461,10 +470,10 @@ export const AppProvider = ({ children }) => {
       handleSaveVariable, handleDeleteVariable,
       showOverflowModal, setShowOverflowModal, overflowData, handleRespondToOverflow,
       showErrorModal, setShowErrorModal, errorData, handleRespondToError,
-      toast, showToast,
+      toastStore, showToast,
       updateStatus, updateVersion, updateOutdatedUrl,
-      reindexingProgress,
-      engineStatus, setEngineStatus, engineDownloadProgress, setEngineDownloadProgress, refreshEngineStatus, downloadEngine, cancelEngineDownload, deleteEngine,
+      reindexStore,
+      engineStatus, setEngineStatus, engineDownloadStore, setEngineDownloadProgress, refreshEngineStatus, downloadEngine, cancelEngineDownload, deleteEngine,
       electronAPI: api
     }}>
       {children}

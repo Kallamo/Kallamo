@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, FileText, Download } from 'lucide-react';
-import hljs from 'highlight.js';
+import hljs from '../../utils/highlight';
 import 'highlight.js/styles/github-dark.css'; // dark code theme
 
 export default function FilePreviewModal({ file, onClose }) {

@@ -1,4 +1,4 @@
-import hljs from 'highlight.js';
+import hljs from './highlight';
 
 export function escapeHTML(str) {
     return str.replace(/[&<>'"]/g, tag => ({
@@ -225,4 +225,23 @@ export function parseMarkdown(text, lineNumbersEnabled = false) {
     if (inList) { htmlResult.push(`</${listType}>`); }
 
     return htmlResult.join('\n');
+}
+
+// Chat rows remount when a view is reopened; reusing their HTML skips parsing and
+// highlighting again. Only for settled text: a live draft would flood the cache.
+const MARKDOWN_CACHE_LIMIT = 300;
+const markdownCache = new Map();
+
+export function parseMarkdownCached(text) {
+    if (!text) return '';
+    const cached = markdownCache.get(text);
+    if (cached !== undefined) {
+        markdownCache.delete(text);
+        markdownCache.set(text, cached);
+        return cached;
+    }
+    const html = parseMarkdown(text);
+    markdownCache.set(text, html);
+    if (markdownCache.size > MARKDOWN_CACHE_LIMIT) markdownCache.delete(markdownCache.keys().next().value);
+    return html;
 }

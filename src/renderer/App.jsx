@@ -1,14 +1,19 @@
-import React, { useState, useEffect } from 'react';
-import { AppProvider, useApp } from './context/AppContext';
+import React, { Suspense, useState, useEffect } from 'react';
+import { AppProvider, useApp, useEngineDownloadProgress, useReindexingProgress, useToast } from './context/AppContext';
 import TitleBar from './components/TitleBar';
 import DashboardView from './components/DashboardView';
-import LibraryView from './components/LibraryView';
-import ChatWorkspaceView from './components/ChatWorkspaceView';
-import SettingsModal from './components/modals/SettingsModal';
-import WorkflowErrorModal from './components/modals/WorkflowErrorModal';
-import ProfileErrorModal from './components/modals/ProfileErrorModal';
-import ContextOverflowModal from './components/modals/ContextOverflowModal';
-import WhatsNewModal from './components/modals/WhatsNewModal';
+import {
+  ChatWorkspaceView,
+  ContextOverflowModal,
+  LibraryView,
+  ProfileErrorModal,
+  SettingsModal,
+  WhatsNewModal,
+  WorkflowErrorModal,
+  idlePreloadOrder
+} from './views';
+import { preloadWhenIdle } from './utils/lazyWithPreload';
+import { PerfProfiler } from './utils/perf';
 import { X, CheckCircle, AlertCircle, Info } from 'lucide-react';
 
 // Self-hosted highlight.js themes (bundled by Vite, served from the app origin instead of a CDN)
@@ -22,34 +27,157 @@ const HLJS_THEME_URLS = {
   'tokyo-night-dark': tokyoNightDarkThemeUrl,
 };
 
-function MainLayout() {
-  const {
-    currentView,
-    activeWorkspaceView,
-    showOverflowModal,
-    showErrorModal,
-    errorData,
-    settings,
-    handleSaveSettings,
-    electronAPI,
-    writingProfiles,
-    chats,
-    toast,
-    showToast,
-    reindexingProgress,
-    engineStatus,
-    engineDownloadProgress,
-    setEngineDownloadProgress,
-    downloadEngine,
-    cancelEngineDownload,
-    settingsRequest,
-    clearSettingsRequest,
-    whatsNewOpen,
-    whatsNewType,
-    whatsNewVersion,
-    closeWhatsNew
-  } = useApp();
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
+const Spinner = ({ className }) => (
+  <svg className={`animate-spin text-accent ${className}`} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+  </svg>
+);
+
+function EngineDownloadStatus() {
+  const { setEngineDownloadProgress, cancelEngineDownload } = useApp();
+  const engineDownloadProgress = useEngineDownloadProgress();
+  if (!engineDownloadProgress) return null;
+
+  if (engineDownloadProgress.isBackground) {
+    return (
+      <div className="fixed bottom-6 right-6 z-50 w-76 bg-[#051116] border border-gray-800 rounded-xl p-4 shadow-2xl flex flex-col space-y-3 animate-in slide-in-from-bottom duration-300">
+        <div className="flex items-center space-x-2.5">
+          <div className="relative">
+            <Spinner className="w-4 h-4" />
+          </div>
+          <span className="text-[0.6875rem] font-bold text-white uppercase tracking-wider">
+            {engineDownloadProgress.status === 'downloading' && 'Downloading Local AI Engine...'}
+            {engineDownloadProgress.status === 'verifying' && 'Verifying Integrity...'}
+            {engineDownloadProgress.status === 'extracting' && 'Setting up AI files...'}
+            {engineDownloadProgress.status === 'completed' && 'Setup complete!'}
+          </span>
+        </div>
+        {engineDownloadProgress.status === 'downloading' && (
+          <div className="w-full">
+            <div className="w-full bg-[#0a161d] rounded-full h-1.5 overflow-hidden">
+              <div
+                className="bg-accent h-full rounded-full transition-[width] duration-300"
+                style={{ width: `${engineDownloadProgress.percent || 0}%` }}
+              />
+            </div>
+            <div className="flex justify-between items-center mt-1.5">
+              <span className="caption font-medium">
+                {engineDownloadProgress.percent || 0}% completed
+              </span>
+              <button
+                onClick={() => cancelEngineDownload()}
+                className="text-[0.625rem] text-gray-400 hover:text-white transition-colors cursor-pointer underline"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="absolute inset-0 z-[9999] flex items-center justify-center bg-[#011419]/95 backdrop-blur-sm">
+      <div className="flex flex-col items-center space-y-6 max-w-md text-center px-8 animate-in fade-in zoom-in-95 duration-300">
+        <div className="relative">
+          {engineDownloadProgress.status === 'error' ? (
+            <AlertCircle className="w-12 h-12 text-red-400" />
+          ) : engineDownloadProgress.status === 'completed' ? (
+            <CheckCircle className="w-12 h-12 text-emerald-400" />
+          ) : (
+            <Spinner className="w-12 h-12" />
+          )}
+        </div>
+
+        <h2 className="text-xl font-bold text-white capitalize">
+          {engineDownloadProgress.status === 'downloading' && 'Downloading Local AI Engine'}
+          {engineDownloadProgress.status === 'verifying' && 'Verifying Integrity Check'}
+          {engineDownloadProgress.status === 'extracting' && 'Extracting Local AI Files'}
+          {engineDownloadProgress.status === 'completed' && 'Installation Successful'}
+          {engineDownloadProgress.status === 'error' && 'Installation Error'}
+        </h2>
+
+        <p className="text-sm text-gray-400 leading-relaxed">
+          {engineDownloadProgress.status === 'downloading' && 'This needs a one-time download of the native runtime (~25 MB). Please do not close the application.'}
+          {engineDownloadProgress.status === 'verifying' && 'Validating SHA-256 package checksum.'}
+          {engineDownloadProgress.status === 'extracting' && 'Decompressing binary modules into the application workspace. This may take up to a minute.'}
+          {engineDownloadProgress.status === 'completed' && 'Engine successfully set up! Directing to dashboard...'}
+          {engineDownloadProgress.status === 'error' && `Error during setup: ${engineDownloadProgress.error}`}
+        </p>
+
+        {/* Progress Bar */}
+        {engineDownloadProgress.status === 'downloading' && (
+          <div className="w-full bg-[#0a161d] rounded-full h-2 overflow-hidden">
+            <div
+              className="bg-accent h-full rounded-full transition-[width] duration-300"
+              style={{ width: `${engineDownloadProgress.percent || 0}%` }}
+            />
+          </div>
+        )}
+
+        {engineDownloadProgress.status === 'downloading' && (
+          <p className="caption font-medium">
+            {engineDownloadProgress.percent || 0}% completed
+            {engineDownloadProgress.loaded && engineDownloadProgress.total && (
+              ` (${(engineDownloadProgress.loaded / (1024 * 1024)).toFixed(1)} / ${(engineDownloadProgress.total / (1024 * 1024)).toFixed(1)} MB)`
+            )}
+          </p>
+        )}
+
+        {engineDownloadProgress.status === 'downloading' && (
+          <button
+            onClick={() => cancelEngineDownload()}
+            className="mt-2 px-5 py-2 bg-transparent hover:bg-gray-800/50 text-gray-400 hover:text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer border border-gray-700/50"
+          >
+            Cancel Download
+          </button>
+        )}
+
+        {engineDownloadProgress.status === 'error' && (
+          <button
+            onClick={() => setEngineDownloadProgress(null)}
+            className="mt-4 px-5 py-2 bg-[#d32f2f] hover:bg-red-700 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+          >
+            Close
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ReindexOverlay() {
+  const reindexingProgress = useReindexingProgress();
+  if (!reindexingProgress || (reindexingProgress.status !== 'started' && reindexingProgress.status !== 'running')) return null;
+  return (
+    <div className="absolute inset-0 z-[9999] flex items-center justify-center bg-[#011419]/95 backdrop-blur-sm">
+      <div className="flex flex-col items-center space-y-6 max-w-md text-center px-8">
+        <div className="relative">
+          <Spinner className="w-12 h-12" />
+        </div>
+        <h2 className="text-xl font-bold text-white">Upgrading Knowledge Base</h2>
+        <p className="text-sm text-gray-400 leading-relaxed">
+          Kallamo is upgrading your local AI to a new multilingual model.
+          This only happens once and may take a few minutes depending on your data.
+        </p>
+        <div className="w-full bg-[#0a161d] rounded-full h-2 overflow-hidden">
+          <div
+            className="bg-accent h-full rounded-full transition-[width] duration-500"
+            style={{ width: reindexingProgress.total ? `${Math.round((reindexingProgress.current / reindexingProgress.total) * 100)}%` : '30%' }}
+          />
+        </div>
+        <p className="caption font-medium">{reindexingProgress.message || 'Processing...'}</p>
+      </div>
+    </div>
+  );
+}
+
+// Indexing reports every chunk; this state stays here so a progress event re-renders the
+// task cards only, not the view underneath.
+function VectorizationTasks() {
+  const { electronAPI, writingProfiles, chats } = useApp();
   const [activeTasks, setActiveTasks] = useState({});
 
   useEffect(() => {
@@ -113,6 +241,112 @@ function MainLayout() {
     return unsubscribe;
   }, [electronAPI, writingProfiles, chats]);
 
+  if (Object.keys(activeTasks).length === 0) return null;
+
+  return (
+    <div className="absolute bottom-6 right-6 z-50 flex flex-col space-y-2 pointer-events-none">
+      {Object.entries(activeTasks).map(([key, task]) => (
+        <div
+          key={key}
+          className="w-72 bg-[#051116] border border-gray-800 rounded-lg p-3 shadow-2xl flex flex-col space-y-2 relative pointer-events-auto animate-in slide-in-from-bottom duration-300"
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              {task.status === 'indexing' && (
+                <div className="relative">
+                  <Spinner className="w-4 h-4" />
+                </div>
+              )}
+              {task.status === 'completed' && <span className="w-2.5 h-2.5 rounded-full bg-green-500" />}
+              {task.status === 'error' && <span className="w-2.5 h-2.5 rounded-full bg-red-500" />}
+
+              <span className="text-[0.625rem] font-bold text-white uppercase tracking-wider truncate max-w-[180px]">
+                {task.name}
+              </span>
+            </div>
+
+            <button
+              onClick={() => {
+                setActiveTasks(prev => {
+                  const copy = { ...prev };
+                  delete copy[key];
+                  return copy;
+                });
+              }}
+              className="text-gray-500 hover:text-white p-0.5 rounded transition-colors cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          <div className="caption font-medium break-all">
+            {task.message}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ToastNotification() {
+  const { showToast } = useApp();
+  const toast = useToast();
+  if (!toast || !toast.show) return null;
+  return (
+    <div className="fixed bottom-6 right-6 z-[9999] flex items-start space-x-3 bg-[#0a161d]/95 border border-gray-800 rounded-xl px-4 py-3.5 shadow-2xl animate-in slide-in-from-bottom-4 duration-300 max-w-md">
+      <div className="shrink-0 mt-0.5">
+        {toast.type === 'success' && <CheckCircle className="w-5.5 h-5.5 text-emerald-400" />}
+        {toast.type === 'error' && <AlertCircle className="w-5.5 h-5.5 text-red-400" />}
+        {toast.type === 'info' && <Info className="w-5.5 h-5.5 text-accent" />}
+      </div>
+      <div className="flex-1 pr-2 min-w-0">
+        <div className="text-xs font-semibold text-gray-200 leading-relaxed break-words whitespace-pre-wrap max-h-[50vh] overflow-y-auto custom-scrollbar">
+          {toast.message}
+        </div>
+        {toast.action && (
+          <button
+            onClick={() => {
+              toast.action.onClick();
+              showToast(toast.message, toast.type, 0);
+            }}
+            className="mt-2 text-xs font-bold text-accent hover:text-white transition-colors cursor-pointer"
+          >
+            {toast.action.label}
+          </button>
+        )}
+      </div>
+      <button
+        onClick={() => showToast(toast.message, toast.type, 0)}
+        className="text-gray-500 hover:text-white transition-colors cursor-pointer shrink-0 self-start"
+      >
+        <X className="w-4 h-4" />
+      </button>
+    </div>
+  );
+}
+
+function MainLayout() {
+  const {
+    currentView,
+    activeWorkspaceView,
+    showOverflowModal,
+    showErrorModal,
+    errorData,
+    settings,
+    activeChatId,
+    settingsRequest,
+    clearSettingsRequest,
+    whatsNewOpen,
+    whatsNewType,
+    whatsNewVersion,
+    closeWhatsNew
+  } = useApp();
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+
+  useEffect(() => {
+    preloadWhenIdle(idlePreloadOrder);
+  }, []);
+
   // Sync Highlight.js code highlighting theme dynamically
   useEffect(() => {
     if (settings?.interface?.codeTheme) {
@@ -122,6 +356,11 @@ function MainLayout() {
       }
     }
   }, [settings?.interface?.codeTheme]);
+
+  // The blur setting promises lighter rendering when off, so it applies to every element.
+  useEffect(() => {
+    document.documentElement.dataset.blur = (settings?.interface?.blur ?? true) ? 'on' : 'off';
+  }, [settings?.interface?.blur]);
 
   // Scale typography without scaling every rem-based width, gap and control.
   // This keeps the app composition stable across the interface size setting.
@@ -209,115 +448,29 @@ function MainLayout() {
     <div className={`flex-1 relative flex flex-col pt-10 overflow-hidden bg-[#011419] w-full h-full select-none ${fontClass}`}>
       <TitleBar />
 
-      {/* Local AI Engine Download Progress Overlay */}
-      {engineDownloadProgress && !engineDownloadProgress.isBackground && (
-        <div className="absolute inset-0 z-[9999] flex items-center justify-center bg-[#011419]/95 backdrop-blur-sm">
-          <div className="flex flex-col items-center space-y-6 max-w-md text-center px-8 animate-in fade-in zoom-in-95 duration-300">
-            <div className="relative">
-              {engineDownloadProgress.status === 'error' ? (
-                <AlertCircle className="w-12 h-12 text-red-400" />
-              ) : engineDownloadProgress.status === 'completed' ? (
-                <CheckCircle className="w-12 h-12 text-emerald-400" />
-              ) : (
-                <svg className="animate-spin text-accent w-12 h-12" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-              )}
-            </div>
-
-            <h2 className="text-xl font-bold text-white capitalize">
-              {engineDownloadProgress.status === 'downloading' && 'Downloading Local AI Engine'}
-              {engineDownloadProgress.status === 'verifying' && 'Verifying Integrity Check'}
-              {engineDownloadProgress.status === 'extracting' && 'Extracting Local AI Files'}
-              {engineDownloadProgress.status === 'completed' && 'Installation Successful'}
-              {engineDownloadProgress.status === 'error' && 'Installation Error'}
-            </h2>
-
-            <p className="text-sm text-gray-400 leading-relaxed">
-              {engineDownloadProgress.status === 'downloading' && 'This needs a one-time download of the native runtime (~25 MB). Please do not close the application.'}
-              {engineDownloadProgress.status === 'verifying' && 'Validating SHA-256 package checksum.'}
-              {engineDownloadProgress.status === 'extracting' && 'Decompressing binary modules into the application workspace. This may take up to a minute.'}
-              {engineDownloadProgress.status === 'completed' && 'Engine successfully set up! Directing to dashboard...'}
-              {engineDownloadProgress.status === 'error' && `Error during setup: ${engineDownloadProgress.error}`}
-            </p>
-
-            {/* Progress Bar */}
-            {engineDownloadProgress.status === 'downloading' && (
-              <div className="w-full bg-[#0a161d] rounded-full h-2 overflow-hidden">
-                <div
-                  className="bg-accent h-full rounded-full transition-all duration-300"
-                  style={{ width: `${engineDownloadProgress.percent || 0}%` }}
-                />
-              </div>
-            )}
-
-            {engineDownloadProgress.status === 'downloading' && (
-              <p className="caption font-medium">
-                {engineDownloadProgress.percent || 0}% completed
-                {engineDownloadProgress.loaded && engineDownloadProgress.total && (
-                  ` (${(engineDownloadProgress.loaded / (1024 * 1024)).toFixed(1)} / ${(engineDownloadProgress.total / (1024 * 1024)).toFixed(1)} MB)`
-                )}
-              </p>
-            )}
-
-            {engineDownloadProgress.status === 'downloading' && (
-              <button
-                onClick={() => cancelEngineDownload()}
-                className="mt-2 px-5 py-2 bg-transparent hover:bg-gray-800/50 text-gray-400 hover:text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer border border-gray-700/50"
-              >
-                Cancel Download
-              </button>
-            )}
-
-            {engineDownloadProgress.status === 'error' && (
-              <button
-                onClick={() => setEngineDownloadProgress(null)}
-                className="mt-4 px-5 py-2 bg-[#d32f2f] hover:bg-red-700 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer"
-              >
-                Close
-              </button>
-            )}
-          </div>
-        </div>
-      )}
+      {/* Local AI Engine download: full-screen overlay, or a discreet card when it runs in the background */}
+      <EngineDownloadStatus />
 
       {/* Full-screen Re-Index Upgrade Overlay */}
-      {reindexingProgress && (reindexingProgress.status === 'started' || reindexingProgress.status === 'running') && (
-        <div className="absolute inset-0 z-[9999] flex items-center justify-center bg-[#011419]/95 backdrop-blur-sm">
-          <div className="flex flex-col items-center space-y-6 max-w-md text-center px-8">
-            <div className="relative">
-              <svg className="animate-spin text-accent w-12 h-12" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
-            </div>
-            <h2 className="text-xl font-bold text-white">Upgrading Knowledge Base</h2>
-            <p className="text-sm text-gray-400 leading-relaxed">
-              Kallamo is upgrading your local AI to a new multilingual model.
-              This only happens once and may take a few minutes depending on your data.
-            </p>
-            <div className="w-full bg-[#0a161d] rounded-full h-2 overflow-hidden">
-              <div
-                className="bg-accent h-full rounded-full transition-all duration-500"
-                style={{ width: reindexingProgress.total ? `${Math.round((reindexingProgress.current / reindexingProgress.total) * 100)}%` : '30%' }}
-              />
-            </div>
-            <p className="caption font-medium">{reindexingProgress.message || 'Processing...'}</p>
-          </div>
-        </div>
-      )}
+      <ReindexOverlay />
 
       <main className="flex-1 relative flex flex-col overflow-hidden w-full h-full z-10">
-        {currentView === 'dashboard' && <DashboardView />}
-        {currentView === 'library' && <LibraryView />}
-        {currentView === 'chat' && <ChatWorkspaceView />}
+        <Suspense fallback={null}>
+          {currentView === 'dashboard' && <DashboardView />}
+          {currentView === 'library' && <LibraryView />}
+          {currentView === 'chat' && (
+            <PerfProfiler id="workspace">
+              <ChatWorkspaceView key={activeChatId} />
+            </PerfProfiler>
+          )}
+        </Suspense>
       </main>
 
       {/* Floating Settings Button - Globally available at bottom left */}
       <button
         onClick={() => setShowSettingsModal(true)}
-        className={`absolute bottom-6 p-3 bg-[#0a161d] hover:bg-[#1a2d32] border border-gray-800 rounded-full text-gray-400 hover:text-white transition-all shadow-lg group titlebar-nodrag z-30 cursor-pointer ${currentView === 'chat' && activeWorkspaceView === 'worldbuild' ? 'right-6' : 'left-6'}`}
+        onMouseEnter={() => SettingsModal.preload()}
+        className={`absolute bottom-6 p-3 bg-[#0a161d] hover:bg-[#1a2d32] border border-gray-800 rounded-full text-gray-400 hover:text-white transition-colors shadow-lg group titlebar-nodrag z-30 cursor-pointer ${currentView === 'chat' && activeWorkspaceView === 'worldbuild' ? 'right-6' : 'left-6'}`}
         title="Settings"
       >
         <svg
@@ -337,147 +490,33 @@ function MainLayout() {
       </button>
 
       {/* Floating Background RAG Indexing Visualizer */}
-      {Object.keys(activeTasks).length > 0 && (
-        <div className="absolute bottom-6 right-6 z-50 flex flex-col space-y-2 pointer-events-none">
-          {Object.entries(activeTasks).map(([key, task]) => (
-            <div
-              key={key}
-              className="w-72 bg-[#051116] border border-gray-800 rounded-lg p-3 shadow-2xl flex flex-col space-y-2 relative pointer-events-auto animate-in slide-in-from-bottom duration-300"
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-2">
-                  {task.status === 'indexing' && (
-                    <div className="relative">
-                      <svg className="animate-spin text-accent w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                      </svg>
-                    </div>
-                  )}
-                  {task.status === 'completed' && <span className="w-2.5 h-2.5 rounded-full bg-green-500" />}
-                  {task.status === 'error' && <span className="w-2.5 h-2.5 rounded-full bg-red-500" />}
-
-                  <span className="text-[0.625rem] font-bold text-white uppercase tracking-wider truncate max-w-[180px]">
-                    {task.name}
-                  </span>
-                </div>
-
-                <button
-                  onClick={() => {
-                    setActiveTasks(prev => {
-                      const copy = { ...prev };
-                      delete copy[key];
-                      return copy;
-                    });
-                  }}
-                  className="text-gray-500 hover:text-white p-0.5 rounded transition-colors cursor-pointer"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              <div className="caption font-medium break-all">
-                {task.message}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Discreet Background Engine Download Indicator */}
-      {engineDownloadProgress && engineDownloadProgress.isBackground && (
-        <div className="fixed bottom-6 right-6 z-50 w-76 bg-[#051116] border border-gray-800 rounded-xl p-4 shadow-2xl flex flex-col space-y-3 animate-in slide-in-from-bottom duration-300">
-          <div className="flex items-center space-x-2.5">
-            <div className="relative">
-              <svg className="animate-spin text-accent w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
-            </div>
-            <span className="text-[0.6875rem] font-bold text-white uppercase tracking-wider">
-              {engineDownloadProgress.status === 'downloading' && 'Downloading Local AI Engine...'}
-              {engineDownloadProgress.status === 'verifying' && 'Verifying Integrity...'}
-              {engineDownloadProgress.status === 'extracting' && 'Setting up AI files...'}
-              {engineDownloadProgress.status === 'completed' && 'Setup complete!'}
-            </span>
-          </div>
-          {engineDownloadProgress.status === 'downloading' && (
-            <div className="w-full">
-              <div className="w-full bg-[#0a161d] rounded-full h-1.5 overflow-hidden">
-                <div
-                  className="bg-accent h-full rounded-full transition-all duration-300"
-                  style={{ width: `${engineDownloadProgress.percent || 0}%` }}
-                />
-              </div>
-              <div className="flex justify-between items-center mt-1.5">
-                <span className="caption font-medium">
-                  {engineDownloadProgress.percent || 0}% completed
-                </span>
-                <button
-                  onClick={() => cancelEngineDownload()}
-                  className="text-[0.625rem] text-gray-400 hover:text-white transition-colors cursor-pointer underline"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+      <VectorizationTasks />
 
       {/* Global Toast Notification */}
-      {toast && toast.show && (
-        <div className={`fixed bottom-6 right-6 z-[9999] flex items-start space-x-3 bg-[#0a161d]/90 backdrop-blur-md border border-gray-800 rounded-xl px-4 py-3.5 shadow-2xl animate-in slide-in-from-bottom-4 duration-300 max-w-md`}>
-          <div className="shrink-0 mt-0.5">
-            {toast.type === 'success' && <CheckCircle className="w-5.5 h-5.5 text-emerald-400" />}
-            {toast.type === 'error' && <AlertCircle className="w-5.5 h-5.5 text-red-400" />}
-            {toast.type === 'info' && <Info className="w-5.5 h-5.5 text-accent" />}
-          </div>
-          <div className="flex-1 pr-2 min-w-0">
-            <div className="text-xs font-semibold text-gray-200 leading-relaxed break-words whitespace-pre-wrap max-h-[50vh] overflow-y-auto custom-scrollbar">
-              {toast.message}
-            </div>
-            {toast.action && (
-              <button
-                onClick={() => {
-                  toast.action.onClick();
-                  showToast(toast.message, toast.type, 0);
-                }}
-                className="mt-2 text-xs font-bold text-accent hover:text-white transition-colors cursor-pointer"
-              >
-                {toast.action.label}
-              </button>
-            )}
-          </div>
-          <button
-            onClick={() => showToast(toast.message, toast.type, 0)}
-            className="text-gray-500 hover:text-white transition-colors cursor-pointer shrink-0 self-start"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
+      <ToastNotification />
 
       {/* Global Modals */}
-      {(showSettingsModal || settingsRequest) && (
-        <SettingsModal
-          initialTab={settingsRequest?.tab}
-          initialSection={settingsRequest?.section}
-          onClose={() => {
-            setShowSettingsModal(false);
-            clearSettingsRequest();
-          }}
-        />
-      )}
-      {showErrorModal && (
-        errorData?.isWorkflow ? <WorkflowErrorModal /> : <ProfileErrorModal />
-      )}
-      {showOverflowModal && (
-        <ContextOverflowModal />
-      )}
-      {whatsNewOpen && (
-        <WhatsNewModal type={whatsNewType} version={whatsNewVersion} onClose={closeWhatsNew} />
-      )}
+      <Suspense fallback={null}>
+        {(showSettingsModal || settingsRequest) && (
+          <SettingsModal
+            initialTab={settingsRequest?.tab}
+            initialSection={settingsRequest?.section}
+            onClose={() => {
+              setShowSettingsModal(false);
+              clearSettingsRequest();
+            }}
+          />
+        )}
+        {showErrorModal && (
+          errorData?.isWorkflow ? <WorkflowErrorModal /> : <ProfileErrorModal />
+        )}
+        {showOverflowModal && (
+          <ContextOverflowModal />
+        )}
+        {whatsNewOpen && (
+          <WhatsNewModal type={whatsNewType} version={whatsNewVersion} onClose={closeWhatsNew} />
+        )}
+      </Suspense>
     </div>
   );
 }
