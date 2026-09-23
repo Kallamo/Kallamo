@@ -36,22 +36,46 @@ function foldChar(char) {
 
 const isUpper = char => /[\p{Lu}\p{Lt}]/u.test(char);
 
+// Whole archives are folded on the main process, so ASCII skips the per-char lookups.
+const ASCII_FOLD = [];
+const ASCII_UPPER = [];
+for (let code = 0; code < 128; code++) {
+  const char = String.fromCharCode(code);
+  ASCII_FOLD[code] = foldChar(char);
+  ASCII_UPPER[code] = isUpper(char);
+}
+
+const upperCache = new Map();
+
+function upperOf(char) {
+  let upper = upperCache.get(char);
+  if (upper !== undefined) return upper;
+  upper = isUpper(char);
+  if (upperCache.size < 20000) upperCache.set(char, upper);
+  return upper;
+}
+
 // Folds `text` and keeps, for every folded unit, where it came from and whether it was
 // upper case there, so a match can be traced back to the original surface.
 function foldWithMap(value) {
   const text = String(value == null ? '' : value);
   let out = '';
+  let lastIsSpace = true;
   const starts = [];
   const ends = [];
   const upper = [];
   let index = 0;
   for (const char of text) {
-    const folded = foldChar(char);
+    const code = char.charCodeAt(0);
+    const ascii = char.length === 1 && code < 128;
+    const folded = ascii ? ASCII_FOLD[code] : foldChar(char);
+    const charUpper = ascii ? ASCII_UPPER[code] : upperOf(char);
     const end = index + char.length;
     for (const unit of folded) {
-      if (unit === ' ' && (out.length === 0 || out[out.length - 1] === ' ')) continue;
+      if (unit === ' ' && lastIsSpace) continue;
       out += unit;
-      for (let k = 0; k < unit.length; k++) { starts.push(index); ends.push(end); upper.push(isUpper(char)); }
+      lastIsSpace = unit === ' ';
+      for (let k = 0; k < unit.length; k++) { starts.push(index); ends.push(end); upper.push(charUpper); }
     }
     index = end;
   }

@@ -77,6 +77,27 @@ describe('Worldbuild awareness Knowledge service', () => {
       .toEqual([{ subject_id: 'kepler', target_id: 'valdrin', status: 'active' }]);
   });
 
+  test('reading cards writes only the awareness a link is missing', () => {
+    db.prepare('INSERT INTO entity_links VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+      'membership-one', 'workspace-one', 'kepler', 'member_of', 'valdrin', null, null, 1,
+    );
+    service.listCards('workspace-one', 'kepler');
+    const stamps = () => db.prepare('SELECT owner_id, updated_at FROM worldbuild_knowledge_cards ORDER BY owner_id').all();
+    const before = stamps();
+    const events = db.prepare('SELECT COUNT(*) AS count FROM narrative_events').get();
+
+    service.listCards('workspace-one', 'kepler');
+    expect(stamps()).toEqual(before);
+    expect(db.prepare('SELECT COUNT(*) AS count FROM narrative_events').get()).toEqual(events);
+
+    db.prepare("DELETE FROM worldbuild_knowledge_sources WHERE source_id = 'membership-one'").run();
+    const [card] = service.listCards('workspace-one', 'kepler');
+    expect(card.sources.map((source: { sourceId: string }) => source.sourceId)).toEqual(['membership-one']);
+
+    service.removeCard({ workspaceId: 'workspace-one', ownerId: 'kepler', targetId: 'valdrin' });
+    expect(service.listCards('workspace-one', 'kepler')).toEqual([]);
+  });
+
   test('marks only currently filled non-hidden fields as known', () => {
     service.ensureAwareness({
       workspaceId: 'workspace-one', ownerId: 'kepler', targetId: 'valdrin',

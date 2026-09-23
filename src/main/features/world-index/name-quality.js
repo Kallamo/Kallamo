@@ -2,7 +2,7 @@
 // its shape in the text, letter case where the script has it, and the other names around it.
 
 const { buildNameIndex, findLiteralMentions, collectLowercaseWords } = require('./literal-mentions');
-const { foldText, isUpper } = require('./text-fold');
+const { foldText, foldWithMap, isUpper } = require('./text-fold');
 
 const CANDIDATE = '\u0000candidate';
 const WORD = /[\p{L}\p{N}\p{M}]/u;
@@ -92,12 +92,14 @@ function assessEntityNames(entities, texts) {
   const index = buildNameIndex(list);
   const lowercaseWords = collectLowercaseWords(corpus);
   const standalone = new Map();
+  const foldedTexts = [];
   for (const text of corpus) {
-    for (const mention of findLiteralMentions(text, index, { lowercaseWords })) {
+    const folded = foldWithMap(String(text == null ? '' : text));
+    foldedTexts.push(folded.text);
+    for (const mention of findLiteralMentions(text, index, { lowercaseWords, folded })) {
       standalone.set(mention.entityId, (standalone.get(mention.entityId) || 0) + 1);
     }
   }
-  const foldedTexts = corpus.map(foldText);
   const namesOf = entity => [entity.canonicalName, ...(Array.isArray(entity.aliases) ? entity.aliases : [])].filter(Boolean);
 
   const results = [];

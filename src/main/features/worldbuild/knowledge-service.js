@@ -47,6 +47,18 @@ function isKnowableForTarget(relation, targetId) {
 }
 
 function createWorldbuildKnowledgeService(db) {
+  // Card reads run per card on every sheet and per link on every reconcile, so the
+  // statements on that path are compiled once.
+  const statements = new Map();
+  const cached = sql => {
+    let statement = statements.get(sql);
+    if (!statement) {
+      statement = db.prepare(sql);
+      statements.set(sql, statement);
+    }
+    return statement;
+  };
+
   const insertCard = db.prepare(`
     INSERT INTO worldbuild_knowledge_cards (
       workspace_id, card_id, owner_id, target_id, known_as,
@@ -65,47 +77,53 @@ function createWorldbuildKnowledgeService(db) {
   `);
 
   function ensureAwareness(input = {}) {
+    const { workspaceId, ownerId, targetId } = grantAwareness(input);
+    return getCard(workspaceId, ownerId, targetId);
+  }
+
+  // The write half of ensureAwareness. Reconcile calls it per link and never reads the card.
+  function grantAwareness(input) {
     const workspaceId = requireText(input.workspaceId, 'workspaceId');
     const ownerId = requireText(input.ownerId, 'ownerId');
     const targetId = requireText(input.targetId, 'targetId');
     const sourceType = SOURCE_TYPES.has(input.sourceType) ? input.sourceType : null;
     if (!sourceType) throw new Error('Unsupported Knowledge source type.');
     const sourceId = requireText(input.sourceId, 'sourceId');
-    const excluded = db.prepare(`
+    const excluded = cached(`
       SELECT 1 FROM worldbuild_knowledge_exclusions
       WHERE workspace_id = ? AND owner_id = ? AND target_id = ?
         AND source_type = ? AND source_id = ?
     `).get(workspaceId, ownerId, targetId, sourceType, sourceId);
-    if (excluded) return getCard(workspaceId, ownerId, targetId);
-
-    return db.transaction(() => {
-      const now = Date.now();
-      const row = insertCard.get(
-        workspaceId, crypto.randomUUID(), ownerId, targetId,
-        cleanOptionalText(input.knownAs),
-        input.audienceType === 'selected-members' ? 'selected-members' : 'all-members',
-        now, now,
-      );
-      insertSource.run(workspaceId, row.card_id, sourceType, sourceId, now);
-      persistTemporalAwareness({
-        workspaceId, ownerId, targetId, sourceType, sourceId, status: 'active',
-      });
-      return getCard(workspaceId, ownerId, targetId);
-    })();
+    if (!excluded) {
+      db.transaction(() => {
+        const now = Date.now();
+        const row = insertCard.get(
+          workspaceId, crypto.randomUUID(), ownerId, targetId,
+          cleanOptionalText(input.knownAs),
+          input.audienceType === 'selected-members' ? 'selected-members' : 'all-members',
+          now, now,
+        );
+        insertSource.run(workspaceId, row.card_id, sourceType, sourceId, now);
+        persistTemporalAwareness({
+          workspaceId, ownerId, targetId, sourceType, sourceId, status: 'active',
+        });
+      })();
+    }
+    return { workspaceId, ownerId, targetId };
   }
 
   function listCards(workspaceId, ownerId) {
     const projectId = requireText(workspaceId, 'workspaceId');
     const subjectId = requireText(ownerId, 'ownerId');
     reconcileWorkspace(projectId);
-    const rows = hasTable(db, 'entities') ? db.prepare(`
+    const rows = hasTable(db, 'entities') ? cached(`
       SELECT cards.*, entities.canonicalName AS target_name, entities.type AS target_type,
         entities.data AS target_data
       FROM worldbuild_knowledge_cards cards
       LEFT JOIN entities ON entities.id = cards.target_id AND entities.workspaceId = cards.workspace_id
       WHERE cards.workspace_id = ? AND cards.owner_id = ? AND cards.status = 'active'
       ORDER BY COALESCE(entities.canonicalName, cards.known_as, cards.target_id) COLLATE NOCASE
-    `).all(projectId, subjectId) : db.prepare(`
+    `).all(projectId, subjectId) : cached(`
       SELECT cards.*, NULL AS target_name, NULL AS target_type, NULL AS target_data
       FROM worldbuild_knowledge_cards cards
       WHERE cards.workspace_id = ? AND cards.owner_id = ? AND cards.status = 'active'
@@ -115,13 +133,13 @@ function createWorldbuildKnowledgeService(db) {
   }
 
   function getCard(workspaceId, ownerId, targetId) {
-    const row = hasTable(db, 'entities') ? db.prepare(`
+    const row = hasTable(db, 'entities') ? cached(`
       SELECT cards.*, entities.canonicalName AS target_name, entities.type AS target_type,
         entities.data AS target_data
       FROM worldbuild_knowledge_cards cards
       LEFT JOIN entities ON entities.id = cards.target_id AND entities.workspaceId = cards.workspace_id
       WHERE cards.workspace_id = ? AND cards.owner_id = ? AND cards.target_id = ?
-    `).get(workspaceId, ownerId, targetId) : db.prepare(`
+    `).get(workspaceId, ownerId, targetId) : cached(`
       SELECT cards.*, NULL AS target_name, NULL AS target_type, NULL AS target_data
       FROM worldbuild_knowledge_cards cards
       WHERE cards.workspace_id = ? AND cards.owner_id = ? AND cards.target_id = ?
@@ -316,56 +334,99 @@ function createWorldbuildKnowledgeService(db) {
     const projectId = requireText(workspaceId, 'workspaceId');
     pruneUnknowableRelationships(projectId);
     if (!hasTable(db, 'entity_links')) return;
-    const links = db.prepare(`
+    const links = cached(`
       SELECT id, fromId, relType, toId
       FROM entity_links
       WHERE workspaceId = ?
         AND relType IN ('related_to', 'member_of', 'former_member_of', 'owned_by', 'carried_by')
     `).all(projectId);
-    db.transaction(() => {
-      for (const link of links) {
-        if (link.relType === 'related_to') {
-          ensureAwareness({
-            workspaceId: projectId, ownerId: link.fromId, targetId: link.toId,
-            sourceType: 'relationship', sourceId: link.id,
-          });
-        } else if (link.relType === 'member_of' || link.relType === 'former_member_of') {
-          ensureAwareness({
-            workspaceId: projectId, ownerId: link.fromId, targetId: link.toId,
-            sourceType: 'faction-membership', sourceId: link.id,
-          });
-          ensureAwareness({
-            workspaceId: projectId, ownerId: link.toId, targetId: link.fromId,
-            sourceType: 'faction-membership', sourceId: link.id,
-            audienceType: 'all-members',
-          });
-        } else {
-          ensureAwareness({
-            workspaceId: projectId, ownerId: link.toId, targetId: link.fromId,
-            sourceType: 'inventory', sourceId: link.id,
-          });
-        }
+    const grants = [];
+    for (const link of links) {
+      if (link.relType === 'related_to') {
+        grants.push({
+          workspaceId: projectId, ownerId: link.fromId, targetId: link.toId,
+          sourceType: 'relationship', sourceId: link.id,
+        });
+      } else if (link.relType === 'member_of' || link.relType === 'former_member_of') {
+        grants.push({
+          workspaceId: projectId, ownerId: link.fromId, targetId: link.toId,
+          sourceType: 'faction-membership', sourceId: link.id,
+        });
+        grants.push({
+          workspaceId: projectId, ownerId: link.toId, targetId: link.fromId,
+          sourceType: 'faction-membership', sourceId: link.id,
+          audienceType: 'all-members',
+        });
+      } else {
+        grants.push({
+          workspaceId: projectId, ownerId: link.toId, targetId: link.fromId,
+          sourceType: 'inventory', sourceId: link.id,
+        });
       }
+    }
+    // Reconcile runs on every read, and almost every grant already holds. Granting again
+    // would only move updated_at, so only the grants that would change something are written.
+    const settled = settledGrantKeys(projectId);
+    const pending = grants.filter(grant => !settled.has(grantKey(grant)));
+    if (!pending.length) return;
+    db.transaction(() => {
+      for (const grant of pending) grantAwareness(grant);
     })();
   }
 
+  // Grants that write nothing when repeated: excluded ones, and ones whose card is active,
+  // whose source is recorded and whose latest awareness is active.
+  function settledGrantKeys(workspaceId) {
+    const keys = new Set();
+    for (const row of cached(`
+      SELECT owner_id, target_id, source_type, source_id
+      FROM worldbuild_knowledge_exclusions WHERE workspace_id = ?
+    `).all(workspaceId)) keys.add(grantKey(rowGrant(row)));
+    const tracksAwareness = hasTable(db, 'narrative_awareness_records') && hasTable(db, 'narrative_events');
+    const aware = new Set();
+    if (tracksAwareness) {
+      for (const row of cached(`
+        SELECT records.subject_id, records.target_id, records.payload_json
+        FROM narrative_awareness_records records
+        WHERE records.workspace_id = ? AND records.rowid = (
+          SELECT MAX(latest.rowid) FROM narrative_awareness_records latest
+          WHERE latest.workspace_id = records.workspace_id
+            AND latest.subject_id = records.subject_id
+            AND latest.target_id = records.target_id
+        )
+      `).all(workspaceId)) {
+        if (parseObject(row.payload_json).status === 'active') aware.add(pairKey(row.subject_id, row.target_id));
+      }
+    }
+    for (const row of cached(`
+      SELECT cards.owner_id, cards.target_id, sources.source_type, sources.source_id
+      FROM worldbuild_knowledge_cards cards
+      JOIN worldbuild_knowledge_sources sources
+        ON sources.workspace_id = cards.workspace_id AND sources.card_id = cards.card_id
+      WHERE cards.workspace_id = ? AND cards.status = 'active'
+    `).all(workspaceId)) {
+      if (!tracksAwareness || aware.has(pairKey(row.owner_id, row.target_id))) keys.add(grantKey(rowGrant(row)));
+    }
+    return keys;
+  }
+
   function hydrateCard(row) {
-    const knownFields = db.prepare(`
+    const knownFields = cached(`
       SELECT field_key, source_type, source_id, audience_type
       FROM worldbuild_known_fields WHERE workspace_id = ? AND card_id = ?
       ORDER BY created_at, field_key
     `).all(row.workspace_id, row.card_id);
-    const sources = db.prepare(`
+    const sources = cached(`
       SELECT source_type, source_id, created_at
       FROM worldbuild_knowledge_sources WHERE workspace_id = ? AND card_id = ?
       ORDER BY created_at, source_type, source_id
     `).all(row.workspace_id, row.card_id);
-    const selectedMembers = db.prepare(`
+    const selectedMembers = cached(`
       SELECT member_id FROM worldbuild_knowledge_audience_members
       WHERE workspace_id = ? AND card_id = ? AND entry_type = 'card' AND entry_id = ?
       ORDER BY member_id
     `).all(row.workspace_id, row.card_id, row.card_id);
-    const knownRelationships = db.prepare(`
+    const knownRelationships = cached(`
       SELECT relationship_id AS relationshipId,
         from_id AS fromId, from_name AS fromName,
         relation_type AS relationType, relation_label AS relationLabel,
@@ -378,7 +439,7 @@ function createWorldbuildKnowledgeService(db) {
       .filter(relationship => isKnowableForTarget(relationship, row.target_id))
       .map(hydrateRelationship);
     const availableRelationships = hasTable(db, 'entity_links') && hasTable(db, 'entities')
-      ? db.prepare(`
+      ? cached(`
         SELECT links.id AS relationshipId,
           links.fromId, source.canonicalName AS fromName,
           links.relType AS relationType, links.label AS relationLabel,
@@ -588,8 +649,22 @@ function hasFilledValue(value) {
   return true;
 }
 
+const pairKey = (ownerId, targetId) => `${ownerId}\u0000${targetId}`;
+const grantKey = grant => `${pairKey(grant.ownerId, grant.targetId)}\u0000${grant.sourceType}\u0000${grant.sourceId}`;
+const rowGrant = row => ({ ownerId: row.owner_id, targetId: row.target_id, sourceType: row.source_type, sourceId: row.source_id });
+
+// A table that exists stays; only a missing one is asked about again.
+const knownTables = new WeakMap();
+
 function hasTable(db, name) {
-  return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
+  const known = knownTables.get(db);
+  if (known?.has(name)) return true;
+  const exists = Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
+  if (exists) {
+    if (known) known.add(name);
+    else knownTables.set(db, new Set([name]));
+  }
+  return exists;
 }
 
 module.exports = { createWorldbuildKnowledgeService };

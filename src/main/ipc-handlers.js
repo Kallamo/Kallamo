@@ -2751,13 +2751,32 @@ function refreshNameTagsFor(workspaceId, entityIds = null) {
 
 const NAME_FIELDS = ['canonicalName', 'aliases', 'type'];
 
+// The review reads every passage of the workspace, so it reruns only when an input changes.
+const entityReviewCache = new Map();
+
+function entityReviewKey(entities, chunks) {
+  const hash = crypto.createHash('sha1');
+  for (const entity of entities) {
+    let data = {};
+    try { data = JSON.parse(entity.data || '{}') || {}; } catch { /* unreadable data reviews as empty */ }
+    hash.update(JSON.stringify([entity.id, entity.type, entity.canonicalName, entity.aliases, entity.status, data.itemNature, data.nameReviewDismissed]));
+  }
+  for (const chunk of chunks) hash.update(`${chunk.id}\u0000${chunk.text}\u0000`);
+  return hash.digest('hex');
+}
+
 ipcMain.handle('get-entity-review', async (event, { workspaceId } = {}) => {
   try {
     const { loadWorkspaceEntities, loadWorkspaceChunks } = require('./features/world-index/name-tags');
     const { assessEntityNames } = require('./features/world-index/name-quality');
     const entities = loadWorkspaceEntities(db, workspaceId);
-    const texts = loadWorkspaceChunks(db, workspaceId).map(chunk => chunk.text);
-    return { success: true, items: assessEntityNames(entities, texts) };
+    const chunks = loadWorkspaceChunks(db, workspaceId);
+    const key = entityReviewKey(entities, chunks);
+    const cached = entityReviewCache.get(workspaceId);
+    if (cached?.key === key) return { success: true, items: cached.items };
+    const items = assessEntityNames(entities, chunks.map(chunk => chunk.text));
+    entityReviewCache.set(workspaceId, { key, items });
+    return { success: true, items };
   } catch (e) {
     console.error('[get-entity-review] failed:', e);
     return { success: false, error: e.message, items: [] };

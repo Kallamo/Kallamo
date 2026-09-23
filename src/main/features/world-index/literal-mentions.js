@@ -30,6 +30,15 @@ function nameShape(folded, original) {
   };
 }
 
+const WORD_RUN = /[\p{L}\p{N}\p{M}]+/gu;
+
+// In spaced scripts a match must start a word of the text, and that word is the name's
+// first word. Null where that does not hold, so the name is always searched.
+function leadingWord(form) {
+  if (!form || UNSPACED.test(form) || HANGUL.test(form) || MARK.test(form[0]) || !WORD.test(form[0])) return null;
+  return form.match(/^[\p{L}\p{N}\p{M}]+/u)[0];
+}
+
 // Groups names by their folded form. A form shared by two entities is ambiguous and
 // never tagged here; the model decides it from context.
 function buildNameIndex(entities) {
@@ -61,6 +70,7 @@ function buildNameIndex(entities) {
       : null;
     names.push({
       form: entry.form,
+      lead: leadingWord(entry.form),
       length: entry.form.length,
       entities: [...entry.entities.values()],
       ambiguous: entry.entities.size > 1,
@@ -114,9 +124,12 @@ function atSentenceStart(source, index) {
 // lowercase is only trusted as a name away from the start of a sentence.
 function collectLowercaseWords(texts) {
   const words = new Set();
+  const seen = new Set();
   for (const text of Array.isArray(texts) ? texts : [texts]) {
     for (const match of String(text || '').matchAll(/[\p{L}\p{M}]+/gu)) {
       const token = match[0];
+      if (seen.has(token)) continue;
+      seen.add(token);
       if (token !== token.toUpperCase() && ![...token].some(isUpper)) words.add(foldText(token));
     }
   }
@@ -134,13 +147,17 @@ function casingAllows(name, ctx, start, lowercaseWords) {
 
 // Longest names first. A shorter name inside a longer one is a fragment ("Harbor" in
 // "Harbor Gate") unless it names another kind of thing ("Ivo" in "Forge of Ivo").
-function findLiteralMentions(text, index, { lowercaseWords = null } = {}) {
+// `folded` is foldWithMap(text) when the caller already has it.
+function findLiteralMentions(text, index, { lowercaseWords = null, folded = null } = {}) {
   const source = String(text == null ? '' : text);
-  const ctx = { source, ...foldWithMap(source) };
+  const ctx = { source, ...(folded || foldWithMap(source)) };
   if (!ctx.text || !index || !index.names) return [];
+  // A word glued to an unspaced script can still hold a name, so such texts skip the filter.
+  const words = UNSPACED.test(ctx.text) || HANGUL.test(ctx.text) ? null : new Set(ctx.text.match(WORD_RUN));
   const accepted = [];
   const mentions = [];
   for (const name of index.names) {
+    if (words && name.lead && !words.has(name.lead)) continue;
     for (let start = ctx.text.indexOf(name.form); start !== -1; start = ctx.text.indexOf(name.form, start + 1)) {
       const end = start + name.length;
       if (!boundaryBefore(ctx, start, name.form) || !boundaryAfter(ctx, end, name.form)) continue;
