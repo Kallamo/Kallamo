@@ -1,7 +1,8 @@
 import {
-  Anvil, BookOpen, Box, CalendarClock, Coins, FileText, Flag, FlaskConical,
-  Gem, Ghost, Globe, Hammer, MapPin, Package, Pickaxe, Shield, Sword, User, Users,
+  Anvil, BookOpen, Box, CalendarClock, Coins, Crosshair, FileText, Flag, FlaskConical,
+  Gem, Ghost, Globe, Hammer, LandPlot, Map as MapIcon, MapPin, Package, Pickaxe, Shield, Sword, User, Users,
 } from 'lucide-react';
+import { LOCATION_SIZES, locationSizeGuide, locationSizeLabel, locationSizeOf, presenceOrder } from '../../../shared/location-sizes';
 
 // `wash` tints the open sheet's header with the type's color, so each kind of
 // record is recognizable before its name is read.
@@ -37,11 +38,37 @@ export const ITEM_TYPE_META = {
 };
 
 export const itemMeta = (itemType) => ITEM_TYPE_META[itemType] || { icon: Package, label: itemType || 'Item' };
+
+// The icon grows with the place, so a list of locations reads as a scale before any name.
+const LOCATION_SIZE_ICONS = { region: MapIcon, area: LandPlot, place: MapPin, spot: Crosshair };
+export const LOCATION_SIZE_OPTIONS = LOCATION_SIZES.map(size => ({
+  value: size.id, label: size.label, guide: locationSizeGuide(size.id), icon: LOCATION_SIZE_ICONS[size.id],
+}));
+export const locationSizeIcon = (size) => LOCATION_SIZE_ICONS[size] || MapPin;
+
 export const entityMeta = (entity) => {
   const base = meta(entity?.type);
-  if (entity?.type !== 'Items') return base;
-  return { ...base, icon: itemMeta(entity.data?.itemType).icon };
+  if (entity?.type === 'Items') return { ...base, icon: itemMeta(entity.data?.itemType).icon };
+  if (entity?.type === 'Locations') return { ...base, icon: locationSizeIcon(locationSizeOf(entity)) };
+  return base;
 };
+
+/** Locations for a "where is it" picker: places and spots first, alphabetical within a size. */
+export const sortLocationsForPresence = (locations) => [...locations]
+  .sort((a, b) => presenceOrder(locationSizeOf(a)) - presenceOrder(locationSizeOf(b))
+    || String(a.canonicalName).localeCompare(String(b.canonicalName)));
+
+export const locationPresenceOptions = (locations) => sortLocationsForPresence(locations)
+  .map(entity => {
+    const size = locationSizeOf(entity);
+    return {
+      id: entity.id,
+      label: entity.canonicalName,
+      aliases: Array.isArray(entity.aliases) ? entity.aliases : String(entity.aliases || '').split(',').map(alias => alias.trim()).filter(Boolean),
+      group: locationSizeLabel(size) || 'Location',
+      icon: locationSizeIcon(size),
+    };
+  });
 export const RARITY = ['Unique', 'Rare', 'Uncommon', 'Common', 'Abundant'];
 export const THREAT = ['Harmless', 'Minor', 'Dangerous', 'Deadly', 'Legendary'];
 export const STATUS = {
@@ -69,7 +96,7 @@ export const RELATIONSHIP_LABELS = ['Father', 'Mother', 'Sibling', 'Child', 'Fri
 const FIELD_LABELS = {
   status: 'Status', age: 'Age', appearance: 'Appearance', personality: 'Personality', role: 'Role', abilities: 'Abilities',
   disposition: 'Disposition', nature: 'Nature', abundance: 'Abundance', threat: 'Threat', kind: 'Kind',
-  description: 'Description', locationType: 'Type', itemType: 'Type', content: 'Content',
+  description: 'Description', locationType: 'Type', size: 'Size', itemType: 'Type', content: 'Content',
 };
 
 export const meta = (type) => TYPES[type] || { label: type, icon: Globe, medallion: 'bg-entity-concept/15 text-entity-concept border-entity-concept/30', ring: 'border-entity-concept/25', soft: 'text-entity-concept', wash: 'from-entity-concept/12' };

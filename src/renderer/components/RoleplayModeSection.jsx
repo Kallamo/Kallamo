@@ -3,6 +3,8 @@ import { Activity, Check, ChevronDown, Clock3, Eye, Gauge, MapPin, Pencil, Plus,
 import ColorField from './ui/ColorField';
 import ConfirmDialog from './ui/ConfirmDialog';
 import SearchableSelect from './ui/SearchableSelect';
+import { locationPresenceOptions } from '../features/worldbuild/worldbuildConfig';
+import { locationSizeLabel } from '../../shared/location-sizes';
 
 const EMPTY_SETTINGS = { playerEntityId: null, locationEntityId: null, activeSceneId: null, scenarioName: '', scenarioSummary: '', defaultUpdatePolicy: 'review' };
 const EMPTY_SCENE = { locationId: null, participantIds: [], possibleObserverIds: [], nearbyIds: [], objectIds: [] };
@@ -25,6 +27,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
   const [narrativeEvents, setNarrativeEvents] = useState([]);
   const [narrativeMetrics, setNarrativeMetrics] = useState([]);
   const [narrativeJobs, setNarrativeJobs] = useState([]);
+  const [pendingNarrativeTurn, setPendingNarrativeTurn] = useState(null);
   const [narrativeNow, setNarrativeNow] = useState(() => Date.now());
   const [resourceDraft, setResourceDraft] = useState(null);
   const [deletingResource, setDeletingResource] = useState(null);
@@ -77,6 +80,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
     setNarrativeEvents(config.narrativeEvents || []);
     setNarrativeMetrics(config.narrativeMetrics || []);
     setNarrativeJobs(config.narrativeJobs || []);
+    setPendingNarrativeTurn(config.pendingNarrativeTurn || null);
     setTimeMatrix(config.timeMatrix || EMPTY_TIME_MATRIX);
     setCalendar(config.calendar || { hoursPerDay: 24 });
     setEntities((worldbuild.entities || []).filter(entity => entity.status !== 'proposed'));
@@ -98,6 +102,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
     setNarrativeEvents(config.narrativeEvents || []);
     setNarrativeMetrics(config.narrativeMetrics || []);
     setNarrativeJobs(config.narrativeJobs || []);
+    setPendingNarrativeTurn(config.pendingNarrativeTurn || null);
     setCalendar(config.calendar || { hoursPerDay: 24 });
   }, [api, workspaceId]);
 
@@ -157,6 +162,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
   }), [entities]);
   const names = useMemo(() => new Map(entities.map(entity => [entity.id, entity.canonicalName])), [entities]);
   const entityOptions = list => list.map(entity => ({ id: entity.id, label: entity.canonicalName, aliases: Array.isArray(entity.aliases) ? entity.aliases : String(entity.aliases || '').split(','), group: entity.type.replace(/s$/, '') }));
+  const sceneLocationOptions = useMemo(() => locationPresenceOptions(groups.locations), [groups.locations]);
   const definitionOptions = definitions.map(item => ({ id: item.id, label: item.name, description: item.description, color: item.color }));
 
   const toggle = async () => {
@@ -366,7 +372,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
       <Panel icon={MapPin} title="Current Scene" summary={`${playerName} · ${locationName}`} description="Choose the active perspective, location, and who is present. These are the details used on the next roleplay turn." defaultOpen>
         <div className="grid gap-4 lg:grid-cols-3">
           <Field label="Player character" hint="The focal perspective used for roleplay context." fieldLabel={fieldLabel}><SearchableSelect ariaLabel="Player character" value={settings.playerEntityId || ''} onChange={value => saveSettings({ playerEntityId: value || null })} options={entityOptions(groups.actors)} placeholder="Select a character" /></Field>
-          <Field label="Current location" hint="Where the active scene is happening." fieldLabel={fieldLabel}><SearchableSelect ariaLabel="Current location" value={scene.locationId || ''} onChange={value => saveScene({ locationId: value || null })} options={entityOptions(groups.locations)} placeholder="Select a location" /></Field>
+          <Field label="Current location" hint="Where the active scene is happening." fieldLabel={fieldLabel}><SearchableSelect ariaLabel="Current location" value={scene.locationId || ''} onChange={value => saveScene({ locationId: value || null })} options={sceneLocationOptions} placeholder="Select a location" /></Field>
           <Field label="Narrative State Updates" hint={POLICY[settings.defaultUpdatePolicy]} fieldLabel={fieldLabel}><select aria-label="Narrative State update policy" className={inputClass} value={settings.defaultUpdatePolicy} onChange={event => saveSettings({ defaultUpdatePolicy: event.target.value })}><option value="manual">Manual only</option><option value="review">Review changes</option><option value="automatic">Automatic</option></select></Field>
         </div>
         <div className="mt-4 space-y-2">
@@ -388,7 +394,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
 
       {pendingCount > 0 && <Panel icon={Activity} title="Pending AI Changes" summary={`${pendingCount} waiting`} description="Review changes that require your approval before they become part of the campaign state." defaultOpen>
         <div className="space-y-2">
-          {pendingEntities.map(change => <Pending key={change.id} label={describeEntityChangeLabel(change)} detail={describeEntityChangeDetail(change)} onApprove={() => resolve('entity', change.id, 'approved')} onReject={() => resolve('entity', change.id, 'rejected')} />)}
+          {pendingEntities.map(change => <Pending key={change.id} label={describeEntityChangeLabel(change)} detail={describeEntityChangeDetail(change, names)} onApprove={() => resolve('entity', change.id, 'approved')} onReject={() => resolve('entity', change.id, 'rejected')} />)}
           {pendingNarrative.map(item => <Pending key={item.proposal.changeSet.event.id} label={item.proposal.changeSet.event.description} detail={describeNarrativeEvent(item, names)} onApprove={() => resolve('narrative', item.proposal.changeSet.event.id, 'approved')} onReject={() => resolve('narrative', item.proposal.changeSet.event.id, 'rejected')} />)}
           {pendingScenes.map(change => <Pending key={change.id} label="Scene update" detail={describePatch(change.patch, names)} onApprove={() => resolve('scene', change.id, 'approved')} onReject={() => resolve('scene', change.id, 'rejected')} />)}
           {pendingInventory.map(change => <Pending key={change.id} label="Inventory update" detail={describeInventoryPatch(change.patch, names)} onApprove={() => resolve('inventory', change.id, 'approved')} onReject={() => resolve('inventory', change.id, 'rejected')} />)}
@@ -526,15 +532,16 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
           <NestedDisclosure
             id={activityPanelId}
             title="Diagnostics and recovery"
-            summary={delayedJobs.length ? `${delayedJobs.length} interrupted or failed updates` : `${recentActivityCount} recent records · No recovery needed`}
+            summary={delayedJobs.length ? `${delayedJobs.length} interrupted or failed updates` : pendingNarrativeTurn ? 'Kept reply waiting for its state update' : `${recentActivityCount} recent records · No recovery needed`}
             open={activityOpen}
             onToggle={() => setActivityOpen(current => !current)}
           >
+            {pendingNarrativeTurn && <div className={`${delayedJobs.length ? 'mb-2 ' : ''}flex flex-col gap-3 rounded-control border border-border-subtle bg-surface-panel-muted/45 px-3 py-3 sm:flex-row sm:items-center`}><div className="min-w-0 flex-1"><p className="text-xs font-semibold text-text-secondary">Kept reply not analyzed yet</p><p className="mt-0.5 text-[0.6875rem] leading-relaxed text-text-muted">A switched or regenerated reply updates the story state once, when you continue. Update now to see it sooner.</p></div><button type="button" onClick={() => reprocess(pendingNarrativeTurn.originId)} className="inline-flex min-h-9 shrink-0 items-center justify-center gap-1.5 rounded-control border border-border-subtle px-3 text-[0.6875rem] font-semibold text-text-secondary hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><RefreshCw aria-hidden="true" className="h-3.5 w-3.5" />Update now</button></div>}
             {delayedJobs.length > 0 && <div className="space-y-2">{delayedJobs.map(job => <div key={job.originId} className="flex flex-col gap-3 rounded-control border border-status-warning/25 bg-status-warning/[0.04] px-3 py-3 sm:flex-row sm:items-center"><div className="min-w-0 flex-1"><p className="text-xs font-semibold text-status-warning">{job.status === 'failed' ? 'State update failed' : 'State update interrupted'}</p><p className="mt-0.5 text-[0.6875rem] leading-relaxed text-text-muted">{job.error || 'This turn may be behind the visible narrative.'}</p></div><button type="button" onClick={() => reprocess(job.originId)} className="inline-flex min-h-9 shrink-0 items-center justify-center gap-1.5 rounded-control border border-status-warning/25 px-3 text-[0.6875rem] font-semibold text-status-warning hover:bg-status-warning/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-warning/40"><RefreshCw aria-hidden="true" className="h-3.5 w-3.5" />Reprocess turn</button></div>)}</div>}
-            {recentActivityCount > 0 ? <div className={`${delayedJobs.length ? 'mt-3' : ''} divide-y divide-border-subtle overflow-hidden rounded-card border border-border-subtle`}>
-              {recentEntities.map(change => <div key={change.id} className="bg-surface-panel-muted/45 px-3.5 py-3"><p className="text-xs font-semibold text-text-secondary">{describeEntityChangeLabel(change)}</p><p className="mt-1 text-[0.6875rem] leading-relaxed text-text-subtle">{describeEntityChangeDetail(change)}</p></div>)}
+            {recentActivityCount > 0 ? <div className={`${delayedJobs.length || pendingNarrativeTurn ? 'mt-3' : ''} divide-y divide-border-subtle overflow-hidden rounded-card border border-border-subtle`}>
+              {recentEntities.map(change => <div key={change.id} className="bg-surface-panel-muted/45 px-3.5 py-3"><p className="text-xs font-semibold text-text-secondary">{describeEntityChangeLabel(change)}</p><p className="mt-1 text-[0.6875rem] leading-relaxed text-text-subtle">{describeEntityChangeDetail(change, names)}</p></div>)}
               {recentEvents.map(event => <div key={event.proposal.changeSet.event.id} className="bg-surface-panel-muted/45 px-3.5 py-3"><p className="text-xs font-semibold text-text-secondary">{event.proposal.changeSet.event.description}</p><p className="mt-1 text-[0.6875rem] leading-relaxed text-text-subtle">{describeNarrativeEvent(event, names)}</p></div>)}
-            </div> : !delayedJobs.length && <Empty text="No recent Narrative State activity or recovery issues." />}
+            </div> : !delayedJobs.length && !pendingNarrativeTurn && <Empty text="No recent Narrative State activity or recovery issues." />}
           </NestedDisclosure>
         </div>
       </Panel>
@@ -585,6 +592,16 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
   </div>;
 }
 
+// A proposed place says where it will sit, because approving it also files it there.
+function describeLocationPlacement(proposal, names) {
+  if (proposal?.type !== 'Locations') return '';
+  const size = locationSizeLabel(proposal.size);
+  const parent = proposal.insideId ? names.get(proposal.insideId) : null;
+  if (size && parent) return `${size} inside ${parent}.`;
+  if (parent) return `Inside ${parent}.`;
+  return size ? `${size}.` : '';
+}
+
 function describeEntityChangeLabel(change) {
   const identity = change.identityUpdate;
   if (!identity) return `${change.proposal.type.replace(/s$/, '')}: ${change.proposal.name}`;
@@ -592,12 +609,14 @@ function describeEntityChangeLabel(change) {
   return `Add aliases to ${identity.previousCanonicalName}`;
 }
 
-function describeEntityChangeDetail(change) {
+function describeEntityChangeDetail(change, names) {
   const identity = change.identityUpdate;
   if (!identity) {
-    return change.status === 'conflicting'
+    const text = change.status === 'conflicting'
       ? `Conflict: ${change.proposal.reason || change.proposal.description}`
       : change.proposal.description || change.proposal.reason;
+    const placement = describeLocationPlacement(change.proposal, names);
+    return placement ? `${placement} ${text || ''}`.trim() : text;
   }
   const details = [];
   if (identity.canonicalName) details.push(`The previous name remains as an alias.`);

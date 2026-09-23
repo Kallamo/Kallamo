@@ -1,6 +1,14 @@
+import { locationSizeLabel } from '../../../shared/location-sizes';
+
+/** A native field's stored value as the sheet names it. */
+export function displayNativeValue(field, value) {
+  if (field === 'size') return locationSizeLabel(value) || String(value);
+  return String(value);
+}
+
 export function displayProposalValue(field, proposal, definitions, entities) {
   const value = proposal && typeof proposal === 'object' && 'value' in proposal ? proposal.value : proposal;
-  if (!field.startsWith('customFields.')) return String(value);
+  if (!field.startsWith('customFields.')) return displayNativeValue(field, value);
   const key = field.slice('customFields.'.length);
   const definition = definitions.find(candidate => candidate.key === key);
   if (!definition) return String(value);

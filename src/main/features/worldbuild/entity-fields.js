@@ -1,6 +1,8 @@
 // Scalar `data` fields of a Worldbuild entity. ENRICH_FIELDS and DOSSIER_DATA_FIELDS live together
 // so a test can hold them against each other; the sheet (JSX) is still checked by hand.
 
+const { LOCATION_SIZE_IDS } = require('../../../../dist-main/shared/location-sizes');
+
 // Closed vocabularies for the fields that are enums. A value outside its list is dropped
 // rather than stored.
 const ENRICH_ENUMS = {
@@ -8,6 +10,7 @@ const ENRICH_ENUMS = {
     disposition: ['hostile', 'neutral', 'friendly', 'unknown'],
     abundance: ['Unique', 'Rare', 'Uncommon', 'Common', 'Abundant'],
     threat: ['Harmless', 'Minor', 'Dangerous', 'Deadly', 'Legendary'],
+    size: [...LOCATION_SIZE_IDS],
     itemType: ['Weapon', 'Armor', 'Tool', 'Consumable', 'Artifact', 'Document', 'Container', 'Currency', 'Material', 'Resource', 'Object'],
 };
 
@@ -16,7 +19,7 @@ const ENRICH_ENUMS = {
 const ENRICH_FIELDS = {
     Characters: ['status', 'age', 'appearance', 'personality'],
     Creatures: ['status', 'disposition', 'nature', 'abundance', 'threat', 'abilities', 'appearance', 'personality'],
-    Locations: ['locationType', 'description'],
+    Locations: ['locationType', 'size', 'description'],
     Items: ['itemType', 'abundance', 'description'],
     Factions: ['description'],
     Races: ['description'],
@@ -48,6 +51,7 @@ const ENRICH_FIELD_GUIDANCE = {
     threat: 'An explicitly established general danger level, not how frightening or powerful one scene makes the entity appear.',
     abilities: 'Concrete repeatable capabilities or traits explicitly demonstrated or stated. Exclude metaphors, one-time circumstances, equipment, and speculation.',
     locationType: 'The explicit kind of place, such as continent, city, fortress, or tavern. Do not use its name, owner, atmosphere, or current purpose as its type.',
+    size: 'How the place relates to a scene: region is wider than a scene and crossed by travel (a kingdom, a planet, an ocean); area holds many places people move between (a city, a station, a ship, a campus); place is where one scene happens (a tavern, a bridge, a classroom); spot is a point within a scene (an altar, a console, a table). Derive it from the explicitly stated kind of place, which counts as explicit evidence. Never derive it from importance, atmosphere, or how much text the place receives.',
     itemType: 'Classify the item by its canonical function. Resource is an ordinary category for naturally occurring or gathered items; item nature, not category, controls ownership and abundance.',
     description: 'A concise factual description built only from established properties, function, appearance, culture, goals, structure, or importance appropriate to this entity type.',
     kind: 'The explicit category of event, such as Battle, Festival, Holiday, Disaster, or Coronation. Do not use its outcome or emotional tone as its kind.',
@@ -56,7 +60,7 @@ const ENRICH_FIELD_GUIDANCE = {
 
 // Every scalar the user set must reach retrieval. Order is the order the model reads.
 const DOSSIER_DATA_FIELDS = [
-    ['status', 'status'], ['itemType', 'type'], ['locationType', 'type'],
+    ['status', 'status'], ['itemType', 'type'], ['locationType', 'type'], ['size', 'size'],
     ['nature', 'nature'], ['scope', 'kind'], ['disposition', 'disposition'],
     ['rarity', 'abundance'], ['abundance', 'abundance'], ['threat', 'threat'],
     ['age', 'age'], ['role', 'role'], ['abilities', 'abilities'], ['ownership', 'ownership'],

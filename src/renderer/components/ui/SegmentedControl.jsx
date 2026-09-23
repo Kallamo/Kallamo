@@ -13,6 +13,7 @@ export default function SegmentedControl({ value, onChange, options, label, clas
             role="radio"
             aria-checked={selected}
             disabled={disabled || option.disabled}
+            data-tooltip={option.tooltip}
             onClick={() => onChange(option.value)}
             className={`inline-flex min-h-8 items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors
               focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50

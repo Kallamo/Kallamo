@@ -1,3 +1,5 @@
+const { locationSizeOf } = require('../../../../dist-main/shared/location-sizes');
+
 const OPTION_LIMIT = 30;
 
 const TYPE_ALIASES = new Map([
@@ -94,7 +96,8 @@ function buildNarrativeOptionPalette({ workspaceId, query, listEntities }) {
 
   const lines = entities.map(entity => {
     const description = compactDescription(entity);
-    return `- ${entity.canonicalName}${description ? `: ${description}` : ''}`;
+    const size = type === 'Locations' ? locationSizeOf(entity) : null;
+    return `- ${entity.canonicalName}${size ? ` (${size})` : ''}${description ? `: ${description}` : ''}`;
   });
   const total = registered.length;
   const truncation = total > entities.length

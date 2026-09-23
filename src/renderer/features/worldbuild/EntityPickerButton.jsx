@@ -4,6 +4,7 @@ import Button from '../../components/ui/Button';
 import Modal from '../../components/ui/Modal';
 import SearchableSelect from '../../components/ui/SearchableSelect';
 import { entityMeta } from './worldbuildConfig';
+import { locationSizeLabel, locationSizeOf } from '../../../shared/location-sizes';
 
 export default function EntityPickerButton({ label = 'Add', title, options, onPick, icon = Plus }) {
   const [isOpen, setOpen] = useState(false);
@@ -15,7 +16,7 @@ export default function EntityPickerButton({ label = 'Add', title, options, onPi
       aliases: Array.isArray(option.aliases)
         ? option.aliases
         : String(option.aliases || '').split(',').map(alias => alias.trim()).filter(Boolean),
-      group: metadata?.label,
+      group: option.type === 'Locations' ? locationSizeLabel(locationSizeOf(option)) || metadata.label : metadata?.label,
       icon: metadata?.icon,
     };
   });

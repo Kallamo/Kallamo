@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { displayProposalValue } from '../../src/renderer/features/worldbuild/reviewDisplay';
+import { displayNativeValue, displayProposalValue } from '../../src/renderer/features/worldbuild/reviewDisplay';
 
 describe('AI review display values', () => {
   test('shows the custom option label instead of its internal slug', () => {
@@ -13,5 +13,10 @@ describe('AI review display values', () => {
     const entities = [{ id: 'entity-1', canonicalName: 'Nico' }];
     expect(displayProposalValue('customFields.owner', { value: 'entity-1' }, definitions, entities))
       .toBe('Nico');
+  });
+
+  test('names a location size the way the sheet does', () => {
+    expect(displayProposalValue('size', { value: 'area' }, [], [])).toBe('Area');
+    expect(displayNativeValue('size', 'unknown-size')).toBe('unknown-size');
   });
 });

@@ -6,7 +6,8 @@ import {
 import SearchableSelect from '../../components/ui/SearchableSelect';
 import Popover from '../../components/ui/Popover';
 import Modal from '../../components/ui/Modal';
-import { itemMeta, meta } from '../worldbuild/worldbuildConfig';
+import { itemMeta, locationPresenceOptions, meta } from '../worldbuild/worldbuildConfig';
+import { locationSizeLabel } from '../../../shared/location-sizes';
 import WorldDateInput, { formatWorldDate } from '../worldbuild/WorldDateInput';
 
 const EMPTY_SCENE = {
@@ -32,7 +33,8 @@ function RoleplayQuickPanel({
   onBackgroundChange,
   onCollapsedChange,
   narrativeStateProcessing = false,
-  initialCollapsed = false
+  initialCollapsed = false,
+  visible = true
 }) {
   const [collapsed, setCollapsed] = useState(initialCollapsed);
   const [tab, setTab] = useState('scene');
@@ -58,6 +60,7 @@ function RoleplayQuickPanel({
   const [refreshKey, setRefreshKey] = useState(0);
   const backgroundInputRef = useRef(null);
   const refreshFrameRef = useRef(null);
+  const wasVisibleRef = useRef(visible);
 
   const load = useCallback(async () => {
     const configurationPromise = api.getRoleplayConfiguration(workspaceId);
@@ -105,6 +108,13 @@ function RoleplayQuickPanel({
   useEffect(() => {
     load().catch(error => showToast(error.message, 'error'));
   }, [load, refreshKey, showToast]);
+
+  // The panel stays mounted behind other workspace tabs, where edits do not all announce
+  // themselves; coming back re-reads the scene instead of trusting what it last loaded.
+  useEffect(() => {
+    if (visible && !wasVisibleRef.current) setRefreshKey(value => value + 1);
+    wasVisibleRef.current = visible;
+  }, [visible]);
 
   useEffect(() => {
     const scheduleRefresh = () => {
@@ -161,11 +171,7 @@ function RoleplayQuickPanel({
     aliases: entity.aliases,
     group: entity.type.replace(/s$/, '')
   }));
-  const locationOptions = groups.locations.map(entity => ({
-    id: entity.id,
-    label: entity.canonicalName,
-    aliases: entity.aliases
-  }));
+  const locationOptions = useMemo(() => locationPresenceOptions(groups.locations), [groups.locations]);
   const player = groups.actors.find(entity => entity.id === settings.playerEntityId);
   const presentIds = new Set([
     ...(scene.participantIds || []),
@@ -884,7 +890,13 @@ function describeRecentChange(change, names, definitions) {
     }
     const label = change.proposal?.type?.replace(/s$/, '') || 'Entity';
     const action = change.createdEntity ? 'created' : isPendingChange(change) ? 'awaiting identity review' : 'matched';
-    return [`${label} ${action}: ${change.proposal?.name || 'Unnamed entity'}`];
+    const lines = [`${label} ${action}: ${change.proposal?.name || 'Unnamed entity'}`];
+    if (change.proposal?.type === 'Locations' && (change.proposal.size || change.proposal.insideId)) {
+      const size = locationSizeLabel(change.proposal.size) || 'Location';
+      const parent = change.proposal.insideId ? names.get(change.proposal.insideId) : null;
+      lines.push(parent ? `${size} inside ${parent}.` : `${size}.`);
+    }
+    return lines;
   }
   if (change.kind === 'narrative') {
     const proposal = change.record.proposal;

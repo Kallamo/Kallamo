@@ -27,11 +27,13 @@ import WorldDateInput, { formatWorldDate } from '../features/worldbuild/WorldDat
 import { WorldbuildInventory, WorldbuildRelationships } from '../features/worldbuild/WorldbuildAgentCollections';
 import WorldbuildTemplateManager from '../features/worldbuild/WorldbuildTemplateManager';
 import WorldbuildRoleplayResources from '../features/worldbuild/WorldbuildRoleplayResources';
-import { displayProposalValue } from '../features/worldbuild/reviewDisplay';
+import { displayNativeValue, displayProposalValue } from '../features/worldbuild/reviewDisplay';
 import {
   ABUNDANCE_HELP, CREATURE_NATURES, DISPOSITION, entityMeta, fieldLabel, ITEM_TYPES, itemMeta, meta, TYPES,
-  RARITY, RELATIONSHIP_LABELS, STATUS, THREAT, TYPE_ORDER,
+  RARITY, RELATIONSHIP_LABELS, STATUS, THREAT, TYPE_ORDER, LOCATION_SIZE_OPTIONS, locationSizeIcon, sortLocationsForPresence,
 } from '../features/worldbuild/worldbuildConfig';
+import { isInvertedNesting, locationSizeGuide, locationSizeLabel, locationSizeOf, locationSizeRank } from '../../shared/location-sizes';
+import SegmentedControl from './ui/SegmentedControl';
 import { normalizeTemplateSections, sheetTabs as sheetTabsFor, tabLabel } from '../features/worldbuild/worldbuildSections';
 
 // Frosted dark inputs: their own dark backing guarantees legible text over BOTH
@@ -48,6 +50,16 @@ const NAME_REVIEW_TEXT = {
   fragment: (reason) => `Appears almost only inside “${reason.relatedName}”. It may be a piece of that name; merging keeps it as an alias.`,
   duplicate: (reason) => `May be the same as “${reason.relatedName}”.`,
 };
+// Story state a delete lets go of: narrative records are retired, cards and scene entries removed.
+const describeStoryImpact = (summary) => {
+  const parts = [
+    summary?.narrativeRecords ? `${summary.narrativeRecords} Narrative State records` : '',
+    summary?.knowledgeCards ? `${summary.knowledgeCards} Knowledge cards` : '',
+    summary?.sceneState ? `${summary.sceneState} scene and equipment entries` : '',
+  ].filter(Boolean);
+  return parts.length ? ` Roleplay state stops using them: ${parts.join(', ')}.` : '';
+};
+
 const describeNameReview = (reason) => (NAME_REVIEW_TEXT[reason?.code] || (() => 'Worth a second look.'))(reason);
 
 const matchesReviewFilter = (entity, filter, { nameReview, reviewCounts }) => {
@@ -182,6 +194,24 @@ const Prose = ({ text, empty = 'Nothing written yet.' }) =>
   text && text.trim()
     ? <p className="text-sm text-text-secondary leading-relaxed whitespace-pre-wrap">{text}</p>
     : <p className="text-sm text-text-disabled italic">{empty}</p>;
+
+// Warns without blocking: some fiction nests a world inside a bottle on purpose.
+function NestingWarning({ size, parent }) {
+  const parentSize = locationSizeOf(parent);
+  if (!parent || !isInvertedNesting(size, parentSize)) return null;
+  return (
+    <p className="flex items-start gap-2 rounded-control border border-status-warning/30 bg-status-warning/10 px-3 py-2 text-xs leading-relaxed text-status-warning">
+      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      <span>This {locationSizeLabel(size).toLowerCase()} sits inside {parent.canonicalName}, which is a {locationSizeLabel(parentSize).toLowerCase()}. A container is usually larger than what it holds.</span>
+    </p>
+  );
+}
+
+const LocationSizeValue = ({ size }) => {
+  if (!size) return null;
+  const Icon = locationSizeIcon(size);
+  return <div className="inline-flex items-center gap-1.5 text-sm font-medium text-text-primary"><Icon className="h-3.5 w-3.5 text-entity-location" aria-hidden="true" />{locationSizeLabel(size)}</div>;
+};
 
 const Chip = ({ children }) => (
   <span className="inline-flex items-center gap-1 rounded-full border border-border-subtle bg-surface-hover/35 px-2 py-0.5 text-[0.6875rem] font-medium text-text-secondary">{children}</span>
@@ -384,20 +414,26 @@ function MemberList({ links, calendar, kind = 'member', leaderId, editing, optio
   );
 }
 
+// The last registry read per workspace. Reopening the tab shows it at once while a fresh
+// read runs; nothing can be opened or edited until that read lands.
+const registryCache = new Map();
+
 export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFocusHandled }) {
   const { showToast, settings, openSettings } = useApp();
   // Update Entities always uses System AI, independently of the Tagger executor.
   const hasSystemAi = !!settings?.advanced?.systemApiProfileId && !!settings?.advanced?.systemModelName;
   const workspaceId = chat?.id;
 
-  const [entities, setEntities] = useState([]);
-  const [insideLinks, setInsideLinks] = useState([]);
+  const [cachedRegistry] = useState(() => registryCache.get(workspaceId));
+  const [entities, setEntities] = useState(() => cachedRegistry?.entities || []);
+  const [insideLinks, setInsideLinks] = useState(() => cachedRegistry?.insideLinks || []);
   const [documents, setDocuments] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !cachedRegistry);
+  const [registryFresh, setRegistryFresh] = useState(false);
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState(null);
   const [reviewFilter, setReviewFilter] = useState(null);
-  const [nameReview, setNameReview] = useState(() => new Map());
+  const [nameReview, setNameReview] = useState(() => cachedRegistry?.nameReview || new Map());
   const [manageMode, setManageMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const filterStripRef = useRef(null);
@@ -405,8 +441,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const [bulkSaving, setBulkSaving] = useState(false);
   const [selected, setSelected] = useState(null);
   const [surface, setSurface] = useState('entities');
-  const [factCount, setFactCount] = useState(0);
-  const [worldCalendar, setWorldCalendar] = useState(null);
+  const [factCount, setFactCount] = useState(() => cachedRegistry?.factCount || 0);
+  const [worldCalendar, setWorldCalendar] = useState(() => cachedRegistry?.worldCalendar || null);
   const [rel, setRel] = useState({});
   const [charTab, setCharTab] = useState('data');
   const [editingSection, setEditingSection] = useState(null);
@@ -421,9 +457,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const [mergePrompt, setMergePrompt] = useState(null); // { id, name } while choosing merge priority
   const [showExportModal, setShowExportModal] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleteImpact, setDeleteImpact] = useState(null);
   const [templates, setTemplates] = useState([]);
   const [fieldDefinitions, setFieldDefinitions] = useState([]);
-  const [reviewCounts, setReviewCounts] = useState({});
+  const [reviewCounts, setReviewCounts] = useState(() => cachedRegistry?.reviewCounts || {});
   const [subjectReview, setSubjectReview] = useState({ proposals: [] });
   const [reviewKind, setReviewKind] = useState('entity');
   const [showTemplateManager, setShowTemplateManager] = useState(false);
@@ -494,6 +531,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   }, [entities]);
   // A group creature is a species or a swarm, not someone a relation can point at.
   // Only specific beings can own things, hold a relationship, or be regarded by a faction.
+  // Where a single object can lie: places and spots before the regions that contain them.
+  const presenceLocations = useMemo(() => sortLocationsForPresence(byType.Locations || []), [byType.Locations]);
   const individualCreatures = useMemo(
     () => (byType.Creatures || []).filter(entity => (entity.data?.scope || 'individual') !== 'group'),
     [byType.Creatures],
@@ -510,14 +549,23 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
         electronAPI.getWorldCalendar?.(workspaceId),
         electronAPI.getEntityReview ? electronAPI.getEntityReview(workspaceId).catch(() => null) : null,
       ]);
-      setEntities(entityRes?.entities || []);
-      setInsideLinks(linkRes?.links || []);
-      setReviewCounts(reviewRes?.counts || {});
-      setFactCount(factRes?.facts?.length || 0);
-      setWorldCalendar(calendarRes?.calendar || null);
-      setNameReview(new Map((nameRes?.items || []).map(item => [item.id, item.reasons])));
-    } catch { setEntities([]); setInsideLinks([]); setNameReview(new Map()); }
-    finally { setLoading(false); }
+      const registry = {
+        entities: entityRes?.entities || [],
+        insideLinks: linkRes?.links || [],
+        reviewCounts: reviewRes?.counts || {},
+        factCount: factRes?.facts?.length || 0,
+        worldCalendar: calendarRes?.calendar || null,
+        nameReview: new Map((nameRes?.items || []).map(item => [item.id, item.reasons]))
+      };
+      registryCache.set(workspaceId, registry);
+      setEntities(registry.entities);
+      setInsideLinks(registry.insideLinks);
+      setReviewCounts(registry.reviewCounts);
+      setFactCount(registry.factCount);
+      setWorldCalendar(registry.worldCalendar);
+      setNameReview(registry.nameReview);
+    } catch { registryCache.delete(workspaceId); setEntities([]); setInsideLinks([]); setNameReview(new Map()); }
+    finally { setLoading(false); setRegistryFresh(true); }
   }, [workspaceId, electronAPI]);
 
   const loadEnrichErrors = useCallback(async () => {
@@ -528,7 +576,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   }, [workspaceId, electronAPI]);
 
   useEffect(() => {
-    setLoading(true);
+    setLoading(!registryCache.has(workspaceId));
     setSelected(null);
     setSurface('entities');
     setRel({});
@@ -628,16 +676,16 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   // Focus an entity requested from outside (the Writing Desk "Open in Worldbuild" action),
   // once the registry has loaded. Clear the request so it fires only once.
   useEffect(() => {
-    if (!focusEntityId || !entities.length) return;
+    if (!registryFresh || !focusEntityId || !entities.length) return;
     const en = entities.find(e => e.id === focusEntityId);
     if (en) openEntity(en);
     onFocusHandled?.();
-  }, [focusEntityId, entities]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [registryFresh, focusEntityId, entities]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (!navigationStateReady || surface !== 'entities' || focusEntityId || selected || !restoredEntityId) return;
+    if (!registryFresh || !navigationStateReady || surface !== 'entities' || focusEntityId || selected || !restoredEntityId) return;
     const en = entities.find(e => e.id === restoredEntityId);
     if (en) openEntity(en);
-  }, [navigationStateReady, surface, focusEntityId, selected, restoredEntityId, entities]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [registryFresh, navigationStateReady, surface, focusEntityId, selected, restoredEntityId, entities]); // eslint-disable-line react-hooks/exhaustive-deps
   const openEntityById = (entityId, options) => {
     const target = entities.find(item => item.id === entityId);
     if (target) openEntity(target, options);
@@ -682,6 +730,16 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
 
   const saveSection = async () => { const id = await persist(); if (id) setEditingSection(null); };
   const cancelSection = async () => { const cur = entities.find(e => e.id === selected.id); if (cur) await openEntity(cur); setEditingSection(null); };
+  useEffect(() => {
+    setDeleteImpact(null);
+    if (!confirmDelete || !selected?.id || !workspaceId) return undefined;
+    let current = true;
+    electronAPI.summarizeBulkEntities(workspaceId, [selected.id])
+      .then(summary => { if (current && summary?.success) setDeleteImpact(summary); })
+      .catch(() => {});
+    return () => { current = false; };
+  }, [confirmDelete, selected?.id, workspaceId]);
+
   const remove = async () => { if (!selected?.id) { setSelected(null); return; } setSaving(true); try { await electronAPI.deleteEntity(selected.id); setSelected(null); await load(); } finally { setSaving(false); } };
 
   // `prefer` decides conflicts; used for AI proposals and imported duplicates.
@@ -1078,19 +1136,36 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
         edit: <Edit label="Content"><LTextarea rows={10} placeholder="Rules and concepts of this universe the AI should always honor." value={selected.data.content || ''} onChange={(e) => patchData({ content: e.target.value })} /></Edit> });
     }
     if (type === 'Locations') {
-      S.push({ key: 'overview', title: 'Overview', icon: MapPin, scalar: true,
+      const size = locationSizeOf(selected);
+      const parent = rel.inside?.entity?.id ? byType.Locations.find(o => o.id === rel.inside.entity.id) : null;
+      // Largest first: a container is picked from the places that can hold this one.
+      const parentOptions = byType.Locations
+        .filter(o => o.id !== selected.id)
+        .sort((a, b) => locationSizeRank(locationSizeOf(b)) - locationSizeRank(locationSizeOf(a)) || String(a.canonicalName).localeCompare(String(b.canonicalName)));
+      S.push({ key: 'overview', title: 'Overview', icon: locationSizeIcon(size), scalar: true,
         view: <>
           <FactGrid>
+            <ViewField label="Size" value={size ? <LocationSizeValue size={size} /> : null} />
             <ViewField label="Type" value={selected.data.locationType} />
             <ViewField label="Inside" value={rel.inside?.entity?.canonicalName} />
             <ViewField label="Owner / leader" value={rel.leader?.entity?.canonicalName} />
           </FactGrid>
+          <NestingWarning size={size} parent={parent} />
           <Prose text={selected.data.description} empty="No description." />
         </>,
         edit: <>
-          <Edit label="Type"><LInput placeholder="e.g. continent / kingdom / city / tavern" value={selected.data.locationType || ''} onChange={(e) => patchData({ locationType: e.target.value })} /></Edit>
+          <Edit label="Size" hint={size ? `${locationSizeGuide(size)} Select it again to clear.` : 'How this place relates to a scene. Leave it empty if you are unsure.'}>
+            <SegmentedControl
+              label="Size"
+              value={size}
+              options={LOCATION_SIZE_OPTIONS.map(option => ({ value: option.value, label: option.label, icon: option.icon, tooltip: option.guide }))}
+              onChange={(value) => patchData({ size: value === size ? null : value })}
+            />
+          </Edit>
+          <Edit label="Type" hint="Its kind in your own words."><LInput placeholder="e.g. kingdom, space station, tavern, bridge" value={selected.data.locationType || ''} onChange={(e) => patchData({ locationType: e.target.value })} /></Edit>
           <Edit label="Description"><LTextarea rows={5} placeholder="What this place looks and feels like, including its defining features." value={selected.data.description || ''} onChange={(e) => patchData({ description: e.target.value })} /></Edit>
-          <SingleRelation label="Inside another place" hint="Nest this within a larger location." disabled={unsaved} current={rel.inside?.entity?.id} options={byType.Locations.filter(o => o.id !== selected.id)} onSet={(id) => setSingle('inside', id)} />
+          <SingleRelation label="Inside another place" hint="Nest this within a larger location." disabled={unsaved} current={rel.inside?.entity?.id} options={parentOptions} onSet={(id) => setSingle('inside', id)} />
+          <NestingWarning size={size} parent={parent} />
           <SingleRelation label="Owner / leader (optional)" hint="Who holds or rules this place, if anyone." disabled={unsaved} current={rel.leader?.entity?.id} options={byType.Characters} onSet={(id) => setSingle('led_by', id)} />
         </> });
       S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, view: loreView, edit: loreEdit });
@@ -1140,7 +1215,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               <EntityPickerButton icon={rel.ownedBy ? Replace : Plus} label={rel.ownedBy ? 'Change' : 'Choose entity'} title="Choose owner" options={ownerOptions} onPick={setOwner} />
             </div>
           </Edit>}
-          {isUniqueItem && <SingleRelation label="Current location" hint="Setting a location removes this item from its current inventory." disabled={unsaved} current={rel.locatedIn?.entity?.id} options={byType.Locations} onSet={setItemLocation} />}
+          {isUniqueItem && <SingleRelation label="Current location" hint="Setting a location removes this item from its current inventory." disabled={unsaved} current={rel.locatedIn?.entity?.id} options={presenceLocations} onSet={setItemLocation} />}
           {isItemType && <Edit label={<>Abundance <InfoPopover items={ABUNDANCE_HELP} /></>} hint="How common this item type is in the world."><LSelect value={selected.data.abundance || ''} onChange={(e) => patchData({ abundance: e.target.value })}><option value="">Choose…</option>{RARITY.map(r => <option key={r} value={r}>{r}</option>)}</LSelect></Edit>}
           {isItemType && <MultiRelation label="Where found" hint="Places where this item type can be found, gathered, or obtained." disabled={unsaved} links={rel.foundIn || []} options={byType.Locations} onAdd={(id) => addMulti('found_in', id)} onRemove={removeLink} />}
           {isItemType && <MultiRelation label="Where sold" hint="Places where this item type can normally be purchased." disabled={unsaved} links={rel.soldIn || []} options={byType.Locations} onAdd={(id) => addMulti('sold_in', id)} onRemove={removeLink} />}
@@ -1445,7 +1520,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
         <div className="relative">
             {manageMode && <Checkbox size="sm" checked={selectedIds.has(entity.id)} onChange={() => toggleEntitySelection(entity.id)} ariaLabel={`Select ${entity.canonicalName}`} className="absolute z-10 left-2.5 top-1/2 -translate-y-1/2" />}
             <button onClick={() => openEntity(entity)} className={`w-full rounded-control pr-2.5 text-left flex items-center transition-colors cursor-pointer group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent ${manageMode ? 'gap-2 py-1.5 pl-9' : 'gap-2.5 py-2 pl-2.5'} ${hasChildren ? 'pr-9' : ''} ${active ? 'bg-accent/15' : 'hover:bg-surface-hover/60'}`}>
-              <span className={`${manageMode ? 'h-6 w-6' : 'h-7 w-7'} rounded-md border flex items-center justify-center shrink-0 ${t.medallion}`}><Icon className="w-3.5 h-3.5" /></span>
+              <span data-tooltip={locationSizeLabel(locationSizeOf(entity)) || undefined} className={`${manageMode ? 'h-6 w-6' : 'h-7 w-7'} rounded-md border flex items-center justify-center shrink-0 ${t.medallion}`}><Icon className="w-3.5 h-3.5" /></span>
               <span className={`flex-1 min-w-0 truncate text-sm font-medium ${active ? 'text-accent' : 'text-text-secondary'}`}>{entity.canonicalName}</span>
               {entity.status === 'proposed' && <Sparkles className="w-3.5 h-3.5 text-status-warning shrink-0" data-tooltip="AI proposal, needs accept" />}
               {entity.status !== 'proposed' && (reviewCounts[entity.id]?.entityUpdates || 0) > 0 && <ShieldCheck className="w-3.5 h-3.5 text-status-info shrink-0" data-tooltip={`${reviewCounts[entity.id].entityUpdates} entity update suggestions`} />}
@@ -1520,7 +1595,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       tone: 'danger',
       title: `Delete ${summary.entities} entities`,
       confirm: 'Delete entities',
-      message: `${summary.proposed} proposed and ${summary.entities - summary.proposed} confirmed entities will be permanently deleted, together with ${summary.relationships} relationships and ${summary.storyTags} World Index associations. This cannot be undone.`,
+      message: `${summary.proposed} proposed and ${summary.entities - summary.proposed} confirmed entities will be permanently deleted, together with ${summary.relationships} relationships and ${summary.storyTags} World Index associations.${describeStoryImpact(summary)} This cannot be undone.`,
     };
     const updateDetails = `${summary.pendingFields} field changes, ${summary.pendingLore} lore updates, and ${summary.pendingLinks} relationships`;
     if (action === 'accept-proposed') return {
@@ -1580,7 +1655,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
         <ConfirmDialog
           tone="danger"
           title="Delete entity"
-          message={<>The {typeMeta(selected.type).label.toLowerCase()} <strong className="text-text-secondary">“{selected.canonicalName}”</strong> will be permanently deleted, along with its connections and story tags. This cannot be undone.</>}
+          message={<>The {typeMeta(selected.type).label.toLowerCase()} <strong className="text-text-secondary">“{selected.canonicalName}”</strong> will be permanently deleted, along with its connections and story tags.{describeStoryImpact(deleteImpact)} This cannot be undone.</>}
           actions={[
             { label: 'Cancel', variant: 'ghost', onClick: () => setConfirmDelete(false) },
             { label: 'Delete', variant: 'danger', autoFocus: true, loading: saving, onClick: async () => { await remove(); setConfirmDelete(false); } },
@@ -1726,13 +1801,13 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           </div>
         )}
 
-        <div className="flex-1 overflow-y-auto custom-scrollbar px-2 pb-2 space-y-0.5">
+        <div aria-busy={!registryFresh} className={`flex-1 overflow-y-auto custom-scrollbar px-2 pb-2 space-y-0.5 ${registryFresh ? '' : 'pointer-events-none'}`}>
           {loading ? <p className="caption text-center py-8">Loading...</p>
             : filtered.length === 0 ? <p className="caption text-center py-8">Nothing here yet.</p>
             : renderSidebarEntities()}
         </div>
         {manageMode && (
-          <div className="shrink-0 space-y-2 border-t border-border-subtle bg-surface-panel/95 p-3 backdrop-blur-md">
+          <div className="shrink-0 space-y-2 border-t border-border-subtle bg-surface-panel/95 p-3">
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs font-semibold text-text-secondary">{selectedIds.size} selected{hiddenSelectedCount ? ` · ${hiddenSelectedCount} hidden` : ''}</span>
               <button type="button" onClick={() => setSelectedIds(new Set())} disabled={!selectedIds.size} className="eyebrow hover:text-text-primary disabled:opacity-40 cursor-pointer">Clear</button>
@@ -1928,7 +2003,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                     {fields.map(f => {
                       const customFieldKey = f.startsWith('customFields.') ? f.slice('customFields.'.length) : null;
                       const cur = customFieldKey ? selected.data?.customFields?.[customFieldKey] : selected.data?.[f];
-                      const curStr = cur == null || String(cur).trim() === '' ? '(empty)' : String(cur);
+                      const curStr = cur == null || String(cur).trim() === '' ? '(empty)' : customFieldKey ? String(cur) : displayNativeValue(f, cur);
                       return (
                         <div key={f} className="flex items-start gap-3 bg-surface-canvas/45 border border-border-subtle rounded-control px-3 py-2">
                           <div className="min-w-0 flex-1">

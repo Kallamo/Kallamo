@@ -27,6 +27,7 @@ import {
   statementKey
 } from '../../../kanora/narrative-taxonomy';
 import { canSubjectAccessOccurrence, isFactionOccurrenceMemoryShared } from '../worldbuild/event-occurrences';
+import { describeLocationChain, loadLocationChain } from '../worldbuild/location-graph';
 import { NarrativeContextManifestRepository, type NarrativeContextManifest } from './context-manifest';
 import { RoleplayContextOrchestrator } from './roleplay-context-orchestrator';
 import {
@@ -368,9 +369,12 @@ export class KallamoKanoraChatContext {
       ...scene.objectIds
     ]));
     const nearbyIds = uniqueIds([...scene.possibleObserverIds, ...scene.nearbyIds]);
+    // The surroundings travel with the place, so the narrator knows the tavern is in a port
+    // city without having to look the city up.
+    const locationChain = loadLocationChain(this.db, workspaceId, scene.locationId);
     const lines = [
       `Scene: ${scene.id}`,
-      `Location: ${scene.locationId ? names.get(scene.locationId) ?? scene.locationId : 'Unspecified'}`,
+      `Location: ${locationChain.length ? describeLocationChain(locationChain) : scene.locationId ? names.get(scene.locationId) ?? scene.locationId : 'Unspecified'}`,
       `Active participants: ${formatEntityList(scene.participantIds, names)}`,
       `Nearby characters: ${formatEntityList(nearbyIds, names)}. Presence alone does not mean they noticed or learned what happened.`,
       `Objects present: ${formatEntityList(scene.objectIds, names)}`
@@ -1074,7 +1078,7 @@ function nativeFieldLabel(key: string): string {
   const labels: Record<string, string> = {
     status: 'Status', age: 'Age', appearance: 'Appearance', personality: 'Personality',
     disposition: 'Disposition', nature: 'Nature', abundance: 'Abundance', threat: 'Threat',
-    abilities: 'Abilities', locationType: 'Type', itemType: 'Type', description: 'Description',
+    abilities: 'Abilities', locationType: 'Type', size: 'Size', itemType: 'Type', description: 'Description',
     kind: 'Kind', content: 'Content'
   };
   return labels[key] || key;
