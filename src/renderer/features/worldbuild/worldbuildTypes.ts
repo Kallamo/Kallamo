@@ -1,4 +1,4 @@
-import type { EntityFieldDefinition } from '../../../kanora/contracts';
+import type { EntityFieldDefinition } from '../../../narrative/contracts';
 
 export interface WorldbuildEntity {
   id: string;
@@ -218,7 +218,7 @@ export interface WorldbuildApi {
   }>;
   listWorldbuildReviewCounts(workspaceId: string): Promise<{
     success: boolean;
-    counts?: Record<string, { entityUpdates: number; kanora: number }>;
+    counts?: Record<string, { entityUpdates: number; narrative: number }>;
     error?: string;
   }>;
   resolveNarrativeStateEvent(workspaceId: string, eventId: string, decision: 'approved' | 'rejected'): Promise<{

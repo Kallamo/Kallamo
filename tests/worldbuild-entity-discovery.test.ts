@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-const { discoverEntityIds } = require('../src/main/features/kanora/worldbuild-entity-discovery');
+const { discoverEntityIds } = require('../src/main/features/narrative/worldbuild-entity-discovery');
 
 describe('Worldbuild entity discovery', () => {
   const graph = [

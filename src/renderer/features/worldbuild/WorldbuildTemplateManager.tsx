@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronUp, Eye, EyeOff, LayoutTemplate, Pencil, Plus, Trash2 } from 'lucide-react';
-import type { EntityFieldDefinition, EntityFieldType } from '../../../kanora/contracts';
+import type { EntityFieldDefinition, EntityFieldType } from '../../../narrative/contracts';
 import Button from '../../components/ui/Button';
 import Checkbox from '../../components/ui/Checkbox';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';

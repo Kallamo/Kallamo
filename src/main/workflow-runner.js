@@ -43,7 +43,7 @@ const { buildLorePrompt, buildLoreAppendPrompt, validateEntityLore, validateEnti
 const { buildNarrativeOptionPalette } = require('./features/worldbuild/narrative-options');
 const { createEntityUpdateState } = require('./features/worldbuild/entity-update-state');
 const { shouldStopEntityUpdates } = require('./features/worldbuild/entity-update-resilience');
-const { NARRATIVE_TRIAGE_SCHEMA, NARRATIVE_STATE_SCHEMA } = require('../../dist-main/main/features/kanora/narrative-state-schema');
+const { NARRATIVE_TRIAGE_SCHEMA, NARRATIVE_STATE_SCHEMA } = require('../../dist-main/main/features/narrative/narrative-state-schema');
 const { findReachableLocations, locationSizesOf, travelCategory } = require('../../dist-main/main/features/worldbuild/location-graph');
 const {
     compactNarrativeManifest,
@@ -51,7 +51,7 @@ const {
     groupKnowledgeCardRows,
     hasEpistemicDomain,
     resolveNarrativeRouting
-} = require('./features/kanora/narrative-state-routing');
+} = require('./features/narrative/narrative-state-routing');
 const { proposalDataForMention } = require('./features/world-index/tagger-response');
 const { runModelTagger } = require('./features/world-index/tagger');
 const { applyNameTags, createNameMatcher, refreshWorkspaceNameTags, loadWorkspaceEntities } = require('./features/world-index/name-tags');
@@ -693,10 +693,10 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             let volatileSystemPrompt = '';
             let isRoleplayWorkspace = false;
             try {
-                const { getWorkspaceExperienceMode } = require('../../dist-main/main/features/kanora/mode-orchestration');
+                const { getWorkspaceExperienceMode } = require('../../dist-main/main/features/narrative/mode-orchestration');
                 isRoleplayWorkspace = getWorkspaceExperienceMode(db, chatId) === 'roleplay';
                 if (isRoleplayWorkspace) {
-                    const { getRoleplayGenerationPolicy } = require('../../dist-main/main/features/kanora/roleplay-generation-policy');
+                    const { getRoleplayGenerationPolicy } = require('../../dist-main/main/features/narrative/roleplay-generation-policy');
                     const generationPolicy = getRoleplayGenerationPolicy();
                     const { buildRoleplayTemporalContext } = require('./features/worldbuild/calendar-service');
                     stableSystemPrompt += `\n\n${generationPolicy}`;
@@ -906,7 +906,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     let planned = null;
                     if (planWorkspaceContext) {
                         const narrativeBudget = Math.max(0, retrievalBudget - packed.usedTokens);
-                        planned = planKanoraContext({
+                        planned = planNarrativeContext({
                             chatId,
                             query: currentInput,
                             items: toNarrativeItems(narrativeCandidates, retrievalBudget),
@@ -1049,7 +1049,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     else chatKbTokens += sectionTokens;
                 }
                 if (planWorkspaceContext) {
-                    const planned = planKanoraContext({
+                    const planned = planNarrativeContext({
                         chatId,
                         query: currentInput,
                         items: narrativeItems.filter(item => selectedItems.has(item)),
@@ -1387,7 +1387,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             }
             if (lastNarrativeContextRequestId) {
                 try {
-                    const { NarrativeContextManifestRepository } = require('../../dist-main/main/features/kanora/context-manifest');
+                    const { NarrativeContextManifestRepository } = require('../../dist-main/main/features/narrative/context-manifest');
                     new NarrativeContextManifestRepository(db)
                         .attachOrigin(chatId, lastNarrativeContextRequestId, aiMsgId);
                 } catch (error) {
@@ -1396,7 +1396,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             }
 
             try {
-                const { getWorkspaceExperienceMode } = require('../../dist-main/main/features/kanora/mode-orchestration');
+                const { getWorkspaceExperienceMode } = require('../../dist-main/main/features/narrative/mode-orchestration');
                 if (!replacedIds.length && getWorkspaceExperienceMode(db, chatId) === 'roleplay') {
                     sendRunEvent(webContents, 'workflow-progress', currentRun, {
                         step: totalSteps,
@@ -1429,7 +1429,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                 console.error('[Roleplay State] System AI update failed:', error);
                 try {
                     const { getRoleplayClock, applyRoleplayTurnFrame } = require('./features/worldbuild/calendar-service');
-                    const { RoleplaySystem } = require('../../dist-main/main/features/kanora/roleplay-system');
+                    const { RoleplaySystem } = require('../../dist-main/main/features/narrative/roleplay-system');
                     const failedScene = new RoleplaySystem(db).getScene(chatId);
                     const failedClock = getRoleplayClock(db, chatId);
                     applyRoleplayTurnFrame(db, {
@@ -1450,7 +1450,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                 };
                 debugObj = mergeNarrativeStateDiagnostics(debugObj, failedNarrativeDiagnostic);
                 try {
-                    const { NarrativeStateSystem } = require('../../dist-main/main/features/kanora/narrative-state');
+                    const { NarrativeStateSystem } = require('../../dist-main/main/features/narrative/narrative-state');
                     new NarrativeStateSystem(db).finishJob(chatId, aiMsgId, 'failed', { error: error.message || 'Narrative State update failed.' });
                 } catch (jobError) {
                     console.error('[Narrative State] Could not persist failed job:', jobError);
@@ -2285,17 +2285,17 @@ function enrichFieldsForEntity(entity) {
     return filterUpdateFields(entity, ENRICH_FIELDS[entity.type] || []);
 }
 
-let kanoraChatContext = null;
-function getKanoraChatContext() {
-    if (!kanoraChatContext) {
-        const { createKallamoKanoraChatContext } = require('../../dist-main/main/features/kanora/chat-context');
-        kanoraChatContext = createKallamoKanoraChatContext(db, estimateTokens);
+let narrativeChatContext = null;
+function getNarrativeChatContext() {
+    if (!narrativeChatContext) {
+        const { createNarrativeChatContext } = require('../../dist-main/main/features/narrative/chat-context');
+        narrativeChatContext = createNarrativeChatContext(db, estimateTokens);
     }
-    return kanoraChatContext;
+    return narrativeChatContext;
 }
 
-function planKanoraContext({ chatId, query, items, tokenBudget }) {
-    return getKanoraChatContext().plan({
+function planNarrativeContext({ chatId, query, items, tokenBudget }) {
+    return getNarrativeChatContext().plan({
         requestId: crypto.randomUUID(),
         workspaceId: chatId,
         query,
@@ -2307,7 +2307,7 @@ function planKanoraContext({ chatId, query, items, tokenBudget }) {
 function shouldPlanWorkspaceContext(chatId, includeChatContext) {
     if (includeChatContext) return true;
     try {
-        const { getWorkspaceExperienceMode } = require('../../dist-main/main/features/kanora/mode-orchestration');
+        const { getWorkspaceExperienceMode } = require('../../dist-main/main/features/narrative/mode-orchestration');
         return getWorkspaceExperienceMode(db, chatId) === 'roleplay';
     } catch {
         return false;
@@ -2330,13 +2330,13 @@ function shouldProcessNarrativeIdentityUpdate(update, updatePolicy) {
 }
 
 async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, userMessage, narrativeResponse }) {
-    const { getWorkspaceExperienceMode } = require('../../dist-main/main/features/kanora/mode-orchestration');
+    const { getWorkspaceExperienceMode } = require('../../dist-main/main/features/narrative/mode-orchestration');
     if (getWorkspaceExperienceMode(db, workspaceId) !== 'roleplay') {
         return { changes: [], diagnostics: null };
     }
 
     const calendarService = require('./features/worldbuild/calendar-service');
-    const { RoleplaySystem } = require('../../dist-main/main/features/kanora/roleplay-system');
+    const { RoleplaySystem } = require('../../dist-main/main/features/narrative/roleplay-system');
     const roleplay = new RoleplaySystem(db);
     const scene = roleplay.getScene(workspaceId);
     const startClock = calendarService.getRoleplayClock(db, workspaceId);
@@ -2366,10 +2366,10 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         };
     }
 
-    const { NarrativeStateSystem } = require('../../dist-main/main/features/kanora/narrative-state');
-    const { EVENT_BUDGET_PER_TURN } = require('../../dist-main/main/features/kanora/narrative-quality');
-    const { NarrativeEntitySystem } = require('../../dist-main/main/features/kanora/narrative-entities');
-    const { NarrativeContextManifestRepository } = require('../../dist-main/main/features/kanora/context-manifest');
+    const { NarrativeStateSystem } = require('../../dist-main/main/features/narrative/narrative-state');
+    const { EVENT_BUDGET_PER_TURN } = require('../../dist-main/main/features/narrative/narrative-quality');
+    const { NarrativeEntitySystem } = require('../../dist-main/main/features/narrative/narrative-entities');
+    const { NarrativeContextManifestRepository } = require('../../dist-main/main/features/narrative/context-manifest');
     const { EventOccurrenceService } = require('../../dist-main/main/features/worldbuild/event-occurrences');
     const narrativeState = new NarrativeStateSystem(db);
     const narrativeEntities = new NarrativeEntitySystem(db);
@@ -2592,12 +2592,12 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         : null;
     const currentPerspectiveState = shouldAnalyzeEpistemicState && affectedIds.size ? db.prepare(`
         SELECT records.record_type AS type, records.subject_id AS subjectId, records.payload_json AS payload
-        FROM kanora_narrative_records records
-        JOIN kanora_narrative_events events
+        FROM narrative_records records
+        JOIN narrative_events events
           ON events.workspace_id = records.workspace_id AND events.event_id = records.source_event_id
-        LEFT JOIN kanora_narrative_event_evidence evidence
+        LEFT JOIN narrative_event_evidence evidence
           ON evidence.workspace_id = events.workspace_id AND evidence.event_id = events.event_id AND evidence.ordinal = 0
-        LEFT JOIN kanora_narrative_origin_lifecycle lifecycle
+        LEFT JOIN narrative_origin_lifecycle lifecycle
           ON lifecycle.workspace_id = events.workspace_id AND lifecycle.origin_id = evidence.origin_id
         WHERE records.workspace_id = ? AND (
           subject_id IN (${[...affectedIds].map(() => '?').join(',')})
@@ -3010,13 +3010,13 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
 }
 
 function narrativeEntitySystem() {
-    const { NarrativeEntitySystem } = require('../../dist-main/main/features/kanora/narrative-entities');
+    const { NarrativeEntitySystem } = require('../../dist-main/main/features/narrative/narrative-entities');
     return new NarrativeEntitySystem(db);
 }
 
 function isRoleplayWorkspace(workspaceId) {
     try {
-        const { getWorkspaceExperienceMode } = require('../../dist-main/main/features/kanora/mode-orchestration');
+        const { getWorkspaceExperienceMode } = require('../../dist-main/main/features/narrative/mode-orchestration');
         return getWorkspaceExperienceMode(db, workspaceId) === 'roleplay';
     } catch (error) {
         console.warn('[Narrative State] Could not read the workspace mode:', error.message);
@@ -4069,7 +4069,7 @@ function submitEntityNarrativeSuggestions({ workspaceId, entity, changes, allEnt
         .join('\n')
         .slice(0, 500);
     const allowedEntityIds = new Set(allEntities.map(candidate => candidate.id));
-    const { NarrativeStateSystem } = require('../../dist-main/main/features/kanora/narrative-state');
+    const { NarrativeStateSystem } = require('../../dist-main/main/features/narrative/narrative-state');
     const narrativeState = new NarrativeStateSystem(db);
     const records = [];
     for (const [ownerId, operations] of operationsByOwner) {
@@ -4291,7 +4291,7 @@ async function enrichEntities(workspaceId, progressCallback = null) {
     };
 
     let updated = 0, staged = 0, upToDate = 0, noEvidence = 0, failed = 0;
-    let canonicalSuggestionCount = 0, kanoraSuggestionCount = 0;
+    let canonicalSuggestionCount = 0, narrativeSuggestionCount = 0;
     let evidenceUsed = 0, taggedEvidenceRemaining = 0, textMatchesDeferred = 0;
     let emptyFieldsExamined = 0, emptyFieldSuggestions = 0;
     let emptyFieldsWithoutSupport = 0, emptyFieldsAwaitingEvidence = 0;
@@ -4828,7 +4828,7 @@ async function enrichEntities(workspaceId, progressCallback = null) {
                 .reduce((total, record) => total + (record?.proposal?.changeSet?.operations?.length || 0), 0);
             const proposalCount = canonicalProposalCount + narrativeProposalCount;
             canonicalSuggestionCount += canonicalProposalCount;
-            kanoraSuggestionCount += narrativeProposalCount;
+            narrativeSuggestionCount += narrativeProposalCount;
             const emptySuggestionCount = emptyWritableFields.filter(field => Object.hasOwn(proposedData, field)).length;
             const emptyFieldsStillOpen = Math.max(0, emptyWritableFields.length - emptySuggestionCount);
             emptyFieldsExamined += emptyWritableFields.length;
@@ -4933,7 +4933,7 @@ async function enrichEntities(workspaceId, progressCallback = null) {
     return {
         runId, entities: targets.length, processedEntities, updated, staged, upToDate, noEvidence,
         failed, failures, evidenceUsed, taggedEvidenceRemaining, textMatchesDeferred,
-        canonicalSuggestionCount, kanoraSuggestionCount, emptyFieldsExamined,
+        canonicalSuggestionCount, narrativeSuggestionCount, emptyFieldsExamined,
         emptyFieldSuggestions, emptyFieldsWithoutSupport, emptyFieldsAwaitingEvidence,
         stoppedEarly, remaining: targets.length - processedEntities, tokenUsage
     };
@@ -5197,7 +5197,7 @@ async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory 
     let awarenessOverview = '';
     if (isRoleplay) {
         try {
-            const { AgenticEpistemicTools } = require('../../dist-main/main/features/kanora/agentic-epistemic-tools');
+            const { AgenticEpistemicTools } = require('../../dist-main/main/features/narrative/agentic-epistemic-tools');
             epistemicTools = new AgenticEpistemicTools(db);
             awarenessOverview = epistemicTools.scanSceneAwareness(chatId, currentInput);
         } catch (error) {

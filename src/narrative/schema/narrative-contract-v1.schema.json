@@ -1,0 +1,366 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:kallamo:narrative-contract:v1",
+  "title": "Narrative Contract v1",
+  "description": "Draft contract under active development until the first public release.",
+  "$ref": "#/$defs/NarrativeProposal",
+  "$defs": {
+    "Id": { "type": "string", "minLength": 1 },
+    "Confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "Position": {
+      "type": "object",
+      "required": ["sequence"],
+      "properties": {
+        "sequence": { "type": "integer", "minimum": 0 },
+        "timestamp": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "Proposition": {
+      "type": "object",
+      "required": ["subjectId", "predicate", "object"],
+      "properties": {
+        "subjectId": { "$ref": "#/$defs/Id" },
+        "predicate": { "$ref": "#/$defs/Id" },
+        "object": true
+      },
+      "additionalProperties": false
+    },
+    "Evidence": {
+      "type": "object",
+      "required": ["id", "originType", "originId"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "originType": { "enum": ["chat-message", "writing-document", "world-action", "worldbuild-update", "import"] },
+        "originId": { "$ref": "#/$defs/Id" },
+        "excerpt": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "Provenance": {
+      "type": "object",
+      "required": ["interpreter", "schemaVersion", "createdAt"],
+      "properties": {
+        "interpreter": { "enum": ["user", "deterministic", "model"] },
+        "interpreterId": { "$ref": "#/$defs/Id" },
+        "promptVersion": { "$ref": "#/$defs/Id" },
+        "schemaVersion": { "const": "1.0" },
+        "createdAt": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "Fact": {
+      "type": "object",
+      "required": ["id", "proposition", "status", "evidenceIds"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "referenceId": { "$ref": "#/$defs/Id" },
+        "proposition": { "$ref": "#/$defs/Proposition" },
+        "relatedEntityIds": { "type": "array", "items": { "$ref": "#/$defs/Id" }, "uniqueItems": true },
+        "status": { "enum": ["active", "superseded", "retracted"] },
+        "evidenceIds": { "type": "array", "items": { "$ref": "#/$defs/Id" } }
+      },
+      "additionalProperties": false
+    },
+    "State": {
+      "type": "object",
+      "required": ["entityId", "property", "value", "effectiveFrom"],
+      "properties": {
+        "entityId": { "$ref": "#/$defs/Id" },
+        "property": { "$ref": "#/$defs/Id" },
+        "value": true,
+        "effectiveFrom": { "$ref": "#/$defs/Position" }
+      },
+      "additionalProperties": false
+    },
+    "Observation": {
+      "type": "object",
+      "required": ["subjectId", "eventId", "method", "confidence"],
+      "properties": {
+        "subjectId": { "$ref": "#/$defs/Id" },
+        "eventId": { "$ref": "#/$defs/Id" },
+        "method": { "enum": ["participant", "witness", "reported", "inferred"] },
+        "confidence": { "$ref": "#/$defs/Confidence" },
+        "factIds": { "type": "array", "items": { "$ref": "#/$defs/Id" }, "uniqueItems": true }
+      },
+      "additionalProperties": false
+    },
+    "Knowledge": {
+      "type": "object",
+      "required": ["id", "subjectId", "proposition", "sourceEventId", "acquisition", "confidence", "accessibility", "status"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "entryId": { "$ref": "#/$defs/Id" },
+        "subjectId": { "$ref": "#/$defs/Id" },
+        "proposition": { "$ref": "#/$defs/Proposition" },
+        "sourceEventId": { "$ref": "#/$defs/Id" },
+        "acquisition": { "enum": ["participant", "witness", "reported", "inferred"] },
+        "confidence": { "$ref": "#/$defs/Confidence" },
+        "accessibility": { "enum": ["available", "suppressed", "inaccessible"] },
+        "status": { "enum": ["active", "forgotten", "revoked", "superseded"] },
+        "factIds": { "type": "array", "items": { "$ref": "#/$defs/Id" }, "uniqueItems": true },
+        "informantIds": { "type": "array", "items": { "$ref": "#/$defs/Id" }, "uniqueItems": true }
+      },
+      "additionalProperties": false
+    },
+    "Belief": {
+      "type": "object",
+      "required": ["id", "subjectId", "proposition", "sourceEventId", "confidence", "relationToCanon", "status"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "entryId": { "$ref": "#/$defs/Id" },
+        "subjectId": { "$ref": "#/$defs/Id" },
+        "proposition": { "$ref": "#/$defs/Proposition" },
+        "sourceEventId": { "$ref": "#/$defs/Id" },
+        "confidence": { "$ref": "#/$defs/Confidence" },
+        "relationToCanon": { "enum": ["aligned", "contradicted", "uncertain", "unknown"] },
+        "status": { "enum": ["active", "superseded", "abandoned"] },
+        "factIds": { "type": "array", "items": { "$ref": "#/$defs/Id" }, "uniqueItems": true }
+      },
+      "additionalProperties": false
+    },
+    "Memory": {
+      "type": "object",
+      "required": ["id", "subjectId", "eventId", "summary", "accessibility"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "subjectId": { "$ref": "#/$defs/Id" },
+        "eventId": { "$ref": "#/$defs/Id" },
+        "summary": { "type": "string", "minLength": 1 },
+        "accessibility": { "enum": ["available", "suppressed", "inaccessible"] },
+        "status": { "enum": ["active", "superseded", "forgotten"] },
+        "supersedesMemoryId": { "$ref": "#/$defs/Id" },
+        "relatedEntityIds": { "type": "array", "items": { "$ref": "#/$defs/Id" }, "uniqueItems": true }
+      },
+      "additionalProperties": false
+    },
+    "Awareness": {
+      "type": "object",
+      "required": ["id", "subjectId", "targetId", "status", "sourceEventId"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "subjectId": { "$ref": "#/$defs/Id" },
+        "targetId": { "$ref": "#/$defs/Id" },
+        "status": { "enum": ["active", "forgotten", "revoked", "superseded"] },
+        "sourceEventId": { "$ref": "#/$defs/Id" }
+      },
+      "additionalProperties": false
+    },
+    "Relationship": {
+      "type": "object",
+      "required": ["id", "sourceEntityId", "targetEntityId", "dimension", "value", "sourceEventId"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "sourceEntityId": { "$ref": "#/$defs/Id" },
+        "targetEntityId": { "$ref": "#/$defs/Id" },
+        "dimension": { "$ref": "#/$defs/Id" },
+        "title": { "type": "string" },
+        "value": { "type": "number", "minimum": -100, "maximum": 100 },
+        "description": { "type": "string" },
+        "sourceEventId": { "$ref": "#/$defs/Id" }
+      },
+      "additionalProperties": false
+    },
+    "Perspective": {
+      "type": "object",
+      "required": ["access"],
+      "properties": {
+        "focalSubjectId": { "$ref": "#/$defs/Id" },
+        "access": { "enum": ["subjective", "omniscient", "explicit"] },
+        "allowedSubjectIds": { "type": "array", "items": { "$ref": "#/$defs/Id" } }
+      },
+      "allOf": [
+        { "if": { "properties": { "access": { "const": "subjective" } } }, "then": { "required": ["focalSubjectId"] } },
+        { "if": { "properties": { "access": { "const": "explicit" } } }, "then": { "required": ["allowedSubjectIds"] } }
+      ],
+      "additionalProperties": false
+    },
+    "Scene": {
+      "type": "object",
+      "required": ["id", "projectId", "status", "participantIds", "possibleObserverIds", "perspective", "position"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "projectId": { "$ref": "#/$defs/Id" },
+        "status": { "enum": ["active", "completed"] },
+        "locationId": { "$ref": "#/$defs/Id" },
+        "participantIds": { "type": "array", "items": { "$ref": "#/$defs/Id" } },
+        "possibleObserverIds": { "type": "array", "items": { "$ref": "#/$defs/Id" } },
+        "perspective": { "$ref": "#/$defs/Perspective" },
+        "position": { "$ref": "#/$defs/Position" },
+        "origin": {
+          "type": "object",
+          "required": ["originType", "originId"],
+          "properties": {
+            "originType": { "enum": ["chat-message", "writing-document", "world-action", "worldbuild-update", "import"] },
+            "originId": { "$ref": "#/$defs/Id" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "Participant": {
+      "type": "object",
+      "required": ["entityId", "role"],
+      "properties": {
+        "entityId": { "$ref": "#/$defs/Id" },
+        "role": { "$ref": "#/$defs/Id" }
+      },
+      "additionalProperties": false
+    },
+    "Event": {
+      "type": "object",
+      "required": ["id", "type", "description", "participants", "position", "evidenceIds"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "type": { "enum": ["movement", "possession-transfer", "revelation", "deception", "discovery", "relationship-change", "custom"] },
+        "description": { "type": "string", "minLength": 1 },
+        "sceneId": { "$ref": "#/$defs/Id" },
+        "locationId": { "$ref": "#/$defs/Id" },
+        "participants": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/Participant" } },
+        "position": { "$ref": "#/$defs/Position" },
+        "evidenceIds": { "type": "array", "items": { "$ref": "#/$defs/Id" } }
+      },
+      "additionalProperties": false
+    },
+    "Operation": {
+      "oneOf": [
+        { "$ref": "#/$defs/AssertFactOperation" },
+        { "$ref": "#/$defs/SetStateOperation" },
+        { "$ref": "#/$defs/RecordObservationOperation" },
+        { "$ref": "#/$defs/GrantAwarenessOperation" },
+        { "$ref": "#/$defs/GrantKnowledgeOperation" },
+        { "$ref": "#/$defs/SetBeliefOperation" },
+        { "$ref": "#/$defs/RecordMemoryOperation" },
+        { "$ref": "#/$defs/SetRelationshipOperation" }
+      ]
+    },
+    "AssertFactOperation": {
+      "type": "object",
+      "required": ["id", "type", "evidenceIds", "fact"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "type": { "const": "assert-fact" },
+        "evidenceIds": { "type": "array", "items": { "$ref": "#/$defs/Id" } },
+        "fact": { "$ref": "#/$defs/Fact" }
+      },
+      "additionalProperties": false
+    },
+    "SetStateOperation": {
+      "type": "object",
+      "required": ["id", "type", "evidenceIds", "state"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "type": { "const": "set-state" },
+        "evidenceIds": { "type": "array", "items": { "$ref": "#/$defs/Id" } },
+        "state": { "$ref": "#/$defs/State" }
+      },
+      "additionalProperties": false
+    },
+    "RecordObservationOperation": {
+      "type": "object",
+      "required": ["id", "type", "evidenceIds", "observation"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "type": { "const": "record-observation" },
+        "evidenceIds": { "type": "array", "items": { "$ref": "#/$defs/Id" } },
+        "observation": { "$ref": "#/$defs/Observation" }
+      },
+      "additionalProperties": false
+    },
+    "GrantKnowledgeOperation": {
+      "type": "object",
+      "required": ["id", "type", "evidenceIds", "knowledge"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "type": { "const": "grant-knowledge" },
+        "evidenceIds": { "type": "array", "items": { "$ref": "#/$defs/Id" } },
+        "knowledge": { "$ref": "#/$defs/Knowledge" }
+      },
+      "additionalProperties": false
+    },
+    "GrantAwarenessOperation": {
+      "type": "object",
+      "required": ["id", "type", "evidenceIds", "awareness"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "type": { "const": "grant-awareness" },
+        "evidenceIds": { "type": "array", "items": { "$ref": "#/$defs/Id" } },
+        "awareness": { "$ref": "#/$defs/Awareness" }
+      },
+      "additionalProperties": false
+    },
+    "SetBeliefOperation": {
+      "type": "object",
+      "required": ["id", "type", "evidenceIds", "belief"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "type": { "const": "set-belief" },
+        "evidenceIds": { "type": "array", "items": { "$ref": "#/$defs/Id" } },
+        "belief": { "$ref": "#/$defs/Belief" }
+      },
+      "additionalProperties": false
+    },
+    "RecordMemoryOperation": {
+      "type": "object",
+      "required": ["id", "type", "evidenceIds", "memory"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "type": { "const": "record-memory" },
+        "evidenceIds": { "type": "array", "items": { "$ref": "#/$defs/Id" } },
+        "memory": { "$ref": "#/$defs/Memory" }
+      },
+      "additionalProperties": false
+    },
+    "SetRelationshipOperation": {
+      "type": "object",
+      "required": ["id", "type", "evidenceIds", "relationship"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "type": { "const": "set-relationship" },
+        "evidenceIds": { "type": "array", "items": { "$ref": "#/$defs/Id" } },
+        "relationship": { "$ref": "#/$defs/Relationship" }
+      },
+      "additionalProperties": false
+    },
+    "ChangeSet": {
+      "type": "object",
+      "required": ["id", "event", "operations"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "event": { "$ref": "#/$defs/Event" },
+        "operations": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/Operation" } }
+      },
+      "additionalProperties": false
+    },
+    "NarrativeProposal": {
+      "type": "object",
+      "required": ["contractVersion", "id", "projectId", "status", "changeSet", "evidence", "provenance"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "id": { "$ref": "#/$defs/Id" },
+        "projectId": { "$ref": "#/$defs/Id" },
+        "status": { "const": "proposed" },
+        "changeSet": { "$ref": "#/$defs/ChangeSet" },
+        "evidence": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/Evidence" } },
+        "provenance": { "$ref": "#/$defs/Provenance" }
+      },
+      "additionalProperties": false
+    },
+    "Projection": {
+      "type": "object",
+      "required": ["projectId", "through", "facts", "states", "awareness", "knowledge", "beliefs", "relationships"],
+      "properties": {
+        "projectId": { "$ref": "#/$defs/Id" },
+        "through": { "$ref": "#/$defs/Position" },
+        "facts": { "type": "array", "items": { "$ref": "#/$defs/Fact" } },
+        "states": { "type": "array", "items": { "$ref": "#/$defs/State" } },
+        "awareness": { "type": "array", "items": { "$ref": "#/$defs/Awareness" } },
+        "knowledge": { "type": "array", "items": { "$ref": "#/$defs/Knowledge" } },
+        "beliefs": { "type": "array", "items": { "$ref": "#/$defs/Belief" } },
+        "relationships": { "type": "array", "items": { "$ref": "#/$defs/Relationship" } }
+      },
+      "additionalProperties": false
+    }
+  }
+}

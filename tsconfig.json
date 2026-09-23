@@ -16,7 +16,7 @@
     "types": ["vite/client", "node"]
   },
   "include": [
-    "src/kanora/**/*.ts",
+    "src/narrative/**/*.ts",
     "src/renderer/**/*.ts",
     "src/renderer/**/*.tsx",
     "src/shared/**/*.ts",

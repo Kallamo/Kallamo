@@ -3,7 +3,7 @@ const { createWorldbuildKnowledgeService } = require('./knowledge-service');
 const {
   normalizeKnowledgeCategory,
   normalizeMemoryCategory,
-} = require('../../../../dist-main/kanora/narrative-taxonomy');
+} = require('../../../../dist-main/narrative/narrative-taxonomy');
 
 const FIELD_TYPES = new Set([
   'short-text', 'long-text', 'number', 'range', 'boolean',
@@ -16,7 +16,7 @@ const ACQUISITION = new Set(['participant', 'witness', 'reported', 'inferred']);
 function createWorldbuildDataService(db) {
   const knowledgeCards = createWorldbuildKnowledgeService(db);
   const insertEvent = db.prepare(`
-    INSERT INTO kanora_narrative_events (
+    INSERT INTO narrative_events (
       workspace_id, event_id, proposal_id, change_set_id, contract_version,
       event_type, description, narrative_sequence, status, version,
       operations_json, provenance_interpreter, provenance_schema_version,
@@ -24,17 +24,17 @@ function createWorldbuildDataService(db) {
     ) VALUES (?, ?, ?, ?, '1.0', 'custom', ?, ?, 'approved', 1, ?, 'user', '1.0', ?, ?)
   `);
   const insertParticipant = db.prepare(`
-    INSERT INTO kanora_narrative_event_participants
+    INSERT INTO narrative_event_participants
       (workspace_id, event_id, ordinal, entity_id, role)
     VALUES (?, ?, 0, ?, 'subject')
   `);
   const insertEvidence = db.prepare(`
-    INSERT INTO kanora_narrative_event_evidence
+    INSERT INTO narrative_event_evidence
       (workspace_id, event_id, evidence_id, ordinal, origin_type, origin_id, excerpt)
     VALUES (?, ?, ?, 0, 'world-action', ?, ?)
   `);
   const insertRecord = db.prepare(`
-    INSERT INTO kanora_narrative_records (
+    INSERT INTO narrative_records (
       workspace_id, record_type, record_id, subject_id, source_event_id,
       operation_id, payload_json, applied_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -164,18 +164,18 @@ function createWorldbuildDataService(db) {
         records.payload_json, records.source_event_id, records.applied_at,
         events.narrative_sequence, events.narrative_timestamp, events.provenance_interpreter,
         occurrences.occurrence_id, occurrences.event_entity_id, occurrences.title AS occurrence_title
-      FROM kanora_narrative_records AS records
-      JOIN kanora_narrative_events AS events
+      FROM narrative_records AS records
+      JOIN narrative_events AS events
         ON events.workspace_id = records.workspace_id
         AND events.event_id = records.source_event_id
       LEFT JOIN worldbuild_event_occurrences AS occurrences
         ON occurrences.workspace_id = records.workspace_id
         AND occurrences.narrative_event_id = records.source_event_id
-      LEFT JOIN kanora_narrative_event_evidence AS evidence
+      LEFT JOIN narrative_event_evidence AS evidence
         ON evidence.workspace_id = events.workspace_id
         AND evidence.event_id = events.event_id
         AND evidence.ordinal = 0
-      LEFT JOIN kanora_narrative_origin_lifecycle AS lifecycle
+      LEFT JOIN narrative_origin_lifecycle AS lifecycle
         ON lifecycle.workspace_id = events.workspace_id
         AND lifecycle.origin_id = evidence.origin_id
       WHERE records.workspace_id = ?
@@ -205,12 +205,12 @@ function createWorldbuildDataService(db) {
     const proposals = db.prepare(`
       SELECT DISTINCT events.event_id, events.description, events.operations_json,
         events.provenance_created_at, events.provenance_prompt_version, evidence.excerpt
-      FROM kanora_narrative_events events
-      JOIN kanora_narrative_event_participants participants
+      FROM narrative_events events
+      JOIN narrative_event_participants participants
         ON participants.workspace_id = events.workspace_id AND participants.event_id = events.event_id
-      LEFT JOIN kanora_narrative_event_evidence evidence
+      LEFT JOIN narrative_event_evidence evidence
         ON evidence.workspace_id = events.workspace_id AND evidence.event_id = events.event_id AND evidence.ordinal = 0
-      LEFT JOIN kanora_narrative_origin_lifecycle lifecycle
+      LEFT JOIN narrative_origin_lifecycle lifecycle
         ON lifecycle.workspace_id = evidence.workspace_id AND lifecycle.origin_id = evidence.origin_id
       WHERE events.workspace_id = ? AND events.status = 'proposed'
         AND participants.entity_id = ?
@@ -247,25 +247,25 @@ function createWorldbuildDataService(db) {
           + (Array.isArray(pending.links) ? pending.links.length : 0)
           + (Array.isArray(pending.chapters) ? pending.chapters.length : 0)
         : 0;
-      counts.set(entity.id, { entityUpdates, kanora: 0 });
+      counts.set(entity.id, { entityUpdates, narrative: 0 });
     }
     const events = db.prepare(`
       SELECT events.operations_json, participants.entity_id AS owner_id
-      FROM kanora_narrative_events events
-      JOIN kanora_narrative_event_participants participants
+      FROM narrative_events events
+      JOIN narrative_event_participants participants
         ON participants.workspace_id = events.workspace_id
         AND participants.event_id = events.event_id
         AND participants.ordinal = 0
-      LEFT JOIN kanora_narrative_event_evidence evidence
+      LEFT JOIN narrative_event_evidence evidence
         ON evidence.workspace_id = events.workspace_id AND evidence.event_id = events.event_id AND evidence.ordinal = 0
-      LEFT JOIN kanora_narrative_origin_lifecycle lifecycle
+      LEFT JOIN narrative_origin_lifecycle lifecycle
         ON lifecycle.workspace_id = evidence.workspace_id AND lifecycle.origin_id = evidence.origin_id
       WHERE events.workspace_id = ? AND events.status = 'proposed'
         AND (lifecycle.status IS NULL OR lifecycle.status = 'active')
     `).all(workspaceId);
     for (const event of events) {
-      const current = counts.get(event.owner_id) || { entityUpdates: 0, kanora: 0 };
-      current.kanora += JSON.parse(event.operations_json)
+      const current = counts.get(event.owner_id) || { entityUpdates: 0, narrative: 0 };
+      current.narrative += JSON.parse(event.operations_json)
         .filter(operation => operation.type !== 'record-observation').length;
       counts.set(event.owner_id, current);
     }
@@ -275,18 +275,18 @@ function createWorldbuildDataService(db) {
   function getSubjectRecord(workspaceId, subjectId, kind, recordId) {
     const row = db.prepare(`
       SELECT records.record_id, records.payload_json, occurrences.occurrence_id
-      FROM kanora_narrative_records AS records
-      JOIN kanora_narrative_events AS events
+      FROM narrative_records AS records
+      JOIN narrative_events AS events
         ON events.workspace_id = records.workspace_id
         AND events.event_id = records.source_event_id
       LEFT JOIN worldbuild_event_occurrences AS occurrences
         ON occurrences.workspace_id = records.workspace_id
         AND occurrences.narrative_event_id = records.source_event_id
-      LEFT JOIN kanora_narrative_event_evidence AS evidence
+      LEFT JOIN narrative_event_evidence AS evidence
         ON evidence.workspace_id = events.workspace_id
         AND evidence.event_id = events.event_id
         AND evidence.ordinal = 0
-      LEFT JOIN kanora_narrative_origin_lifecycle AS lifecycle
+      LEFT JOIN narrative_origin_lifecycle AS lifecycle
         ON lifecycle.workspace_id = events.workspace_id
         AND lifecycle.origin_id = evidence.origin_id
       WHERE records.workspace_id = ? AND records.subject_id = ?
@@ -366,15 +366,15 @@ function createWorldbuildDataService(db) {
       SELECT records.record_id, records.payload_json, records.source_event_id,
         records.applied_at, events.narrative_sequence, events.narrative_timestamp,
         events.provenance_interpreter
-      FROM kanora_narrative_records records
-      JOIN kanora_narrative_events events
+      FROM narrative_records records
+      JOIN narrative_events events
         ON events.workspace_id = records.workspace_id
         AND events.event_id = records.source_event_id
-      LEFT JOIN kanora_narrative_event_evidence evidence
+      LEFT JOIN narrative_event_evidence evidence
         ON evidence.workspace_id = events.workspace_id
         AND evidence.event_id = events.event_id
         AND evidence.ordinal = 0
-      LEFT JOIN kanora_narrative_origin_lifecycle lifecycle
+      LEFT JOIN narrative_origin_lifecycle lifecycle
         ON lifecycle.workspace_id = events.workspace_id
         AND lifecycle.origin_id = evidence.origin_id
       WHERE records.workspace_id = ? AND records.record_type = 'fact'
@@ -418,15 +418,15 @@ function createWorldbuildDataService(db) {
   function getWorldFactRecord(workspaceId, factId) {
     const rows = db.prepare(`
       SELECT records.record_id, records.payload_json
-      FROM kanora_narrative_records AS records
-      JOIN kanora_narrative_events AS events
+      FROM narrative_records AS records
+      JOIN narrative_events AS events
         ON events.workspace_id = records.workspace_id
         AND events.event_id = records.source_event_id
-      LEFT JOIN kanora_narrative_event_evidence AS evidence
+      LEFT JOIN narrative_event_evidence AS evidence
         ON evidence.workspace_id = events.workspace_id
         AND evidence.event_id = events.event_id
         AND evidence.ordinal = 0
-      LEFT JOIN kanora_narrative_origin_lifecycle AS lifecycle
+      LEFT JOIN narrative_origin_lifecycle AS lifecycle
         ON lifecycle.workspace_id = events.workspace_id
         AND lifecycle.origin_id = evidence.origin_id
       WHERE records.workspace_id = ? AND records.record_type = 'fact'
@@ -538,7 +538,7 @@ function createWorldbuildDataService(db) {
   function nextNarrativeSequence(workspaceId) {
     const row = db.prepare(`
       SELECT COALESCE(MAX(narrative_sequence), 0) + 1 AS sequence
-      FROM kanora_narrative_events WHERE workspace_id = ?
+      FROM narrative_events WHERE workspace_id = ?
     `).get(workspaceId);
     return row.sequence;
   }

@@ -1,5 +1,5 @@
 const { estimateTokens, PAYLOAD_BUDGET_CONTRACT } = require('../llm/payload-budget');
-const { stripLeadingStoryEvidenceMarkers } = require('../kanora/roleplay-history');
+const { stripLeadingStoryEvidenceMarkers } = require('../narrative/roleplay-history');
 const { stripReasoning } = require('./message-text');
 const { PROMPT_CACHE_CONTRACT, readHistoryAnchor, writeHistoryAnchor } = require('../llm/prompt-cache');
 

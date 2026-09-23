@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Braces, Check, Pencil } from 'lucide-react';
-import type { EntityFieldDefinition, EntityFieldType } from '../../../kanora/contracts';
+import type { EntityFieldDefinition, EntityFieldType } from '../../../narrative/contracts';
 import Button from '../../components/ui/Button';
 import SearchableSelect from '../../components/ui/SearchableSelect';
 import type { Toast, WorldbuildApi, WorldbuildEntity, WorldbuildEntityTemplate } from './worldbuildTypes';

@@ -465,11 +465,11 @@ function createWorldbuildKnowledgeService(db) {
   }
 
   function persistTemporalAwareness({ workspaceId, ownerId, targetId, sourceType, sourceId, status }) {
-    if (!hasTable(db, 'kanora_awareness_records') || !hasTable(db, 'kanora_narrative_events')) return;
+    if (!hasTable(db, 'narrative_awareness_records') || !hasTable(db, 'narrative_events')) return;
     if (status === 'active') {
       const current = db.prepare(`
         SELECT payload_json
-        FROM kanora_awareness_records
+        FROM narrative_awareness_records
         WHERE workspace_id = ? AND subject_id = ? AND target_id = ?
         ORDER BY rowid DESC LIMIT 1
       `).get(workspaceId, ownerId, targetId);
@@ -480,7 +480,7 @@ function createWorldbuildKnowledgeService(db) {
       .digest('hex').slice(0, 24);
     const eventId = `awareness_event_${signature}`;
     if (db.prepare(`
-      SELECT 1 FROM kanora_narrative_events WHERE workspace_id = ? AND event_id = ?
+      SELECT 1 FROM narrative_events WHERE workspace_id = ? AND event_id = ?
     `).get(workspaceId, eventId)) return;
     const awarenessId = `awareness_${signature}`;
     const operationId = `awareness_operation_${signature}`;
@@ -488,12 +488,12 @@ function createWorldbuildKnowledgeService(db) {
     const createdAt = new Date().toISOString();
     const sequence = db.prepare(`
       SELECT COALESCE(MAX(narrative_sequence), 0) + 1 AS value
-      FROM kanora_narrative_events WHERE workspace_id = ?
+      FROM narrative_events WHERE workspace_id = ?
     `).get(workspaceId).value;
     const awareness = { id: awarenessId, subjectId: ownerId, targetId, status, sourceEventId: eventId };
     const operation = { id: operationId, type: 'grant-awareness', evidenceIds: [evidenceId], awareness };
     db.prepare(`
-      INSERT INTO kanora_narrative_events (
+      INSERT INTO narrative_events (
         workspace_id, event_id, proposal_id, change_set_id, contract_version,
         event_type, description, narrative_sequence, status, version,
         operations_json, provenance_interpreter, provenance_schema_version,
@@ -505,12 +505,12 @@ function createWorldbuildKnowledgeService(db) {
       sequence, JSON.stringify([operation]), createdAt, createdAt,
     );
     db.prepare(`
-      INSERT INTO kanora_narrative_event_participants
+      INSERT INTO narrative_event_participants
         (workspace_id, event_id, ordinal, entity_id, role)
       VALUES (?, ?, 0, ?, 'subject')
     `).run(workspaceId, eventId, ownerId);
     db.prepare(`
-      INSERT INTO kanora_narrative_event_evidence
+      INSERT INTO narrative_event_evidence
         (workspace_id, event_id, evidence_id, ordinal, origin_type, origin_id, excerpt)
       VALUES (?, ?, ?, 0, ?, ?, ?)
     `).run(
@@ -520,7 +520,7 @@ function createWorldbuildKnowledgeService(db) {
       `${sourceType} awareness for ${targetId}`,
     );
     db.prepare(`
-      INSERT INTO kanora_awareness_records (
+      INSERT INTO narrative_awareness_records (
         workspace_id, awareness_id, subject_id, target_id, status,
         source_event_id, operation_id, payload_json, applied_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)

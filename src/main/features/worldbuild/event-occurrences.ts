@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import type { NarrativeOperation } from '../../../kanora/contracts';
-import type { NarrativeEventLedgerRecord } from '../../../kanora/ledger';
-import { isValidNarrativeOperation, NarrativeStateSystem, type ExtractedNarrativeEvent } from '../kanora/narrative-state';
-import { RoleplaySystem, type RoleplayInventoryPatch } from '../kanora/roleplay-system';
+import type { NarrativeOperation } from '../../../narrative/contracts';
+import type { NarrativeEventLedgerRecord } from '../../../narrative/ledger';
+import { isValidNarrativeOperation, NarrativeStateSystem, type ExtractedNarrativeEvent } from '../narrative/narrative-state';
+import { RoleplaySystem, type RoleplayInventoryPatch } from '../narrative/roleplay-system';
 
 interface EventOccurrenceCalendarService {
   getCalendar(db: Database.Database, workspaceId: string): Record<string, any>;
@@ -114,7 +114,7 @@ export class EventOccurrenceService {
     const rows = this.db.prepare(`
       SELECT occurrences.*, events.status
       FROM worldbuild_event_occurrences occurrences
-      JOIN kanora_narrative_events events
+      JOIN narrative_events events
         ON events.workspace_id = occurrences.workspace_id
         AND events.event_id = occurrences.narrative_event_id
       WHERE occurrences.workspace_id = ? AND occurrences.event_entity_id = ?
@@ -243,7 +243,7 @@ export class EventOccurrenceService {
 
     return this.db.transaction(() => {
       const eventRow = this.db.prepare(`
-        SELECT operations_json FROM kanora_narrative_events
+        SELECT operations_json FROM narrative_events
         WHERE workspace_id = ? AND event_id = ?
       `).get(workspaceId, occurrence.narrativeEventId) as { operations_json: string } | undefined;
       if (!eventRow) throw new Error('The linked narrative event was not found.');
@@ -311,22 +311,22 @@ export class EventOccurrenceService {
       }
 
       const updatedEvent = this.db.prepare(`
-        UPDATE kanora_narrative_events
+        UPDATE narrative_events
         SET description = ?, location_id = ?, operations_json = ?, version = version + 1
         WHERE workspace_id = ? AND event_id = ?
       `).run(`${title}: ${summary}`, locationIds[0] ?? null, JSON.stringify(nextOperations), workspaceId, occurrence.narrativeEventId);
       if (updatedEvent.changes !== 1) throw new Error('The linked narrative event was not found.');
       const updatedEvidence = this.db.prepare(`
-        UPDATE kanora_narrative_event_evidence SET excerpt = ?
+        UPDATE narrative_event_evidence SET excerpt = ?
         WHERE workspace_id = ? AND event_id = ? AND ordinal = 0 AND origin_id = ?
       `).run(summary.slice(0, 500), workspaceId, occurrence.narrativeEventId, occurrence.originId);
       if (updatedEvidence.changes !== 1) throw new Error('The occurrence provenance could not be updated safely.');
       this.db.prepare(`
-        DELETE FROM kanora_narrative_event_participants
+        DELETE FROM narrative_event_participants
         WHERE workspace_id = ? AND event_id = ?
       `).run(workspaceId, occurrence.narrativeEventId);
       const insertParticipant = this.db.prepare(`
-        INSERT INTO kanora_narrative_event_participants
+        INSERT INTO narrative_event_participants
           (workspace_id, event_id, ordinal, entity_id, role)
         VALUES (?, ?, ?, ?, ?)
       `);
@@ -342,7 +342,7 @@ export class EventOccurrenceService {
       for (const operation of existingMemoryOperations) {
         if (!nextMemoryOperationIds.has(operation.id)) {
           this.db.prepare(`
-            DELETE FROM kanora_narrative_records
+            DELETE FROM narrative_records
             WHERE workspace_id = ? AND source_event_id = ? AND operation_id = ? AND record_type = 'memory'
           `).run(workspaceId, occurrence.narrativeEventId, operation.id);
         }
@@ -383,7 +383,7 @@ export class EventOccurrenceService {
       `).run(updatedAt, workspaceId, occurrenceId);
       if (archived.changes !== 1) throw new Error('The event occurrence was not found.');
       this.db.prepare(`
-        INSERT INTO kanora_narrative_origin_lifecycle
+        INSERT INTO narrative_origin_lifecycle
           (workspace_id, origin_id, status, replacement_origin_id, updated_at)
         VALUES (?, ?, 'deleted', NULL, ?)
         ON CONFLICT(workspace_id, origin_id) DO UPDATE SET
@@ -516,7 +516,7 @@ export class EventOccurrenceService {
       ? { type: 'fact', id: operation.fact.id, subjectId: null, payload: operation.fact }
       : { type: 'memory', id: operation.memory.id, subjectId: operation.memory.subjectId, payload: operation.memory };
     this.db.prepare(`
-      INSERT INTO kanora_narrative_records (
+      INSERT INTO narrative_records (
         workspace_id, record_type, record_id, subject_id, source_event_id,
         operation_id, payload_json, applied_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -537,10 +537,10 @@ export class EventOccurrenceService {
         events.provenance_interpreter, events.provenance_interpreter_id,
         evidence.origin_id AS evidence_origin_id
       FROM worldbuild_event_occurrences occurrences
-      JOIN kanora_narrative_events events
+      JOIN narrative_events events
         ON events.workspace_id = occurrences.workspace_id
         AND events.event_id = occurrences.narrative_event_id
-      LEFT JOIN kanora_narrative_event_evidence evidence
+      LEFT JOIN narrative_event_evidence evidence
         ON evidence.workspace_id = events.workspace_id
         AND evidence.event_id = events.event_id
         AND evidence.ordinal = 0
@@ -566,7 +566,7 @@ export class EventOccurrenceService {
     const row = this.db.prepare(`
       SELECT occurrences.*, events.status
       FROM worldbuild_event_occurrences occurrences
-      JOIN kanora_narrative_events events
+      JOIN narrative_events events
         ON events.workspace_id = occurrences.workspace_id
         AND events.event_id = occurrences.narrative_event_id
       WHERE occurrences.workspace_id = ? AND occurrences.occurrence_id = ?
@@ -579,7 +579,7 @@ export class EventOccurrenceService {
     const row = this.db.prepare(`
       SELECT occurrences.*, events.status
       FROM worldbuild_event_occurrences occurrences
-      JOIN kanora_narrative_events events
+      JOIN narrative_events events
         ON events.workspace_id = occurrences.workspace_id
         AND events.event_id = occurrences.narrative_event_id
       WHERE occurrences.workspace_id = ? AND occurrences.narrative_event_id = ?
@@ -732,7 +732,7 @@ export function canSubjectAccessOccurrence(
   subjectId: string
 ): boolean {
   const rows = db.prepare(`
-    SELECT subject_id, payload_json FROM kanora_narrative_records
+    SELECT subject_id, payload_json FROM narrative_records
     WHERE workspace_id = ? AND source_event_id = ? AND record_type = 'memory'
   `).all(workspaceId, narrativeEventId) as Array<{ subject_id: string; payload_json: string }>;
   return rows.some(row => {

@@ -92,9 +92,9 @@ function ensureEntityUpdateEvidenceTriggers(db) {
 
 const MIGRATIONS = [
   {
-    id: 'kanora_narrative_event_ledger_v1',
+    id: 'narrative_event_ledger_v1',
     up: (db) => db.exec(`
-      CREATE TABLE IF NOT EXISTS kanora_narrative_events (
+      CREATE TABLE IF NOT EXISTS narrative_events (
         workspace_id TEXT NOT NULL,
         event_id TEXT NOT NULL,
         proposal_id TEXT NOT NULL,
@@ -119,7 +119,7 @@ const MIGRATIONS = [
         UNIQUE (workspace_id, proposal_id)
       );
 
-      CREATE TABLE IF NOT EXISTS kanora_narrative_event_participants (
+      CREATE TABLE IF NOT EXISTS narrative_event_participants (
         workspace_id TEXT NOT NULL,
         event_id TEXT NOT NULL,
         ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
@@ -127,11 +127,11 @@ const MIGRATIONS = [
         role TEXT NOT NULL,
         PRIMARY KEY (workspace_id, event_id, ordinal),
         FOREIGN KEY (workspace_id, event_id)
-          REFERENCES kanora_narrative_events (workspace_id, event_id)
+          REFERENCES narrative_events (workspace_id, event_id)
           ON DELETE CASCADE
       );
 
-      CREATE TABLE IF NOT EXISTS kanora_narrative_event_evidence (
+      CREATE TABLE IF NOT EXISTS narrative_event_evidence (
         workspace_id TEXT NOT NULL,
         event_id TEXT NOT NULL,
         evidence_id TEXT NOT NULL,
@@ -142,21 +142,21 @@ const MIGRATIONS = [
         PRIMARY KEY (workspace_id, event_id, evidence_id),
         UNIQUE (workspace_id, event_id, ordinal),
         FOREIGN KEY (workspace_id, event_id)
-          REFERENCES kanora_narrative_events (workspace_id, event_id)
+          REFERENCES narrative_events (workspace_id, event_id)
           ON DELETE CASCADE
       );
 
-      CREATE INDEX IF NOT EXISTS idx_kanora_events_workspace_order
-        ON kanora_narrative_events (workspace_id, narrative_sequence, event_id);
+      CREATE INDEX IF NOT EXISTS idx_narrative_events_workspace_order
+        ON narrative_events (workspace_id, narrative_sequence, event_id);
 
-      CREATE INDEX IF NOT EXISTS idx_kanora_evidence_origin
-        ON kanora_narrative_event_evidence (workspace_id, origin_type, origin_id);
+      CREATE INDEX IF NOT EXISTS idx_narrative_evidence_origin
+        ON narrative_event_evidence (workspace_id, origin_type, origin_id);
     `)
   },
   {
-    id: 'kanora_transactional_change_sets_v1',
+    id: 'narrative_transactional_change_sets_v1',
     up: (db) => db.exec(`
-      CREATE TABLE IF NOT EXISTS kanora_narrative_records (
+      CREATE TABLE IF NOT EXISTS narrative_records (
         workspace_id TEXT NOT NULL,
         record_type TEXT NOT NULL CHECK (record_type IN (
           'fact', 'state', 'observation', 'knowledge', 'belief', 'memory', 'relationship'
@@ -170,11 +170,11 @@ const MIGRATIONS = [
         PRIMARY KEY (workspace_id, record_type, record_id),
         UNIQUE (workspace_id, operation_id),
         FOREIGN KEY (workspace_id, source_event_id)
-          REFERENCES kanora_narrative_events (workspace_id, event_id)
+          REFERENCES narrative_events (workspace_id, event_id)
           ON DELETE CASCADE
       );
 
-      CREATE TABLE IF NOT EXISTS kanora_change_set_attempts (
+      CREATE TABLE IF NOT EXISTS narrative_change_set_attempts (
         workspace_id TEXT NOT NULL,
         attempt_id TEXT NOT NULL,
         event_id TEXT NOT NULL,
@@ -187,21 +187,21 @@ const MIGRATIONS = [
         attempted_at TEXT NOT NULL,
         PRIMARY KEY (workspace_id, attempt_id),
         FOREIGN KEY (workspace_id, event_id)
-          REFERENCES kanora_narrative_events (workspace_id, event_id)
+          REFERENCES narrative_events (workspace_id, event_id)
           ON DELETE CASCADE
       );
 
-      CREATE INDEX IF NOT EXISTS idx_kanora_records_workspace_event
-        ON kanora_narrative_records (workspace_id, source_event_id);
+      CREATE INDEX IF NOT EXISTS idx_narrative_records_workspace_event
+        ON narrative_records (workspace_id, source_event_id);
 
-      CREATE INDEX IF NOT EXISTS idx_kanora_attempts_workspace_event
-        ON kanora_change_set_attempts (workspace_id, event_id, attempted_at, attempt_id);
+      CREATE INDEX IF NOT EXISTS idx_narrative_attempts_workspace_event
+        ON narrative_change_set_attempts (workspace_id, event_id, attempted_at, attempt_id);
     `)
   },
   {
-    id: 'kanora_scenes_and_individual_knowledge_v1',
+    id: 'narrative_scenes_and_individual_knowledge_v1',
     up: (db) => db.exec(`
-      CREATE TABLE IF NOT EXISTS kanora_scenes (
+      CREATE TABLE IF NOT EXISTS narrative_scenes (
         workspace_id TEXT NOT NULL,
         scene_id TEXT NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('active', 'completed')),
@@ -216,7 +216,7 @@ const MIGRATIONS = [
         PRIMARY KEY (workspace_id, scene_id)
       );
 
-      CREATE TABLE IF NOT EXISTS kanora_scene_participants (
+      CREATE TABLE IF NOT EXISTS narrative_scene_participants (
         workspace_id TEXT NOT NULL,
         scene_id TEXT NOT NULL,
         ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
@@ -224,11 +224,11 @@ const MIGRATIONS = [
         PRIMARY KEY (workspace_id, scene_id, ordinal),
         UNIQUE (workspace_id, scene_id, entity_id),
         FOREIGN KEY (workspace_id, scene_id)
-          REFERENCES kanora_scenes (workspace_id, scene_id)
+          REFERENCES narrative_scenes (workspace_id, scene_id)
           ON DELETE CASCADE
       );
 
-      CREATE TABLE IF NOT EXISTS kanora_scene_possible_observers (
+      CREATE TABLE IF NOT EXISTS narrative_scene_possible_observers (
         workspace_id TEXT NOT NULL,
         scene_id TEXT NOT NULL,
         ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
@@ -236,36 +236,36 @@ const MIGRATIONS = [
         PRIMARY KEY (workspace_id, scene_id, ordinal),
         UNIQUE (workspace_id, scene_id, entity_id),
         FOREIGN KEY (workspace_id, scene_id)
-          REFERENCES kanora_scenes (workspace_id, scene_id)
+          REFERENCES narrative_scenes (workspace_id, scene_id)
           ON DELETE CASCADE
       );
 
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_kanora_one_active_scene
-        ON kanora_scenes (workspace_id) WHERE status = 'active';
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_narrative_one_active_scene
+        ON narrative_scenes (workspace_id) WHERE status = 'active';
 
-      CREATE INDEX IF NOT EXISTS idx_kanora_scenes_workspace_order
-        ON kanora_scenes (workspace_id, narrative_sequence, scene_id);
+      CREATE INDEX IF NOT EXISTS idx_narrative_scenes_workspace_order
+        ON narrative_scenes (workspace_id, narrative_sequence, scene_id);
 
-      CREATE INDEX IF NOT EXISTS idx_kanora_knowledge_subject
-        ON kanora_narrative_records (workspace_id, subject_id, applied_at, record_id)
+      CREATE INDEX IF NOT EXISTS idx_narrative_knowledge_subject
+        ON narrative_records (workspace_id, subject_id, applied_at, record_id)
         WHERE record_type = 'knowledge';
     `)
   },
   {
-    id: 'kanora_explicit_knowledge_accessibility_draft_v1',
+    id: 'narrative_explicit_knowledge_accessibility_draft_v1',
     up: (db) => {
-      const columns = db.prepare('PRAGMA table_info(kanora_narrative_records)').all();
+      const columns = db.prepare('PRAGMA table_info(narrative_records)').all();
       if (!columns.some(column => column.name === 'subject_id')) {
-        db.exec('ALTER TABLE kanora_narrative_records ADD COLUMN subject_id TEXT');
+        db.exec('ALTER TABLE narrative_records ADD COLUMN subject_id TEXT');
       }
       db.exec(`
-        UPDATE kanora_narrative_records
+        UPDATE narrative_records
         SET subject_id = json_extract(payload_json, '$.subjectId')
         WHERE record_type = 'knowledge'
           AND subject_id IS NULL
           AND json_valid(payload_json);
 
-        UPDATE kanora_narrative_records
+        UPDATE narrative_records
         SET payload_json = json_set(
           payload_json,
           '$.accessibility',
@@ -278,35 +278,35 @@ const MIGRATIONS = [
           AND json_valid(payload_json)
           AND json_type(payload_json, '$.accessibility') IS NULL;
 
-        DROP INDEX IF EXISTS idx_kanora_knowledge_subject;
+        DROP INDEX IF EXISTS idx_narrative_knowledge_subject;
 
-        CREATE INDEX idx_kanora_knowledge_subject
-          ON kanora_narrative_records (workspace_id, subject_id, applied_at, record_id)
+        CREATE INDEX idx_narrative_knowledge_subject
+          ON narrative_records (workspace_id, subject_id, applied_at, record_id)
           WHERE record_type = 'knowledge';
       `);
     }
   },
   {
-    id: 'kanora_beliefs_and_dynamic_relationships_v1',
+    id: 'narrative_beliefs_and_dynamic_relationships_v1',
     up: (db) => db.exec(`
-      UPDATE kanora_narrative_records
+      UPDATE narrative_records
       SET subject_id = json_extract(payload_json, '$.subjectId')
       WHERE record_type = 'belief'
         AND subject_id IS NULL
         AND json_valid(payload_json);
 
-      UPDATE kanora_narrative_records
+      UPDATE narrative_records
       SET subject_id = json_extract(payload_json, '$.sourceEntityId')
       WHERE record_type = 'relationship'
         AND subject_id IS NULL
         AND json_valid(payload_json);
 
-      CREATE INDEX IF NOT EXISTS idx_kanora_belief_subject
-        ON kanora_narrative_records (workspace_id, subject_id, applied_at, record_id)
+      CREATE INDEX IF NOT EXISTS idx_narrative_belief_subject
+        ON narrative_records (workspace_id, subject_id, applied_at, record_id)
         WHERE record_type = 'belief';
 
-      CREATE INDEX IF NOT EXISTS idx_kanora_relationship_source
-        ON kanora_narrative_records (workspace_id, subject_id, applied_at, record_id)
+      CREATE INDEX IF NOT EXISTS idx_narrative_relationship_source
+        ON narrative_records (workspace_id, subject_id, applied_at, record_id)
         WHERE record_type = 'relationship';
       `)
   },
@@ -365,9 +365,9 @@ const MIGRATIONS = [
     }
   },
   {
-    id: 'kanora_awareness_temporal_records_v1',
+    id: 'narrative_awareness_temporal_records_v1',
     up: (db) => db.exec(`
-      CREATE TABLE IF NOT EXISTS kanora_awareness_records (
+      CREATE TABLE IF NOT EXISTS narrative_awareness_records (
         workspace_id TEXT NOT NULL,
         awareness_id TEXT NOT NULL,
         subject_id TEXT NOT NULL,
@@ -380,12 +380,12 @@ const MIGRATIONS = [
         PRIMARY KEY (workspace_id, awareness_id),
         UNIQUE (workspace_id, operation_id),
         FOREIGN KEY (workspace_id, source_event_id)
-          REFERENCES kanora_narrative_events (workspace_id, event_id)
+          REFERENCES narrative_events (workspace_id, event_id)
       );
-      CREATE INDEX IF NOT EXISTS idx_kanora_awareness_subject_target
-        ON kanora_awareness_records (workspace_id, subject_id, target_id, applied_at);
-      CREATE INDEX IF NOT EXISTS idx_kanora_awareness_target
-        ON kanora_awareness_records (workspace_id, target_id, applied_at);
+      CREATE INDEX IF NOT EXISTS idx_narrative_awareness_subject_target
+        ON narrative_awareness_records (workspace_id, subject_id, target_id, applied_at);
+      CREATE INDEX IF NOT EXISTS idx_narrative_awareness_target
+        ON narrative_awareness_records (workspace_id, target_id, applied_at);
     `)
   },
   {
@@ -510,9 +510,9 @@ const MIGRATIONS = [
     `)
   },
   {
-    id: 'kanora_narrative_state_runtime_v1',
+    id: 'narrative_state_runtime_v1',
     up: (db) => db.exec(`
-      CREATE TABLE IF NOT EXISTS kanora_narrative_state_jobs (
+      CREATE TABLE IF NOT EXISTS narrative_state_jobs (
         workspace_id TEXT NOT NULL,
         origin_id TEXT NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'skipped')),
@@ -526,7 +526,7 @@ const MIGRATIONS = [
         PRIMARY KEY (workspace_id, origin_id)
       );
 
-      CREATE TABLE IF NOT EXISTS kanora_narrative_state_metrics (
+      CREATE TABLE IF NOT EXISTS narrative_state_metrics (
         workspace_id TEXT NOT NULL,
         origin_id TEXT NOT NULL,
         triage_input_tokens INTEGER NOT NULL DEFAULT 0,
@@ -540,7 +540,7 @@ const MIGRATIONS = [
         PRIMARY KEY (workspace_id, origin_id)
       );
 
-      CREATE TABLE IF NOT EXISTS kanora_narrative_state_fingerprints (
+      CREATE TABLE IF NOT EXISTS narrative_state_fingerprints (
         workspace_id TEXT NOT NULL,
         fingerprint TEXT NOT NULL,
         origin_id TEXT NOT NULL,
@@ -550,10 +550,10 @@ const MIGRATIONS = [
         UNIQUE (workspace_id, event_id)
       );
 
-      CREATE INDEX IF NOT EXISTS idx_kanora_state_jobs_status
-        ON kanora_narrative_state_jobs (workspace_id, status, created_at);
-      CREATE INDEX IF NOT EXISTS idx_kanora_state_metrics_time
-        ON kanora_narrative_state_metrics (workspace_id, recorded_at);
+      CREATE INDEX IF NOT EXISTS idx_narrative_state_jobs_status
+        ON narrative_state_jobs (workspace_id, status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_narrative_state_metrics_time
+        ON narrative_state_metrics (workspace_id, recorded_at);
     `)
   },
   {
@@ -598,7 +598,7 @@ const MIGRATIONS = [
       CREATE UNIQUE INDEX IF NOT EXISTS idx_roleplay_entity_origin_reference
         ON roleplay_entity_changes (workspace_id, provenance_id, json_extract(payload_json, '$.referenceId'));
 
-      CREATE TABLE IF NOT EXISTS kanora_narrative_origin_lifecycle (
+      CREATE TABLE IF NOT EXISTS narrative_origin_lifecycle (
         workspace_id TEXT NOT NULL,
         origin_id TEXT NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('active', 'superseded', 'deleted')),
@@ -607,8 +607,8 @@ const MIGRATIONS = [
         PRIMARY KEY (workspace_id, origin_id)
       );
 
-      CREATE INDEX IF NOT EXISTS idx_kanora_origin_lifecycle_status
-        ON kanora_narrative_origin_lifecycle (workspace_id, status, updated_at);
+      CREATE INDEX IF NOT EXISTS idx_narrative_origin_lifecycle_status
+        ON narrative_origin_lifecycle (workspace_id, status, updated_at);
 
       CREATE TABLE IF NOT EXISTS roleplay_turn_snapshots (
         workspace_id TEXT NOT NULL,
@@ -622,14 +622,14 @@ const MIGRATIONS = [
   {
     id: 'remove_legacy_dynamic_relationships_v1',
     up: (db) => db.transaction(() => {
-      const hasEvents = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'kanora_narrative_events'").get();
+      const hasEvents = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'narrative_events'").get();
       if (!hasEvents) return;
       const events = db.prepare(`
-        SELECT workspace_id, event_id FROM kanora_narrative_events
+        SELECT workspace_id, event_id FROM narrative_events
         WHERE description LIKE 'Worldbuild relationship updated:%'
       `).all();
       if (!events.length) return;
-      const removeEvent = db.prepare('DELETE FROM kanora_narrative_events WHERE workspace_id = ? AND event_id = ?');
+      const removeEvent = db.prepare('DELETE FROM narrative_events WHERE workspace_id = ? AND event_id = ?');
       for (const event of events) removeEvent.run(event.workspace_id, event.event_id);
     })()
   },
@@ -799,9 +799,9 @@ const MIGRATIONS = [
     `)
   },
   {
-    id: 'kanora_operation_review_v1',
+    id: 'narrative_operation_review_v1',
     up: (db) => db.exec(`
-      CREATE TABLE IF NOT EXISTS kanora_narrative_operation_reviews (
+      CREATE TABLE IF NOT EXISTS narrative_operation_reviews (
         workspace_id TEXT NOT NULL,
         event_id TEXT NOT NULL,
         operation_id TEXT NOT NULL,
@@ -809,11 +809,11 @@ const MIGRATIONS = [
         decided_at TEXT NOT NULL,
         PRIMARY KEY (workspace_id, event_id, operation_id),
         FOREIGN KEY (workspace_id, event_id)
-          REFERENCES kanora_narrative_events (workspace_id, event_id) ON DELETE CASCADE
+          REFERENCES narrative_events (workspace_id, event_id) ON DELETE CASCADE
       );
 
-      CREATE INDEX IF NOT EXISTS idx_kanora_operation_reviews_event
-        ON kanora_narrative_operation_reviews (workspace_id, event_id, decision);
+      CREATE INDEX IF NOT EXISTS idx_narrative_operation_reviews_event
+        ON narrative_operation_reviews (workspace_id, event_id, decision);
     `)
   },
   {
@@ -862,9 +862,9 @@ const MIGRATIONS = [
     `)
   },
   {
-    id: 'kanora_narrative_context_manifest_v1',
+    id: 'narrative_context_manifest_v1',
     up: (db) => db.exec(`
-      CREATE TABLE IF NOT EXISTS kanora_narrative_context_manifests (
+      CREATE TABLE IF NOT EXISTS narrative_context_manifests (
         workspace_id TEXT NOT NULL,
         request_id TEXT NOT NULL,
         origin_id TEXT,
@@ -880,10 +880,10 @@ const MIGRATIONS = [
         UNIQUE (workspace_id, origin_id)
       );
 
-      CREATE INDEX IF NOT EXISTS idx_kanora_context_manifest_origin
-        ON kanora_narrative_context_manifests (workspace_id, origin_id, status);
-      CREATE INDEX IF NOT EXISTS idx_kanora_context_manifest_sequence
-        ON kanora_narrative_context_manifests (workspace_id, narrative_sequence, created_at);
+      CREATE INDEX IF NOT EXISTS idx_narrative_context_manifest_origin
+        ON narrative_context_manifests (workspace_id, origin_id, status);
+      CREATE INDEX IF NOT EXISTS idx_narrative_context_manifest_sequence
+        ON narrative_context_manifests (workspace_id, narrative_sequence, created_at);
     `)
   },
   {
@@ -959,7 +959,7 @@ const MIGRATIONS = [
         PRIMARY KEY (workspace_id, occurrence_id),
         UNIQUE (workspace_id, narrative_event_id),
         FOREIGN KEY (workspace_id, narrative_event_id)
-          REFERENCES kanora_narrative_events (workspace_id, event_id)
+          REFERENCES narrative_events (workspace_id, event_id)
           ON DELETE CASCADE
       );
 
@@ -977,15 +977,15 @@ const MIGRATIONS = [
      * already answers. Only records the model wrote are touched, and only their status: the
      * rows, their events and their evidence stay for audit.
      */
-    id: 'kanora_narrative_record_categories_v1',
+    id: 'narrative_record_categories_v1',
     up: (db) => {
       const hasEvents = db.prepare(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'kanora_narrative_events'"
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'narrative_events'"
       ).get();
       if (!hasEvents) return;
       const scenePredicates = `(${SCENE_PREDICATE_LIST})`;
       const retire = (recordTypes, status) => db.prepare(`
-        UPDATE kanora_narrative_records
+        UPDATE narrative_records
         SET payload_json = json_set(payload_json, '$.status', ?)
         WHERE record_type IN (${recordTypes.map(() => '?').join(', ')})
           AND json_valid(payload_json)
@@ -994,8 +994,8 @@ const MIGRATIONS = [
             COALESCE(json_extract(payload_json, '$.proposition.predicate'), ''), '_', '-'
           )) IN ${scenePredicates}
           AND source_event_id IN (
-            SELECT event_id FROM kanora_narrative_events
-            WHERE workspace_id = kanora_narrative_records.workspace_id
+            SELECT event_id FROM narrative_events
+            WHERE workspace_id = narrative_records.workspace_id
               AND provenance_interpreter = 'model'
           )
       `).run(status, ...recordTypes);

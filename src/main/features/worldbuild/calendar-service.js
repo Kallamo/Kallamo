@@ -1044,7 +1044,7 @@ function getCalendarEntries(db, workspaceId, year, month, eraId) {
       occurrences.title, occurrences.start_date_json AS startDateJson,
       occurrences.end_date_json AS endDateJson, event_entities.data AS eventData
     FROM worldbuild_event_occurrences occurrences
-    JOIN kanora_narrative_events events
+    JOIN narrative_events events
       ON events.workspace_id = occurrences.workspace_id
       AND events.event_id = occurrences.narrative_event_id
     LEFT JOIN entities event_entities

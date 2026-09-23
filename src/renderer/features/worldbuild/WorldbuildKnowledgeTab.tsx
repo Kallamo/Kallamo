@@ -14,7 +14,7 @@ import {
   normalizeKnowledgeCategory,
   normalizeMemoryCategory,
   type DurableKnowledgeCategory
-} from '../../../kanora/narrative-taxonomy';
+} from '../../../narrative/narrative-taxonomy';
 import type {
   KnowledgeEntryKind, Toast, WorldbuildApi, WorldbuildEntity,
   WorldbuildKnowledgeCard, WorldbuildKnowledgeEntry, WorldbuildKnowledgeProjection,

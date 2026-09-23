@@ -12,19 +12,19 @@ const ENTITY_REFERENCE_COLUMNS = [
   { table: 'entity_enrichment_errors', column: 'entityId', merge: 'remove', delete: 'remove' },
   { table: 'entity_update_evidence', column: 'entity_id', merge: 'repoint', delete: 'remove' },
   { table: 'entity_update_jobs', column: 'entity_id', merge: 'repoint', delete: 'keep history' },
-  { table: 'kanora_narrative_records', column: 'subject_id', merge: 'repoint', delete: 'retire' },
-  { table: 'kanora_narrative_records', column: 'payload_json', merge: 'repoint', delete: 'retire or unlist' },
-  { table: 'kanora_awareness_records', column: 'subject_id', merge: 'repoint', delete: 'revoke' },
-  { table: 'kanora_awareness_records', column: 'target_id', merge: 'repoint', delete: 'revoke' },
-  { table: 'kanora_awareness_records', column: 'payload_json', merge: 'repoint', delete: 'revoke' },
-  { table: 'kanora_narrative_events', column: 'location_id', merge: 'repoint', delete: 'keep history' },
-  { table: 'kanora_narrative_events', column: 'operations_json', merge: 'repoint proposed', delete: 'reject proposed' },
-  { table: 'kanora_narrative_event_participants', column: 'entity_id', merge: 'repoint', delete: 'keep history' },
-  { table: 'kanora_scenes', column: 'location_id', merge: 'repoint', delete: 'clear' },
-  { table: 'kanora_scenes', column: 'focal_subject_id', merge: 'repoint', delete: 'clear' },
-  { table: 'kanora_scenes', column: 'allowed_subject_ids_json', merge: 'repoint', delete: 'unlist' },
-  { table: 'kanora_scene_participants', column: 'entity_id', merge: 'repoint', delete: 'remove' },
-  { table: 'kanora_scene_possible_observers', column: 'entity_id', merge: 'repoint', delete: 'remove' },
+  { table: 'narrative_records', column: 'subject_id', merge: 'repoint', delete: 'retire' },
+  { table: 'narrative_records', column: 'payload_json', merge: 'repoint', delete: 'retire or unlist' },
+  { table: 'narrative_awareness_records', column: 'subject_id', merge: 'repoint', delete: 'revoke' },
+  { table: 'narrative_awareness_records', column: 'target_id', merge: 'repoint', delete: 'revoke' },
+  { table: 'narrative_awareness_records', column: 'payload_json', merge: 'repoint', delete: 'revoke' },
+  { table: 'narrative_events', column: 'location_id', merge: 'repoint', delete: 'keep history' },
+  { table: 'narrative_events', column: 'operations_json', merge: 'repoint proposed', delete: 'reject proposed' },
+  { table: 'narrative_event_participants', column: 'entity_id', merge: 'repoint', delete: 'keep history' },
+  { table: 'narrative_scenes', column: 'location_id', merge: 'repoint', delete: 'clear' },
+  { table: 'narrative_scenes', column: 'focal_subject_id', merge: 'repoint', delete: 'clear' },
+  { table: 'narrative_scenes', column: 'allowed_subject_ids_json', merge: 'repoint', delete: 'unlist' },
+  { table: 'narrative_scene_participants', column: 'entity_id', merge: 'repoint', delete: 'remove' },
+  { table: 'narrative_scene_possible_observers', column: 'entity_id', merge: 'repoint', delete: 'remove' },
   { table: 'roleplay_scene_objects', column: 'entity_id', merge: 'repoint', delete: 'remove' },
   { table: 'roleplay_scene_nearby', column: 'entity_id', merge: 'repoint', delete: 'remove' },
   { table: 'roleplay_workspace_settings', column: 'player_entity_id', merge: 'repoint', delete: 'clear' },
@@ -65,8 +65,8 @@ const ENTITY_REFERENCE_COLUMNS = [
 ];
 
 const IGNORED_ENTITY_REFERENCE_COLUMNS = [
-  { table: 'kanora_narrative_context_manifests', column: 'player_subject_id', reason: 'A record of a context already sent to the model.' },
-  { table: 'kanora_narrative_context_manifests', column: 'manifest_json', reason: 'A record of a context already sent to the model.' },
+  { table: 'narrative_context_manifests', column: 'player_subject_id', reason: 'A record of a context already sent to the model.' },
+  { table: 'narrative_context_manifests', column: 'manifest_json', reason: 'A record of a context already sent to the model.' },
   { table: 'roleplay_turn_snapshots', column: 'snapshot_json', reason: 'Redirected or dropped when a snapshot is restored.' },
   { table: 'narrative_turn_replacements', column: 'restore_json', reason: 'Restored through the same snapshot path.' },
   { table: 'roleplay_message_frames', column: 'advance_json', reason: 'A time cost, not a place or an actor.' },
@@ -160,12 +160,12 @@ function repointEntityReferences(db, { workspaceId, sourceId, targetId, prefer =
   moveUnique('entity_update_evidence', 'entity_id');
   moveUnique('entity_update_jobs', 'entity_id');
 
-  if (has('kanora_narrative_records')) {
+  if (has('narrative_records')) {
     const rows = db.prepare(`
-      SELECT rowid AS rid, record_type, subject_id, payload_json FROM kanora_narrative_records
+      SELECT rowid AS rid, record_type, subject_id, payload_json FROM narrative_records
       WHERE workspace_id = ? AND (subject_id = ? OR payload_json LIKE ? ESCAPE '\\')
     `).all(workspaceId, sourceId, like);
-    const update = db.prepare('UPDATE kanora_narrative_records SET subject_id = ?, payload_json = ? WHERE rowid = ?');
+    const update = db.prepare('UPDATE narrative_records SET subject_id = ?, payload_json = ? WHERE rowid = ?');
     for (const row of rows) {
       const payload = replace(parseJson(row.payload_json, {}));
       const subjectId = row.subject_id === sourceId ? targetId : row.subject_id;
@@ -177,12 +177,12 @@ function repointEntityReferences(db, { workspaceId, sourceId, targetId, prefer =
     }
   }
 
-  if (has('kanora_awareness_records')) {
+  if (has('narrative_awareness_records')) {
     const rows = db.prepare(`
-      SELECT rowid AS rid, subject_id, target_id, status, payload_json FROM kanora_awareness_records
+      SELECT rowid AS rid, subject_id, target_id, status, payload_json FROM narrative_awareness_records
       WHERE workspace_id = ? AND (subject_id = ? OR target_id = ?)
     `).all(workspaceId, sourceId, sourceId);
-    const update = db.prepare('UPDATE kanora_awareness_records SET subject_id = ?, target_id = ?, status = ?, payload_json = ? WHERE rowid = ?');
+    const update = db.prepare('UPDATE narrative_awareness_records SET subject_id = ?, target_id = ?, status = ?, payload_json = ? WHERE rowid = ?');
     for (const row of rows) {
       const subjectId = row.subject_id === sourceId ? targetId : row.subject_id;
       const awareTargetId = row.target_id === sourceId ? targetId : row.target_id;
@@ -193,34 +193,34 @@ function repointEntityReferences(db, { workspaceId, sourceId, targetId, prefer =
     }
   }
 
-  if (has('kanora_narrative_events')) {
-    db.prepare('UPDATE kanora_narrative_events SET location_id = ? WHERE workspace_id = ? AND location_id = ?').run(targetId, workspaceId, sourceId);
+  if (has('narrative_events')) {
+    db.prepare('UPDATE narrative_events SET location_id = ? WHERE workspace_id = ? AND location_id = ?').run(targetId, workspaceId, sourceId);
     rewriteJsonColumn(db, {
-      table: 'kanora_narrative_events', column: 'operations_json',
+      table: 'narrative_events', column: 'operations_json',
       where: "workspace_id = ? AND status = 'proposed' AND operations_json LIKE ? ESCAPE '\\'", params: [workspaceId, like], transform: replace
     });
   }
-  if (has('kanora_narrative_event_participants')) {
-    db.prepare('UPDATE kanora_narrative_event_participants SET entity_id = ? WHERE workspace_id = ? AND entity_id = ?').run(targetId, workspaceId, sourceId);
+  if (has('narrative_event_participants')) {
+    db.prepare('UPDATE narrative_event_participants SET entity_id = ? WHERE workspace_id = ? AND entity_id = ?').run(targetId, workspaceId, sourceId);
     db.prepare(`
-      DELETE FROM kanora_narrative_event_participants
+      DELETE FROM narrative_event_participants
       WHERE workspace_id = ? AND entity_id = ? AND ordinal NOT IN (
-        SELECT MIN(ordinal) FROM kanora_narrative_event_participants AS kept
-        WHERE kept.workspace_id = kanora_narrative_event_participants.workspace_id
-          AND kept.event_id = kanora_narrative_event_participants.event_id AND kept.entity_id = ?
+        SELECT MIN(ordinal) FROM narrative_event_participants AS kept
+        WHERE kept.workspace_id = narrative_event_participants.workspace_id
+          AND kept.event_id = narrative_event_participants.event_id AND kept.entity_id = ?
       )
     `).run(workspaceId, targetId, targetId);
   }
 
-  if (has('kanora_scenes')) {
-    db.prepare('UPDATE kanora_scenes SET location_id = ? WHERE workspace_id = ? AND location_id = ?').run(targetId, workspaceId, sourceId);
-    db.prepare('UPDATE kanora_scenes SET focal_subject_id = ? WHERE workspace_id = ? AND focal_subject_id = ?').run(targetId, workspaceId, sourceId);
+  if (has('narrative_scenes')) {
+    db.prepare('UPDATE narrative_scenes SET location_id = ? WHERE workspace_id = ? AND location_id = ?').run(targetId, workspaceId, sourceId);
+    db.prepare('UPDATE narrative_scenes SET focal_subject_id = ? WHERE workspace_id = ? AND focal_subject_id = ?').run(targetId, workspaceId, sourceId);
     rewriteJsonColumn(db, {
-      table: 'kanora_scenes', column: 'allowed_subject_ids_json',
+      table: 'narrative_scenes', column: 'allowed_subject_ids_json',
       where: "workspace_id = ? AND allowed_subject_ids_json LIKE ? ESCAPE '\\'", params: [workspaceId, like], transform: replace
     });
   }
-  for (const table of ['kanora_scene_participants', 'kanora_scene_possible_observers', 'roleplay_scene_objects', 'roleplay_scene_nearby']) {
+  for (const table of ['narrative_scene_participants', 'narrative_scene_possible_observers', 'roleplay_scene_objects', 'roleplay_scene_nearby']) {
     if (!has(table)) continue;
     db.prepare(`UPDATE OR IGNORE ${table} SET entity_id = ? WHERE workspace_id = ? AND entity_id = ?`).run(targetId, workspaceId, sourceId);
     db.prepare(`DELETE FROM ${table} WHERE workspace_id = ? AND entity_id = ?`).run(workspaceId, sourceId);
@@ -378,12 +378,12 @@ function releaseEntityReferences(db, { workspaceId, entityId }) {
   if (has('entity_enrichment_errors')) db.prepare('DELETE FROM entity_enrichment_errors WHERE entityId = ?').run(entityId);
   if (has('entity_update_evidence')) db.prepare('DELETE FROM entity_update_evidence WHERE entity_id = ?').run(entityId);
 
-  if (has('kanora_narrative_records')) {
+  if (has('narrative_records')) {
     const rows = db.prepare(`
-      SELECT rowid AS rid, record_type, subject_id, payload_json FROM kanora_narrative_records
+      SELECT rowid AS rid, record_type, subject_id, payload_json FROM narrative_records
       WHERE workspace_id = ? AND (subject_id = ? OR payload_json LIKE ? ESCAPE '\\')
     `).all(workspaceId, entityId, like);
-    const update = db.prepare('UPDATE kanora_narrative_records SET payload_json = ? WHERE rowid = ?');
+    const update = db.prepare('UPDATE narrative_records SET payload_json = ? WHERE rowid = ?');
     for (const row of rows) {
       const payload = parseJson(row.payload_json, {});
       const proposition = payload.proposition && typeof payload.proposition === 'object' ? payload.proposition : {};
@@ -402,41 +402,41 @@ function releaseEntityReferences(db, { workspaceId, entityId }) {
     }
   }
 
-  if (has('kanora_awareness_records')) {
+  if (has('narrative_awareness_records')) {
     rewriteJsonColumn(db, {
-      table: 'kanora_awareness_records', column: 'payload_json',
+      table: 'narrative_awareness_records', column: 'payload_json',
       where: "workspace_id = ? AND (subject_id = ? OR target_id = ?) AND status != 'revoked'", params: [workspaceId, entityId, entityId],
       transform: payload => ({ ...payload, status: 'revoked' })
     });
-    db.prepare("UPDATE kanora_awareness_records SET status = 'revoked' WHERE workspace_id = ? AND (subject_id = ? OR target_id = ?)").run(workspaceId, entityId, entityId);
+    db.prepare("UPDATE narrative_awareness_records SET status = 'revoked' WHERE workspace_id = ? AND (subject_id = ? OR target_id = ?)").run(workspaceId, entityId, entityId);
   }
 
-  if (has('kanora_narrative_events')) {
+  if (has('narrative_events')) {
     const proposed = db.prepare(`
-      SELECT event_id FROM kanora_narrative_events
+      SELECT event_id FROM narrative_events
       WHERE workspace_id = ? AND status = 'proposed' AND (location_id = ? OR operations_json LIKE ? ESCAPE '\\'
-        OR event_id IN (SELECT event_id FROM kanora_narrative_event_participants WHERE workspace_id = ? AND entity_id = ?))
+        OR event_id IN (SELECT event_id FROM narrative_event_participants WHERE workspace_id = ? AND entity_id = ?))
     `).all(workspaceId, entityId, like, workspaceId, entityId);
     const reject = db.prepare(`
-      UPDATE kanora_narrative_events SET status = 'rejected', version = version + 1, decided_at = ?
+      UPDATE narrative_events SET status = 'rejected', version = version + 1, decided_at = ?
       WHERE workspace_id = ? AND event_id = ?
     `);
     for (const event of proposed) reject.run(new Date(now).toISOString(), workspaceId, event.event_id);
   }
 
-  if (has('kanora_scenes')) {
-    db.prepare('UPDATE kanora_scenes SET location_id = NULL WHERE workspace_id = ? AND location_id = ?').run(workspaceId, entityId);
+  if (has('narrative_scenes')) {
+    db.prepare('UPDATE narrative_scenes SET location_id = NULL WHERE workspace_id = ? AND location_id = ?').run(workspaceId, entityId);
     db.prepare(`
-      UPDATE kanora_scenes SET focal_subject_id = NULL,
+      UPDATE narrative_scenes SET focal_subject_id = NULL,
         perspective_access = CASE perspective_access WHEN 'subjective' THEN 'omniscient' ELSE perspective_access END
       WHERE workspace_id = ? AND focal_subject_id = ?
     `).run(workspaceId, entityId);
     rewriteJsonColumn(db, {
-      table: 'kanora_scenes', column: 'allowed_subject_ids_json',
+      table: 'narrative_scenes', column: 'allowed_subject_ids_json',
       where: "workspace_id = ? AND allowed_subject_ids_json LIKE ? ESCAPE '\\'", params: [workspaceId, like], transform: unlist
     });
   }
-  for (const table of ['kanora_scene_participants', 'kanora_scene_possible_observers', 'roleplay_scene_objects', 'roleplay_scene_nearby', 'roleplay_species_memberships']) {
+  for (const table of ['narrative_scene_participants', 'narrative_scene_possible_observers', 'roleplay_scene_objects', 'roleplay_scene_nearby', 'roleplay_species_memberships']) {
     if (has(table)) db.prepare(`DELETE FROM ${table} WHERE workspace_id = ? AND entity_id = ?`).run(workspaceId, entityId);
   }
   if (has('roleplay_species_memberships')) db.prepare('DELETE FROM roleplay_species_memberships WHERE workspace_id = ? AND species_id = ?').run(workspaceId, entityId);
@@ -512,22 +512,22 @@ function countEntityReferences(db, workspaceId, entityIds) {
   const list = ids.map(() => '?').join(', ');
   const count = (table, sql, ...params) => (hasTable(db, table) ? db.prepare(sql).get(...params).count : 0);
   return {
-    narrativeRecords: count('kanora_narrative_records', `
-      SELECT COUNT(*) AS count FROM kanora_narrative_records WHERE workspace_id = ? AND (
+    narrativeRecords: count('narrative_records', `
+      SELECT COUNT(*) AS count FROM narrative_records WHERE workspace_id = ? AND (
         subject_id IN (${list})
         OR json_extract(payload_json, '$.proposition.subjectId') IN (${list})
         OR json_extract(payload_json, '$.entityId') IN (${list})
         OR json_extract(payload_json, '$.targetEntityId') IN (${list})
       )
     `, workspaceId, ...ids, ...ids, ...ids, ...ids)
-      + count('kanora_awareness_records', `
-      SELECT COUNT(*) AS count FROM kanora_awareness_records WHERE workspace_id = ? AND status != 'revoked'
+      + count('narrative_awareness_records', `
+      SELECT COUNT(*) AS count FROM narrative_awareness_records WHERE workspace_id = ? AND status != 'revoked'
         AND (subject_id IN (${list}) OR target_id IN (${list}))
     `, workspaceId, ...ids, ...ids),
     knowledgeCards: count('worldbuild_knowledge_cards', `
       SELECT COUNT(*) AS count FROM worldbuild_knowledge_cards WHERE workspace_id = ? AND (owner_id IN (${list}) OR target_id IN (${list}))
     `, workspaceId, ...ids, ...ids),
-    sceneState: ['kanora_scene_participants', 'kanora_scene_possible_observers', 'roleplay_scene_objects', 'roleplay_scene_nearby', 'roleplay_equipment']
+    sceneState: ['narrative_scene_participants', 'narrative_scene_possible_observers', 'roleplay_scene_objects', 'roleplay_scene_nearby', 'roleplay_equipment']
       .reduce((total, table) => total + count(table, `SELECT COUNT(*) AS count FROM ${table} WHERE workspace_id = ? AND entity_id IN (${list})`, workspaceId, ...ids), 0)
   };
 }
@@ -540,11 +540,11 @@ function releaseOrphanedEntityReferences(db) {
   if (!hasTable(db, 'entities')) return 0;
   const retired = "COALESCE(json_extract(payload_json, '$.status'), 'active') NOT IN ('retracted', 'superseded', 'forgotten', 'retired', 'revoked')";
   const candidates = [
-    ['kanora_narrative_records', 'subject_id', retired],
-    ['kanora_awareness_records', 'subject_id', "status != 'revoked'"],
-    ['kanora_awareness_records', 'target_id', "status != 'revoked'"],
-    ['kanora_scene_participants', 'entity_id'],
-    ['kanora_scene_possible_observers', 'entity_id'],
+    ['narrative_records', 'subject_id', retired],
+    ['narrative_awareness_records', 'subject_id', "status != 'revoked'"],
+    ['narrative_awareness_records', 'target_id', "status != 'revoked'"],
+    ['narrative_scene_participants', 'entity_id'],
+    ['narrative_scene_possible_observers', 'entity_id'],
     ['roleplay_scene_objects', 'entity_id'],
     ['roleplay_scene_nearby', 'entity_id'],
     ['roleplay_workspace_settings', 'player_entity_id'],

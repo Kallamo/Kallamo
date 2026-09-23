@@ -3392,7 +3392,7 @@ ipcMain.handle('set-inventory-item', async (event, payload) => {
 
 ipcMain.handle('get-workspace-experience-mode', async (event, { workspaceId } = {}) => {
   try {
-    const { getWorkspaceExperienceMode } = require('../../dist-main/main/features/kanora/mode-orchestration');
+    const { getWorkspaceExperienceMode } = require('../../dist-main/main/features/narrative/mode-orchestration');
     return { success: true, mode: getWorkspaceExperienceMode(db, workspaceId) };
   } catch (error) {
     console.error('[get-workspace-experience-mode] failed:', error);
@@ -3402,7 +3402,7 @@ ipcMain.handle('get-workspace-experience-mode', async (event, { workspaceId } = 
 
 ipcMain.handle('set-workspace-experience-mode', async (event, { workspaceId, mode } = {}) => {
   try {
-    const { setWorkspaceExperienceMode } = require('../../dist-main/main/features/kanora/mode-orchestration');
+    const { setWorkspaceExperienceMode } = require('../../dist-main/main/features/narrative/mode-orchestration');
     return { success: true, mode: setWorkspaceExperienceMode(db, workspaceId, mode) };
   } catch (error) {
     console.error('[set-workspace-experience-mode] failed:', error);
@@ -3411,17 +3411,17 @@ ipcMain.handle('set-workspace-experience-mode', async (event, { workspaceId, mod
 });
 
 function getRoleplaySystem() {
-  const { RoleplaySystem } = require('../../dist-main/main/features/kanora/roleplay-system');
+  const { RoleplaySystem } = require('../../dist-main/main/features/narrative/roleplay-system');
   return new RoleplaySystem(db);
 }
 
 function getNarrativeStateSystem() {
-  const { NarrativeStateSystem } = require('../../dist-main/main/features/kanora/narrative-state');
+  const { NarrativeStateSystem } = require('../../dist-main/main/features/narrative/narrative-state');
   return new NarrativeStateSystem(db);
 }
 
 function getNarrativeEntitySystem() {
-  const { NarrativeEntitySystem } = require('../../dist-main/main/features/kanora/narrative-entities');
+  const { NarrativeEntitySystem } = require('../../dist-main/main/features/narrative/narrative-entities');
   return new NarrativeEntitySystem(db);
 }
 
@@ -3714,7 +3714,7 @@ ipcMain.handle('resolve-narrative-state-operations', async (event, {
 
 ipcMain.handle('compact-narrative-state', async (event, { workspaceId, apply = false } = {}) => {
   try {
-    const { NarrativeMaintenance } = require('../../dist-main/main/features/kanora/narrative-maintenance');
+    const { NarrativeMaintenance } = require('../../dist-main/main/features/narrative/narrative-maintenance');
     const maintenance = new NarrativeMaintenance(db);
     return { success: true, report: apply ? maintenance.compact(workspaceId) : maintenance.preview(workspaceId) };
   } catch (error) {

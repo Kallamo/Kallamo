@@ -73,7 +73,7 @@ describe('Worldbuild awareness Knowledge service', () => {
     const [card] = service.listCards('workspace-one', 'kepler');
     expect(card.knownFieldKeys).toEqual([]);
     expect(card.sources).toHaveLength(2);
-    expect(db.prepare('SELECT subject_id, target_id, status FROM kanora_awareness_records').all())
+    expect(db.prepare('SELECT subject_id, target_id, status FROM narrative_awareness_records').all())
       .toEqual([{ subject_id: 'kepler', target_id: 'valdrin', status: 'active' }]);
   });
 
@@ -167,7 +167,7 @@ describe('Worldbuild awareness Knowledge service', () => {
     expect(service.listCards('workspace-one', 'kepler')).toHaveLength(1);
     service.removeCard({ workspaceId: 'workspace-one', ownerId: 'kepler', targetId: 'valdrin' });
     expect(service.listCards('workspace-one', 'kepler')).toEqual([]);
-    expect(db.prepare('SELECT status FROM kanora_awareness_records ORDER BY rowid').all())
+    expect(db.prepare('SELECT status FROM narrative_awareness_records ORDER BY rowid').all())
       .toEqual([{ status: 'active' }, { status: 'revoked' }]);
   });
 

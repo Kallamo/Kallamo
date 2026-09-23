@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import type { EntityFieldDefinition } from '../../src/kanora/contracts';
+import type { EntityFieldDefinition } from '../../src/narrative/contracts';
 import { runDatabaseMigrations } from '../../src/main/database/migrations.js';
 import {
   WorldbuildFieldDefinitionRepository,

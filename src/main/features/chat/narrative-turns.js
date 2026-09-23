@@ -25,16 +25,16 @@ function hasTable(db, name) {
  * so this can never retry, and bill, the same turn on its own.
  */
 function findPendingNarrativeTurn(db, chatId, excludedIds = []) {
-  if (!chatId || !hasTable(db, 'kanora_narrative_state_jobs')) return null;
+  if (!chatId || !hasTable(db, 'narrative_state_jobs')) return null;
   const excluded = new Set(excludedIds);
   const latest = db.prepare("SELECT id FROM messages WHERE chatId = ? AND role = 'ai' ORDER BY createdAt DESC, id DESC LIMIT 25")
     .all(chatId)
     .find(message => !excluded.has(message.id));
   if (!latest) return null;
-  const started = db.prepare('SELECT 1 FROM kanora_narrative_state_jobs WHERE workspace_id = ? AND origin_id = ?').get(chatId, latest.id);
+  const started = db.prepare('SELECT 1 FROM narrative_state_jobs WHERE workspace_id = ? AND origin_id = ?').get(chatId, latest.id);
   if (started) return null;
-  const retired = hasTable(db, 'kanora_narrative_origin_lifecycle') && db.prepare(`
-    SELECT 1 FROM kanora_narrative_origin_lifecycle WHERE workspace_id = ? AND origin_id = ? AND status != 'active'
+  const retired = hasTable(db, 'narrative_origin_lifecycle') && db.prepare(`
+    SELECT 1 FROM narrative_origin_lifecycle WHERE workspace_id = ? AND origin_id = ? AND status != 'active'
   `).get(chatId, latest.id);
   return retired ? null : { originId: latest.id };
 }

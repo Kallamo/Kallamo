@@ -19,7 +19,7 @@ import { useSidebarWidth } from '../features/worldbuild/useSidebarWidth';
 import { useWorldbuildNavigationState } from '../features/worldbuild/useWorldbuildNavigationState';
 import WorldbuildCustomFields from '../features/worldbuild/WorldbuildCustomFields';
 import WorldbuildKnowledgeTab from '../features/worldbuild/WorldbuildKnowledgeTab';
-import WorldbuildKanoraReview from '../features/worldbuild/WorldbuildKanoraReview';
+import WorldbuildNarrativeReview from '../features/worldbuild/WorldbuildNarrativeReview';
 import WorldbuildFactsRegistry from '../features/worldbuild/WorldbuildFactsRegistry';
 import WorldbuildCalendar from '../features/worldbuild/WorldbuildCalendar';
 import WorldbuildEventOccurrences from '../features/worldbuild/WorldbuildEventOccurrences';
@@ -66,7 +66,7 @@ const matchesReviewFilter = (entity, filter, { nameReview, reviewCounts }) => {
   if (filter === 'proposed') return entity.status === 'proposed';
   if (filter === 'updates') {
     const counts = reviewCounts[entity.id];
-    return entity.status !== 'proposed' && ((counts?.entityUpdates || 0) > 0 || (counts?.kanora || 0) > 0);
+    return entity.status !== 'proposed' && ((counts?.entityUpdates || 0) > 0 || (counts?.narrative || 0) > 0);
   }
   if (filter === 'names') return nameReview.has(entity.id);
   return true;
@@ -492,10 +492,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   }, [storedTemplate]);
   const templateSections = activeTemplate?.layout?.sections || [];
   const sectionSetting = (id) => templateSections.find(section => section.id === id);
-  const selectedReviewCounts = reviewCounts[selected?.id] || { entityUpdates: selected?.data?._enrichPending ? 1 : 0, kanora: 0 };
+  const selectedReviewCounts = reviewCounts[selected?.id] || { entityUpdates: selected?.data?._enrichPending ? 1 : 0, narrative: 0 };
   const hasEntityReview = selectedReviewCounts.entityUpdates > 0;
-  const hasKanoraReview = selectedReviewCounts.kanora > 0;
-  const hasReview = hasEntityReview || hasKanoraReview;
+  const hasNarrativeReview = selectedReviewCounts.narrative > 0;
+  const hasReview = hasEntityReview || hasNarrativeReview;
   const isFaction = selected?.type === 'Factions';
   // Which tabs a sheet shows follows from the type and its shape. The relational tabs are
   // systematic, so the template has no say over them.
@@ -607,9 +607,9 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   }, [electronAPI, selected?.id, workspaceId]);
   useEffect(() => { loadSubjectReview(); }, [loadSubjectReview]);
   useEffect(() => {
-    if (!hasEntityReview && hasKanoraReview) setReviewKind('kanora');
-    else if (hasEntityReview && !hasKanoraReview) setReviewKind('entity');
-  }, [hasEntityReview, hasKanoraReview, selected?.id]);
+    if (!hasEntityReview && hasNarrativeReview) setReviewKind('narrative');
+    else if (hasEntityReview && !hasNarrativeReview) setReviewKind('entity');
+  }, [hasEntityReview, hasNarrativeReview, selected?.id]);
   // A tab can disappear under the reader: the template hides its section, or a creature
   // changes shape. Fall back to Data instead of leaving an empty tab selected.
   useEffect(() => {
@@ -825,7 +825,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       if (res.taggedEvidenceRemaining) bits.push(`${res.taggedEvidenceRemaining} tagged passages pending`);
       if (res.textMatchesDeferred) bits.push(`${res.textMatchesDeferred} lower-priority text matches deferred`);
       if (res.canonicalSuggestionCount) bits.push(`${res.canonicalSuggestionCount} entity suggestions`);
-      if (res.kanoraSuggestionCount) bits.push(`${res.kanoraSuggestionCount} Kanora suggestions`);
+      if (res.narrativeSuggestionCount) bits.push(`${res.narrativeSuggestionCount} Narrative state suggestions`);
       if (res.emptyFieldSuggestions) bits.push(`${res.emptyFieldSuggestions} empty field suggestions`);
       if (res.emptyFieldsWithoutSupport) bits.push(`${res.emptyFieldsWithoutSupport} empty fields without supporting evidence`);
       if (res.emptyFieldsAwaitingEvidence) bits.push(`${res.emptyFieldsAwaitingEvidence} empty fields still awaiting deferred evidence`);
@@ -1003,14 +1003,14 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const useLocationTree = !search.trim() && !reviewFilter && (!filterType || filterType === 'Locations');
   const toggleLocation = (id) => setExpandedLocations(current => ({ ...current, [id]: current[id] === false }));
   const proposedCount = useMemo(() => entities.filter(e => e.status === 'proposed').length, [entities]);
-  const pendingUpdateCount = useMemo(() => entities.filter(e => e.status !== 'proposed' && ((reviewCounts[e.id]?.entityUpdates || 0) > 0 || (reviewCounts[e.id]?.kanora || 0) > 0)).length, [entities, reviewCounts]);
+  const pendingUpdateCount = useMemo(() => entities.filter(e => e.status !== 'proposed' && ((reviewCounts[e.id]?.entityUpdates || 0) > 0 || (reviewCounts[e.id]?.narrative || 0) > 0)).length, [entities, reviewCounts]);
   const nameReviewCount = useMemo(() => entities.filter(e => nameReview.has(e.id)).length, [entities, nameReview]);
   const exportableCount = useMemo(() => entities.filter(e => e.status !== 'proposed').length, [entities]);
   const selectedEntities = useMemo(() => entities.filter(entity => selectedIds.has(entity.id)), [entities, selectedIds]);
   const visibleIds = useMemo(() => new Set(filtered.map(entity => entity.id)), [filtered]);
   const hiddenSelectedCount = useMemo(() => selectedEntities.filter(entity => !visibleIds.has(entity.id)).length, [selectedEntities, visibleIds]);
   const selectedProposedCount = selectedEntities.filter(entity => entity.status === 'proposed').length;
-  const selectedUpdateCount = selectedEntities.filter(entity => entity.status !== 'proposed' && ((reviewCounts[entity.id]?.entityUpdates || 0) > 0 || (reviewCounts[entity.id]?.kanora || 0) > 0)).length;
+  const selectedUpdateCount = selectedEntities.filter(entity => entity.status !== 'proposed' && ((reviewCounts[entity.id]?.entityUpdates || 0) > 0 || (reviewCounts[entity.id]?.narrative || 0) > 0)).length;
   const selectedConfirmedCount = selectedEntities.length - selectedProposedCount;
 
   useEffect(() => {
@@ -1495,7 +1495,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           <span className={`flex-1 min-w-0 truncate text-sm font-medium ${active ? 'text-accent' : 'text-text-secondary'}`}>{en.canonicalName}</span>
           {en.status === 'proposed' && <Sparkles className="w-3.5 h-3.5 text-status-warning shrink-0" data-tooltip="AI proposal, needs accept" />}
           {en.status !== 'proposed' && (reviewCounts[en.id]?.entityUpdates || 0) > 0 && <ShieldCheck className="w-3.5 h-3.5 text-status-info shrink-0" data-tooltip={`${reviewCounts[en.id].entityUpdates} entity update suggestions`} />}
-          {en.status !== 'proposed' && (reviewCounts[en.id]?.kanora || 0) > 0 && <Sparkles className="w-3.5 h-3.5 text-entity-event shrink-0" data-tooltip={`${reviewCounts[en.id].kanora} Kanora suggestions`} />}
+          {en.status !== 'proposed' && (reviewCounts[en.id]?.narrative || 0) > 0 && <Sparkles className="w-3.5 h-3.5 text-entity-event shrink-0" data-tooltip={`${reviewCounts[en.id].narrative} Narrative state suggestions`} />}
           {nameReview.has(en.id) && <AlertTriangle className="w-3.5 h-3.5 text-status-warning shrink-0" data-tooltip={describeNameReview(nameReview.get(en.id)[0])} />}
         </button>
       </div>
@@ -1524,7 +1524,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               <span className={`flex-1 min-w-0 truncate text-sm font-medium ${active ? 'text-accent' : 'text-text-secondary'}`}>{entity.canonicalName}</span>
               {entity.status === 'proposed' && <Sparkles className="w-3.5 h-3.5 text-status-warning shrink-0" data-tooltip="AI proposal, needs accept" />}
               {entity.status !== 'proposed' && (reviewCounts[entity.id]?.entityUpdates || 0) > 0 && <ShieldCheck className="w-3.5 h-3.5 text-status-info shrink-0" data-tooltip={`${reviewCounts[entity.id].entityUpdates} entity update suggestions`} />}
-              {entity.status !== 'proposed' && (reviewCounts[entity.id]?.kanora || 0) > 0 && <Sparkles className="w-3.5 h-3.5 text-entity-event shrink-0" data-tooltip={`${reviewCounts[entity.id].kanora} Kanora suggestions`} />}
+              {entity.status !== 'proposed' && (reviewCounts[entity.id]?.narrative || 0) > 0 && <Sparkles className="w-3.5 h-3.5 text-entity-event shrink-0" data-tooltip={`${reviewCounts[entity.id].narrative} Narrative state suggestions`} />}
               {nameReview.has(entity.id) && <AlertTriangle className="w-3.5 h-3.5 text-status-warning shrink-0" data-tooltip={describeNameReview(nameReview.get(entity.id)[0])} />}
             </button>
             {hasChildren && <button type="button" onClick={() => toggleLocation(entity.id)} aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${entity.canonicalName}`} className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-md text-text-subtle hover:text-text-secondary hover:bg-surface-hover/60 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent">
@@ -1821,7 +1821,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               <div className="flex flex-wrap gap-1.5">
               <button type="button" onClick={selectVisibleEntities} disabled={!filtered.length} className="text-[0.625rem] font-semibold px-2 py-1 rounded-md border border-border-subtle text-text-secondary hover:bg-surface-hover/60 disabled:opacity-40 cursor-pointer">Select visible</button>
               {proposedCount > 0 && <button type="button" onClick={() => selectEntities(entities.filter(entity => entity.status === 'proposed'))} className="text-[0.625rem] font-semibold px-2 py-1 rounded-md border border-status-warning/25 text-status-warning hover:bg-status-warning/10 cursor-pointer">Proposed</button>}
-              {pendingUpdateCount > 0 && <button type="button" onClick={() => selectEntities(entities.filter(entity => entity.status !== 'proposed' && ((reviewCounts[entity.id]?.entityUpdates || 0) > 0 || (reviewCounts[entity.id]?.kanora || 0) > 0)))} className="text-[0.625rem] font-semibold px-2 py-1 rounded-md border border-status-info/25 text-status-info hover:bg-status-info/10 cursor-pointer">Reviews</button>}
+              {pendingUpdateCount > 0 && <button type="button" onClick={() => selectEntities(entities.filter(entity => entity.status !== 'proposed' && ((reviewCounts[entity.id]?.entityUpdates || 0) > 0 || (reviewCounts[entity.id]?.narrative || 0) > 0)))} className="text-[0.625rem] font-semibold px-2 py-1 rounded-md border border-status-info/25 text-status-info hover:bg-status-info/10 cursor-pointer">Reviews</button>}
               {nameReviewCount > 0 && <button type="button" onClick={() => selectEntities(entities.filter(entity => nameReview.has(entity.id)))} className="text-[0.625rem] font-semibold px-2 py-1 rounded-md border border-status-warning/25 text-status-warning hover:bg-status-warning/10 cursor-pointer">Needs review</button>}
               {Object.keys(AI_POLICY).map(policy => {
                 const matches = entities.filter(entity => entity.status !== 'proposed' && (entity.data?.aiPolicy || 'review') === policy);
@@ -1962,16 +1962,16 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                 {visibleSheetTabs.map(t => (
                   <button key={t} onClick={() => { setCharTab(t); setEditingSection(null); }} className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[0.6875rem] font-semibold tracking-wide transition-colors cursor-pointer ${charTab === t ? 'bg-accent/20 text-accent shadow-sm' : 'text-text-muted hover:bg-surface-hover hover:text-text-primary'}`}>
                     {sheetTabLabel(t)}
-                    {t === 'review' && <span className={`rounded-full px-1.5 py-0.5 text-[0.625rem] ${charTab === t ? 'bg-accent/10' : 'bg-surface-hover/60'}`}>{selectedReviewCounts.entityUpdates + selectedReviewCounts.kanora}</span>}
+                    {t === 'review' && <span className={`rounded-full px-1.5 py-0.5 text-[0.625rem] ${charTab === t ? 'bg-accent/10' : 'bg-surface-hover/60'}`}>{selectedReviewCounts.entityUpdates + selectedReviewCounts.narrative}</span>}
                   </button>
                 ))}
               </div>
             )}
 
-            {charTab === 'review' && hasEntityReview && hasKanoraReview && (
+            {charTab === 'review' && hasEntityReview && hasNarrativeReview && (
               <div className="grid grid-cols-2 gap-1 rounded-card border border-border-subtle bg-surface-panel-muted/60 p-1.5 backdrop-blur-md">
                 <button type="button" onClick={() => setReviewKind('entity')} aria-pressed={reviewKind === 'entity'} className={`rounded-control px-3 py-2 text-xs font-bold uppercase tracking-[0.09em] transition-colors duration-200 ease-standard focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${reviewKind === 'entity' ? 'bg-status-info text-on-accent' : 'text-text-subtle hover:bg-surface-hover/60 hover:text-text-secondary'}`}>Entity updates <span className="ml-1 rounded-full bg-surface-canvas/35 px-1.5 py-0.5 tabular-nums">{selectedReviewCounts.entityUpdates}</span></button>
-                <button type="button" onClick={() => setReviewKind('kanora')} aria-pressed={reviewKind === 'kanora'} className={`rounded-control px-3 py-2 text-xs font-bold uppercase tracking-[0.09em] transition-colors duration-200 ease-standard focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${reviewKind === 'kanora' ? 'bg-entity-event text-on-accent' : 'text-text-subtle hover:bg-surface-hover/60 hover:text-text-secondary'}`}>Kanora <span className="ml-1 rounded-full bg-surface-canvas/35 px-1.5 py-0.5 tabular-nums">{selectedReviewCounts.kanora}</span></button>
+                <button type="button" onClick={() => setReviewKind('narrative')} aria-pressed={reviewKind === 'narrative'} className={`rounded-control px-3 py-2 text-xs font-bold uppercase tracking-[0.09em] transition-colors duration-200 ease-standard focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${reviewKind === 'narrative' ? 'bg-entity-event text-on-accent' : 'text-text-subtle hover:bg-surface-hover/60 hover:text-text-secondary'}`}>Narrative state <span className="ml-1 rounded-full bg-surface-canvas/35 px-1.5 py-0.5 tabular-nums">{selectedReviewCounts.narrative}</span></button>
               </div>
             )}
 
@@ -2089,8 +2089,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               <>
                 {charTab === 'review' && hasReview ? (
                   <div className="space-y-4">
-                    {reviewKind === 'kanora' && hasKanoraReview && (
-                      <WorldbuildKanoraReview
+                    {reviewKind === 'narrative' && hasNarrativeReview && (
+                      <WorldbuildNarrativeReview
                         workspaceId={workspaceId}
                         proposals={subjectReview.proposals || []}
                         entities={entities}

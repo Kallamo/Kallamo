@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "noEmit": false,
+    "rootDir": "./src",
+    "outDir": "./dist-main",
+    "resolveJsonModule": true,
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": [
+    "src/narrative/**/*.ts",
+    "src/main/features/narrative/**/*.ts",
+    "src/main/features/narrative/worldbuild-entity-discovery.js",
+    "src/main/features/worldbuild/knowledge-service.js",
+    "src/main/features/worldbuild/event-occurrences.ts",
+    "src/main/features/worldbuild/location-graph.ts",
+    "src/shared/location-sizes.ts",
+    "src/shared/retrieval-settings-runtime.ts"
+  ]
+}

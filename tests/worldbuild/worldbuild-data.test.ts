@@ -114,7 +114,7 @@ describe('Worldbuild runtime data adapter', () => {
       workspaceId: 'workspace-one', subjectId: 'mara', kind: 'knowledge', entryId: revised.known[0].id
     });
     expect(removed.known).toEqual([]);
-    expect(db.prepare("SELECT COUNT(*) AS count FROM kanora_narrative_records WHERE record_type = 'knowledge'").get())
+    expect(db.prepare("SELECT COUNT(*) AS count FROM narrative_records WHERE record_type = 'knowledge'").get())
       .toEqual({ count: 3 });
   });
 
@@ -136,7 +136,7 @@ describe('Worldbuild runtime data adapter', () => {
       workspaceId: 'workspace-one', subjectId: 'vharos', kind: 'memory', entryId: revised.memories[0].id
     });
     expect(removed.memories).toEqual([]);
-    expect(db.prepare("SELECT COUNT(*) AS count FROM kanora_narrative_records WHERE record_type = 'memory'").get())
+    expect(db.prepare("SELECT COUNT(*) AS count FROM narrative_records WHERE record_type = 'memory'").get())
       .toEqual({ count: 3 });
   });
 
@@ -152,7 +152,7 @@ describe('Worldbuild runtime data adapter', () => {
     // Adopt the entry's own narrative event as an occurrence, which is the shape the
     // occurrence writer produces: one narrative event carrying the recorded memories.
     const narrativeEventId = (db.prepare(
-      "SELECT source_event_id AS id FROM kanora_narrative_records WHERE record_type = 'memory'"
+      "SELECT source_event_id AS id FROM narrative_records WHERE record_type = 'memory'"
     ).get() as { id: string }).id;
     db.prepare(`
       INSERT INTO worldbuild_event_occurrences (
@@ -287,7 +287,7 @@ describe('Worldbuild runtime data adapter', () => {
       factId: revised[0].id,
     });
     expect(removed).toEqual([]);
-    expect(db.prepare("SELECT DISTINCT subject_id FROM kanora_narrative_records WHERE record_type = 'fact'").all())
+    expect(db.prepare("SELECT DISTINCT subject_id FROM narrative_records WHERE record_type = 'fact'").all())
       .toEqual([{ subject_id: null }]);
   });
 

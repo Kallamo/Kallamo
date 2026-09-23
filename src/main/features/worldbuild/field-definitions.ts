@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
-import type { EntityFieldDefinition } from '../../../kanora/contracts';
-import { validateEntityFieldDefinition, type ValidationIssue } from '../../../kanora/validation';
+import type { EntityFieldDefinition } from '../../../narrative/contracts';
+import { validateEntityFieldDefinition, type ValidationIssue } from '../../../narrative/validation';
 
 interface FieldDefinitionRow {
   workspace_id: string;
