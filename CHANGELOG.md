@@ -2,6 +2,80 @@
 
 All notable changes to Kallamo are documented in this file. Version numbers reflect the size of the change for the people using Kallamo: patch releases fix and refine, minor releases are named milestones, and major releases change what the product is.
 
+## [1.2.0] - Unreleased
+
+Roleplay Mode and a world that remembers: the story's state, what each character knows, and when things happened are kept as records the AI reads from the right point of view.
+
+### Added
+
+#### Roleplay Mode
+- **Roleplay Mode**: a workspace can be switched to roleplay in Configuration. It adds a player character, a current scene with its location, participating characters, nearby characters, objects present and current situation, a scenario context, and the focal perspective the narration is written from. Turning it off keeps every scene, resource, value and history entry.
+- **Roleplay panel**: a panel beside the chat shows the story date and time, the scene and the player's inventory, split into carried and equipped, and edits them in place. It shows the turn being processed while the story state updates.
+- **Tracked resources**: numeric values such as Health, Stamina or Mana, with a minimum, maximum, initial value, guidance for the AI and an AI update policy. Values can be assigned per entity, and Entity State shows each entity's current and inherited values.
+- **Story time**: roleplay has a clock in the world calendar. The Time Cost Matrix sets how long each kind of action or move can take, from Micro to Macro, and each reply records the place and time it happened.
+- **Narrative State**: after each roleplay reply, a background AI role reads the turn and updates the story: the scene, the time, inventories, tracked resources, relationships, what characters know, believe and remember, and new characters, places and items. A short triage decides which parts of the story the turn touched, and only those are analyzed in depth. The update policy decides what applies on its own and what waits under Pending AI Changes, where each suggestion is approved or rejected on its own.
+- Narrative State keeps only records that last. Every fact, piece of knowledge, belief and memory the AI writes declares its kind, and momentary detail such as where someone stands or what they are doing right now stays in the scene instead of becoming a record. A relationship moves only when the turn names a cause for it, courtesy and small talk never move it, and one event moves a relationship once. Ordinary world lore applies automatically, while secrets, identities, beliefs and ruptures wait for review.
+- A scene change applies whole or not at all, so characters are never moved into a room the player has just left.
+- An estimated time skip is capped at a week unless the story states the span in words, a stated skip always lands, and a completed move costs at least the minimum time for that kind of trip. The panel says when an advance was limited or raised.
+- A new character or creature with an established name can be added to Worldbuild automatically. Anonymous people, places and items are proposed for review.
+- **Narrative State Activity** lists recent changes and the updates that were interrupted or failed, which can be run again. Clean up stored records previews repeated statements, momentary scene detail and records that only hold an identifier, and retires them. Retired records stay in the history.
+- Settings has Show Narrative State Diagnostics, with the triage, the deep analysis, proposals, retries, timing and token use of each turn, and Show Retrieval & Context Diagnostics, with the exact narrative context sent with each reply.
+
+#### Perspective and Knowledge
+- **Perspective-aware context**: the roleplay context is built from what the focal character can know. Facts, a character's knowledge, beliefs and memories, and relationships are chosen by perspective and relevance inside the retrieval budget, so a secret stays out of the scene until someone in it learns it. Agentic retrieval can look up what a character knows in the same way.
+- **Canonical Facts**: objective truths of the world, kept apart from what any character knows or believes. Facts can be searched, filtered by source and retracted.
+- **Knowledge tab**: characters, creatures and factions hold Knowledge cards about the subjects they know. Access sets what they know about a subject: that it exists, which of its fields, and which of its connections. Statements hold knowledge and beliefs in the subject's own words, each with its kind and how it was learned, observed or reported, and who told them. Memories record experiences and whether they can still be recalled.
+- A faction shares its Knowledge cards with its members, with everyone or everyone except the members you pick. What a member learns alone never becomes the faction's knowledge.
+- Knowledge covers structural connections too, such as who leads a faction or who owns an item, and each one reads as its own kind of connection.
+
+#### Worldbuild
+- **World Calendar**: a workspace can define its own calendar, with months, hours per day, leap years, eras that count forward or backward, seasons and a timeline origin. Worldbuild dates and roleplay time follow it, and changing a rule that no longer fits saved dates asks how to handle them before anything changes. Every world date is written with the same date control.
+- **Event occurrences**: an Event can record each time it happened, with its date, location, participants, faction audience, the memories participants keep and its lasting consequences on state, inventories and relationships. Occurrences can be edited and removed, and the records they created follow them.
+- **Templates**: each entity type has a template. Its Data sections can be renamed, reordered, hidden or added, and custom fields can be short or long text, a number range, a single or multiple choice, or one or more entity references. Each field can be required and sets whether the AI can read it, read and propose edits, or not see it.
+- **Relationships**: a character's relationships have a value, a title and a description written from that character's side, and the other side's view is shown as an Incoming perspective.
+- **Inventory**: characters and creatures carry items with a quantity, a condition and notes.
+- **Factions** have command and territory, a roster, former members and relations with other factions, with a stance from -100 to 100. Membership keeps when someone joined or left, since when they lead and whether they founded it, and retrieval reads it. Individual creatures can join factions.
+- Creatures can be a specific being or a group or species, each with its own entry in Create and its own sections.
+- Locations have a Size: Region, Area, Place or Spot. Sizes follow how a place relates to a scene, not a genre, so a kingdom, a space station and a classroom all fit. The Type field keeps its free wording, and a location with no size works as before.
+- The location tree, pickers and sheets show each size with its own icon. When a location sits inside a smaller one, its sheet shows a warning but does not block the choice.
+- Update entities can suggest a size for a location from the kind of place your story names. The first Update entities run after this update reads every location's passages again, so it takes longer and costs more than usual.
+- The scene context names where the scene is and the places around it, for example "Crow Tavern (place), within Porto Velho (area), within Norvania (region)".
+- A place introduced during roleplay comes with a suggested size and a suggested parent location, both shown on the proposal. Approving it adds the location under that parent. A suggestion whose parent no longer exists adds the location without one.
+
+#### Retrieval, cost and safety
+- **Prompt Cache**: the stable part of each prompt is kept identical between turns, so providers that reuse a repeated prefix bill less for it. Anthropic, Claude through OpenRouter and Claude on AWS Bedrock are asked for that caching explicitly, and the token panel shows what the provider read from and wrote to its cache. Retrieved Context Position can move retrieved context from the system prompt to the turn, which lets the history be cached as well.
+- Retrieval settings have a Worldbuild Entity Limit, the number of entities that reach the context as complete dossiers, a Worldbuild Breadth, how far connections are followed to find them, and a Workspace Documents Top-K.
+- Before an update changes your data, Kallamo saves a verified copy of it. It keeps the last three copies, plus the one taken when you moved to a new version line, so a run of updates cannot remove your only copy of the data from the previous version. If the copy cannot be saved, the update does not touch your data, and when the disk is full Kallamo says how much space to free.
+- If an update cannot bring your data up to date, Kallamo puts the data back exactly as it was before the update and says so, instead of opening with half-updated data.
+- Settings > Advanced lists these copies under Update Safety Copies and has a Show Folder button. Restore Backup opens in that folder, so going back to a copy takes a few clicks.
+
+### Changed
+- In a roleplay, regenerating, editing or switching to another reply first undoes the story state of the reply it replaces, so the new reply is written from the state before it. Narrative State analyzes the reply you keep once, when the story continues or when you choose Update now, instead of once for every alternative you try. A replacement interrupted by closing the app is undone on the next start.
+- Deleting an entity also retires the Narrative State records about it and removes its Knowledge cards and scene entries, and the confirmation says how many. Merging two entities moves their story records, Knowledge and roleplay state to the one that remains, and an update already under way when the merge happens writes to it as well.
+- Opening Kallamo while it is already running brings the open window to the front instead of starting a second copy of the app.
+- Opening a workspace no longer moves the conversation after it appears. The roleplay layout and each reply's place and time are read before the chat is shown, and the view stays on the latest message while a reply streams, frames load or images arrive.
+- Switching between the workspace areas is faster. The chat stays open behind Writing, Worldbuild, Memory and Files and comes back where you were reading, Worldbuild shows its last list at once while it refreshes, and each area loads in the background before you open it.
+- Long conversations stay responsive. A streamed reply, a toast or an indexing update redraws only what changed, a new reply no longer re-reads the whole history, and older messages far from view are drawn only when you scroll to them.
+- Kallamo starts faster: code highlighting includes the common languages instead of every language, and screens load when they are first needed.
+- Turning Blur off in Settings now removes every blur effect. Chat bubbles blur only over a background image, where the effect is visible.
+- The interface has one scale for depth, corner radius and motion. Panels rely on borders instead of stacked shadows, and text sizes follow the interface scale.
+- Entity sheets have a clearer layout: a header tinted by type, framed fact grids and one style of section header. Create opens the whole Data tab of the type, custom fields included.
+- In a world with sizes, a scene can move anywhere inside the region around it, however deep the scene's location is nested. Worlds without sizes keep the previous rule.
+- The minimum time a move between two locations costs uses their sizes. A move within one place is Micro, a walk within one area is Local, crossing into another area is Transit, and a trip between areas of a region is Macro. Moves the map cannot place are still Transit.
+- Pickers that ask where something is, such as a scene's location or a unique item's location, list places and spots first. The picker for a location's parent lists the largest locations first.
+- Update entities tells its failures apart. A reply cut off before it produced anything, such as a reasoning model that spent its output on thinking, is retried with less evidence and more room, and only a malformed reply goes to the repair pass.
+
+### Fixed
+- Claude Opus 4.7 and later, Sonnet 5 and Fable no longer fail with an error about temperature. Kallamo sends a temperature only to the Claude models that accept one, on Anthropic and on AWS Bedrock.
+- Narrative State, the Tagger, Update entities and the RAG Query Simulator stay within the workspace's MAX API Payload, like the chat. An oversized request used to reach the provider and be billed.
+- Switching to another reply no longer loses it when saving the switch fails. The new reply is saved before the old one is removed.
+- Accepting every Update entities suggestion at once no longer fails on an entity that still carries chapter suggestions from an earlier version.
+- The Plan every message and Native tool calling switches are disabled when the Retrieval Planner is off.
+- The workspace menu on the dashboard stays open when clicked.
+- Row actions that appear on hover also appear when the row has keyboard focus.
+- A database whose updates ran before its base tables existed is repaired on startup.
+- A deleted or merged entity no longer reaches the AI as a bare identifier, and records left behind by earlier deletes are cleaned up once on startup.
+
 ## [1.1.7] - 2026-09-14
 
 ### Added
