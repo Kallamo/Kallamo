@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import { AlertTriangle, BookCheck, Check, Eye, Link2, Sparkles, X } from 'lucide-react';
+import { AlertTriangle, BookCheck, Check, Eye, X, ArrowRightLeft } from 'lucide-react';
+import { AiGlyph } from '../../components/ui/glyphs';
 import Button from '../../components/ui/Button';
 import {
   KNOWLEDGE_CATEGORY_LABELS,
@@ -107,7 +108,7 @@ export default function WorldbuildNarrativeReview({
             <header className="flex items-start justify-between gap-4 border-b border-border-subtle px-4 py-3.5">
               <div>
                 <h3 className="flex items-center gap-2 text-sm font-semibold text-text-primary">
-                  <Sparkles className="h-4 w-4 text-entity-event" />
+                  <AiGlyph className="h-4 w-4 text-entity-event" />
                   Narrative state suggestions
                 </h3>
                 <p className="mt-1 text-xs leading-relaxed text-text-subtle">{proposal.description}</p>
@@ -145,7 +146,7 @@ export default function WorldbuildNarrativeReview({
                         <div className="mt-2 flex flex-wrap gap-2 text-xs text-text-subtle">
                           {operation.method && <span className="inline-flex items-center gap-1 capitalize"><Eye className="h-3 w-3" />{operation.method}</span>}
                           {operation.confidence !== undefined && <span>{Math.round(operation.confidence * 100)}% confidence</span>}
-                          {operation.kind === 'relationship' && <span className="inline-flex items-center gap-1"><Link2 className="h-3 w-3" />Directional perspective</span>}
+                          {operation.kind === 'relationship' && <span className="inline-flex items-center gap-1"><ArrowRightLeft className="h-3 w-3" />Directional perspective</span>}
                           {operation.kind === 'fact' && <span className="inline-flex items-center gap-1"><BookCheck className="h-3 w-3" />Saved to Facts when approved</span>}
                         </div>
                       </div>

@@ -8,10 +8,11 @@ import Popover from './ui/Popover';
 import WritingDirectivesPanel from './WritingDirectivesPanel';
 import WritingNotesPanel from './WritingNotesPanel';
 import {
-  Folder, FolderPlus, FilePlus, Upload, ChevronRight, ChevronDown,
+  Folder, FolderPlus, FilePlus, ChevronRight, ChevronDown,
   FileText, Trash2, FolderInput, PenLine, Download,
-  PanelLeftClose, PanelLeftOpen, Loader2, Sparkles, Pin, StickyNote
+  PanelLeftClose, PanelLeftOpen, Pin, FileInput
 } from 'lucide-react';
+import { AiGlyph, SuggestionPendingGlyph, NoteGlyph } from './ui/glyphs';
 
 export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
   const { settings, showToast } = useApp();
@@ -454,10 +455,10 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
       <FileText className="w-3.5 h-3.5 shrink-0" />
       {editingId === doc.id ? renderEditable({ ...doc, type: 'document' }) : <span className="truncate">{doc.title}</span>}
       {inFlight[doc.id] && (
-        <Loader2 title="AI is working on this chapter" className="w-3.5 h-3.5 shrink-0 text-accent animate-spin" />
+        <AiGlyph animated title="AI is working on this chapter" className="w-3.5 h-3.5 shrink-0 text-accent" />
       )}
       {!inFlight[doc.id] && pendingIds.has(doc.id) && (
-        <Sparkles title="AI suggestion ready" className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
+        <SuggestionPendingGlyph title="AI suggestion ready" className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
       )}
       <ItemActions item={{ ...doc, type: 'document', name: doc.title }} />
       {moveMenuId === doc.id && <MoveMenu item={{ ...doc, type: 'document' }} />}
@@ -481,7 +482,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
           <span className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-500 mr-auto">Chapters</span>
           <button title="New chapter" onClick={() => newDocument(null)} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md"><FilePlus className="w-4 h-4" /></button>
           <button title="New folder" onClick={() => newFolder(null)} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md"><FolderPlus className="w-4 h-4" /></button>
-          <button title="Import .docx/.pdf" onClick={importDocument} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md"><Upload className="w-4 h-4" /></button>
+          <button title="Import .docx/.pdf" onClick={importDocument} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md"><FileInput className="w-4 h-4" /></button>
           <button title="Hide chapters" onClick={toggleSidebar} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md"><PanelLeftClose className="w-4 h-4" /></button>
         </div>
         <div
@@ -556,7 +557,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
             <Pin className="w-4 h-4" />
           </button>
           <button title="Notes" onClick={() => openPanel('notes')} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md">
-            <StickyNote className="w-4 h-4" />
+            <NoteGlyph className="w-4 h-4" />
           </button>
         </div>
       )}

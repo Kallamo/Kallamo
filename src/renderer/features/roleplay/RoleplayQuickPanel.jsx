@@ -1,8 +1,9 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Backpack, CalendarDays, Check, ChevronRight, Clock3, Image as ImageIcon, MapPin,
-  Loader2, MoreVertical, PanelRightOpen, Pencil, Plus, Settings2, Sparkles, Swords, Users, X
+  Backpack, CalendarDays, Check, ChevronRight, Image as ImageIcon, MapPin,
+  Loader2, MoreVertical, PanelRightOpen, Pencil, Plus, Settings2, Swords, Users, X, Clapperboard, Gamepad2, HandHelping, Hourglass
 } from 'lucide-react';
+import { AiGlyph } from '../../components/ui/glyphs';
 import SearchableSelect from '../../components/ui/SearchableSelect';
 import Popover from '../../components/ui/Popover';
 import Modal from '../../components/ui/Modal';
@@ -508,7 +509,7 @@ function RoleplayQuickPanel({
             {!!recentTurns.length && (
               <section className="border-t border-border-subtle pt-3">
                 <button type="button" onClick={() => setRecentOpen(value => !value)} aria-expanded={recentOpen} className="flex w-full items-center justify-between rounded-control text-xs font-semibold text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                  <span className="inline-flex items-center gap-2"><Sparkles aria-hidden="true" className="h-3.5 w-3.5 text-accent" />Recent Changes</span>
+                  <span className="inline-flex items-center gap-2"><AiGlyph className="h-3.5 w-3.5 text-accent" />Recent Changes</span>
                   <ChevronRight aria-hidden="true" className={'h-3.5 w-3.5 transition-transform duration-200 ease-standard ' + (recentOpen ? 'rotate-90' : '')} />
                 </button>
                 {recentOpen && (
@@ -565,7 +566,7 @@ function RoleplayQuickPanel({
       )}
 
       <footer className="grid h-14 shrink-0 grid-cols-2 gap-1 border-t border-border-subtle bg-surface-canvas/70 p-2">
-        <TabButton active={tab === 'scene'} onClick={() => setTab('scene')} icon={Users} label="Scene" />
+        <TabButton active={tab === 'scene'} onClick={() => setTab('scene')} icon={Clapperboard} label="Scene" />
         <TabButton active={tab === 'inventory'} onClick={() => setTab('inventory')} icon={Backpack} label="Inventory" count={inventory.length} />
       </footer>
     </aside>
@@ -594,7 +595,7 @@ function CharacterCard({ entity, typeLabel, protagonist = false, presence, menuO
       )}
       {menuOpen && (
         <FloatingMenu anchorRef={menuButtonRef} onClose={onMenu}>
-          <MenuAction onClick={onPlay} icon={Sparkles}>Play as character</MenuAction>
+          <MenuAction onClick={onPlay} icon={Gamepad2}>Play as character</MenuAction>
           {Object.entries(PRESENCE).map(([key, value]) => <MenuAction key={key} onClick={() => onPresence(key)} icon={value.icon}>{value.label}</MenuAction>)}
           <MenuAction onClick={onRemove} icon={X} danger>Remove from scene</MenuAction>
         </FloatingMenu>
@@ -651,7 +652,7 @@ function InventoryItemCard({ item, menuOpen, onMenu, onCloseMenu, onToggle, onTr
         <FloatingMenu anchorRef={menuButtonRef} onClose={onCloseMenu}>
           <MenuAction onClick={() => onToggle(item)} icon={Swords}>{item.equipped ? 'Unequip' : 'Equip'}</MenuAction>
           <MenuAction onClick={() => onTransfer({ itemId: item.itemId, mode: 'location', targetId: '', quantity: 1 })} icon={MapPin}>Drop or move</MenuAction>
-          <MenuAction onClick={() => onTransfer({ itemId: item.itemId, mode: 'character', targetId: '', quantity: 1 })} icon={Users}>Give to character</MenuAction>
+          <MenuAction onClick={() => onTransfer({ itemId: item.itemId, mode: 'character', targetId: '', quantity: 1 })} icon={HandHelping}>Give to character</MenuAction>
         </FloatingMenu>
       ) : null}
     </article>
@@ -695,7 +696,7 @@ function LauncherSummary({ player, participants, nearby, locationName, calendar,
        filling the card because the row, not the text, defines the width. */
     <span className="block border-t border-border-subtle opacity-0 transition-opacity duration-200 ease-standard group-hover:opacity-100 group-hover:delay-100 group-focus-within:opacity-100 group-focus-within:delay-100">
       <span className="flex w-full items-start gap-2.5 px-3.5 py-2.5">
-        <Clock3 aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-info" />
+        <Hourglass aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-info" />
         <span className="min-w-0 flex-1">
           <span className="flex items-baseline justify-between gap-2">
             <span className="min-w-0 truncate font-semibold text-text-primary">{formatWorldDate(calendar, clock)}</span>
@@ -769,7 +770,7 @@ function RecentTurn({ turn, names, definitions, open, onToggle, onResolve, resol
   return (
     <article className={`overflow-hidden rounded-card border transition-colors duration-200 ease-standard ${open ? 'border-accent/25 bg-accent/[0.035]' : 'border-border-subtle bg-surface-panel-muted/70 hover:bg-surface-panel-muted'}`}>
       <button type="button" aria-expanded={open} onClick={onToggle} className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40">
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-accent/20 bg-accent/[0.06] text-accent"><Sparkles aria-hidden="true" className="h-3.5 w-3.5" /></span>
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-accent/20 bg-accent/[0.06] text-accent"><AiGlyph className="h-3.5 w-3.5" /></span>
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2 text-[0.6875rem] font-bold uppercase tracking-[0.09em] text-text-secondary">{turn.frame ? `Turn ${turn.turnNumber}` : 'Recent change'}{pending > 0 && <span className="rounded-full bg-status-warning/10 px-1.5 py-0.5 text-[0.625rem] text-status-warning">{pending} review</span>}</span>
           <span className="mt-0.5 block truncate text-[0.6875rem] text-text-subtle">{date}{date && time ? ' · ' : ''}{time}{point?.display?.weekdayName ? ` · ${point.display.weekdayName}` : ''}</span>

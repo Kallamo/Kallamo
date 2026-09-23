@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { X, Check, CheckSquare, Square, Info, Archive, MessageSquare, EyeOff, AlertTriangle } from 'lucide-react';
+import { X, Check, Square, Info, Archive, MessageSquare, EyeOff, AlertTriangle, SquareCheck } from 'lucide-react';
 
 // Each message is exactly one of archive, keep or drop, so the token bar and summary card agree.
 const ARCHIVE = 'archive';
@@ -243,7 +243,7 @@ export default function SummarizeModal({
                 onClick={() => setAll(ARCHIVE)}
                 className="flex items-center space-x-1 text-gray-400 hover:text-white cursor-pointer transition-colors"
               >
-                <CheckSquare className="w-3.5 h-3.5" />
+                <SquareCheck className="w-3.5 h-3.5" />
                 <span>Archive All</span>
               </button>
               <span className="text-gray-800">|</span>

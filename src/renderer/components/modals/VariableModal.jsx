@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, HelpCircle, Code } from 'lucide-react';
+import { X, HelpCircle, Variable } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 
 export default function VariableModal({ variable, onClose, onSave }) {
@@ -62,7 +62,7 @@ export default function VariableModal({ variable, onClose, onSave }) {
         {/* Header */}
         <div className="shrink-0 flex justify-between items-center h-14 w-full px-6 bg-[#011419] border-b border-gray-800/50">
           <div className="flex items-center space-x-2.5">
-            <Code className="w-5 h-5 text-accent" />
+            <Variable className="w-5 h-5 text-accent" />
             <h2 className="text-lg font-bold text-white tracking-wide">
               {isEditing ? 'Edit Variable' : 'Create Variable'}
             </h2>

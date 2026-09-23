@@ -182,7 +182,7 @@ export function proposeLocationParent(size: unknown, chain: Array<Pick<LocationC
   const rank = locationSizeRank(known);
   for (const node of chain) {
     if (locationSizeRank(node.size) > rank) return node.id;
-    // An unsized scene location still holds a spot: a point within the scene is inside it.
+    // An unsized scene location still holds a spot: a room inside the scene's place is inside it.
     if (!node.size && known === 'spot') return node.id;
   }
   return null;

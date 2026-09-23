@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { RotateCw, Send, Square } from 'lucide-react';
+import { RotateCw, Send, Square, SendHorizontal } from 'lucide-react';
 
 const sessionDrafts = new Map();
 
@@ -77,7 +77,7 @@ export default function ChatInput({
           {isGenerating ? (
             isHoveringSend ? <Square className="w-4 h-4 fill-current text-text-primary" /> : <RotateCw className="w-4 h-4 animate-spin text-accent" />
           ) : (
-            <Send className="w-4 h-4" />
+            <SendHorizontal className="w-4 h-4" />
           )}
         </button>
       </span>

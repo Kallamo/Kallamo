@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Sparkles, X, AlertTriangle } from 'lucide-react';
+import { X, AlertTriangle } from 'lucide-react';
+import { AiGlyph } from './ui/glyphs';
 import Button from './ui/Button';
 import SearchableSelect from './ui/SearchableSelect';
 
@@ -18,7 +19,7 @@ export function InvokeModal({ selection, profiles, initialChannel, onSubmit, onC
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onMouseDown={onClose}>
       <div className="w-[34rem] max-w-[92vw] bg-[#0a161d] border border-gray-800 rounded-xl shadow-2xl p-5" onMouseDown={e => e.stopPropagation()}>
         <div className="flex items-center gap-2 mb-3">
-          <Sparkles className="w-4 h-4 text-accent" />
+          <AiGlyph className="w-4 h-4 text-accent" />
           <h2 className="text-sm font-semibold text-white">Invoke AI on selection</h2>
           <button onClick={onClose} className="ml-auto p-1 text-gray-500 hover:text-white"><X className="w-4 h-4" /></button>
         </div>

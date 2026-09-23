@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
-import { X, Plus, Trash2, ArrowUp, ArrowDown, Settings, ListOrdered, HelpCircle } from 'lucide-react';
+import { X, Plus, Trash2, ArrowUp, ArrowDown, ListOrdered, HelpCircle, Workflow } from 'lucide-react';
 
 export default function WorkflowModal({ workflow, onClose, onSave }) {
   const {
@@ -147,7 +147,7 @@ export default function WorkflowModal({ workflow, onClose, onSave }) {
             <div className="space-y-4 max-h-[360px] overflow-y-auto custom-scrollbar pr-1">
               {steps.length === 0 ? (
                 <div className="flex flex-col items-center justify-center text-gray-500 py-20 bg-[#0a161d]/20 border border-dashed border-gray-800/80 rounded-2xl">
-                  <Settings className="w-8 h-8 opacity-30 mb-2 animate-spin-slow" />
+                  <Workflow className="w-8 h-8 opacity-30 mb-2 animate-spin-slow" />
                   <p className="text-xs font-medium">No steps added to the workflow yet.</p>
                   <button
                     onClick={addStep}

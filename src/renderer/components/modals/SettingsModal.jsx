@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
-import { X, Plus, Key, Link2, Eye, EyeOff, Monitor, Settings, Layout, Layers, HardDrive, Trash2, FolderOpen, RefreshCw, Cpu, Database, Palette, Type, PenLine, AlertTriangle, Sparkles, SlidersHorizontal, Languages, ChevronDown } from 'lucide-react';
+import { X, Plus, Key, Link2, Eye, EyeOff, Settings, Layout, Layers, HardDrive, Trash2, FolderOpen, RefreshCw, Cpu, Database, Palette, Type, AlertTriangle, Sparkles, SlidersHorizontal, Languages, ChevronDown, FileSearch, LayoutDashboard, Plug, Settings2 } from 'lucide-react';
+import { AiGlyph, WritingGlyph } from '../ui/glyphs';
 import Logo, { Logotype } from '../../logo';
 import AiEngineRoleCard from '../../features/ai-engine/AiEngineRoleCard';
 import Toggle from '../ui/Toggle';
@@ -599,7 +600,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
               className={`flex items-center gap-2.5 text-left px-4 py-2.5 rounded-md text-sm font-medium transition-colors cursor-pointer ${activeTab === 'api' ? 'bg-[#1a2d32] text-white' : 'text-gray-400 hover:bg-[#1a2d32]/50 hover:text-gray-200'
                 }`}
             >
-              <Link2 className="w-4 h-4 shrink-0" />
+              <Plug className="w-4 h-4 shrink-0" />
               API Connections
             </button>
             <button
@@ -660,7 +661,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                   <div className="flex flex-col h-full">
                     <div className="shrink-0 flex justify-between items-center mb-6 border-b border-gray-800 pb-3">
                       <h3 className="text-xl font-bold text-white flex items-center space-x-2">
-                        <Link2 className="w-5 h-5 text-accent" />
+                        <Plug className="w-5 h-5 text-accent" />
                         <span>API Connections</span>
                       </h3>
                       <button
@@ -985,7 +986,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
               <div className="space-y-6">
                 <div className="shrink-0 mb-4 border-b border-gray-800 pb-3">
                   <h3 className="text-xl font-bold text-white flex items-center space-x-2">
-                    <Layout className="w-5 h-5 text-accent" />
+                    <LayoutDashboard className="w-5 h-5 text-accent" />
                     <span>Interface settings</span>
                   </h3>
                   <p className="caption mt-1">Customize the visual layout, typography, and default behavior.</p>
@@ -1089,7 +1090,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                   {/* SECTION: WRITING DESK */}
                   <div className="space-y-3">
                     <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
-                      <PenLine className="w-3.5 h-3.5" />
+                      <WritingGlyph className="w-3.5 h-3.5" />
                       <span>Writing Desk</span>
                     </h4>
                     <div className="bg-[#051116] rounded-xl border border-gray-800/80 divide-y divide-gray-800/80 overflow-hidden">
@@ -1134,7 +1135,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                   {/* SECTION 3: CHAT LAYOUT & CODE RENDERING */}
                   <div className="space-y-3">
                     <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
-                      <Layout className="w-3.5 h-3.5" />
+                      <LayoutDashboard className="w-3.5 h-3.5" />
                       <span>Chat Layout & Code Rendering</span>
                     </h4>
                     <div className="bg-[#051116] p-5 rounded-xl border border-gray-800/80 space-y-5">
@@ -1312,7 +1313,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                   <div id="ai-engine-roles-config" className="space-y-3 scroll-mt-6">
                     <div>
                       <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
-                        <Sparkles className="w-3.5 h-3.5" />
+                        <AiGlyph className="w-3.5 h-3.5" />
                         <span>AI Engine Roles</span>
                       </h4>
                       <p className="caption mt-1">Assign a global execution model to each internal responsibility. AI Profiles still control visible responses, voice, and creative behavior.</p>
@@ -1387,7 +1388,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
 
                   <details id="retrieval-config" className="group scroll-mt-6 space-y-3">
                     <summary className="flex cursor-pointer list-none items-center gap-3 rounded-xl border border-border-default bg-surface-panel px-4 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                      <Database className="h-4 w-4 shrink-0 text-accent" />
+                      <FileSearch className="h-4 w-4 shrink-0 text-accent" />
                       <span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-text-secondary">Retrieval &amp; Chunking</span><span className="mt-0.5 block text-xs text-text-muted">Candidate limits, relevance strictness, chunk size, and Worldbuild breadth.</span></span>
                       <ChevronDown className="h-4 w-4 shrink-0 text-text-subtle transition-transform group-open:rotate-180" />
                     </summary>
@@ -1720,7 +1721,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
               <div className="space-y-6">
                 <div className="shrink-0 mb-4 border-b border-gray-800 pb-3">
                   <h3 className="text-xl font-bold text-white flex items-center space-x-2">
-                    <Monitor className="w-5 h-5 text-accent" />
+                    <Settings2 className="w-5 h-5 text-accent" />
                     <span>Advanced Options</span>
                   </h3>
                   <p className="caption mt-1">Diagnostics, logging, and data storage management.</p>
@@ -1730,7 +1731,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
 
                   <div className="space-y-3">
                     <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
-                      <Monitor className="w-3.5 h-3.5" />
+                      <Settings2 className="w-3.5 h-3.5" />
                       <span>Generation</span>
                     </h4>
                     <div className="bg-[#051116] rounded-xl border border-gray-800/80 divide-y divide-gray-800/80 overflow-hidden">
@@ -1788,7 +1789,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                   {/* SECTION 3: DIAGNOSTICS & DEBUGGING */}
                   <div className="space-y-3">
                     <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
-                      <Monitor className="w-3.5 h-3.5" />
+                      <Settings2 className="w-3.5 h-3.5" />
                       <span>Diagnostics & Logging</span>
                     </h4>
                     <div className="bg-[#051116] rounded-xl border border-gray-800/80 divide-y divide-gray-800/80 overflow-hidden">
@@ -1864,7 +1865,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                   {/* SECTION 4: STORAGE & BACKUPS */}
                   <div className="space-y-3">
                     <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
-                      <Layers className="w-3.5 h-3.5" />
+                      <HardDrive className="w-3.5 h-3.5" />
                       <span>Data Storage & Backups</span>
                     </h4>
                     <div className="bg-[#051116] rounded-xl border border-gray-800/80 divide-y divide-gray-800/80 overflow-hidden">

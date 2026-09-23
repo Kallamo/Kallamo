@@ -1,5 +1,5 @@
 import React from 'react';
-import { Sparkles } from 'lucide-react';
+import { Sparkles, Lightbulb } from 'lucide-react';
 import Popover from './Popover';
 
 // Presentational only: the caller gates `open` on a persisted UI flag.
@@ -16,7 +16,7 @@ export default function CoachMark({ anchorRef, open, onDismiss, title, children,
       className="w-64 !p-3 border border-accent/40"
     >
       <div className="flex items-start gap-2">
-        <Sparkles className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+        <Lightbulb className="w-4 h-4 text-accent shrink-0 mt-0.5" />
         <div className="flex flex-col gap-1.5">
           {title && <span className="text-xs font-bold text-text-primary">{title}</span>}
           <p className="text-[0.6875rem] leading-relaxed text-text-secondary">{children}</p>

@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react';
-import { Brain, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Clock3, Copy, Edit, Eye, EyeOff, MapPin, MoreVertical, Paperclip, RotateCcw, RotateCw, Trash2 } from 'lucide-react';
+import { Brain, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Clock3, Copy, Edit, Eye, EyeOff, MapPin, MoreVertical, Paperclip, RotateCw, Trash2, History, Pencil } from 'lucide-react';
 import Popover from '../../../components/ui/Popover';
 import MessageMarkdown from './MessageMarkdown';
 import MessageEditor from './MessageEditor';
@@ -281,7 +281,7 @@ function MessageMenu({ message, actions }) {
           onClick={(event) => choose(event, () => actions.requestRevert(message.id))}
           className="w-full text-left px-3 py-1.5 text-gray-300 hover:bg-white/5 hover:text-accent transition-colors flex items-center space-x-1.5 cursor-pointer"
         >
-          <RotateCcw className="w-3.5 h-3.5 text-inherit" />
+          <History className="w-3.5 h-3.5 text-inherit" />
           <span>Revert Chat Here</span>
         </button>
       </Popover>
@@ -361,7 +361,7 @@ function UserMessage({ message, isEditing, isLastUser, view, actions }) {
                 onClick={() => actions.startEdit(message.id)}
                 className="flex items-center space-x-1 text-gray-300 hover:text-accent transition-colors cursor-pointer"
               >
-                <Edit className="w-3 h-3 transition-colors" />
+                <Pencil className="w-3 h-3 transition-colors" />
                 <span>Edit</span>
               </button>
             </>
@@ -512,7 +512,7 @@ function AiMessage({ message, isEditing, isLastAi, isTyping, frame, view, action
             onClick={() => actions.startEdit(message.id)}
             className="flex items-center space-x-1 text-gray-300 hover:text-accent transition-colors cursor-pointer"
           >
-            <Edit className="w-3 h-3 transition-colors" />
+            <Pencil className="w-3 h-3 transition-colors" />
             <span>Edit</span>
           </button>
           {isLastAi && (

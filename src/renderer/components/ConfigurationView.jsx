@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
-import { HelpCircle, Trash2, Plus, Edit, Image as ImageIcon, Check, AlertTriangle, Cpu, Workflow, Brain, PenTool, Palette, Send, Drama, RotateCcw } from 'lucide-react';
+import { HelpCircle, Trash2, Plus, Image as ImageIcon, Check, AlertTriangle, Workflow, Palette, Send, Drama, ImageUp, RefreshCw, Pencil } from 'lucide-react';
+import { MemoryGlyph, WritingGlyph, AiGlyph } from './ui/glyphs';
 import ProfileModal from './modals/ProfileModal';
 import WorkflowModal from './modals/WorkflowModal';
 import RoleplayModeSection from './RoleplayModeSection';
@@ -21,9 +22,9 @@ const safeParseJson = (str, fallback = []) => {
 };
 
 const SECTIONS = [
-  { id: 'agents', label: 'Profiles & Workflows', icon: Cpu },
-  { id: 'context', label: 'Context & Memory', icon: Brain },
-  { id: 'writing', label: 'Writing Desk', icon: PenTool },
+  { id: 'agents', label: 'Profiles & Workflows', icon: AiGlyph },
+  { id: 'context', label: 'Context & Memory', icon: MemoryGlyph },
+  { id: 'writing', label: 'Writing Desk', icon: WritingGlyph },
   { id: 'roleplay', label: 'Roleplay Mode', icon: Drama },
   { id: 'appearance', label: 'Appearance', icon: Palette },
 ];
@@ -486,7 +487,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
           <section ref={registerSection('agents')} data-section="agents" className="scroll-mt-6">
             <div className="rounded-surface border border-border-subtle bg-surface-panel/50 p-5 sm:p-6">
               <SectionHead
-                icon={Cpu}
+                icon={AiGlyph}
                 title="Profiles & Workflows"
                 desc="Toggle which AI Profiles and Workflows this workspace can run."
               />
@@ -585,7 +586,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
           <section ref={registerSection('context')} data-section="context" className="scroll-mt-6">
             <div className="rounded-surface border border-border-subtle bg-surface-panel/50 p-5 sm:p-6">
               <SectionHead
-                icon={Brain}
+                icon={MemoryGlyph}
                 title="Context & Memory"
                 desc="How much history the model sees, and when older messages get archived."
               />
@@ -697,7 +698,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                     title="Bring the whole conversation back and start the archive again"
                     className="flex items-center space-x-1 text-[0.625rem] font-semibold uppercase tracking-wider text-gray-500 hover:text-gray-300 transition-colors cursor-pointer"
                   >
-                    <RotateCcw className="w-3 h-3" />
+                    <RefreshCw className="w-3 h-3" />
                     <span>Rebuild everything</span>
                   </button>
                 )}
@@ -734,7 +735,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                               title="Click to rename"
                             >
                               <span className="truncate">{block.title}</span>
-                              <Edit aria-hidden="true" className="h-2.5 w-2.5 shrink-0 text-text-subtle opacity-0 transition-opacity group-hover/title:opacity-100 group-focus-visible/title:opacity-100" />
+                              <Pencil aria-hidden="true" className="h-2.5 w-2.5 shrink-0 text-text-subtle opacity-0 transition-opacity group-hover/title:opacity-100 group-focus-visible/title:opacity-100" />
                             </button>
                           </div>
                         )}
@@ -753,7 +754,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                               aria-label={`Rebuild ${block.title}`}
                               title="Rebuild this summary"
                             >
-                              <RotateCcw aria-hidden="true" className="h-3 w-3" />
+                              <RefreshCw aria-hidden="true" className="h-3 w-3" />
                             </button>
                           )}
                           <button
@@ -781,7 +782,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
           <section ref={registerSection('writing')} data-section="writing" className="scroll-mt-6">
             <div className="rounded-surface border border-border-subtle bg-surface-panel/50 p-5 sm:p-6">
               <SectionHead
-                icon={PenTool}
+                icon={WritingGlyph}
                 title="Writing Desk"
                 desc="How much of your chapter the AI reads when you ask it to help with a highlighted passage."
               />
@@ -853,7 +854,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                     >
                       {!bgImage ? (
                         <div className="flex flex-col items-center justify-center transition-all duration-200">
-                          <ImageIcon className="text-text-disabled group-hover:text-accent transition-colors w-6 h-6 mb-1" />
+                          <ImageUp className="text-text-disabled group-hover:text-accent transition-colors w-6 h-6 mb-1" />
                           <span className="text-[0.5625rem] text-text-subtle uppercase tracking-widest font-semibold hover-reveal font-sans">Upload Image</span>
                         </div>
                       ) : (
@@ -968,7 +969,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
       {archiveDialog?.kind === 'reset' && (
         <ConfirmDialog
           tone="warning"
-          icon={RotateCcw}
+          icon={RefreshCw}
           title="Rebuild the whole archive?"
           message={
             <>
@@ -991,7 +992,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
       {archiveDialog?.kind === 'rebuild' && (
         <ConfirmDialog
           tone="question"
-          icon={RotateCcw}
+          icon={RefreshCw}
           title={`Rebuild "${archiveDialog.block.title}"?`}
           message="This summary is deleted and the messages it covered return to the conversation, ready to be archived differently. Your other summaries stay exactly as they are."
           actions={[

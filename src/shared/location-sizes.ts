@@ -16,7 +16,7 @@ export const LOCATION_SIZES: readonly LocationSizeDefinition[] = Object.freeze([
   { id: 'region', label: 'Region', hint: 'Wider than a scene. You travel across it.', examples: 'a kingdom, a planet, an ocean', rank: 4 },
   { id: 'area', label: 'Area', hint: 'Holds many places. You move around inside it.', examples: 'a city, a space station, a campus', rank: 3 },
   { id: 'place', label: 'Place', hint: 'Where a scene happens.', examples: "a tavern, a ship's bridge, a classroom", rank: 2 },
-  { id: 'spot', label: 'Spot', hint: 'A point within a scene.', examples: 'an altar, a console, a table', rank: 1 }
+  { id: 'spot', label: 'Spot', hint: 'A room or enclosed space inside a place.', examples: "a back room, a ship's cabin, a cellar", rank: 1 }
 ]);
 
 export const LOCATION_SIZE_IDS: readonly LocationSize[] = Object.freeze(LOCATION_SIZES.map(size => size.id));

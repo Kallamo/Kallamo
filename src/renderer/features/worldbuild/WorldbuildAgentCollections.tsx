@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, Package, Pencil, Plus, Trash2, Users } from 'lucide-react';
+import { Check, Pencil, Plus, Trash2, Users, Backpack } from 'lucide-react';
+import { ConnectionsGlyph } from '../../components/ui/glyphs';
 import Button from '../../components/ui/Button';
 import SearchableSelect from '../../components/ui/SearchableSelect';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
@@ -138,8 +139,8 @@ export function WorldbuildRelationships({ workspaceId, subject, links, options, 
 
   const copy = subject.type === 'Factions' ? RELATION_COPY.faction : RELATION_COPY.subject;
   return (
-    <CollectionShell icon={Users} title={title} onAdd={available.length ? startAdd : undefined}>
-      {!links.length && <EmptyCollection icon={Users} title={copy.emptyTitle} detail={copy.emptyDetail} onAdd={available.length ? startAdd : undefined} />}
+    <CollectionShell icon={ConnectionsGlyph} title={title} onAdd={available.length ? startAdd : undefined}>
+      {!links.length && <EmptyCollection icon={ConnectionsGlyph} title={copy.emptyTitle} detail={copy.emptyDetail} onAdd={available.length ? startAdd : undefined} />}
       <div className="space-y-3">
         {links.map(link => editor?.link?.linkId === link.linkId
           ? <RelationshipEditor key={link.linkId} draft={editor} setDraft={setEditor} options={[link.entity as WorldbuildEntity, ...available]} copy={copy} onSave={save} onClose={() => setEditor(null)} saving={saving} compact />
@@ -290,8 +291,8 @@ export function WorldbuildInventory({ workspaceId, subject, links, options, api,
     } catch (error) { showToast(error instanceof Error ? error.message : 'Could not remove the item.', 'error'); }
     finally { setSaving(false); }
   };
-  return <CollectionShell icon={Package} title="Inventory" onAdd={available.length ? startAdd : undefined}>
-    {!links.length && <EmptyCollection icon={Package} title="Inventory is empty" detail="Add an existing Worldbuild item and describe how this subject carries it." onAdd={available.length ? startAdd : undefined} />}
+  return <CollectionShell icon={Backpack} title="Inventory" onAdd={available.length ? startAdd : undefined}>
+    {!links.length && <EmptyCollection icon={Backpack} title="Inventory is empty" detail="Add an existing Worldbuild item and describe how this subject carries it." onAdd={available.length ? startAdd : undefined} />}
     <div className="grid grid-cols-1 gap-2.5 xl:grid-cols-2">{links.map(link => <InventoryCard key={link.linkId} link={link} onEdit={() => startEdit(link)} onDelete={() => setDeleting(link)} />)}</div>
     {editor && <InventoryEditor draft={editor} setDraft={setEditor} options={editor.link ? [editor.link.entity as WorldbuildEntity] : available} onSave={save} onClose={() => setEditor(null)} saving={saving} />}
     {deleting && <ConfirmDialog title="Remove inventory item" message={`Remove ${deleting.entity.canonicalName} from ${subject.canonicalName}'s inventory? The Worldbuild item itself will not be deleted.`} actions={[
@@ -321,7 +322,7 @@ function InventoryCard({ link, onEdit, onDelete }: { link: EntityLink; onEdit():
 function InventoryEditor({ draft, setDraft, options, onSave, onClose, saving }: { draft: InventoryDraft; setDraft(draft: InventoryDraft): void; options: WorldbuildEntity[]; onSave(): void; onClose(): void; saving: boolean }) {
   const update = (patch: Partial<InventoryDraft>) => setDraft({ ...draft, ...patch });
   const isUnique = isUniqueItem(options.find(option => option.id === draft.itemId));
-  return <Modal size="lg" title={draft.link ? 'Edit inventory item' : 'Add inventory item'} icon={Package} onClose={onClose} closeOnEsc={!saving} closeOnOverlay={!saving}>
+  return <Modal size="lg" title={draft.link ? 'Edit inventory item' : 'Add inventory item'} icon={Backpack} onClose={onClose} closeOnEsc={!saving} closeOnOverlay={!saving}>
     <div className="space-y-5 p-5">
       <div className={`grid gap-4 ${isUnique ? 'grid-cols-1' : 'grid-cols-[minmax(0,1fr)_8rem]'}`}>
         <Field label="Item"><SearchableSelect value={draft.itemId} disabled={Boolean(draft.link)} onChange={(itemId: string) => update({ itemId })} options={options.map(option => ({ id: option.id, label: option.canonicalName, aliases: option.aliases, group: itemMeta(option.data?.itemType).label, icon: itemMeta(option.data?.itemType).icon }))} placeholder="Search for an item" /></Field>

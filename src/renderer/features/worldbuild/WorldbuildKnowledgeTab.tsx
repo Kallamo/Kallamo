@@ -1,8 +1,9 @@
 import { type KeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpenCheck, Brain, Check, ChevronDown, Eye, EyeOff, Lightbulb, Link2, Lock, LockKeyhole,
-  Megaphone, Pencil, Plus, Search, Sparkles, Trash2, Users, X,
+  Pencil, Plus, Search, Trash2, Users, X, Ear,
 } from 'lucide-react';
+import { AiGlyph, KnowledgeGlyph, OccurrencesGlyph } from '../../components/ui/glyphs';
 import Button from '../../components/ui/Button';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import Modal from '../../components/ui/Modal';
@@ -53,8 +54,8 @@ const MEMORY_STATES: Record<MemoryAccessibility, {
 // Same three origins the Facts registry names, so one vocabulary covers every record
 // the world keeps. An occurrence entry is owned by its event and read-only here.
 const ENTRY_ORIGINS: Record<'authored' | 'narrative' | 'occurrence', { label: string; icon: typeof Lock | null; tone: string }> = {
-  occurrence: { label: 'Event record', icon: Lock, tone: 'text-entity-event' },
-  narrative: { label: 'Narrative State', icon: Sparkles, tone: 'text-entity-event' },
+  occurrence: { label: 'Event record', icon: OccurrencesGlyph, tone: 'text-entity-event' },
+  narrative: { label: 'Narrative State', icon: AiGlyph, tone: 'text-entity-event' },
   authored: { label: 'Authored', icon: null, tone: 'text-text-subtle' },
 };
 const NATIVE_FIELDS: Record<string, Array<{ key: string; label: string }>> = {
@@ -255,7 +256,7 @@ export default function WorldbuildKnowledgeTab({ workspaceId, entity, entities, 
   return (
     <div className="space-y-4">
       <div role="tablist" aria-label="Knowledge views" aria-orientation="horizontal" className="grid grid-cols-2 gap-1 rounded-card border border-border-subtle bg-surface-panel/70 p-1.5">
-        <SurfaceButton id="knowledge-surface-tab" controls="knowledge-surface-panel" active={surface === 'knowledge'} onClick={() => setSurface('knowledge')} onKeyDown={event => handleSurfaceKeyDown(event, 'knowledge')} icon={BookOpenCheck} label="Knowledge" count={currentProjection?.cards.length ?? 0} />
+        <SurfaceButton id="knowledge-surface-tab" controls="knowledge-surface-panel" active={surface === 'knowledge'} onClick={() => setSurface('knowledge')} onKeyDown={event => handleSurfaceKeyDown(event, 'knowledge')} icon={KnowledgeGlyph} label="Knowledge" count={currentProjection?.cards.length ?? 0} />
         <SurfaceButton id="memories-surface-tab" controls="memories-surface-panel" active={surface === 'memories'} onClick={() => setSurface('memories')} onKeyDown={event => handleSurfaceKeyDown(event, 'memories')} icon={Brain} label="Memories" count={currentProjection?.memories.length ?? 0} />
       </div>
 
@@ -418,7 +419,7 @@ export function entryCategoryLabel(value: unknown): string | null {
 const ACQUISITION_META: Record<Acquisition, { label: string; icon: typeof Eye; hint: string }> = {
   witness: { label: 'Observed', icon: Eye, hint: 'They found this out for themselves.' },
   participant: { label: 'Observed', icon: Eye, hint: 'They were part of it.' },
-  reported: { label: 'Reported', icon: Megaphone, hint: 'Someone told them.' },
+  reported: { label: 'Reported', icon: Ear, hint: 'Someone told them.' },
   inferred: { label: 'Inferred', icon: Lightbulb, hint: 'They worked it out from what they had.' },
 };
 const AUTHORED_ACQUISITIONS: Acquisition[] = ['witness', 'reported'];
@@ -1715,7 +1716,7 @@ function AddCardModal({ owner, entities, existing, onClose, onAdd }: {
     }));
   }, [entities, existing, owner.id]);
   return (
-    <Modal onClose={onClose} size="md" title="Add Knowledge card" icon={BookOpenCheck}>
+    <Modal onClose={onClose} size="md" title="Add Knowledge card" icon={KnowledgeGlyph}>
       <div className="space-y-4 p-4 sm:p-5">
         <p className="text-sm leading-relaxed text-text-muted">Choose a subject whose existence {owner.canonicalName} knows about.</p>
         <SearchableSelect value={targetId} onChange={setTargetId} options={options} ariaLabel="Choose known subject" placeholder="Search for an entity" />

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
-import { X, AlertTriangle, ArrowRight, Save } from 'lucide-react';
+import { X, AlertTriangle, Save, Send } from 'lucide-react';
 
 export default function ContextOverflowModal() {
   const { overflowData, handleRespondToOverflow, settings } = useApp();
@@ -58,7 +58,7 @@ export default function ContextOverflowModal() {
             onClick={() => handleRespondToOverflow('send_anyway', overflowData.text)}
             className="px-4 py-2 bg-[#011419] hover:bg-[#1a2d32] border border-gray-800 text-gray-300 rounded-lg text-xs font-semibold transition-colors cursor-pointer flex items-center space-x-1.5"
           >
-            <ArrowRight className="w-3.5 h-3.5" />
+            <Send className="w-3.5 h-3.5" />
             <span>Send Anyway</span>
           </button>
           

@@ -8,8 +8,9 @@ import {
   Rows, Columns, Trash2, Combine,
   ArrowUpToLine, ArrowDownToLine, ArrowLeftToLine, ArrowRightToLine,
   AlignLeft, AlignCenter, AlignRight, AlignJustify, ALargeSmall, AlignVerticalSpaceAround, Pilcrow, Plus, FileCog, Asterisk,
-  DatabaseZap, Database, DatabaseBackup, AlertCircle, MoreHorizontal, Link2, ExternalLink, Unlink, Globe
+  MoreHorizontal, Link2, ExternalLink, Unlink, CircleHelp, Lightbulb, Orbit, UserRound, UsersRound
 } from 'lucide-react';
+import { AiGlyph, SuggestionPendingGlyph, IndexingGlyph, IndexedGlyph, IndexOutdatedGlyph, IndexErrorGlyph, IndexNeverGlyph, DragonIcon, MoneybagIcon, PennantIcon, StopwatchIcon, WorldbuildGlyph, TextColorGlyph } from './ui/glyphs';
 import ColorPicker from './ui/ColorPicker';
 import Button from './ui/Button';
 import Popover from './ui/Popover';
@@ -18,7 +19,7 @@ import ExportModal from './ExportModal';
 import { InvokeModal } from './WritingInvocation';
 import WritingFindReplace from './WritingFindReplace';
 import { useApp } from '../context/AppContext';
-import { Sparkles, X, Loader2, AlertTriangle, User, Users, MapPin, Package, Flag, Ghost, CalendarClock, BookOpen } from 'lucide-react';
+import { X, Loader2, AlertTriangle, MapPin } from 'lucide-react';
 import { DecorationSet } from '@tiptap/pm/view';
 import {
   getEditorExtensions, estimatePagesFromWords,
@@ -29,16 +30,16 @@ import {
 // Type → icon/label for linked-entity affordances (hover card, menu). Mirrors the
 // Worldbuild TYPES map so the in-text bridge speaks the same visual language.
 const ENTITY_TYPE_META = {
-  System:     { label: 'System / Concept', Icon: BookOpen },
+  System:     { label: 'System / Concept', Icon: Orbit },
   Locations:  { label: 'Location', Icon: MapPin },
-  Items:      { label: 'Item', Icon: Package },
-  Races:      { label: 'Race', Icon: Users },
-  Factions:   { label: 'Faction', Icon: Flag },
-  Characters: { label: 'Character', Icon: User },
-  Creatures:  { label: 'Creature', Icon: Ghost },
-  Events:     { label: 'Event', Icon: CalendarClock },
+  Items:      { label: 'Item', Icon: MoneybagIcon },
+  Races:      { label: 'Race', Icon: UsersRound },
+  Factions:   { label: 'Faction', Icon: PennantIcon },
+  Characters: { label: 'Character', Icon: UserRound },
+  Creatures:  { label: 'Creature', Icon: DragonIcon },
+  Events:     { label: 'Event', Icon: StopwatchIcon },
 };
-const entityMeta = (t) => ENTITY_TYPE_META[t] || { label: t || 'Entity', Icon: Globe };
+const entityMeta = (t) => ENTITY_TYPE_META[t] || { label: t || 'Entity', Icon: CircleHelp };
 const WB_TYPE_ORDER = ['Characters', 'Locations', 'Factions', 'Items', 'Creatures', 'Races', 'Events', 'System'];
 
 export const PAPER_THEMES = [
@@ -433,10 +434,9 @@ function ColorPopover({ editor }) {
         type="button"
         onMouseDown={(e) => { e.preventDefault(); setOpen(o => !o); }}
         title="Text color"
-        className="p-1.5 rounded-md text-gray-400 hover:text-white hover:bg-white/5 transition-colors cursor-pointer flex flex-col items-center"
+        className="p-1.5 rounded-md text-gray-400 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
       >
-        <Palette className="w-4 h-4" />
-        <span className="block w-4 h-1 rounded-sm mt-0.5" style={{ backgroundColor: current || '#9ca3af' }} />
+        <TextColorGlyph className="w-4 h-4" color={current || undefined} />
       </button>
       <Popover anchorRef={ref} open={open} onClose={close} matchAnchorWidth={false} scroll={false} className="w-52 !p-3 !rounded-lg">
         <div className="grid grid-cols-6 gap-1.5">
@@ -648,21 +648,21 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
   const vecPill = (() => {
     if (vecBusy) {
       const p = vecProgress ? ` ${vecProgress.done}/${vecProgress.total}` : '';
-      return { Icon: Loader2, spin: true, label: `Indexing${p}`, cls: 'text-gray-400 border-gray-500/35 bg-gray-500/10',
+      return { Icon: IndexingGlyph, animated: true, label: `Indexing${p}`, cls: 'text-gray-400 border-gray-500/35 bg-gray-500/10',
         title: vecProgress ? `Indexing chapter… (${vecProgress.phase} ${vecProgress.done}/${vecProgress.total})` : 'Indexing chapter…' };
     }
     switch (vecStatus) {
       case 'done':
-        return { Icon: Database, label: 'Indexed', cls: 'text-green-400 border-green-500/40 bg-green-500/10',
+        return { Icon: IndexedGlyph, label: 'Indexed', cls: 'text-green-400 border-green-500/40 bg-green-500/10',
           title: 'Chapter indexed. AI can see it from other chapters' };
       case 'outdated':
-        return { Icon: DatabaseBackup, label: 'Out of date', cls: 'text-amber-400 border-amber-500/45 bg-amber-500/10',
+        return { Icon: IndexOutdatedGlyph, label: 'Out of date', cls: 'text-amber-400 border-amber-500/45 bg-amber-500/10',
           title: 'Chapter edited since last index — AI is still reading the old version. Reindex to sync.' };
       case 'error':
-        return { Icon: AlertCircle, label: 'Index failed', cls: 'text-red-400 border-red-500/40 bg-red-500/10',
+        return { Icon: IndexErrorGlyph, label: 'Index failed', cls: 'text-red-400 border-red-500/40 bg-red-500/10',
           title: 'Last index failed. Click to try again.' };
       default:
-        return { Icon: DatabaseZap, label: 'Not indexed', cls: 'text-gray-400 border-gray-500/35 bg-gray-500/10',
+        return { Icon: IndexNeverGlyph, label: 'Not indexed', cls: 'text-gray-400 border-gray-500/35 bg-gray-500/10',
           title: 'Index this chapter for cross-chapter AI context' };
     }
   })();
@@ -1145,7 +1145,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
             title={vecPill.title}
             className={`flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full border text-xs font-medium transition-colors cursor-pointer disabled:cursor-default hover:bg-white/5 ${vecPill.cls}`}
           >
-            <vecPill.Icon className={`w-3.5 h-3.5 shrink-0 ${vecPill.spin ? 'animate-spin' : ''}`} />
+            <vecPill.Icon animated={vecPill.animated} className="w-3.5 h-3.5 shrink-0" />
             {vecPill.label}
           </button>
           <Popover anchorRef={vecBtnRef} open={vecMenuOpen} onClose={() => setVecMenuOpen(false)} matchAnchorWidth={false} align="right" className="w-72 !p-2">
@@ -1233,7 +1233,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
               onClick={openInvoke}
               className="flex items-center gap-1.5 bg-accent text-white text-xs font-medium rounded-lg px-2.5 py-1.5 shadow-xl hover:brightness-110 cursor-pointer"
             >
-              <Sparkles className="w-3.5 h-3.5" /> Invoke AI
+              <AiGlyph className="w-3.5 h-3.5" /> Invoke AI
             </button>
             <button
               type="button"
@@ -1248,7 +1248,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
           {!uiFlags.wdEntityLinkSeen && !wbOpen && (
             <div className="w-60 bg-[#0a161d] border border-accent/40 rounded-lg p-3 shadow-xl">
               <div className="flex items-start gap-2">
-                <Sparkles className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+                <Lightbulb className="w-4 h-4 text-accent shrink-0 mt-0.5" />
                 <div className="flex flex-col gap-1.5">
                   <span className="text-xs font-bold text-white">Link words to your world</span>
                   <p className="text-[0.6875rem] leading-relaxed text-gray-300">
@@ -1271,7 +1271,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
       <Popover anchorRef={wbAnchorRef} open={wbOpen} onClose={() => setWbOpen(false)} matchAnchorWidth={false} align="right" scroll={false} className="w-80 !p-1.5">
         {wbData && (
           <div className="flex items-center gap-1.5 px-2 py-1 mb-1 border-b border-gray-800/70">
-            <Globe className="w-3 h-3 text-accent shrink-0" />
+            <WorldbuildGlyph className="w-3 h-3 text-accent shrink-0" />
             <span className="text-[0.625rem] uppercase tracking-wider font-bold text-gray-500">Worldbuild</span>
             <span className="text-[0.625rem] text-gray-600 truncate ml-auto max-w-[130px]">“{wbData.text}”</span>
           </div>
@@ -1406,7 +1406,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
             )}
             <div className="pointer-events-auto flex items-center gap-2 bg-[#0a161d]/95 border border-gray-800 rounded-full shadow-2xl px-3 py-1.5">
               <span className="flex items-center gap-1.5 text-[0.6875rem] tabular-nums pr-1 border-r border-gray-800">
-                <Sparkles className="w-3.5 h-3.5 text-accent" />
+                <SuggestionPendingGlyph className="w-3.5 h-3.5 text-accent" />
                 {stale
                   ? <span className="text-red-400">text changed, reject</span>
                   : <span><span className="text-emerald-400">+{delta.added}</span> / <span className="text-red-400">−{delta.removed}</span></span>}

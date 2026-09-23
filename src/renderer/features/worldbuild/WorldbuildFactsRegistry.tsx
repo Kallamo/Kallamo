@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BookCheck, Lock, Pencil, Plus, Search, Sparkles, Trash2, X } from 'lucide-react';
+import { BookCheck, Lock, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
+import { AiGlyph } from '../../components/ui/glyphs';
 import Button from '../../components/ui/Button';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import Modal from '../../components/ui/Modal';
@@ -259,7 +260,7 @@ function FactCard({ fact, names, onEdit, onDelete }: {
   const origin = fact.managed
     ? { label: 'Event record', icon: Lock, tone: 'text-entity-event' }
     : fact.source === 'narrative'
-      ? { label: 'Narrative State', icon: Sparkles, tone: 'text-entity-event' }
+      ? { label: 'Narrative State', icon: AiGlyph, tone: 'text-entity-event' }
       : { label: 'Authored', icon: null, tone: 'text-text-subtle' };
   const OriginIcon = origin.icon;
   return (

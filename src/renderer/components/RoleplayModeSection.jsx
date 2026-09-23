@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { Activity, Check, ChevronDown, Clock3, Eye, Gauge, MapPin, Pencil, Plus, RefreshCw, Shield, Sparkles, Trash2, Users, X } from 'lucide-react';
+import { Activity, Check, ChevronDown, Gauge, Pencil, Plus, RefreshCw, Trash2, X, Clapperboard, Drama, HeartPulse, Hourglass, UserCog } from 'lucide-react';
+import { AiGlyph } from './ui/glyphs';
 import ColorField from './ui/ColorField';
 import ConfirmDialog from './ui/ConfirmDialog';
 import SearchableSelect from './ui/SearchableSelect';
@@ -355,7 +356,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
       : { value: 'Up to date', tone: 'default' };
 
   return <div className="rounded-surface border border-border-subtle bg-surface-panel/50 p-3 sm:p-5 lg:p-6">
-    <SectionHead icon={Shield} title="Roleplay Mode" desc="Set the active scene first. Open campaign systems only when you need deeper control." />
+    <SectionHead icon={Drama} title="Roleplay Mode" desc="Set the active scene first. Open campaign systems only when you need deeper control." />
     <section className="overflow-hidden rounded-card border border-border-default bg-surface-canvas">
       <div className="flex min-w-0 items-center justify-between gap-6 px-5 py-4">
         <div className="min-w-0"><span className="text-sm font-semibold text-text-primary">Enable Roleplay Mode</span><p className="caption mt-1">Turning it off preserves every scene, resource, value, and history entry.</p></div>
@@ -369,7 +370,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
     </section>
 
     {enabled && <div className="mt-5 space-y-5">
-      <Panel icon={MapPin} title="Current Scene" summary={`${playerName} · ${locationName}`} description="Choose the active perspective, location, and who is present. These are the details used on the next roleplay turn." defaultOpen>
+      <Panel icon={Clapperboard} title="Current Scene" summary={`${playerName} · ${locationName}`} description="Choose the active perspective, location, and who is present. These are the details used on the next roleplay turn." defaultOpen>
         <div className="grid gap-4 lg:grid-cols-3">
           <Field label="Player character" hint="The focal perspective used for roleplay context." fieldLabel={fieldLabel}><SearchableSelect ariaLabel="Player character" value={settings.playerEntityId || ''} onChange={value => saveSettings({ playerEntityId: value || null })} options={entityOptions(groups.actors)} placeholder="Select a character" /></Field>
           <Field label="Current location" hint="Where the active scene is happening." fieldLabel={fieldLabel}><SearchableSelect ariaLabel="Current location" value={scene.locationId || ''} onChange={value => saveScene({ locationId: value || null })} options={sceneLocationOptions} placeholder="Select a location" /></Field>
@@ -392,7 +393,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
         </div>
       </Panel>
 
-      {pendingCount > 0 && <Panel icon={Activity} title="Pending AI Changes" summary={`${pendingCount} waiting`} description="Review changes that require your approval before they become part of the campaign state." defaultOpen>
+      {pendingCount > 0 && <Panel icon={AiGlyph} title="Pending AI Changes" summary={`${pendingCount} waiting`} description="Review changes that require your approval before they become part of the campaign state." defaultOpen>
         <div className="space-y-2">
           {pendingEntities.map(change => <Pending key={change.id} label={describeEntityChangeLabel(change)} detail={describeEntityChangeDetail(change, names)} onApprove={() => resolve('entity', change.id, 'approved')} onReject={() => resolve('entity', change.id, 'rejected')} />)}
           {pendingNarrative.map(item => <Pending key={item.proposal.changeSet.event.id} label={item.proposal.changeSet.event.description} detail={describeNarrativeEvent(item, names)} onApprove={() => resolve('narrative', item.proposal.changeSet.event.id, 'approved')} onReject={() => resolve('narrative', item.proposal.changeSet.event.id, 'rejected')} />)}
@@ -402,7 +403,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
         </div>
       </Panel>}
 
-      <Panel icon={Clock3} title="Time Cost Matrix" summary={`${timeMatrix.categories.length} action ranges`} description="Optional timing rules for actions that do not state an exact duration. Explicit time in the narrative always takes priority.">
+      <Panel icon={Hourglass} title="Time Cost Matrix" summary={`${timeMatrix.categories.length} action ranges`} description="Optional timing rules for actions that do not state an exact duration. Explicit time in the narrative always takes priority.">
         {!timeMatrix.categories.length && <Empty text="No action ranges are configured." />}
         <div className="space-y-2">
           {timeMatrix.categories.map(category => {
@@ -467,7 +468,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
         {!definitions.length && !resourceDraft && <Empty text="No tracked resources yet. Add Health, Stamina, Mana, or another numeric state." />}
       </Panel>
 
-      <Panel icon={Users} title="Resource Assignments" summary={`${assignments.length} assignments`} description="Apply tracked resources to characters, races, or species. Individual values take priority over inherited defaults.">
+      <Panel icon={UserCog} title="Resource Assignments" summary={`${assignments.length} assignments`} description="Apply tracked resources to characters, races, or species. Individual values take priority over inherited defaults.">
         <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <p className="max-w-2xl text-xs leading-relaxed text-text-muted">Create an explicit value only when a character, Race, or species should differ from the resource default.</p>
           <button
@@ -499,7 +500,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
         <AssignmentList assignments={assignments} definitions={definitions} names={names} onRemove={setRemovingAssignment} />
       </Panel>
 
-      <Panel icon={Eye} title="Entity State" summary={inspectId ? names.get(inspectId) || 'Selected entity' : 'Inspect effective values'} description="Check a character's current resources and whether each value is individual, inherited, or using its default.">
+      <Panel icon={HeartPulse} title="Entity State" summary={inspectId ? names.get(inspectId) || 'Selected entity' : 'Inspect effective values'} description="Check a character's current resources and whether each value is individual, inherited, or using its default.">
         <div className="grid gap-3 rounded-card border border-border-subtle bg-surface-panel-muted/45 p-3.5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
           <Field label="Entity" hint="Select one character to inspect its effective state." fieldLabel={fieldLabel}><SearchableSelect ariaLabel="Entity state subject" value={inspectId} onChange={inspect} options={entityOptions(groups.actors)} placeholder="Search for an entity" /></Field>
           {inspectId && <span className="inline-flex min-h-10 items-center justify-center rounded-control border border-border-subtle bg-surface-input/55 px-3 text-xs font-semibold text-text-secondary">{resources.length} {resources.length === 1 ? 'value' : 'values'}</span>}
@@ -523,7 +524,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
             <p className="mt-0.5 text-[0.6875rem] leading-relaxed text-text-muted">Find statements stored more than once and momentary scene detail kept as durable canon. You see what would change before anything is applied.</p>
           </div>
           <button type="button" onClick={previewCompaction} disabled={compactionBusy} className="inline-flex min-h-9 shrink-0 items-center justify-center gap-1.5 rounded-control border border-border-default px-3 text-[0.6875rem] font-semibold text-text-secondary hover:bg-surface-hover/60 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-            <Sparkles aria-hidden="true" className="h-3.5 w-3.5" />
+            <AiGlyph className="h-3.5 w-3.5" />
             Check records
           </button>
         </div>

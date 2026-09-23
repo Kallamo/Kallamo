@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { copyText } from '../utils/clipboard';
-import { ArrowLeft, Plus, Bot, Trash2, Edit3, Database, Workflow, Play, Code, Copy, AlertTriangle, Download, UploadCloud } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Database, Workflow, Play, Copy, AlertTriangle, Download, Variable, Pencil, Upload } from 'lucide-react';
+import { AiGlyph } from './ui/glyphs';
 import ProfileModal from './modals/ProfileModal';
 import WorkflowModal from './modals/WorkflowModal';
 import DeleteModal from './modals/DeleteModal';
@@ -303,7 +304,7 @@ export default function LibraryView() {
                   onClick={handleImportProfile}
                   className="flex items-center space-x-2 border border-gray-800 hover:border-accent hover:bg-accent/5 text-gray-300 hover:text-white px-4 py-2 rounded-md transition-all active:scale-95 text-sm cursor-pointer font-bold animate-in duration-200"
                 >
-                  <UploadCloud className="w-4 h-4 text-accent" />
+                  <Upload className="w-4 h-4 text-accent" />
                   <span>Import</span>
                 </button>
                 <button 
@@ -318,7 +319,7 @@ export default function LibraryView() {
             
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 overflow-y-auto custom-scrollbar pb-8 pr-2">
               {writingProfiles.length === 0 ? (
-                <EmptyState className="col-span-full" icon={Bot} title="No AI profiles yet" subtitle="Create a reusable voice, model connection, and behavior rule set." action={<Button icon={Plus} onClick={openNewProfile}>New Profile</Button>} />
+                <EmptyState className="col-span-full" icon={AiGlyph} title="No AI profiles yet" subtitle="Create a reusable voice, model connection, and behavior rule set." action={<Button icon={Plus} onClick={openNewProfile}>New Profile</Button>} />
               ) : (
                 writingProfiles.map(profile => {
                   const linkedApi = apiProfiles.find(ap => ap.id === profile.apiProfileId);
@@ -365,7 +366,7 @@ export default function LibraryView() {
                             className="text-gray-400 hover:text-white p-1.5 bg-[#0a141d] rounded-md transition-colors cursor-pointer" 
                             title="Edit Profile"
                           >
-                            <Edit3 className="w-3.5 h-3.5" />
+                            <Pencil className="w-3.5 h-3.5" />
                           </button>
                           <button 
                             onClick={(e) => triggerDeleteProfile(e, profile)}
@@ -408,7 +409,7 @@ export default function LibraryView() {
                   onClick={handleImportWorkflow}
                   className="flex items-center space-x-2 border border-gray-800 hover:border-accent hover:bg-accent/5 text-gray-300 hover:text-white px-4 py-2 rounded-md transition-all active:scale-95 text-sm cursor-pointer font-bold animate-in duration-200"
                 >
-                  <UploadCloud className="w-4 h-4 text-accent" />
+                  <Upload className="w-4 h-4 text-accent" />
                   <span>Import</span>
                 </button>
                 <button 
@@ -463,7 +464,7 @@ export default function LibraryView() {
                             className="text-gray-400 hover:text-white p-1.5 bg-[#0a141d] rounded-md transition-colors cursor-pointer" 
                             title="Edit Workflow"
                           >
-                            <Edit3 className="w-3.5 h-3.5" />
+                            <Pencil className="w-3.5 h-3.5" />
                           </button>
                           <button 
                             onClick={(e) => triggerDeleteWorkflow(e, wf)}
@@ -526,7 +527,7 @@ export default function LibraryView() {
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 overflow-y-auto custom-scrollbar pb-8 pr-2">
               {variables.length === 0 ? (
-                <EmptyState className="col-span-full" icon={Code} title="No variables yet" subtitle="Create reusable values for prompts and workflow steps." action={<Button icon={Plus} onClick={openNewVariable}>New Variable</Button>} />
+                <EmptyState className="col-span-full" icon={Variable} title="No variables yet" subtitle="Create reusable values for prompts and workflow steps." action={<Button icon={Plus} onClick={openNewVariable}>New Variable</Button>} />
               ) : (
                 variables.map(v => (
                   <div 
@@ -543,7 +544,7 @@ export default function LibraryView() {
                           className="text-gray-400 hover:text-white p-1.5 bg-[#0a141d] rounded-md transition-colors cursor-pointer" 
                           title="Edit Variable"
                         >
-                          <Edit3 className="w-3.5 h-3.5" />
+                          <Pencil className="w-3.5 h-3.5" />
                         </button>
                         <button 
                           onClick={(e) => triggerDeleteVariable(e, v)}

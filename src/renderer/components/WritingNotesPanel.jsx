@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { StickyNote, Plus, Trash2, Check, X, PanelRightClose, RotateCcw, CornerDownLeft, Sparkles, ChevronDown, ChevronRight } from 'lucide-react';
+import { Plus, Trash2, Check, X, PanelRightClose, RotateCcw, CornerDownLeft, ChevronDown, ChevronRight, CircleCheck } from 'lucide-react';
+import { AiGlyph, AiNoteGlyph, NoteGlyph } from './ui/glyphs';
 import { parseMarkdown } from '../utils/markdown';
 import ConfirmDialog from './ui/ConfirmDialog';
 
@@ -89,7 +90,7 @@ export default function WritingNotesPanel({ documentId, workspaceId, electronAPI
                 onClick={() => toggle(n.id)}
                 className={`w-full text-left truncate text-gray-400 hover:text-gray-200 ${n.status === 'resolved' ? 'line-through' : ''}`}
               >
-                {n.source === 'ai' && <Sparkles className="inline w-3 h-3 text-accent/70 mr-1 -mt-0.5" />}
+                {n.source === 'ai' && <AiNoteGlyph className="inline w-3 h-3 text-accent/70 mr-1 -mt-0.5" />}
                 {preview(n.body)}
               </button>
             )}
@@ -133,7 +134,7 @@ export default function WritingNotesPanel({ documentId, workspaceId, electronAPI
 
                 {n.source === 'ai' && (
                   <div className="flex items-center gap-1 text-[0.625rem] text-gray-600 mt-1.5 min-w-0">
-                    <Sparkles className="w-3 h-3 text-accent/70 shrink-0" />
+                    <AiGlyph className="w-3 h-3 text-accent/70 shrink-0" />
                     <span className="truncate">{profiles[n.profileId] || 'AI'}{n.instruction ? ` · ${n.instruction}` : ''}</span>
                   </div>
                 )}
@@ -145,7 +146,7 @@ export default function WritingNotesPanel({ documentId, workspaceId, electronAPI
             {n.status === 'resolved' ? (
               <button title="Reopen" onClick={() => setStatus(n.id, 'open')} className="p-0.5 text-gray-600 hover:text-white"><RotateCcw className="w-3.5 h-3.5" /></button>
             ) : (
-              <button title="Mark resolved" onClick={() => setStatus(n.id, 'resolved')} className="p-0.5 text-gray-600 hover:text-green-400"><Check className="w-3.5 h-3.5" /></button>
+              <button title="Mark resolved" onClick={() => setStatus(n.id, 'resolved')} className="p-0.5 text-gray-600 hover:text-green-400"><CircleCheck className="w-3.5 h-3.5" /></button>
             )}
             <button title="Delete" onClick={() => setConfirmId(n.id)} className="p-0.5 text-gray-600 hover:text-red-400 hover-reveal"><Trash2 className="w-3.5 h-3.5" /></button>
           </div>
@@ -157,7 +158,7 @@ export default function WritingNotesPanel({ documentId, workspaceId, electronAPI
   return (
     <div className="w-72 shrink-0 border-l border-gray-800/40 flex flex-col bg-[#011419]/25">
       <div className="flex items-center gap-2 px-3 py-3 border-b border-gray-800/80 bg-[#011419]/35">
-        <StickyNote className="w-3.5 h-3.5 text-accent shrink-0" />
+        <NoteGlyph className="w-3.5 h-3.5 text-accent shrink-0" />
         <span className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-500 mr-auto">Notes</span>
         <button title="Hide notes" onClick={onClose} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md">
           <PanelRightClose className="w-4 h-4" />

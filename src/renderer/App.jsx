@@ -14,7 +14,7 @@ import {
 } from './views';
 import { preloadWhenIdle } from './utils/lazyWithPreload';
 import { PerfProfiler } from './utils/perf';
-import { X, CheckCircle, AlertCircle, Info } from 'lucide-react';
+import { X, AlertCircle, Info, CircleCheck } from 'lucide-react';
 
 // Self-hosted highlight.js themes (bundled by Vite, served from the app origin instead of a CDN)
 import atomOneDarkThemeUrl from 'highlight.js/styles/atom-one-dark.css?url';
@@ -85,7 +85,7 @@ function EngineDownloadStatus() {
           {engineDownloadProgress.status === 'error' ? (
             <AlertCircle className="w-12 h-12 text-red-400" />
           ) : engineDownloadProgress.status === 'completed' ? (
-            <CheckCircle className="w-12 h-12 text-emerald-400" />
+            <CircleCheck className="w-12 h-12 text-emerald-400" />
           ) : (
             <Spinner className="w-12 h-12" />
           )}
@@ -295,7 +295,7 @@ function ToastNotification() {
   return (
     <div className="fixed bottom-6 right-6 z-[9999] flex items-start space-x-3 bg-[#0a161d]/95 border border-gray-800 rounded-xl px-4 py-3.5 shadow-2xl animate-in slide-in-from-bottom-4 duration-300 max-w-md">
       <div className="shrink-0 mt-0.5">
-        {toast.type === 'success' && <CheckCircle className="w-5.5 h-5.5 text-emerald-400" />}
+        {toast.type === 'success' && <CircleCheck className="w-5.5 h-5.5 text-emerald-400" />}
         {toast.type === 'error' && <AlertCircle className="w-5.5 h-5.5 text-red-400" />}
         {toast.type === 'info' && <Info className="w-5.5 h-5.5 text-accent" />}
       </div>

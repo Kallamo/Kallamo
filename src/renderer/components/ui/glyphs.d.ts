@@ -1,0 +1,31 @@
+import type { ForwardRefExoticComponent, RefAttributes } from 'react';
+import type { LucideProps } from 'lucide-react';
+
+export type GlyphProps = Omit<LucideProps, 'ref'> & { animated?: boolean };
+export type Glyph = ForwardRefExoticComponent<GlyphProps & RefAttributes<SVGSVGElement>>;
+
+export const AiGlyph: Glyph;
+export const WorkspaceGlyph: Glyph;
+export const WritingGlyph: Glyph;
+export const WorldbuildGlyph: Glyph;
+export const MemoryGlyph: Glyph;
+export const KnowledgeGlyph: Glyph;
+export const ConnectionsGlyph: Glyph;
+export const OccurrencesGlyph: Glyph;
+export const PolicyOpenGlyph: Glyph;
+export const PolicyReviewGlyph: Glyph;
+export const PolicyLockedGlyph: Glyph;
+export const SuggestionPendingGlyph: Glyph;
+export const NoteGlyph: Glyph;
+export const AiNoteGlyph: Glyph;
+export const IndexNeverGlyph: Glyph;
+export const IndexingGlyph: Glyph;
+export const IndexedGlyph: Glyph;
+export const IndexOutdatedGlyph: Glyph;
+export const IndexErrorGlyph: Glyph;
+export const TextColorGlyph: ForwardRefExoticComponent<GlyphProps & { color?: string } & RefAttributes<SVGSVGElement>>;
+export const DragonIcon: Glyph;
+export const PennantIcon: Glyph;
+export const MoneybagIcon: Glyph;
+export const StopwatchIcon: Glyph;
+export const StoreIcon: Glyph;

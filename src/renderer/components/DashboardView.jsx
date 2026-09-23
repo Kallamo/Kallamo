@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { useApp } from '../context/AppContext';
-import { Search, Library, Plus, MoreVertical, Pin, Trash2, Edit3, MessageSquare } from 'lucide-react';
+import { Search, Plus, MoreVertical, Pin, Trash2, LibraryBig, Pencil } from 'lucide-react';
+import { WorkspaceGlyph } from './ui/glyphs';
 import ChatModal from './modals/ChatModal';
 import DeleteModal from './modals/DeleteModal';
 import Popover from './ui/Popover';
@@ -94,7 +95,7 @@ export default function DashboardView() {
           </div>
 
           {/* Library Link */}
-          <Button variant="ghost" icon={Library} onClick={() => setCurrentView('library')}>Library</Button>
+          <Button variant="ghost" icon={LibraryBig} onClick={() => setCurrentView('library')}>Library</Button>
 
           {/* New Chat Button */}
           <Button
@@ -114,7 +115,7 @@ export default function DashboardView() {
         {sortedChats.length === 0 ? (
           <EmptyState
             className="col-span-full mt-6"
-            icon={MessageSquare}
+            icon={WorkspaceGlyph}
             title={searchQuery ? 'No matching workspaces' : 'Create your first workspace'}
             subtitle={searchQuery ? 'Try a different title or clear the search.' : 'Keep a story, its Worldbuild, memory, files, and writing tools together.'}
             action={!searchQuery ? <Button icon={Plus} onClick={() => { setChatToEdit(null); setShowChatModal(true); }}>New Workspace</Button> : null}
@@ -174,7 +175,7 @@ export default function DashboardView() {
                           onClick={(e) => openEditModal(e, chat)}
                           className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-[#1a2d32] hover:text-white transition-colors flex items-center space-x-2 cursor-pointer font-medium"
                         >
-                          <Edit3 className="w-3 h-3" />
+                          <Pencil className="w-3 h-3" />
                           <span>Edit</span>
                         </button>
                         <div className="h-px bg-gray-800 w-full my-1"></div>

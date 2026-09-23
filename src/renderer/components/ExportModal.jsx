@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Modal from './ui/Modal';
 import Button from './ui/Button';
-import { Download, ChevronLeft, ChevronRight, FileDown, FileText, Hash } from 'lucide-react';
+import { Download, ChevronLeft, ChevronRight, FileText, Hash, FileType } from 'lucide-react';
 import { proseCss, buildExportHtml } from './writingExport';
 
 function Segmented({ value, options, onChange }) {
@@ -202,8 +202,8 @@ export default function ExportModal({ editor, pageConfig, title, electronAPI, on
           <div className="space-y-2">
             <span className="caption">Format</span>
             <Segmented value={format} onChange={setFormat} options={[
-              { value: 'pdf', label: 'PDF', icon: FileDown },
-              { value: 'docx', label: 'Word', icon: FileText },
+              { value: 'pdf', label: 'PDF', icon: FileText },
+              { value: 'docx', label: 'Word', icon: FileType },
             ]} />
           </div>
 

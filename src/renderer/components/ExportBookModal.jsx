@@ -2,7 +2,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import Modal from './ui/Modal';
 import Button from './ui/Button';
 import Checkbox from './ui/Checkbox';
-import { ChevronLeft, ChevronRight, FileDown, FileText, Hash, BookOpen } from 'lucide-react';
+import { ChevronLeft, ChevronRight, FileText, Hash, Book, FileType } from 'lucide-react';
 import { proseCss, buildExportHtml } from './writingExport';
 import { chapterJsonToHtml } from './writingExtensions';
 
@@ -267,14 +267,14 @@ export default function ExportBookModal({ folderTitle, documents, electronAPI, o
 
   if (loading || !pageConfig) {
     return (
-      <Modal onClose={onClose} size="xl" title="Export Folder" icon={BookOpen} className="!max-w-5xl">
+      <Modal onClose={onClose} size="xl" title="Export Folder" icon={Book} className="!max-w-5xl">
         <div className="h-64 flex items-center justify-center text-gray-500 text-sm">Loading chapters…</div>
       </Modal>
     );
   }
 
   return (
-    <Modal onClose={onClose} size="xl" title={`Export Folder: ${folderTitle}`} icon={BookOpen} className="!max-w-5xl">
+    <Modal onClose={onClose} size="xl" title={`Export Folder: ${folderTitle}`} icon={Book} className="!max-w-5xl">
       <div className="flex min-h-0" style={{ height: '78vh' }}>
         {/* Preview */}
         <div ref={previewColRef} className="flex-1 min-w-0 bg-[#00080B] overflow-y-auto custom-scrollbar flex flex-col items-center py-6 px-4">
@@ -324,8 +324,8 @@ export default function ExportBookModal({ folderTitle, documents, electronAPI, o
           <div className="space-y-2">
             <span className="caption">Format</span>
             <Segmented value={format} onChange={setFormat} options={[
-              { value: 'pdf', label: 'PDF', icon: FileDown },
-              { value: 'docx', label: 'Word', icon: FileText },
+              { value: 'pdf', label: 'PDF', icon: FileText },
+              { value: 'docx', label: 'Word', icon: FileType },
             ]} />
           </div>
 

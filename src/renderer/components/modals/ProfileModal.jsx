@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
-import { X, Cpu, Palette, SlidersHorizontal, Wand2 } from 'lucide-react';
+import { X, SlidersHorizontal, IdCard, Plug, ScrollText } from 'lucide-react';
 import { parseMarkdown, escapeHTML } from '../../utils/markdown';
 import Popover from '../ui/Popover';
 
@@ -270,7 +270,7 @@ export default function ProfileModal({ profile, onClose, onSave }) {
             <div className="space-y-4 flex flex-col xl:col-span-5">
               {/* Identity */}
               <div className={cardCls}>
-                <Head icon={Palette} title="Identity" />
+                <Head icon={IdCard} title="Identity" />
                 <div className="space-y-3.5">
                   <div>
                     <label className={labelCls}>Profile Name</label>
@@ -314,7 +314,7 @@ export default function ProfileModal({ profile, onClose, onSave }) {
               {/* Engine Connection + Generation, one card: the model and how it generates
                   belong together. Params sit as a lighter sub-section, not a second medallion. */}
               <div className={`${cardCls} flex-1 flex flex-col`}>
-                <Head icon={Cpu} title="Engine Connection" />
+                <Head icon={Plug} title="Engine Connection" />
                 <div className="space-y-3.5">
                   <div>
                     <label className={labelCls}>Linked API Profile</label>
@@ -420,7 +420,7 @@ export default function ProfileModal({ profile, onClose, onSave }) {
             {/* Right Column (System Prompt) */}
             <div className="flex min-h-[32rem] flex-col overflow-hidden xl:col-span-7 xl:h-full xl:min-h-0">
               <div className={`${cardCls} flex flex-col h-full min-h-0`}>
-                <Head icon={Wand2} title="Behavior & Rules" right={
+                <Head icon={ScrollText} title="Behavior & Rules" right={
                   <div className="flex bg-[#011419] p-0.5 rounded-lg border border-gray-800 text-[0.625rem] font-bold uppercase tracking-wider select-none shrink-0 z-10 space-x-0.5">
                     <button
                       type="button"

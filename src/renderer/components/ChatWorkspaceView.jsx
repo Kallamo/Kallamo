@@ -1,6 +1,7 @@
 import { Suspense, useCallback, useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useApp } from '../context/AppContext';
-import { ArrowDown, ArrowLeft, Sliders, Paperclip, Cpu, Workflow, X, ChevronDown, Plus, Brain, Folder, MessageSquare, PenTool, Globe, AlertTriangle } from 'lucide-react';
+import { ArrowDown, ArrowLeft, Paperclip, Workflow, X, ChevronDown, Plus, Folder, AlertTriangle, SlidersHorizontal } from 'lucide-react';
+import { WorkspaceGlyph, WritingGlyph, WorldbuildGlyph, MemoryGlyph, AiGlyph } from './ui/glyphs';
 import SummarizeModal from './modals/SummarizeModal';
 import { selectActiveMessages, selectArchivableMessages } from '../features/chat/archive-coverage';
 import FilePreviewModal from './modals/FilePreviewModal';
@@ -953,10 +954,10 @@ export default function ChatWorkspaceView() {
 
           <nav aria-label="Workspace areas" className="flex min-w-0 items-center gap-0.5 rounded-lg border border-border-subtle bg-surface-input/80 p-1 select-none z-10">
             {[
-              ['chat', 'Workspace', MessageSquare],
-              ['writing', 'Writing', PenTool],
-              ['worldbuild', 'Worldbuild', Globe],
-              ['memory', 'Memory', Brain],
+              ['chat', 'Workspace', WorkspaceGlyph],
+              ['writing', 'Writing', WritingGlyph],
+              ['worldbuild', 'Worldbuild', WorldbuildGlyph],
+              ['memory', 'Memory', MemoryGlyph],
               ['files', 'Files', Folder],
             ].map(([id, label, Icon]) => (
               <button
@@ -1003,7 +1004,7 @@ export default function ChatWorkspaceView() {
                 : 'text-text-muted hover:text-text-primary hover:bg-white/5'
                 }`}
             >
-              <Sliders className="h-4 w-4" />
+              <SlidersHorizontal className="h-4 w-4" />
               <span>Configuration</span>
             </button>
           </div>
@@ -1156,7 +1157,7 @@ export default function ChatWorkspaceView() {
                     onClick={() => setProfileDropdownOpen(!profileDropdownOpen)}
                     className="px-2.5 py-1.5 rounded-lg border border-gray-800 bg-[#011419] text-gray-400 hover:text-white text-[0.625rem] font-bold uppercase tracking-wider flex items-center space-x-1.5 cursor-pointer transition-colors"
                   >
-                    <Cpu className="w-3.5 h-3.5" />
+                    <AiGlyph className="w-3.5 h-3.5" />
                     <span className="truncate max-w-[80px]">
                       {selectedTarget ? selectedTarget.name : 'Select a Profile'}
                     </span>

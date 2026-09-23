@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Flag, List, Plus, RotateCcw, Save, Settings2, Trash2 } from 'lucide-react';
+import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, List, Plus, RotateCcw, Save, Settings2, Trash2, Bookmark } from 'lucide-react';
 import ColorField from '../../components/ui/ColorField';
 import SelectMenu from '../../components/ui/SelectMenu';
 import WorldDateInput, { formatWorldDate } from './WorldDateInput';
@@ -291,7 +291,7 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
               </div>
             </div>
             <div className="flex items-center gap-1">
-              <button type="button" onClick={goToStoryDay} disabled={!storyClock} className="inline-flex items-center gap-1.5 rounded-control px-2 py-1.5 text-xs font-semibold text-text-muted transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40" title={storyClock ? `Go to ${formatWorldDate(calendar, storyClock)}` : undefined}><Flag className="h-3.5 w-3.5" />Story day</button>
+              <button type="button" onClick={goToStoryDay} disabled={!storyClock} className="inline-flex items-center gap-1.5 rounded-control px-2 py-1.5 text-xs font-semibold text-text-muted transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40" title={storyClock ? `Go to ${formatWorldDate(calendar, storyClock)}` : undefined}><Bookmark className="h-3.5 w-3.5" />Story day</button>
               <button type="button" onClick={() => moveMonth(1)} className="rounded-control p-2 text-text-muted transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><ChevronRight className="h-4 w-4" /></button>
             </div>
           </div>
@@ -311,9 +311,9 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
                   const isStoryDay = sameDate(storyClock, { eraId: cursor.eraId, year: cursor.year, month: cursor.month, day });
                   return <div key={day} className="calendar-day group min-h-28 border-b border-r border-border-subtle p-2" style={{ '--calendar-day-season': daySeason?.color || seasonColor }}>
                     <div className="flex items-center justify-between gap-2">
-                      <span className={`inline-flex items-center gap-1 text-xs font-semibold ${isStoryDay ? 'text-accent' : 'text-text-secondary'}`}>{day}{isStoryDay && <Flag className="h-3 w-3 fill-current" aria-label="Current story day" />}</span>
+                      <span className={`inline-flex items-center gap-1 text-xs font-semibold ${isStoryDay ? 'text-accent' : 'text-text-secondary'}`}>{day}{isStoryDay && <Bookmark className="h-3 w-3 fill-current" aria-label="Current story day" />}</span>
                       <span className="flex items-center gap-1.5">
-                        {!isStoryDay && <button type="button" onClick={() => setStoryDay(day)} className="opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100" aria-label={`Set day ${day} as current story day`} title="Set as current story day"><Flag className="h-3 w-3 text-text-subtle hover:text-accent" /></button>}
+                        {!isStoryDay && <button type="button" onClick={() => setStoryDay(day)} className="opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100" aria-label={`Set day ${day} as current story day`} title="Set as current story day"><Bookmark className="h-3 w-3 text-text-subtle hover:text-accent" /></button>}
                         {daySeason && <span className="h-1.5 w-1.5 rounded-full opacity-70" style={{ backgroundColor: daySeason.color }} title={daySeason.name} />}
                       </span>
                     </div>

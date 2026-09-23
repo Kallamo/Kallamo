@@ -1,20 +1,20 @@
 import {
-  Anvil, BookOpen, Box, CalendarClock, Coins, Crosshair, FileText, Flag, FlaskConical,
-  Gem, Ghost, Globe, Hammer, LandPlot, Map as MapIcon, MapPin, Package, Pickaxe, Shield, Sword, User, Users,
+  Anvil, Box, CircleHelp, Coins, DoorOpen, FlaskRound, Gem, Hammer, LandPlot, Map as MapIcon, MapPin, Orbit, Package, Pickaxe, Scroll, Shield, Sword, UserRound, UsersRound,
 } from 'lucide-react';
+import { DragonIcon, MoneybagIcon, PennantIcon, StopwatchIcon, StoreIcon } from '../../components/ui/glyphs';
 import { LOCATION_SIZES, locationSizeGuide, locationSizeLabel, locationSizeOf, presenceOrder } from '../../../shared/location-sizes';
 
 // `wash` tints the open sheet's header with the type's color, so each kind of
 // record is recognizable before its name is read.
 export const TYPES = {
-  System: { label: 'System / Concept', icon: BookOpen, medallion: 'bg-entity-concept/15 text-entity-concept border-entity-concept/30', ring: 'border-entity-concept/25', soft: 'text-entity-concept', wash: 'from-entity-concept/12' },
+  System: { label: 'System / Concept', icon: Orbit, medallion: 'bg-entity-concept/15 text-entity-concept border-entity-concept/30', ring: 'border-entity-concept/25', soft: 'text-entity-concept', wash: 'from-entity-concept/12' },
   Locations: { label: 'Location', icon: MapPin, medallion: 'bg-entity-location/15 text-entity-location border-entity-location/30', ring: 'border-entity-location/25', soft: 'text-entity-location', wash: 'from-entity-location/12' },
-  Items: { label: 'Item', icon: Package, medallion: 'bg-entity-item/15 text-entity-item border-entity-item/30', ring: 'border-entity-item/25', soft: 'text-entity-item', wash: 'from-entity-item/12' },
-  Races: { label: 'Race', icon: Users, medallion: 'bg-entity-race/15 text-entity-race border-entity-race/30', ring: 'border-entity-race/25', soft: 'text-entity-race', wash: 'from-entity-race/12' },
-  Factions: { label: 'Faction', icon: Flag, medallion: 'bg-entity-faction/15 text-entity-faction border-entity-faction/30', ring: 'border-entity-faction/25', soft: 'text-entity-faction', wash: 'from-entity-faction/12' },
-  Characters: { label: 'Character', icon: User, medallion: 'bg-entity-character/15 text-entity-character border-entity-character/30', ring: 'border-entity-character/25', soft: 'text-entity-character', wash: 'from-entity-character/12' },
-  Creatures: { label: 'Creature / Entity', icon: Ghost, medallion: 'bg-entity-creature/15 text-entity-creature border-entity-creature/30', ring: 'border-entity-creature/25', soft: 'text-entity-creature', wash: 'from-entity-creature/12' },
-  Events: { label: 'Event', icon: CalendarClock, medallion: 'bg-entity-event/15 text-entity-event border-entity-event/30', ring: 'border-entity-event/25', soft: 'text-entity-event', wash: 'from-entity-event/12' },
+  Items: { label: 'Item', icon: MoneybagIcon, medallion: 'bg-entity-item/15 text-entity-item border-entity-item/30', ring: 'border-entity-item/25', soft: 'text-entity-item', wash: 'from-entity-item/12' },
+  Races: { label: 'Race', icon: UsersRound, medallion: 'bg-entity-race/15 text-entity-race border-entity-race/30', ring: 'border-entity-race/25', soft: 'text-entity-race', wash: 'from-entity-race/12' },
+  Factions: { label: 'Faction', icon: PennantIcon, medallion: 'bg-entity-faction/15 text-entity-faction border-entity-faction/30', ring: 'border-entity-faction/25', soft: 'text-entity-faction', wash: 'from-entity-faction/12' },
+  Characters: { label: 'Character', icon: UserRound, medallion: 'bg-entity-character/15 text-entity-character border-entity-character/30', ring: 'border-entity-character/25', soft: 'text-entity-character', wash: 'from-entity-character/12' },
+  Creatures: { label: 'Creature / Entity', icon: DragonIcon, medallion: 'bg-entity-creature/15 text-entity-creature border-entity-creature/30', ring: 'border-entity-creature/25', soft: 'text-entity-creature', wash: 'from-entity-creature/12' },
+  Events: { label: 'Event', icon: StopwatchIcon, medallion: 'bg-entity-event/15 text-entity-event border-entity-event/30', ring: 'border-entity-event/25', soft: 'text-entity-event', wash: 'from-entity-event/12' },
 };
 
 export const TYPE_ORDER = ['Characters', 'Locations', 'Factions', 'Items', 'Races', 'Creatures', 'Events', 'System'];
@@ -27,9 +27,9 @@ export const ITEM_TYPE_META = {
   Weapon: { icon: Sword, label: 'Weapon' },
   Armor: { icon: Shield, label: 'Armor' },
   Tool: { icon: Hammer, label: 'Tool' },
-  Consumable: { icon: FlaskConical, label: 'Consumable' },
+  Consumable: { icon: FlaskRound, label: 'Consumable' },
   Artifact: { icon: Gem, label: 'Artifact' },
-  Document: { icon: FileText, label: 'Document' },
+  Document: { icon: Scroll, label: 'Document' },
   Container: { icon: Box, label: 'Container' },
   Currency: { icon: Coins, label: 'Currency' },
   Material: { icon: Anvil, label: 'Material' },
@@ -40,7 +40,7 @@ export const ITEM_TYPE_META = {
 export const itemMeta = (itemType) => ITEM_TYPE_META[itemType] || { icon: Package, label: itemType || 'Item' };
 
 // The icon grows with the place, so a list of locations reads as a scale before any name.
-const LOCATION_SIZE_ICONS = { region: MapIcon, area: LandPlot, place: MapPin, spot: Crosshair };
+const LOCATION_SIZE_ICONS = { region: MapIcon, area: LandPlot, place: StoreIcon, spot: DoorOpen };
 export const LOCATION_SIZE_OPTIONS = LOCATION_SIZES.map(size => ({
   value: size.id, label: size.label, guide: locationSizeGuide(size.id), icon: LOCATION_SIZE_ICONS[size.id],
 }));
@@ -99,5 +99,5 @@ const FIELD_LABELS = {
   description: 'Description', locationType: 'Type', size: 'Size', itemType: 'Type', content: 'Content',
 };
 
-export const meta = (type) => TYPES[type] || { label: type, icon: Globe, medallion: 'bg-entity-concept/15 text-entity-concept border-entity-concept/30', ring: 'border-entity-concept/25', soft: 'text-entity-concept', wash: 'from-entity-concept/12' };
+export const meta = (type) => TYPES[type] || { label: type, icon: CircleHelp, medallion: 'bg-entity-concept/15 text-entity-concept border-entity-concept/30', ring: 'border-entity-concept/25', soft: 'text-entity-concept', wash: 'from-entity-concept/12' };
 export const fieldLabel = (field) => FIELD_LABELS[field] || field;

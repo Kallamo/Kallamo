@@ -1,6 +1,6 @@
 import React from 'react';
 import { useApp } from '../../context/AppContext';
-import { AlertCircle, Play, XCircle } from 'lucide-react';
+import { AlertCircle, XCircle, RotateCw } from 'lucide-react';
 import { isRetryableGenerationError } from '../../features/chat/generation-target';
 
 export default function ProfileErrorModal() {
@@ -58,7 +58,7 @@ export default function ProfileErrorModal() {
               onClick={() => handleRespondToError('retry')}
               className="flex flex-col items-center justify-center p-3 bg-accent/5 hover:bg-accent/15 border border-accent/20 hover:border-accent rounded-xl transition-all cursor-pointer group"
             >
-              <Play className="w-5 h-5 text-accent mb-1 group-hover:scale-110 transition-transform" fill="currentColor" />
+              <RotateCw className="w-5 h-5 text-accent mb-1 group-hover:scale-110 transition-transform" fill="currentColor" />
               <span className="text-[0.625rem] font-bold text-accent uppercase tracking-wider">Retry</span>
               <span className="text-[0.5rem] text-gray-500 text-center mt-0.5 leading-tight">Re-execute call to AI Profile</span>
             </button>

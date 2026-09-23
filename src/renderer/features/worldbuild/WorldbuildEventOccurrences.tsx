@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { Activity, Brain, CalendarClock, ChevronDown, Link2, Package, Pencil, Plus, Sparkles, Trash2, Users, X } from 'lucide-react';
+import { Activity, Brain, ChevronDown, Pencil, Plus, Trash2, Users, X, Backpack, Waypoints } from 'lucide-react';
+import { AiGlyph, ConnectionsGlyph, StopwatchIcon } from '../../components/ui/glyphs';
 import Button from '../../components/ui/Button';
 import Checkbox from '../../components/ui/Checkbox';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
@@ -282,7 +283,7 @@ export default function WorldbuildEventOccurrences({
         <header className="flex items-start justify-between gap-4 border-b border-border-subtle px-4 py-4">
           <div className="flex min-w-0 gap-3">
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-card border border-status-warning/25 bg-status-warning/[0.08] text-status-warning">
-              <CalendarClock className="h-5 w-5" />
+              <StopwatchIcon className="h-5 w-5" />
             </span>
             <div>
               <h2 className="text-sm font-semibold text-text-primary">Occurrences</h2>
@@ -296,7 +297,7 @@ export default function WorldbuildEventOccurrences({
           {loading && <><div className="h-28 animate-pulse rounded-card bg-surface-hover/40" /><div className="h-24 animate-pulse rounded-card bg-surface-hover/35" /></>}
           {!loading && !occurrences.length && (
             <button type="button" onClick={startAdd} className="flex w-full flex-col items-center rounded-card border border-dashed border-border-subtle px-6 py-10 text-center transition-colors hover:border-status-warning/30 hover:bg-status-warning/[0.03]">
-              <CalendarClock className="mb-2 h-5 w-5 text-text-disabled" />
+              <StopwatchIcon className="mb-2 h-5 w-5 text-text-disabled" />
               <span className="text-sm font-semibold text-text-secondary">Record the first occurrence</span>
               <span className="mt-1 max-w-md text-xs leading-relaxed text-text-subtle">Each edition remains connected to this event while keeping its own date, participants, memories, and consequences.</span>
             </button>
@@ -315,7 +316,7 @@ export default function WorldbuildEventOccurrences({
       </section>
 
       {editor && (
-        <Modal onClose={() => setEditor(null)} size="2xl" title={editor.occurrenceId ? 'Edit event occurrence' : 'Record event occurrence'} icon={CalendarClock} closeOnOverlay={!saving} closeOnEsc={!saving}>
+        <Modal onClose={() => setEditor(null)} size="2xl" title={editor.occurrenceId ? 'Edit event occurrence' : 'Record event occurrence'} icon={StopwatchIcon} closeOnOverlay={!saving} closeOnEsc={!saving}>
           <div className="max-h-[76vh] space-y-4 overflow-y-auto overscroll-contain p-5 custom-scrollbar">
             <EditorRegion title="Event details" description="Name this edition and record what happened.">
               <div className="space-y-4">
@@ -369,7 +370,7 @@ export default function WorldbuildEventOccurrences({
             </EditorRegion>
 
             <button type="button" onClick={() => setShowDetails(value => !value)} aria-expanded={showDetails} aria-controls={advancedDetailsId} className="flex w-full items-center gap-3 rounded-card border border-border-subtle bg-surface-canvas/30 px-4 py-3 text-left transition-colors hover:border-border-strong hover:bg-surface-hover/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-              <span className="flex h-8 w-8 items-center justify-center rounded-control border border-entity-event/20 bg-entity-event/[0.06] text-entity-event"><Sparkles className="h-4 w-4" aria-hidden="true" /></span>
+              <span className="flex h-8 w-8 items-center justify-center rounded-control border border-entity-event/20 bg-entity-event/[0.06] text-entity-event"><Waypoints className="h-4 w-4" aria-hidden="true" /></span>
               <span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-text-secondary">Memories and consequences</span><span className="mt-0.5 block text-xs text-text-subtle">{editor.occurrenceId ? 'Review participant memories. Applied consequences remain unchanged.' : 'Optional details for state, inventory, relationships, and faction memory.'}</span></span>
               <ChevronDown aria-hidden="true" className={`h-4 w-4 text-text-subtle transition-transform motion-reduce:transition-none ${showDetails ? 'rotate-180' : ''}`} />
             </button>
@@ -490,7 +491,7 @@ function OccurrenceCard({ occurrence, names, calendar, onEdit, onDelete }: {
             {occurrence.relatedEntityIds.map(id => <span key={`related:${id}`} className="rounded-full border border-border-subtle bg-surface-hover/40 px-2 py-0.5 text-xs text-text-muted">{names.get(id) || 'Unknown entity'}</span>)}
           </div>}
           <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-text-subtle">
-            <span className="inline-flex items-center gap-1">{occurrence.source === 'narrative-state' ? <><Sparkles className="h-3 w-3 text-entity-event" />Narrative State</> : 'Added manually'}</span>
+            <span className="inline-flex items-center gap-1">{occurrence.source === 'narrative-state' ? <><AiGlyph className="h-3 w-3 text-entity-event" />Narrative State</> : 'Added manually'}</span>
             <span className="inline-flex items-center gap-1"><Users className="h-3 w-3" />{occurrence.participants.length} participants</span>
             <span className="inline-flex items-center gap-1"><Users className="h-3 w-3" />{occurrence.participants.filter(participant => participant.remember).length} memories</span>
             {consequenceCount > 0 && <span className="inline-flex items-center gap-1"><Activity className="h-3 w-3" />{consequenceCount} consequences</span>}
@@ -553,7 +554,7 @@ function InventoryConsequences({ editor, setEditor, items, actors, locations }: 
     ...actors.map(entity => ({ ...option(entity), id: `holder:${entity.id}`, group: 'Inventory' })),
     ...locations.map(entity => ({ ...option(entity), id: `location:${entity.id}`, group: 'Location' })),
   ];
-  return <DetailSection icon={Package} title="Inventory consequences" action={<Button variant="ghost" size="sm" icon={Plus} onClick={add}>Add inventory</Button>}>
+  return <DetailSection icon={Backpack} title="Inventory consequences" action={<Button variant="ghost" size="sm" icon={Plus} onClick={add}>Add inventory</Button>}>
     {!editor.inventoryChanges.length && <EmptyDetail text="No inventory changes recorded." />}
     {editor.inventoryChanges.map((change, index) => {
       const destination = change.toHolderId ? `holder:${change.toHolderId}` : change.locationId ? `location:${change.locationId}` : '';
@@ -572,7 +573,7 @@ function InventoryConsequences({ editor, setEditor, items, actors, locations }: 
 
 function RelationshipConsequences({ editor, setEditor, subjects }: { editor: EditorState; setEditor(value: EditorState): void; subjects: WorldbuildEntity[] }) {
   const add = () => setEditor({ ...editor, relationshipChanges: [...editor.relationshipChanges, { sourceEntityId: '', targetEntityId: '', dimension: 'overall', value: 0, description: '' }] });
-  return <DetailSection icon={Link2} title="Relationship consequences" action={<Button variant="ghost" size="sm" icon={Plus} onClick={add}>Add relationship</Button>}>
+  return <DetailSection icon={ConnectionsGlyph} title="Relationship consequences" action={<Button variant="ghost" size="sm" icon={Plus} onClick={add}>Add relationship</Button>}>
     {!editor.relationshipChanges.length && <EmptyDetail text="No relationship changes recorded." />}
     {editor.relationshipChanges.map((change, index) => <ConsequenceRow key={index} onRemove={() => setEditor({ ...editor, relationshipChanges: editor.relationshipChanges.filter((_, itemIndex) => itemIndex !== index) })}>
       <ConsequenceField label="Source"><SearchableSelect ariaLabel="Relationship source" value={change.sourceEntityId} onChange={(sourceEntityId: string) => replaceAt(editor.relationshipChanges, index, { ...change, sourceEntityId }, relationshipChanges => setEditor({ ...editor, relationshipChanges }))} options={options(subjects)} placeholder="Choose source…" searchPlaceholder="Filter entities…" /></ConsequenceField>
