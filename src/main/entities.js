@@ -3,6 +3,7 @@ const db = require('./database');
 const crypto = require('crypto');
 const { discardEnrichPending, normalizeRelationshipLabel } = require('./features/worldbuild/entity-review');
 const { foldText } = require('./features/world-index/text-fold');
+const { countEntityReferences, releaseEntityReferences, replaceEntityId, repointEntityReferences } = require('./features/worldbuild/entity-references');
 
 function parseJsonArray(raw) {
   if (!raw) return [];
@@ -102,7 +103,11 @@ function updateEntity(id, fields = {}) {
 }
 
 function deleteEntity(id) {
-  db.prepare('DELETE FROM entities WHERE id = ?').run(id); // links + chunk_tags GC via triggers
+  const row = db.prepare('SELECT workspaceId FROM entities WHERE id = ?').get(id);
+  db.transaction(() => {
+    if (row) releaseEntityReferences(db, { workspaceId: row.workspaceId, entityId: id });
+    db.prepare('DELETE FROM entities WHERE id = ?').run(id); // links + chunk_tags GC via triggers
+  })();
   return { id };
 }
 
@@ -139,7 +144,7 @@ function mergeEntity(sourceId, targetId, { prefer = 'target' } = {}) {
   // its own AI policy regardless. Internal keys never travel.
   const sData = stripInternal(parseJsonObject(source.data));
   const tData = stripInternal(parseJsonObject(target.data));
-  const mergedData = prefer === 'source' ? { ...tData, ...sData } : { ...sData, ...tData };
+  const mergedData = replaceEntityId(prefer === 'source' ? { ...tData, ...sData } : { ...sData, ...tData }, sourceId, targetId);
   const targetPolicy = parseJsonObject(target.data).aiPolicy;
   if (targetPolicy) mergedData.aiPolicy = targetPolicy; else delete mergedData.aiPolicy;
   const sLore = (source.lore || '').trim();
@@ -150,12 +155,15 @@ function mergeEntity(sourceId, targetId, { prefer = 'target' } = {}) {
     // Repoint everything the source owned onto the target. OR IGNORE drops chunk-tag rows
     // that would collide with an existing (chunkId, tag, target) row.
     db.prepare('UPDATE OR IGNORE chunk_tags SET entity = ? WHERE entity = ?').run(targetId, sourceId);
-    db.prepare('UPDATE entity_links SET fromId = ? WHERE fromId = ?').run(targetId, sourceId);
-    db.prepare('UPDATE entity_links SET toId = ? WHERE toId = ?').run(targetId, sourceId);
+    // An item holds one owner and one location, so the target's own edge wins where both have one.
+    db.prepare('UPDATE OR IGNORE entity_links SET fromId = ? WHERE fromId = ?').run(targetId, sourceId);
+    db.prepare('UPDATE OR IGNORE entity_links SET toId = ? WHERE toId = ?').run(targetId, sourceId);
+    db.prepare('DELETE FROM entity_links WHERE fromId = ? OR toId = ?').run(sourceId, sourceId);
     // A merge can create self-loops (source was linked to target) and duplicate edges.
     db.prepare('DELETE FROM entity_links WHERE fromId = toId').run();
     db.prepare(`DELETE FROM entity_links WHERE id NOT IN (
         SELECT MIN(id) FROM entity_links GROUP BY fromId, relType, toId, IFNULL(label, ''))`).run();
+    repointEntityReferences(db, { workspaceId: target.workspaceId, sourceId, targetId, prefer, targetName: target.canonicalName });
     db.prepare('UPDATE entities SET aliases = ?, lore = ?, data = ?, last_modified = ? WHERE id = ?')
       .run(JSON.stringify(mergedAliases), mergedLore, JSON.stringify(mergedData), Date.now(), targetId);
     db.prepare('DELETE FROM entities WHERE id = ?').run(sourceId);
@@ -178,6 +186,9 @@ function resolveEnrichReview(id, { accept = {}, reject = {} } = {}) {
   const rejectFields = new Set(Array.isArray(reject.fields) ? reject.fields : []);
   const acceptLinks = new Set(Array.isArray(accept.links) ? accept.links : []);
   const rejectLinks = new Set(Array.isArray(reject.links) ? reject.links : []);
+  // Chapter proposals are no longer generated, but older staged blobs still carry them.
+  const acceptChapters = new Set(Array.isArray(accept.chapters) ? accept.chapters : []);
+  const rejectChapters = new Set(Array.isArray(reject.chapters) ? reject.chapters : []);
 
   const nextData = { ...cur.data };
   const fields = { data: nextData };
@@ -541,7 +552,7 @@ function bulkEntityRows(workspaceId, ids) {
 
 function summarizeBulkEntities(workspaceId, ids) {
   const rows = bulkEntityRows(workspaceId, ids);
-  if (!rows.length) return { entities: 0, proposed: 0, pendingUpdates: 0, pendingFields: 0, pendingLore: 0, pendingLinks: 0, relationships: 0, storyTags: 0 };
+  if (!rows.length) return { entities: 0, proposed: 0, pendingUpdates: 0, pendingFields: 0, pendingLore: 0, pendingLinks: 0, relationships: 0, storyTags: 0, narrativeRecords: 0, knowledgeCards: 0, sceneState: 0 };
   const placeholders = rows.map(() => '?').join(', ');
   const rowIds = rows.map(row => row.id);
   const relationships = db.prepare(`SELECT COUNT(*) AS count FROM entity_links WHERE fromId IN (${placeholders}) OR toId IN (${placeholders})`)
@@ -557,6 +568,7 @@ function summarizeBulkEntities(workspaceId, ids) {
     pendingLinks: pending.reduce((count, entry) => count + (entry.proposal.links || []).length, 0),
     relationships,
     storyTags,
+    ...countEntityReferences(db, workspaceId, rowIds),
   };
 }
 

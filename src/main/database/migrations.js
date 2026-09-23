@@ -1,3 +1,5 @@
+const { releaseOrphanedEntityReferences } = require('../features/worldbuild/entity-references');
+
 /** Predicates that name a moment the live scene already carries, never durable canon. */
 const SCENE_PREDICATE_LIST = [
   'current-location', 'current-position', 'current-place', 'current-activity',
@@ -6,6 +8,87 @@ const SCENE_PREDICATE_LIST = [
   'present-at', 'presence', 'located-at', 'is-at', 'emotional-state',
   'emotional-state-reported', 'mood', 'posture', 'stance'
 ].map(value => `'${value}'`).join(', ');
+
+const hasTable = (db, name) => Boolean(
+  db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name)
+);
+
+// Base tables come from database.js; these helpers stay no-ops until those exist.
+function ensureEntityLinkMetadata(db) {
+  const columns = db.prepare('PRAGMA table_info(entity_links)').all();
+  if (columns.length && !columns.some(column => column.name === 'metadata_json')) {
+    db.exec('ALTER TABLE entity_links ADD COLUMN metadata_json TEXT');
+  }
+}
+
+function enforceItemPresence(db) {
+  if (!hasTable(db, 'entities') || !hasTable(db, 'entity_links')) return;
+  db.prepare(`
+    UPDATE entity_links SET relType = 'carried_by'
+    WHERE relType = 'owned_by'
+      AND fromId IN (
+        SELECT id FROM entities
+        WHERE type = 'Items' AND COALESCE(json_extract(data, '$.itemNature'), 'type') != 'unique'
+      )
+  `).run();
+  db.prepare(`
+    UPDATE entity_links SET relType = 'located_in'
+    WHERE relType = 'found_in'
+      AND fromId IN (
+        SELECT id FROM entities
+        WHERE type = 'Items' AND json_extract(data, '$.itemNature') = 'unique'
+      )
+      AND fromId NOT IN (SELECT fromId FROM entity_links WHERE relType = 'owned_by')
+      AND fromId IN (
+        SELECT fromId FROM entity_links WHERE relType = 'found_in'
+        GROUP BY fromId HAVING COUNT(*) = 1
+      )
+  `).run();
+  db.prepare(`
+    DELETE FROM entity_links
+    WHERE relType = 'owned_by' AND rowid NOT IN (
+      SELECT MAX(rowid) FROM entity_links WHERE relType = 'owned_by'
+      GROUP BY workspaceId, fromId
+    )
+  `).run();
+  db.prepare(`
+    DELETE FROM entity_links
+    WHERE relType = 'carried_by' AND rowid NOT IN (
+      SELECT MAX(rowid) FROM entity_links WHERE relType = 'carried_by'
+      GROUP BY workspaceId, fromId, toId
+    )
+  `).run();
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_item_owner
+      ON entity_links (workspaceId, fromId) WHERE relType = 'owned_by';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_item_location
+      ON entity_links (workspaceId, fromId) WHERE relType = 'located_in';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_item_type_inventory
+      ON entity_links (workspaceId, fromId, toId) WHERE relType = 'carried_by';
+  `);
+}
+
+function ensureEntityUpdateEvidenceTriggers(db) {
+  if (!hasTable(db, 'entity_update_evidence')) return;
+  if (hasTable(db, 'knowledge_chunks')) {
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_entity_update_evidence_chunk_gc
+      AFTER DELETE ON knowledge_chunks
+      FOR EACH ROW BEGIN
+        DELETE FROM entity_update_evidence WHERE chunk_id = OLD.id;
+      END;
+    `);
+  }
+  if (hasTable(db, 'entities')) {
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_entity_update_evidence_entity_gc
+      AFTER DELETE ON entities
+      FOR EACH ROW BEGIN
+        DELETE FROM entity_update_evidence WHERE entity_id = OLD.id;
+      END;
+    `);
+  }
+}
 
 const MIGRATIONS = [
   {
@@ -257,12 +340,7 @@ const MIGRATIONS = [
   },
   {
     id: 'worldbuild_rich_entity_links_v1',
-    up: (db) => {
-      const columns = db.prepare('PRAGMA table_info(entity_links)').all();
-      if (columns.length && !columns.some(column => column.name === 'metadata_json')) {
-        db.exec('ALTER TABLE entity_links ADD COLUMN metadata_json TEXT');
-      }
-    }
+    up: (db) => ensureEntityLinkMetadata(db)
   },
   {
     id: 'worldbuild_entity_templates_v1',
@@ -496,52 +574,7 @@ const MIGRATIONS = [
         CREATE INDEX IF NOT EXISTS idx_roleplay_inventory_changes_status
           ON roleplay_inventory_changes (workspace_id, status, created_at);
       `);
-      const hasEntities = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'entities'").get();
-      const hasLinks = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'entity_links'").get();
-      if (!hasEntities || !hasLinks) return;
-      db.prepare(`
-        UPDATE entity_links SET relType = 'carried_by'
-        WHERE relType = 'owned_by'
-          AND fromId IN (
-            SELECT id FROM entities
-            WHERE type = 'Items' AND COALESCE(json_extract(data, '$.itemNature'), 'type') != 'unique'
-          )
-      `).run();
-      db.prepare(`
-        UPDATE entity_links SET relType = 'located_in'
-        WHERE relType = 'found_in'
-          AND fromId IN (
-            SELECT id FROM entities
-            WHERE type = 'Items' AND json_extract(data, '$.itemNature') = 'unique'
-          )
-          AND fromId NOT IN (SELECT fromId FROM entity_links WHERE relType = 'owned_by')
-          AND fromId IN (
-            SELECT fromId FROM entity_links WHERE relType = 'found_in'
-            GROUP BY fromId HAVING COUNT(*) = 1
-          )
-      `).run();
-      db.prepare(`
-        DELETE FROM entity_links
-        WHERE relType = 'owned_by' AND rowid NOT IN (
-          SELECT MAX(rowid) FROM entity_links WHERE relType = 'owned_by'
-          GROUP BY workspaceId, fromId
-        )
-      `).run();
-      db.prepare(`
-        DELETE FROM entity_links
-        WHERE relType = 'carried_by' AND rowid NOT IN (
-          SELECT MAX(rowid) FROM entity_links WHERE relType = 'carried_by'
-          GROUP BY workspaceId, fromId, toId
-        )
-      `).run();
-      db.exec(`
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_item_owner
-          ON entity_links (workspaceId, fromId) WHERE relType = 'owned_by';
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_item_location
-          ON entity_links (workspaceId, fromId) WHERE relType = 'located_in';
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_item_type_inventory
-          ON entity_links (workspaceId, fromId, toId) WHERE relType = 'carried_by';
-      `);
+      enforceItemPresence(db);
     })()
   },
   {
@@ -654,24 +687,7 @@ const MIGRATIONS = [
         ON entity_update_jobs (run_id, status, updated_at);
 
       `);
-      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_chunks'").get()) {
-        db.exec(`
-          CREATE TRIGGER IF NOT EXISTS trg_entity_update_evidence_chunk_gc
-          AFTER DELETE ON knowledge_chunks
-          FOR EACH ROW BEGIN
-            DELETE FROM entity_update_evidence WHERE chunk_id = OLD.id;
-          END;
-        `);
-      }
-      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'entities'").get()) {
-        db.exec(`
-          CREATE TRIGGER IF NOT EXISTS trg_entity_update_evidence_entity_gc
-          AFTER DELETE ON entities
-          FOR EACH ROW BEGIN
-            DELETE FROM entity_update_evidence WHERE entity_id = OLD.id;
-          END;
-        `);
-      }
+      ensureEntityUpdateEvidenceTriggers(db);
     }
   },
   {
@@ -986,10 +1002,53 @@ const MIGRATIONS = [
       retire(['fact'], 'retracted');
       retire(['knowledge', 'belief'], 'superseded');
     }
+  },
+  {
+    // Migrations used to run before database.js created the base tables, so a fresh
+    // install recorded these steps without applying them.
+    id: 'worldbuild_base_schema_repair_v1',
+    up: (db) => {
+      ensureEntityLinkMetadata(db);
+      enforceItemPresence(db);
+      ensureEntityUpdateEvidenceTriggers(db);
+    }
+  },
+  {
+    // A regenerated or edited turn is superseded before its replacement is generated;
+    // the restore point brings it back if that generation never completes.
+    id: 'narrative_turn_replacements_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS narrative_turn_replacements (
+        workspace_id TEXT NOT NULL,
+        replacement_id TEXT NOT NULL,
+        origin_ids_json TEXT NOT NULL,
+        restore_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, replacement_id)
+      );
+    `)
+  },
+  {
+    // A merged entity's old id, so a write that was already under way still lands on the survivor.
+    id: 'entity_redirects_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS entity_redirects (
+        workspace_id TEXT NOT NULL,
+        from_id TEXT NOT NULL,
+        to_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, from_id)
+      );
+    `)
+  },
+  {
+    // Merges and deletes used to leave narrative and roleplay rows pointing at missing entities.
+    id: 'entity_reference_orphans_v1',
+    up: (db) => { releaseOrphanedEntityReferences(db); }
   }
 ];
 
-function runDatabaseMigrations(db) {
+function runDatabaseMigrations(db, migrations = MIGRATIONS) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       id TEXT PRIMARY KEY,
@@ -1000,12 +1059,18 @@ function runDatabaseMigrations(db) {
   const hasMigration = db.prepare('SELECT 1 FROM schema_migrations WHERE id = ?');
   const recordMigration = db.prepare('INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)');
 
-  for (const migration of MIGRATIONS) {
+  for (const migration of migrations) {
     if (hasMigration.get(migration.id)) continue;
-    db.transaction(() => {
-      migration.up(db);
-      recordMigration.run(migration.id, new Date().toISOString());
-    })();
+    try {
+      db.transaction(() => {
+        migration.up(db);
+        recordMigration.run(migration.id, new Date().toISOString());
+      })();
+    } catch (error) {
+      const failure = new Error(`Migration ${migration.id} failed: ${error.message}`, { cause: error });
+      failure.migrationId = migration.id;
+      throw failure;
+    }
   }
 }
 

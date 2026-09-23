@@ -153,7 +153,7 @@ export class DynamicRelationshipRepository {
     return latestBy(
       this.records.list(projectId, sourceEntityId, options.throughSequence),
       record => `${record.value.sourceEntityId}\u0000${record.value.targetEntityId}\u0000${record.value.dimension}`
-    ).map(toRelationshipRecord);
+    ).filter(record => record.value.status !== 'retired').map(toRelationshipRecord);
   }
 }
 

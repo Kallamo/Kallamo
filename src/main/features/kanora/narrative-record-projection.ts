@@ -90,7 +90,9 @@ export function projectCurrentNarrativeRecords(
       return;
     }
     if (row.record_type === 'state') {
-      states.set(`${String(payload.entityId ?? '')}\u0000${String(payload.property ?? '')}`, projected);
+      const key = `${String(payload.entityId ?? '')}\u0000${String(payload.property ?? '')}`;
+      if (payload.status === 'retired') states.delete(key);
+      else states.set(key, projected);
       return;
     }
     if (row.record_type === 'memory') {
@@ -101,7 +103,9 @@ export function projectCurrentNarrativeRecords(
     }
     if (row.record_type === 'relationship') {
       const key = `${row.subject_id}\u0000${String(payload.targetEntityId ?? '')}\u0000${String(payload.dimension ?? '')}`;
-      relationships.set(key, projected);
+      // Retired when an entity on either side was deleted, or a merge made both sides one entity.
+      if (payload.status === 'retired') relationships.delete(key);
+      else relationships.set(key, projected);
       return;
     }
     // Two records that say the same thing about the same subject are one statement, however

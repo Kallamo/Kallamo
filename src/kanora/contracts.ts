@@ -108,6 +108,8 @@ export interface NarrativeState {
   property: string;
   value: unknown;
   effectiveFrom: NarrativePosition;
+  /** Set only when the entity it describes was deleted. */
+  status?: 'retired';
 }
 
 export interface Observation {
@@ -189,6 +191,8 @@ export interface RelationshipState {
   /** What in the scene actually moved the bar. Courtesy and banter are not causes. */
   cause?: RelationshipCause;
   sourceEventId: NarrativeId;
+  /** Set only when an entity on either side was deleted, or a merge made both sides one entity. */
+  status?: 'retired';
 }
 
 export interface Perspective {

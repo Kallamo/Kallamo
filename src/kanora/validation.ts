@@ -275,6 +275,7 @@ function validateRelationshipValue(value: unknown, path: string, issues: Validat
   }
   optionalEnum(relationship, 'cause', RELATIONSHIP_CAUSE_VALUES, path, issues);
   requireString(relationship, 'sourceEventId', path, issues);
+  if (relationship.status !== undefined) requireEnum(relationship, 'status', ['retired'], path, issues);
 }
 
 function validateEvidence(value: unknown, path: string, issues: ValidationIssue[]): void {

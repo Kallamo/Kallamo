@@ -105,10 +105,13 @@ export class NarrativeStateSystem {
     `).run(status, details.deepAnalysis ? 1 : 0, details.fingerprint ?? null, details.inputTokens ?? 0, details.outputTokens ?? 0, details.error ?? null, Date.now(), workspaceId, originId);
   }
 
-  createEvent(proposed: CreateEventInput): CreateEventResult {
-    if ((proposed.provenanceInterpreter ?? 'model') === 'model' && proposed.updatePolicy === 'manual') {
+  createEvent(input0: CreateEventInput): CreateEventResult {
+    if ((input0.provenanceInterpreter ?? 'model') === 'model' && input0.updatePolicy === 'manual') {
       return { skipped: 'manual-policy' };
     }
+    // An entity merged or deleted while the analysis was running: the ids it names are resolved
+    // against the world as it is now, so nothing is written about an entity that is gone.
+    const proposed = this.resolveEntityIdentity(input0);
     // The gate runs before anything is fingerprinted or written, so a turn whose only
     // content was scene chatter never reaches the ledger at all, and a regenerated turn
     // that differs only in the chatter still fingerprints to the same event.
@@ -295,6 +298,34 @@ export class NarrativeStateSystem {
         (workspace_id, fingerprint, origin_id, event_id, created_at)
       VALUES (?, ?, ?, ?, ?)
     `).run(workspaceId, fingerprint, originId, eventId, Date.now());
+  }
+
+  /** Follows merges and drops entities that no longer exist, for both the event and its allowed ids. */
+  private resolveEntityIdentity(input: CreateEventInput): CreateEventInput {
+    // Without the registry there is nothing to resolve against, and the caller's ids stand.
+    if (!this.hasTable('entities')) return input;
+    const redirects = this.hasTable('entity_redirects')
+      ? (this.db.prepare('SELECT from_id, to_id FROM entity_redirects WHERE workspace_id = ?').all(input.workspaceId) as Array<{ from_id: string; to_id: string }>)
+      : [];
+    const existing = new Set((this.db.prepare('SELECT id FROM entities WHERE workspaceId = ?').all(input.workspaceId) as Array<{ id: string }>)
+      .map(row => row.id));
+    const allowedEntityIds = new Set<string>();
+    const redirected = new Map(redirects.map(row => [row.from_id, row.to_id] as const));
+    for (const id of input.allowedEntityIds) {
+      const current = redirected.get(id) ?? id;
+      if (existing.has(current)) allowedEntityIds.add(current);
+    }
+    const event = redirects.length
+      ? JSON.parse(redirects.reduce(
+          (text, row) => text.split(JSON.stringify(row.from_id)).join(JSON.stringify(row.to_id)),
+          JSON.stringify(input.event)
+        )) as ExtractedNarrativeEvent
+      : input.event;
+    return { ...input, event, allowedEntityIds };
+  }
+
+  private hasTable(table: string): boolean {
+    return Boolean(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table));
   }
 
   private currentRelationshipBaseline(workspaceId: string, sourceId: string, targetId: string, dimension: string): RelationshipBaseline {
