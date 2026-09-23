@@ -139,12 +139,22 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [utilityStatus, setUtilityStatus] = useState(null); // null | { title: string, message: string }
   const [restoring, setRestoring] = useState(false);
   const [appVersion, setAppVersion] = useState('1.0.0');
+  const [migrationBackups, setMigrationBackups] = useState([]);
 
   useEffect(() => {
     if (electronAPI?.getAppVersion) {
       electronAPI.getAppVersion().then(setAppVersion).catch(console.error);
     }
   }, [electronAPI]);
+
+  useEffect(() => {
+    if (activeTab !== 'advanced' || !electronAPI?.listMigrationBackups) return;
+    let cancelled = false;
+    electronAPI.listMigrationBackups()
+      .then(backups => { if (!cancelled) setMigrationBackups(backups || []); })
+      .catch(console.error);
+    return () => { cancelled = true; };
+  }, [activeTab, electronAPI]);
 
   const colors = ['#FBCB2D', '#ff5f56', '#3b82f6', '#10b981', '#9c27b0'];
 
@@ -468,6 +478,17 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   // Data helpers
   const handleOpenWorkspace = () => {
     if (electronAPI.openWorkspaceFolder) electronAPI.openWorkspaceFolder();
+  };
+
+  const handleOpenMigrationBackups = () => {
+    if (electronAPI.openMigrationBackupsFolder) electronAPI.openMigrationBackupsFolder();
+  };
+
+  const describeMigrationBackup = (backup) => {
+    const date = new Date(backup.createdAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+    const from = backup.fromVersion === 'unknown' ? 'an earlier version' : backup.fromVersion;
+    const size = `${(backup.bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return { date, versions: `${from} to ${backup.toVersion}`, size };
   };
 
   const handleBackup = async () => {
@@ -1887,6 +1908,37 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                           <RefreshCw className="w-3.5 h-3.5" />
                           <span>Restore Backup</span>
                         </button>
+                      </div>
+
+                      <div className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div className="pr-4">
+                            <span className="block text-sm text-gray-200 font-bold">Update Safety Copies</span>
+                            <span className="caption">Before an update changes your data, Kallamo saves a verified copy of it. Restore one with Restore Backup.</span>
+                          </div>
+                          <button
+                            onClick={handleOpenMigrationBackups}
+                            className="px-3 py-1.5 bg-[#1a2d32] hover:bg-[#243b52] text-white text-xs font-semibold rounded-lg transition-colors border border-gray-700/50 flex items-center space-x-1.5 cursor-pointer shrink-0 ml-4"
+                          >
+                            <FolderOpen className="w-3.5 h-3.5" />
+                            <span>Show Folder</span>
+                          </button>
+                        </div>
+                        {migrationBackups.length > 0 ? (
+                          <ul className="mt-3 space-y-1">
+                            {migrationBackups.map(backup => {
+                              const { date, versions, size } = describeMigrationBackup(backup);
+                              return (
+                                <li key={backup.file} className="flex items-center justify-between gap-4 text-xs text-gray-400">
+                                  <span className="truncate"><span className="text-gray-300">{date}</span> · {versions}</span>
+                                  <span className="shrink-0 tabular-nums">{size}</span>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        ) : (
+                          <p className="mt-3 text-xs text-gray-500">No copies yet. One is saved the first time an update changes your data.</p>
+                        )}
                       </div>
 
                       <div className="p-4 flex items-center justify-between">

@@ -45,6 +45,20 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'app-file', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }
 ]);
 
+// Taken before the database loads: a second process would back up and migrate the same file.
+if (!app.requestSingleInstanceLock()) {
+  log.info('Kallamo is already running; handing over to that window.');
+  process.exit(0);
+}
+
+app.on('second-instance', () => {
+  const win = BrowserWindow.getAllWindows().find(w => !w.isDestroyed() && (w.isVisible() || w.isMinimized()));
+  if (!win) return;
+  if (win.isMinimized()) win.restore();
+  win.focus();
+});
+
+require('./main/perf-monitor').install();
 require('./main/database');
 require('./main/ipc-handlers');
 

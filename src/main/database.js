@@ -1,10 +1,22 @@
 const Database = require('better-sqlite3');
-const { app, safeStorage } = require('electron');
+const { app, dialog, safeStorage } = require('electron');
+const log = require('electron-log');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
-const { runDatabaseMigrations } = require('./database/migrations');
+const { MIGRATIONS, runDatabaseMigrations } = require('./database/migrations');
+const {
+  readSchemaAppVersion,
+  writeSchemaAppVersion,
+  unknownMigrationIds,
+  needsPreMigrationBackup,
+  createPreMigrationBackup,
+  pruneMigrationBackups,
+  restoreDatabaseFromBackup,
+  bootFailureMessage,
+  UNKNOWN_VERSION
+} = require('./database/migration-backup');
 
 // --- DATABASE INITIALIZATION & MIGRATIONS ---
 
@@ -136,7 +148,82 @@ const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 db.isFreshInstall = isFreshInstall;
-runDatabaseMigrations(db);
+
+// --- PRE-MIGRATION SAFETY COPY ---
+const appVersion = app.getVersion();
+const migrationBackupDir = path.join(dataDir, 'backups');
+const migrationIds = MIGRATIONS.map(migration => migration.id);
+let preMigrationBackup = null;
+
+// process.exit, not app.exit: app.exit returns, and this module would go on to migrate.
+function abortBoot(stage, error, { restored = false } = {}) {
+  log.error(`[Database] Startup stopped (${stage}):`, error);
+  const { title, message } = bootFailureMessage({
+    stage, error, dataDir, backupPath: preMigrationBackup && preMigrationBackup.path, restored
+  });
+  try { dialog.showErrorBox(title, message); } catch (e) {}
+  try { if (db.open) db.close(); } catch (e) {}
+  process.exit(1);
+}
+
+// A failed step leaves earlier steps written, so the copy from this boot is put back before exiting.
+function runSchemaStep(step) {
+  try {
+    step();
+  } catch (error) {
+    let restored = false;
+    if (preMigrationBackup) {
+      try {
+        db.close();
+        restoreDatabaseFromBackup(dbPath, preMigrationBackup.path);
+        restored = true;
+      } catch (restoreError) {
+        log.error('[Database] Could not put the pre-update copy back:', restoreError);
+      }
+    }
+    abortBoot('migration', error, { restored });
+  }
+}
+
+try {
+  const unknownMigrations = unknownMigrationIds(db, migrationIds);
+  if (unknownMigrations.length) {
+    log.warn(`[Database] Newer database opened by older build; unknown migrations: ${unknownMigrations.join(', ')}`);
+  }
+} catch (e) {}
+
+let backupNeeded;
+try {
+  backupNeeded = needsPreMigrationBackup(db, { migrationIds, appVersion, isFreshInstall });
+} catch (error) {
+  abortBoot('backup', error);
+}
+
+if (backupNeeded) {
+  // Dev-only: lets a rehearsal reach the low-disk path without filling a drive.
+  const simulatedFreeBytes = !app.isPackaged && process.env.KALLAMO_SIMULATE_FREE_BYTES
+    ? Number(process.env.KALLAMO_SIMULATE_FREE_BYTES)
+    : NaN;
+  try {
+    preMigrationBackup = createPreMigrationBackup(db, {
+      backupDir: migrationBackupDir,
+      fromVersion: readSchemaAppVersion(db) || UNKNOWN_VERSION,
+      toVersion: appVersion,
+      ...(Number.isFinite(simulatedFreeBytes) ? { statfs: () => ({ bavail: simulatedFreeBytes, bsize: 1 }) } : {})
+    });
+    log.info(`[Database] Saved a copy before the update: ${preMigrationBackup.path} (${preMigrationBackup.bytes} bytes, ${preMigrationBackup.ms} ms, ${preMigrationBackup.method})`);
+    if (preMigrationBackup.sourceDamaged) {
+      log.warn('[Database] The integrity check reports damage in the database itself; the copy matches it exactly.');
+    }
+  } catch (error) {
+    abortBoot('backup', error);
+  }
+  try {
+    pruneMigrationBackups(migrationBackupDir);
+  } catch (error) {
+    log.warn('[Database] Could not prune old update copies:', error);
+  }
+}
 
 
 // --- ENCRYPTION HELPERS ---
@@ -174,7 +261,7 @@ db.decryptApiKey = function(encryptedText) {
 
 // --- DATABASE SCHEMA SETUP ---
 
-db.exec(`
+runSchemaStep(() => db.exec(`
   CREATE TABLE IF NOT EXISTS api_profiles (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -598,7 +685,7 @@ db.exec(`
   BEGIN
       UPDATE variables SET last_modified = (strftime('%s', 'now') * 1000) WHERE id = NEW.id;
   END;
-`);
+`));
 
 // --- DATABASE MIGRATIONS ---
 
@@ -1168,6 +1255,16 @@ try {
   console.error("Migration error checking rag_model_metadata:", e);
 }
 
+// Versioned migrations extend the base tables above, so they run once those exist.
+runSchemaStep(() => runDatabaseMigrations(db));
+
+// Recorded only after both schema layers succeeded; an unrecorded version backs up again next boot.
+try {
+  if (readSchemaAppVersion(db) !== appVersion) writeSchemaAppVersion(db, appVersion);
+} catch (error) {
+  log.warn('[Database] Could not record the schema version:', error);
+}
+
 function encryptExistingKeys() {
   try {
     const rows = db.prepare("SELECT id, apiKey, customConfig FROM api_profiles").all();
@@ -1488,7 +1585,7 @@ Rank the problems by how much they break the story, most serious first.
         lore: 'Aldous Finn’s granddaughter, 28. She returns to Mourne Cliff to settle the family estate and sell the lighthouse, but the open door and the torn logbook page pull her into her grandfather’s disappearance.' },
       { id: eAldous, type: 'Characters', name: 'Aldous Finn', aliases: ['Aldous', 'the keeper', 'the old keeper'], data: { status: 'missing', loreDocumentIds: [docId] },
         lore: 'The lighthouse’s last keeper. Vanished without a trace in 1983 and was never found. His handwriting survives on a logbook page Mara discovers on the bottom step.' },
-      { id: eLighthouse, type: 'Locations', name: 'Mourne Cliff Lighthouse', aliases: ['the lighthouse', 'Mourne Cliff'], data: { loreDocumentIds: [docId] },
+      { id: eLighthouse, type: 'Locations', name: 'Mourne Cliff Lighthouse', aliases: ['the lighthouse', 'Mourne Cliff'], data: { size: 'place', loreDocumentIds: [docId] },
         lore: 'A tall, weatherbeaten lighthouse abandoned for forty years, its lantern long dark. The villagers avoid the cliff path after sundown. Setting of Chapter One.' },
       { id: eLogbook, type: 'Items', name: 'The Keeper’s Logbook', aliases: ['the logbook', 'the journal', 'the torn page'], data: { loreDocumentIds: [docId] },
         lore: 'Aldous’s keeper’s logbook. A single page, torn loose, is found at the foot of the stairs in his handwriting — dry, though no rain could have reached it.' },
