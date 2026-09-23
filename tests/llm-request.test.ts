@@ -4,6 +4,7 @@ import { afterEach, describe, expect, test } from 'vitest';
 const require = createRequire(import.meta.url);
 const {
   buildRequest,
+  claudeRejectsSampling,
   learnFromReportedTokens,
   parseResponse,
   parseStreamChunk,
@@ -194,6 +195,56 @@ describe('reasoning models, provider limits and replies', () => {
     expect(reasoning.max_completion_tokens).toBe(500 + 8192);
     expect(regular.temperature).toBe(0.2);
     expect(regular.max_tokens).toBe(500);
+  });
+
+  test('omits sampling for Claude models that reject it, including unknown ids', () => {
+    for (const model of [
+      'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-5', 'claude-fable-5', 'claude-fable-5-1',
+      'anthropic.claude-opus-4-7', 'anthropic.claude-sonnet-5', 'global.anthropic.claude-fable-5-1',
+      'claude-haiku-5', 'claude-opus-6-2', 'claude-next', 'my-proxy-alias'
+    ]) {
+      expect(claudeRejectsSampling(model), model).toBe(true);
+    }
+    for (const model of [
+      'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'claude-haiku-4-5-20251001', 'claude-opus-4-20250514',
+      'claude-sonnet-4-5-20250929', 'claude-3-7-sonnet-20250219', 'claude-3-haiku-20240307', 'claude-2.1',
+      'anthropic.claude-opus-4-6-v1', 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+      'global.anthropic.claude-haiku-4-5-20251001-v1:0', 'anthropic.claude-v2', 'anthropic.claude-instant-v1',
+      'arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-opus-4-6-v1'
+    ]) {
+      expect(claudeRejectsSampling(model), model).toBe(false);
+    }
+  });
+
+  test('sends temperature on the Anthropic path only to models that accept it', async () => {
+    const database = createDatabase({ provider: 'Anthropic' });
+    const build = async (model: string) => JSON.parse((await buildRequest({
+      apiProfileId: 'api-profile', model, newPrompt: 'Hi', temperature: 0.2, maxTokens: 500
+    }, { database })).requestBodyPayload);
+    const current = await build('claude-opus-5');
+    const earlier = await build('claude-sonnet-4-6');
+    expect(current).not.toHaveProperty('temperature');
+    expect(current).not.toHaveProperty('top_p');
+    expect(current).not.toHaveProperty('top_k');
+    expect(current.max_tokens).toBe(500);
+    expect(earlier.temperature).toBe(0.2);
+  });
+
+  test('sends temperature on the Bedrock Claude path only to models that accept it', async () => {
+    const database = createDatabase({
+      provider: 'AWS Bedrock',
+      customConfig: { awsAccessKeyId: 'access-key', awsSecretAccessKey: 'secret-key', awsRegion: 'us-east-1' }
+    });
+    const build = async (model: string) => JSON.parse((await buildRequest({
+      apiProfileId: 'api-profile', model, newPrompt: 'Hi', temperature: 0.2, maxTokens: 500
+    }, { database })).requestBodyPayload);
+    const current = await build('us.anthropic.claude-opus-4-7');
+    const earlier = await build('us.anthropic.claude-opus-4-6-v1');
+    const llama = await build('meta.llama3-70b-instruct-v1:0');
+    expect(current).not.toHaveProperty('temperature');
+    expect(current.anthropic_version).toBe('bedrock-2023-05-31');
+    expect(earlier.temperature).toBe(0.2);
+    expect(llama.temperature).toBe(0.2);
   });
 
   test('gives thinking models output headroom within the provider ceiling', () => {

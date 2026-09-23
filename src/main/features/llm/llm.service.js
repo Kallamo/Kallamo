@@ -40,6 +40,18 @@ function needsMaxCompletionTokens(model) {
     return m.startsWith('gpt-5') || /^o[1-9]($|[-.])/.test(m);
 }
 
+// Claude Opus 4.7+, Sonnet 5 and Fable return 400 for non-default temperature/top_p/top_k.
+// Only ids known to predate that keep sampling, so unknown or future ids omit it.
+function claudeRejectsSampling(model) {
+    const m = String(model || '').toLowerCase();
+    if (/claude-(?:instant|v[12]|[123][-.])/.test(m)) return false;
+    const version = m.match(/claude-(?:opus|sonnet|haiku)-(\d+)(?:[-.](\d{1,2}))?(?!\d)/);
+    if (!version) return true;
+    const major = Number(version[1]);
+    const minor = Number(version[2] ?? 0);
+    return !(major < 4 || (major === 4 && minor <= 6));
+}
+
 // Reasoning models count thinking inside the output limit, so they get headroom on top.
 // Only generated tokens are billed, so unused headroom is free.
 const REASONING_OUTPUT_HEADROOM = 8192;
@@ -691,10 +703,10 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
                     ? buildCacheableSystem(stableSystem, contextPlacement === 'system' ? volatileSystem : '')
                     : systemPrompt,
                 messages: [...historyForRequest, { role: "user", content: userContent }],
-                temperature: temperature ?? 0.7,
                 max_tokens: outputTokens,
                 stream: false
             };
+            if (!claudeRejectsSampling(model)) requestBody.temperature = temperature ?? 0.7;
             break;
         }
 
@@ -839,9 +851,9 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
                     system: markedSystem
                         ? buildCacheableSystem(stableSystem, contextPlacement === 'system' ? volatileSystem : '')
                         : systemPrompt,
-                    messages: bedrockMessages,
-                    temperature: temperature ?? 0.7
+                    messages: bedrockMessages
                 };
+                if (!claudeRejectsSampling(model)) requestBody.temperature = temperature ?? 0.7;
                 requestBody = applyBedrockStructuredOutput(requestBody, jsonSchema);
             } else if (model.toLowerCase().includes("meta") || model.toLowerCase().includes("llama")) {
                 let bedrockPrompt = newPrompt;
@@ -1124,6 +1136,7 @@ module.exports = {
     learnFromReportedTokens,
     createPromptVariableResolver,
     needsMaxCompletionTokens,
+    claudeRejectsSampling,
     isGeminiThinkingModel,
     REASONING_OUTPUT_HEADROOM,
     generationDispatcher,
