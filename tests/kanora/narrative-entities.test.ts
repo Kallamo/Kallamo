@@ -101,6 +101,9 @@ describe('Narrative entity identity', () => {
 
   test('restores the latest turn snapshot before invalidating a regenerated response', () => {
     db.prepare(`
+      INSERT INTO entities VALUES ('selka', 'workspace-one', 'Characters', 'Selka', '[]', '', NULL, '{}', 'confirmed', 1, 1)
+    `).run();
+    db.prepare(`
       INSERT INTO roleplay_resource_definitions
         (workspace_id, definition_id, resource_key, name, description, color, minimum, maximum,
          initial_value, unit, applies_to_json, update_policy, position, enabled, updated_at)
@@ -143,6 +146,60 @@ describe('Narrative entity identity', () => {
       .toThrow('later turns have been reverted');
     expect(db.prepare('SELECT status FROM kanora_narrative_origin_lifecycle WHERE origin_id = ?').get('message-one'))
       .toEqual({ status: 'active' });
+  });
+
+  describe('a place the story introduces', () => {
+    beforeEach(() => {
+      const insert = db.prepare(`INSERT INTO entities VALUES (?, 'workspace-one', 'Locations', ?, '[]', '', NULL, ?, 'confirmed', 1, 1)`);
+      insert.run('norvania', 'Norvania', JSON.stringify({ size: 'region' }));
+      insert.run('porto', 'Porto Velho', JSON.stringify({ size: 'area' }));
+      insert.run('tavern', 'Crow Tavern', JSON.stringify({ size: 'place' }));
+      const link = db.prepare(`INSERT INTO entity_links VALUES (?, 'workspace-one', ?, 'inside', ?, NULL, '{}', 1)`);
+      link.run('l1', 'porto', 'norvania');
+      link.run('l2', 'tavern', 'porto');
+    });
+
+    const place = (overrides: Record<string, unknown>) => entityProposal({
+      referenceId: 'new:place', name: 'Back Room', type: 'Locations', ...overrides
+    } as never);
+    const insideOf = (entityId: string | null) => (db.prepare(`
+      SELECT toId FROM entity_links WHERE fromId = ? AND relType = 'inside'
+    `).get(entityId) as { toId: string } | undefined)?.toId;
+
+    test('stays reviewable and is filed inside the scene when it is a spot', () => {
+      const change = system.resolveOrPropose('workspace-one', 'message-one', place({ size: 'Spot' }), { sceneLocationId: 'tavern' });
+
+      expect(change.status).toBe('pending');
+      expect(change.proposal).toMatchObject({ size: 'spot', insideId: 'tavern' });
+      const applied = system.resolveChange('workspace-one', change.id, 'approved');
+      const data = JSON.parse(String((db.prepare('SELECT data FROM entities WHERE id = ?').get(applied.entityId) as { data: string }).data));
+      expect(data.size).toBe('spot');
+      expect(insideOf(applied.entityId)).toBe('tavern');
+    });
+
+    test('lands in the first container larger than itself, not inside the tavern', () => {
+      const city = system.resolveOrPropose('workspace-one', 'message-one', place({ referenceId: 'new:city', name: 'Aurel', size: 'area' }), { sceneLocationId: 'tavern' });
+      const inn = system.resolveOrPropose('workspace-one', 'message-one', place({ referenceId: 'new:inn', name: 'Gull Inn', size: 'place' }), { sceneLocationId: 'tavern' });
+
+      expect(city.proposal.insideId).toBe('norvania');
+      expect(inn.proposal.insideId).toBe('porto');
+    });
+
+    test('falls back to the scene location when the size is unknown, and ignores a container from the model', () => {
+      const change = system.resolveOrPropose('workspace-one', 'message-one', place({ size: 'huge', insideId: 'norvania' }), { sceneLocationId: 'tavern' });
+
+      expect(change.proposal.size).toBeUndefined();
+      expect(change.proposal.insideId).toBe('tavern');
+    });
+
+    test('is created without a container when the suggested one is gone by approval', () => {
+      const change = system.resolveOrPropose('workspace-one', 'message-one', place({ size: 'spot' }), { sceneLocationId: 'tavern' });
+      db.prepare("DELETE FROM entities WHERE id = 'tavern'").run();
+
+      const applied = system.resolveChange('workspace-one', change.id, 'approved');
+      expect(applied.status).toBe('applied');
+      expect(insideOf(applied.entityId)).toBeUndefined();
+    });
   });
 
   function entityProposal(overrides: Partial<Parameters<NarrativeEntitySystem['resolveOrPropose']>[2]> = {}) {

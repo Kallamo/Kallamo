@@ -63,6 +63,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resolveNarrativeStateEvent: (workspaceId, eventId, decision) => ipcRenderer.invoke('resolve-narrative-state-event', { workspaceId, eventId, decision }),
   resolveNarrativeStateOperations: (workspaceId, eventId, approvedOperationIds, rejectedOperationIds) =>
     ipcRenderer.invoke('resolve-narrative-state-operations', { workspaceId, eventId, approvedOperationIds, rejectedOperationIds }),
+  deferNarrativeStateTurn: (workspaceId, originId) => ipcRenderer.invoke('defer-narrative-state-turn', { workspaceId, originId }),
   reprocessNarrativeStateTurn: (workspaceId, originId) => ipcRenderer.invoke('reprocess-narrative-state-turn', { workspaceId, originId }),
   compactNarrativeState: (workspaceId, apply) => ipcRenderer.invoke('compact-narrative-state', { workspaceId, apply }),
   onRoleplayResourceChanges: (callback) => {
@@ -296,6 +297,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openWorkspaceFolder: () => ipcRenderer.send('open-workspace-folder'),
   backupWorkspace: () => ipcRenderer.invoke('backup-workspace'),
   restoreWorkspace: () => ipcRenderer.invoke('restore-workspace'),
+  listMigrationBackups: () => ipcRenderer.invoke('list-migration-backups'),
+  openMigrationBackupsFolder: () => ipcRenderer.send('open-migration-backups-folder'),
   purgeVectors: () => ipcRenderer.invoke('purge-vectors'),
   clearModelCache: () => ipcRenderer.invoke('clear-model-cache'),
 

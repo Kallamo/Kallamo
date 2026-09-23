@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
+import { normalizeLocationSize, type LocationSize } from '../../../shared/location-sizes';
+import { loadLocationChain, proposeLocationParent } from '../worldbuild/location-graph';
 
 export type NarrativeEntityType = 'Characters' | 'Creatures' | 'Locations' | 'Items';
 export type NarrativeEntityDecision = 'new' | 'ambiguous' | 'conflicting';
@@ -17,6 +19,13 @@ export interface NarrativeEntityProposal {
   reason?: string;
   itemNature?: 'unique' | 'type';
   scenePresence?: 'participant' | 'observer' | 'nearby' | 'absent';
+  size?: LocationSize;
+  /** Suggested container for a new Location; the link is written only when the proposal is approved. */
+  insideId?: string;
+}
+
+export interface NarrativeEntityContext {
+  sceneLocationId?: string | null;
 }
 
 export interface NarrativeEntityIdentityUpdate {
@@ -56,16 +65,50 @@ interface EntityRow {
 }
 
 const AUTO_TYPES = new Set<NarrativeEntityType>(['Characters', 'Creatures']);
+const OPEN_CHANGE_TABLES = ['roleplay_resource_changes', 'roleplay_scene_changes', 'roleplay_inventory_changes', 'roleplay_entity_changes'];
+
+type TurnSnapshot = Record<string, Array<Record<string, unknown>> | undefined>;
+
+/**
+ * Entity columns in each snapshot section. A snapshot can predate a merge or a delete, so its ids
+ * are redirected to the surviving entity, and rows naming a missing one are not restored.
+ */
+export const SNAPSHOT_ENTITY_COLUMNS: Record<string, { table: string; required?: string[]; nullable?: string[]; lists?: string[] }> = {
+  settings: { table: 'roleplay_workspace_settings', nullable: ['player_entity_id', 'location_entity_id'] },
+  scenes: { table: 'kanora_scenes', nullable: ['location_id', 'focal_subject_id'], lists: ['allowed_subject_ids_json'] },
+  participants: { table: 'kanora_scene_participants', required: ['entity_id'] },
+  observers: { table: 'kanora_scene_possible_observers', required: ['entity_id'] },
+  objects: { table: 'roleplay_scene_objects', required: ['entity_id'] },
+  nearby: { table: 'roleplay_scene_nearby', required: ['entity_id'] },
+  equipment: { table: 'roleplay_equipment', required: ['entity_id', 'item_id'] },
+  locationInventory: { table: 'roleplay_location_inventory', required: ['location_id', 'item_id'] },
+  resources: { table: 'roleplay_resource_values', required: ['target_id'] },
+  links: { table: 'entity_links', required: ['fromId', 'toId'] }
+};
+
+interface TurnRestorePoint {
+  snapshot: TurnSnapshot;
+  lifecycle: Array<{ originId: string; row: { status: string; replacement_origin_id: string | null; updated_at: number } | null }>;
+  changes: Array<{ table: string; change_id: string; status: string; resolved_at: number | null }>;
+  entities: Array<{ id: string; status: string }>;
+  manifests: Array<{ request_id: string; status: string; updated_at: number }>;
+}
 const AUTO_CONFIDENCE = 0.9;
 
 export class NarrativeEntitySystem {
   constructor(private readonly db: Database.Database) {}
 
-  resolveOrPropose(workspaceId: string, provenanceId: string, input: NarrativeEntityProposal): NarrativeEntityChange {
-    const proposal = normalizeProposal(input);
-    const changeId = `${provenanceId}:entity:${proposal.referenceId}`;
+  resolveOrPropose(
+    workspaceId: string,
+    provenanceId: string,
+    input: NarrativeEntityProposal,
+    context: NarrativeEntityContext = {}
+  ): NarrativeEntityChange {
+    const normalized = normalizeProposal(input);
+    const changeId = `${provenanceId}:entity:${normalized.referenceId}`;
     const previous = this.getChange(workspaceId, changeId);
     if (previous) return previous;
+    const proposal = this.withSuggestedContainer(workspaceId, normalized, context.sceneLocationId);
 
     const match = proposal.identityEstablished
       ? this.findExactMatch(workspaceId, proposal)
@@ -168,7 +211,10 @@ export class NarrativeEntitySystem {
 
     const match = this.findExactMatch(workspaceId, change.proposal);
     const entityId = match?.id ?? randomUUID();
-    if (!match) this.insertEntity(workspaceId, entityId, change.proposal, change.provenanceId);
+    if (!match) {
+      this.insertEntity(workspaceId, entityId, change.proposal, change.provenanceId);
+      this.fileInsideContainer(workspaceId, entityId, change.proposal);
+    }
     this.updateStatus(workspaceId, changeId, 'applied', entityId, !match);
     return this.getChange(workspaceId, changeId)!;
   }
@@ -206,29 +252,20 @@ export class NarrativeEntitySystem {
   captureTurnSnapshot(workspaceId: string, originId: string): void {
     const existing = this.db.prepare('SELECT 1 FROM roleplay_turn_snapshots WHERE workspace_id = ? AND origin_id = ?').get(workspaceId, originId);
     if (existing) return;
-    const snapshot = {
-      settings: this.rows('roleplay_workspace_settings', workspaceId),
-      scenes: this.rows('kanora_scenes', workspaceId),
-      participants: this.rows('kanora_scene_participants', workspaceId),
-      observers: this.rows('kanora_scene_possible_observers', workspaceId),
-      objects: this.rows('roleplay_scene_objects', workspaceId),
-      resources: this.rows('roleplay_resource_values', workspaceId),
-      timeState: this.hasTable('roleplay_time_state') ? this.rows('roleplay_time_state', workspaceId) : [],
-      timeAdvances: this.hasTable('roleplay_time_advances') ? this.rows('roleplay_time_advances', workspaceId) : [],
-      links: (this.db.prepare(`
-        SELECT * FROM entity_links WHERE workspaceId = ? AND relType IN ('owned_by', 'carried_by', 'located_in', 'related_to')
-      `).all(workspaceId) as Array<Record<string, unknown>>),
-      entityIdentities: (this.db.prepare(`
-        SELECT id, canonicalName, aliases, last_modified FROM entities WHERE workspaceId = ?
-      `).all(workspaceId) as Array<Record<string, unknown>>)
-    };
     this.db.prepare(`
       INSERT INTO roleplay_turn_snapshots (workspace_id, origin_id, snapshot_json, created_at)
       VALUES (?, ?, ?, ?)
-    `).run(workspaceId, originId, JSON.stringify(snapshot), Date.now());
+    `).run(workspaceId, originId, JSON.stringify(this.buildSnapshot(workspaceId)), Date.now());
   }
 
   invalidateOrigin(workspaceId: string, originId: string, status: 'superseded' | 'deleted'): { restored: boolean } {
+    // A turn already superseded by a replacement has had its state reverted; deleting its
+    // message afterwards only records the final status.
+    const current = this.originStatus(workspaceId, originId);
+    if (current && current !== 'active') {
+      if (status === 'deleted' && current !== 'deleted') this.markOrigin(workspaceId, originId, 'deleted');
+      return { restored: false };
+    }
     const hasSnapshot = Boolean(this.db.prepare(`
       SELECT 1 FROM roleplay_turn_snapshots WHERE workspace_id = ? AND origin_id = ?
     `).get(workspaceId, originId));
@@ -258,11 +295,202 @@ export class NarrativeEntitySystem {
     return { restored };
   }
 
+  /**
+   * Supersedes the turns a regeneration or an edit replaces, newest first, so the new reply
+   * is written against the state before them. The restore point undoes this when the
+   * replacement is never saved.
+   */
+  beginTurnReplacement(workspaceId: string, originIds: string[]): string | null {
+    const origins = [...new Set(originIds.filter(Boolean))];
+    if (!origins.length) return null;
+    const replacementId = randomUUID();
+    this.db.transaction(() => {
+      const restore: TurnRestorePoint = {
+        snapshot: this.buildSnapshot(workspaceId),
+        lifecycle: origins.map(originId => ({
+          originId,
+          row: (this.db.prepare(`
+            SELECT status, replacement_origin_id, updated_at FROM kanora_narrative_origin_lifecycle
+            WHERE workspace_id = ? AND origin_id = ?
+          `).get(workspaceId, originId) as TurnRestorePoint['lifecycle'][number]['row']) ?? null
+        })),
+        changes: this.openChanges(workspaceId, origins),
+        entities: this.createdEntityStatuses(workspaceId, origins),
+        manifests: this.hasTable('kanora_narrative_context_manifests')
+          ? this.db.prepare(`
+              SELECT request_id, status, updated_at FROM kanora_narrative_context_manifests
+              WHERE workspace_id = ? AND origin_id IN (${origins.map(() => '?').join(', ')})
+            `).all(workspaceId, ...origins) as TurnRestorePoint['manifests']
+          : []
+      };
+      this.db.prepare(`
+        INSERT INTO narrative_turn_replacements (workspace_id, replacement_id, origin_ids_json, restore_json, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(workspaceId, replacementId, JSON.stringify(origins), JSON.stringify(restore), Date.now());
+      for (const originId of origins) this.invalidateOrigin(workspaceId, originId, 'superseded');
+    })();
+    return replacementId;
+  }
+
+  completeTurnReplacement(workspaceId: string, replacementId: string): void {
+    this.db.prepare('DELETE FROM narrative_turn_replacements WHERE workspace_id = ? AND replacement_id = ?')
+      .run(workspaceId, replacementId);
+  }
+
+  cancelTurnReplacement(workspaceId: string, replacementId: string): boolean {
+    const row = this.db.prepare(`
+      SELECT restore_json FROM narrative_turn_replacements WHERE workspace_id = ? AND replacement_id = ?
+    `).get(workspaceId, replacementId) as { restore_json: string } | undefined;
+    if (!row) return false;
+    const restore = JSON.parse(row.restore_json) as TurnRestorePoint;
+    this.db.transaction(() => {
+      this.applySnapshot(workspaceId, restore.snapshot);
+      for (const { originId, row: lifecycle } of restore.lifecycle) {
+        if (!lifecycle) {
+          this.db.prepare('DELETE FROM kanora_narrative_origin_lifecycle WHERE workspace_id = ? AND origin_id = ?')
+            .run(workspaceId, originId);
+          continue;
+        }
+        this.db.prepare(`
+          INSERT INTO kanora_narrative_origin_lifecycle (workspace_id, origin_id, status, replacement_origin_id, updated_at)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(workspace_id, origin_id) DO UPDATE SET
+            status = excluded.status, replacement_origin_id = excluded.replacement_origin_id, updated_at = excluded.updated_at
+        `).run(workspaceId, originId, lifecycle.status, lifecycle.replacement_origin_id, lifecycle.updated_at);
+      }
+      for (const change of restore.changes) {
+        if (!OPEN_CHANGE_TABLES.includes(change.table)) continue;
+        this.db.prepare(`UPDATE ${change.table} SET status = ?, resolved_at = ? WHERE workspace_id = ? AND change_id = ?`)
+          .run(change.status, change.resolved_at, workspaceId, change.change_id);
+      }
+      for (const entity of restore.entities) {
+        this.db.prepare('UPDATE entities SET status = ? WHERE workspaceId = ? AND id = ?').run(entity.status, workspaceId, entity.id);
+      }
+      for (const manifest of restore.manifests) {
+        this.db.prepare(`
+          UPDATE kanora_narrative_context_manifests SET status = ?, updated_at = ?
+          WHERE workspace_id = ? AND request_id = ?
+        `).run(manifest.status, manifest.updated_at, workspaceId, manifest.request_id);
+      }
+      this.completeTurnReplacement(workspaceId, replacementId);
+    })();
+    return true;
+  }
+
+  /**
+   * Restores every replacement a run left open, newest first. A new run settles them before it
+   * reads the story state, so a cancelled run that unwinds late has nothing left to overwrite.
+   */
+  cancelOpenTurnReplacements(workspaceId?: string): number {
+    if (!this.hasTable('narrative_turn_replacements')) return 0;
+    const rows = (workspaceId
+      ? this.db.prepare('SELECT workspace_id, replacement_id FROM narrative_turn_replacements WHERE workspace_id = ? ORDER BY created_at DESC, rowid DESC').all(workspaceId)
+      : this.db.prepare('SELECT workspace_id, replacement_id FROM narrative_turn_replacements ORDER BY created_at DESC, rowid DESC').all()
+    ) as Array<{ workspace_id: string; replacement_id: string }>;
+    return rows.filter(row => this.cancelTurnReplacement(row.workspace_id, row.replacement_id)).length;
+  }
+
+  private originStatus(workspaceId: string, originId: string): string | undefined {
+    return (this.db.prepare(`
+      SELECT status FROM kanora_narrative_origin_lifecycle WHERE workspace_id = ? AND origin_id = ?
+    `).get(workspaceId, originId) as { status: string } | undefined)?.status;
+  }
+
+  private openChanges(workspaceId: string, origins: string[]): TurnRestorePoint['changes'] {
+    const placeholders = origins.map(() => '?').join(', ');
+    return OPEN_CHANGE_TABLES.flatMap(table => (this.db.prepare(`
+      SELECT change_id, status, resolved_at FROM ${table}
+      WHERE workspace_id = ? AND provenance_id IN (${placeholders}) AND status IN ('pending', 'conflicting')
+    `).all(workspaceId, ...origins) as Array<{ change_id: string; status: string; resolved_at: number | null }>)
+      .map(row => ({ table, ...row })));
+  }
+
+  private createdEntityStatuses(workspaceId: string, origins: string[]): TurnRestorePoint['entities'] {
+    return this.db.prepare(`
+      SELECT id, status FROM entities
+      WHERE workspaceId = ? AND id IN (
+        SELECT entity_id FROM roleplay_entity_changes
+        WHERE workspace_id = ? AND provenance_id IN (${origins.map(() => '?').join(', ')})
+          AND entity_id IS NOT NULL AND created_entity = 1
+      )
+    `).all(workspaceId, workspaceId, ...origins) as TurnRestorePoint['entities'];
+  }
+
+  private buildSnapshot(workspaceId: string): TurnSnapshot {
+    return {
+      settings: this.rows('roleplay_workspace_settings', workspaceId),
+      scenes: this.rows('kanora_scenes', workspaceId),
+      participants: this.rows('kanora_scene_participants', workspaceId),
+      observers: this.rows('kanora_scene_possible_observers', workspaceId),
+      objects: this.rows('roleplay_scene_objects', workspaceId),
+      nearby: this.hasTable('roleplay_scene_nearby') ? this.rows('roleplay_scene_nearby', workspaceId) : [],
+      equipment: this.hasTable('roleplay_equipment') ? this.rows('roleplay_equipment', workspaceId) : [],
+      locationInventory: this.hasTable('roleplay_location_inventory') ? this.rows('roleplay_location_inventory', workspaceId) : [],
+      resources: this.rows('roleplay_resource_values', workspaceId),
+      timeState: this.hasTable('roleplay_time_state') ? this.rows('roleplay_time_state', workspaceId) : [],
+      timeAdvances: this.hasTable('roleplay_time_advances') ? this.rows('roleplay_time_advances', workspaceId) : [],
+      links: (this.db.prepare(`
+        SELECT * FROM entity_links WHERE workspaceId = ? AND relType IN ('owned_by', 'carried_by', 'located_in', 'related_to')
+      `).all(workspaceId) as Array<Record<string, unknown>>),
+      entityIdentities: (this.db.prepare(`
+        SELECT id, canonicalName, aliases, last_modified FROM entities WHERE workspaceId = ?
+      `).all(workspaceId) as Array<Record<string, unknown>>)
+    };
+  }
+
   private restoreTurnSnapshot(workspaceId: string, originId: string): boolean {
     const row = this.db.prepare('SELECT snapshot_json FROM roleplay_turn_snapshots WHERE workspace_id = ? AND origin_id = ?')
       .get(workspaceId, originId) as { snapshot_json: string } | undefined;
     if (!row) return false;
-    const snapshot = JSON.parse(row.snapshot_json) as Record<string, Array<Record<string, unknown>>>;
+    this.applySnapshot(workspaceId, JSON.parse(row.snapshot_json) as TurnSnapshot);
+    return true;
+  }
+
+  private normalizeSnapshot(workspaceId: string, snapshot: TurnSnapshot): TurnSnapshot {
+    const existing = new Set((this.db.prepare('SELECT id FROM entities WHERE workspaceId = ?').all(workspaceId) as Array<{ id: string }>)
+      .map(row => row.id));
+    const redirects = new Map(this.hasTable('entity_redirects')
+      ? (this.db.prepare('SELECT from_id, to_id FROM entity_redirects WHERE workspace_id = ?').all(workspaceId) as Array<{ from_id: string; to_id: string }>)
+        .map(row => [row.from_id, row.to_id] as const)
+      : []);
+    const resolve = (id: unknown): unknown => {
+      if (typeof id !== 'string' || !id) return id;
+      const current = redirects.get(id) ?? id;
+      return existing.has(current) ? current : null;
+    };
+    const next: TurnSnapshot = { ...snapshot };
+    for (const [key, spec] of Object.entries(SNAPSHOT_ENTITY_COLUMNS)) {
+      const rows = snapshot[key];
+      if (!rows) continue;
+      next[key] = rows.flatMap(row => {
+        const copy = { ...row };
+        for (const column of spec.required ?? []) {
+          if (!(column in copy)) continue;
+          copy[column] = resolve(copy[column]);
+          if (copy[column] === null) return [];
+        }
+        for (const column of spec.nullable ?? []) {
+          if (column in copy) copy[column] = resolve(copy[column]);
+        }
+        for (const column of spec.lists ?? []) {
+          if (typeof copy[column] !== 'string') continue;
+          try {
+            const ids = JSON.parse(String(copy[column]));
+            if (Array.isArray(ids)) copy[column] = JSON.stringify([...new Set(ids.map(resolve).filter(Boolean))]);
+          } catch {
+            // A list that no longer parses is restored as it was stored.
+          }
+        }
+        if (key === 'scenes' && copy.perspective_access === 'subjective' && !copy.focal_subject_id) copy.perspective_access = 'omniscient';
+        if (key === 'links' && copy.fromId === copy.toId) return [];
+        return [copy];
+      });
+    }
+    return next;
+  }
+
+  private applySnapshot(workspaceId: string, stored: TurnSnapshot): void {
+    const snapshot = this.normalizeSnapshot(workspaceId, stored);
     this.db.transaction(() => {
       this.replaceRows('roleplay_workspace_settings', workspaceId, snapshot.settings ?? []);
       this.db.prepare('DELETE FROM kanora_scene_participants WHERE workspace_id = ?').run(workspaceId);
@@ -273,6 +501,10 @@ export class NarrativeEntitySystem {
       this.insertRows('kanora_scene_participants', snapshot.participants ?? []);
       this.insertRows('kanora_scene_possible_observers', snapshot.observers ?? []);
       this.insertRows('roleplay_scene_objects', snapshot.objects ?? []);
+      // Snapshots taken before these tables were captured leave them as they are.
+      for (const [key, table] of [['nearby', 'roleplay_scene_nearby'], ['equipment', 'roleplay_equipment'], ['locationInventory', 'roleplay_location_inventory']] as const) {
+        if (snapshot[key] && this.hasTable(table)) this.replaceRows(table, workspaceId, snapshot[key]!);
+      }
       this.replaceRows('roleplay_resource_values', workspaceId, snapshot.resources ?? []);
       if (this.hasTable('roleplay_time_state')) {
         this.replaceRows('roleplay_time_state', workspaceId, snapshot.timeState ?? []);
@@ -289,7 +521,6 @@ export class NarrativeEntitySystem {
         `).run(identity.canonicalName, identity.aliases, identity.last_modified, workspaceId, identity.id);
       }
     })();
-    return true;
   }
 
   private rows(table: string, workspaceId: string): Array<Record<string, unknown>> {
@@ -312,7 +543,7 @@ export class NarrativeEntitySystem {
       const columns = Object.keys(row);
       if (!columns.length) continue;
       const placeholders = columns.map(() => '?').join(', ');
-      this.db.prepare(`INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`).run(...columns.map(column => row[column]));
+      this.db.prepare(`INSERT OR IGNORE INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`).run(...columns.map(column => row[column]));
     }
   }
 
@@ -362,11 +593,32 @@ export class NarrativeEntitySystem {
     `).run(canonicalName, JSON.stringify(aliases), Date.now(), workspaceId, current.id);
   }
 
+  private withSuggestedContainer(workspaceId: string, proposal: NarrativeEntityProposal, sceneLocationId?: string | null): NarrativeEntityProposal {
+    if (proposal.type !== 'Locations' || !sceneLocationId) return proposal;
+    const insideId = proposeLocationParent(proposal.size, loadLocationChain(this.db, workspaceId, sceneLocationId));
+    return insideId ? { ...proposal, insideId } : proposal;
+  }
+
+  // The container may have been deleted, merged away or left proposed since the turn; a stale
+  // suggestion is dropped rather than filing the new place under something that is gone.
+  private fileInsideContainer(workspaceId: string, entityId: string, proposal: NarrativeEntityProposal): void {
+    if (proposal.type !== 'Locations' || !proposal.insideId || proposal.insideId === entityId) return;
+    const container = this.db.prepare(`
+      SELECT id FROM entities WHERE workspaceId = ? AND id = ? AND type = 'Locations' AND status != 'proposed'
+    `).get(workspaceId, proposal.insideId) as { id: string } | undefined;
+    if (!container) return;
+    this.db.prepare(`
+      INSERT INTO entity_links (id, workspaceId, fromId, relType, toId, label, metadata_json, createdAt)
+      VALUES (?, ?, ?, 'inside', ?, NULL, '{}', ?)
+    `).run(randomUUID(), workspaceId, entityId, container.id, Date.now());
+  }
+
   private insertEntity(workspaceId: string, entityId: string, proposal: NarrativeEntityProposal, provenanceId: string): void {
     const now = Date.now();
     const data = {
       ...(proposal.type === 'Creatures' ? { scope: 'individual' } : {}),
       ...(proposal.type === 'Items' ? { itemNature: proposal.itemNature ?? 'unique' } : {}),
+      ...(proposal.type === 'Locations' && proposal.size ? { size: proposal.size } : {}),
       narrativeOrigin: { originId: provenanceId, excerpt: proposal.excerpt },
       needsEnrichment: true
     };
@@ -435,7 +687,9 @@ function normalizeProposal(input: NarrativeEntityProposal): NarrativeEntityPropo
             : 'absent' }
         : {}
     ),
-    ...(input.type === 'Items' ? { itemNature: input.itemNature === 'type' ? 'type' : 'unique' } : {})
+    ...(input.type === 'Items' ? { itemNature: input.itemNature === 'type' ? 'type' : 'unique' } : {}),
+    // The container is worked out from the scene, never taken from the model's output.
+    ...(input.type === 'Locations' && normalizeLocationSize(input.size) ? { size: normalizeLocationSize(input.size)! } : {})
   };
 }
 

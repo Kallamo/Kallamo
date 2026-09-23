@@ -13,6 +13,7 @@ const {
 } = require('./features/chat/workspace-context-scope');
 const { ROLE_IDS, readAdvancedSettings, resolveAiEngineRole } = require('./features/ai-engine/role-resolver');
 const { formatActiveHistory, planActiveHistory, selectActiveHistory } = require('./features/chat/history-window');
+const { deferredNarrativeState, findPendingNarrativeTurn, replacedReplyIds } = require('./features/chat/narrative-turns');
 const { parseEntityUpdateObject } = require('./features/worldbuild/entity-update-json');
 const {
     buildEstimatedUsage,
@@ -43,6 +44,7 @@ const { buildNarrativeOptionPalette } = require('./features/worldbuild/narrative
 const { createEntityUpdateState } = require('./features/worldbuild/entity-update-state');
 const { shouldStopEntityUpdates } = require('./features/worldbuild/entity-update-resilience');
 const { NARRATIVE_TRIAGE_SCHEMA, NARRATIVE_STATE_SCHEMA } = require('../../dist-main/main/features/kanora/narrative-state-schema');
+const { findReachableLocations, locationSizesOf, travelCategory } = require('../../dist-main/main/features/worldbuild/location-graph');
 const {
     compactNarrativeManifest,
     extractNarrativeSignals,
@@ -422,6 +424,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
     };
     activeRun = currentRun;
     let isWorkflow = false;
+    let turnReplacementId = null;
 
     try {
         const chat = resolvedTarget.chat;
@@ -583,6 +586,18 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
         // Live history is whatever no summary covers and the user has not muted,
         // so a gap left by a deleted summary comes back on its own.
         const activeMessages = selectActiveMessages(messages, chat?.memoryBlocks);
+
+        // In a roleplay, the replaced replies are reverted before anything reads the story
+        // state, and the turn before them catches up if it was never analyzed.
+        const roleplayTurns = isRoleplayWorkspace(chatId);
+        if (roleplayTurns) narrativeEntitySystem().cancelOpenTurnReplacements(chatId);
+        const replacedIds = roleplayTurns ? replacedReplyIds(persistedMessages, { historyEdit, regenerateMessageId }) : [];
+        if (replacedIds.length) {
+            turnReplacementId = narrativeEntitySystem().beginTurnReplacement(chatId, replacedIds);
+        }
+        if (roleplayTurns) {
+            await analyzePendingNarrativeTurn({ chatId, excludedIds: replacedIds, webContents, currentRun, totalSteps });
+        }
 
         let currentInput = messageContent;
         let finalOutput = '';
@@ -1366,6 +1381,10 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             );
 
             db.prepare('UPDATE chats SET updatedAt = ? WHERE id = ?').run(Date.now(), chatId);
+            if (turnReplacementId) {
+                narrativeEntitySystem().completeTurnReplacement(chatId, turnReplacementId);
+                turnReplacementId = null;
+            }
             if (lastNarrativeContextRequestId) {
                 try {
                     const { NarrativeContextManifestRepository } = require('../../dist-main/main/features/kanora/context-manifest');
@@ -1378,7 +1397,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
 
             try {
                 const { getWorkspaceExperienceMode } = require('../../dist-main/main/features/kanora/mode-orchestration');
-                if (getWorkspaceExperienceMode(db, chatId) === 'roleplay') {
+                if (!replacedIds.length && getWorkspaceExperienceMode(db, chatId) === 'roleplay') {
                     sendRunEvent(webContents, 'workflow-progress', currentRun, {
                         step: totalSteps,
                         totalSteps,
@@ -1392,12 +1411,16 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             }
 
             try {
-                const narrativeResult = await updateRoleplayStateWithSystemAi({
-                    workspaceId: chatId,
-                    provenanceId: aiMsgId,
-                    userMessage: messageContent,
-                    narrativeResponse: finalOutput
-                });
+                // A reply that replaced another waits for the story to continue, so trying alternatives
+                // never bills an analysis per reply.
+                const narrativeResult = replacedIds.length
+                    ? { changes: [], diagnostics: deferredNarrativeState() }
+                    : await updateRoleplayStateWithSystemAi({
+                        workspaceId: chatId,
+                        provenanceId: aiMsgId,
+                        userMessage: messageContent,
+                        narrativeResponse: finalOutput
+                    });
                 roleplayChanges = narrativeResult.changes;
                 if (narrativeResult.diagnostics) {
                     debugObj = mergeNarrativeStateDiagnostics(debugObj, narrativeResult.diagnostics);
@@ -1470,6 +1493,13 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
         });
         return { success: false, error: e.message };
     } finally {
+        if (turnReplacementId) {
+            try {
+                narrativeEntitySystem().cancelTurnReplacement(chatId, turnReplacementId);
+            } catch (error) {
+                console.error('[Narrative State] Could not restore the replaced turn:', error);
+            }
+        }
         if (activeRun === currentRun) activeRun = null;
         if (errorDeferred?.runId === currentRun.id) errorDeferred = null;
         if (overflowDeferred?.runId === currentRun.id) overflowDeferred = null;
@@ -2405,6 +2435,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         lore: String(lore || '').slice(0, 2000),
         data: safeParseObject(data) || {}
     }));
+    const locationSizes = locationSizesOf(allEntities);
     const compactEntities = entities.map(entity => ({
         id: entity.id,
         type: entity.type,
@@ -2413,6 +2444,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         ...(entity.type === 'Items' ? {
             itemNature: entity.data.itemNature === 'unique' ? 'unique' : 'type'
         } : {}),
+        ...(entity.type === 'Locations' && locationSizes.get(entity.id) ? { size: locationSizes.get(entity.id) } : {}),
         ...(entity.type === 'Events' ? {
             eventNature: entity.data.eventNature === 'recurring' ? 'recurring' : 'one-time',
             kind: entity.data.kind || '',
@@ -2428,10 +2460,9 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         SELECT fromId, toId, relType FROM entity_links
         WHERE workspaceId = ? AND relType IN ('inside', 'connected_to', 'adjacent_to')
     `).all(workspaceId).filter(link => locationIds.has(link.fromId) && locationIds.has(link.toId));
-    // Depth counts containment levels climbed, not distance walked: it decides how large a
-    // region counts as local. Four covers a room nested several levels inside a district while
-    // the world root, which is never expanded, keeps separate continents out regardless.
-    const reachableLocationIds = findReachableLocations(scene?.locationId, locationLinks, 4);
+    // Sized worlds climb to the region around the scene. Unsized ones fall back to four levels,
+    // enough for a room nested inside a district; the world root is never expanded either way.
+    const reachableLocationIds = findReachableLocations(scene?.locationId, locationLinks, { maxDepth: 4, sizes: locationSizes });
     const calendar = calendarService.getCalendar(db, workspaceId);
     const timeMatrix = calendarService.getTimeMatrix(db, workspaceId);
     const narrativeLanguageInstruction = getSystemLanguageInstruction();
@@ -2748,7 +2779,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     }
     for (const proposal of routedResult.newEntities) {
         if (!shouldProcessNarrativeEntityProposal(proposal, roleplaySettings.defaultUpdatePolicy)) continue;
-        const change = narrativeEntities.resolveOrPropose(workspaceId, provenanceId, proposal);
+        const change = narrativeEntities.resolveOrPropose(workspaceId, provenanceId, proposal, { sceneLocationId: scene?.locationId });
         changes.push({ kind: 'entity', ...change });
         if (change.entityId) {
             referenceIds.set(proposal.referenceId, change.entityId);
@@ -2902,6 +2933,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         startLocationId: scene?.locationId,
         endLocationId: appliedLocationId,
         locationLinks,
+        locationSizes,
         timeMatrix
     });
     const timeFrame = recordTimeFrame(triage?.timeAdvance, endLocationId, travelFloorMinutes);
@@ -2975,6 +3007,48 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             elapsedMs
         }
     };
+}
+
+function narrativeEntitySystem() {
+    const { NarrativeEntitySystem } = require('../../dist-main/main/features/kanora/narrative-entities');
+    return new NarrativeEntitySystem(db);
+}
+
+function isRoleplayWorkspace(workspaceId) {
+    try {
+        const { getWorkspaceExperienceMode } = require('../../dist-main/main/features/kanora/mode-orchestration');
+        return getWorkspaceExperienceMode(db, workspaceId) === 'roleplay';
+    } catch (error) {
+        console.warn('[Narrative State] Could not read the workspace mode:', error.message);
+        return false;
+    }
+}
+
+// Runs before the next reply is generated, so it reads the state of the reply the user kept.
+async function analyzePendingNarrativeTurn({ chatId, excludedIds, webContents, currentRun, totalSteps }) {
+    const pending = findPendingNarrativeTurn(db, chatId, excludedIds);
+    if (!pending || !resolveAiEngineRole(ROLE_IDS.NARRATIVE_STATE).executor) return;
+    sendRunEvent(webContents, 'workflow-progress', currentRun, {
+        step: 1,
+        totalSteps,
+        profileName: 'Narrative State',
+        status: 'Updating Narrative State…',
+        phase: 'narrative-state'
+    });
+    try {
+        await reprocessNarrativeStateTurn(chatId, pending.originId);
+    } catch (error) {
+        console.error('[Narrative State] Could not analyze the kept reply:', error);
+    }
+}
+
+function deferNarrativeStateTurn(workspaceId, originId) {
+    const current = db.prepare("SELECT debugNotice FROM messages WHERE id = ? AND chatId = ? AND role = 'ai'").get(originId, workspaceId);
+    if (!current) throw new Error('Narrative response was not found for this turn.');
+    const updated = mergeNarrativeStateDiagnostics(safeParseObject(current.debugNotice) || {}, deferredNarrativeState());
+    const debugNotice = JSON.stringify(updated);
+    db.prepare('UPDATE messages SET debugNotice = ? WHERE id = ? AND chatId = ?').run(debugNotice, originId, workspaceId);
+    return debugNotice;
 }
 
 async function reprocessNarrativeStateTurn(workspaceId, originId) {
@@ -3210,7 +3284,7 @@ const NARRATIVE_FULL_STATE_SYSTEM_PROMPT = `You are Kallamo's Narrative State in
 Return JSON only with {"newEntities":[],"identityUpdates":[],"resourceChanges":[],"scenePatch":{},"inventoryChanges":[],"events":[]}.
 The user message is the player character's chosen action. The narrative response contains world and NPC consequences. Never infer a player choice, line, intention, emotion, memory, or private thought that the user did not supply.
 preTurnContext is the exact compact epistemic manifest used for generation. Use its separate subject assessments to decide who could acquire information this turn. "undetermined" is not ignorance. "derived" and "evidence-candidate" are not automatically canon. currentKnowledgeCards contains Awareness and known-field coverage at the start of the turn.
-When the final narrative clearly introduces a persistent Character, individual Creature, named Location, or narratively important Item that is absent from availableEntities, add {"referenceId":"new:stable-local-key","name":"canonical name or concise sparse label","type":"Characters|Creatures|Locations|Items","aliases":[],"description":"only explicit introduction facts","excerpt":"short verbatim evidence","confidence":0.0,"decision":"new|ambiguous|conflicting","identityEstablished":true|false,"reason":"brief","itemNature":"unique|type","scenePresence":"participant|observer|nearby|absent"}. Use its referenceId everywhere else in this response. For Characters and individual Creatures, set scenePresence to participant only when directly engaged in the action or conversation, observer only when explicitly able to witness or listen, nearby only when physically present in the broader location, and absent for recollections, reports, or offscreen mentions. Scene presence is independent from a location change. Set identityEstablished true only when a proper name, stable title, number, designation, unmistakable continuity identity, or explicit registration establishes who the individual is. Appearance, ancestry, clothing, age, expression, or scene position alone never establishes identity. An individually described but anonymous person may be retained with a concise sparse label and identityEstablished false; it remains reviewable and must not become a Worldbuild entity automatically. Characters and individual Creatures may be created automatically only when identityEstablished is true and the identity is unequivocal. Locations and Items are reviewable. Do not create generic crowds, ordinary item mentions, transformations, disguises, or duplicates. Mark ambiguous identity or possible duplication as ambiguous. Mark an invention that contradicts supplied canon as conflicting.
+When the final narrative clearly introduces a persistent Character, individual Creature, named Location, or narratively important Item that is absent from availableEntities, add {"referenceId":"new:stable-local-key","name":"canonical name or concise sparse label","type":"Characters|Creatures|Locations|Items","aliases":[],"description":"only explicit introduction facts","excerpt":"short verbatim evidence","confidence":0.0,"decision":"new|ambiguous|conflicting","identityEstablished":true|false,"reason":"brief","itemNature":"unique|type","scenePresence":"participant|observer|nearby|absent","size":"region|area|place|spot"}. Use its referenceId everywhere else in this response. For Locations, size is region when wider than a scene, area when it holds many places, place when a scene happens there, and spot for a point within a scene. For Characters and individual Creatures, set scenePresence to participant only when directly engaged in the action or conversation, observer only when explicitly able to witness or listen, nearby only when physically present in the broader location, and absent for recollections, reports, or offscreen mentions. Scene presence is independent from a location change. Set identityEstablished true only when a proper name, stable title, number, designation, unmistakable continuity identity, or explicit registration establishes who the individual is. Appearance, ancestry, clothing, age, expression, or scene position alone never establishes identity. An individually described but anonymous person may be retained with a concise sparse label and identityEstablished false; it remains reviewable and must not become a Worldbuild entity automatically. Characters and individual Creatures may be created automatically only when identityEstablished is true and the identity is unequivocal. Locations and Items are reviewable. Do not create generic crowds, ordinary item mentions, transformations, disguises, or duplicates. Mark ambiguous identity or possible duplication as ambiguous. Mark an invention that contradicts supplied canon as conflicting.
 When the narrative establishes that an existing Character or individual Creature has a newly revealed proper name, corrected name, nickname, title, designation, or alternate spelling, add {"referenceId":"identity:stable-local-key","entityId":"existing-id","canonicalName":"new primary name or empty string","aliases":["new alternate name"],"excerpt":"short verbatim evidence","confidence":0.0,"identityEstablished":true|false,"reason":"brief"} to identityUpdates. Use canonicalName only when the text clearly replaces a provisional, descriptive, or incorrect primary label. Put nicknames, titles, alternate spellings, and additional forms in aliases. The previous canonical name is retained automatically as an alias after a rename. Never remove aliases, change an entity ID or type, or update a Location or Item through identityUpdates. Require explicit same-person evidence such as self-identification, direct naming, registration, or unmistakable continuity. Proximity, pronouns, appearance, ancestry, clothing, age, expression, and scene position are insufficient. If the target identity is uncertain, return no identity update.
 Scene patch may contain locationId, participantIds, possibleObserverIds, nearbyIds, and objectIds. Participants are directly involved, possible observers can witness the scene, and nearby entities are present in the broader location without necessarily witnessing it. Update these arrays when an existing or newly introduced character enters, leaves, joins, observes, or moves nearby, even if locationId does not change. When inventory also changes, keep objectIds consistent with unique items explicitly dropped, picked up, consumed, destroyed, or removed. Change location only after movement is completed in the user action or final narrative and use only reachableLocationIds; intention, preparation, a destination plan, an open door, or a visible route is not a completed location change. Never jump to an unrelated branch of the location hierarchy. reachableLocationIds already spans the whole surrounding region, so a completed journey across a city, district, or road belongs here and must not be downgraded to an epistemic record instead. A scene patch is applied whole or not at all: if the destination is not in reachableLocationIds, the participant and object arrays are discarded with it, so return the arrays that match the location you actually set. Presence is not ownership. A possible observer is only a candidate and does not automatically observe or learn.
 Inventory changes must be explicit and use currentInventoryState plus currentLocationInventoryState. Track pickup, drop, placement, gift, transfer, theft, loss, consumption, destruction, equip, unequip, drawing, sheathing, and quantities for every Character and individual Creature, including currentScene.playerEntityId. Inventory means everything the character possesses but is not actively using; equipped means only what is actively being used, wielded, worn, or held in use. A carried item in a belt, sheath, scabbard, holster, bag, pocket, or ordinary inventory remains inventory and is not equipped. Determine the final state after the whole user message and narrative response, not the first intermediate action. If the same item is drawn or used and later sheathed, stowed, put away, placed on a belt, or taken off, return only the final equipped:false state. For a unique item move return {"itemId":"id","fromHolderId":"id-or-null","toHolderId":"id-or-null","locationId":"id-or-null","equipped":boolean-when-explicit}. For an item type transfer return {"itemId":"id","fromHolderId":"id-or-null","fromLocationId":"id-or-null","toHolderId":"id-or-null","locationId":"id-or-null","quantity":1,"equipped":boolean-when-explicit}. locationId means deliberately dropped or stored; fromLocationId means picked up. Removal, consumption, or loss may have no destination. For equipment only return {"itemId":"id","holderId":"id","equipped":boolean}. Drawing, wielding, or wearing normally equips; sheathing, stowing, taking off, or putting away normally unequips without changing possession. Never mutate inventory from a mere mention, observation, price, request, offer, or speculation.`;
@@ -3218,7 +3292,7 @@ Inventory changes must be explicit and use currentInventoryState plus currentLoc
 const NARRATIVE_SCOPED_BASE_PROMPT = `You are Kallamo's Narrative State interpreter. Never write narrative prose. Analyze only routing.selectedDomains. Extract explicit durable consequences from the user action and final narrative. Candidate signals are hints, not facts. Use only supplied IDs and resource keys.
 Return JSON only with {"newEntities":[],"identityUpdates":[],"resourceChanges":[],"scenePatch":{},"inventoryChanges":[],"events":[]}. Leave every unselected domain empty. The user message is the player character's chosen action. The narrative response contains world and NPC consequences. Never invent a player choice, line, intention, emotion, memory, or private thought. Empty arrays and an empty scenePatch are correct.`;
 
-const NARRATIVE_ENTITY_SCOPED_PROMPT = `ENTITY DOMAIN: Retain a newly introduced persistent individual absent from availableEntities as either an established identity or a sparse candidate. Return it in newEntities as {"referenceId":"new:stable-local-key","name":"canonical name or concise sparse label","type":"Characters|Creatures|Locations|Items","aliases":[],"description":"explicit introduction facts","excerpt":"short verbatim evidence","confidence":0.0,"decision":"new|ambiguous|conflicting","identityEstablished":true|false,"reason":"brief","itemNature":"unique|type","scenePresence":"participant|observer|nearby|absent"}. For Characters and individual Creatures, use participant only for direct involvement, observer only for explicit witnessing or listening, nearby only for broader physical presence, and absent for recollections, reports, or offscreen mentions. This presence can change without a location change. Set identityEstablished true only for a proper name, stable title, number, designation, unmistakable continuity identity, or explicit registration. Appearance, ancestry, clothing, age, expression, or scene position alone means false. Anonymous individuals with false remain sparse and reviewable; they do not become Worldbuild entities automatically. Use referenceId elsewhere. Do not create crowds, ordinary item mentions, disguises, transformations, or duplicates.
+const NARRATIVE_ENTITY_SCOPED_PROMPT = `ENTITY DOMAIN: Retain a newly introduced persistent individual absent from availableEntities as either an established identity or a sparse candidate. Return it in newEntities as {"referenceId":"new:stable-local-key","name":"canonical name or concise sparse label","type":"Characters|Creatures|Locations|Items","aliases":[],"description":"explicit introduction facts","excerpt":"short verbatim evidence","confidence":0.0,"decision":"new|ambiguous|conflicting","identityEstablished":true|false,"reason":"brief","itemNature":"unique|type","scenePresence":"participant|observer|nearby|absent","size":"region|area|place|spot"}. For Locations, size is region when wider than a scene, area when it holds many places, place when a scene happens there, and spot for a point within a scene. For Characters and individual Creatures, use participant only for direct involvement, observer only for explicit witnessing or listening, nearby only for broader physical presence, and absent for recollections, reports, or offscreen mentions. This presence can change without a location change. Set identityEstablished true only for a proper name, stable title, number, designation, unmistakable continuity identity, or explicit registration. Appearance, ancestry, clothing, age, expression, or scene position alone means false. Anonymous individuals with false remain sparse and reviewable; they do not become Worldbuild entities automatically. Use referenceId elsewhere. Do not create crowds, ordinary item mentions, disguises, transformations, or duplicates.
 When an existing Character or individual Creature is explicitly identified by a newly revealed or corrected primary name, return in identityUpdates {"referenceId":"identity:stable-local-key","entityId":"existing-id","canonicalName":"new primary name or empty string","aliases":["new nickname, title, alternate spelling, or designation"],"excerpt":"short verbatim evidence","confidence":0.0,"identityEstablished":true|false,"reason":"brief"}. Use canonicalName only to replace a provisional, descriptive, or incorrect primary label. Use aliases for additional valid forms. Renames retain the previous primary label as an alias automatically. Never remove an alias or alter an ID or type. Require explicit same-person evidence; proximity, pronouns, appearance, and scene position are insufficient. Return no identity update when the association is uncertain.`;
 
 const NARRATIVE_SCENE_SCOPED_PROMPT = `SCENE DOMAIN: scenePatch may contain locationId, participantIds, possibleObserverIds, nearbyIds, and objectIds. Return complete replacement arrays only for fields that changed. Participants are directly involved, possible observers can witness, nearby entities are in the broader location, and objects are physically present. Explicit completed arrivals, departures, joining a conversation, sitting with the group, leaving, and deliberate movement can change scene membership independently from locationId. Include newly introduced entity referenceIds in the appropriate array. When inventory is also selected, dropping a unique item may add it to objectIds, while picking up, consuming, destroying, or removing it may remove it. Keep unrelated existing objectIds. Change location only after movement is completed and use reachableLocationIds. Intention, preparation, a destination plan, an open door, or a visible route is not a completed location change. reachableLocationIds already spans the whole surrounding region, so a completed journey across a city, district, or road belongs here. A scene patch is applied whole or not at all: if the destination is not in reachableLocationIds, the participant and object arrays are discarded with it, so return the arrays that match the location you actually set. Presence is not ownership or knowledge.`;
@@ -3414,14 +3488,12 @@ function extractExplicitClockTarget(text, startClock, calendar, futureOnly = fal
  * two lines of prose, so it kept arriving as zero. The turn knows both ends of the move and
  * the author already wrote a Time Cost Matrix, so the floor is read from the graph rather
  * than guessed: a room inside its building is a step, a linked neighbour is a local walk, and
- * anything the map does not join directly is transit.
+ * location sizes tell a stroll inside one area from a trip between areas of a region. Anything
+ * the map cannot place is transit.
  */
-function resolveTravelFloorMinutes({ startLocationId, endLocationId, locationLinks, timeMatrix }) {
-    if (!startLocationId || !endLocationId || startLocationId === endLocationId) return 0;
-    const link = (locationLinks || []).find(candidate =>
-        (candidate.fromId === startLocationId && candidate.toId === endLocationId)
-        || (candidate.fromId === endLocationId && candidate.toId === startLocationId));
-    const categoryId = !link ? 'transit' : link.relType === 'inside' ? 'micro' : 'local';
+function resolveTravelFloorMinutes({ startLocationId, endLocationId, locationLinks, locationSizes, timeMatrix }) {
+    const categoryId = travelCategory(startLocationId, endLocationId, locationLinks || [], locationSizes);
+    if (!categoryId) return 0;
     const calendar = require('./features/worldbuild/calendar-service');
     return calendar.matrixMinimumMinutes(timeMatrix, categoryId)
         || calendar.matrixMinimumMinutes(timeMatrix, 'local');
@@ -3779,78 +3851,6 @@ function sameIdSet(left, right) {
     const leftIds = [...new Set(left || [])];
     const rightIds = [...new Set(right || [])];
     return leftIds.length === rightIds.length && leftIds.every(id => rightIds.includes(id));
-}
-
-// Containment is directional, so treating it as an undirected graph and counting hops measures
-// the wrong thing: a walk across town reads as far because it climbs to the shared district and
-// back down, while a jump to another continent under the same root reads as near. Reachability
-// is therefore anchored on the containers the origin sits in. Everything under those containers
-// is walkable, everything outside them is a different branch of the world.
-function findReachableLocations(originId, links, maxDepth) {
-    if (!originId) return new Set();
-    const parents = new Map();
-    const children = new Map();
-    const lateral = new Map();
-    const append = (map, key, value) => {
-        if (!map.has(key)) map.set(key, []);
-        map.get(key).push(value);
-    };
-    for (const link of links) {
-        if (link.relType === 'inside') {
-            append(parents, link.fromId, link.toId);
-            append(children, link.toId, link.fromId);
-        } else {
-            append(lateral, link.fromId, link.toId);
-            append(lateral, link.toId, link.fromId);
-        }
-    }
-    const anchors = new Set([originId]);
-    let climbing = [originId];
-    for (let depth = 0; depth < maxDepth && climbing.length; depth += 1) {
-        const next = [];
-        for (const id of climbing) {
-            for (const parent of parents.get(id) ?? []) {
-                if (anchors.has(parent)) continue;
-                anchors.add(parent);
-                next.push(parent);
-            }
-        }
-        climbing = next;
-    }
-    const reachable = new Set(anchors);
-    const descend = startIds => {
-        let frontier = startIds.filter(id => {
-            if (reachable.has(id)) return false;
-            reachable.add(id);
-            return true;
-        });
-        while (frontier.length) {
-            const next = [];
-            for (const id of frontier) {
-                for (const child of children.get(id) ?? []) {
-                    if (reachable.has(child)) continue;
-                    reachable.add(child);
-                    next.push(child);
-                }
-            }
-            frontier = next;
-        }
-    };
-    // The outermost container is the world, not a region. Expanding it would make every place
-    // reachable from every other and the guard would stop meaning anything.
-    for (const anchor of [...anchors]) {
-        if (!(parents.get(anchor) ?? []).length) continue;
-        descend(children.get(anchor) ?? []);
-    }
-    // An explicit connection is an authored shortcut and outranks containment: a road, a portal
-    // or a tunnel is exactly the case the hierarchy cannot express.
-    for (const id of [...reachable]) descend(lateral.get(id) ?? []);
-    // Climbing may have passed through the world itself. It is a container, never somewhere a
-    // scene can be set, so it stays out unless the scene already sits there.
-    for (const id of [...reachable]) {
-        if (id !== originId && !(parents.get(id) ?? []).length && (children.get(id) ?? []).length) reachable.delete(id);
-    }
-    return reachable;
 }
 
 function chunkValues(values, size) {
@@ -6254,5 +6254,6 @@ module.exports = {
     computeDocumentVectorStatus,
     checkAndAutoSummarize,
     getSystemAiConfiguration,
+    deferNarrativeStateTurn,
     reprocessNarrativeStateTurn
 };

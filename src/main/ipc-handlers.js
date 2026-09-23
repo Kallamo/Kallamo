@@ -14,6 +14,8 @@ const https = require('https');
 const crypto = require('crypto');
 const db = require('./database');
 const { getMessagePage } = require('./features/chat/message-pages');
+const { findPendingNarrativeTurn } = require('./features/chat/narrative-turns');
+const { ROLE_IDS, resolveAiEngineRole } = require('./features/ai-engine/role-resolver');
 const {
   syncSummarizedIndex,
   deleteSummaryBlock,
@@ -3447,7 +3449,10 @@ ipcMain.handle('get-roleplay-configuration', async (event, { workspaceId } = {})
       narrativeEvents: getNarrativeStateSystem().listEvents(workspaceId),
       recentTurnFrames: calendarService.listRecentMessageFrames(db, workspaceId, 50),
       narrativeMetrics: getNarrativeStateSystem().listMetrics(workspaceId, 50),
-      narrativeJobs: getNarrativeStateSystem().listJobs(workspaceId, 50)
+      narrativeJobs: getNarrativeStateSystem().listJobs(workspaceId, 50),
+      pendingNarrativeTurn: resolveAiEngineRole(ROLE_IDS.NARRATIVE_STATE).executor
+        ? findPendingNarrativeTurn(db, workspaceId)
+        : null
     };
   } catch (error) {
     return { success: false, error: error.message };
@@ -3712,6 +3717,15 @@ ipcMain.handle('compact-narrative-state', async (event, { workspaceId, apply = f
     const { NarrativeMaintenance } = require('../../dist-main/main/features/kanora/narrative-maintenance');
     const maintenance = new NarrativeMaintenance(db);
     return { success: true, report: apply ? maintenance.compact(workspaceId) : maintenance.preview(workspaceId) };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('defer-narrative-state-turn', async (event, { workspaceId, originId } = {}) => {
+  try {
+    const { deferNarrativeStateTurn } = require('./workflow-runner');
+    return { success: true, debugNotice: deferNarrativeStateTurn(workspaceId, originId) };
   } catch (error) {
     return { success: false, error: error.message };
   }
@@ -4138,7 +4152,6 @@ ipcMain.handle('start-world-index-tagging', async (event, { chatId, tier = 'arch
   const startedAt = Date.now();
   const selectedCount = Array.isArray(chunkIds) ? [...new Set(chunkIds.filter(Boolean))].length : null;
   const state = { runId, mode: selectedCount !== null ? 'selected' : (full ? 'all' : 'new'), status: 'running', total: selectedCount ?? (full ? initial.total : initial.pending), processed: 0, tagged: 0, taggedChunks: 0, empty: 0, failed: 0, error: null, startedAt };
-  const { ROLE_IDS, resolveAiEngineRole } = require('./features/ai-engine/role-resolver');
   const taggerConfig = resolveAiEngineRole(ROLE_IDS.TAGGER);
   if (!taggerConfig.executor) {
     db.prepare(`INSERT INTO world_index_runs (id, chatId, tier, mode, status, totalChunks, error, startedAt, completedAt)
@@ -4879,6 +4892,16 @@ ipcMain.on('open-workspace-folder', () => {
   shell.openPath(dataDir);
 });
 
+const { listMigrationBackups } = require('./database/migration-backup');
+const migrationBackupDir = path.join(dataDir, 'backups');
+
+ipcMain.handle('list-migration-backups', () => listMigrationBackups(migrationBackupDir));
+
+ipcMain.on('open-migration-backups-folder', () => {
+  fs.mkdirSync(migrationBackupDir, { recursive: true });
+  shell.openPath(migrationBackupDir);
+});
+
 // --- WORKFLOW GENERATION IPC HANDLERS ---
 const { runWorkflow, cancelGeneration, resolveErrorDeferred, resolveOverflowDeferred } = require('./workflow-runner');
 
@@ -4936,6 +4959,7 @@ ipcMain.handle('restore-workspace', async (event) => {
 
     const { filePaths } = await dialog.showOpenDialog(win, {
       title: 'Import Workspace Backup',
+      ...(fs.existsSync(migrationBackupDir) ? { defaultPath: migrationBackupDir } : {}),
       filters: [{ name: 'SQLite Database', extensions: ['db'] }],
       properties: ['openFile']
     });
@@ -5025,6 +5049,7 @@ ipcMain.handle('restore-workspace', async (event) => {
     }, null, 2), 'utf8');
 
     setTimeout(() => {
+      app.releaseSingleInstanceLock();
       app.relaunch();
       app.exit(0);
     }, 1000);
@@ -5981,6 +6006,14 @@ async function autoDownloadEngineIfNeeded() {
 }
 
 app.whenReady().then(() => {
+  // A reply regeneration interrupted by a closed app is undone, so its turn keeps the state it had.
+  try {
+    const restored = getNarrativeEntitySystem().cancelOpenTurnReplacements();
+    if (restored) console.log(`[Narrative State] Restored ${restored} interrupted reply replacement(s).`);
+  } catch (error) {
+    console.error('[Narrative State] Could not restore interrupted reply replacements:', error);
+  }
+
   // One-time orphan + FTS cleanup (v1)
   try {
     const done = db.prepare("SELECT value FROM settings WHERE key = 'orphan_cleanup_v1'").get();
