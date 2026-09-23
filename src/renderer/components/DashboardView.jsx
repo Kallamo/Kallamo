@@ -26,7 +26,13 @@ export default function DashboardView() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [chatToDelete, setChatToDelete] = useState(null);
   
-  const dropdownRef = useRef(null);
+  // One stable anchor per card: a ref attached only when the menu opens is still null
+  // when the Popover measures it, which closes the menu on the same render.
+  const dropdownRefs = useRef(new Map());
+  const dropdownRefFor = id => {
+    if (!dropdownRefs.current.has(id)) dropdownRefs.current.set(id, { current: null });
+    return dropdownRefs.current.get(id);
+  };
 
   const filteredChats = chats.filter(c => 
     (c.title || '').toLowerCase().includes(searchQuery.toLowerCase())
@@ -144,7 +150,7 @@ export default function DashboardView() {
                 {/* Card options area */}
                 <div className="absolute top-4 right-4 flex items-center space-x-1.5 z-30" onClick={(e) => e.stopPropagation()}>
 
-                  <div ref={activeDropdownId === chat.id ? dropdownRef : null} className="relative">
+                  <div ref={dropdownRefFor(chat.id)} className="relative">
                     <button 
                       onClick={(e) => {
                         e.stopPropagation();
@@ -156,7 +162,7 @@ export default function DashboardView() {
                       <MoreVertical className="w-4 h-4" />
                     </button>
 
-                    <Popover anchorRef={dropdownRef} open={activeDropdownId === chat.id} onClose={() => setActiveDropdownId(null)} matchAnchorWidth={false} align="right" maxHeight={180} scroll={false} className="w-36 overflow-hidden rounded-md py-1">
+                    <Popover anchorRef={dropdownRefFor(chat.id)}open={activeDropdownId === chat.id} onClose={() => setActiveDropdownId(null)} matchAnchorWidth={false} align="right" maxHeight={180} scroll={false} className="w-36 overflow-hidden rounded-md py-1">
                         <button 
                           onClick={(e) => togglePin(e, chat)}
                           className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-[#1a2d32] hover:text-white transition-colors flex items-center space-x-2 cursor-pointer font-medium"
