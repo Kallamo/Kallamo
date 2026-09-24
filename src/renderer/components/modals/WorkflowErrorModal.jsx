@@ -14,22 +14,22 @@ export default function WorkflowErrorModal() {
 
   return (
     <div className={`fixed inset-0 z-50 flex items-center justify-center titlebar-nodrag select-none ${(settings?.interface?.blur ?? true) ? 'bg-black/70 backdrop-blur-sm' : 'bg-[#011419]'}`}>
-      <div className="w-[480px] bg-[#011419] border border-red-950 rounded-xl shadow-2xl p-6 flex flex-col space-y-4 animate-in fade-in zoom-in duration-200">
+      <div className="w-[480px] bg-[#011419] border border-status-danger/30 rounded-xl shadow-2xl p-6 flex flex-col space-y-4 animate-in fade-in zoom-in duration-200">
         
         {/* Error Header */}
-        <div className="flex items-center space-x-3 text-red-500">
-          <div className="p-2 bg-red-500/10 rounded-lg">
+        <div className="flex items-center space-x-3 text-status-danger">
+          <div className="p-2 bg-status-danger/10 rounded-lg">
             <AlertCircle className="w-6 h-6 animate-pulse" />
           </div>
           <div className="flex flex-col">
             <h3 className="text-white font-bold text-base">Workflow Execution Error</h3>
-            <span className="text-[0.625rem] text-red-400 font-bold uppercase tracking-wider">Failed at: {stepName}</span>
+            <span className="text-[0.625rem] text-status-danger font-bold uppercase tracking-wider">Failed at: {stepName}</span>
           </div>
         </div>
 
         {/* Detailed Error message */}
-        <div className="bg-red-950/20 border border-red-900/40 rounded-lg p-4 max-h-48 overflow-y-auto custom-scrollbar">
-          <p className="text-xs text-red-200 font-mono leading-relaxed whitespace-pre-wrap">
+        <div className="bg-status-danger/10 border border-status-danger/25 rounded-lg p-4 max-h-48 overflow-y-auto custom-scrollbar">
+          <p className="text-xs text-text-secondary font-mono leading-relaxed whitespace-pre-wrap">
             {errorMessage}
           </p>
         </div>
@@ -46,10 +46,10 @@ export default function WorkflowErrorModal() {
           {/* Interrupt */}
           <button 
             onClick={() => handleRespondToError('interrupt')}
-            className="flex flex-col items-center justify-center p-3 bg-red-950/10 hover:bg-red-950/30 border border-red-900/50 hover:border-red-500/50 rounded-xl transition-all cursor-pointer group"
+            className="flex flex-col items-center justify-center p-3 bg-status-danger/5 hover:bg-status-danger/15 border border-status-danger/30 hover:border-status-danger/50 rounded-xl transition-all cursor-pointer group"
           >
-            <XCircle className="w-5 h-5 text-red-500 mb-1 group-hover:scale-110 transition-transform" />
-            <span className="text-[0.625rem] font-bold text-red-400 uppercase tracking-wider">{canResume ? 'Interrupt' : 'Close'}</span>
+            <XCircle className="w-5 h-5 text-status-danger mb-1 group-hover:scale-110 transition-transform" />
+            <span className="text-[0.625rem] font-bold text-status-danger uppercase tracking-wider">{canResume ? 'Interrupt' : 'Close'}</span>
             <span className="text-[0.5rem] text-gray-500 text-center mt-0.5 leading-tight">{canResume ? 'Stop chain & save messages' : 'Dismiss this error'}</span>
           </button>
 

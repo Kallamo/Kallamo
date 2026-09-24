@@ -216,6 +216,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   executeSummarization: (args) => ipcRenderer.invoke('execute-summarization', args),
   getArchiveOverview: (chatId) => ipcRenderer.invoke('get-archive-overview', { chatId }),
   getArchiveTokenTotals: (chatId) => ipcRenderer.invoke('get-archive-token-totals', { chatId }),
+  getArchivedMessageDetails: (chatId, messageIds) => ipcRenderer.invoke('get-archived-message-details', { chatId, messageIds }),
   resetChatSummaries: (chatId) => ipcRenderer.invoke('reset-chat-summaries', { chatId }),
   setMessagesExcluded: (chatId, messageIds, excluded) => ipcRenderer.invoke('set-messages-excluded', { chatId, messageIds, excluded }),
   onTriggerAutoSummarize: (callback) => {

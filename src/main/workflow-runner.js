@@ -5090,14 +5090,14 @@ async function executeSummarizationInternal({ chatId, selectedMessages, messageI
         setMessagesExcluded(db, chatId, excludeIds, true);
     }
 
-    const history = db.prepare('SELECT id, role, content, excluded FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
+    const history = db.prepare('SELECT id, role, content, excluded, aiName, aiColor, createdAt FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
     const covered = coveredMessageIds(chat.memoryBlocks);
     const excludedNow = new Set(excludeIds);
 
     // Chat order, stored content, nothing already covered, nothing just muted.
     const archiveMessages = history
         .filter(m => wanted.has(m.id) && !covered.has(m.id) && !excludedNow.has(m.id) && m.excluded !== 1)
-        .map(m => ({ id: m.id, role: m.role, content: m.content }));
+        .map(m => ({ id: m.id, role: m.role, content: m.content, aiName: m.aiName || null, aiColor: m.aiColor || null, createdAt: m.createdAt || null }));
 
     if (archiveMessages.length === 0) {
         const summarizedIndex = syncSummarizedIndex(db, chatId);

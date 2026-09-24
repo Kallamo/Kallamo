@@ -22,7 +22,7 @@ export default function TextInput({
   return (
     <div className={`flex flex-col ${containerClassName}`}>
       {label && (
-        <label htmlFor={inputId} className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">
+        <label htmlFor={inputId} className="mb-1.5 block text-sm font-medium text-text-secondary">
           {label}
         </label>
       )}

@@ -17,7 +17,7 @@ export default function ExportWorldbuildModal({ entityCount = 0, onClose, onConf
             <Download className="w-4 h-4 text-accent" />
             <h2 className="text-sm font-bold text-white uppercase tracking-wider font-sans">Export Worldbuild</h2>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-red-500 transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5">
+          <button onClick={onClose} className="text-gray-400 hover:text-status-danger transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5">
             <X className="w-4 h-4" />
           </button>
         </div>

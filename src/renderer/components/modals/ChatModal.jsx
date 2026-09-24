@@ -164,7 +164,7 @@ export default function ChatModal({ chat, onClose }) {
           </div>
           <button 
             onClick={onClose}
-            className="text-gray-500 hover:text-red-500 hover:bg-white/5 p-1 rounded-md transition-colors cursor-pointer"
+            className="text-gray-500 hover:text-status-danger hover:bg-white/5 p-1 rounded-md transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -211,7 +211,7 @@ export default function ChatModal({ chat, onClose }) {
                   type="text" 
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  className={`w-full bg-[#011419] border text-white text-sm rounded-md px-3 py-2 focus:outline-none focus:border-accent transition-colors font-sans ${!title.trim() && isEditing ? 'border-red-500/50' : 'border-gray-800'}`}
+                  className={`w-full bg-[#011419] border text-white text-sm rounded-md px-3 py-2 focus:outline-none focus:border-accent transition-colors font-sans ${!title.trim() && isEditing ? 'border-status-danger/50' : 'border-gray-800'}`}
                   placeholder="e.g., Novel Project, Code Sandbox..."
                 />
               </div>

@@ -595,9 +595,9 @@ function TableBubble({ editor }) {
         <ToolbarButton onClick={() => editor.chain().focus().toggleHeaderRow().run()} title="Toggle header row"><Rows className="w-4 h-4" /></ToolbarButton>
         <ToolbarButton onClick={() => editor.chain().focus().mergeOrSplit().run()} title="Merge / split cells"><Combine className="w-4 h-4" /></ToolbarButton>
         <Divider />
-        <ToolbarButton onClick={() => editor.chain().focus().deleteRow().run()} title="Delete row"><Rows className="w-4 h-4 text-red-400" /></ToolbarButton>
-        <ToolbarButton onClick={() => editor.chain().focus().deleteColumn().run()} title="Delete column"><Columns className="w-4 h-4 text-red-400" /></ToolbarButton>
-        <ToolbarButton onClick={() => editor.chain().focus().deleteTable().run()} title="Delete table"><Trash2 className="w-4 h-4 text-red-400" /></ToolbarButton>
+        <ToolbarButton onClick={() => editor.chain().focus().deleteRow().run()} title="Delete row"><Rows className="w-4 h-4 text-status-danger" /></ToolbarButton>
+        <ToolbarButton onClick={() => editor.chain().focus().deleteColumn().run()} title="Delete column"><Columns className="w-4 h-4 text-status-danger" /></ToolbarButton>
+        <ToolbarButton onClick={() => editor.chain().focus().deleteTable().run()} title="Delete table"><Trash2 className="w-4 h-4 text-status-danger" /></ToolbarButton>
       </div>
       <CellColorControl editor={editor} />
     </BubbleMenu>
@@ -659,7 +659,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
         return { Icon: IndexOutdatedGlyph, label: 'Out of date', cls: 'text-amber-400 border-amber-500/45 bg-amber-500/10',
           title: 'Chapter edited since last index — AI is still reading the old version. Reindex to sync.' };
       case 'error':
-        return { Icon: IndexErrorGlyph, label: 'Index failed', cls: 'text-red-400 border-red-500/40 bg-red-500/10',
+        return { Icon: IndexErrorGlyph, label: 'Index failed', cls: 'text-status-danger border-status-danger/40 bg-status-danger/10',
           title: 'Last index failed. Click to try again.' };
       default:
         return { Icon: IndexNeverGlyph, label: 'Not indexed', cls: 'text-gray-400 border-gray-500/35 bg-gray-500/10',
@@ -1318,7 +1318,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
                     <ExternalLink className="w-3.5 h-3.5 shrink-0 text-gray-500" /> Open in Worldbuild
                   </button>
                 )}
-                <button onClick={unlinkEntity} className="flex items-center gap-2 text-left px-2 py-1.5 text-xs text-gray-400 hover:text-red-400 hover:bg-white/5 rounded-md">
+                <button onClick={unlinkEntity} className="flex items-center gap-2 text-left px-2 py-1.5 text-xs text-gray-400 hover:text-status-danger hover:bg-white/5 rounded-md">
                   <Unlink className="w-3.5 h-3.5 shrink-0" /> Unlink
                 </button>
               </>
@@ -1408,8 +1408,8 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
               <span className="flex items-center gap-1.5 text-[0.6875rem] tabular-nums pr-1 border-r border-gray-800">
                 <SuggestionPendingGlyph className="w-3.5 h-3.5 text-accent" />
                 {stale
-                  ? <span className="text-red-400">text changed, reject</span>
-                  : <span><span className="text-emerald-400">+{delta.added}</span> / <span className="text-red-400">−{delta.removed}</span></span>}
+                  ? <span className="text-status-danger">text changed, reject</span>
+                  : <span><span className="text-emerald-400">+{delta.added}</span> / <span className="text-status-danger">−{delta.removed}</span></span>}
               </span>
               <button onClick={rejectSuggestion} className="flex items-center gap-1 text-xs text-gray-300 hover:text-white px-2 py-1 rounded-full hover:bg-white/5 cursor-pointer">
                 <X className="w-3.5 h-3.5" /> Reject

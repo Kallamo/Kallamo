@@ -18,6 +18,7 @@ const SIZES = {
   md: 'max-w-md',
   lg: 'max-w-lg',
   xl: 'max-w-2xl',
+  wide: 'max-w-4xl',
   '2xl': 'max-w-5xl',
 };
 
@@ -102,7 +103,7 @@ export default function Modal({
           <div className="relative z-10 shrink-0 flex items-center justify-between gap-3 min-h-14 px-5 bg-surface-panel/60 border-b border-border-subtle">
             <div className="flex items-center gap-2.5 min-w-0">
               {Icon && <Icon className="w-4 h-4 text-accent shrink-0" />}
-              <h2 id={generatedTitleId} className="text-sm font-bold text-text-primary uppercase tracking-wider truncate">{title}</h2>
+              <h2 id={generatedTitleId} className="text-base font-semibold text-text-primary truncate">{title}</h2>
             </div>
             {showClose && (
               <button

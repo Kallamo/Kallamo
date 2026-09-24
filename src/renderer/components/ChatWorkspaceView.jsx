@@ -875,9 +875,10 @@ export default function ChatWorkspaceView() {
     }
   };
 
+  // Only the chat's veil is configurable; Memory keeps a fixed one so its glass reads the same everywhere.
   const backdropStyle = {
-    backgroundColor: '#011419',
-    opacity: (activeChat.backdropOpacity ?? 75) / 100
+    backgroundColor: 'var(--theme-surface-canvas)',
+    opacity: (activeSubView === 'memory' ? 75 : (activeChat.backdropOpacity ?? 75)) / 100
   };
 
   const bgStyle = hasBg ? {
@@ -991,7 +992,7 @@ export default function ChatWorkspaceView() {
                   ? `${ctxHistoryCut} older ${ctxHistoryCut === 1 ? 'message was' : 'messages were'} left out of the last reply to fit the payload budget. Archive them to keep them searchable.`
                   : 'Active history exceeds the payload budget. The oldest messages are being cut. Archive them.'}
                 aria-label="Active history exceeds the payload budget"
-                className="p-1.5 rounded-md text-red-400 hover:text-red-300 hover:bg-red-950/40 transition-colors cursor-pointer shrink-0"
+                className="p-1.5 rounded-md text-status-danger hover:bg-status-danger/15 transition-colors cursor-pointer shrink-0"
               >
                 <AlertTriangle className="w-4 h-4" />
               </button>
@@ -1015,7 +1016,7 @@ export default function ChatWorkspaceView() {
           <div className="h-1 w-full bg-gray-800/50 shrink-0 relative z-10" title={`Active context: ~${ctxTokens} / ${ctxThreshold} tokens`}>
             <div
               style={{ width: `${ctxPercentage}%` }}
-              className={`h-full transition-[width,background-color] duration-500 ease-out ${ctxPercentage >= 95 ? 'bg-red-500' : ctxPercentage >= 75 ? 'bg-orange-500' : 'bg-accent'}`}
+              className={`h-full transition-[width,background-color] duration-500 ease-out ${ctxPercentage >= 95 ? 'bg-status-danger' : ctxPercentage >= 75 ? 'bg-orange-500' : 'bg-accent'}`}
             />
           </div>
         )}
@@ -1120,7 +1121,7 @@ export default function ChatWorkspaceView() {
                       {/* Floating delete button on hover or always */}
                       <button
                         onClick={() => removePendingFile(file.name)}
-                        className="absolute -top-1.5 -right-1.5 bg-red-500 hover:bg-red-600 text-white rounded-full p-0.5 shadow-md shadow-black/40 hover:scale-105 transition-[background-color,transform] cursor-pointer shrink-0"
+                        className="absolute -top-1.5 -right-1.5 bg-danger-solid hover:bg-danger-solid-hover text-white rounded-full p-0.5 shadow-md shadow-black/40 hover:scale-105 transition-[background-color,transform] cursor-pointer shrink-0"
                       >
                         <X className="w-3 h-3" />
                       </button>
@@ -1286,6 +1287,8 @@ export default function ChatWorkspaceView() {
                 chat={activeChat}
                 onSaveChat={handleSaveChat}
                 electronAPI={electronAPI}
+                backgroundImage={hasBg ? effectiveBackground : null}
+                hasBackdrop={hasBg}
               />
             ) : activeSubView === 'writing' ? (
               <WritingDeskView
@@ -1341,9 +1344,9 @@ export default function ChatWorkspaceView() {
 
       {/* Floating Error modal for failed message edit */}
       {editError && (
-        <div className="absolute bottom-28 right-6 w-80 bg-[#1a0a0d] border border-red-950/60 rounded-xl p-4 shadow-[0_0_20px_rgba(0,0,0,0.6)] z-50 animate-in fade-in slide-in-from-bottom-5 duration-300 flex flex-col space-y-3">
+        <div className="absolute bottom-28 right-6 w-80 bg-[#1a0a0d] border border-status-danger/30 rounded-xl p-4 shadow-[0_0_20px_rgba(0,0,0,0.6)] z-50 animate-in fade-in slide-in-from-bottom-5 duration-300 flex flex-col space-y-3">
           <div className="flex items-start justify-between">
-            <div className="flex items-center space-x-2 text-red-400">
+            <div className="flex items-center space-x-2 text-status-danger">
               <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
               </svg>
@@ -1376,7 +1379,7 @@ export default function ChatWorkspaceView() {
                 setEditError(null);
                 await handleEditUserMessage(msgId, editedText, targetId);
               }}
-              className="px-3 py-1 bg-red-600 hover:bg-red-500 text-white rounded text-[0.625rem] font-bold uppercase hover:scale-[1.02] active:scale-95 transition-[background-color,transform] cursor-pointer"
+              className="px-3 py-1 bg-danger-solid hover:bg-danger-solid-hover text-white rounded text-[0.625rem] font-bold uppercase hover:scale-[1.02] active:scale-95 transition-[background-color,transform] cursor-pointer"
             >
               Retry
             </button>

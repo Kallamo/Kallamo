@@ -22,7 +22,7 @@
   --theme-text-subtle: #7f8b96;
   --theme-text-disabled: #65717c;
   --theme-text-on-accent: #011419;
-  --theme-text-on-danger: #ffe8ea;
+  --theme-text-on-danger: #ffffff;
 
   --theme-border-subtle: rgb(255 255 255 / 8%);
   --theme-border-default: rgb(255 255 255 / 14%);
@@ -31,7 +31,15 @@
   --theme-status-info: #60a5fa;
   --theme-status-success: #34d399;
   --theme-status-warning: #fbbf24;
-  --theme-status-danger: #d96872;
+  /* Danger has two tones: status-danger is readable as text on the canvas,
+     danger-solid is dark enough to carry on-danger text as a fill. */
+  --theme-status-danger: #f2555a;
+  --theme-danger-solid: #d93036;
+  --theme-danger-solid-hover: #e5484d;
+  /* How a memory reaches the model. The mode owns the colour; the icon tells notes from files. */
+  --theme-mode-always: #a78bfa;
+  --theme-mode-searchable: #60a5fa;
+  --theme-mode-history: #2dd4bf;
   --theme-calendar-birthday: #e99ac5;
   --theme-calendar-festival: #e7b94f;
   --theme-calendar-event: #a999e8;
@@ -86,6 +94,11 @@
   --color-status-success: var(--theme-status-success);
   --color-status-warning: var(--theme-status-warning);
   --color-status-danger: var(--theme-status-danger);
+  --color-danger-solid: var(--theme-danger-solid);
+  --color-danger-solid-hover: var(--theme-danger-solid-hover);
+  --color-mode-always: var(--theme-mode-always);
+  --color-mode-searchable: var(--theme-mode-searchable);
+  --color-mode-history: var(--theme-mode-history);
   --color-entity-character: var(--theme-entity-character);
   --color-entity-location: var(--theme-entity-location);
   --color-entity-faction: var(--theme-entity-faction);
@@ -568,3 +581,15 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
+
+/* Over a chat background every surface shares one transparency and one blur, so no panel
+   decides its own. The chat's backdrop opacity still sets how dark the art sits. */
+.glass-panel { background-color: var(--theme-surface-panel); }
+.glass-rail { background-color: var(--theme-surface-sidebar); }
+.has-backdrop .glass-panel,
+.has-backdrop .glass-rail {
+  backdrop-filter: blur(20px) saturate(1.15);
+  -webkit-backdrop-filter: blur(20px) saturate(1.15);
+}
+.has-backdrop .glass-panel { background-color: color-mix(in srgb, var(--theme-surface-panel) 66%, transparent); }
+.has-backdrop .glass-rail { background-color: color-mix(in srgb, var(--theme-surface-sidebar) 62%, transparent); }

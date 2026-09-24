@@ -147,7 +147,7 @@ export default function ProfileModal({ profile, onClose, onSave }) {
           </div>
         `;
       } else {
-        return `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-red-500/10 text-red-400 border border-red-500/30 select-none">⚠️ {{${key} (not found)}}</span>`;
+        return `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-status-danger/10 text-status-danger border border-status-danger/30 select-none">⚠️ {{${key} (not found)}}</span>`;
       }
     });
 
@@ -256,7 +256,7 @@ export default function ProfileModal({ profile, onClose, onSave }) {
           <button
             onClick={onClose}
             aria-label="Close profile editor"
-            className="text-gray-400 hover:text-red-500 transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5"
+            className="text-gray-400 hover:text-status-danger transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5"
           >
             <X className="w-5 h-5" />
           </button>

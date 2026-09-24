@@ -4438,6 +4438,23 @@ ipcMain.handle('get-archive-token-totals', async (event, { chatId }) => {
   }
 });
 
+// Archiving keeps the rows, so summaries written before speaker details were copied
+// can still read them from the live table.
+ipcMain.handle('get-archived-message-details', async (event, { chatId, messageIds }) => {
+  try {
+    const ids = [...new Set((messageIds || []).map(String).filter(Boolean))];
+    if (!ids.length) return { success: true, messages: [] };
+    const placeholders = ids.map(() => '?').join(',');
+    const messages = db
+      .prepare(`SELECT id, aiName, aiColor, createdAt FROM messages WHERE chatId = ? AND id IN (${placeholders})`)
+      .all(chatId, ...ids);
+    return { success: true, messages };
+  } catch (e) {
+    console.error("Error reading archived message details:", e);
+    return { success: false, messages: [] };
+  }
+});
+
 ipcMain.handle('set-messages-excluded', async (event, { chatId, messageIds, excluded }) => {
   try {
     const result = setMessagesExcluded(db, chatId, messageIds, excluded);

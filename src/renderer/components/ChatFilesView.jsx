@@ -308,7 +308,7 @@ export default function ChatFilesView({
                         <button
                           onClick={(e) => { e.stopPropagation(); setDeleteTarget(file); }}
                           title="Delete file permanently"
-                          className="p-2 bg-red-950/40 hover:bg-red-600 text-red-400 hover:text-white border border-red-950 rounded-lg transition-colors"
+                          className="p-2 bg-status-danger/15 hover:bg-danger-solid-hover text-status-danger hover:text-white border border-status-danger/30 rounded-lg transition-colors"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>

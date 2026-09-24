@@ -83,7 +83,7 @@ export default function ExportProfileModal({ profile, onClose, onExport }) {
           </div>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-red-500 transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5"
+            className="text-gray-400 hover:text-status-danger transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5"
           >
             <X className="w-4 h-4" />
           </button>

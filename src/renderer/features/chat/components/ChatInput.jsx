@@ -69,13 +69,13 @@ export default function ChatInput({
           onMouseLeave={() => setIsHoveringSend(false)}
           className={`shrink-0 w-9 h-9 rounded-full flex items-center justify-center shadow-md transition-all active:scale-95 cursor-pointer border ${isGenerating
             ? isHoveringSend
-              ? 'bg-red-600 hover:bg-red-500 border-red-500/20 text-text-primary hover:brightness-110'
+              ? 'bg-danger-solid hover:bg-danger-solid-hover border-danger-solid text-on-danger'
               : 'bg-accent/20 border-accent/40 text-accent cursor-wait'
             : 'bg-accent border-accent text-on-accent hover:brightness-110 disabled:opacity-50 disabled:pointer-events-none'
             }`}
         >
           {isGenerating ? (
-            isHoveringSend ? <Square className="w-4 h-4 fill-current text-text-primary" /> : <RotateCw className="w-4 h-4 animate-spin text-accent" />
+            isHoveringSend ? <Square className="w-4 h-4 fill-current" /> : <RotateCw className="w-4 h-4 animate-spin text-accent" />
           ) : (
             <SendHorizontal className="w-4 h-4" />
           )}

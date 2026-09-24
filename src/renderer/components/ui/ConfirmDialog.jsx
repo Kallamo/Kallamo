@@ -46,10 +46,10 @@ export default function ConfirmDialog({
           <div className={`p-2 rounded-control shrink-0 ${toneConf.chip}`}>
             <Icon className="w-5 h-5" />
           </div>
-          <h3 className="text-sm font-bold text-text-primary uppercase tracking-wider">{title}</h3>
+          <h3 className="text-base font-semibold text-text-primary">{title}</h3>
         </div>
 
-        <div className="text-xs text-text-muted leading-relaxed whitespace-pre-wrap select-text">
+        <div className="text-sm text-text-muted leading-relaxed whitespace-pre-wrap select-text">
           {message}
         </div>
 

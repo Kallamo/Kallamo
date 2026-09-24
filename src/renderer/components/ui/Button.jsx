@@ -15,7 +15,7 @@ import { Loader2 } from 'lucide-react';
  */
 const VARIANTS = {
   primary: 'bg-accent/90 text-on-accent hover:bg-accent shadow-sm',
-  danger: 'border border-status-danger/40 bg-status-danger/85 text-on-danger hover:bg-status-danger shadow-sm',
+  danger: 'bg-danger-solid text-on-danger hover:bg-danger-solid-hover shadow-sm',
   ghost: 'bg-surface-panel/70 border border-border-default text-text-secondary hover:bg-surface-hover hover:text-text-primary',
   subtle: 'bg-transparent text-text-muted hover:bg-surface-hover/45 hover:text-text-primary',
 };

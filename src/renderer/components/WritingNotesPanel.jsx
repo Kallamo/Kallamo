@@ -148,7 +148,7 @@ export default function WritingNotesPanel({ documentId, workspaceId, electronAPI
             ) : (
               <button title="Mark resolved" onClick={() => setStatus(n.id, 'resolved')} className="p-0.5 text-gray-600 hover:text-green-400"><CircleCheck className="w-3.5 h-3.5" /></button>
             )}
-            <button title="Delete" onClick={() => setConfirmId(n.id)} className="p-0.5 text-gray-600 hover:text-red-400 hover-reveal"><Trash2 className="w-3.5 h-3.5" /></button>
+            <button title="Delete" onClick={() => setConfirmId(n.id)} className="p-0.5 text-gray-600 hover:text-status-danger hover-reveal"><Trash2 className="w-3.5 h-3.5" /></button>
           </div>
         </div>
       </div>

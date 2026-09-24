@@ -69,7 +69,7 @@ export default function VariableModal({ variable, onClose, onSave }) {
           </div>
           <button 
             onClick={onClose}
-            className="text-gray-400 hover:text-red-500 transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5"
+            className="text-gray-400 hover:text-status-danger transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5"
           >
             <X className="w-5 h-5" />
           </button>
@@ -110,7 +110,7 @@ export default function VariableModal({ variable, onClose, onSave }) {
                 className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 focus:outline-none focus:border-accent disabled:opacity-50 disabled:cursor-not-allowed font-mono"
               />
               {keyError && (
-                <p className="text-[0.625rem] text-red-400 mt-1 font-semibold">{keyError}</p>
+                <p className="text-[0.625rem] text-status-danger mt-1 font-semibold">{keyError}</p>
               )}
             </div>
           </div>

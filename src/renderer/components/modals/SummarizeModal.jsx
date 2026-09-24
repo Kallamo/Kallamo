@@ -235,7 +235,7 @@ export default function SummarizeModal({
               <span className="text-gray-700 mx-1.5">|</span>
               <span className="text-gray-300 font-mono">{totals.keepCount}</span> staying
               <span className="text-gray-700 mx-1.5">|</span>
-              <span className="text-red-400/90 font-mono">{totals.dropCount}</span> dropped
+              <span className="text-status-danger/90 font-mono">{totals.dropCount}</span> dropped
             </span>
             <div className="flex items-center space-x-2 text-[0.625rem] uppercase font-bold tracking-wider">
               <button
@@ -264,9 +264,9 @@ export default function SummarizeModal({
               <p className="text-xs text-gray-500 py-6 text-center">Reading history...</p>
             )}
             {!loading && loadError && (
-              <div className="flex items-start space-x-2 bg-red-500/5 border border-red-500/25 rounded-xl p-3">
-                <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
-                <p className="text-xs text-red-300 leading-relaxed">{loadError}</p>
+              <div className="flex items-start space-x-2 bg-status-danger/5 border border-status-danger/25 rounded-xl p-3">
+                <AlertTriangle className="w-4 h-4 text-status-danger shrink-0 mt-0.5" />
+                <p className="text-xs text-status-danger leading-relaxed">{loadError}</p>
               </div>
             )}
             {!loading && !loadError && visibleList.length === 0 && (
@@ -286,7 +286,7 @@ export default function SummarizeModal({
                   className={`flex items-start p-3 rounded-xl border transition-colors cursor-pointer ${isArchive
                     ? 'bg-[#1a2d32]/50 border-accent/35 shadow-md shadow-black/10'
                     : isDrop
-                      ? 'bg-red-950/15 border-red-500/25 opacity-70'
+                      ? 'bg-status-danger/10 border-status-danger/25 opacity-70'
                       : 'bg-[#011419]/45 border-gray-800/40 opacity-70'
                     }`}
                 >
@@ -296,7 +296,7 @@ export default function SummarizeModal({
                       {isUser ? 'User Prompt' : 'AI Response'}
                       {msgObj.reserved && <span className="ml-1.5 text-gray-500 normal-case font-semibold">recent</span>}
                     </span>
-                    <p className={`text-xs leading-relaxed line-clamp-3 whitespace-pre-wrap ${isDrop ? 'text-gray-500 line-through decoration-red-500/40' : 'text-gray-300'}`}>
+                    <p className={`text-xs leading-relaxed line-clamp-3 whitespace-pre-wrap ${isDrop ? 'text-gray-500 line-through decoration-status-danger/40' : 'text-gray-300'}`}>
                       {msgObj.content}
                     </p>
                   </div>
@@ -323,7 +323,7 @@ export default function SummarizeModal({
                       active={isDrop}
                       onClick={() => setState(msgObj.id, DROP)}
                       title="Drop from context entirely"
-                      activeClass="bg-red-500/80 border-red-500/80 text-white"
+                      activeClass="bg-danger-solid border-danger-solid text-white"
                       disabled={isVectorizing}
                     >
                       <EyeOff className="w-3 h-3" />

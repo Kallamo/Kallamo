@@ -584,7 +584,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
           <h2 className="text-lg font-bold text-white tracking-wide">Settings</h2>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-red-500 transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5"
+            className="text-gray-400 hover:text-status-danger transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5"
           >
             <X className="w-5 h-5" />
           </button>
@@ -697,7 +697,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                                 </button>
                                 <button
                                   onClick={() => handleDeleteApiProfile(ap.id)}
-                                  className="text-xs text-red-400 hover:text-red-300 p-1.5 hover:bg-red-500/10 rounded-md transition-colors cursor-pointer"
+                                  className="text-xs text-status-danger p-1.5 hover:bg-status-danger/10 rounded-md transition-colors cursor-pointer"
                                 >
                                   <Trash2 className="w-4 h-4" />
                                 </button>
@@ -948,7 +948,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                               >
                                 <span>{m}</span>
                                 <X
-                                  className="w-3 h-3 text-gray-500 hover:text-red-400 cursor-pointer"
+                                  className="w-3 h-3 text-gray-500 hover:text-status-danger cursor-pointer"
                                   onClick={() => removeModel(m)}
                                 />
                               </span>
@@ -1596,7 +1596,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                             </label>
                           </div>
                           {isPlatformUnsupported && (
-                            <p className="text-red-400/90 text-[0.625rem] leading-relaxed">
+                            <p className="text-status-danger/90 text-[0.625rem] leading-relaxed">
                               ⚠️ Local AI is not supported on Intel Mac. Please configure an external embedding provider.
                             </p>
                           )}
@@ -1606,7 +1606,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                         {!isPlatformUnsupported && (
                           <div className="p-3 bg-[#0d1b22]/45 rounded-lg border border-gray-800 flex items-center justify-between text-xs mt-3 select-none">
                             <div className="flex items-center space-x-2.5">
-                              <span className={`w-2 h-2 rounded-full ${engineStatus.installed ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                              <span className={`w-2 h-2 rounded-full ${engineStatus.installed ? 'bg-emerald-500' : 'bg-status-danger'}`} />
                               <div className="flex flex-col">
                                 <span className="text-gray-200 font-bold">Local AI Engine Status</span>
                                 <span className="caption">
@@ -1620,7 +1620,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                               <button
                                 type="button"
                                 onClick={() => setConfirmAction('deleteEngine')}
-                                className="px-3 py-1.5 bg-red-600/10 hover:bg-red-650/20 text-red-400 font-semibold rounded-md border border-red-600/20 transition-all cursor-pointer select-none"
+                                className="px-3 py-1.5 bg-status-danger/10 hover:bg-status-danger/15 text-status-danger font-semibold rounded-md border border-status-danger/20 transition-all cursor-pointer select-none"
                               >
                                 Delete Engine
                               </button>
@@ -1944,12 +1944,12 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
 
                       <div className="p-4 flex items-center justify-between">
                         <div className="pr-4">
-                          <span className="block text-sm text-red-400 font-bold">Purge Vector DB Cache</span>
+                          <span className="block text-sm text-status-danger font-bold">Purge Vector DB Cache</span>
                           <span className="caption">Delete all compiled vector indices. Cached knowledge files will require rebuilding to support search features.</span>
                         </div>
                         <button
                           onClick={() => setConfirmAction('purge')}
-                          className="px-3 py-1.5 bg-red-600/10 hover:bg-red-600/20 text-red-400 text-xs font-semibold rounded-lg transition-colors border border-red-600/30 flex items-center space-x-1.5 cursor-pointer shrink-0 ml-4"
+                          className="px-3 py-1.5 bg-status-danger/10 hover:bg-status-danger/15 text-status-danger text-xs font-semibold rounded-lg transition-colors border border-status-danger/30 flex items-center space-x-1.5 cursor-pointer shrink-0 ml-4"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                           <span>Purge Indexes</span>
@@ -2143,7 +2143,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                     }
                   }
                 }}
-                className="px-4 py-2 text-xs font-bold bg-red-600 hover:bg-red-700 text-white rounded transition-colors cursor-pointer"
+                className="px-4 py-2 text-xs font-bold bg-danger-solid hover:bg-danger-solid-hover text-white rounded transition-colors cursor-pointer"
               >
                 Confirm
               </button>

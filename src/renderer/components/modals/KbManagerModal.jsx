@@ -731,7 +731,7 @@ export default function KbManagerModal({ profile, onClose }) {
           </div>
         `;
       } else {
-        return `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-red-500/10 text-red-400 border border-red-500/30 select-none">⚠️ {{${key} (not found)}}</span>`;
+        return `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-status-danger/10 text-status-danger border border-status-danger/30 select-none">⚠️ {{${key} (not found)}}</span>`;
       }
     });
 
@@ -1023,7 +1023,7 @@ export default function KbManagerModal({ profile, onClose }) {
 
             <button
               onClick={onClose}
-              className="text-gray-400 hover:text-red-500 transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5"
+              className="text-gray-400 hover:text-status-danger transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5"
             >
               <X className="w-5 h-5" />
             </button>
@@ -1394,7 +1394,7 @@ export default function KbManagerModal({ profile, onClose }) {
                                       handleDeleteBlock(block);
                                     }
                                   }}
-                                  className="p-1 text-gray-500 hover:text-red-500 hover:bg-red-500/10 rounded transition-colors cursor-pointer"
+                                  className="p-1 text-gray-500 hover:text-status-danger hover:bg-status-danger/10 rounded transition-colors cursor-pointer"
                                   title={block.type === 'rag_file' ? "Delete Searchable File" : "Delete Block"}
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
@@ -1446,7 +1446,7 @@ export default function KbManagerModal({ profile, onClose }) {
                 </div>
                 <button
                   onClick={() => setViewingFileBlock(null)}
-                  className="text-gray-400 hover:text-red-500 transition-colors cursor-pointer"
+                  className="text-gray-400 hover:text-status-danger transition-colors cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -1499,7 +1499,7 @@ export default function KbManagerModal({ profile, onClose }) {
                               }
                             });
                           }}
-                          className="p-1 text-gray-500 hover:text-red-500 hover:bg-red-500/10 rounded cursor-pointer"
+                          className="p-1 text-gray-500 hover:text-status-danger hover:bg-status-danger/10 rounded cursor-pointer"
                           title="Delete Chunk"
                         >
                           <Trash2 className="w-3 h-3" />
@@ -1524,7 +1524,7 @@ export default function KbManagerModal({ profile, onClose }) {
                 </h3>
                 <button
                   onClick={() => setEditorOpen(false)}
-                  className="text-gray-400 hover:text-red-500 transition-colors cursor-pointer"
+                  className="text-gray-400 hover:text-status-danger transition-colors cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -1681,7 +1681,7 @@ export default function KbManagerModal({ profile, onClose }) {
                 )}
 
                 {editorError && (
-                  <p className="text-[0.625rem] text-red-400 font-semibold px-1">{editorError}</p>
+                  <p className="text-[0.625rem] text-status-danger font-semibold px-1">{editorError}</p>
                 )}
               </div>
 
@@ -1734,7 +1734,7 @@ export default function KbManagerModal({ profile, onClose }) {
               </button>
               <button
                 onClick={() => setIsBulkDeleteConfirmOpen(true)}
-                className="px-3 py-1.5 bg-red-650 hover:bg-red-650/80 text-white text-[0.625rem] font-bold uppercase tracking-wider rounded-lg transition-colors cursor-pointer flex items-center space-x-1.5 shadow-md shadow-red-950/20"
+                className="px-3 py-1.5 bg-danger-solid hover:bg-danger-solid-hover text-white text-[0.625rem] font-bold uppercase tracking-wider rounded-lg transition-colors cursor-pointer flex items-center space-x-1.5 shadow-md shadow-black/20"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>Delete</span>

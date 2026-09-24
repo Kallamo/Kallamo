@@ -83,7 +83,7 @@ function EngineDownloadStatus() {
       <div className="flex flex-col items-center space-y-6 max-w-md text-center px-8 animate-in fade-in zoom-in-95 duration-300">
         <div className="relative">
           {engineDownloadProgress.status === 'error' ? (
-            <AlertCircle className="w-12 h-12 text-red-400" />
+            <AlertCircle className="w-12 h-12 text-status-danger" />
           ) : engineDownloadProgress.status === 'completed' ? (
             <CircleCheck className="w-12 h-12 text-emerald-400" />
           ) : (
@@ -138,7 +138,7 @@ function EngineDownloadStatus() {
         {engineDownloadProgress.status === 'error' && (
           <button
             onClick={() => setEngineDownloadProgress(null)}
-            className="mt-4 px-5 py-2 bg-[#d32f2f] hover:bg-red-700 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+            className="mt-4 px-5 py-2 bg-danger-solid hover:bg-danger-solid-hover text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer"
           >
             Close
           </button>
@@ -258,7 +258,7 @@ function VectorizationTasks() {
                 </div>
               )}
               {task.status === 'completed' && <span className="w-2.5 h-2.5 rounded-full bg-green-500" />}
-              {task.status === 'error' && <span className="w-2.5 h-2.5 rounded-full bg-red-500" />}
+              {task.status === 'error' && <span className="w-2.5 h-2.5 rounded-full bg-status-danger" />}
 
               <span className="text-[0.625rem] font-bold text-white uppercase tracking-wider truncate max-w-[180px]">
                 {task.name}
@@ -296,7 +296,7 @@ function ToastNotification() {
     <div className="fixed bottom-6 right-6 z-[9999] flex items-start space-x-3 bg-[#0a161d]/95 border border-gray-800 rounded-xl px-4 py-3.5 shadow-2xl animate-in slide-in-from-bottom-4 duration-300 max-w-md">
       <div className="shrink-0 mt-0.5">
         {toast.type === 'success' && <CircleCheck className="w-5.5 h-5.5 text-emerald-400" />}
-        {toast.type === 'error' && <AlertCircle className="w-5.5 h-5.5 text-red-400" />}
+        {toast.type === 'error' && <AlertCircle className="w-5.5 h-5.5 text-status-danger" />}
         {toast.type === 'info' && <Info className="w-5.5 h-5.5 text-accent" />}
       </div>
       <div className="flex-1 pr-2 min-w-0">

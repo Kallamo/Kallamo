@@ -102,7 +102,7 @@ export default function WorkflowModal({ workflow, onClose, onSave }) {
           </h2>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-red-500 transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5"
+            className="text-gray-400 hover:text-status-danger transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5"
           >
             <X className="w-5 h-5" />
           </button>
@@ -199,7 +199,7 @@ export default function WorkflowModal({ workflow, onClose, onSave }) {
                           </button>
                           <button
                             onClick={() => removeStep(step.id)}
-                            className="p-1 hover:bg-red-500/10 text-gray-500 hover:text-red-500 rounded transition-colors cursor-pointer"
+                            className="p-1 hover:bg-status-danger/10 text-gray-500 hover:text-status-danger rounded transition-colors cursor-pointer"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>

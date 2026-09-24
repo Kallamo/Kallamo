@@ -56,8 +56,8 @@ export default function FilePreviewModal({ file, onClose }) {
 
     if (error) {
       return (
-        <div className="text-center p-6 bg-red-950/20 border border-red-900/40 rounded-xl max-w-sm">
-          <p className="text-xs text-red-400 font-semibold">{error}</p>
+        <div className="text-center p-6 bg-status-danger/10 border border-status-danger/25 rounded-xl max-w-sm">
+          <p className="text-xs text-status-danger font-semibold">{error}</p>
         </div>
       );
     }

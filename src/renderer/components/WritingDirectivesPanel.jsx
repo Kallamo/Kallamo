@@ -87,7 +87,7 @@ export default function WritingDirectivesPanel({ workspaceId, electronAPI, onClo
                 >{d.text}</span>
                 <div className="flex items-center gap-1.5 shrink-0">
                   <Toggle checked={d.enabled !== 0} onChange={(next) => toggleEnabled(d, next)} />
-                  <button title="Delete" onClick={() => remove(d.id)} className="p-0.5 text-gray-600 hover:text-red-400 hover-reveal">
+                  <button title="Delete" onClick={() => remove(d.id)} className="p-0.5 text-gray-600 hover:text-status-danger hover-reveal">
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 </div>

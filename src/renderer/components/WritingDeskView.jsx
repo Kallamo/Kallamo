@@ -389,7 +389,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
       )}
       <button title="Rename" onClick={(e) => { e.stopPropagation(); setEditingId(item.id); setEditValue(item.name || item.title); }} className="p-1 text-gray-500 hover:text-white"><PenLine className="w-3.5 h-3.5" /></button>
       <button ref={moveMenuId === item.id ? moveAnchorRef : null} title="Move to" onClick={(e) => { e.stopPropagation(); setMoveMenuId(moveMenuId === item.id ? null : item.id); }} className="p-1 text-gray-500 hover:text-white"><FolderInput className="w-3.5 h-3.5" /></button>
-      <button title="Delete" onClick={(e) => { e.stopPropagation(); setDeleteTarget(item); }} className="p-1 text-gray-500 hover:text-red-400"><Trash2 className="w-3.5 h-3.5" /></button>
+      <button title="Delete" onClick={(e) => { e.stopPropagation(); setDeleteTarget(item); }} className="p-1 text-gray-500 hover:text-status-danger"><Trash2 className="w-3.5 h-3.5" /></button>
     </span>
   );
 

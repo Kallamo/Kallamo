@@ -13,40 +13,12 @@ import {
   safeParseDebugNotice,
   safeParseJson
 } from '../diagnostic-format';
+import { formatFrameDate, formatFrameTime, formatFrameWeekday, sameFrameDate, shouldShowTimeTransition } from '../frame-format';
 
 const COPIED_FEEDBACK_MS = 2000;
 
 export const isImage = (name) => /\.(png|jpe?g|gif|webp)$/i.test(name);
 export const isVideo = (name) => /\.(mp4|webm|ogg)$/i.test(name);
-
-const formatFrameDate = point => {
-  if (!point?.position) return '';
-  const { position, display } = point;
-  return `${position.day} ${display?.monthName || `Month ${position.month}`} ${position.year}${display?.eraShortName ? ` ${display.eraShortName}` : ''}`;
-};
-
-const formatFrameTime = point => point?.position
-  ? `${String(point.position.hour ?? 0).padStart(2, '0')}:${String(point.position.minute ?? 0).padStart(2, '0')}`
-  : '';
-
-const formatFrameWeekday = point => point?.display?.weekdayName || '';
-
-const sameFrameDate = (left, right) => left?.position && right?.position
-  && left.position.eraId === right.position.eraId
-  && left.position.year === right.position.year
-  && left.position.month === right.position.month
-  && left.position.day === right.position.day;
-
-const shouldShowTimeTransition = frame => {
-  if (!frame?.advance) return false;
-  const duration = frame.advance.duration || {};
-  return !sameFrameDate(frame.start, frame.end)
-    || Number(duration.years) > 0
-    || Number(duration.months) > 0
-    || Number(duration.days) > 0
-    || Number(duration.hours) > 0
-    || Number(duration.minutes) >= 30;
-};
 
 function RoleplayMessageFrame({ frame }) {
   if (!frame?.end) return null;
@@ -263,7 +235,7 @@ function MessageMenu({ message, actions }) {
       <Popover anchorRef={anchorRef} open={open} onClose={() => setOpen(false)} matchAnchorWidth={false} align="right" maxHeight={160} scroll={false} className="w-44 py-1 text-left text-[0.625rem] font-bold uppercase tracking-wider">
         <button
           onClick={(event) => choose(event, () => actions.requestDelete(message.id))}
-          className="w-full text-left px-3 py-1.5 text-gray-300 hover:bg-white/5 hover:text-red-400 transition-colors flex items-center space-x-1.5 cursor-pointer"
+          className="w-full text-left px-3 py-1.5 text-gray-300 hover:bg-white/5 hover:text-status-danger transition-colors flex items-center space-x-1.5 cursor-pointer"
         >
           <Trash2 className="w-3.5 h-3.5 text-inherit" />
           <span>Delete Message</span>

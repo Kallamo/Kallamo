@@ -25,7 +25,7 @@ const Textarea = React.forwardRef(function Textarea({
   return (
     <div className={`flex flex-col ${containerClassName}`}>
       {label && (
-        <label htmlFor={textareaId} className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">
+        <label htmlFor={textareaId} className="mb-1.5 block text-sm font-medium text-text-secondary">
           {label}
         </label>
       )}

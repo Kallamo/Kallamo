@@ -370,7 +370,7 @@ export default function LibraryView() {
                           </button>
                           <button 
                             onClick={(e) => triggerDeleteProfile(e, profile)}
-                            className="text-gray-500 hover:text-red-500 p-1.5 bg-[#0a141d] rounded-md transition-colors cursor-pointer" 
+                            className="text-gray-500 hover:text-status-danger p-1.5 bg-[#0a141d] rounded-md transition-colors cursor-pointer" 
                             title="Delete Profile"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -468,7 +468,7 @@ export default function LibraryView() {
                           </button>
                           <button 
                             onClick={(e) => triggerDeleteWorkflow(e, wf)}
-                            className="text-gray-500 hover:text-red-500 p-1.5 bg-[#0a141d] rounded-md transition-colors cursor-pointer" 
+                            className="text-gray-500 hover:text-status-danger p-1.5 bg-[#0a141d] rounded-md transition-colors cursor-pointer" 
                             title="Delete Workflow"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -548,7 +548,7 @@ export default function LibraryView() {
                         </button>
                         <button 
                           onClick={(e) => triggerDeleteVariable(e, v)}
-                          className="text-gray-500 hover:text-red-500 p-1.5 bg-[#0a141d] rounded-md transition-colors cursor-pointer" 
+                          className="text-gray-500 hover:text-status-danger p-1.5 bg-[#0a141d] rounded-md transition-colors cursor-pointer" 
                           title="Delete Variable"
                         >
                           <Trash2 className="w-3.5 h-3.5" />

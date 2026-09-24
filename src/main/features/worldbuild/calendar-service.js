@@ -782,8 +782,12 @@ function applyRoleplayTurnFrame(db, {
       Date.now()
     );
   }
-  const start = framePoint(db, workspaceId, currentClock, startLocationId);
-  const end = framePoint(db, workspaceId, endClock, endLocationId);
+  // The player can change between turns, so each frame keeps who was being played.
+  const playerEntityId = db.prepare('SELECT player_entity_id FROM roleplay_workspace_settings WHERE workspace_id = ?')
+    .get(workspaceId)?.player_entity_id || null;
+  const player = { playerEntityId, playerName: entityName(db, workspaceId, playerEntityId) };
+  const start = { ...framePoint(db, workspaceId, currentClock, startLocationId), ...player };
+  const end = { ...framePoint(db, workspaceId, endClock, endLocationId), ...player };
   const now = Date.now();
   db.prepare(`
     INSERT INTO roleplay_message_frames
