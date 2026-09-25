@@ -39,6 +39,24 @@ export const ITEM_TYPE_META = {
 
 export const itemMeta = (itemType) => ITEM_TYPE_META[itemType] || { icon: Package, label: itemType || 'Item' };
 
+const ITEM_FAMILIES = {
+  combat: { tile: 'bg-item-combat/12 text-item-combat border-item-combat/30', soft: 'text-item-combat', wash: 'from-item-combat/10 border-item-combat/25' },
+  craft: { tile: 'bg-item-craft/12 text-item-craft border-item-craft/30', soft: 'text-item-craft', wash: 'from-item-craft/10 border-item-craft/25' },
+  consumable: { tile: 'bg-item-consumable/12 text-item-consumable border-item-consumable/30', soft: 'text-item-consumable', wash: 'from-item-consumable/10 border-item-consumable/25' },
+  artifact: { tile: 'bg-item-artifact/12 text-item-artifact border-item-artifact/30', soft: 'text-item-artifact', wash: 'from-item-artifact/10 border-item-artifact/25' },
+  neutral: { tile: 'bg-item-neutral/10 text-item-neutral border-item-neutral/25', soft: 'text-item-neutral', wash: 'from-item-neutral/8 border-item-neutral/20' },
+};
+
+const ITEM_TYPE_FAMILY = {
+  Weapon: 'combat', Armor: 'combat',
+  Tool: 'craft', Material: 'craft', Resource: 'craft',
+  Consumable: 'consumable',
+  Artifact: 'artifact',
+};
+
+/** Colour classes for an item type's family; unknown types read as neutral. */
+export const itemFamily = (itemType) => ITEM_FAMILIES[ITEM_TYPE_FAMILY[itemType] || 'neutral'];
+
 // The icon grows with the place, so a list of locations reads as a scale before any name.
 const LOCATION_SIZE_ICONS = { region: MapIcon, area: LandPlot, place: StoreIcon, spot: DoorOpen };
 export const LOCATION_SIZE_OPTIONS = LOCATION_SIZES.map(size => ({

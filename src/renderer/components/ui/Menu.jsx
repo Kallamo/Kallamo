@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { Check } from 'lucide-react';
 import Popover from './Popover';
 
 /**
@@ -20,14 +21,16 @@ export function Menu({ anchorRef, open, onClose, label, align = 'right', classNa
   useEffect(() => {
     if (!open) return;
     const frame = requestAnimationFrame(() => {
-      listRef.current?.querySelector('[role="menuitem"]:not([disabled])')?.focus();
+      const items = listRef.current;
+      (items?.querySelector('[role="menuitemradio"][aria-checked="true"]:not([disabled])')
+        || items?.querySelector('[role^="menuitem"]:not([disabled])'))?.focus();
     });
     return () => cancelAnimationFrame(frame);
   }, [open]);
 
   const onKeyDown = (event) => {
     if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
-    const items = [...(listRef.current?.querySelectorAll('[role="menuitem"]:not([disabled])') || [])];
+    const items = [...(listRef.current?.querySelectorAll('[role^="menuitem"]:not([disabled])') || [])];
     if (!items.length) return;
     event.preventDefault();
     const index = items.indexOf(document.activeElement);
@@ -49,11 +52,14 @@ export function Menu({ anchorRef, open, onClose, label, align = 'right', classNa
   );
 }
 
-export function MenuItem({ icon: Icon, iconClassName = 'text-text-muted', label, description, trailing, danger = false, disabled = false, onSelect }) {
+/** `checked` turns the item into one choice of a group (menuitemradio) with a check mark. */
+export function MenuItem({ icon: Icon, iconClassName = 'text-text-muted', label, description, trailing, danger = false, disabled = false, checked, onSelect }) {
+  const isChoice = checked !== undefined;
   return (
     <button
       type="button"
-      role="menuitem"
+      role={isChoice ? 'menuitemradio' : 'menuitem'}
+      aria-checked={isChoice ? checked : undefined}
       disabled={disabled}
       onClick={onSelect}
       className={`flex w-full items-start gap-3 rounded-lg px-2.5 py-2 text-left transition-colors cursor-pointer
@@ -66,8 +72,13 @@ export function MenuItem({ icon: Icon, iconClassName = 'text-text-muted', label,
         {description && <span className="mt-0.5 block text-xs leading-snug text-text-muted">{description}</span>}
       </span>
       {trailing}
+      {isChoice && <Check className={`mt-0.5 h-4 w-4 shrink-0 ${checked ? 'text-text-primary' : 'invisible'}`} aria-hidden="true" />}
     </button>
   );
+}
+
+export function MenuLabel({ children }) {
+  return <p className="px-2.5 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-text-subtle">{children}</p>;
 }
 
 export function MenuSeparator() {

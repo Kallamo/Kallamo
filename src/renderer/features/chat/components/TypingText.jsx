@@ -30,7 +30,7 @@ export default function TypingText({ text, onComplete, onClick }) {
   }, [text]);
 
   return (
-    <div onClick={onClick} className="cursor-pointer select-text" title="Click to skip typing effect">
+    <div onClick={onClick} className="cursor-pointer select-text" data-tooltip="Click to skip the typing effect">
       <div className="leading-relaxed markdown-content" dangerouslySetInnerHTML={{ __html: parseMarkdown(displayedText) }} />
     </div>
   );

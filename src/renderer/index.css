@@ -54,6 +54,19 @@
   --theme-entity-race: #38bdf8;
   --theme-entity-concept: #cbd5e1;
 
+  /* Item families: eleven item types read as five groups, not a rainbow. */
+  --theme-item-combat: #fb7185;
+  --theme-item-craft: #f59e0b;
+  --theme-item-consumable: #34d399;
+  --theme-item-artifact: #c084fc;
+  --theme-item-neutral: #cbd5e1;
+
+  /* Roleplay clock bands. */
+  --theme-daylight-dawn: #f0a0b8;
+  --theme-daylight-day: #fbbf24;
+  --theme-daylight-dusk: #a78bfa;
+  --theme-daylight-night: #818cf8;
+
   /* Depth. Panels stay flat and rely on borders; only floating surfaces cast a
      shadow, so stacked cards never read as a pile of boxes. */
   --theme-shadow-raised: 0 0.0625rem 0.125rem rgb(0 0 0 / 28%);
@@ -107,6 +120,15 @@
   --color-entity-creature: var(--theme-entity-creature);
   --color-entity-race: var(--theme-entity-race);
   --color-entity-concept: var(--theme-entity-concept);
+  --color-item-combat: var(--theme-item-combat);
+  --color-item-craft: var(--theme-item-craft);
+  --color-item-consumable: var(--theme-item-consumable);
+  --color-item-artifact: var(--theme-item-artifact);
+  --color-item-neutral: var(--theme-item-neutral);
+  --color-daylight-dawn: var(--theme-daylight-dawn);
+  --color-daylight-day: var(--theme-daylight-day);
+  --color-daylight-dusk: var(--theme-daylight-dusk);
+  --color-daylight-night: var(--theme-daylight-night);
   --shadow-raised: var(--theme-shadow-raised);
   --shadow-panel: var(--theme-shadow-panel);
   --shadow-overlay: var(--theme-shadow-overlay);
@@ -574,6 +596,8 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   content-visibility: auto;
   contain-intrinsic-size: auto 12rem;
 }
+/* Skipped rendering also clips paint, which would cut an open diagnostics report. */
+.chat-message-deferred:has([data-diagnostics-open]) { content-visibility: visible; }
 
 /* Settings > Blur off: no element pays for a backdrop filter. A filter that marks state
    rather than decoration opts out with data-keep-backdrop. */
@@ -593,3 +617,9 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 }
 .has-backdrop .glass-panel { background-color: color-mix(in srgb, var(--theme-surface-panel) 66%, transparent); }
 .has-backdrop .glass-rail { background-color: color-mix(in srgb, var(--theme-surface-sidebar) 62%, transparent); }
+/* The chat's own veil can be thin, so rails beside it keep more body than Memory's. */
+/* Message actions sit straight on the chat background; a light backing keeps them legible over bright art. */
+.has-backdrop .chat-action,
+.has-backdrop .chat-hint { background-color: color-mix(in srgb, var(--theme-surface-canvas) 55%, transparent); }
+.has-backdrop .glass-panel.glass-dense { background-color: color-mix(in srgb, var(--theme-surface-editor) 90%, transparent); }
+.has-backdrop .glass-rail.glass-dense { background-color: color-mix(in srgb, var(--theme-surface-sidebar) 82%, transparent); }

@@ -3576,7 +3576,7 @@ ipcMain.handle('remove-roleplay-resource-value', async (event, payload = {}) => 
 });
 
 ipcMain.handle('save-roleplay-scene', async (event, { workspaceId, patch } = {}) => {
-  try { return { success: true, scene: getRoleplaySystem().saveScene(workspaceId, patch) }; }
+  try { return { success: true, scene: getRoleplaySystem().saveScene(workspaceId, patch, { keepCast: true }) }; }
   catch (error) { return { success: false, error: error.message }; }
 });
 

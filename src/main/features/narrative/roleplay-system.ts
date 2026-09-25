@@ -217,18 +217,21 @@ export class RoleplaySystem {
     };
   }
 
-  saveScene(workspaceId: string, patch: RoleplayScenePatch): RoleplaySceneState {
+  // A story move leaves the cast behind. A user picking the location corrects where the
+  // scene already is, so `keepCast` carries the people over; objects stay with the room.
+  saveScene(workspaceId: string, patch: RoleplayScenePatch, options: { keepCast?: boolean } = {}): RoleplaySceneState {
     const settings = this.getSettings(workspaceId);
     const current = this.getScene(workspaceId);
     const locationId = patch.locationId === undefined ? current?.locationId ?? settings.locationEntityId : patch.locationId;
     const locationChanged = patch.locationId !== undefined && patch.locationId !== current?.locationId;
+    const castReset = locationChanged && !options.keepCast;
     const participantIds = unique([
       ...compact([settings.playerEntityId]),
-      ...(patch.participantIds ?? (locationChanged ? [] : current?.participantIds ?? []))
+      ...(patch.participantIds ?? (castReset ? [] : current?.participantIds ?? []))
     ]);
-    const possibleObserverIds = unique(patch.possibleObserverIds ?? (locationChanged ? [] : current?.possibleObserverIds ?? []))
+    const possibleObserverIds = unique(patch.possibleObserverIds ?? (castReset ? [] : current?.possibleObserverIds ?? []))
       .filter(id => id !== settings.playerEntityId && !participantIds.includes(id));
-    const nearbyIds = unique(patch.nearbyIds ?? (locationChanged ? [] : current?.nearbyIds ?? []))
+    const nearbyIds = unique(patch.nearbyIds ?? (castReset ? [] : current?.nearbyIds ?? []))
       .filter(id => id !== settings.playerEntityId && !participantIds.includes(id) && !possibleObserverIds.includes(id));
     const objectIds = unique(patch.objectIds ?? (locationChanged ? [] : current?.objectIds ?? []));
     this.validateReference(workspaceId, locationId, ['Locations']);
@@ -620,7 +623,7 @@ export class RoleplaySystem {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `).run(input.workspaceId, input.id, JSON.stringify(input.patch), status, input.source,
         input.provenanceId ?? null, Date.now(), status === 'applied' ? Date.now() : null);
-      if (status === 'applied') this.saveScene(input.workspaceId, input.patch);
+      if (status === 'applied') this.saveScene(input.workspaceId, input.patch, { keepCast: input.source === 'manual' });
     })();
     return this.getSceneChange(input.workspaceId, input.id)!;
   }

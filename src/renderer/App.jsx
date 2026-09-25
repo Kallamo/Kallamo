@@ -328,7 +328,6 @@ function ToastNotification() {
 function MainLayout() {
   const {
     currentView,
-    activeWorkspaceView,
     showOverflowModal,
     showErrorModal,
     errorData,
@@ -376,7 +375,7 @@ function MainLayout() {
   // Global Tooltip Engine
   useEffect(() => {
     const globalTooltip = document.createElement('div');
-    globalTooltip.className = 'fixed hidden bg-[#051116] border border-gray-800 text-gray-300 text-[0.625rem] leading-relaxed rounded-md p-2.5 shadow-xl z-[100000] max-w-[220px] pointer-events-none transition-opacity duration-200 opacity-0';
+    globalTooltip.className = 'fixed hidden max-w-[16rem] rounded-card border border-border-default bg-surface-panel-muted px-3 py-2 text-xs leading-snug text-text-secondary shadow-overlay z-[100000] pointer-events-none transition-opacity duration-150 opacity-0';
     document.body.appendChild(globalTooltip);
 
     const handleMouseOver = (e) => {
@@ -446,7 +445,7 @@ function MainLayout() {
 
   return (
     <div className={`flex-1 relative flex flex-col pt-10 overflow-hidden bg-[#011419] w-full h-full select-none ${fontClass}`}>
-      <TitleBar />
+      <TitleBar onOpenSettings={() => setShowSettingsModal(true)} onPreloadSettings={() => SettingsModal.preload()} />
 
       {/* Local AI Engine download: full-screen overlay, or a discreet card when it runs in the background */}
       <EngineDownloadStatus />
@@ -466,28 +465,6 @@ function MainLayout() {
         </Suspense>
       </main>
 
-      {/* Floating Settings Button - Globally available at bottom left */}
-      <button
-        onClick={() => setShowSettingsModal(true)}
-        onMouseEnter={() => SettingsModal.preload()}
-        className={`absolute bottom-6 p-3 bg-[#0a161d] hover:bg-[#1a2d32] border border-gray-800 rounded-full text-gray-400 hover:text-white transition-colors shadow-lg group titlebar-nodrag z-30 cursor-pointer ${currentView === 'chat' && activeWorkspaceView === 'worldbuild' ? 'right-6' : 'left-6'}`}
-        title="Settings"
-      >
-        <svg
-          className="group-hover:rotate-90 transition-transform duration-500"
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <circle cx="12" cy="12" r="3"></circle>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-        </svg>
-      </button>
 
       {/* Floating Background RAG Indexing Visualizer */}
       <VectorizationTasks />

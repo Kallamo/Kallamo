@@ -1,15 +1,15 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Backpack, CalendarDays, Check, ChevronRight, Image as ImageIcon, MapPin,
-  Loader2, MoreVertical, PanelRightOpen, Pencil, Plus, Settings2, Swords, Users, X, Clapperboard, Gamepad2, HandHelping, Hourglass
-} from 'lucide-react';
-import { AiGlyph } from '../../components/ui/glyphs';
+import { Backpack, Check, ChevronRight, Clock3, PanelRightClose, Plus, Settings2, X } from 'lucide-react';
 import SearchableSelect from '../../components/ui/SearchableSelect';
-import Popover from '../../components/ui/Popover';
 import Modal from '../../components/ui/Modal';
-import { itemMeta, locationPresenceOptions, meta } from '../worldbuild/worldbuildConfig';
+import Button from '../../components/ui/Button';
+import IconButton from '../../components/ui/IconButton';
+import { locationPresenceOptions, meta } from '../worldbuild/worldbuildConfig';
 import { locationSizeLabel } from '../../../shared/location-sizes';
-import WorldDateInput, { formatWorldDate } from '../worldbuild/WorldDateInput';
+import WorldDateInput from '../worldbuild/WorldDateInput';
+import {
+  CastGroup, CastRow, InventoryTab, LocationHero, PanelClock, PanelTabs, PlayerCard, RoleplayRail, RoleplayStatus, SectionHead
+} from './RoleplayPanelParts';
 
 const EMPTY_SCENE = {
   locationId: null,
@@ -19,12 +19,7 @@ const EMPTY_SCENE = {
   objectIds: []
 };
 
-const PRESENCE = {
-  participating: { label: 'Participating', icon: Swords },
-  nearby: { label: 'Nearby', icon: MapPin }
-};
-
-const COLLAPSED_ACTOR_LIMIT = 5;
+const RECENT_TURN_LIMIT = 5;
 
 function RoleplayQuickPanel({
   workspaceId,
@@ -33,6 +28,8 @@ function RoleplayQuickPanel({
   onOpenConfiguration,
   onBackgroundChange,
   onCollapsedChange,
+  onPlayerChange,
+  onNamesChange,
   narrativeStateProcessing = false,
   initialCollapsed = false,
   visible = true
@@ -51,9 +48,8 @@ function RoleplayQuickPanel({
   const [inventory, setInventory] = useState([]);
   const [background, setBackground] = useState(null);
   const [addingCharacter, setAddingCharacter] = useState(false);
-  const [openMenuId, setOpenMenuId] = useState(null);
   const [transfer, setTransfer] = useState(null);
-  const [recentOpen, setRecentOpen] = useState(false);
+  const [showAllTurns, setShowAllTurns] = useState(false);
   const [recentTurns, setRecentTurns] = useState([]);
   const [expandedTurnId, setExpandedTurnId] = useState(null);
   const [resolvingChangeId, setResolvingChangeId] = useState(null);
@@ -142,20 +138,6 @@ function RoleplayQuickPanel({
     };
   }, [api, workspaceId]);
 
-  useEffect(() => {
-    if (!openMenuId) return undefined;
-    const closeMenu = event => {
-      const isOutsideClick = event.type === 'pointerdown' && !event.target.closest('[data-roleplay-menu-root]');
-      if (event.key === 'Escape' || isOutsideClick) setOpenMenuId(null);
-    };
-    document.addEventListener('pointerdown', closeMenu);
-    document.addEventListener('keydown', closeMenu);
-    return () => {
-      document.removeEventListener('pointerdown', closeMenu);
-      document.removeEventListener('keydown', closeMenu);
-    };
-  }, [openMenuId]);
-
   const groups = useMemo(() => ({
     actors: entities.filter(entity => entity.type === 'Characters'
       || (entity.type === 'Creatures' && (entity.data?.scope || 'individual') !== 'group')),
@@ -174,6 +156,18 @@ function RoleplayQuickPanel({
   }));
   const locationOptions = useMemo(() => locationPresenceOptions(groups.locations), [groups.locations]);
   const player = groups.actors.find(entity => entity.id === settings.playerEntityId);
+  // Each reload rebuilds the map; the chat only hears about it when a name really changed,
+  // since every message row re-renders on a new one.
+  const namesSignatureRef = useRef('');
+  useEffect(() => {
+    const signature = [...names].map(([id, name]) => id + '=' + name).join('|');
+    if (signature === namesSignatureRef.current) return;
+    namesSignatureRef.current = signature;
+    onNamesChange?.(names);
+  }, [names, onNamesChange]);
+  useEffect(() => {
+    onPlayerChange?.(player?.canonicalName || null);
+  }, [onPlayerChange, player?.canonicalName]);
   const presentIds = new Set([
     ...(scene.participantIds || []),
     ...(scene.possibleObserverIds || []),
@@ -221,7 +215,6 @@ function RoleplayQuickPanel({
   const setPlayer = async entityId => {
     const result = await api.saveRoleplaySettings(workspaceId, { ...settings, playerEntityId: entityId });
     if (!result?.success) return showToast(result?.error || 'Could not change the controlled character.', 'error');
-    setOpenMenuId(null);
     window.dispatchEvent(new CustomEvent('roleplay-state-change', { detail: { workspaceId } }));
   };
 
@@ -240,7 +233,6 @@ function RoleplayQuickPanel({
     const key = presence === 'participating' ? 'participantIds' : 'nearbyIds';
     patch[key] = [...patch[key], entityId];
     await saveScene(patch);
-    setOpenMenuId(null);
   };
 
   const removeCharacter = async entityId => {
@@ -249,14 +241,12 @@ function RoleplayQuickPanel({
       possibleObserverIds: (scene.possibleObserverIds || []).filter(id => id !== entityId),
       nearbyIds: (scene.nearbyIds || []).filter(id => id !== entityId)
     });
-    setOpenMenuId(null);
   };
 
   const toggleEquipped = async item => {
     const result = await api.setRoleplayEquipped(workspaceId, settings.playerEntityId, item.itemId, !item.equipped);
     if (!result?.success) return showToast(result?.error || 'Could not update equipment.', 'error');
     setInventory(result.inventory || []);
-    setOpenMenuId(null);
   };
 
   const applyTransfer = async () => {
@@ -277,7 +267,6 @@ function RoleplayQuickPanel({
     const result = await api.applyRoleplayInventoryChange(workspaceId, patch);
     if (!result?.success) return showToast(result?.error || 'Could not move the item.', 'error');
     setTransfer(null);
-    setOpenMenuId(null);
     setRefreshKey(value => value + 1);
   };
 
@@ -337,212 +326,158 @@ function RoleplayQuickPanel({
     }));
   };
 
+  const openPanel = async target => {
+    if (target === 'inventory') setTab('inventory');
+    else if (target) setTab('scene');
+    if (target === 'clock') setEditingClock(true);
+    await savePanelState(false);
+  };
+
   if (collapsed) {
     return (
-      <div className="group absolute bottom-5 right-5 z-30 text-xs">
-        <button
-          type="button"
-          onClick={() => savePanelState(false)}
-          aria-label={launcherLabel(roleplayStatusLabel, calendar, clock, names.get(scene.locationId))}
-          className="flex w-[10em] flex-col overflow-hidden rounded-surface border border-accent/35 bg-surface-panel/95 text-left text-accent shadow-panel backdrop-blur-md transition-[width,background-color,border-color,box-shadow] duration-300 ease-emphasized hover:w-[17.5em] hover:border-accent/55 hover:shadow-overlay focus-visible:w-[17.5em] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 group-focus-within:w-[17.5em]"
-        >
-          <span className="flex min-h-11 w-full items-center justify-between gap-2 px-3.5">
-            <span className="flex shrink-0 items-center gap-2">
-              <span className="font-bold uppercase tracking-[0.14em]">RP Mode</span>
-              <RoleplayStatus processing={narrativeStateProcessing} pendingCount={pendingCount} />
-            </span>
-            {/* The only cue that a full panel exists behind this button. */}
-            <span className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-text-subtle opacity-0 transition-opacity duration-200 ease-standard group-hover:opacity-100 group-hover:delay-150 group-focus-within:opacity-100 group-focus-within:delay-150">
-              <span className="truncate font-semibold">Open panel</span>
-              <PanelRightOpen aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
-            </span>
-          </span>
-          <span
-            aria-hidden="true"
-            className="reveal group-hover:reveal-open group-focus-within:reveal-open"
-          >
-            <span className="reveal-body block">
-              <LauncherSummary
-                player={player}
-                participants={otherCharacters.filter(entity => scene.participantIds?.includes(entity.id))}
-                nearby={otherCharacters.filter(entity => !scene.participantIds?.includes(entity.id))}
-                locationName={names.get(scene.locationId)}
-                calendar={calendar}
-                clock={clock}
-              />
-            </span>
-          </span>
-        </button>
-      </div>
+      <RoleplayRail
+        statusLabel={roleplayStatusLabel}
+        processing={narrativeStateProcessing}
+        pendingCount={pendingCount}
+        calendar={calendar}
+        clock={clock}
+        player={player}
+        others={otherCharacters}
+        locationName={names.get(scene.locationId)}
+        locationType={locationOptions.find(option => option.id === scene.locationId)?.group}
+        presenceOf={entityId => presenceOf(entityId, scene)}
+        typeLabels={typeLabels}
+        inventoryCount={inventory.length}
+        onOpen={openPanel}
+      />
     );
   }
 
+  const participants = otherCharacters.filter(entity => presenceOf(entity.id, scene) === 'participating');
+  const nearby = otherCharacters.filter(entity => presenceOf(entity.id, scene) === 'nearby');
+  const castRow = entity => (
+    <CastRow
+      key={entity.id}
+      entity={entity}
+      typeLabel={typeLabels.get(entity.type)}
+      presence={presenceOf(entity.id, scene)}
+      onPlay={() => setPlayer(entity.id)}
+      onPresence={presence => changePresence(entity.id, presence)}
+      onRemove={() => removeCharacter(entity.id)}
+    />
+  );
+  const visibleTurns = showAllTurns ? recentTurns : recentTurns.slice(0, RECENT_TURN_LIMIT);
+
   return (
-    <aside className="relative z-20 flex h-full w-[clamp(18rem,30vw,22.5rem)] shrink-0 flex-col border-l border-border-subtle bg-surface-sidebar/90 shadow-2xl backdrop-blur-xl 2xl:w-[23.5rem]">
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-border-subtle px-4">
-        {/* The pulsing dot already says "active", so the label only appears when
-            there is something else to report. */}
-        <div className="flex min-w-0 items-center gap-2.5 py-1 text-accent">
+    <aside aria-label="Roleplay" className="glass-rail glass-dense relative z-20 flex h-full w-[clamp(18rem,30vw,22.5rem)] shrink-0 flex-col border-l border-border-subtle shadow-2xl 2xl:w-[23.5rem]">
+      <header className="flex h-14 shrink-0 items-center justify-between border-b border-border-subtle pl-4 pr-3">
+        <div className="flex min-w-0 items-center gap-2.5 text-accent">
           <RoleplayStatus processing={narrativeStateProcessing} pendingCount={pendingCount} />
-          <span className="min-w-0 text-left">
-            <span className="block text-xs font-bold uppercase tracking-[0.16em]">RP Mode</span>
+          <span className="min-w-0">
+            <span className="block text-xs font-bold uppercase tracking-[0.16em]">Roleplay</span>
             {(narrativeStateProcessing || pendingCount > 0) && (
-              <span className="mt-0.5 block truncate text-[0.625rem] font-medium text-text-subtle">{roleplayStatusLabel}</span>
+              <span className="mt-0.5 block truncate text-[0.6875rem] font-medium text-text-subtle">{roleplayStatusLabel}</span>
             )}
           </span>
         </div>
         <div className="flex items-center gap-0.5">
-          <button type="button" onClick={openConfiguration} aria-label="Open Roleplay Mode settings" className="rounded-control p-2 text-text-subtle transition-colors hover:bg-surface-hover/60 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" title="Roleplay Mode settings"><Settings2 aria-hidden="true" className="h-4 w-4" /></button>
-          <button type="button" onClick={() => savePanelState(true)} aria-label="Minimize Roleplay panel" className="rounded-control p-2 text-text-subtle transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" title="Minimize panel"><ChevronRight aria-hidden="true" className="h-4 w-4" /></button>
+          <IconButton icon={Settings2} label="Roleplay settings" size="sm" onClick={openConfiguration} />
+          <IconButton icon={PanelRightClose} label="Collapse panel" size="sm" onClick={() => savePanelState(true)} />
         </div>
       </header>
 
-      <section className="shrink-0 border-b border-border-subtle bg-surface-canvas/40 px-4 py-3">
-        {editingClock && calendar ? (
-          <div className="space-y-3">
-            <WorldDateInput calendar={calendar} value={clockDraft} includeTime allowClear={false} label="Roleplay date and time" emptyLabel="Set date and time" onChange={setClockDraft} />
-            <div className="flex justify-end gap-2">
-              <button type="button" onClick={() => { setClockDraft(clock); setEditingClock(false); }} className="inline-flex min-h-9 items-center gap-1.5 rounded-control px-3 text-xs font-semibold text-text-muted transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><X aria-hidden="true" className="h-3.5 w-3.5" />Cancel</button>
-              <button type="button" onClick={saveClock} className="inline-flex min-h-9 items-center gap-1.5 rounded-control bg-accent px-3 text-xs font-bold text-on-accent transition-[filter] hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Check aria-hidden="true" className="h-3.5 w-3.5" />Save time</button>
-            </div>
+      {editingClock && calendar ? (
+        <section className="shrink-0 space-y-3 border-b border-border-subtle bg-surface-canvas/40 px-4 py-3">
+          <WorldDateInput calendar={calendar} value={clockDraft} includeTime allowClear={false} label="Roleplay date and time" emptyLabel="Set date and time" onChange={setClockDraft} />
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={() => { setClockDraft(clock); setEditingClock(false); }}>Cancel</Button>
+            <Button variant="primary" size="sm" icon={Check} onClick={saveClock}>Save time</Button>
           </div>
-        ) : (
-          <button type="button" onClick={() => setEditingClock(true)} className="group/clock flex w-full items-center justify-between gap-3 rounded-control text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-            <span className="min-w-0">
-              <span className="flex min-w-0 items-center gap-2 truncate text-sm font-semibold text-text-secondary">
-                <CalendarDays aria-hidden="true" className="h-4 w-4 shrink-0 text-status-info" />
-                {formatWorldDate(calendar, clock)}
-              </span>
-              <span className="mt-1 flex items-baseline gap-2 text-text-muted">
-                <span className="font-mono text-xl font-semibold tabular-nums tracking-tight text-text-primary">{String(clock?.hour ?? 0).padStart(2, '0')}:{String(clock?.minute ?? 0).padStart(2, '0')}</span>
-                {clock?.weekdayName && <span className="truncate text-xs font-medium">{clock.weekdayName}</span>}
-              </span>
-            </span>
-            <Pencil aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-text-disabled transition-colors group-hover/clock:text-accent" />
-          </button>
-        )}
-      </section>
+        </section>
+      ) : (
+        <PanelClock calendar={calendar} clock={clock} onEdit={() => setEditingClock(true)} />
+      )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 custom-scrollbar">
+      <PanelTabs tab={tab} onChange={setTab} inventoryCount={inventory.length} />
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-2 custom-scrollbar">
         {tab === 'scene' ? (
           <div className="space-y-5">
             <section>
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <h3 className="eyebrow">Active Characters</h3>
-                <button type="button" onClick={() => setAddingCharacter(value => !value)} aria-expanded={addingCharacter} className="inline-flex items-center gap-1 rounded-control px-2 py-1 text-xs font-semibold text-accent transition-colors hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Plus aria-hidden="true" className="h-3.5 w-3.5" />Add</button>
-              </div>
+              <LocationHero
+                locationId={scene.locationId}
+                locationName={names.get(scene.locationId)}
+                locationOptions={locationOptions}
+                onChangeLocation={locationId => saveScene({ locationId: locationId || null })}
+                background={background}
+                inheritedFrom={background?.inherited ? (names.get(background.sourceLocationId) || 'a parent location') : null}
+                onChooseBackground={() => backgroundInputRef.current?.click()}
+                onRemoveBackground={removeBackground}
+              />
+              <input ref={backgroundInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden" onChange={uploadBackground} />
+            </section>
+
+            <section>
+              <SectionHead title="In scene">
+                <Button variant="subtle" size="sm" icon={Plus} aria-expanded={addingCharacter} onClick={() => setAddingCharacter(value => !value)}>Add</Button>
+              </SectionHead>
               {addingCharacter && (
-                <div className="mb-2 animate-rise-in rounded-card border border-accent/20 bg-accent/[0.04] p-2">
+                <div className="mb-2 animate-rise-in">
                   <SearchableSelect
                     value=""
                     onChange={addCharacter}
-                    options={actorOptions.filter(option => !presentIds.has(option.id))}
-                    placeholder="Search characters"
+                    onClose={() => setAddingCharacter(false)}
+                    options={actorOptions.map(option => presentIds.has(option.id) || option.id === settings.playerEntityId
+                      ? { ...option, disabled: true, disabledLabel: 'In scene' }
+                      : option)}
+                    placeholder="Add a character"
+                    searchPlaceholder="Search characters"
                     ariaLabel="Add a character to the scene"
+                    searchInTrigger
+                    autoOpen
                   />
                 </div>
               )}
-              <div className="space-y-1.5">
-                {player ? <CharacterCard entity={player} protagonist typeLabel={typeLabels.get(player.type)} /> : <EmptyState text="Choose a Player Character in Roleplay Mode settings." />}
-                <div className={(presentIds.size >= 5 ? 'max-h-[17rem] overflow-y-auto pr-1 custom-scrollbar' : '') + ' space-y-1.5'}>
-                  {otherCharacters.map(entity => (
-                    <CharacterCard
-                      key={entity.id}
-                      entity={entity}
-                      typeLabel={typeLabels.get(entity.type)}
-                      presence={presenceOf(entity.id, scene)}
-                      menuOpen={openMenuId === entity.id}
-                      onMenu={() => setOpenMenuId(openMenuId === entity.id ? null : entity.id)}
-                      onPresence={presence => changePresence(entity.id, presence)}
-                      onPlay={() => setPlayer(entity.id)}
-                      onRemove={() => removeCharacter(entity.id)}
+              {player
+                ? <PlayerCard entity={player} typeLabel={typeLabels.get(player.type)} />
+                : <p className="rounded-card border border-dashed border-border-subtle px-3 py-5 text-center text-xs text-text-disabled">Choose who you play in Roleplay settings.</p>}
+              {participants.length > 0 && <CastGroup presence="participating" count={participants.length}>{participants.map(castRow)}</CastGroup>}
+              {nearby.length > 0 && <CastGroup presence="nearby" count={nearby.length}>{nearby.map(castRow)}</CastGroup>}
+              {!otherCharacters.length && player && <p className="px-2 pt-3 text-center text-xs text-text-disabled">No one else is here.</p>}
+            </section>
+
+            {recentTurns.length > 0 && (
+              <section>
+                <SectionHead title="Recent changes" />
+                <ol className="relative">
+                  {visibleTurns.map((turn, index) => (
+                    <RecentTurn
+                      key={turn.key}
+                      turn={turn}
+                      last={index === visibleTurns.length - 1}
+                      names={names}
+                      definitions={definitions}
+                      open={expandedTurnId === turn.key}
+                      onToggle={() => setExpandedTurnId(current => current === turn.key ? null : turn.key)}
+                      onResolve={resolveRecentChange}
+                      resolvingChangeId={resolvingChangeId}
                     />
                   ))}
-                  {!otherCharacters.length && player && <p className="px-2 py-3 text-center text-xs text-text-disabled">No one else is present.</p>}
-                </div>
-              </div>
-            </section>
-
-            <section>
-              <h3 className="eyebrow mb-2">Current Location</h3>
-              <SearchableSelect
-                value={scene.locationId || ''}
-                onChange={locationId => saveScene({ locationId: locationId || null })}
-                options={locationOptions}
-                placeholder="Select a Location"
-                ariaLabel="Current Location"
-              />
-            </section>
-
-            <section>
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <h3 className="eyebrow">Location Background</h3>
-                {background?.imagePath && !background.inherited && (
-                  <button type="button" onClick={removeBackground} className="rounded-control px-1.5 py-0.5 text-xs font-semibold text-text-muted transition-colors hover:text-status-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-danger/40">Remove</button>
-                )}
-              </div>
-              <button
-                type="button"
-                disabled={!scene.locationId}
-                onClick={() => backgroundInputRef.current?.click()}
-                className={`group relative flex w-full overflow-hidden rounded-card border border-border-subtle bg-surface-panel-muted transition-colors duration-200 ease-standard hover:border-border-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50 ${background?.imagePath ? 'h-32 items-center justify-center' : 'min-h-11 items-center px-3'}`}
-                style={background?.imagePath ? {
-                  backgroundImage: `url("app-file:///${background.imagePath.replace(/\\/g, '/')}")`,
-                  backgroundPosition: 'center',
-                  backgroundSize: 'cover'
-                } : {}}
-              >
-                <div className={'absolute inset-0 rounded-[inherit] transition-colors ' + (background?.imagePath ? 'bg-black/0 group-hover:bg-black/50 group-focus-visible:bg-black/50' : 'bg-transparent')} />
-                <div className={'relative flex items-center gap-2 transition-opacity ' + (background?.imagePath ? 'flex-col opacity-0 text-accent group-hover:opacity-100 group-focus-visible:opacity-100' : 'text-text-muted group-hover:text-accent')}>
-                  <ImageIcon className={background?.imagePath ? 'h-6 w-6' : 'h-4 w-4'} />
-                  <span className="text-xs font-semibold">{background?.imagePath ? 'Change background' : 'Choose background'}</span>
-                </div>
-              </button>
-              <input ref={backgroundInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden" onChange={uploadBackground} />
-              <p className="mt-2 truncate text-xs text-text-subtle">
-                {background?.inherited
-                  ? `Inherited from ${names.get(background.sourceLocationId) || 'parent Location'}`
-                  : background?.imagePath ? 'Saved to this Location' : 'Uses the workspace background'}
-              </p>
-            </section>
-
-            {!!recentTurns.length && (
-              <section className="border-t border-border-subtle pt-3">
-                <button type="button" onClick={() => setRecentOpen(value => !value)} aria-expanded={recentOpen} className="flex w-full items-center justify-between rounded-control text-xs font-semibold text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                  <span className="inline-flex items-center gap-2"><AiGlyph className="h-3.5 w-3.5 text-accent" />Recent Changes</span>
-                  <ChevronRight aria-hidden="true" className={'h-3.5 w-3.5 transition-transform duration-200 ease-standard ' + (recentOpen ? 'rotate-90' : '')} />
-                </button>
-                {recentOpen && (
-                  <div className="mt-2 animate-rise-in space-y-2">
-                    {recentTurns.map(turn => (
-                      <RecentTurn
-                        key={turn.originId}
-                        turn={turn}
-                        names={names}
-                        definitions={definitions}
-                        open={expandedTurnId === turn.originId}
-                        onToggle={() => setExpandedTurnId(current => current === turn.originId ? null : turn.originId)}
-                        onResolve={resolveRecentChange}
-                        resolvingChangeId={resolvingChangeId}
-                      />
-                    ))}
-                  </div>
+                </ol>
+                {recentTurns.length > RECENT_TURN_LIMIT && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllTurns(value => !value)}
+                    className="ml-8 mt-1.5 rounded-md px-1 text-xs font-semibold text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                  >
+                    {showAllTurns ? 'Show fewer' : 'Show all turns'}
+                  </button>
                 )}
               </section>
             )}
           </div>
         ) : (
-          <div className="space-y-4">
-            <div className="flex items-center gap-3 rounded-card border border-accent/15 bg-accent/[0.04] p-3">
-              <Avatar entity={player} />
-              <div className="min-w-0">
-                <p className="eyebrow text-accent">Current inventory</p>
-                <p className="mt-0.5 truncate text-sm font-semibold text-text-primary">{player?.canonicalName || 'No controlled character'}</p>
-              </div>
-            </div>
-            <InventorySection title="Equipped" items={inventory.filter(item => item.equipped)} empty="Nothing is equipped." onMenu={setOpenMenuId} openMenuId={openMenuId} onToggle={toggleEquipped} onTransfer={setTransfer} />
-            <InventorySection title="Carried" items={inventory.filter(item => !item.equipped)} empty="This character carries no other items." onMenu={setOpenMenuId} openMenuId={openMenuId} onToggle={toggleEquipped} onTransfer={setTransfer} />
-          </div>
+          <InventoryTab player={player} inventory={inventory} onToggle={toggleEquipped} onTransfer={setTransfer} />
         )}
       </div>
 
@@ -564,98 +499,7 @@ function RoleplayQuickPanel({
           />
         </Modal>
       )}
-
-      <footer className="grid h-14 shrink-0 grid-cols-2 gap-1 border-t border-border-subtle bg-surface-canvas/70 p-2">
-        <TabButton active={tab === 'scene'} onClick={() => setTab('scene')} icon={Clapperboard} label="Scene" />
-        <TabButton active={tab === 'inventory'} onClick={() => setTab('inventory')} icon={Backpack} label="Inventory" count={inventory.length} />
-      </footer>
     </aside>
-  );
-}
-
-function CharacterCard({ entity, typeLabel, protagonist = false, presence, menuOpen, onMenu, onPresence, onPlay, onRemove }) {
-  const presenceConfig = PRESENCE[presence] || PRESENCE.participating;
-  const PresenceIcon = presenceConfig.icon;
-  const typeMeta = meta(entity.type);
-  const menuButtonRef = useRef(null);
-  return (
-    <article data-roleplay-menu-root className={'group/card relative flex items-center gap-2.5 rounded-card border p-2 transition-colors duration-200 ease-standard ' + (protagonist ? 'border-accent/35 bg-accent/[0.07]' : `${typeMeta.ring} bg-surface-panel-muted/70 hover:bg-surface-panel-muted`)}>
-      <Avatar entity={entity} protagonist={protagonist} />
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <span className={'truncate text-[0.6875rem] font-bold uppercase tracking-[0.09em] ' + typeMeta.soft}>{typeLabel || typeMeta.label}</span>
-          {protagonist
-            ? <span className="shrink-0 rounded bg-accent/15 px-1.5 py-0.5 text-[0.6875rem] font-bold uppercase tracking-[0.09em] text-accent">Playing</span>
-            : <span className="inline-flex shrink-0 items-center gap-1 text-[0.6875rem] font-medium text-text-muted"><PresenceIcon aria-hidden="true" className="h-3 w-3" />{presenceConfig.label}</span>}
-        </div>
-        <p className="mt-0.5 truncate text-sm font-semibold text-text-primary">{entity.canonicalName}</p>
-      </div>
-      {!protagonist && (
-        <button ref={menuButtonRef} type="button" aria-label={`Actions for ${entity.canonicalName}`} onClick={onMenu} className="shrink-0 rounded-control p-1.5 text-text-subtle opacity-0 transition-[color,background-color,opacity] hover:bg-surface-hover/60 hover:text-text-primary focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 group-focus-within/card:opacity-100 group-hover/card:opacity-100"><MoreVertical aria-hidden="true" className="h-4 w-4" /></button>
-      )}
-      {menuOpen && (
-        <FloatingMenu anchorRef={menuButtonRef} onClose={onMenu}>
-          <MenuAction onClick={onPlay} icon={Gamepad2}>Play as character</MenuAction>
-          {Object.entries(PRESENCE).map(([key, value]) => <MenuAction key={key} onClick={() => onPresence(key)} icon={value.icon}>{value.label}</MenuAction>)}
-          <MenuAction onClick={onRemove} icon={X} danger>Remove from scene</MenuAction>
-        </FloatingMenu>
-      )}
-    </article>
-  );
-}
-
-function FloatingMenu({ anchorRef, onClose, children }) {
-  return (
-    <Popover anchorRef={anchorRef} open onClose={onClose} matchAnchorWidth={false} align="right" scroll={false} className="w-44 border-border-default bg-surface-panel-muted p-1.5">
-      <div data-roleplay-menu-root>{children}</div>
-    </Popover>
-  );
-}
-
-/* A span so it stays valid phrasing content inside the launcher button. */
-function Avatar({ entity, protagonist = false, compact = false }) {
-  const image = entity?.data?.image || entity?.data?.imagePath || entity?.data?.avatar;
-  return (
-    <span
-      className={'inline-flex shrink-0 items-center justify-center overflow-hidden border bg-surface-canvas font-bold uppercase ' + (compact ? 'h-7 w-7 rounded-control text-xs ' : 'h-10 w-10 rounded-card text-sm ') + (protagonist ? 'border-accent/50 text-accent' : 'border-border-subtle text-text-muted')}
-      style={image ? { backgroundImage: `url("app-file:///${String(image).replace(/\\/g, '/')}")`, backgroundPosition: 'center', backgroundSize: 'cover' } : {}}
-    >
-      {!image && (entity?.canonicalName?.[0] || '?')}
-    </span>
-  );
-}
-
-function InventorySection({ title, items, empty, openMenuId, onMenu, onToggle, onTransfer }) {
-  return (
-    <section>
-      <h3 className="eyebrow mb-2">{title}</h3>
-      <div className="space-y-1.5">
-        {items.map(item => <InventoryItemCard key={item.itemId} item={item} menuOpen={openMenuId === item.itemId} onMenu={() => onMenu(openMenuId === item.itemId ? null : item.itemId)} onCloseMenu={() => onMenu(null)} onToggle={onToggle} onTransfer={onTransfer} />)}
-        {!items.length && <p className="rounded-card border border-dashed border-border-subtle px-3 py-5 text-center text-xs text-text-disabled">{empty}</p>}
-      </div>
-    </section>
-  );
-}
-
-function InventoryItemCard({ item, menuOpen, onMenu, onCloseMenu, onToggle, onTransfer }) {
-  const menuButtonRef = useRef(null);
-  const ItemIcon = itemMeta(item.data?.itemType).icon;
-  return (
-    <article data-roleplay-menu-root className={'group/item relative flex items-center gap-2.5 rounded-card border p-2 transition-colors duration-200 ease-standard ' + (item.equipped ? 'border-status-info/35 bg-status-info/[0.07]' : 'border-border-subtle bg-surface-panel-muted/70 hover:bg-surface-panel-muted')}>
-      <div className={'flex h-9 w-9 shrink-0 items-center justify-center rounded-control border bg-surface-canvas ' + (item.equipped ? 'border-status-info/30 text-status-info' : 'border-border-default text-entity-item')}><ItemIcon aria-hidden="true" className="h-4 w-4" /></div>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-semibold text-text-primary">{item.name}</p>
-        <p className={'text-xs ' + (item.equipped ? 'text-status-info' : 'text-text-muted')}>{item.equipped ? 'Equipped' : item.nature === 'unique' ? 'Unique item' : `Quantity ${item.quantity}`}</p>
-      </div>
-      <button ref={menuButtonRef} type="button" aria-label={`Actions for ${item.name}`} onClick={onMenu} className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-text-subtle opacity-0 transition-[color,background-color,opacity] hover:bg-surface-hover/60 hover:text-text-primary focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 group-focus-within/item:opacity-100 group-hover/item:opacity-100"><MoreVertical aria-hidden="true" className="h-4 w-4" /></button>
-      {menuOpen ? (
-        <FloatingMenu anchorRef={menuButtonRef} onClose={onCloseMenu}>
-          <MenuAction onClick={() => onToggle(item)} icon={Swords}>{item.equipped ? 'Unequip' : 'Equip'}</MenuAction>
-          <MenuAction onClick={() => onTransfer({ itemId: item.itemId, mode: 'location', targetId: '', quantity: 1 })} icon={MapPin}>Drop or move</MenuAction>
-          <MenuAction onClick={() => onTransfer({ itemId: item.itemId, mode: 'character', targetId: '', quantity: 1 })} icon={HandHelping}>Give to character</MenuAction>
-        </FloatingMenu>
-      ) : null}
-    </article>
   );
 }
 
@@ -676,109 +520,65 @@ function TransferEditor({ transfer, setTransfer, item, actors, locations, curren
           <input type="number" min="1" max={item.quantity} value={transfer.quantity} onChange={event => setTransfer({ ...transfer, quantity: event.target.value })} className="min-h-10 w-20 rounded-control border border-border-default bg-surface-input px-2 text-right text-sm text-text-primary outline-none focus:border-accent/50 focus:ring-2 focus:ring-accent/20" />
         </label>
       )}
-      <button type="button" onClick={onApply} className="min-h-10 w-full rounded-control border border-accent/30 bg-accent/10 px-4 text-sm font-semibold text-accent hover:bg-accent/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">Apply move</button>
+      <Button variant="primary" fullWidth onClick={onApply}>Apply move</Button>
     </section>
   );
 }
 
-/* Revealed inside the collapsed launcher itself. Purely visual: the button
-   carries the equivalent text in its aria-label. */
-function LauncherSummary({ player, participants, nearby, locationName, calendar, clock }) {
-  const actors = [
-    player,
-    ...participants.filter(entity => entity.id !== player?.id),
-    ...nearby.filter(entity => entity.id !== player?.id)
-  ].filter(Boolean);
-  const visibleActors = actors.slice(0, COLLAPSED_ACTOR_LIMIT);
-  const overflowCount = actors.length - visibleActors.length;
-  return (
-    /* Full-width rows with edge-to-edge dividers. Short strings still read as
-       filling the card because the row, not the text, defines the width. */
-    <span className="block border-t border-border-subtle opacity-0 transition-opacity duration-200 ease-standard group-hover:opacity-100 group-hover:delay-100 group-focus-within:opacity-100 group-focus-within:delay-100">
-      <span className="flex w-full items-start gap-2.5 px-3.5 py-2.5">
-        <Hourglass aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-info" />
-        <span className="min-w-0 flex-1">
-          <span className="flex items-baseline justify-between gap-2">
-            <span className="min-w-0 truncate font-semibold text-text-primary">{formatWorldDate(calendar, clock)}</span>
-            <span className="shrink-0 font-mono tabular-nums text-text-secondary">{String(clock?.hour ?? 0).padStart(2, '0')}:{String(clock?.minute ?? 0).padStart(2, '0')}</span>
-          </span>
-          {clock?.weekdayName && <span className="mt-0.5 block truncate text-text-muted">{clock.weekdayName}</span>}
-        </span>
-      </span>
+// Colour names the kind of change; whole class strings so Tailwind can see them.
+const CHANGE_KINDS = {
+  scene: { label: 'Scene', chip: 'bg-entity-location/14 text-entity-location', dot: 'bg-entity-location', bullet: 'text-entity-location' },
+  narrative: { label: 'Narrative', chip: 'bg-entity-event/14 text-entity-event', dot: 'bg-entity-event', bullet: 'text-entity-event' },
+  inventory: { label: 'Inventory', chip: 'bg-entity-item/14 text-entity-item', dot: 'bg-entity-item', bullet: 'text-entity-item' },
+  resource: { label: 'State', chip: 'bg-status-warning/14 text-status-warning', dot: 'bg-status-warning', bullet: 'text-status-warning' },
+  entity: { label: 'Entity', chip: 'bg-entity-concept/12 text-entity-concept', dot: 'bg-entity-concept', bullet: 'text-entity-concept' },
+  time: { label: 'Time', chip: 'bg-status-info/14 text-status-info', dot: 'bg-status-info', bullet: 'text-status-info' }
+};
+const kindOf = kind => CHANGE_KINDS[kind] || CHANGE_KINDS.entity;
 
-      <span className="flex w-full items-center gap-2.5 border-t border-border-subtle px-3.5 py-2.5">
-        <Users aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-accent/70" />
-        <span className="flex min-w-0 flex-1 items-center gap-1.5">
-          {visibleActors.map(entity => (
-            <Avatar key={entity.id} entity={entity} protagonist={entity.id === player?.id} compact />
-          ))}
-          {overflowCount > 0 && (
-            <span className="flex h-7 min-w-7 items-center justify-center rounded-control border border-border-default bg-surface-panel-muted px-1 font-semibold text-text-secondary">+{overflowCount}</span>
-          )}
-          {!visibleActors.length && <span className="text-text-muted">No active characters</span>}
-        </span>
-      </span>
-
-      <span className="flex w-full items-center gap-2.5 border-t border-border-subtle px-3.5 py-2.5">
-        <MapPin aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-status-success" />
-        <span className="min-w-0 flex-1 truncate font-medium text-text-secondary">{locationName || 'No current Location'}</span>
-      </span>
-    </span>
-  );
+function turnTitle(turn) {
+  if (turn.manual) return 'You';
+  return turn.frame ? `Turn ${turn.turnNumber}` : 'Recent change';
 }
 
-function launcherLabel(statusLabel, calendar, clock, locationName) {
-  const time = `${String(clock?.hour ?? 0).padStart(2, '0')}:${String(clock?.minute ?? 0).padStart(2, '0')}`;
-  return [
-    'Open Roleplay panel',
-    statusLabel,
-    [formatWorldDate(calendar, clock), time].filter(Boolean).join(' '),
-    locationName
-  ].filter(Boolean).join('. ') + '.';
-}
-
-function RoleplayStatus({ processing, pendingCount }) {
-  if (processing) {
-    return (
-      <span aria-hidden="true" className="inline-flex h-5 w-5 shrink-0 items-center justify-center text-accent">
-        <span className="inline-flex animate-spin motion-reduce:animate-none"><Loader2 className="h-4 w-4" /></span>
-      </span>
-    );
-  }
-  if (pendingCount > 0) {
-    return (
-      <span aria-hidden="true" className="inline-flex min-h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-accent px-1.5 text-[0.625rem] font-bold leading-none text-on-accent">
-        {pendingCount > 99 ? '99+' : pendingCount}
-      </span>
-    );
-  }
-  /* Live state. Goes static as soon as there is something to review, so the
-     motion always means "running", never "needs attention". */
-  return (
-    <span aria-hidden="true" className="relative inline-flex h-5 w-5 shrink-0 items-center justify-center">
-      <span className="absolute h-2 w-2 animate-live-halo rounded-full bg-accent motion-reduce:animate-none" />
-      <span className="relative h-2 w-2 animate-live-core rounded-full bg-accent motion-reduce:animate-none" />
-    </span>
-  );
-}
-
-function RecentTurn({ turn, names, definitions, open, onToggle, onResolve, resolvingChangeId }) {
+// Story turns carry the in-game moment; the player's own edits need no date at all.
+function turnMoment(turn) {
   const point = turn.frame?.end;
-  const date = point?.position ? formatTurnDate(point) : '';
-  const time = point?.position ? `${String(point.position.hour ?? 0).padStart(2, '0')}:${String(point.position.minute ?? 0).padStart(2, '0')}` : '';
+  if (turn.manual || !point?.position) return '';
+  const time = `${String(point.position.hour ?? 0).padStart(2, '0')}:${String(point.position.minute ?? 0).padStart(2, '0')}`;
+  return `${formatTurnDate(point)} · ${time}`;
+}
+
+function RecentTurn({ turn, last, names, definitions, open, onToggle, onResolve, resolvingChangeId }) {
   const pending = turn.changes.filter(isPendingChange).length;
+  const kinds = [...new Set(turn.changes.map(change => change.kind))];
+  const moment = turnMoment(turn);
+  const weekday = turn.frame?.end?.display?.weekdayName;
   return (
-    <article className={`overflow-hidden rounded-card border transition-colors duration-200 ease-standard ${open ? 'border-accent/25 bg-accent/[0.035]' : 'border-border-subtle bg-surface-panel-muted/70 hover:bg-surface-panel-muted'}`}>
-      <button type="button" aria-expanded={open} onClick={onToggle} className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40">
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-accent/20 bg-accent/[0.06] text-accent"><AiGlyph className="h-3.5 w-3.5" /></span>
-        <span className="min-w-0 flex-1">
-          <span className="flex items-center gap-2 text-[0.6875rem] font-bold uppercase tracking-[0.09em] text-text-secondary">{turn.frame ? `Turn ${turn.turnNumber}` : 'Recent change'}{pending > 0 && <span className="rounded-full bg-status-warning/10 px-1.5 py-0.5 text-[0.625rem] text-status-warning">{pending} review</span>}</span>
-          <span className="mt-0.5 block truncate text-[0.6875rem] text-text-subtle">{date}{date && time ? ' · ' : ''}{time}{point?.display?.weekdayName ? ` · ${point.display.weekdayName}` : ''}</span>
+    <li className="relative">
+      {!last && <span aria-hidden="true" className="absolute bottom-[-0.5rem] left-[0.9375rem] top-5 w-px bg-border-subtle" />}
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={onToggle}
+        data-tooltip={moment && weekday ? `${moment} · ${weekday}` : undefined}
+        className={`relative flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${open ? 'bg-white/[0.05]' : 'hover:bg-white/[0.03]'}`}
+      >
+        <span className="flex w-3.5 shrink-0 justify-center">
+          <span aria-hidden="true" className={`h-2.5 w-2.5 rounded-full border ${turn.manual ? 'border-accent' : 'border-entity-event'} ${open ? (turn.manual ? 'bg-accent' : 'bg-entity-event') : 'bg-surface-panel'}`} />
+        </span>
+        <span className="flex min-w-0 flex-1 items-baseline gap-2 text-[0.8125rem]">
+          <span className={`shrink-0 font-semibold ${turn.manual ? 'text-accent' : 'text-entity-event'}`}>{turnTitle(turn)}</span>
+          {moment && <span className="truncate text-xs text-text-muted tabular-nums">{moment}</span>}
+        </span>
+        {pending > 0 && <span className="shrink-0 rounded-full bg-status-warning/12 px-2 py-0.5 text-[0.6875rem] font-semibold text-status-warning">{pending} to review</span>}
+        <span aria-hidden="true" className="flex shrink-0 gap-1">
+          {kinds.map(kind => <span key={kind} className={`h-[0.4375rem] w-[0.4375rem] rounded-full ${kindOf(kind).dot}`} />)}
         </span>
         <ChevronRight aria-hidden="true" className={`h-3.5 w-3.5 shrink-0 text-text-disabled transition-transform duration-200 ease-standard ${open ? 'rotate-90' : ''}`} />
       </button>
       {open && (
-        <div className="animate-rise-in space-y-1.5 border-t border-border-subtle px-2.5 py-2.5">
+        <div className="mb-2 ml-8 mt-0.5 space-y-1.5 animate-rise-in">
           {turn.changes.map(change => (
             <RecentTurnChange
               key={`${change.kind}:${change.id}`}
@@ -791,45 +591,66 @@ function RecentTurn({ turn, names, definitions, open, onToggle, onResolve, resol
           ))}
         </div>
       )}
-    </article>
+    </li>
   );
 }
 
 function RecentTurnChange({ change, names, definitions, onResolve, resolving }) {
-  const details = describeRecentChange(change, names, definitions);
+  const [lead, ...details] = describeRecentChange(change, names, definitions);
   const pending = isPendingChange(change);
+  const kind = kindOf(change.kind);
+  const rejected = change.status === 'rejected';
   return (
-    <div className="rounded-control border border-border-subtle bg-surface-canvas/40 px-2.5 py-2">
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5">
-            <span className="text-[0.625rem] font-bold uppercase tracking-[0.09em] text-accent/80">{changeLabel(change.kind)}</span>
-            {change.status && <span className={`text-[0.625rem] font-semibold uppercase ${pending ? 'text-status-warning' : change.status === 'rejected' ? 'text-status-danger' : 'text-text-disabled'}`}>{change.status}</span>}
-          </div>
-          <div className="mt-1 space-y-1">
-            {details.map((detail, index) => <p key={index} className="text-xs leading-relaxed text-text-secondary">{detail}</p>)}
-          </div>
-        </div>
-        {pending && (
-          <div className="flex shrink-0 items-center gap-1">
-            <button type="button" disabled={resolving} onClick={() => onResolve(change, 'rejected')} className="rounded border border-status-danger/25 px-2 py-1 text-[0.625rem] font-semibold text-status-danger transition-colors hover:bg-status-danger/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-danger/40 disabled:opacity-50">Reject</button>
-            <button type="button" disabled={resolving} onClick={() => onResolve(change, 'approved')} className="rounded bg-accent px-2 py-1 text-[0.625rem] font-bold text-on-accent transition-[filter] hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-50">Approve</button>
-          </div>
+    <article className="rounded-lg border border-border-subtle bg-surface-canvas/40 px-3 py-2.5">
+      <div className="mb-1.5 flex flex-wrap items-center gap-2">
+        <span className={`inline-flex h-5 items-center rounded-md px-2 text-[0.6875rem] font-semibold ${kind.chip}`}>{kind.label}</span>
+        {change.status && (
+          <span className={`inline-flex items-center gap-1 text-[0.6875rem] ${pending ? 'text-status-warning' : rejected ? 'text-status-danger' : 'text-text-muted'}`}>
+            {pending ? <Clock3 aria-hidden="true" className="h-3 w-3" /> : rejected ? <X aria-hidden="true" className="h-3 w-3" /> : <Check aria-hidden="true" className="h-3 w-3 text-status-success" />}
+            {change.status.charAt(0).toUpperCase() + change.status.slice(1)}
+          </span>
         )}
       </div>
-    </div>
+      {lead && <p className="text-[0.8125rem] leading-relaxed text-text-secondary">{lead}</p>}
+      {details.map((detail, index) => (
+        <p key={index} className="mt-1 flex gap-2 text-xs leading-relaxed text-text-muted">
+          <span aria-hidden="true" className={kind.bullet}>•</span>
+          <span className="min-w-0">{detail}</span>
+        </p>
+      ))}
+      {pending && (
+        <div className="mt-2 flex justify-end gap-1.5">
+          <Button variant="ghost" size="sm" disabled={resolving} onClick={() => onResolve(change, 'rejected')}>Reject</Button>
+          <Button variant="primary" size="sm" disabled={resolving} onClick={() => onResolve(change, 'approved')}>Approve</Button>
+        </div>
+      )}
+    </article>
   );
 }
 
+// What a manual edit changes; a later edit to the same thing replaces the earlier one.
+function manualTarget(change) {
+  if (change.kind === 'scene') return 'scene';
+  if (change.kind === 'inventory') return `inventory:${change.patch?.itemId}`;
+  if (change.kind === 'resource') return `resource:${change.definitionId}:${change.entityId}`;
+  return `${change.kind}:${change.id}`;
+}
+
+// Turns come from message frames. Edits made in the panel have none, so every edit made
+// since the last story turn gathers into one "You" entry, keeping only the latest edit of
+// each thing; the next turn starts a new one. Without them the panel could not explain a
+// change it shows.
 function groupRecentTurns(configuration) {
   const frames = configuration.recentTurnFrames || [];
-  const turns = new Map(frames.map(frame => [frame.originId, { ...frame, frame, changes: [] }]));
+  const turns = new Map(frames.map(frame => [frame.originId, { ...frame, key: frame.originId, frame, changes: [] }]));
+  const turnBefore = time => frames.reduce((latest, frame) => (frame.createdAt <= time ? frame.originId : latest), 'start');
   const add = (originId, change) => {
     if (!originId) return;
-    let turn = turns.get(originId);
+    const key = change.source === 'manual' ? `manual:after:${turnBefore(change.createdAt || 0)}` : originId;
+    let turn = turns.get(key);
     if (!turn) {
-      turn = { originId, frame: null, turnNumber: null, createdAt: change.createdAt || 0, changes: [] };
-      turns.set(originId, turn);
+      turn = { key, originId, frame: null, turnNumber: null, manual: change.source === 'manual', createdAt: change.createdAt || 0, changes: [] };
+      turns.set(key, turn);
     }
     turn.createdAt = Math.max(turn.createdAt || 0, change.createdAt || 0);
     turn.changes.push(change);
@@ -854,18 +675,19 @@ function groupRecentTurns(configuration) {
     if (frame.advance) add(frame.originId, { id: `${frame.originId}:time`, kind: 'time', status: 'applied', createdAt: frame.createdAt, frame });
   });
   return [...turns.values()]
-    .filter(turn => turn.frame && turn.changes.length)
-    .map(turn => ({ ...turn, changes: turn.changes.sort((left, right) => (left.createdAt || 0) - (right.createdAt || 0)) }))
-    .sort((left, right) => (right.frame?.createdAt || right.createdAt || 0) - (left.frame?.createdAt || left.createdAt || 0))
+    .filter(turn => (turn.frame || turn.manual) && turn.changes.length)
+    .map(turn => {
+      const ordered = turn.changes.sort((left, right) => (left.createdAt || 0) - (right.createdAt || 0));
+      if (!turn.manual) return { ...turn, changes: ordered };
+      const latest = new Map(ordered.map(change => [manualTarget(change), change]));
+      return { ...turn, changes: [...latest.values()].sort((left, right) => (left.createdAt || 0) - (right.createdAt || 0)) };
+    })
+    .sort((left, right) => (right.manual ? right.createdAt : right.frame?.createdAt || right.createdAt || 0) - (left.manual ? left.createdAt : left.frame?.createdAt || left.createdAt || 0))
     .slice(0, 12);
 }
 
 function isPendingChange(change) {
   return change.status === 'pending' || change.status === 'proposed' || change.status === 'conflicting';
-}
-
-function changeLabel(kind) {
-  return ({ scene: 'Scene', inventory: 'Inventory', resource: 'State', entity: 'Entity', narrative: 'Narrative', time: 'Time' })[kind] || 'Update';
 }
 
 function formatTurnDate(point) {
@@ -968,7 +790,7 @@ function describeInventoryChange(patch, names) {
 
 function describeNarrativeOperation(operation, names) {
   if (operation.type === 'assert-fact') return `Fact: ${describeProposition(operation.fact?.proposition, names)}`;
-  if (operation.type === 'set-state') return `State: ${names.get(operation.state?.entityId) || 'Entity'} · ${operation.state?.property || 'property'} → ${displayValue(operation.state?.value)}`;
+  if (operation.type === 'set-state') return `State: ${names.get(operation.state?.entityId) || 'Entity'} · ${operation.state?.property || 'property'} → ${displayValue(operation.state?.value, names)}`;
   if (operation.type === 'grant-awareness') return `${names.get(operation.awareness?.subjectId) || 'Entity'} became aware of ${names.get(operation.awareness?.targetId) || 'another entity'}.`;
   if (operation.type === 'grant-knowledge') {
     const knowledge = operation.knowledge;
@@ -987,29 +809,19 @@ function describeNarrativeOperation(operation, names) {
 function describeProposition(proposition, names) {
   if (!proposition) return 'narrative fact updated';
   const subject = names.get(proposition.subjectId) || 'entity';
-  return `${subject} · ${proposition.predicate || 'fact'}: ${displayValue(proposition.object)}`;
+  return `${subject} · ${proposition.predicate || 'fact'}: ${displayValue(proposition.object, names)}`;
 }
 
-function displayValue(value) {
-  if (typeof value === 'string') return value;
+// Values may hold entity ids (a location, an owner); show the name the user knows.
+function displayValue(value, names) {
+  if (typeof value === 'string') return names.get(value) || value;
+  if (Array.isArray(value) && value.every(item => typeof item === 'string')) return value.map(item => names.get(item) || item).join(', ');
   if (value === null || value === undefined) return 'empty';
   return JSON.stringify(value);
 }
 
 function nameList(ids, names) {
   return ids?.length ? ids.map(id => names.get(id) || 'Unknown entity').join(', ') : 'none';
-}
-
-function TabButton({ active, onClick, icon: Icon, label, count }) {
-  return <button type="button" onClick={onClick} aria-pressed={active} className={'flex items-center justify-center gap-2 rounded-control text-xs font-semibold transition-colors duration-200 ease-standard focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ' + (active ? 'bg-accent/10 text-accent' : 'text-text-muted hover:bg-surface-hover/60 hover:text-text-secondary')}><Icon aria-hidden="true" className="h-4 w-4" />{label}{count > 0 && <span className="rounded-full bg-surface-hover px-1.5 py-0.5 text-xs tabular-nums">{count}</span>}</button>;
-}
-
-function MenuAction({ onClick, icon: Icon, children, danger = false }) {
-  return <button type="button" onClick={onClick} className={'flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-left text-xs transition-colors hover:bg-surface-hover/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ' + (danger ? 'text-status-danger' : 'text-text-secondary hover:text-text-primary')}><Icon aria-hidden="true" className="h-3.5 w-3.5" />{children}</button>;
-}
-
-function EmptyState({ text }) {
-  return <p className="rounded-card border border-dashed border-border-subtle px-3 py-5 text-center text-xs text-text-disabled">{text}</p>;
 }
 
 function presenceOf(entityId, scene) {

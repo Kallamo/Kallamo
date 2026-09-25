@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { RotateCw, Send, Square, SendHorizontal } from 'lucide-react';
+import { SendHorizontal, Square } from 'lucide-react';
 
 const sessionDrafts = new Map();
 
+// The composer: the draft on top, the tools row below. `leading` and `trailing`
+// hold the workspace's own controls (attach, context, reply target).
 export default function ChatInput({
   canSend,
   hasTargets,
@@ -11,16 +13,17 @@ export default function ChatInput({
   onSend,
   pendingFileCount,
   placeholder,
-  workspaceId
+  workspaceId,
+  leading,
+  trailing
 }) {
   const [inputValue, setInputValue] = useState(() => sessionDrafts.get(workspaceId) || '');
-  const [isHoveringSend, setIsHoveringSend] = useState(false);
   const inputRef = useRef(null);
 
   useEffect(() => {
     if (!inputRef.current) return;
     inputRef.current.style.height = 'auto';
-    inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 108)}px`;
+    inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 120)}px`;
   }, [inputValue]);
 
   useEffect(() => {
@@ -47,7 +50,7 @@ export default function ChatInput({
   const isDisabled = (!isGenerating && !inputValue.trim() && pendingFileCount === 0) || !hasTargets || (!isGenerating && !canSend);
 
   return (
-    <>
+    <div className="flex flex-col gap-1">
       <textarea
         ref={inputRef}
         value={inputValue}
@@ -56,31 +59,26 @@ export default function ChatInput({
         rows={1}
         aria-label="Message"
         placeholder={placeholder}
-        style={{ maxHeight: '120px', overflowY: 'auto' }}
-        className="order-2 flex-1 bg-transparent border-0 text-text-primary text-xs px-3 py-2.5 focus:outline-none resize-none font-sans custom-scrollbar leading-relaxed"
+        className="w-full resize-none border-0 bg-transparent px-1 py-1.5 font-sans text-sm leading-relaxed text-text-primary placeholder:text-text-subtle focus:outline-none custom-scrollbar"
       />
-      <span data-tooltip={(!isGenerating && !canSend) ? 'This AI Profile needs setup: create an API profile in Settings, then link it in the Library.' : undefined} className="order-4 shrink-0">
-        <button
-          type="button"
-          aria-label={isGenerating ? 'Cancel generation' : 'Send message'}
-          onClick={isGenerating ? onCancel : submit}
-          disabled={isDisabled}
-          onMouseEnter={() => setIsHoveringSend(true)}
-          onMouseLeave={() => setIsHoveringSend(false)}
-          className={`shrink-0 w-9 h-9 rounded-full flex items-center justify-center shadow-md transition-all active:scale-95 cursor-pointer border ${isGenerating
-            ? isHoveringSend
-              ? 'bg-danger-solid hover:bg-danger-solid-hover border-danger-solid text-on-danger'
-              : 'bg-accent/20 border-accent/40 text-accent cursor-wait'
-            : 'bg-accent border-accent text-on-accent hover:brightness-110 disabled:opacity-50 disabled:pointer-events-none'
-            }`}
-        >
-          {isGenerating ? (
-            isHoveringSend ? <Square className="w-4 h-4 fill-current" /> : <RotateCw className="w-4 h-4 animate-spin text-accent" />
-          ) : (
-            <SendHorizontal className="w-4 h-4" />
-          )}
-        </button>
-      </span>
-    </>
+      <div className="-ml-1.5 flex items-center gap-1">
+        {leading}
+        <span className="flex-1" />
+        {trailing}
+        <span data-tooltip={(!isGenerating && !canSend) ? 'This AI Profile needs setup: create an API profile in Settings, then link it in the Library.' : undefined} className="ml-1 shrink-0">
+          <button
+            type="button"
+            aria-label={isGenerating ? 'Stop generating' : 'Send message'}
+            onClick={isGenerating ? onCancel : submit}
+            disabled={isDisabled}
+            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-[filter,background-color,transform] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:pointer-events-none disabled:opacity-50 cursor-pointer ${isGenerating
+              ? 'border border-border-strong bg-white/[0.08] text-text-primary hover:bg-danger-solid hover:border-danger-solid hover:text-on-danger'
+              : 'bg-accent text-on-accent shadow-sm hover:brightness-110'}`}
+          >
+            {isGenerating ? <Square aria-hidden="true" className="h-3.5 w-3.5 fill-current" /> : <SendHorizontal aria-hidden="true" className="h-4 w-4" />}
+          </button>
+        </span>
+      </div>
+    </div>
   );
 }

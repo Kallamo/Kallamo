@@ -1,15 +1,18 @@
 import { Suspense, useCallback, useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useApp } from '../context/AppContext';
-import { ArrowDown, ArrowLeft, Paperclip, Workflow, X, ChevronDown, Plus, Folder, AlertTriangle, SlidersHorizontal } from 'lucide-react';
-import { WorkspaceGlyph, WritingGlyph, WorldbuildGlyph, MemoryGlyph, AiGlyph } from './ui/glyphs';
+import { ArrowDown, ArrowLeft, Paperclip, X, Folder, AlertTriangle, SlidersHorizontal, Trash2, History } from 'lucide-react';
+import { WorkspaceGlyph, WritingGlyph, WorldbuildGlyph, MemoryGlyph } from './ui/glyphs';
 import SummarizeModal from './modals/SummarizeModal';
 import { selectActiveMessages, selectArchivableMessages } from '../features/chat/archive-coverage';
 import FilePreviewModal from './modals/FilePreviewModal';
-import DeleteModal from './modals/DeleteModal';
-import Popover from './ui/Popover';
+import ConfirmDialog from './ui/ConfirmDialog';
+import Checkbox from './ui/Checkbox';
+import IconButton from './ui/IconButton';
 import ChatInput from '../features/chat/components/ChatInput';
 import ChatMessageItem, { isImage, isVideo } from '../features/chat/components/ChatMessageItem';
 import GenerationBubble from '../features/chat/components/GenerationBubble';
+import ContextMeter from '../features/chat/components/ContextMeter';
+import ReplyTargetPicker from '../features/chat/components/ReplyTargetPicker';
 import RoleplayQuickPanel from '../features/roleplay/RoleplayQuickPanel';
 import { prepareGenerationSubmission, resolveActiveGenerationTarget } from '../features/chat/generation-target';
 import { holdDeferredFrames, safeParseDebugNotice, safeParseJson } from '../features/chat/diagnostic-format';
@@ -67,10 +70,11 @@ export default function ChatWorkspaceView() {
   } = useApp();
 
   const workspaceId = activeChat?.id;
-  const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   // Seeded from the preload done while opening, so the first paint has the final layout.
   const [initialPresentation] = useState(() => getCachedPresentation(workspaceId));
   const [roleplayMode, setRoleplayMode] = useState(() => initialPresentation?.mode ?? false);
+  const [roleplayPlayerName, setRoleplayPlayerName] = useState(null);
+  const [entityNames, setEntityNames] = useState(null);
   const [roleplayPanelCollapsed, setRoleplayPanelCollapsed] = useState(() => initialPresentation?.collapsed ?? false);
   const [roleplayWorkspaceId, setRoleplayWorkspaceId] = useState(() => (initialPresentation ? workspaceId : null));
   const [roleplayBackground, setRoleplayBackground] = useState(() => getCachedBackground(workspaceId) || null);
@@ -272,7 +276,6 @@ export default function ChatWorkspaceView() {
   const chatShownRef = useRef(false);
   const wasGeneratingRef = useRef(false);
   const layoutAnchorRef = useRef(null);
-  const dropdownRef = useRef(null);
   const fileInputRef = useRef(null);
   const [isFollowingLatest, setIsFollowingLatest] = useState(true);
   const [hasCompletedResponseBelow, setHasCompletedResponseBelow] = useState(false);
@@ -640,7 +643,7 @@ export default function ChatWorkspaceView() {
 
   const messageView = useMemo(() => {
     const blurStyle = alpha => (softBlur && alpha < 1
-      ? { backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }
+      ? { backdropFilter: 'blur(20px) saturate(1.15)', WebkitBackdropFilter: 'blur(20px) saturate(1.15)' }
       : {});
     const userAlpha = bubbleAlpha(userBubbleOpacity);
     const aiAlpha = bubbleAlpha(aiBubbleOpacity);
@@ -649,16 +652,17 @@ export default function ChatWorkspaceView() {
       isDocumentMode,
       softBlur,
       userBubbleStyle: {
-        backgroundColor: `rgba(26, 45, 50, ${userAlpha})`,
-        border: '1px solid rgba(221, 186, 110, 0.15)',
+        backgroundColor: `rgba(24, 44, 50, ${userAlpha})`,
+        borderColor: 'rgba(255, 255, 255, 0.1)',
         ...blurStyle(userAlpha),
         ...(isDocumentMode ? { padding: '1.25rem', borderRadius: '0.75rem' } : {})
       },
       aiBubbleStyle: {
         backgroundColor: `rgba(10, 22, 29, ${aiAlpha})`,
-        border: '1px solid rgba(255, 255, 255, 0.05)',
+        borderColor: 'rgba(255, 255, 255, 0.08)',
         ...(isDocumentMode ? { padding: '1.25rem', borderRadius: '0.75rem' } : blurStyle(aiAlpha))
       },
+      entityNames,
       flags: {
         tokenDebug: Boolean(advanced.tokenDebug),
         ragDebug: Boolean(advanced.ragDebug),
@@ -666,7 +670,7 @@ export default function ChatWorkspaceView() {
         narrativeStateDebug: Boolean(advanced.narrativeStateDebug)
       }
     };
-  }, [fontSize, isDocumentMode, softBlur, userBubbleOpacity, aiBubbleOpacity, advanced.tokenDebug, advanced.ragDebug, advanced.agenticDebug, advanced.narrativeStateDebug]);
+  }, [entityNames, fontSize, isDocumentMode, softBlur, userBubbleOpacity, aiBubbleOpacity, advanced.tokenDebug, advanced.ragDebug, advanced.agenticDebug, advanced.narrativeStateDebug]);
 
   const lastUserMessageId = useMemo(() => activeMessages.findLast(m => m.role === 'user')?.id, [activeMessages]);
   const lastAiMessage = useMemo(() => activeMessages.findLast(m => m.role === 'ai'), [activeMessages]);
@@ -889,7 +893,6 @@ export default function ChatWorkspaceView() {
   } : {};
 
   const ctxThreshold = activeChat.archiveThreshold || 60000;
-  const ctxPercentage = Math.min((ctxTokens / ctxThreshold) * 100, 100);
   // Unarchived messages past the budget are lost from context, so the header says so.
   // The last reply's count is authoritative; the estimate is only a fallback.
   const lastContext = lastAiMessage ? safeParseDebugNotice(lastAiMessage.debugNotice)?.context : null;
@@ -902,17 +905,21 @@ export default function ChatWorkspaceView() {
     ? ctxHistoryCut > 0 && !(lastArchiveAt > (lastAiMessage?.createdAt || 0))
     : ctxTokens > ctxPayloadLimit;
 
-  const generatingBubbleStyle = isDocumentMode ? {
-    backgroundColor: `rgba(10, 22, 29, ${bubbleAlpha(aiBubbleOpacity)})`,
-    border: '1px solid rgba(251, 203, 45, 0.15)',
-    padding: '1.25rem',
-    borderRadius: '0.75rem',
-    boxShadow: '0 0 15px rgba(251, 203, 45, 0.03)'
-  } : {
-    backgroundColor: `rgba(10, 22, 29, ${bubbleAlpha(aiBubbleOpacity)})`,
-    border: '1px solid rgba(251, 203, 45, 0.15)',
-    ...(softBlur && aiBubbleOpacity < 100 ? { backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' } : {}),
-    boxShadow: '0 0 15px rgba(251, 203, 45, 0.03)'
+  const generatingColor = writingProfiles.find(profile => profile.name === generationProgress?.profileName)?.color;
+  // The player's name for "You as …": the frame after each message records who was played,
+  // and the latest frame stands in for a message that has no reply yet.
+  const latestPlayerName = (() => {
+    for (let index = activeMessages.length - 1; index >= 0; index -= 1) {
+      const frame = roleplayFrames[activeMessages[index].id] || heldRoleplayFrames[activeMessages[index].id];
+      if (frame?.end?.playerName) return frame.end.playerName;
+    }
+    return null;
+  })();
+  const playerNameAt = index => {
+    if (!isCurrentRoleplayMode) return undefined;
+    const next = activeMessages[index + 1];
+    const frame = next && next.role !== 'user' ? (roleplayFrames[next.id] || heldRoleplayFrames[next.id]) : null;
+    return frame?.start?.playerName || roleplayPlayerName || latestPlayerName || undefined;
   };
 
   return (
@@ -921,7 +928,7 @@ export default function ChatWorkspaceView() {
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className="flex w-full h-full relative overflow-hidden bg-[#011419]"
+      className={`flex w-full h-full relative overflow-hidden bg-[#011419] ${hasBg ? 'has-backdrop' : ''}`}
     >
       {/* Visual Background Layers */}
       {hasBg && <div style={bgStyle} className="absolute inset-0 z-0" />}
@@ -982,21 +989,6 @@ export default function ChatWorkspaceView() {
           </nav>
 
           <div className="flex-1 flex justify-end items-center gap-1 ml-4">
-            {/* Past the payload budget the oldest live messages stop being sent at all.
-                It stays a marker rather than a banner: the state persists for as long as
-                the history overflows, and a permanent band would only be noise. */}
-            {isChatVisible && ctxOverPayload && (
-              <button
-                onClick={() => setSummarizeModalOpen(true)}
-                data-tooltip={ctxHistoryCut > 0
-                  ? `${ctxHistoryCut} older ${ctxHistoryCut === 1 ? 'message was' : 'messages were'} left out of the last reply to fit the payload budget. Archive them to keep them searchable.`
-                  : 'Active history exceeds the payload budget. The oldest messages are being cut. Archive them.'}
-                aria-label="Active history exceeds the payload budget"
-                className="p-1.5 rounded-md text-status-danger hover:bg-status-danger/15 transition-colors cursor-pointer shrink-0"
-              >
-                <AlertTriangle className="w-4 h-4" />
-              </button>
-            )}
             <button
               onClick={() => setActiveSubView('configuration')}
               onMouseEnter={() => workspaceTabViews.configuration.preload()}
@@ -1011,50 +1003,36 @@ export default function ChatWorkspaceView() {
           </div>
         </div>
 
-        {/* Active context usage bar under the header (chat only, when enabled) */}
-        {isChatVisible && activeChat.showContextBar === 1 && (
-          <div className="h-1 w-full bg-gray-800/50 shrink-0 relative z-10" title={`Active context: ~${ctxTokens} / ${ctxThreshold} tokens`}>
-            <div
-              style={{ width: `${ctxPercentage}%` }}
-              className={`h-full transition-[width,background-color] duration-500 ease-out ${ctxPercentage >= 95 ? 'bg-status-danger' : ctxPercentage >= 75 ? 'bg-orange-500' : 'bg-accent'}`}
-            />
-          </div>
-        )}
-
         {/* The chat stays mounted while another tab is open, so returning is instant and
             keeps the reading position. The other tabs mount on demand. */}
         <div className={`flex-1 min-h-0 flex-col relative overflow-hidden ${isChatVisible ? 'flex' : 'hidden'}`}>
-          {/* Message Container Thread */}
           <div
             ref={messageContainerRef}
             onClick={handleContainerClick}
             onScroll={updateFollowingLatest}
-            className={`chat-thread flex-1 overflow-y-auto pt-6 pb-28 px-12 md:px-24 custom-scrollbar ${presentationReady ? '' : 'invisible'} ${isCurrentRoleplayMode && !roleplayPanelCollapsed ? 'xl:px-20 2xl:px-28' : isCurrentRoleplayMode ? 'xl:px-40 2xl:px-72' : 'xl:px-48'}`}
+            className={`chat-thread flex-1 overflow-y-auto px-6 pt-6 pb-40 custom-scrollbar ${presentationReady ? '' : 'invisible'}`}
           >
-            <div ref={messageContentRef} className="space-y-6">
-              <div className="flex flex-wrap items-center justify-center gap-2">
-                {hasOlderMessages && (
+            <div ref={messageContentRef} className="mx-auto w-full max-w-[55rem] space-y-7">
+              {hasOlderMessages && (
+                <div className="flex flex-wrap items-center justify-center gap-2">
                   <button
                     type="button"
-                    aria-label="Attach files"
                     onClick={handleLoadOlderMessages}
                     disabled={isLoadingOlderMessages}
-                    className="rounded-lg border border-gray-700 bg-[#0a161d] px-3 py-1.5 text-[0.625rem] font-bold uppercase tracking-wider text-gray-300 transition-colors hover:border-accent/50 hover:text-accent disabled:cursor-wait disabled:opacity-60"
+                    className="h-8 rounded-control border border-border-default bg-surface-panel/80 px-3 text-xs font-semibold text-text-secondary transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-wait disabled:opacity-60"
                   >
-                    {isLoadingOlderMessages ? 'Loading history...' : 'Show 50 previous messages'}
+                    {isLoadingOlderMessages ? 'Loading history…' : 'Show 50 earlier messages'}
                   </button>
-                )}
-                {hasOlderMessages && (
                   <button
                     type="button"
                     onClick={handleJumpToStart}
                     disabled={isLoadingOlderMessages}
-                    className="rounded-lg border border-gray-700 bg-[#0a161d] px-3 py-1.5 text-[0.625rem] font-bold uppercase tracking-wider text-gray-300 transition-colors hover:border-accent/50 hover:text-accent disabled:cursor-wait disabled:opacity-60"
+                    className="h-8 rounded-control border border-border-default bg-surface-panel/80 px-3 text-xs font-semibold text-text-secondary transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-wait disabled:opacity-60"
                   >
                     Go to start
                   </button>
-                )}
-              </div>
+                </div>
+              )}
               {activeMessages.map((msg, index) => (
                 <ChatMessageItem
                   key={msg.id}
@@ -1065,14 +1043,20 @@ export default function ChatWorkspaceView() {
                   isLastAi={msg.id === lastAiMessage?.id}
                   isTyping={msg.id === lastGeneratedMessageId}
                   frame={msg.role === 'user' ? undefined : (roleplayFrames[msg.id] || heldRoleplayFrames[msg.id])}
+                  playerName={msg.role === 'user' ? playerNameAt(index) : undefined}
                   view={messageView}
                   actions={messageActions}
                 />
               ))}
 
-              {/* Workflow runner progress banner */}
               {isGenerating && generationProgress && (
-                <GenerationBubble progress={generationProgress} style={generatingBubbleStyle} onTextChange={pinToLatestIfFollowing} />
+                <GenerationBubble
+                  progress={generationProgress}
+                  color={generatingColor}
+                  style={messageView.aiBubbleStyle}
+                  sizeClass={messageView.sizeClass}
+                  onTextChange={pinToLatestIfFollowing}
+                />
               )}
             </div>
           </div>
@@ -1081,60 +1065,51 @@ export default function ChatWorkspaceView() {
             <button
               type="button"
               onClick={scrollToLatest}
-              className="absolute right-6 bottom-28 z-20 flex items-center gap-2 rounded-full border border-accent/35 bg-[#0a161d]/95 px-3 py-2 text-[0.625rem] font-bold uppercase tracking-wider text-accent shadow-lg shadow-black/30 transition-colors hover:bg-accent hover:text-[#011419]"
+              className="absolute right-6 bottom-36 z-20 inline-flex h-9 items-center gap-2 rounded-full border border-accent/40 bg-surface-panel px-3.5 text-xs font-semibold text-accent shadow-overlay transition-colors hover:bg-accent hover:text-on-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
-              <ArrowDown className="w-3.5 h-3.5" />
-              <span>New response below</span>
+              <ArrowDown aria-hidden="true" className="h-3.5 w-3.5" />
+              New reply below
             </button>
           )}
 
-          {/* Digitization Chat Input Area */}
-          <div className="shrink-0 p-6 pt-0 w-full max-w-4xl mx-auto absolute bottom-0 inset-x-0 bg-gradient-to-t from-[#011419] via-[#011419] to-transparent pb-6 pt-4">
+          {/* The veil lets the thread fade under the composer without hiding the background. */}
+          <div aria-hidden="true" className={`pointer-events-none absolute inset-x-0 bottom-0 h-32 bg-gradient-to-b from-transparent ${hasBg ? 'to-surface-canvas/80' : 'to-surface-canvas'} to-70%`} />
 
-            {/* Pending Attachments list (Rendered static preview above the chat bar) */}
-            {pendingFiles.length > 0 && (
-              <div className="w-full flex flex-wrap gap-3 px-3 pb-3 select-none animate-in fade-in slide-in-from-bottom-2 duration-200">
-                {pendingFiles.map(file => {
-                  const fileUrl = file.path ? `app-file:///${encodeURI(file.path.replace(/\\/g, '/'))}` : '';
-                  const hasThumbnail = isImage(file.name) || isVideo(file.name);
-
-                  return (
-                    <div
-                      key={file.name}
-                      className="flex items-center space-x-2.5 bg-[#0a161d]/95 border border-gray-800/80 rounded-xl p-2 text-xs text-gray-300 relative group pr-4 shadow-lg"
-                    >
-                      {isImage(file.name) && (
-                        <img src={fileUrl} alt="preview" className="w-10 h-10 object-cover rounded-lg border border-gray-700/50 shrink-0" />
-                      )}
-                      {isVideo(file.name) && (
-                        <video src={fileUrl} className="w-10 h-10 object-cover rounded-lg border border-gray-700/50 shrink-0" muted />
-                      )}
-                      {!hasThumbnail && (
-                        <div className="w-10 h-10 bg-[#051116] border border-gray-800 rounded-lg flex items-center justify-center text-gray-500 shrink-0">
-                          <Paperclip className="w-4 h-4" />
+          <div className="absolute inset-x-0 bottom-0 z-20 px-6 pb-5">
+            <div className="mx-auto w-full max-w-[55rem]">
+              {pendingFiles.length > 0 && (
+                <div className="flex w-full flex-wrap gap-3 px-1 pb-3 select-none animate-in fade-in slide-in-from-bottom-2 duration-200">
+                  {pendingFiles.map(file => {
+                    const fileUrl = file.path ? `app-file:///${encodeURI(file.path.replace(/\\/g, '/'))}` : '';
+                    const hasThumbnail = isImage(file.name) || isVideo(file.name);
+                    return (
+                      <div key={file.name} className="relative flex items-center gap-2.5 rounded-xl border border-border-subtle bg-surface-panel/95 p-2 pr-4 text-xs text-text-secondary shadow-panel">
+                        {isImage(file.name) && <img src={fileUrl} alt="" className="h-10 w-10 shrink-0 rounded-lg border border-border-subtle object-cover" />}
+                        {isVideo(file.name) && <video src={fileUrl} className="h-10 w-10 shrink-0 rounded-lg border border-border-subtle object-cover" muted />}
+                        {!hasThumbnail && (
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border-subtle bg-surface-input text-text-subtle">
+                            <Paperclip aria-hidden="true" className="h-4 w-4" />
+                          </div>
+                        )}
+                        <div className="flex min-w-0 max-w-[8rem] flex-col">
+                          <span className="truncate font-semibold text-text-primary" title={file.name}>{file.name}</span>
+                          <span className="font-mono text-text-subtle">{(file.size / 1024).toFixed(0)} KB</span>
                         </div>
-                      )}
-                      <div className="flex flex-col min-w-0 max-w-[120px]">
-                        <span className="truncate text-[0.625rem] font-bold text-gray-100" title={file.name}>{file.name}</span>
-                        <span className="text-[0.5rem] text-gray-500 font-mono mt-0.5">{(file.size / 1024).toFixed(0)} KB</span>
+                        <button
+                          type="button"
+                          aria-label={`Remove ${file.name}`}
+                          onClick={() => removePendingFile(file.name)}
+                          className="absolute -right-1.5 -top-1.5 rounded-full bg-danger-solid p-0.5 text-on-danger shadow-md transition-colors hover:bg-danger-solid-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 cursor-pointer"
+                        >
+                          <X aria-hidden="true" className="h-3 w-3" />
+                        </button>
                       </div>
-                      {/* Floating delete button on hover or always */}
-                      <button
-                        onClick={() => removePendingFile(file.name)}
-                        className="absolute -top-1.5 -right-1.5 bg-danger-solid hover:bg-danger-solid-hover text-white rounded-full p-0.5 shadow-md shadow-black/40 hover:scale-105 transition-[background-color,transform] cursor-pointer shrink-0"
-                      >
-                        <X className="w-3 h-3" />
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+                    );
+                  })}
+                </div>
+              )}
 
-            <div className="bg-[#051116] border border-gray-800/80 rounded-2xl flex flex-col px-2 py-2 shadow-lg shadow-black/20 focus-within:border-accent/50 transition-colors relative z-20">
-
-              <div className="flex items-center w-full">
-                {/* File attachment upload trigger */}
+              <div className="glass-panel glass-dense rounded-[1.125rem] border border-border-default py-2.5 pl-4 pr-2.5 shadow-overlay transition-colors focus-within:border-accent/50">
                 <input
                   type="file"
                   multiple
@@ -1142,126 +1117,6 @@ export default function ChatWorkspaceView() {
                   onChange={handleFileAttachment}
                   className="hidden"
                 />
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="order-1 p-2 rounded-full hover:bg-white/5 text-gray-500 hover:text-white transition-colors cursor-pointer"
-                  title="Attach Files"
-                >
-                  <Paperclip className="w-4 h-4" />
-                </button>
-
-                {/* Ingestion Profile Choices Dropdown */}
-                <div className="relative order-3 mr-2" ref={dropdownRef}>
-                  <button
-                    type="button"
-                    onClick={() => setProfileDropdownOpen(!profileDropdownOpen)}
-                    className="px-2.5 py-1.5 rounded-lg border border-gray-800 bg-[#011419] text-gray-400 hover:text-white text-[0.625rem] font-bold uppercase tracking-wider flex items-center space-x-1.5 cursor-pointer transition-colors"
-                  >
-                    <AiGlyph className="w-3.5 h-3.5" />
-                    <span className="truncate max-w-[80px]">
-                      {selectedTarget ? selectedTarget.name : 'Select a Profile'}
-                    </span>
-                    <ChevronDown className="w-3 h-3 text-gray-500" />
-                  </button>
-
-                  <Popover anchorRef={dropdownRef} open={profileDropdownOpen} onClose={() => setProfileDropdownOpen(false)} matchAnchorWidth={false} align="right" scroll={false} className="w-64 !p-2.5 font-sans">
-                      <span className="block text-[0.5rem] font-bold text-gray-500 uppercase tracking-widest px-2 pb-1.5 select-none">AI Profile / Workflow</span>
-
-                      <div className="max-h-60 overflow-y-auto custom-scrollbar space-y-2.5">
-                        {/* Writing Profiles */}
-                        <div>
-                          <span className="block text-[0.4375rem] font-extrabold text-[#FBCB2D]/55 uppercase tracking-widest px-2 py-0.5 select-none">Profiles</span>
-                          {displayProfiles.length > 0 ? (
-                            <div className="space-y-1">
-                              {displayProfiles.map(p => (
-                                <button
-                                  key={p.id}
-                                  type="button"
-                                  onClick={() => {
-                                    setSelectedTargetId(p.id);
-                                    electronAPI.setChatLastTarget(activeChat.id, p.id);
-                                    setProfileDropdownOpen(false);
-                                  }}
-                                  className={`w-full flex items-center space-x-2.5 px-2 py-1.5 rounded-md text-left text-xs transition-colors cursor-pointer ${selectedTargetId === p.id
-                                    ? 'bg-accent/10 text-accent font-bold border border-accent/20'
-                                    : 'text-gray-300 hover:bg-white/5 border border-transparent'
-                                    }`}
-                                >
-                                  <span className={`w-2 h-2 rounded-full shrink-0 ${p.needsSetup ? 'opacity-40' : ''}`} style={{ backgroundColor: p.color }} />
-                                  <span className={`flex-1 min-w-0 truncate font-sans ${p.needsSetup && selectedTargetId !== p.id ? 'text-gray-500' : ''}`}>{p.name}</span>
-                                  {p.needsSetup && (
-                                    <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0 cursor-help" data-tooltip="To activate: create an API profile in Settings, then link it to this profile in the Library." />
-                                  )}
-                                </button>
-                              ))}
-                            </div>
-                          ) : (
-                            <div className="flex flex-col items-center py-2 px-2 border border-dashed border-gray-800/60 rounded-lg bg-black/10 select-none">
-                              <span className="caption italic">No AI Profiles Active</span>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setProfileDropdownOpen(false);
-                                  setActiveSubView('configuration');
-                                }}
-                                className="mt-1 flex items-center space-x-1 text-[0.5625rem] font-bold text-accent hover:underline uppercase cursor-pointer"
-                              >
-                                <Plus className="w-2.5 h-2.5" />
-                                <span>Active Profile</span>
-                              </button>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Divider */}
-                        <div className="h-px bg-gray-800/80 my-1 shrink-0" />
-
-                        {/* Workflows */}
-                        <div>
-                          <span className="block text-[0.4375rem] font-extrabold text-[#FBCB2D]/55 uppercase tracking-widest px-2 py-0.5 select-none">Workflows</span>
-                          {displayWorkflows.length > 0 ? (
-                            <div className="space-y-1">
-                              {displayWorkflows.map(w => (
-                                <button
-                                  key={w.id}
-                                  type="button"
-                                  onClick={() => {
-                                    setSelectedTargetId(w.id);
-                                    electronAPI.setChatLastTarget(activeChat.id, w.id);
-                                    setProfileDropdownOpen(false);
-                                  }}
-                                  className={`w-full flex items-center space-x-2 px-2 py-1.5 rounded-md text-left text-xs transition-colors cursor-pointer ${selectedTargetId === w.id
-                                    ? 'bg-accent/10 text-accent font-bold border border-accent/20'
-                                    : 'text-gray-300 hover:bg-white/5 border border-transparent'
-                                    }`}
-                                >
-                                  <Workflow className="w-3.5 h-3.5 text-accent shrink-0" />
-                                  <span className="truncate font-sans">{w.name}</span>
-                                </button>
-                              ))}
-                            </div>
-                          ) : (
-                            <div className="flex flex-col items-center py-2 px-2 border border-dashed border-gray-800/60 rounded-lg bg-black/10 select-none">
-                              <span className="caption italic">No Workflows Active</span>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setProfileDropdownOpen(false);
-                                  setActiveSubView('configuration');
-                                }}
-                                className="mt-1 flex items-center space-x-1 text-[0.5625rem] font-bold text-accent hover:underline uppercase cursor-pointer"
-                              >
-                                <Plus className="w-2.5 h-2.5" />
-                                <span>Active Workflow</span>
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                  </Popover>
-                </div>
-
                 <ChatInput
                   key={activeChat.id}
                   canSend={canSend}
@@ -1270,12 +1125,44 @@ export default function ChatWorkspaceView() {
                   onCancel={handleCancelGeneration}
                   onSend={handleSend}
                   pendingFileCount={pendingFiles.length}
-                  placeholder={activeMessages.length > 0 ? "Write a message..." : "Write a message or drag and drop files..."}
+                  placeholder={activeMessages.length > 0 ? 'Write a message…' : 'Write a message or drop files here…'}
                   workspaceId={activeChat.id}
+                  leading={(
+                    <>
+                      <IconButton icon={Paperclip} label="Attach files" size="sm" onClick={() => fileInputRef.current?.click()} />
+                      {activeChat.showContextBar === 1 && <ContextMeter tokens={ctxTokens} threshold={ctxThreshold} />}
+                      {/* Past the payload budget the oldest live messages stop being sent at all.
+                          It stays a marker rather than a banner: the state lasts as long as the
+                          history overflows, and a permanent band would only be noise. */}
+                      {ctxOverPayload && (
+                        <button
+                          type="button"
+                          onClick={() => setSummarizeModalOpen(true)}
+                          data-tooltip={ctxHistoryCut > 0
+                            ? `${ctxHistoryCut} older ${ctxHistoryCut === 1 ? 'message was' : 'messages were'} left out of the last reply to fit the payload budget. Archive them to keep them searchable.`
+                            : 'Active history exceeds the payload budget. The oldest messages are being cut. Archive them.'}
+                          className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-status-danger/12 px-2.5 text-xs font-semibold text-status-danger transition-colors hover:bg-status-danger/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-danger/40 cursor-pointer"
+                        >
+                          <AlertTriangle aria-hidden="true" className="h-3.5 w-3.5" />
+                          Over payload limit
+                        </button>
+                      )}
+                    </>
+                  )}
+                  trailing={(
+                    <ReplyTargetPicker
+                      profiles={displayProfiles}
+                      workflows={displayWorkflows}
+                      selectedId={selectedTarget?.id}
+                      onSelect={id => {
+                        setSelectedTargetId(id);
+                        electronAPI.setChatLastTarget(activeChat.id, id);
+                      }}
+                      onManage={() => setActiveSubView('configuration')}
+                    />
+                  )}
                 />
-
               </div>
-
             </div>
           </div>
         </div>
@@ -1337,6 +1224,8 @@ export default function ChatWorkspaceView() {
             narrativeStateProcessing={isGenerating && generationProgress?.chatId === activeChat.id && generationProgress?.phase === 'narrative-state'}
             onBackgroundChange={handleRoleplayBackgroundChange}
             onCollapsedChange={handleRoleplayPanelCollapsedChange}
+            onPlayerChange={setRoleplayPlayerName}
+            onNamesChange={setEntityNames}
             onOpenConfiguration={openRoleplayConfiguration}
           />
         </div>
@@ -1350,7 +1239,7 @@ export default function ChatWorkspaceView() {
               <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
               </svg>
-              <span className="text-xs font-bold uppercase tracking-wider">Request Failed</span>
+              <span className="text-sm font-semibold">Request failed</span>
             </div>
             <button
               onClick={() => setEditError(null)}
@@ -1421,28 +1310,43 @@ export default function ChatWorkspaceView() {
           } catch (e) {}
         }
 
+        const close = () => setConfirmDeleteData(null);
+        const confirm = async () => {
+          close();
+          if (isDeleteMsg) {
+            await electronAPI.deleteMessage(msgId, deleteAttachedFiles);
+            await refreshChats(activeChat.id);
+          } else {
+            await handleRevertChat(msgId);
+          }
+        };
         return (
-          <DeleteModal
-            title={isDeleteMsg ? "Delete Message" : "Revert Chat to Message"}
-            message={isDeleteMsg
-              ? "Are you sure you want to delete this message? This action is permanent and cannot be undone."
-              : "Are you sure you want to revert the chat to this message? All subsequent messages will be permanently deleted."
-            }
-            confirmText={isDeleteMsg ? "Delete" : "Revert"}
-            showCheckbox={isDeleteMsg && hasAttachments}
-            checkboxLabel="Delete Attached Files from Memory"
-            checkboxValue={deleteAttachedFiles}
-            onCheckboxChange={setDeleteAttachedFiles}
-            onConfirm={async (shouldDeleteFiles) => {
-              setConfirmDeleteData(null);
-              if (isDeleteMsg) {
-                await electronAPI.deleteMessage(msgId, shouldDeleteFiles);
-                await refreshChats(activeChat.id);
-              } else {
-                await handleRevertChat(msgId);
-              }
-            }}
-            onClose={() => setConfirmDeleteData(null)}
+          <ConfirmDialog
+            tone="danger"
+            icon={isDeleteMsg ? Trash2 : History}
+            title={isDeleteMsg ? 'Delete message' : 'Revert chat to this message'}
+            message={(
+              <div className="space-y-3">
+                <p>{isDeleteMsg
+                  ? 'This message is removed for good. This cannot be undone.'
+                  : 'Every message after this one is deleted for good. This cannot be undone.'}</p>
+                {isDeleteMsg && hasAttachments && (
+                  <div className="rounded-card border border-border-subtle bg-surface-input/60 px-3 py-2.5 text-text-secondary">
+                    <Checkbox
+                      size="sm"
+                      checked={deleteAttachedFiles}
+                      onChange={setDeleteAttachedFiles}
+                      label="Also delete attached files from memory"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+            actions={[
+              { label: 'Cancel', variant: 'ghost', onClick: close },
+              { label: isDeleteMsg ? 'Delete' : 'Revert', variant: 'danger', onClick: confirm, autoFocus: true }
+            ]}
+            onClose={close}
           />
         );
       })()}

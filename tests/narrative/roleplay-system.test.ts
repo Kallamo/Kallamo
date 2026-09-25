@@ -175,6 +175,19 @@ describe('Kallamo roleplay system', () => {
     expect(roleplay.getScene('workspace-one')).toMatchObject({ participantIds: ['elias'], possibleObserverIds: [], objectIds: [] });
   });
 
+  test('keeps the cast when the user corrects the location, but not when the story moves', () => {
+    roleplay.saveSettings('workspace-one', { playerEntityId: 'elias' });
+    roleplay.saveScene('workspace-one', { locationId: 'gate', participantIds: ['mara'], objectIds: ['sword'] });
+    db.prepare("INSERT INTO entities (id, workspaceId, type, canonicalName, data, status) VALUES ('tower', 'workspace-one', 'Locations', 'Tower', '{}', 'confirmed')").run();
+
+    roleplay.proposeSceneChange({ id: 'manual-move', workspaceId: 'workspace-one', patch: { locationId: 'tower' }, source: 'manual' });
+    expect(roleplay.getScene('workspace-one')).toMatchObject({ locationId: 'tower', participantIds: ['elias', 'mara'], objectIds: [] });
+
+    roleplay.saveSettings('workspace-one', { defaultUpdatePolicy: 'automatic' });
+    roleplay.proposeSceneChange({ id: 'ai-move', workspaceId: 'workspace-one', patch: { locationId: 'gate' }, source: 'ai', provenanceId: 'message-move' });
+    expect(roleplay.getScene('workspace-one')).toMatchObject({ locationId: 'gate', participantIds: ['elias'] });
+  });
+
   test('stores nearby presence separately from participants and observers', () => {
     roleplay.saveSettings('workspace-one', { playerEntityId: 'elias' });
     const scene = roleplay.saveScene('workspace-one', {

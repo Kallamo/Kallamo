@@ -61,7 +61,7 @@ const formatSelectionFunnel = selection => {
   ].join('\n');
 };
 
-const formatPlannerDecisions = bundle => {
+export const formatPlannerDecisions = bundle => {
   if (!bundle?.scopes?.length) return 'No perspective bundle.';
   const composition = bundle.composition;
   const summary = composition ? [

@@ -2,7 +2,7 @@ import React from 'react';
 import SelectMenu from '../../components/ui/SelectMenu';
 
 const COMPOUND_SEGMENT = 'min-w-0 bg-surface-input px-2 py-1.5 transition-colors focus-within:bg-surface-hover/45';
-const COMPOUND_LABEL = 'block text-[0.625rem] font-bold uppercase tracking-[0.12em] text-text-subtle';
+const COMPOUND_LABEL = 'block text-xs font-medium text-text-muted';
 const COMPOUND_NUMBER = 'min-h-9 w-full bg-transparent px-1.5 text-sm font-medium tabular-nums text-text-primary outline-none';
 
 function daysInMonth(calendar, date) {

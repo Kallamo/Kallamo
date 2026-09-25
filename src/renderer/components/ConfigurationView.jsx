@@ -642,8 +642,8 @@ export default function ConfigurationView({ onTriggerSummarize }) {
                 </div>
                 <div className="flex items-center justify-between mt-3 pt-3 border-t border-border-subtle">
                   <div className="pr-4">
-                    <span className="text-xs text-text-secondary font-semibold">Show this bar at the top of the chat</span>
-                    <p className="caption mt-0.5">Adds a thin usage bar under the chat header so you can watch the context fill as you write.</p>
+                    <span className="text-xs text-text-secondary font-semibold">Show the context meter in the message box</span>
+                    <p className="caption mt-0.5">Shows how full the active context is next to the attach button, so you can watch it fill as you write.</p>
                   </div>
                   <label className="relative inline-flex items-center cursor-pointer shrink-0">
                     <input

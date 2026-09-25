@@ -9,6 +9,9 @@ export interface SearchableSelectOption {
   description?: string;
   icon?: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
   color?: string;
+  iconClassName?: string;
+  disabled?: boolean;
+  disabledLabel?: string;
 }
 
 interface SearchableSelectCommonProps {
@@ -20,6 +23,8 @@ interface SearchableSelectCommonProps {
   clearable?: boolean;
   autoOpen?: boolean;
   ariaLabel?: string;
+  searchInTrigger?: boolean;
+  onClose?: () => void;
   className?: string;
 }
 
