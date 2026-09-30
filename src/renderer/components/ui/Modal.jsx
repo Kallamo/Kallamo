@@ -27,6 +27,9 @@ export default function Modal({
   size = 'sm',
   title = null,
   icon: Icon = null,
+  iconClassName = 'text-accent',
+  subtitle = null,
+  leading = null,
   closeOnOverlay = true,
   closeOnEsc = true,
   showClose = true,
@@ -52,6 +55,8 @@ export default function Modal({
     document.body.style.overflow = 'hidden';
     const frame = window.requestAnimationFrame(() => {
       const dialog = dialogRef.current;
+      // React's autoFocus leaves no attribute behind, so keep a field that already took focus.
+      if (dialog?.contains(document.activeElement) && document.activeElement !== dialog) return;
       const target = dialog?.querySelector('[autofocus], button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])');
       (target || dialog)?.focus();
     });
@@ -101,9 +106,12 @@ export default function Modal({
       >
         {title && (
           <div className="relative z-10 shrink-0 flex items-center justify-between gap-3 min-h-14 px-5 bg-surface-panel/60 border-b border-border-subtle">
-            <div className="flex items-center gap-2.5 min-w-0">
-              {Icon && <Icon className="w-4 h-4 text-accent shrink-0" />}
-              <h2 id={generatedTitleId} className="text-base font-semibold text-text-primary truncate">{title}</h2>
+            <div className={`flex min-w-0 items-center ${leading ? 'gap-3 py-3' : 'gap-2.5'}`}>
+              {leading || (Icon && <Icon className={`w-4 h-4 shrink-0 ${iconClassName}`} />)}
+              <div className="min-w-0">
+                <h2 id={generatedTitleId} className="text-base font-semibold text-text-primary truncate">{title}</h2>
+                {subtitle && <p className="truncate text-xs text-text-subtle">{subtitle}</p>}
+              </div>
             </div>
             {showClose && (
               <button

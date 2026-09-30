@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, Pencil, Plus, Trash2, Users, Backpack } from 'lucide-react';
+import { Check, ChevronRight, MoreHorizontal, Pencil, Plus, Trash2, Users, Backpack } from 'lucide-react';
+import { useRef } from 'react';
+import Menu, { MenuItem, MenuSeparator } from '../../components/ui/Menu';
+import IconButton from '../../components/ui/IconButton';
 import { ConnectionsGlyph } from '../../components/ui/glyphs';
 import Button from '../../components/ui/Button';
 import SearchableSelect from '../../components/ui/SearchableSelect';
+import RelationshipSlider from './RelationshipSlider';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import Modal from '../../components/ui/Modal';
-import { itemMeta, meta } from './worldbuildConfig';
+import { itemFamily, itemMeta, meta } from './worldbuildConfig';
 import type { Toast, WorldbuildEntity } from './worldbuildTypes';
 
 // A faction's stance is the body's own position, which is not the sum of what its
@@ -14,14 +18,14 @@ const RELATION_COPY = {
   subject: {
     emptyTitle: 'No relationships yet',
     emptyDetail: 'Add only relationships this subject has formed or explicitly knows.',
-    party: 'Subject',
+    party: 'With',
     search: 'Search characters or entities',
-    type: 'Relationship type',
-    typePlaceholder: 'Friend, rival, mentor…',
-    value: 'Relationship value',
+    type: 'What they are',
+    typePlaceholder: 'Friend, rival, mentor',
+    value: 'How they feel',
     valueHint: '−100 is intense hostility, 0 is neutral, and 100 is deep closeness.',
-    description: 'Subjective description',
-    descriptionHint: 'Always written from the perspective of the open sheet.',
+    description: 'In their words',
+    descriptionHint: 'Always from the open sheet\'s side. The other view lives on the other sheet.',
     descriptionPlaceholder: 'How does this subject see and feel about the other entity?',
   },
   faction: {
@@ -30,7 +34,7 @@ const RELATION_COPY = {
     party: 'Other party',
     search: 'Search factions, characters or entities',
     type: 'Classification',
-    typePlaceholder: 'Ally, rival, enemy, patron…',
+    typePlaceholder: 'Ally, rival, enemy, patron',
     value: 'Standing',
     valueHint: '−100 is open hostility, 0 is indifference, and 100 is a close alliance.',
     description: 'The faction’s position',
@@ -138,15 +142,31 @@ export function WorldbuildRelationships({ workspaceId, subject, links, options, 
   };
 
   const copy = subject.type === 'Factions' ? RELATION_COPY.faction : RELATION_COPY.subject;
+  const outgoing = links.filter(link => link.direction !== 'incoming');
+  const incoming = links.filter(link => link.direction === 'incoming');
+  const [showIncoming, setShowIncoming] = useState(false);
   return (
-    <CollectionShell icon={ConnectionsGlyph} title={title} onAdd={available.length ? startAdd : undefined}>
-      {!links.length && <EmptyCollection icon={ConnectionsGlyph} title={copy.emptyTitle} detail={copy.emptyDetail} onAdd={available.length ? startAdd : undefined} />}
-      <div className="space-y-3">
-        {links.map(link => editor?.link?.linkId === link.linkId
-          ? <RelationshipEditor key={link.linkId} draft={editor} setDraft={setEditor} options={[link.entity as WorldbuildEntity, ...available]} copy={copy} onSave={save} onClose={() => setEditor(null)} saving={saving} compact />
-          : <RelationshipCard key={link.linkId} link={link} subjectName={subject.canonicalName} api={api} showToast={showToast} onChanged={onChanged} onEdit={() => startEdit(link)} onDelete={() => setDeleting(link)} readOnly={link.direction === 'incoming'} />)}
-        {editor && !editor.link && <RelationshipEditor draft={editor} setDraft={setEditor} options={available} copy={copy} onSave={save} onClose={() => setEditor(null)} saving={saving} />}
+    <CollectionShell icon={ConnectionsGlyph} title={title} count={outgoing.length || undefined} empty={!links.length && !editor} emptyVerb="Add" onAdd={available.length ? startAdd : undefined}>
+      <div className="divide-y divide-border-subtle">
+        {editor && !editor.link && <div className="pb-3"><RelationshipEditor subjectName={subject.canonicalName} draft={editor} setDraft={setEditor} options={available} copy={copy} onSave={save} onClose={() => setEditor(null)} saving={saving} /></div>}
+        {outgoing.map(link => editor?.link?.linkId === link.linkId
+          ? <div key={link.linkId} className="py-3"><RelationshipEditor subjectName={subject.canonicalName} draft={editor} setDraft={setEditor} options={[link.entity as WorldbuildEntity, ...available]} copy={copy} onSave={save} onClose={() => setEditor(null)} saving={saving} /></div>
+          : <RelationshipRow key={link.linkId} link={link} onEdit={() => startEdit(link)} onDelete={() => setDeleting(link)} />)}
+        {!outgoing.length && !editor && <p className="py-3 text-sm text-text-disabled">{copy.emptyDetail}</p>}
       </div>
+      {incoming.length > 0 && (
+        <div className="mt-1 border-t border-border-subtle pt-3">
+          <button type="button" aria-expanded={showIncoming} onClick={() => setShowIncoming(v => !v)}
+            className="flex w-full items-center gap-2 rounded text-left text-sm font-medium text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            <ChevronRight className={`h-3.5 w-3.5 transition-transform ${showIncoming ? 'rotate-90' : ''}`} aria-hidden="true" />
+            How others see {subject.canonicalName}
+            <span className="text-xs tabular-nums text-text-subtle">{incoming.length}</span>
+            <span className="flex-1" />
+            <span className="text-xs font-normal text-text-subtle">Written on their sheets</span>
+          </button>
+          {showIncoming && <div className="mt-1 divide-y divide-border-subtle">{incoming.map(link => <RelationshipRow key={link.linkId} link={link} readOnly />)}</div>}
+        </div>
+      )}
       {deleting && <ConfirmDialog title="Delete relationship" message={`Delete ${subject.canonicalName}'s relationship with ${deleting.entity.canonicalName}? This removes only this direction and cannot be undone.`} actions={[
         { label: 'Cancel', variant: 'ghost', onClick: () => setDeleting(null) },
         { label: 'Delete', variant: 'danger', loading: saving, autoFocus: true, onClick: remove },
@@ -155,82 +175,70 @@ export function WorldbuildRelationships({ workspaceId, subject, links, options, 
   );
 }
 
-function RelationshipCard({ link, subjectName, api, showToast, onChanged, onEdit, onDelete, readOnly = false }: { link: EntityLink; subjectName: string; api: LinkApi; showToast: Toast; onChanged(): Promise<void> | void; onEdit(): void; onDelete(): void; readOnly?: boolean }) {
-  const [value, setValue] = useState(() => clampRelationship(link.metadata?.value));
-  const [description, setDescription] = useState(() => String(link.metadata?.description ?? ''));
-  const [saving, setSaving] = useState(false);
-  useEffect(() => { setValue(clampRelationship(link.metadata?.value)); setDescription(String(link.metadata?.description ?? '')); }, [link]);
-  const persist = async (nextValue = value) => {
-    setSaving(true);
-    try {
-      const result = await api.updateEntityLink(link.linkId, { metadata: { ...(link.metadata || {}), value: nextValue, description: description.trim() } });
-      if (!result.success) throw new Error(result.error || 'Could not save the relationship.');
-      await onChanged();
-    } catch (error) { showToast(error instanceof Error ? error.message : 'Could not save the relationship.', 'error'); }
-    finally { setSaving(false); }
-  };
+// A relationship read at a glance: who, what they are, how it leans, and why.
+function RelationshipRow({ link, onEdit, onDelete, readOnly = false }: { link: EntityLink; onEdit?(): void; onDelete?(): void; readOnly?: boolean }) {
+  const value = clampRelationship(link.metadata?.value);
+  const description = String(link.metadata?.description ?? '').trim();
+  const positive = value >= 0;
+  const Icon = meta(link.entity.type).icon;
   return (
-    <article className={`group rounded-card border bg-surface-canvas/35 px-4 py-3.5 transition-colors ${saving ? 'border-accent/20' : 'border-border-subtle'}`}>
-      <div className="flex items-start gap-4">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-            <h4 className="text-sm font-semibold text-text-primary">{link.entity.canonicalName}</h4>
-            <span className="text-xs font-semibold text-accent/85">{link.label || 'Unlabeled relationship'}</span>
-            {readOnly && <span className="text-[0.6875rem] font-medium text-text-subtle">Incoming perspective</span>}
-          </div>
-          {readOnly && <p className="mt-1 text-xs text-text-subtle">How {link.entity.canonicalName} sees {subjectName}.</p>}
-          <RelationshipScale value={value} onChange={setValue} onCommit={persist} readOnly={readOnly} />
-          <textarea readOnly={readOnly} aria-label={`Relationship description for ${link.entity.canonicalName}`} className="mt-3 min-h-20 w-full resize-y rounded-control border border-border-subtle bg-surface-input/85 px-3 py-2.5 text-sm leading-relaxed text-text-secondary placeholder:italic placeholder:text-text-subtle focus:border-accent/45 focus:outline-none focus:ring-2 focus:ring-accent/15 read-only:cursor-default read-only:opacity-80" value={description} onChange={event => setDescription(event.target.value)} onBlur={() => { if (!readOnly) persist(); }} placeholder="Describe this relationship from this subject’s perspective." />
+    <article className="grid grid-cols-[minmax(0,1fr)_9.5rem_auto] items-start gap-4 py-3.5">
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border ${meta(link.entity.type).medallion}`}><Icon className="h-3.5 w-3.5" aria-hidden="true" /></span>
+          <h4 className="text-sm font-semibold text-text-primary">{link.entity.canonicalName}</h4>
+          {link.label ? <span className="text-sm font-medium text-accent">{link.label}</span> : <span className="text-sm text-text-disabled">No label</span>}
         </div>
-        {!readOnly && <RowActions onEdit={onEdit} onDelete={onDelete} />}
+        {description && <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-text-muted">{description}</p>}
       </div>
+      <div className="pt-1" aria-label={`Feeling ${value > 0 ? '+' : ''}${value} out of 100`}>
+        <div className="flex justify-between text-xs text-text-subtle"><span>Hostile</span><span className={`font-semibold tabular-nums ${value === 0 ? 'text-text-muted' : positive ? 'text-status-success' : 'text-status-danger'}`}>{value > 0 ? '+' : ''}{value}</span><span>Close</span></div>
+        <div className="relative mt-1.5 h-1.5 rounded-full bg-surface-hover">
+          <span aria-hidden="true" className="absolute left-1/2 -top-0.5 h-2.5 w-px bg-border-strong" />
+          <span aria-hidden="true" className={`absolute top-0 bottom-0 rounded-full ${positive ? 'left-1/2 bg-status-success' : 'right-1/2 bg-status-danger'}`} style={{ width: `${Math.abs(value) / 2}%` }} />
+        </div>
+      </div>
+      {readOnly ? <span className="w-8" /> : <RowActions onEdit={onEdit!} onDelete={onDelete!} />}
     </article>
   );
 }
 
-function RelationshipScale({ value, onChange, onCommit, readOnly = false }: { value: number; onChange(value: number): void; onCommit(value: number): void; readOnly?: boolean }) {
-  const [inputValue, setInputValue] = useState(String(value));
-  useEffect(() => setInputValue(String(value)), [value]);
-  const commitInput = () => {
-    if (readOnly) return;
-    const nextValue = clampRelationship(inputValue);
-    setInputValue(String(nextValue));
-    onChange(nextValue);
-    onCommit(nextValue);
-  };
-  const changeInput = (nextValue: string) => {
-    if (readOnly) return;
-    if (!/^-?\d{0,3}$/.test(nextValue)) return;
-    setInputValue(nextValue);
-    if (nextValue !== '' && nextValue !== '-') onChange(clampRelationship(nextValue));
-  };
-  return <div className={`mt-3 flex items-center gap-3 ${readOnly ? 'opacity-80' : ''}`}><input disabled={readOnly} aria-label="Relationship value" type="range" min="-100" max="100" step="1" value={value} onChange={event => onChange(clampRelationship(event.target.value))} onPointerUp={() => onCommit(value)} onKeyUp={() => onCommit(value)} className="relationship-range min-w-0 flex-1" /><input readOnly={readOnly} aria-label="Relationship numeric value" className={`${INPUT} !w-20 shrink-0 text-center tabular-nums`} type="text" inputMode="numeric" value={inputValue} onChange={event => changeInput(event.target.value)} onBlur={commitInput} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }} /></div>;
-}
-
-function RelationshipEditor({ draft, setDraft, options, copy, onSave, onClose, saving, compact = false }: {
-  draft: RelationshipDraft; setDraft(draft: RelationshipDraft): void; options: WorldbuildEntity[]; copy: RelationCopy; onSave(): void; onClose(): void; saving: boolean; compact?: boolean;
+function RelationshipEditor({ draft, setDraft, options, copy, onSave, onClose, saving, subjectName = '' }: {
+  draft: RelationshipDraft; setDraft(draft: RelationshipDraft): void; options: WorldbuildEntity[]; copy: RelationCopy; onSave(): void; onClose(): void; saving: boolean; subjectName?: string;
 }) {
   const update = (patch: Partial<RelationshipDraft>) => setDraft({ ...draft, ...patch });
-  return <div className="rounded-card border border-accent/25 bg-surface-panel-muted/95 p-4 shadow-lg shadow-black/10">
-    <div className="space-y-5">
+  // Named on both sides, so the direction of the relationship cannot be read backwards.
+  const subject = firstName(subjectName);
+  const target = firstName(options.find(option => option.id === draft.targetId)?.canonicalName || draft.link?.entity.canonicalName || '');
+  const personal = copy === RELATION_COPY.subject && Boolean(subject);
+  const typeLabel = personal ? `What ${target || 'they'} ${target ? 'is' : 'are'} to ${subject}` : copy.type;
+  const valueLabel = personal ? `How ${subject} feels` : copy.value;
+  const descriptionLabel = personal ? `In ${subject}'s words` : copy.description;
+  const descriptionHint = personal ? `Always from ${subject}'s side.${target ? ` ${target}'s view lives on ${target}'s sheet.` : ' The other view lives on the other sheet.'}` : copy.descriptionHint;
+  return <section className="overflow-hidden rounded-card border border-border-default bg-surface-panel-muted/80">
+    <header className="flex min-h-11 items-center gap-2.5 border-b border-border-subtle px-4">
+      <ConnectionsGlyph className="h-4 w-4 shrink-0 text-text-muted" aria-hidden="true" />
+      <h4 className="text-sm font-semibold text-text-primary">{draft.link ? `Edit relationship with ${draft.link.entity.canonicalName}` : 'New relationship'}</h4>
+    </header>
+    <div className="space-y-4 p-4">
       {/* items-end keeps both inputs on one baseline when a label wraps to two lines. */}
       <div className="grid grid-cols-2 items-end gap-4">
         <Field label={copy.party}>
           <EntityCombobox options={options} value={draft.targetId} query={draft.targetQuery} placeholder={copy.search} onChange={(targetId, targetQuery) => update({ targetId, targetQuery })} autoFocus={!draft.link} />
         </Field>
-        <Field label={copy.type}>
+        <Field label={typeLabel}>
           <input className={INPUT} value={draft.label} onChange={event => update({ label: event.target.value })} placeholder={copy.typePlaceholder} autoFocus={Boolean(draft.link)} />
         </Field>
       </div>
-      {!compact && <><Field label={copy.value} hint={copy.valueHint}>
-        <div className="flex items-center gap-3"><input type="range" min="-100" max="100" step="1" value={draft.value} onChange={event => update({ value: Number(event.target.value) })} className="relationship-range min-w-0 flex-1" /><input className={`${INPUT} !w-20 shrink-0 text-center tabular-nums`} type="number" min="-100" max="100" value={draft.value} onChange={event => update({ value: clampRelationship(event.target.value) })} /></div>
+      <Field label={valueLabel} hint={personal ? undefined : copy.valueHint}>
+        <RelationshipSlider label={valueLabel} value={draft.value} onChange={value => update({ value })} ends={personal} />
       </Field>
-      <Field label={copy.description} hint={copy.descriptionHint}>
-        <textarea className={`${INPUT} min-h-32 resize-y`} value={draft.description} onChange={event => update({ description: event.target.value })} placeholder={copy.descriptionPlaceholder} />
-      </Field></>}
-      <div className="flex justify-end gap-2"><Button variant="ghost" size="sm" onClick={onClose} disabled={saving}>Cancel</Button><Button icon={Check} size="sm" onClick={onSave} loading={saving} disabled={!draft.targetId}>Save relationship</Button></div>
+      <Field label={descriptionLabel} hint={descriptionHint}>
+        <textarea className={`${INPUT} min-h-20 resize-y`} value={draft.description} onChange={event => update({ description: event.target.value })} placeholder={personal ? `How ${subject} sees ${target || 'them'}, in their own terms` : copy.descriptionPlaceholder} />
+      </Field>
+      <div className="flex justify-end gap-2"><Button variant="subtle" size="sm" onClick={onClose} disabled={saving}>Cancel</Button><Button icon={Check} size="sm" onClick={onSave} loading={saving} disabled={!draft.targetId}>Save relationship</Button></div>
     </div>
-  </div>;
+  </section>;
 }
 
 function EntityCombobox({ options, value, query, onChange, autoFocus, placeholder = 'Search characters or entities' }: { options: WorldbuildEntity[]; value: string; query: string; onChange(value: string, query: string): void; autoFocus?: boolean; placeholder?: string }) {
@@ -250,6 +258,7 @@ function EntityCombobox({ options, value, query, onChange, autoFocus, placeholde
       label: option.canonicalName,
       aliases: option.aliases,
       group: meta(option.type).label.split(' / ')[0],
+      dotClassName: meta(option.type).dot,
     }))}
     placeholder={placeholder}
   />;
@@ -291,10 +300,9 @@ export function WorldbuildInventory({ workspaceId, subject, links, options, api,
     } catch (error) { showToast(error instanceof Error ? error.message : 'Could not remove the item.', 'error'); }
     finally { setSaving(false); }
   };
-  return <CollectionShell icon={Backpack} title="Inventory" onAdd={available.length ? startAdd : undefined}>
-    {!links.length && <EmptyCollection icon={Backpack} title="Inventory is empty" detail="Add an existing Worldbuild item and describe how this subject carries it." onAdd={available.length ? startAdd : undefined} />}
-    <div className="grid grid-cols-1 gap-2.5 xl:grid-cols-2">{links.map(link => <InventoryCard key={link.linkId} link={link} onEdit={() => startEdit(link)} onDelete={() => setDeleting(link)} />)}</div>
-    {editor && <InventoryEditor draft={editor} setDraft={setEditor} options={editor.link ? [editor.link.entity as WorldbuildEntity] : available} onSave={save} onClose={() => setEditor(null)} saving={saving} />}
+  return <CollectionShell icon={Backpack} title="Carried" count={links.length || undefined} empty={!links.length && !editor} emptyVerb="Add item" onAdd={available.length ? startAdd : undefined}>
+    {editor && <div className="pt-2"><InventoryEditor draft={editor} setDraft={setEditor} options={editor.link ? [editor.link.entity as WorldbuildEntity] : available} onSave={save} onClose={() => setEditor(null)} saving={saving} /></div>}
+    <div className="grid grid-cols-1 gap-2.5 py-2 sm:grid-cols-2">{links.map(link => <InventoryCard key={link.linkId} link={link} onEdit={() => startEdit(link)} onDelete={() => setDeleting(link)} />)}</div>
     {deleting && <ConfirmDialog title="Remove inventory item" message={`Remove ${deleting.entity.canonicalName} from ${subject.canonicalName}'s inventory? The Worldbuild item itself will not be deleted.`} actions={[
       { label: 'Cancel', variant: 'ghost', onClick: () => setDeleting(null) },
       { label: 'Remove', variant: 'danger', loading: saving, autoFocus: true, onClick: remove },
@@ -308,11 +316,16 @@ function InventoryCard({ link, onEdit, onDelete }: { link: EntityLink; onEdit():
   const condition = String(link.metadata?.condition ?? '');
   const notes = String(link.metadata?.notes ?? '');
   const ItemIcon = itemMeta(link.entity.data?.itemType).icon;
-  return <article className="group flex items-start gap-3 rounded-card border border-border-subtle bg-surface-canvas/35 px-3.5 py-3">
-    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-control border border-entity-item/20 bg-entity-item/[0.06] text-entity-item"><ItemIcon className="h-4 w-4" /></div>
+  const family = itemFamily(String(link.entity.data?.itemType ?? ''));
+  return <article className={`group flex items-center gap-3 rounded-card border bg-gradient-to-br to-transparent px-3 py-3 ${family.wash}`}>
+    <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-control border ${family.tile}`}><ItemIcon className="h-5 w-5" /></div>
     <div className="min-w-0 flex-1">
-      <div className="flex flex-wrap items-center gap-2"><h4 className="truncate text-sm font-semibold text-text-primary">{link.entity.canonicalName}</h4>{!isUnique && <span className="rounded-full border border-border-subtle bg-surface-hover/45 px-2 py-0.5 text-xs font-semibold tabular-nums text-text-secondary">×{quantity}</span>}{isUnique && <span className="text-xs font-medium text-accent/70">Unique</span>}</div>
-      {condition && <p className="mt-1 text-xs font-medium text-accent/75">{condition}</p>}
+      <h4 className="text-sm font-semibold leading-snug text-text-primary">{link.entity.canonicalName}</h4>
+      <p className="mt-0.5 text-xs text-text-muted">{[
+        isUnique ? `Unique ${link.entity.data?.itemType ? String(link.entity.data.itemType).toLowerCase() : 'item'}` : itemMeta(link.entity.data?.itemType).label,
+        !isUnique && quantity > 1 ? `×${quantity}` : null,
+        condition || null,
+      ].filter(Boolean).join(' · ')}{link.metadata?.equipped ? <span className="text-text-secondary"> · Equipped</span> : null}</p>
       {notes && <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-text-subtle">{notes}</p>}
     </div>
     <RowActions onEdit={onEdit} onDelete={onDelete} />
@@ -322,7 +335,7 @@ function InventoryCard({ link, onEdit, onDelete }: { link: EntityLink; onEdit():
 function InventoryEditor({ draft, setDraft, options, onSave, onClose, saving }: { draft: InventoryDraft; setDraft(draft: InventoryDraft): void; options: WorldbuildEntity[]; onSave(): void; onClose(): void; saving: boolean }) {
   const update = (patch: Partial<InventoryDraft>) => setDraft({ ...draft, ...patch });
   const isUnique = isUniqueItem(options.find(option => option.id === draft.itemId));
-  return <Modal size="lg" title={draft.link ? 'Edit inventory item' : 'Add inventory item'} icon={Backpack} onClose={onClose} closeOnEsc={!saving} closeOnOverlay={!saving}>
+  return <Modal size="lg" title={draft.link ? 'Edit inventory item' : 'Add inventory item'} icon={Backpack} iconClassName="text-text-muted" onClose={onClose} closeOnEsc={!saving} closeOnOverlay={!saving}>
     <div className="space-y-5 p-5">
       <div className={`grid gap-4 ${isUnique ? 'grid-cols-1' : 'grid-cols-[minmax(0,1fr)_8rem]'}`}>
         <Field label="Item"><SearchableSelect value={draft.itemId} disabled={Boolean(draft.link)} onChange={(itemId: string) => update({ itemId })} options={options.map(option => ({ id: option.id, label: option.canonicalName, aliases: option.aliases, group: itemMeta(option.data?.itemType).label, icon: itemMeta(option.data?.itemType).icon }))} placeholder="Search for an item" /></Field>
@@ -335,23 +348,44 @@ function InventoryEditor({ draft, setDraft, options, onSave, onClose, saving }: 
   </Modal>;
 }
 
-function CollectionShell({ icon: Icon, title, onAdd, children }: { icon: typeof Users; title: string; onAdd?: () => void; children: React.ReactNode }) {
-  return <section className="overflow-hidden rounded-card border border-border-subtle bg-surface-panel-muted/60 backdrop-blur-md">
-    <header className="flex items-center justify-between gap-3 border-b border-border-subtle bg-surface-canvas/20 px-4 py-2.5"><div className="flex min-w-0 items-center gap-2.5"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-accent/20 bg-accent/10 text-accent"><Icon className="h-3.5 w-3.5" /></span><h3 className="eyebrow truncate text-text-secondary">{title}</h3></div>{onAdd && <button type="button" onClick={onAdd} aria-label={`Add ${title.toLowerCase()}`} className="shrink-0 rounded-md p-1.5 text-text-subtle transition-colors hover:bg-surface-hover/60 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Plus className="h-4 w-4" /></button>}</header>
-    <div className="p-4">{children}</div>
+// Same card as a sheet section, so a relational tab reads like the rest of the sheet.
+function CollectionShell({ icon: Icon, title, count, empty = false, emptyVerb = 'Add', onAdd, children }: { icon: typeof Users; title: string; count?: number; empty?: boolean; emptyVerb?: string; onAdd?: () => void; children: React.ReactNode }) {
+  if (empty) {
+    return <section className="flex min-h-12 items-center gap-2.5 rounded-card border border-border-subtle bg-surface-panel-muted/45 py-1.5 pl-4 pr-2 backdrop-blur-md">
+      <Icon className="h-4 w-4 shrink-0 text-text-disabled" aria-hidden="true" />
+      <h3 className="text-sm font-semibold text-text-secondary">{title}</h3>
+      <span className="min-w-0 flex-1 truncate text-sm text-text-disabled">None yet</span>
+      {onAdd && <button type="button" onClick={onAdd} className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-xs font-semibold text-text-muted transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Plus className="h-3.5 w-3.5" aria-hidden="true" />{emptyVerb}</button>}
+    </section>;
+  }
+  return <section className="overflow-hidden rounded-card border border-border-default bg-surface-panel-muted/60 backdrop-blur-md">
+    <header className="flex min-h-11 items-center gap-2.5 border-b border-border-subtle pl-4 pr-2">
+      <Icon className="h-4 w-4 shrink-0 text-text-muted" aria-hidden="true" />
+      <h3 className="min-w-0 truncate text-sm font-semibold text-text-primary">{title}</h3>
+      {count != null && <span className="text-xs tabular-nums text-text-subtle">{count}</span>}
+      <span className="flex-1" />
+      {onAdd && <button type="button" onClick={onAdd} className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-xs font-semibold text-text-muted transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Plus className="h-3.5 w-3.5" aria-hidden="true" />{emptyVerb}</button>}
+    </header>
+    <div className="px-4 py-2">{children}</div>
   </section>;
 }
 
-function EmptyCollection({ icon: Icon, title, detail, onAdd }: { icon: typeof Users; title: string; detail: string; onAdd?: () => void }) {
-  return <button type="button" onClick={onAdd} disabled={!onAdd} className="flex w-full flex-col items-center rounded-control border border-dashed border-border-subtle px-5 py-8 text-center transition-colors enabled:hover:border-accent/30 enabled:hover:bg-accent/[0.04]"><Icon className="mb-2 h-5 w-5 text-text-disabled" /><span className="text-sm font-medium text-text-muted">{title}</span><span className="mt-1 max-w-md text-xs leading-relaxed text-text-disabled">{detail}</span></button>;
-}
-
 function RowActions({ onEdit, onDelete }: { onEdit(): void; onDelete(): void }) {
-  return <div className="flex shrink-0 items-center gap-1 opacity-70 transition-opacity group-hover:opacity-100"><button type="button" onClick={onEdit} aria-label="Edit" className="rounded-md p-1.5 text-text-subtle transition-colors hover:bg-surface-hover/60 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Pencil className="h-3.5 w-3.5" /></button><button type="button" onClick={onDelete} aria-label="Delete" className="rounded-md p-1.5 text-text-subtle transition-colors hover:bg-status-danger/10 hover:text-status-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-danger/40"><Trash2 className="h-3.5 w-3.5" /></button></div>;
+  const anchorRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  return <>
+    <IconButton ref={anchorRef} icon={MoreHorizontal} size="sm" label="Actions" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(v => !v)} />
+    <Menu anchorRef={anchorRef} open={open} onClose={() => setOpen(false)} label="Actions" className="w-44">
+      <MenuItem icon={Pencil} label="Edit" onSelect={() => { setOpen(false); onEdit(); }} />
+      <MenuSeparator />
+      <MenuItem icon={Trash2} label="Delete" danger onSelect={() => { setOpen(false); onDelete(); }} />
+    </Menu>
+  </>;
 }
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) { return <label className="block"><span className="mb-1 block eyebrow text-text-muted">{label}</span>{children}{hint && <span className="mt-1 block text-xs leading-relaxed text-text-subtle">{hint}</span>}</label>; }
+function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) { return <label className="block"><span className="mb-1.5 block text-xs font-medium text-text-muted">{label}</span>{children}{hint && <span className="mt-1 block text-xs leading-relaxed text-text-subtle">{hint}</span>}</label>; }
 function ModalFooter({ saving, valid, onClose, onSave, label }: { saving: boolean; valid: boolean; onClose(): void; onSave(): void; label: string }) { return <footer className="flex justify-end gap-2 border-t border-border-subtle px-5 py-4"><Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button><Button icon={Check} onClick={onSave} loading={saving} disabled={!valid}>{label}</Button></footer>; }
 function clampRelationship(value: unknown): number { const number = Number(value); return Number.isFinite(number) ? Math.max(-100, Math.min(100, Math.round(number))) : 0; }
+const firstName = (name: string) => String(name || '').trim().split(/\s+/)[0] || '';
 function positiveQuantity(value: unknown): number { const number = Number(value); return Number.isFinite(number) ? Math.max(1, Math.round(number)) : 1; }
 function isUniqueItem(item?: Pick<WorldbuildEntity, 'data'>): boolean { return item?.data?.itemNature === 'unique'; }

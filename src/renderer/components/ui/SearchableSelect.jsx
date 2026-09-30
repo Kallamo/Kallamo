@@ -144,6 +144,7 @@ export default function SearchableSelect({
             ${clearable && selected.length > 0 && !multiple ? 'pr-16' : 'pr-9'}`}
         >
           {SelectedIcon ? <SelectedIcon className="h-4 w-4 shrink-0 text-accent" aria-hidden="true" /> : null}
+          {!multiple && !SelectedIcon && selected[0]?.dotClassName ? <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${selected[0].dotClassName}`} /> : null}
           <span className={`min-w-0 flex-1 truncate ${selected.length ? '' : 'text-text-subtle'}`}>
             {multiple
               ? selected.length ? `${selected.length} selected` : placeholder
@@ -213,6 +214,7 @@ export default function SearchableSelect({
                   ${option.disabled ? 'cursor-default opacity-50 ' : ''}${isSelected ? 'bg-accent/12 text-accent' : isActive ? 'bg-surface-hover/55 text-text-primary' : 'text-text-secondary hover:bg-surface-hover/55 hover:text-text-primary'}`}
               >
                 {Icon ? <Icon className={`h-4 w-4 shrink-0 ${option.iconClassName || ''}`} aria-hidden="true" /> : null}
+                {!Icon && option.dotClassName ? <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${option.dotClassName}`} /> : null}
                 {option.color ? <span className="h-6 w-1 rounded-full" style={{ backgroundColor: option.color }} /> : null}
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium">{option.label}</span>

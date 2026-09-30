@@ -1,4 +1,4 @@
-const { ipcMain, shell, dialog, BrowserWindow, clipboard } = require('electron');
+const { ipcMain, shell, dialog, BrowserWindow, clipboard, nativeImage } = require('electron');
 const log = require('electron-log');
 
 // navigator.clipboard is focus/permission-gated in Electron; the native clipboard is not.
@@ -40,6 +40,22 @@ const dataDir = path.join(appDataPath, 'Kallamo');
 const profilesDir = path.join(dataDir, 'AI Profiles');
 const chatsDir = path.join(dataDir, 'ChatHistory');
 const worldIndexJobs = new Map();
+const { createEntityImages } = require('./features/worldbuild/entity-images');
+const entityImages = createEntityImages({ db, dataDir, nativeImage });
+// Rows written before paths became relative, and files nothing points at any more.
+try {
+  for (const row of db.prepare('SELECT workspace_id, location_id, image_path FROM roleplay_location_backgrounds').all()) {
+    const stored = entityImages.toStored(row.image_path);
+    if (stored !== row.image_path) db.prepare('UPDATE roleplay_location_backgrounds SET image_path = ? WHERE workspace_id = ? AND location_id = ?').run(stored, row.workspace_id, row.location_id);
+  }
+  entityImages.sweep();
+} catch (error) { console.warn('[entity-images] startup check failed:', error.message); }
+// The renderer gets absolute paths it can serve; the database keeps relative ones.
+const withBackground = (workspaceId, background) => background && {
+  ...background,
+  imagePath: entityImages.resolve(background.imagePath),
+  focus: entityImages.backgroundFocus(workspaceId, background.sourceLocationId),
+};
 
 function hashText(text) {
   return crypto.createHash('sha256').update(String(text || '')).digest('hex');
@@ -2870,7 +2886,9 @@ ipcMain.handle('update-entity', async (event, { id, fields }) => {
 
 ipcMain.handle('delete-entity', async (event, { id }) => {
   try {
-    return { success: true, ...entitiesStore.deleteEntity(id) };
+    const result = entitiesStore.deleteEntity(id);
+    entityImages.sweep();
+    return { success: true, ...result };
   } catch (e) {
     console.error('[delete-entity] failed:', e);
     return { success: false, error: e.message };
@@ -2880,6 +2898,7 @@ ipcMain.handle('delete-entity', async (event, { id }) => {
 ipcMain.handle('merge-entity', async (event, { sourceId, targetId, prefer } = {}) => {
   try {
     const entity = entitiesStore.mergeEntity(sourceId, targetId, { prefer });
+    entityImages.sweep();
     refreshNameTagsFor(entity?.workspaceId, [targetId]);
     return { success: true, entity };
   } catch (e) {
@@ -2915,7 +2934,7 @@ ipcMain.handle('bulk-manage-entities', async (event, { workspaceId, ids, action,
     else if (action === 'reject-proposed') result = entitiesStore.bulkRejectProposed(workspaceId, ids);
     else if (action === 'reject-updates') result = entitiesStore.bulkRejectEnrichUpdates(workspaceId, ids);
     else if (action === 'reprocess') result = entitiesStore.resetEntityEnrichmentProgress(workspaceId, ids);
-    else if (action === 'delete') result = entitiesStore.bulkDeleteEntities(workspaceId, ids);
+    else if (action === 'delete') { result = entitiesStore.bulkDeleteEntities(workspaceId, ids); entityImages.sweep(); }
     else throw new Error('unknown bulk entity action');
     return { success: true, ...result };
   } catch (e) {
@@ -2949,16 +2968,16 @@ ipcMain.handle('dismiss-entity-enrichment-error', async (event, { id } = {}) => 
   }
 });
 
-ipcMain.handle('enrich-entities', async (event, { workspaceId } = {}) => {
+ipcMain.handle('enrich-entities', async (event, { workspaceId, entityIds = null } = {}) => {
   if (enrichState.running) return { success: false, error: 'An entity update is already running.' };
-  enrichState = { running: true, workspaceId, progress: null };
+  enrichState = { running: true, workspaceId, progress: null, cancelRequested: false };
   const wc = event.sender;
   try {
     const { enrichEntities } = require('./workflow-runner');
     const res = await enrichEntities(workspaceId, (p) => {
       enrichState.progress = { workspaceId, ...p };
       try { wc.send('enrich-entities-progress', { workspaceId, ...p }); } catch (e) {}
-    });
+    }, { entityIds: Array.isArray(entityIds) ? entityIds : null, shouldCancel: () => enrichState.cancelRequested });
     try { wc.send('enrich-entities-complete', { workspaceId, success: true, ...res }); } catch (e) {}
     return { success: true, ...res };
   } catch (e) {
@@ -2970,9 +2989,25 @@ ipcMain.handle('enrich-entities', async (event, { workspaceId } = {}) => {
   }
 });
 
+// Stop takes effect once the entity being read is finished.
+ipcMain.handle('cancel-enrich-entities', async (event, { workspaceId } = {}) => {
+  if (!enrichState.running || (workspaceId && enrichState.workspaceId !== workspaceId)) return { success: false };
+  enrichState.cancelRequested = true;
+  return { success: true };
+});
+
 // Export Worldbuild (.klwb, Kallamo Worldbuild Package: a zip holding worldbuild.json,
 // the self-contained entities + edges for this workspace).
-ipcMain.handle('export-worldbuild', async (event, { workspaceId } = {}) => {
+// What an export would carry, for the dialog to describe before anything is written.
+ipcMain.handle('worldbuild-export-summary', async (event, { workspaceId } = {}) => {
+  try {
+    const data = entitiesStore.exportWorldbuild(workspaceId);
+    const images = entityImages.listForExport(workspaceId, data.entities.map(entity => entity.ref));
+    return { success: true, entities: data.entities.length, images: images.length, imageBytes: images.reduce((total, image) => total + image.bytes, 0) };
+  } catch (e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('export-worldbuild', async (event, { workspaceId, includeImages = true } = {}) => {
   try {
     const win = BrowserWindow.fromWebContents(event.sender);
     const data = entitiesStore.exportWorldbuild(workspaceId);
@@ -2985,6 +3020,15 @@ ipcMain.handle('export-worldbuild', async (event, { workspaceId } = {}) => {
     });
     if (canceled || !filePath) return { cancelled: true };
     const zip = new AdmZip();
+    // Images go in as files under images/; the JSON names them by entity ref, never by a local path.
+    if (includeImages) {
+      data.images = [];
+      for (const image of entityImages.listForExport(workspaceId, data.entities.map(entity => entity.ref))) {
+        const file = `images/${image.entityId}/${image.kind}${path.extname(image.absolute).toLowerCase()}`;
+        zip.addFile(file, fs.readFileSync(image.absolute));
+        data.images.push({ ref: image.entityId, kind: image.kind, file, focus: image.focus });
+      }
+    }
     zip.addFile('worldbuild.json', Buffer.from(JSON.stringify(data, null, 2), 'utf8'));
     zip.writeZip(filePath);
     return { success: true, filePath, entities: data.entities.length, links: data.links.length };
@@ -3028,9 +3072,25 @@ ipcMain.handle('import-worldbuild', async (event, { workspaceId } = {}) => {
         calendarConflict = JSON.stringify(currentCalendar) !== JSON.stringify(payload.calendar);
       }
     }
-    const res = entitiesStore.importWorldbuild(workspaceId, payload);
+    const { idMap, ...res } = entitiesStore.importWorldbuild(workspaceId, payload);
+    // Packages without images stay valid; each image is checked before it is copied in.
+    let imagesAdded = 0;
+    if (Array.isArray(payload.images)) {
+      const zip = new AdmZip(filePaths[0]);
+      for (const image of payload.images) {
+        const entityId = idMap.get(image?.ref);
+        const file = String(image?.file || '');
+        if (!entityId || !['portrait', 'background'].includes(image?.kind)) continue;
+        if (!file.startsWith('images/') || file.includes('..') || file.includes('\\')) continue;
+        const entry = zip.getEntry(file);
+        if (!entry) continue;
+        try {
+          if (entityImages.importPackaged({ workspaceId, entityId, kind: image.kind, buffer: entry.getData(), extension: path.extname(file).toLowerCase(), focus: image.focus })) imagesAdded += 1;
+        } catch (error) { console.warn('[import-worldbuild] skipped an image:', error.message); }
+      }
+    }
     refreshNameTagsFor(workspaceId);
-    return { success: true, ...res, calendarImported, calendarConflict };
+    return { success: true, ...res, imagesAdded, calendarImported, calendarConflict };
   } catch (e) {
     console.error('[import-worldbuild] failed:', e);
     return { success: false, error: e.message };
@@ -3635,16 +3695,15 @@ ipcMain.handle('apply-roleplay-inventory-change', async (event, { workspaceId, p
 ipcMain.handle('get-roleplay-location-background', async (event, { workspaceId, locationId } = {}) => {
   try {
     if (!locationId) return { success: true, background: null };
-    return { success: true, background: getRoleplaySystem().getLocationBackground(workspaceId, locationId) };
+    return { success: true, background: withBackground(workspaceId, getRoleplaySystem().getLocationBackground(workspaceId, locationId)) };
   } catch (error) { return { success: false, error: error.message }; }
 });
 
 ipcMain.handle('set-roleplay-location-background', async (event, { workspaceId, locationId, imagePath } = {}) => {
   try {
-    return {
-      success: true,
-      background: getRoleplaySystem().setLocationBackground(workspaceId, locationId, imagePath || null)
-    };
+    const background = withBackground(workspaceId, getRoleplaySystem().setLocationBackground(workspaceId, locationId, imagePath ? entityImages.toStored(imagePath) : null));
+    entityImages.sweep();
+    return { success: true, background };
   } catch (error) { return { success: false, error: error.message }; }
 });
 
@@ -3653,23 +3712,39 @@ ipcMain.handle('upload-roleplay-location-background', async (event, { workspaceI
     if (!workspaceId || !locationId || !filePath || !fs.existsSync(filePath)) {
       throw new Error('A valid Location background image is required.');
     }
-    const workspaceKey = crypto.createHash('sha256').update(String(workspaceId)).digest('hex').slice(0, 24);
-    const locationKey = crypto.createHash('sha256').update(String(locationId)).digest('hex').slice(0, 24);
-    const backgroundDir = path.join(chatsDir, workspaceKey, 'LocationBackgrounds', locationKey);
-    fs.mkdirSync(backgroundDir, { recursive: true });
-    const extension = path.extname(String(fileName || filePath)).toLowerCase();
-    const supported = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
-    if (!supported.has(extension)) throw new Error('Choose a PNG, JPG, WEBP, or GIF image.');
-    const version = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
-    const destination = path.join(backgroundDir, `background-${version}${extension}`);
-    fs.copyFileSync(filePath, destination);
-    for (const entry of fs.readdirSync(backgroundDir)) {
-      const storedPath = path.join(backgroundDir, entry);
-      if (storedPath !== destination) fs.unlinkSync(storedPath);
-    }
-    const background = getRoleplaySystem().setLocationBackground(workspaceId, locationId, destination);
-    return { success: true, background };
+    void fileName;
+    const stored = entityImages.importImage({ workspaceId, entityId: locationId, kind: 'background', sourcePath: filePath });
+    getRoleplaySystem().setLocationBackground(workspaceId, locationId, stored);
+    entityImages.setBackgroundFocus(workspaceId, locationId, null);
+    entityImages.sweep();
+    return { success: true, background: withBackground(workspaceId, getRoleplaySystem().getLocationBackground(workspaceId, locationId)) };
   } catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('set-location-background-focus', async (event, { workspaceId, locationId, focus } = {}) => {
+  try {
+    entityImages.setBackgroundFocus(workspaceId, locationId, focus || null);
+    return { success: true, background: withBackground(workspaceId, getRoleplaySystem().getLocationBackground(workspaceId, locationId)) };
+  } catch (error) { return { success: false, error: error.message }; }
+});
+
+// Character portraits: kept apart from entity data so the path never reaches a prompt.
+ipcMain.handle('list-entity-portraits', async (event, { workspaceId } = {}) => {
+  try { return { success: true, portraits: entityImages.listPortraits(workspaceId) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('set-entity-portrait', async (event, { workspaceId, entityId, filePath = null, focus } = {}) => {
+  try {
+    const entity = entitiesStore.getEntity(entityId);
+    if (!entity || entity.workspaceId !== workspaceId) throw new Error('This entity no longer exists.');
+    return { success: true, portrait: entityImages.setPortrait({ workspaceId, entityId, sourcePath: filePath, focus }) };
+  } catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('remove-entity-portrait', async (event, { workspaceId, entityId } = {}) => {
+  try { entityImages.removePortrait(workspaceId, entityId); return { success: true }; }
+  catch (error) { return { success: false, error: error.message }; }
 });
 
 ipcMain.handle('link-roleplay-entity-species', async (event, payload = {}) => {
@@ -3895,10 +3970,13 @@ ipcMain.handle('delete-chat', async (event, id) => {
       'roleplay_time_advances',
       'roleplay_time_matrices',
       'roleplay_time_state',
-      'worldbuild_calendars'
+      'worldbuild_calendars',
+      'roleplay_location_backgrounds',
+      'worldbuild_entity_images'
     ]) {
       db.prepare(`DELETE FROM ${table} WHERE workspace_id = ?`).run(id);
     }
+    entityImages.sweep();
     db.prepare('DELETE FROM chats WHERE id = ?').run(id);
 
     db.prepare('DELETE FROM knowledge_chunks WHERE ownerId = ?').run(id);

@@ -28,6 +28,7 @@ import {
 import { useStableCallback } from '../utils/useStableCallback';
 import { perfEndAfterPaint, perfStart } from '../utils/perf';
 import { ChatFilesView, ChatMemoryView, ConfigurationView, WorldbuildView, WritingDeskView, workspaceTabViews } from '../views';
+import { forgetWorldbuildView } from '../features/worldbuild/worldbuildViewCache';
 
 // Within this distance of the end the reader counts as following the conversation.
 const FOLLOW_LATEST_THRESHOLD_PX = 96;
@@ -83,6 +84,13 @@ export default function ChatWorkspaceView() {
   const [roleplayFrames, setRoleplayFrames] = useState(() => initialFrames?.frames || {});
   const [roleplayFrameRevision, setRoleplayFrameRevision] = useState(0);
   const [selectedTargetId, setSelectedTargetId] = useState(''); // Selected profile or workflow ID
+
+  // Closing the workspace ends the visit: the next one opens Worldbuild on the overview.
+  useEffect(() => {
+    const workspaceId = activeChat.id;
+    // After the tab's own unmount, which stores its place on the way out.
+    return () => queueMicrotask(() => forgetWorldbuildView(workspaceId));
+  }, [activeChat.id]);
 
   useEffect(() => {
     let active = true;

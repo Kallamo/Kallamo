@@ -538,7 +538,7 @@ function importWorldbuild(workspaceId, payload) {
       linksAdded++;
     }
   })();
-  return { entitiesAdded, linksAdded };
+  return { entitiesAdded, linksAdded, idMap };
 }
 
 function bulkEntityRows(workspaceId, ids) {

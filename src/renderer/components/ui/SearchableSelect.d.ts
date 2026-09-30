@@ -10,6 +10,8 @@ export interface SearchableSelectOption {
   icon?: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
   color?: string;
   iconClassName?: string;
+  /** A small colour dot shown before the label when there is no icon. */
+  dotClassName?: string;
   disabled?: boolean;
   disabledLabel?: string;
 }

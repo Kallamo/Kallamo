@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { AlertTriangle, BookCheck, Check, Eye, X, ArrowRightLeft } from 'lucide-react';
 import { AiGlyph } from '../../components/ui/glyphs';
 import Button from '../../components/ui/Button';
@@ -49,7 +49,7 @@ interface ReviewProposal {
 }
 
 export default function WorldbuildNarrativeReview({
-  workspaceId, proposals, entities, api, showToast, onChanged,
+  workspaceId, proposals, entities, api, showToast, onChanged, switcher = null,
 }: {
   workspaceId: string;
   proposals: ReviewProposal[];
@@ -57,6 +57,8 @@ export default function WorldbuildNarrativeReview({
   api: WorldbuildApi;
   showToast: Toast;
   onChanged(): Promise<void> | void;
+  /** Switches between sheet updates and Narrative state; it replaces the first card's title. */
+  switcher?: React.ReactNode;
 }) {
   const names = useMemo(() => new Map(entities.map(entity => [entity.id, entity.canonicalName])), [entities]);
   const [decisions, setDecisions] = useState<Record<string, 'approved' | 'rejected'>>({});
@@ -101,76 +103,80 @@ export default function WorldbuildNarrativeReview({
 
   return (
     <div className="space-y-4">
-      {proposals.map(proposal => {
+      {proposals.map((proposal, index) => {
         const reviewed = proposal.operations.filter(operation => decisions[operation.id]).length;
+        const busy = saving === proposal.eventId;
         return (
-          <section key={proposal.eventId} className="overflow-hidden rounded-card border border-entity-event/20 bg-surface-panel-muted/70 backdrop-blur-md">
-            <header className="flex items-start justify-between gap-4 border-b border-border-subtle px-4 py-3.5">
-              <div>
-                <h3 className="flex items-center gap-2 text-sm font-semibold text-text-primary">
-                  <AiGlyph className="h-4 w-4 text-entity-event" />
-                  Narrative state suggestions
-                </h3>
-                <p className="mt-1 text-xs leading-relaxed text-text-subtle">{proposal.description}</p>
-              </div>
-              <span className="shrink-0 rounded-full border border-border-subtle bg-surface-hover/40 px-2 py-1 text-xs text-text-muted">{reviewed}/{proposal.operations.length} reviewed</span>
-            </header>
+          <section key={proposal.eventId} className="rounded-card border border-border-default bg-surface-panel-muted/60 px-4 pb-2 pt-3.5 backdrop-blur-md">
+            <div className="flex flex-wrap items-center gap-2">
+              {index === 0 && switcher ? switcher : <><AiGlyph className="h-4 w-4 shrink-0 text-entity-event" /><h2 className="text-sm font-semibold text-text-primary">Narrative state</h2></>}
+              <span className="text-xs tabular-nums text-text-subtle">{reviewed} of {proposal.operations.length} reviewed</span>
+              <span className="flex-1" />
+              <Button size="sm" variant="subtle" disabled={busy} onClick={() => decideAll(proposal, 'rejected')}>Reject all</Button>
+              <Button size="sm" variant="ghost" icon={Check} disabled={proposal.legacy || busy} onClick={() => decideAll(proposal, 'approved')}>Accept all</Button>
+            </div>
+            {proposal.description && <p className="caption mt-1.5">{proposal.description}</p>}
 
             {proposal.legacy && (
-              <div className="flex gap-2 border-b border-status-warning/20 bg-status-warning/[0.07] px-4 py-3 text-xs leading-relaxed text-status-warning/80">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                This proposal was created by the previous extraction model. Review ownership and direction carefully. Applying it is disabled; reject it and run Update Entities again.
+              <div className="mt-3 flex gap-2 rounded-control border border-status-warning/25 bg-status-warning/[0.07] px-3 py-2.5 text-xs leading-relaxed text-text-secondary">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-warning" aria-hidden="true" />
+                An older version of the AI made this suggestion, so it cannot be applied. Reject it and update entities again.
               </div>
             )}
 
-            <div className="space-y-2.5 p-4">
+            <div className="mt-2 divide-y divide-border-subtle">
               {proposal.operations.map(operation => {
                 const decision = decisions[operation.id];
-                const source = names.get(operation.subjectId || '') || 'Unknown subject';
+                const source = names.get(operation.subjectId || '') || 'Unknown';
                 const target = names.get(operation.targetId || '');
                 const scope = operation.kind === 'fact'
-                  ? `Global canon${target ? ` · About ${target}` : ''}`
+                  ? `World fact${target ? ` about ${target}` : ''}`
                   : `${source}${target ? ` → ${target}` : ''}`;
                 const tag = operationTag(operation);
                 return (
-                  <article key={operation.id} className={`rounded-card border px-4 py-3.5 transition-colors ${decision === 'approved' ? 'border-status-success/30 bg-status-success/[0.06]' : decision === 'rejected' ? 'border-status-danger/25 bg-status-danger/[0.05]' : 'border-border-subtle bg-surface-canvas/30'}`}>
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="min-w-0 flex-1">
-                        <div className="mb-2 flex flex-wrap items-center gap-2">
-                          <span className="rounded-full border border-entity-event/20 bg-entity-event/[0.08] px-2 py-0.5 eyebrow text-entity-event">{operation.kind}</span>
-                          {tag && <span className="rounded-full border border-border-subtle bg-surface-hover/50 px-2 py-0.5 eyebrow text-text-secondary">{tag}</span>}
-                          <span className="text-xs text-text-muted">{scope}</span>
-                        </div>
-                        {operation.title && <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-text-muted">{operation.title}</p>}
-                        <p className="whitespace-pre-wrap text-sm leading-relaxed text-text-secondary">{operation.summary || 'No usable content was extracted.'}</p>
-                        <div className="mt-2 flex flex-wrap gap-2 text-xs text-text-subtle">
-                          {operation.method && <span className="inline-flex items-center gap-1 capitalize"><Eye className="h-3 w-3" />{operation.method}</span>}
-                          {operation.confidence !== undefined && <span>{Math.round(operation.confidence * 100)}% confidence</span>}
-                          {operation.kind === 'relationship' && <span className="inline-flex items-center gap-1"><ArrowRightLeft className="h-3 w-3" />Directional perspective</span>}
-                          {operation.kind === 'fact' && <span className="inline-flex items-center gap-1"><BookCheck className="h-3 w-3" />Saved to Facts when approved</span>}
-                        </div>
+                  <div key={operation.id} className="flex items-start gap-4 py-3.5">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+                        <span className="font-medium text-text-muted">{kindLabel(operation.kind)}</span>
+                        {tag && <><span className="text-text-disabled" aria-hidden="true">·</span><span className="text-text-secondary">{tag}</span></>}
+                        <span className="text-text-disabled" aria-hidden="true">·</span>
+                        <span className="text-text-subtle">{scope}</span>
                       </div>
-                      <div className="flex shrink-0 gap-1">
-                        <button type="button" disabled={proposal.legacy || saving === proposal.eventId} onClick={() => decide(operation.id, 'approved')} data-tooltip="Apply suggestion" className={`rounded-md p-2 transition-colors ${decision === 'approved' ? 'bg-status-success text-on-accent' : 'text-text-subtle hover:bg-status-success/10 hover:text-status-success'}`}><Check className="h-4 w-4" /></button>
-                        <button type="button" disabled={saving === proposal.eventId} onClick={() => decide(operation.id, 'rejected')} data-tooltip="Reject suggestion" className={`rounded-md p-2 transition-colors ${decision === 'rejected' ? 'bg-status-danger text-on-danger' : 'text-text-subtle hover:bg-status-danger/10 hover:text-status-danger'}`}><X className="h-4 w-4" /></button>
+                      {operation.title && <p className="mt-1 text-sm font-semibold text-text-primary">{operation.title}</p>}
+                      <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-text-secondary">{operation.summary || 'Nothing usable was read from the story.'}</p>
+                      <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-xs text-text-subtle">
+                        {operation.method && <span className="inline-flex items-center gap-1"><Eye className="h-3 w-3" aria-hidden="true" />{sentence(operation.method)}</span>}
+                        {operation.confidence !== undefined && <span>{Math.round(operation.confidence * 100)}% sure</span>}
+                        {operation.kind === 'relationship' && <span className="inline-flex items-center gap-1"><ArrowRightLeft className="h-3 w-3" aria-hidden="true" />As {source} sees it</span>}
+                        {operation.kind === 'fact' && <span className="inline-flex items-center gap-1"><BookCheck className="h-3 w-3" aria-hidden="true" />Goes to Facts when accepted</span>}
                       </div>
                     </div>
-                  </article>
+                    <div className="flex shrink-0 items-start gap-1.5">
+                      <Button size="sm" variant="subtle" icon={X} aria-pressed={decision === 'rejected'} disabled={busy} onClick={() => decide(operation.id, 'rejected')}
+                        className={decision === 'rejected' ? '!bg-status-danger/10 !text-status-danger' : ''}>Reject</Button>
+                      <Button size="sm" variant="ghost" icon={Check} aria-pressed={decision === 'approved'} disabled={proposal.legacy || busy} onClick={() => decide(operation.id, 'approved')}
+                        className={`!border-status-success/35 !text-status-success ${decision === 'approved' ? '!bg-status-success/15' : ''}`}>Accept</Button>
+                    </div>
+                  </div>
                 );
               })}
-              {proposal.excerpt && <p className="rounded-control border border-border-subtle bg-surface-canvas/30 px-3 py-2 text-xs italic leading-relaxed text-text-subtle">{proposal.excerpt}</p>}
             </div>
-            <footer className="flex flex-col gap-3 border-t border-border-subtle px-4 py-3 xl:flex-row xl:items-center xl:justify-between">
-              <p className="text-xs text-text-subtle">Each suggestion has its own decision. Only approved operations are written.</p>
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                <Button size="sm" variant="ghost" disabled={proposal.legacy || saving === proposal.eventId} onClick={() => decideAll(proposal, 'approved')}>Approve all</Button>
-                <Button size="sm" variant="ghost" disabled={saving === proposal.eventId} onClick={() => decideAll(proposal, 'rejected')}>Reject all</Button>
-                <Button size="sm" loading={saving === proposal.eventId} disabled={reviewed !== proposal.operations.length} onClick={() => submit(proposal)}>Finish review</Button>
+            {proposal.excerpt && (
+              <div className="border-t border-border-subtle py-3">
+                <p className="text-xs font-medium text-text-muted">From the story</p>
+                <p className="mt-1 border-l-2 border-border-strong pl-3 text-sm italic leading-relaxed text-text-subtle">{proposal.excerpt}</p>
               </div>
-            </footer>
+            )}
+            <div className="flex flex-wrap items-center gap-3 border-t border-border-subtle py-3">
+              <p className="min-w-0 flex-1 text-xs text-text-subtle">Decide each one. Only what you accept is written.</p>
+              <Button size="sm" loading={busy} disabled={reviewed !== proposal.operations.length} onClick={() => submit(proposal)}>Finish review</Button>
+            </div>
           </section>
         );
       })}
     </div>
   );
 }
+
+const sentence = (text: string) => text ? text.charAt(0).toUpperCase() + text.slice(1).replace(/[_-]+/g, ' ') : text;
+const kindLabel = (kind: string) => sentence(kind || 'Change');

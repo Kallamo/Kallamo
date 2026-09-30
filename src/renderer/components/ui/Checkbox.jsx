@@ -41,12 +41,12 @@ export default function Checkbox({
     </span>
   </>;
 
-  if (!label) return <label className={`group inline-flex ${disabled ? 'opacity-50' : 'cursor-pointer'}`}>{control}</label>;
+  if (!label) return <label className={`group relative inline-flex ${disabled ? 'opacity-50' : 'cursor-pointer'}`}>{control}</label>;
 
   return (
     <label
       htmlFor={inputId}
-      className={`group flex items-center gap-2.5 select-none ${disabled ? 'opacity-50' : 'cursor-pointer'}`}
+      className={`group relative flex items-center gap-2.5 select-none ${disabled ? 'opacity-50' : 'cursor-pointer'}`}
     >
       {control}
       <span className="text-sm text-text-secondary">{label}</span>

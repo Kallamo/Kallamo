@@ -5,6 +5,10 @@ export interface ModalProps {
   size?: 'sm' | 'md' | 'lg' | 'xl' | 'wide' | '2xl';
   title?: ReactNode;
   icon?: ComponentType<{ className?: string }> | null;
+  iconClassName?: string;
+  subtitle?: ReactNode;
+  /** Replaces the icon, for dialogs that open on a thing with its own medallion. */
+  leading?: ReactNode;
   closeOnOverlay?: boolean;
   closeOnEsc?: boolean;
   showClose?: boolean;

@@ -169,7 +169,8 @@ describe('Narrative Event Ledger SQLite repository', () => {
       { id: 'worldbuild_base_schema_repair_v1' },
       { id: 'narrative_turn_replacements_v1' },
       { id: 'entity_redirects_v1' },
-      { id: 'entity_reference_orphans_v1' }
+      { id: 'entity_reference_orphans_v1' },
+      { id: 'worldbuild_entity_images_v1' }
     ]);
     expect(db.prepare('PRAGMA table_info(entity_links)').all()).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'metadata_json', type: 'TEXT' })

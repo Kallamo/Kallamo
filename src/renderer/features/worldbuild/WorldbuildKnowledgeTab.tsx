@@ -1,8 +1,10 @@
-import { type KeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, type KeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpenCheck, Brain, Check, ChevronDown, Eye, EyeOff, Lightbulb, Link2, Lock, LockKeyhole,
-  Pencil, Plus, Search, Trash2, Users, X, Ear,
+  Pencil, Plus, Search, Trash2, Users, UserMinus, X, Ear, Info, MoreHorizontal,
 } from 'lucide-react';
+import Menu, { MenuItem } from '../../components/ui/Menu';
+import IconButton from '../../components/ui/IconButton';
 import { AiGlyph, KnowledgeGlyph, OccurrencesGlyph } from '../../components/ui/glyphs';
 import Button from '../../components/ui/Button';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
@@ -31,21 +33,21 @@ const MEMORY_STATES: Record<MemoryAccessibility, {
 }> = {
   available: {
     label: 'Available',
-    description: 'This memory can be recalled and used normally.',
+    description: 'Recalled and used normally.',
     icon: Eye,
     tone: 'border-status-success/30 bg-status-success/[0.07] text-status-success',
     badge: 'border-status-success/30 bg-status-success/10 text-status-success',
   },
   suppressed: {
     label: 'Suppressed',
-    description: 'The memory exists, but cannot currently be recalled or used.',
+    description: 'Exists, but out of reach for now.',
     icon: EyeOff,
     tone: 'border-status-warning/30 bg-status-warning/[0.07] text-status-warning',
     badge: 'border-status-warning/30 bg-status-warning/10 text-status-warning',
   },
   inaccessible: {
     label: 'Inaccessible',
-    description: 'The memory cannot be recovered, as if destroyed or permanently lost.',
+    description: 'Lost for good.',
     icon: LockKeyhole,
     tone: 'border-status-danger/30 bg-status-danger/[0.07] text-status-danger',
     badge: 'border-status-danger/30 bg-status-danger/10 text-status-danger',
@@ -54,9 +56,9 @@ const MEMORY_STATES: Record<MemoryAccessibility, {
 // Same three origins the Facts registry names, so one vocabulary covers every record
 // the world keeps. An occurrence entry is owned by its event and read-only here.
 const ENTRY_ORIGINS: Record<'authored' | 'narrative' | 'occurrence', { label: string; icon: typeof Lock | null; tone: string }> = {
-  occurrence: { label: 'Event record', icon: OccurrencesGlyph, tone: 'text-entity-event' },
-  narrative: { label: 'Narrative State', icon: AiGlyph, tone: 'text-entity-event' },
-  authored: { label: 'Authored', icon: null, tone: 'text-text-subtle' },
+  occurrence: { label: 'From an event', icon: OccurrencesGlyph, tone: 'text-text-muted' },
+  narrative: { label: 'From the narrative state', icon: AiGlyph, tone: 'text-text-muted' },
+  authored: { label: 'Written by you', icon: Pencil, tone: 'text-text-muted' },
 };
 const NATIVE_FIELDS: Record<string, Array<{ key: string; label: string }>> = {
   Characters: [{ key: 'status', label: 'Status' }, { key: 'age', label: 'Age' }, { key: 'appearance', label: 'Appearance' }, { key: 'personality', label: 'Personality' }],
@@ -125,6 +127,8 @@ export default function WorldbuildKnowledgeTab({ workspaceId, entity, entities, 
   const projectionScopeRef = useRef(projectionScope);
   projectionScopeRef.current = projectionScope;
   const currentProjection = projection?.subjectId === entity.id ? projection : null;
+  // The Add memory button lives in the shared header; each press asks Memories to open its form.
+  const [composeSignal, setComposeSignal] = useState(0);
   // Sharing runs one way. A faction hands each card down to the members it names, and
   // nothing a member learns alone ever climbs back up, so both sides of that rule are
   // read from the same roster: who receives from here, and who this subject receives from.
@@ -254,22 +258,28 @@ export default function WorldbuildKnowledgeTab({ workspaceId, entity, entities, 
   };
 
   return (
-    <div className="space-y-4">
-      <div role="tablist" aria-label="Knowledge views" aria-orientation="horizontal" className="grid grid-cols-2 gap-1 rounded-card border border-border-subtle bg-surface-panel/70 p-1.5">
-        <SurfaceButton id="knowledge-surface-tab" controls="knowledge-surface-panel" active={surface === 'knowledge'} onClick={() => setSurface('knowledge')} onKeyDown={event => handleSurfaceKeyDown(event, 'knowledge')} icon={KnowledgeGlyph} label="Knowledge" count={currentProjection?.cards.length ?? 0} />
+    <section className="space-y-3 rounded-card border border-border-default bg-surface-panel-muted/60 p-4 backdrop-blur-md">
+      <div className="flex flex-wrap items-center gap-2">
+      <div role="tablist" aria-label="Knowledge views" aria-orientation="horizontal" className="inline-flex gap-1 rounded-control border border-border-default bg-surface-input p-1">
+        <SurfaceButton id="knowledge-surface-tab" controls="knowledge-surface-panel" active={surface === 'knowledge'} onClick={() => setSurface('knowledge')} onKeyDown={event => handleSurfaceKeyDown(event, 'knowledge')} icon={KnowledgeGlyph} label="Subjects" count={currentProjection?.cards.length ?? 0} />
         <SurfaceButton id="memories-surface-tab" controls="memories-surface-panel" active={surface === 'memories'} onClick={() => setSurface('memories')} onKeyDown={event => handleSurfaceKeyDown(event, 'memories')} icon={Brain} label="Memories" count={currentProjection?.memories.length ?? 0} />
       </div>
+      <span className="flex-1" />
+      {surface === 'knowledge'
+        ? <Button variant="ghost" size="sm" icon={Plus} onClick={() => setAddingCard(true)}>Add subject</Button>
+        : <Button variant="ghost" size="sm" icon={Plus} onClick={() => setComposeSignal(value => value + 1)}>Add memory</Button>}
+      </div>
 
-      <section id="knowledge-surface-panel" role="tabpanel" aria-labelledby="knowledge-surface-tab" hidden={surface !== 'knowledge'} aria-busy={loading} className="overflow-hidden rounded-surface border border-border-subtle bg-surface-panel/70">
-          <header className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between">
-            <div className="min-w-0">
-              <h3 className="text-sm font-semibold text-text-primary">Known subjects</h3>
-              <p className="caption mt-1 max-w-3xl">A card means {entity.canonicalName} knows that subject exists. Its contents define what else is known.</p>
-              <SharingRule entity={entity} roster={roster} factions={ownFactions} entities={entities} />
-            </div>
-            <Button variant="ghost" size="sm" icon={Plus} onClick={() => setAddingCard(true)} className="shrink-0 self-start">Add subject</Button>
-          </header>
-          <div className="border-y border-border-subtle bg-surface-canvas/30 p-3 sm:px-4">
+      <div id="knowledge-surface-panel" role="tabpanel" aria-labelledby="knowledge-surface-tab" hidden={surface !== 'knowledge'} aria-busy={loading} className="space-y-3">
+          <p className="flex gap-2 text-xs leading-relaxed text-text-muted">
+            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-text-subtle" aria-hidden="true" />
+            <span>
+              {entity.type === 'Factions'
+                ? <>Each card is something {entity.canonicalName} knows exists. What the group knows reaches its whole roster{roster.length ? `, ${roster.length} today` : ''}, unless a card names exceptions.</>
+                : <>Each card is something {firstName(entity.canonicalName)} knows exists. Open it to choose what else {firstName(entity.canonicalName)} knows.<SharingRule entity={entity} factions={ownFactions} entities={entities} onOpenEntity={onOpenEntity} /></>}
+            </span>
+          </p>
+          <div>
             <label className="relative block">
               <span className="sr-only">Search known subjects</span>
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-subtle" aria-hidden="true" />
@@ -279,7 +289,7 @@ export default function WorldbuildKnowledgeTab({ workspaceId, entity, entities, 
                 autoComplete="off"
                 value={cardSearch}
                 onChange={event => setCardSearch(event.target.value)}
-                placeholder="Search known subjects…"
+                placeholder="Search known subjects"
                 className="wb-input field-input py-2 pl-9 pr-9 text-sm [&::-webkit-search-cancel-button]:hidden"
               />
               {cardSearch && (
@@ -294,7 +304,7 @@ export default function WorldbuildKnowledgeTab({ workspaceId, entity, entities, 
               )}
             </label>
           </div>
-          <div className="custom-scrollbar grid max-h-[40rem] gap-2 overflow-y-auto overscroll-contain p-3 sm:p-4 xl:grid-cols-2">
+          <div className="custom-scrollbar grid max-h-[40rem] gap-2 overflow-y-auto overscroll-contain sm:grid-cols-2">
             {loading && <div className="col-span-full h-24 animate-pulse rounded-card bg-surface-panel-muted/60 motion-reduce:animate-none" />}
             {!loading && !currentProjection?.cards.length && <EmptyState text="No known subjects yet." onClick={() => setAddingCard(true)} />}
             {!loading && (currentProjection?.cards.length ?? 0) > 0 && !filteredCards.length && (
@@ -308,17 +318,14 @@ export default function WorldbuildKnowledgeTab({ workspaceId, entity, entities, 
               const typeMeta = meta(card.targetType);
               const TypeIcon = typeMeta.icon;
               return (
-                <article key={card.cardId} className={`group relative overflow-hidden rounded-card border bg-surface-panel-muted/60 transition-colors duration-200 ease-standard hover:bg-surface-panel-muted focus-within:bg-surface-panel-muted motion-reduce:transition-none ${typeMeta.ring}`}>
-                  <button type="button" onClick={() => setSelectedCard(card)} className="flex w-full flex-col gap-2.5 p-3 pr-11 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50">
-                    <span className="flex min-w-0 items-center gap-2.5">
-                      <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-control border ${typeMeta.medallion}`}>
-                        <TypeIcon className="h-4.5 w-4.5" aria-hidden="true" />
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className={`block truncate eyebrow ${typeMeta.soft}`}>{typeMeta.label}</span>
-                        <span className="mt-0.5 block truncate text-sm font-semibold text-text-primary">{card.targetName}</span>
-                      </span>
+                <article key={card.cardId} className="group relative overflow-hidden rounded-card border border-border-subtle bg-surface-canvas/30 transition-colors duration-200 ease-standard hover:border-border-default hover:bg-surface-hover/35 focus-within:border-border-default motion-reduce:transition-none">
+                  <button type="button" onClick={() => setSelectedCard(card)} className="flex w-full items-center gap-3 p-3 pr-10 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50">
+                    <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-control border ${typeMeta.medallion}`}>
+                      <TypeIcon className="h-4.5 w-4.5" aria-hidden="true" />
                     </span>
+                    <span className="min-w-0 flex-1">
+                      <span className={`block truncate text-xs font-semibold ${typeMeta.soft}`}>{typeMeta.label}</span>
+                      <span className="block truncate text-sm font-semibold text-text-primary">{card.targetName}</span>
                     <CardStats
                       counts={[
                         { value: card.knownFieldKeys.length, label: 'fields' },
@@ -327,6 +334,7 @@ export default function WorldbuildKnowledgeTab({ workspaceId, entity, entities, 
                         { value: beliefs, label: 'believed' },
                       ]}
                     />
+                    </span>
                   </button>
                   <button type="button" onClick={() => setDeletingCard(card)} className="absolute right-2 top-2 rounded p-1.5 text-text-subtle transition-[color,background-color,opacity] hover:bg-status-danger/10 hover:text-status-danger focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-danger/50 motion-reduce:transition-none sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100" aria-label={`Remove Knowledge card for ${card.targetName}`}>
                     <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
@@ -335,8 +343,8 @@ export default function WorldbuildKnowledgeTab({ workspaceId, entity, entities, 
               );
             })}
           </div>
-      </section>
-      <Memories key={entity.id} hidden={surface !== 'memories'} loading={loading} workspaceId={workspaceId} owner={entity} projection={currentProjection} api={api} reload={reload} showToast={showToast} onOpenEntity={onOpenEntity} />
+      </div>
+      <Memories key={entity.id} hidden={surface !== 'memories'} loading={loading} workspaceId={workspaceId} owner={entity} projection={currentProjection} api={api} reload={reload} showToast={showToast} onOpenEntity={onOpenEntity} composeSignal={composeSignal} />
 
       {addingCard && <AddCardModal owner={entity} entities={entities} existing={currentProjection?.cards ?? []} onClose={() => setAddingCard(false)} onAdd={addCard} />}
       {selectedCard && currentProjection && (
@@ -365,9 +373,11 @@ export default function WorldbuildKnowledgeTab({ workspaceId, entity, entities, 
           onClose={() => setDeletingCard(null)}
         />
       )}
-    </div>
+    </section>
   );
 }
+
+const firstName = (name: string) => String(name || '').trim().split(/\s+/)[0] || name;
 
 type CardPane = 'access' | 'statements';
 type CardSection = 'fields' | 'connections' | 'audience';
@@ -383,6 +393,12 @@ interface StatementDraft {
 const emptyStatementDraft = (): StatementDraft => ({
   kind: 'knowledge', statement: '', category: 'world-lore', acquisition: 'witness', informantIds: [],
 });
+
+// Why a card exists, in words: the stored source types are internal keys.
+const SOURCE_LABELS: Record<string, string> = {
+  manual: 'you', relationship: 'a relationship', 'faction-membership': 'faction membership', inventory: 'their inventory',
+  memory: 'a memory', narrative: 'the narrative state', fact: 'a fact', statement: 'a statement', import: 'an import',
+};
 
 /* What a statement is, not just what it says. The same sentence can be a piece of public lore
    or something a character would die before repeating, and only the label separates them. It
@@ -458,23 +474,9 @@ function KnowledgeCardModal({ workspaceId, owner, card, entity, entities, roster
     ...projection.known.filter(entry => entry.aboutId === card.targetId),
     ...projection.beliefs.filter(entry => entry.aboutId === card.targetId),
   ];
-  const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
-  // Only kinds actually present are offered, and the filter disappears entirely below two of
-  // them: a list of chips that never narrows anything is noise on a card with three entries.
-  const categoryFilters = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const entry of statements) {
-      const key = normalizeKnowledgeCategory(entry.category) ?? 'unclassified';
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-    return [...counts.entries()].map(([value, count]) => ({
-      value,
-      label: entryCategoryLabel(value) ?? 'Unclassified',
-      count,
-    })).sort((left, right) => right.count - left.count);
-  }, [statements]);
-  const visibleStatements = categoryFilter
-    ? statements.filter(entry => (normalizeKnowledgeCategory(entry.category) ?? 'unclassified') === categoryFilter)
+  const [kindFilter, setKindFilter] = useState<'all' | 'knowledge' | 'belief'>('all');
+  const visibleStatements = kindFilter !== 'all'
+    ? statements.filter(entry => entry.kind === kindFilter)
     : statements;
   const relationships = mergeRelationships(card.availableRelationships, card.knownRelationships);
   const typeMeta = meta(card.targetType);
@@ -775,25 +777,19 @@ function KnowledgeCardModal({ workspaceId, owner, card, entity, entities, roster
 
   return (
     <>
-    <Modal onClose={onClose} closeOnEsc={!deleting} size="2xl" title={card.targetName} icon={TypeIcon} className="max-h-[calc(100vh-2rem)]">
-      <div className="border-b border-border-subtle bg-surface-panel/45 p-4 sm:p-5">
-        <div className="flex items-center gap-3">
-          <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-card border ${typeMeta.medallion}`}>
-            <TypeIcon className="h-5 w-5" aria-hidden="true" />
-          </span>
-          <div className="min-w-0">
-            <p className={`text-[0.6875rem] font-bold uppercase tracking-[0.16em] ${typeMeta.soft}`}>{typeMeta.label}</p>
-            <p className="mt-1 text-sm leading-relaxed text-text-muted"><span className="font-medium text-text-primary">{owner.canonicalName}</span> is aware this subject exists.</p>
-          </div>
-        </div>
+    <Modal onClose={onClose} closeOnEsc={!deleting} size="2xl" className="max-h-[calc(100vh-2rem)]"
+      title={<><span className={`block text-xs font-semibold ${typeMeta.soft}`}>{typeMeta.label}</span>{card.targetName}</>}
+      subtitle={`What ${owner.canonicalName} knows about it`}
+      leading={<span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-card border ${typeMeta.medallion}`}><TypeIcon className="h-5 w-5" aria-hidden="true" /></span>}>
+      <div className="px-4 pt-4 sm:px-5">
         {/* Two different questions, so two panes rather than one stack: what this
             perspective is allowed to read, and what it actually holds in its own words. */}
-        <div role="tablist" aria-label="Knowledge card views" className="mt-4 grid grid-cols-2 gap-1 rounded-control border border-border-subtle bg-surface-canvas/40 p-1">
+        <div role="tablist" aria-label="Knowledge card views" className="inline-flex gap-1 rounded-control border border-border-default bg-surface-input p-1">
           <PaneButton id="card-access-tab" controls="card-access-pane" active={pane === 'access'} onClick={() => setPane('access')} icon={Check} label="Access" count={fieldKeys.length + relationshipIds.length} />
           <PaneButton id="card-statements-tab" controls="card-statements-pane" active={pane === 'statements'} onClick={() => setPane('statements')} icon={BookOpenCheck} label="Statements" count={statements.length} />
         </div>
       </div>
-      <div id="card-access-pane" role="tabpanel" aria-labelledby="card-access-tab" className="custom-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto p-3 sm:p-5" hidden={pane !== 'access'}>
+      <div id="card-access-pane" role="tabpanel" aria-labelledby="card-access-tab" className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-2 sm:px-5" hidden={pane !== 'access'}>
         <KnowledgeSection
           id="knowledge-fields-section"
           open={openSection === 'fields'}
@@ -826,7 +822,7 @@ function KnowledgeCardModal({ workspaceId, owner, card, entity, entities, roster
                         aria-pressed={checked}
                         disabled={savingFields}
                         onClick={() => saveFields(checked ? fieldKeys.filter(key => key !== field.key) : [...fieldKeys, field.key])}
-                        className={`flex min-h-10 items-center gap-2 rounded-control border px-3 py-2 text-left text-sm transition-colors duration-200 ease-standard focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-wait disabled:opacity-60 motion-reduce:transition-none ${checked ? 'border-accent/35 bg-accent/[0.08] text-text-primary' : 'border-border-subtle bg-surface-input/45 text-text-muted hover:border-border-default hover:text-text-secondary'}`}
+                        className={`flex min-h-10 items-center gap-2 rounded-control border px-3 py-2 text-left text-sm transition-colors duration-200 ease-standard focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-wait disabled:opacity-60 motion-reduce:transition-none ${checked ? 'border-border-strong bg-surface-hover/80 text-text-primary' : 'border-border-subtle bg-surface-input/45 text-text-muted hover:border-border-default hover:text-text-secondary'}`}
                       >
                         <span aria-hidden="true" className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${checked ? 'border-accent bg-accent text-on-accent' : 'border-border-strong'}`}>{checked && <Check className="h-3 w-3" />}</span>
                         {field.label}
@@ -881,38 +877,34 @@ function KnowledgeCardModal({ workspaceId, owner, card, entity, entities, roster
           </KnowledgeSection>
         )}
 
-        {card.sources.length > 0 && <p className="px-1 text-xs text-text-subtle">Sources: {[...new Set(card.sources.map(source => source.sourceType))].join(', ')}</p>}
+        {card.sources.length > 0 && <p className="mt-2 flex gap-2 border-t border-border-subtle pt-3 text-xs text-text-muted"><Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-text-subtle" aria-hidden="true" />Known through {[...new Set(card.sources.map(source => SOURCE_LABELS[source.sourceType] ?? 'another record'))].join(', ')}</p>}
       </div>
 
       <div id="card-statements-pane" role="tabpanel" aria-labelledby="card-statements-tab" className="custom-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto p-3 sm:p-5" hidden={pane !== 'statements'}>
         <section ref={statementEditorRef} aria-labelledby="statement-editor-heading" className="card-surface p-3 sm:p-4">
-          <div className="mb-3 flex items-start justify-between gap-3">
-            <div>
-              <h4 id="statement-editor-heading" className="eyebrow text-text-secondary">{editing ? 'Edit Statement' : 'New Statement'}</h4>
-              <p className="caption mt-1">Keep known facts separate from subjective beliefs.</p>
-            </div>
-            {editing && <button type="button" onClick={cancelEditing} className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-md px-2 text-xs text-text-muted transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none"><X className="h-3.5 w-3.5" aria-hidden="true" />Cancel</button>}
-          </div>
-          <fieldset>
-            <legend className="eyebrow mb-1.5">Statement type</legend>
-            <div className="mb-4 grid grid-cols-2 gap-1 rounded-control border border-border-subtle bg-surface-input/55 p-1">
+          <div className="mb-4 flex flex-wrap items-center gap-3">
+            <h4 id="statement-editor-heading" className="text-sm font-semibold text-text-primary">{editing ? 'Edit statement' : 'New statement'}</h4>
+            <span className="flex-1" />
+            <div role="radiogroup" aria-label="Known or believed" className="inline-flex gap-1 rounded-control border border-border-default bg-surface-input p-1">
               {(['knowledge', 'belief'] as const).map(kind => (
                 <button
                   key={kind}
                   type="button"
-                  aria-pressed={draft.kind === kind}
+                  role="radio"
+                  aria-checked={draft.kind === kind}
                   disabled={Boolean(editing)}
                   onClick={() => setDraft(current => ({ ...current, kind }))}
-                  className={`min-h-9 rounded-md px-2 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none ${draft.kind === kind ? 'bg-surface-hover text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'} disabled:cursor-not-allowed disabled:opacity-60`}
+                  className={`inline-flex min-h-8 items-center gap-1.5 rounded-md px-3 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none ${draft.kind === kind ? 'bg-surface-hover text-text-primary ring-1 ring-inset ring-border-strong' : 'text-text-muted hover:text-text-secondary'} disabled:cursor-not-allowed disabled:opacity-60`}
                 >
+                  {kind === 'knowledge' ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : <Lightbulb className="h-3.5 w-3.5" aria-hidden="true" />}
                   {kind === 'knowledge' ? 'Known' : 'Believed'}
                 </button>
               ))}
             </div>
-          </fieldset>
+          </div>
 
           <fieldset className="mb-4">
-            <legend className="eyebrow mb-1.5">Kind of statement</legend>
+            <legend className="mb-1.5 text-xs font-medium text-text-muted">Kind</legend>
             <div className="flex flex-wrap gap-1.5">
               {DURABLE_KNOWLEDGE_CATEGORIES.map(category => (
                 <button
@@ -921,7 +913,7 @@ function KnowledgeCardModal({ workspaceId, owner, card, entity, entities, roster
                   aria-pressed={draft.category === category}
                   data-tooltip={CATEGORY_HINTS[category]}
                   onClick={() => setDraft(current => ({ ...current, category }))}
-                  className={`min-h-8 rounded-full border px-2.5 py-1 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none ${draft.category === category ? 'border-accent/40 bg-accent/[0.12] text-accent' : 'border-border-subtle text-text-muted hover:bg-surface-hover/60 hover:text-text-secondary'}`}
+                  className={`min-h-8 rounded-full border px-2.5 py-1 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none ${draft.category === category ? 'border-border-strong bg-surface-hover text-text-primary' : 'border-border-subtle text-text-muted hover:bg-surface-hover/60 hover:text-text-secondary'}`}
                 >
                   {KNOWLEDGE_CATEGORY_LABELS[category]}
                 </button>
@@ -942,25 +934,27 @@ function KnowledgeCardModal({ workspaceId, owner, card, entity, entities, roster
             />
           )}
 
-          <label htmlFor="knowledge-statement" className="eyebrow mb-1.5 mt-4 block">Statement</label>
+          <label htmlFor="knowledge-statement" className="mb-1.5 mt-4 block text-xs font-medium text-text-muted">Statement</label>
           <textarea ref={statementInputRef} id="knowledge-statement" className={`${INPUT} custom-scrollbar min-h-28 max-h-48 resize-none overflow-y-auto leading-relaxed`} value={draft.statement} onChange={event => setDraft(current => ({ ...current, statement: event.target.value }))} placeholder="Add a specific statement about this subject" />
-          <div className="mt-3 flex justify-end"><Button onClick={saveStatement} loading={saving} disabled={!draft.statement.trim()}>{editing ? 'Save changes' : 'Add Statement'}</Button></div>
+          <div className="mt-3 flex justify-end gap-2">
+            <Button variant="ghost" onClick={cancelEditing} disabled={saving || (!editing && !draft.statement.trim())}>{editing ? 'Cancel' : 'Clear'}</Button>
+            <Button onClick={saveStatement} loading={saving} disabled={!draft.statement.trim()}>{editing ? 'Save changes' : 'Add statement'}</Button>
+          </div>
         </section>
 
         <section aria-labelledby="recorded-statements-heading">
-          <div className="mb-2 flex items-baseline justify-between gap-3">
-            <h4 id="recorded-statements-heading" className="eyebrow text-text-secondary">Recorded statements</h4>
-            <span className="text-xs tabular-nums text-text-subtle">{visibleStatements.length === statements.length ? statements.length : `${visibleStatements.length} / ${statements.length}`}</span>
-          </div>
-          {categoryFilters.length > 1 && (
-            <div className="mb-2 flex flex-wrap gap-1.5" role="group" aria-label="Filter statements by kind">
-              <FilterChip label="All" active={!categoryFilter} onClick={() => setCategoryFilter(null)} />
-              {categoryFilters.map(({ value, label, count }) => (
-                <FilterChip key={value} label={`${label} · ${count}`} active={categoryFilter === value} onClick={() => setCategoryFilter(categoryFilter === value ? null : value)} />
+          <div className="mb-1 flex flex-wrap items-center gap-2 border-b border-border-subtle pb-3">
+            <h4 id="recorded-statements-heading" className="text-sm font-semibold text-text-primary">Recorded</h4>
+            <span className="text-xs tabular-nums text-text-subtle">{statements.length}</span>
+            <span className="flex-1" />
+            <div role="radiogroup" aria-label="Show statements" className="inline-flex gap-1 rounded-control border border-border-default bg-surface-input p-1">
+              {([['all', 'All'], ['knowledge', 'Known'], ['belief', 'Believed']] as const).map(([value, text]) => (
+                <button key={value} type="button" role="radio" aria-checked={kindFilter === value} onClick={() => setKindFilter(value)}
+                  className={`min-h-7 rounded-md px-2.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${kindFilter === value ? 'bg-surface-hover text-text-primary ring-1 ring-inset ring-border-strong' : 'text-text-muted hover:text-text-primary'}`}>{text}</button>
               ))}
             </div>
-          )}
-          <div className="space-y-2">
+          </div>
+          <div className="divide-y divide-border-subtle">
             {visibleStatements.map(entry => (
               <Statement
                 key={entry.id}
@@ -970,8 +964,8 @@ function KnowledgeCardModal({ workspaceId, owner, card, entity, entities, roster
                 onDelete={entry.managed ? undefined : () => setDeleting(entry)}
               />
             ))}
-            {!statements.length && <p className="rounded-card border border-dashed border-border-subtle px-4 py-8 text-center text-xs text-text-subtle">No Statements recorded.</p>}
-            {Boolean(statements.length) && !visibleStatements.length && <p className="rounded-card border border-dashed border-border-subtle px-4 py-8 text-center text-xs text-text-subtle">No Statements of this kind.</p>}
+            {!statements.length && <p className="rounded-card border border-dashed border-border-subtle px-4 py-8 text-center text-xs text-text-subtle">No statements recorded.</p>}
+            {Boolean(statements.length) && !visibleStatements.length && <p className="rounded-card border border-dashed border-border-subtle px-4 py-8 text-center text-xs text-text-subtle">No statements of this kind.</p>}
           </div>
         </section>
       </div>
@@ -997,7 +991,7 @@ function FilterChip({ label, active, onClick }: { label: string; active: boolean
       type="button"
       aria-pressed={active}
       onClick={onClick}
-      className={`min-h-8 rounded-full border px-2.5 py-1 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none ${active ? 'border-accent/40 bg-accent/[0.12] text-accent' : 'border-border-subtle text-text-muted hover:bg-surface-hover/60 hover:text-text-secondary'}`}
+      className={`min-h-8 rounded-full border px-2.5 py-1 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none ${active ? 'border-border-strong bg-surface-hover text-text-primary' : 'border-border-subtle text-text-muted hover:bg-surface-hover/60 hover:text-text-secondary'}`}
     >
       {label}
     </button>
@@ -1027,7 +1021,7 @@ function AcquisitionPicker({ owner, entities, acquisition, informantIds, onChang
   return (
     <>
       <fieldset>
-        <legend className="eyebrow mb-1.5">How they learned it</legend>
+        <legend className="mb-1.5 text-xs font-medium text-text-muted">How they learned it</legend>
         <div className="grid gap-2 sm:grid-cols-2">
           {AUTHORED_ACQUISITIONS.map(value => {
             const state = ACQUISITION_META[value];
@@ -1039,10 +1033,10 @@ function AcquisitionPicker({ owner, entities, acquisition, informantIds, onChang
                 type="button"
                 aria-pressed={selected}
                 onClick={() => onChange({ acquisition: value, ...(value === 'reported' ? {} : { informantIds: [] }) })}
-                className={`rounded-card border p-3 text-left transition-colors duration-200 ease-standard focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none ${selected ? 'border-accent/35 bg-accent/[0.08] text-text-primary' : 'border-border-subtle bg-surface-input/45 text-text-muted hover:border-border-default hover:text-text-secondary'}`}
+                className={`rounded-card border p-3 text-left transition-colors duration-200 ease-standard focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none ${selected ? 'border-border-strong bg-surface-hover/80 text-text-primary' : 'border-border-subtle bg-surface-input/45 text-text-muted hover:border-border-default hover:text-text-secondary'}`}
               >
                 <span className="flex items-center gap-2 text-xs font-semibold"><StateIcon className="h-4 w-4" aria-hidden="true" />{state.label}</span>
-                <span className="mt-1.5 block text-[0.6875rem] leading-relaxed opacity-75">{state.hint}</span>
+                <span className="mt-1.5 block text-xs leading-relaxed opacity-75">{state.hint}</span>
               </button>
             );
           })}
@@ -1050,7 +1044,7 @@ function AcquisitionPicker({ owner, entities, acquisition, informantIds, onChang
       </fieldset>
       {acquisition === 'reported' && (
         <div className="mt-3">
-          <label className="eyebrow mb-1.5 block">Told by</label>
+          <label className="mb-1.5 block text-xs font-medium text-text-muted">Told by</label>
           <SearchableSelect
             multiple
             values={informantIds}
@@ -1095,7 +1089,7 @@ function PaneButton({ id, controls, active, onClick, icon: Icon, label, count }:
     >
       <Icon className="h-3.5 w-3.5" aria-hidden="true" />
       {label}
-      {count > 0 && <span className="rounded-full bg-surface-canvas/60 px-1.5 py-0.5 text-[0.625rem] tabular-nums">{count}</span>}
+      {count > 0 && <span className="rounded-full bg-surface-canvas/60 px-1.5 py-0.5 text-xs tabular-nums">{count}</span>}
     </button>
   );
 }
@@ -1219,7 +1213,7 @@ function KnownConnections({ subjectId, subjectName, relationships, currentIds, s
                 <span aria-hidden="true" className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border ${groupMeta.medallion}`}>
                   <GroupIcon className="h-3 w-3" />
                 </span>
-                <span className={`eyebrow ${groupMeta.soft}`}>{groupLabel}</span>
+                <span className={`text-xs font-semibold ${groupMeta.soft}`}>{groupLabel}</span>
                 <span className="text-xs tabular-nums text-text-subtle">{chosen}/{ids.length}</span>
                 <span aria-hidden="true" className="h-px flex-1 bg-border-subtle" />
                 <button
@@ -1241,7 +1235,7 @@ function KnownConnections({ subjectId, subjectName, relationships, currentIds, s
                       aria-pressed={checked}
                       disabled={busy}
                       onClick={() => setMany([row.relationshipId], !checked)}
-                      className={`flex min-h-12 items-start gap-2.5 rounded-control border px-3 py-2 text-left transition-colors duration-200 ease-standard focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-wait disabled:opacity-60 motion-reduce:transition-none ${checked ? 'border-accent/35 bg-accent/[0.08]' : 'border-border-subtle bg-surface-input/45 hover:border-border-default'}`}
+                      className={`flex min-h-12 items-start gap-2.5 rounded-control border px-3 py-2 text-left transition-colors duration-200 ease-standard focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-wait disabled:opacity-60 motion-reduce:transition-none ${checked ? 'border-border-strong bg-surface-hover/80' : 'border-border-subtle bg-surface-input/45 hover:border-border-default'}`}
                     >
                       <span aria-hidden="true" className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border ${checked ? 'border-accent bg-accent text-on-accent' : 'border-border-strong'}`}>{checked && <Check className="h-3 w-3" />}</span>
                       <span className="min-w-0 flex-1">
@@ -1301,55 +1295,49 @@ function FactionAudience({ roster, entities, audienceType, selectedMemberIds, bu
     ];
   }, [byId, roster, selectedMemberIds]);
 
+  // Stored as who receives it; shown as who is left out, which is the question people ask.
+  const excluded = roster.filter(id => !selectedMemberIds.includes(id));
+  const readers = audienceType === 'all-members' ? roster.length : selectedMemberIds.filter(id => roster.includes(id)).length;
   return (
-    <div className="space-y-3 p-3 sm:p-4">
+    <div className="space-y-3 pl-6">
       {!roster.length && (
         <p className="rounded-card border border-dashed border-border-subtle px-4 py-6 text-center text-xs text-text-subtle">
           Nobody is on the roster yet. Add members on the faction&apos;s Members tab and this perspective reaches them.
         </p>
       )}
-      <fieldset disabled={busy || !roster.length}>
-        <legend className="eyebrow mb-1.5">Audience</legend>
-        <div className="grid grid-cols-2 gap-1 rounded-control border border-border-subtle bg-surface-input/55 p-1">
-          {([['all-members', 'Everyone'], ['selected-members', 'Everyone except…']] as const).map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              aria-pressed={audienceType === value}
-              onClick={() => onChange(value, value === 'selected-members' && !selectedMemberIds.length ? roster : undefined)}
-              className={`min-h-9 rounded-md px-2 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none ${audienceType === value ? 'bg-surface-hover text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'}`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </fieldset>
+      <div role="radiogroup" aria-label="Shared with" className="inline-flex gap-1 rounded-control border border-border-default bg-surface-input p-1">
+        {([['all-members', 'Every member', Users], ['selected-members', 'Every member except…', UserMinus]] as const).map(([value, label, Icon]) => (
+          <button
+            key={value}
+            type="button"
+            role="radio"
+            aria-checked={audienceType === value}
+            disabled={busy || !roster.length}
+            onClick={() => onChange(value, value === 'selected-members' && !selectedMemberIds.length ? roster : undefined)}
+            className={`inline-flex min-h-8 items-center gap-1.5 rounded-md px-3 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none ${audienceType === value ? 'bg-surface-hover text-text-primary ring-1 ring-inset ring-border-strong' : 'text-text-muted hover:text-text-secondary'}`}
+          >
+            <Icon className="h-3.5 w-3.5" aria-hidden="true" />{label}
+          </button>
+        ))}
+      </div>
       {audienceType === 'selected-members' && roster.length > 0 && (
-        <div>
-          <label className="eyebrow mb-1.5 block">Who is kept in</label>
-          <SearchableSelect
-            multiple
-            values={selectedMemberIds}
-            disabled={busy}
-            onChange={(memberIds: string[]) => onChange('selected-members', memberIds)}
-            options={options}
-            ariaLabel="Which members receive this perspective"
-            placeholder="Nobody selected"
-          />
-          {!selectedMemberIds.length && (
-            <p className="mt-2 rounded-control border border-status-warning/30 bg-status-warning/[0.07] px-3 py-2 text-xs text-status-warning">
-              Nobody is left on this card, so it reaches no one in play. Remove people from a full roster instead, or switch back to Everyone.
-            </p>
-          )}
-        </div>
+        <SearchableSelect
+          multiple
+          values={excluded}
+          disabled={busy}
+          onChange={(left: string[]) => onChange('selected-members', roster.filter(id => !left.includes(id)))}
+          options={options.filter(option => roster.includes(option.id))}
+          ariaLabel="Members left out"
+          placeholder="Add members to leave out"
+        />
       )}
       {roster.length > 0 && (
         <p className="caption">
-          {audienceType === 'all-members'
-            ? 'Everyone on the roster reads this in play, with nothing to maintain as the roster changes.'
-            : 'Only the members above read this in play.'}
-          {' '}Leaving the faction stops new sharing; what a former member already knew stays theirs.
-          {' '}A member told this in a scene gets their own record, so you never have to predict it here.
+          {readers === 0
+            ? 'Nobody on the roster reads this in play. Switch back to Every member, or leave fewer people out.'
+            : audienceType === 'all-members'
+              ? `In play, all ${roster.length} ${roster.length === 1 ? 'member reads' : 'members read'} this. Anyone who joins later reads it too; anyone who leaves keeps what they knew.`
+              : `In play, the other ${readers} ${readers === 1 ? 'member reads' : 'members read'} this. Anyone who leaves keeps what they knew.`}
         </p>
       )}
     </div>
@@ -1358,27 +1346,24 @@ function FactionAudience({ roster, entities, audienceType, selectedMemberIds, bu
 
 /* The direction is the part that is easy to get backwards, so the sheet says it outright
    on both sides of the relationship rather than leaving it to be inferred from behavior. */
-function SharingRule({ entity, roster, factions, entities }: {
-  entity: WorldbuildEntity; roster: string[]; factions: string[]; entities: WorldbuildEntity[];
+function SharingRule({ entity, factions, entities, onOpenEntity }: {
+  entity: WorldbuildEntity; factions: string[]; entities: WorldbuildEntity[];
+  onOpenEntity?(entityId: string, options?: { tab?: string }): void;
 }) {
-  if (entity.type === 'Factions') {
-    return (
-      <p className="caption mt-1.5 max-w-3xl">
-        What the group knows reaches its whole roster{roster.length ? ` — ${roster.length} today` : ''}, unless a card names exceptions.
-        Nothing travels the other way: what a member learns alone becomes faction Knowledge only when you record it here.
-      </p>
-    );
-  }
-  if (!factions.length) return null;
-  const names = factions
-    .map(id => entities.find(item => item.id === id)?.canonicalName)
-    .filter((name): name is string => Boolean(name));
-  if (!names.length) return null;
+  const found = factions.map(id => entities.find(item => item.id === id)).filter((item): item is WorldbuildEntity => Boolean(item));
+  if (!found.length) return null;
   return (
-    <p className="caption mt-1.5 max-w-3xl">
-      In play {entity.canonicalName} also reads whatever {joinNames(names)} {names.length > 1 ? 'share' : 'shares'},
-      set on {names.length > 1 ? 'their own Knowledge tabs' : 'its own Knowledge tab'}.
-    </p>
+    <>
+      {' '}In play {firstName(entity.canonicalName)} also reads what{' '}
+      {found.map((faction, index) => (
+        <Fragment key={faction.id}>
+          {index > 0 && (index === found.length - 1 ? ' and ' : ', ')}
+          <button type="button" onClick={() => onOpenEntity?.(faction.id, { tab: 'knowledge' })}
+            className="rounded font-medium text-text-secondary underline decoration-border-strong underline-offset-2 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{faction.canonicalName}</button>
+        </Fragment>
+      ))}
+      {' '}{found.length > 1 ? 'share' : 'shares'}.
+    </>
   );
 }
 
@@ -1409,8 +1394,8 @@ function joinNames(names: string[]): string {
   return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 }
 
-function Memories({ hidden, loading, workspaceId, owner, projection, api, reload, showToast, onOpenEntity }: {
-  hidden: boolean; loading: boolean;
+function Memories({ hidden, loading, workspaceId, owner, projection, api, reload, showToast, onOpenEntity, composeSignal = 0 }: {
+  hidden: boolean; loading: boolean; composeSignal?: number;
   workspaceId: string; owner: WorldbuildEntity; projection: WorldbuildKnowledgeProjection | null;
   api: WorldbuildApi; reload(options?: { cardIdToSelect?: string; preserveSelection?: boolean }): Promise<boolean>; showToast: Toast;
   onOpenEntity?(entityId: string, options?: { tab?: string }): void;
@@ -1425,6 +1410,14 @@ function Memories({ hidden, loading, workspaceId, owner, projection, api, reload
   const memoryEditorRef = useRef<HTMLDivElement | null>(null);
   const memoryInputRef = useRef<HTMLTextAreaElement | null>(null);
   const composerOpen = composing || Boolean(editing);
+  const [filter, setFilter] = useState<MemoryAccessibility | 'all'>('all');
+  const name = firstName(owner.canonicalName);
+  useEffect(() => {
+    if (!composeSignal) return;
+    setEditing(null);
+    setDraft({ summary: '', accessibility: 'available' });
+    setComposing(true);
+  }, [composeSignal]);
 
   useEffect(() => {
     if (!composerOpen) return;
@@ -1533,43 +1526,19 @@ function Memories({ hidden, loading, workspaceId, owner, projection, api, reload
 
   return (
     <>
-    <section id="memories-surface-panel" role="tabpanel" aria-labelledby="memories-surface-tab" hidden={hidden} aria-busy={loading} className="overflow-hidden rounded-surface border border-border-subtle bg-surface-panel/70">
-      <header className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between sm:p-5">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <Brain className="h-4 w-4 text-accent" aria-hidden="true" />
-            <h3 className="text-sm font-semibold text-text-primary">Memories</h3>
-          </div>
-          <p className="caption mt-1 max-w-3xl">Events and experiences this subject remembers, including memories that cannot be reached.</p>
-        </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          icon={Plus}
-          onClick={() => { setEditing(null); setDraft({ summary: '', accessibility: 'available' }); setComposing(true); }}
-          disabled={composerOpen}
-          className="shrink-0 self-start"
-        >
-          Add memory
-        </Button>
-      </header>
-
+    <div id="memories-surface-panel" role="tabpanel" aria-labelledby="memories-surface-tab" hidden={hidden} aria-busy={loading} className="space-y-3">
       {composerOpen && (
-        <div className="animate-rise-in border-y border-border-subtle bg-surface-canvas/30 p-3 sm:p-5">
-        <div ref={memoryEditorRef} className="card-surface p-3 sm:p-4">
-          <div className="mb-3 flex items-start justify-between gap-3">
-            <div>
-              <h4 className="eyebrow text-text-secondary">{editing ? 'Edit Memory' : 'New Memory'}</h4>
-              <p className="caption mt-1">Record the experience first, then define whether it can be recalled.</p>
-            </div>
-            <button type="button" onClick={cancelEditing} className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded px-2 text-xs text-text-muted transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none"><X className="h-3.5 w-3.5" aria-hidden="true" />Cancel</button>
+        <div ref={memoryEditorRef} className="animate-rise-in rounded-card border border-border-default bg-surface-canvas/40 p-4">
+          <div className="mb-3">
+            <h4 className="text-sm font-semibold text-text-primary">{editing ? 'Edit memory' : 'New memory'}</h4>
+            <p className="caption mt-1">Write what {name} remembers, then say whether {name} can recall it.</p>
           </div>
 
-          <label htmlFor="memory-summary" className="eyebrow mb-1.5 block">Memory</label>
-          <textarea ref={memoryInputRef} id="memory-summary" className={`${INPUT} custom-scrollbar min-h-28 max-h-48 resize-none overflow-y-auto leading-relaxed`} value={draft.summary} onChange={event => setDraft(current => ({ ...current, summary: event.target.value }))} placeholder="What does this subject remember?" />
+          <label htmlFor="memory-summary" className="mb-1.5 block text-xs font-medium text-text-muted">Memory</label>
+          <textarea ref={memoryInputRef} id="memory-summary" className={`${INPUT} custom-scrollbar min-h-28 max-h-48 resize-none overflow-y-auto leading-relaxed`} value={draft.summary} onChange={event => setDraft(current => ({ ...current, summary: event.target.value }))} placeholder={`What does ${name} remember?`} />
 
           <fieldset className="mt-4">
-            <legend className="eyebrow mb-2">Accessibility</legend>
+            <legend className="mb-2 text-xs font-medium text-text-muted">Can {name} recall it?</legend>
             <div className="grid gap-2 md:grid-cols-3">
               {(Object.entries(MEMORY_STATES) as Array<[MemoryAccessibility, typeof MEMORY_STATES[MemoryAccessibility]]>).map(([value, state]) => {
                 const StateIcon = state.icon;
@@ -1583,7 +1552,7 @@ function Memories({ hidden, loading, workspaceId, owner, projection, api, reload
                     className={`rounded-card border p-3 text-left transition-colors duration-200 ease-standard focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none ${selected ? state.tone : 'border-border-subtle bg-surface-input/45 text-text-muted hover:border-border-default hover:text-text-secondary'}`}
                   >
                     <span className="flex items-center gap-2 text-xs font-semibold"><StateIcon className="h-4 w-4" aria-hidden="true" />{state.label}</span>
-                    <span className="mt-1.5 block text-[0.6875rem] leading-relaxed opacity-75">{state.description}</span>
+                    <span className="mt-1.5 block text-xs leading-relaxed opacity-75">{state.description}</span>
                   </button>
                 );
               })}
@@ -1592,29 +1561,24 @@ function Memories({ hidden, loading, workspaceId, owner, projection, api, reload
 
           <div className="mt-4 flex justify-end gap-2">
             <Button variant="ghost" onClick={cancelEditing} disabled={saving}>Cancel</Button>
-            <Button onClick={save} loading={saving} disabled={!draft.summary.trim()}>{editing ? 'Save changes' : 'Add Memory'}</Button>
+            <Button onClick={save} loading={saving} disabled={!draft.summary.trim()}>{editing ? 'Save changes' : 'Add memory'}</Button>
           </div>
-        </div>
         </div>
       )}
 
-      <div className="p-3 sm:p-4">
-        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-baseline gap-2">
-            <h4 className="eyebrow text-text-secondary">Recorded memories</h4>
-            <span className="text-xs tabular-nums text-text-subtle">{projection?.memories.length ?? 0}</span>
-          </div>
-          <div role="group" className="flex flex-wrap gap-1.5" aria-label="Memory accessibility summary">
-            {(Object.entries(MEMORY_STATES) as Array<[MemoryAccessibility, typeof MEMORY_STATES[MemoryAccessibility]]>).map(([value, state]) => (
-              <span key={value} className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[0.625rem] font-semibold ${state.badge}`}>
-                {state.label} <span className="tabular-nums">{projection?.memories.filter(entry => entry.accessibility === value).length ?? 0}</span>
-              </span>
-            ))}
-          </div>
+      <div>
+        <div role="group" aria-label="Show memories" className="flex flex-wrap items-center gap-1.5 border-b border-border-subtle pb-3">
+          <span className="mr-1 text-xs text-text-subtle">Show</span>
+          {([['all', 'All', projection?.memories.length ?? 0], ...(Object.entries(MEMORY_STATES) as Array<[MemoryAccessibility, typeof MEMORY_STATES[MemoryAccessibility]]>).map(([value, state]) => [value, state.label, projection?.memories.filter(entry => entry.accessibility === value).length ?? 0])] as Array<[MemoryAccessibility | 'all', string, number]>).map(([value, label, count]) => (
+            <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)}
+              className={`inline-flex min-h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${filter === value ? 'border-border-strong bg-surface-hover text-text-primary' : count ? 'border-border-subtle text-text-secondary hover:text-text-primary' : 'border-border-subtle text-text-disabled'}`}>
+              {label}<span className="font-medium tabular-nums text-text-subtle">{count}</span>
+            </button>
+          ))}
         </div>
-        <div className="custom-scrollbar max-h-[40rem] space-y-2 overflow-y-auto overscroll-contain">
-          {loading && <div className="h-24 animate-pulse rounded-card bg-surface-panel-muted/60 motion-reduce:animate-none" />}
-          {!loading && projection?.memories.map(entry => {
+        <div className="custom-scrollbar max-h-[40rem] divide-y divide-border-subtle overflow-y-auto overscroll-contain">
+          {loading && <div className="mt-3 h-24 animate-pulse rounded-card bg-surface-panel-muted/60 motion-reduce:animate-none" />}
+          {!loading && projection?.memories.filter(entry => filter === 'all' || entry.accessibility === filter).map(entry => {
             const originEventId = entry.origin?.eventEntityId;
             return (
               <Statement
@@ -1627,14 +1591,14 @@ function Memories({ hidden, loading, workspaceId, owner, projection, api, reload
             );
           })}
           {!loading && !projection?.memories.length && (
-            <button type="button" onClick={() => setComposing(true)} className="w-full rounded-card border border-dashed border-border-subtle px-5 py-9 text-center text-xs text-text-subtle transition-colors duration-200 ease-standard hover:border-accent/30 hover:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none">
+            <button type="button" onClick={() => setComposing(true)} className="mt-3 w-full rounded-card border border-dashed border-border-subtle px-5 py-9 text-center text-xs text-text-subtle transition-colors duration-200 ease-standard hover:border-border-strong hover:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none">
               <Plus className="mx-auto mb-2 h-5 w-5" aria-hidden="true" />
-              No Memories recorded.
+              No memories recorded yet.
             </button>
           )}
         </div>
       </div>
-    </section>
+    </div>
     {deleting && (
       <ConfirmDialog
         title="Delete Memory"
@@ -1654,8 +1618,10 @@ function Statement({ entry, entities = [], onEdit, onDelete, onOpenOrigin }: {
   entry: WorldbuildKnowledgeEntry; entities?: WorldbuildEntity[];
   onEdit?(): void; onDelete?(): void; onOpenOrigin?(): void;
 }) {
+  const menuRef = useRef<HTMLButtonElement | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const memoryState = entry.kind === 'memory' ? MEMORY_STATES[entry.accessibility] : null;
-  const Icon = memoryState?.icon || (entry.kind === 'belief' ? Lightbulb : BookOpenCheck);
+  const MemoryIcon = memoryState?.icon;
   const label = memoryState?.label || (entry.kind === 'belief' ? 'Believed' : 'Known');
   const origin = ENTRY_ORIGINS[entry.origin?.kind ?? 'authored'] ?? ENTRY_ORIGINS.authored;
   const OriginIcon = origin.icon;
@@ -1666,39 +1632,41 @@ function Statement({ entry, entities = [], onEdit, onDelete, onOpenOrigin }: {
   const tellers = (entry.informantIds ?? [])
     .map(id => entities.find(item => item.id === id)?.canonicalName)
     .filter((name): name is string => Boolean(name));
+  const dot = <span aria-hidden="true" className="text-text-disabled">·</span>;
   return (
-    <article className="group flex gap-3 rounded-card border border-border-subtle bg-surface-panel-muted/55 px-3.5 py-3 text-sm text-text-secondary transition-colors hover:border-border-default hover:bg-surface-hover/45 motion-reduce:transition-none">
-      <span className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-control border ${memoryState?.badge || (entry.kind === 'belief' ? 'border-status-warning/25 bg-status-warning/[0.07] text-status-warning' : 'border-accent/25 bg-accent/[0.07] text-accent')}`}>
-        <Icon className="h-3.5 w-3.5" aria-hidden="true" />
-      </span>
+    <article className="group flex gap-3 py-3 text-sm text-text-secondary">
+      {MemoryIcon && (
+        <span data-tooltip={label} className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-control border ${memoryState?.badge}`}>
+          <MemoryIcon className="h-3.5 w-3.5" aria-label={label} />
+        </span>
+      )}
       <div className="min-w-0 flex-1">
-        <div className="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="eyebrow">{label}</span>
-          <span aria-hidden="true" className="h-3 w-px bg-border-subtle" />
-          <span className={`inline-flex items-center gap-1 eyebrow ${origin.tone}`}>
-            {OriginIcon && <OriginIcon className="h-3 w-3" aria-hidden="true" />}
-            {origin.label}
-          </span>
-          {occurrenceTitle && (onOpenOrigin
-            ? <button type="button" onClick={onOpenOrigin} className="max-w-full truncate rounded text-xs text-accent underline decoration-dotted underline-offset-4 transition-colors hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none">{occurrenceTitle}</button>
-            : <span className="max-w-full truncate text-xs text-text-muted">{occurrenceTitle}</span>)}
-          {categoryLabel && (
-            <span className="rounded-full border border-border-subtle bg-surface-hover/45 px-2 py-0.5 text-[0.625rem] font-semibold text-text-secondary">{categoryLabel}</span>
-          )}
-          {route && RouteIcon && (
-            <span className="inline-flex items-center gap-1 rounded-full border border-border-subtle px-2 py-0.5 text-[0.625rem] font-semibold text-text-muted">
-              <RouteIcon className="h-3 w-3" aria-hidden="true" />
-              {route.label}{tellers.length ? ` · ${joinNames(tellers)}` : ''}
-            </span>
+        <div className="mb-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs">
+          {entry.kind === 'memory' ? (
+            <>
+              <span className="inline-flex items-center gap-1 text-text-muted">{OriginIcon && <OriginIcon className="h-3 w-3" aria-hidden="true" />}{origin.label}</span>
+              {occurrenceTitle && (onOpenOrigin
+                ? <button type="button" onClick={onOpenOrigin} className="ml-1 inline-flex min-h-6 max-w-full items-center gap-1.5 truncate rounded-full border border-border-subtle bg-surface-hover/35 px-2.5 font-medium text-text-secondary hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-entity-event" />{occurrenceTitle}</button>
+                : <span className="max-w-full truncate text-text-muted">{occurrenceTitle}</span>)}
+            </>
+          ) : (
+            <>
+              <span className="font-semibold text-text-secondary">{label}</span>
+              {categoryLabel && <>{dot}<span className="text-text-muted">{categoryLabel}</span></>}
+              {route && RouteIcon && <>{dot}<span className="inline-flex items-center gap-1 text-text-muted"><RouteIcon className="h-3 w-3" aria-hidden="true" />{route.label}{tellers.length ? ` by ${joinNames(tellers)}` : ''}</span></>}
+            </>
           )}
         </div>
-        <p className="whitespace-pre-wrap leading-relaxed">{entry.statement || entry.summary}</p>
+        <p className="whitespace-pre-wrap leading-relaxed text-text-primary">{entry.statement || entry.summary}</p>
       </div>
       {(onEdit || onDelete) && (
-        <div className="flex shrink-0 items-start gap-1 opacity-100 transition-opacity motion-reduce:transition-none sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
-          {onEdit && <button type="button" onClick={onEdit} className="inline-flex min-h-8 min-w-8 items-center justify-center rounded-md text-text-subtle transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none" aria-label={`Edit ${label.toLowerCase()} entry`}><Pencil className="h-3.5 w-3.5" aria-hidden="true" /></button>}
-          {onDelete && <button type="button" onClick={onDelete} className="inline-flex min-h-8 min-w-8 items-center justify-center rounded-md text-text-subtle transition-colors hover:bg-status-danger/10 hover:text-status-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-danger/50 motion-reduce:transition-none" aria-label={`Delete ${label.toLowerCase()} entry`}><Trash2 className="h-3.5 w-3.5" aria-hidden="true" /></button>}
-        </div>
+        <>
+          <IconButton ref={menuRef} icon={MoreHorizontal} size="sm" label={`${label} entry actions`} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen(value => !value)} />
+          <Menu anchorRef={menuRef} open={menuOpen} onClose={() => setMenuOpen(false)} label={`${label} entry actions`} className="w-48" align="right">
+            {onEdit && <MenuItem icon={Pencil} label="Edit" onSelect={() => { setMenuOpen(false); onEdit(); }} />}
+            {onDelete && <MenuItem icon={Trash2} label="Delete" danger onSelect={() => { setMenuOpen(false); onDelete(); }} />}
+          </Menu>
+        </>
       )}
     </article>
   );
@@ -1716,7 +1684,7 @@ function AddCardModal({ owner, entities, existing, onClose, onAdd }: {
     }));
   }, [entities, existing, owner.id]);
   return (
-    <Modal onClose={onClose} size="md" title="Add Knowledge card" icon={KnowledgeGlyph}>
+    <Modal onClose={onClose} size="md" title="Add Knowledge card" icon={KnowledgeGlyph} iconClassName="text-text-muted">
       <div className="space-y-4 p-4 sm:p-5">
         <p className="text-sm leading-relaxed text-text-muted">Choose a subject whose existence {owner.canonicalName} knows about.</p>
         <SearchableSelect value={targetId} onChange={setTargetId} options={options} ariaLabel="Choose known subject" placeholder="Search for an entity" />
@@ -1730,7 +1698,7 @@ function AddCardModal({ owner, entities, existing, onClose, onAdd }: {
 }
 
 function EmptyState({ text, onClick }: { text: string; onClick(): void }) {
-  return <button type="button" onClick={onClick} className="col-span-full rounded-card border border-dashed border-border-subtle px-5 py-9 text-sm text-text-muted transition-colors hover:border-accent/30 hover:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none"><Plus className="mx-auto mb-2 h-5 w-5" aria-hidden="true" />{text}</button>;
+  return <button type="button" onClick={onClick} className="col-span-full rounded-card border border-dashed border-border-subtle px-5 py-9 text-sm text-text-muted transition-colors hover:border-border-strong hover:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none"><Plus className="mx-auto mb-2 h-5 w-5" aria-hidden="true" />{text}</button>;
 }
 
 /* One quiet line instead of four boxed chips: the counts are secondary to the
@@ -1738,15 +1706,15 @@ function EmptyState({ text, onClick }: { text: string; onClick(): void }) {
 function CardStats({ counts }: { counts: Array<{ value: number; label: string }> }) {
   const filled = counts.filter(entry => entry.value > 0);
   if (!filled.length) {
-    return <span className="block border-t border-border-subtle pt-2 text-xs text-text-disabled">Existence only</span>;
+    return <span className="block text-xs text-text-subtle">Knows it exists</span>;
   }
   return (
-    <span className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border-subtle pt-2 text-xs text-text-muted">
+    <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-text-subtle">
       {filled.map((entry, index) => (
         <span key={entry.label} className="inline-flex items-center gap-1">
           {index > 0 && <span aria-hidden="true" className="mr-1 text-text-disabled">·</span>}
-          <span className="font-semibold tabular-nums text-text-secondary">{entry.value}</span>
-          {entry.label}
+          <span className="tabular-nums">{entry.value}</span>
+          {entry.value === 1 ? entry.label.replace(/s$/, '') : entry.label}
         </span>
       ))}
     </span>
@@ -1759,29 +1727,28 @@ function KnowledgeSection({ id, open, onToggle, icon: Icon, title, description, 
 }) {
   const triggerId = `${id}-trigger`;
   const panelId = `${id}-panel`;
+  // Flat parts of one card, separated by rules, as in the rest of the sheet.
+  void Icon;
   return (
-    <section className={`overflow-hidden rounded-card border bg-surface-panel-muted/35 transition-colors motion-reduce:transition-none ${open ? 'border-border-default' : 'border-border-subtle'}`}>
+    <section className="border-t border-border-subtle first:border-t-0">
       <button
         id={triggerId}
         type="button"
         aria-expanded={open}
         aria-controls={panelId}
         onClick={onToggle}
-        className="flex min-h-16 w-full items-center gap-3 p-3 text-left transition-colors hover:bg-surface-hover/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 motion-reduce:transition-none sm:p-4"
+        className="flex min-h-12 w-full items-center gap-2 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
       >
-        <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-control border ${open ? 'border-accent/30 bg-accent/[0.08] text-accent' : 'border-border-subtle bg-surface-input/45 text-text-muted'}`}>
-          <Icon className="h-4 w-4" aria-hidden="true" />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-            <span className="eyebrow text-text-primary">{title}</span>
-            <span className="text-xs text-text-subtle">{summary}</span>
-          </span>
-          <span className="mt-1 block text-xs leading-relaxed text-text-muted">{description}</span>
-        </span>
-        <ChevronDown aria-hidden="true" className={`h-4 w-4 shrink-0 text-text-subtle transition-transform duration-200 motion-reduce:transition-none ${open ? 'rotate-180' : ''}`} />
+        <ChevronDown aria-hidden="true" className={`h-4 w-4 shrink-0 text-text-subtle transition-transform duration-200 motion-reduce:transition-none ${open ? '' : '-rotate-90'}`} />
+        <span className="text-sm font-semibold text-text-primary">{title}</span>
+        <span className="text-xs tabular-nums text-text-subtle">{summary}</span>
       </button>
-      {open && <div id={panelId} role="region" aria-labelledby={triggerId} className="animate-in fade-in slide-in-from-top-1 border-t border-border-subtle duration-200 motion-reduce:animate-none">{children}</div>}
+      {open && (
+        <div id={panelId} role="region" aria-labelledby={triggerId} className="pb-3">
+          <p className="caption mb-1 pl-6">{description}</p>
+          {children}
+        </div>
+      )}
     </section>
   );
 }
@@ -1791,7 +1758,7 @@ function SurfaceButton({ id, controls, active, onClick, onKeyDown, icon: Icon, l
   onKeyDown(event: KeyboardEvent<HTMLButtonElement>): void;
   icon: typeof BookOpenCheck; label: string; count: number;
 }) {
-  return <button id={id} type="button" role="tab" aria-controls={controls} aria-selected={active} tabIndex={active ? 0 : -1} onClick={onClick} onKeyDown={onKeyDown} className={`flex min-h-10 items-center justify-center gap-2 rounded-control px-3 py-2 text-xs font-bold uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 motion-reduce:transition-none ${active ? 'bg-accent text-on-accent shadow-raised' : 'text-text-muted hover:bg-surface-hover/60 hover:text-text-primary'}`}><Icon className="h-3.5 w-3.5" aria-hidden="true" />{label}{count > 0 && <span className={`rounded-full px-1.5 py-0.5 text-[0.625rem] tabular-nums ${active ? 'bg-surface-canvas/25' : 'bg-surface-hover'}`}>{count}</span>}</button>;
+  return <button id={id} type="button" role="tab" aria-controls={controls} aria-selected={active} tabIndex={active ? 0 : -1} onClick={onClick} onKeyDown={onKeyDown} className={`flex min-h-8 items-center justify-center gap-2 rounded-md px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 motion-reduce:transition-none ${active ? 'bg-surface-hover font-semibold text-text-primary ring-1 ring-inset ring-border-strong' : 'font-medium text-text-muted hover:text-text-primary'}`}><Icon className="h-3.5 w-3.5" aria-hidden="true" />{label}{count > 0 && <span className="text-xs tabular-nums text-text-subtle">{count}</span>}</button>;
 }
 
 function hasFilledValue(value: unknown): boolean {

@@ -11,9 +11,9 @@ export default function Field({ label, hint = null, error = null, optional = fal
 
   return (
     <div className={`flex flex-col gap-1.5 ${className}`}>
-      <div className="flex items-baseline justify-between gap-3">
-        <span className="text-xs font-semibold uppercase tracking-wider text-text-muted">{label}</span>
-        {optional ? <span className="text-xs text-text-subtle">Optional</span> : null}
+      <div className="flex items-baseline gap-1.5">
+        <span className="text-xs font-medium text-text-muted">{label}</span>
+        {optional ? <span className="text-xs text-text-subtle">optional</span> : null}
       </div>
       {child}
       {(hint || error) ? (

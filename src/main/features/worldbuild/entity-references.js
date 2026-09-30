@@ -38,6 +38,7 @@ const ENTITY_REFERENCE_COLUMNS = [
   { table: 'roleplay_location_inventory', column: 'location_id', merge: 'repoint, quantities add', delete: 'remove' },
   { table: 'roleplay_location_inventory', column: 'item_id', merge: 'repoint, quantities add', delete: 'remove' },
   { table: 'roleplay_location_backgrounds', column: 'location_id', merge: 'repoint, preferred side wins', delete: 'remove' },
+  { table: 'worldbuild_entity_images', column: 'entity_id', merge: 'repoint, preferred side wins', delete: 'remove' },
   { table: 'roleplay_entity_changes', column: 'entity_id', merge: 'repoint', delete: 'reject pending' },
   { table: 'roleplay_entity_changes', column: 'payload_json', merge: 'repoint', delete: 'reject pending' },
   { table: 'roleplay_scene_changes', column: 'payload_json', merge: 'repoint', delete: 'reject pending' },
@@ -287,6 +288,12 @@ function repointEntityReferences(db, { workspaceId, sourceId, targetId, prefer =
     db.prepare('UPDATE OR IGNORE roleplay_location_backgrounds SET location_id = ? WHERE workspace_id = ? AND location_id = ?').run(targetId, workspaceId, sourceId);
     db.prepare('DELETE FROM roleplay_location_backgrounds WHERE workspace_id = ? AND location_id = ?').run(workspaceId, sourceId);
   }
+  // The files left without a row are removed by the image sweep after the merge commits.
+  if (has('worldbuild_entity_images')) {
+    if (preferSource) db.prepare('DELETE FROM worldbuild_entity_images WHERE workspace_id = ? AND entity_id = ? AND EXISTS (SELECT 1 FROM worldbuild_entity_images AS other WHERE other.workspace_id = ? AND other.entity_id = ? AND other.kind = worldbuild_entity_images.kind)').run(workspaceId, targetId, workspaceId, sourceId);
+    db.prepare('UPDATE OR IGNORE worldbuild_entity_images SET entity_id = ? WHERE workspace_id = ? AND entity_id = ?').run(targetId, workspaceId, sourceId);
+    db.prepare('DELETE FROM worldbuild_entity_images WHERE workspace_id = ? AND entity_id = ?').run(workspaceId, sourceId);
+  }
   if (has('roleplay_entity_changes')) {
     db.prepare('UPDATE roleplay_entity_changes SET entity_id = ? WHERE workspace_id = ? AND entity_id = ?').run(targetId, workspaceId, sourceId);
   }
@@ -448,6 +455,7 @@ function releaseEntityReferences(db, { workspaceId, entityId }) {
   if (has('roleplay_equipment')) db.prepare('DELETE FROM roleplay_equipment WHERE workspace_id = ? AND (entity_id = ? OR item_id = ?)').run(workspaceId, entityId, entityId);
   if (has('roleplay_location_inventory')) db.prepare('DELETE FROM roleplay_location_inventory WHERE workspace_id = ? AND (location_id = ? OR item_id = ?)').run(workspaceId, entityId, entityId);
   if (has('roleplay_location_backgrounds')) db.prepare('DELETE FROM roleplay_location_backgrounds WHERE workspace_id = ? AND location_id = ?').run(workspaceId, entityId);
+  if (has('worldbuild_entity_images')) db.prepare('DELETE FROM worldbuild_entity_images WHERE workspace_id = ? AND entity_id = ?').run(workspaceId, entityId);
 
   if (has('roleplay_resource_changes')) {
     db.prepare("UPDATE roleplay_resource_changes SET status = 'rejected', resolved_at = ? WHERE workspace_id = ? AND entity_id = ? AND status = 'pending'").run(now, workspaceId, entityId);

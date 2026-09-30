@@ -7,14 +7,14 @@ import { LOCATION_SIZES, locationSizeGuide, locationSizeLabel, locationSizeOf, p
 // `wash` tints the open sheet's header with the type's color, so each kind of
 // record is recognizable before its name is read.
 export const TYPES = {
-  System: { label: 'System / Concept', icon: Orbit, medallion: 'bg-entity-concept/15 text-entity-concept border-entity-concept/30', ring: 'border-entity-concept/25', soft: 'text-entity-concept', wash: 'from-entity-concept/12' },
-  Locations: { label: 'Location', icon: MapPin, medallion: 'bg-entity-location/15 text-entity-location border-entity-location/30', ring: 'border-entity-location/25', soft: 'text-entity-location', wash: 'from-entity-location/12' },
-  Items: { label: 'Item', icon: MoneybagIcon, medallion: 'bg-entity-item/15 text-entity-item border-entity-item/30', ring: 'border-entity-item/25', soft: 'text-entity-item', wash: 'from-entity-item/12' },
-  Races: { label: 'Race', icon: UsersRound, medallion: 'bg-entity-race/15 text-entity-race border-entity-race/30', ring: 'border-entity-race/25', soft: 'text-entity-race', wash: 'from-entity-race/12' },
-  Factions: { label: 'Faction', icon: PennantIcon, medallion: 'bg-entity-faction/15 text-entity-faction border-entity-faction/30', ring: 'border-entity-faction/25', soft: 'text-entity-faction', wash: 'from-entity-faction/12' },
-  Characters: { label: 'Character', icon: UserRound, medallion: 'bg-entity-character/15 text-entity-character border-entity-character/30', ring: 'border-entity-character/25', soft: 'text-entity-character', wash: 'from-entity-character/12' },
-  Creatures: { label: 'Creature / Entity', icon: DragonIcon, medallion: 'bg-entity-creature/15 text-entity-creature border-entity-creature/30', ring: 'border-entity-creature/25', soft: 'text-entity-creature', wash: 'from-entity-creature/12' },
-  Events: { label: 'Event', icon: StopwatchIcon, medallion: 'bg-entity-event/15 text-entity-event border-entity-event/30', ring: 'border-entity-event/25', soft: 'text-entity-event', wash: 'from-entity-event/12' },
+  System: { label: 'System or concept', plural: 'Systems', icon: Orbit, medallion: 'bg-entity-concept/15 text-entity-concept border-entity-concept/30', ring: 'border-entity-concept/25', soft: 'text-entity-concept', dot: 'bg-entity-concept', wash: 'from-entity-concept/12' },
+  Locations: { label: 'Location', plural: 'Locations', icon: MapPin, medallion: 'bg-entity-location/15 text-entity-location border-entity-location/30', ring: 'border-entity-location/25', soft: 'text-entity-location', dot: 'bg-entity-location', wash: 'from-entity-location/12' },
+  Items: { label: 'Item', plural: 'Items', icon: MoneybagIcon, medallion: 'bg-entity-item/15 text-entity-item border-entity-item/30', ring: 'border-entity-item/25', soft: 'text-entity-item', dot: 'bg-entity-item', wash: 'from-entity-item/12' },
+  Races: { label: 'Race', plural: 'Races', icon: UsersRound, medallion: 'bg-entity-race/15 text-entity-race border-entity-race/30', ring: 'border-entity-race/25', soft: 'text-entity-race', dot: 'bg-entity-race', wash: 'from-entity-race/12' },
+  Factions: { label: 'Faction', plural: 'Factions', icon: PennantIcon, medallion: 'bg-entity-faction/15 text-entity-faction border-entity-faction/30', ring: 'border-entity-faction/25', soft: 'text-entity-faction', dot: 'bg-entity-faction', wash: 'from-entity-faction/12' },
+  Characters: { label: 'Character', plural: 'Characters', icon: UserRound, medallion: 'bg-entity-character/15 text-entity-character border-entity-character/30', ring: 'border-entity-character/25', soft: 'text-entity-character', dot: 'bg-entity-character', wash: 'from-entity-character/12' },
+  Creatures: { label: 'Creature', plural: 'Creatures', icon: DragonIcon, medallion: 'bg-entity-creature/15 text-entity-creature border-entity-creature/30', ring: 'border-entity-creature/25', soft: 'text-entity-creature', dot: 'bg-entity-creature', wash: 'from-entity-creature/12' },
+  Events: { label: 'Event', plural: 'Events', icon: StopwatchIcon, medallion: 'bg-entity-event/15 text-entity-event border-entity-event/30', ring: 'border-entity-event/25', soft: 'text-entity-event', dot: 'bg-entity-event', wash: 'from-entity-event/12' },
 };
 
 export const TYPE_ORDER = ['Characters', 'Locations', 'Factions', 'Items', 'Races', 'Creatures', 'Events', 'System'];
@@ -89,17 +89,18 @@ export const locationPresenceOptions = (locations) => sortLocationsForPresence(l
   });
 export const RARITY = ['Unique', 'Rare', 'Uncommon', 'Common', 'Abundant'];
 export const THREAT = ['Harmless', 'Minor', 'Dangerous', 'Deadly', 'Legendary'];
+// `dot` is the state read at a glance; the label stays neutral text beside it.
 export const STATUS = {
-  alive: { label: 'Alive', cls: 'bg-status-success/15 text-status-success border-status-success/30' },
-  deceased: { label: 'Deceased', cls: 'bg-status-danger/15 text-status-danger border-status-danger/30' },
-  missing: { label: 'Missing', cls: 'bg-status-warning/15 text-status-warning border-status-warning/30' },
-  unknown: { label: 'Unknown', cls: 'bg-surface-hover/45 text-text-muted border-border-default' },
+  alive: { label: 'Alive', dot: 'bg-status-success' },
+  deceased: { label: 'Deceased', dot: 'bg-status-danger' },
+  missing: { label: 'Missing', dot: 'bg-status-warning' },
+  unknown: { label: 'Unknown', dot: 'bg-text-subtle' },
 };
 export const DISPOSITION = {
-  hostile: { label: 'Hostile', cls: 'bg-status-danger/15 text-status-danger border-status-danger/30' },
-  neutral: { label: 'Neutral', cls: 'bg-surface-hover/45 text-text-muted border-border-default' },
-  friendly: { label: 'Friendly', cls: 'bg-status-success/15 text-status-success border-status-success/30' },
-  unknown: { label: 'Unknown', cls: 'bg-surface-hover/45 text-text-muted border-border-default' },
+  hostile: { label: 'Hostile', dot: 'bg-status-danger' },
+  neutral: { label: 'Neutral', dot: 'bg-text-subtle' },
+  friendly: { label: 'Friendly', dot: 'bg-status-success' },
+  unknown: { label: 'Unknown', dot: 'bg-text-subtle' },
 };
 export const CREATURE_NATURES = ['Beast', 'Monster', 'Spirit', 'Undead', 'Construct', 'Elemental', 'Deity', 'Aberration'];
 export const ABUNDANCE_HELP = [
@@ -117,5 +118,5 @@ const FIELD_LABELS = {
   description: 'Description', locationType: 'Type', size: 'Size', itemType: 'Type', content: 'Content',
 };
 
-export const meta = (type) => TYPES[type] || { label: type, icon: CircleHelp, medallion: 'bg-entity-concept/15 text-entity-concept border-entity-concept/30', ring: 'border-entity-concept/25', soft: 'text-entity-concept', wash: 'from-entity-concept/12' };
+export const meta = (type) => TYPES[type] || { label: type, icon: CircleHelp, medallion: 'bg-entity-concept/15 text-entity-concept border-entity-concept/30', ring: 'border-entity-concept/25', soft: 'text-entity-concept', dot: 'bg-entity-concept', wash: 'from-entity-concept/12' };
 export const fieldLabel = (field) => FIELD_LABELS[field] || field;

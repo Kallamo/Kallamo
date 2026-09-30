@@ -49,7 +49,7 @@
   --theme-entity-location: #34d399;
   --theme-entity-faction: #f59e0b;
   --theme-entity-event: #c084fc;
-  --theme-entity-item: #facc15;
+  --theme-entity-item: #a3e635;
   --theme-entity-creature: #fb7185;
   --theme-entity-race: #38bdf8;
   --theme-entity-concept: #cbd5e1;
@@ -560,13 +560,11 @@ textarea::-webkit-scrollbar-corner { background: transparent; }
   height: 0.375rem;
   appearance: none;
   border-radius: 9999px;
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--theme-status-danger) 78%, var(--theme-surface-canvas)) 0%,
-    var(--theme-surface-hover) 50%,
-    color-mix(in srgb, var(--theme-status-success) 72%, var(--theme-surface-canvas)) 100%
-  );
-  box-shadow: inset 0 0 0 1px var(--theme-border-subtle);
+  /* Centre tick, then the fill from neutral to the value (set inline), over the track. */
+  background:
+    linear-gradient(var(--theme-border-strong), var(--theme-border-strong)) 50% 50% / 1px 100% no-repeat,
+    linear-gradient(90deg, transparent var(--rel-lo, 50%), var(--rel-fill, transparent) var(--rel-lo, 50%), var(--rel-fill, transparent) var(--rel-hi, 50%), transparent var(--rel-hi, 50%)),
+    var(--theme-surface-hover);
   cursor: pointer;
 }
 
@@ -574,20 +572,22 @@ textarea::-webkit-scrollbar-corner { background: transparent; }
   width: 1rem;
   height: 1rem;
   appearance: none;
-  border: 0.125rem solid var(--app-accent);
+  border: 0;
   border-radius: 9999px;
-  background: var(--theme-surface-input);
+  background: var(--theme-text-primary);
   box-shadow: 0 0.125rem 0.5rem rgb(0 0 0 / 35%);
 }
 
 .relationship-range::-moz-range-thumb {
   width: 1rem;
   height: 1rem;
-  border: 0.125rem solid var(--app-accent);
+  border: 0;
   border-radius: 9999px;
-  background: var(--theme-surface-input);
+  background: var(--theme-text-primary);
   box-shadow: 0 0.125rem 0.5rem rgb(0 0 0 / 35%);
 }
+
+.relationship-range:focus-visible { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--app-accent) 40%, transparent); }
 input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 
 /* Older chat rows skip layout and paint while far off screen. `auto` makes the browser

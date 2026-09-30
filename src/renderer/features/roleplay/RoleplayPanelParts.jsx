@@ -9,6 +9,7 @@ import { itemFamily, itemMeta, meta } from '../worldbuild/worldbuildConfig';
 import { formatWorldDate } from '../worldbuild/WorldDateInput';
 import { DAYLIGHT, daylightPhase } from './daylight';
 import Tooltip from '../../components/ui/Tooltip';
+import { framedImageStyle, usePortraitOf } from '../worldbuild/portraits';
 
 export const PRESENCE = {
   participating: { label: 'Participating', icon: Swords, hint: 'Acts and speaks in the scene.' },
@@ -52,16 +53,17 @@ export function RoleplayStatus({ processing, pendingCount }) {
 }
 
 /* A span so it stays valid phrasing content inside buttons. */
+// A portrait when the sheet has one, the initial otherwise.
 export function Avatar({ entity, player = false, size = 'md' }) {
-  const image = entity?.data?.image || entity?.data?.imagePath || entity?.data?.avatar;
+  const portrait = usePortraitOf(entity?.id);
   const tone = player ? 'border-accent/55 bg-surface-canvas text-accent' : meta(entity?.type).medallion;
   const sizes = { sm: 'h-8 w-8 rounded-[0.5625rem] text-xs', md: 'h-9 w-9 rounded-control text-sm', lg: 'h-10 w-10 rounded-card text-[0.9375rem]' };
   return (
     <span
       className={`inline-flex shrink-0 items-center justify-center overflow-hidden border font-bold uppercase ${sizes[size]} ${tone}`}
-      style={image ? { backgroundImage: `url("app-file:///${String(image).replace(/\\/g, '/')}")`, backgroundPosition: 'center', backgroundSize: 'cover' } : undefined}
+      style={framedImageStyle(portrait)}
     >
-      {!image && (entity?.canonicalName?.[0] || '?')}
+      {!portrait && (entity?.canonicalName?.[0] || '?')}
     </span>
   );
 }

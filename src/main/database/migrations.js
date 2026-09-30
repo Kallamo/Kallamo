@@ -1045,6 +1045,26 @@ const MIGRATIONS = [
     // Merges and deletes used to leave narrative and roleplay rows pointing at missing entities.
     id: 'entity_reference_orphans_v1',
     up: (db) => { releaseOrphanedEntityReferences(db); }
+  },
+  {
+    // Portraits live in their own table, never in entity data, so a file path cannot reach
+    // the prompt or an export. Backgrounds gain a framing point.
+    id: 'worldbuild_entity_images_v1',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS worldbuild_entity_images (
+          workspace_id TEXT NOT NULL,
+          entity_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          image_path TEXT NOT NULL,
+          focus TEXT,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (workspace_id, entity_id, kind)
+        );
+      `);
+      const columns = db.prepare('PRAGMA table_info(roleplay_location_backgrounds)').all().map(column => column.name);
+      if (columns.length && !columns.includes('focus')) db.exec('ALTER TABLE roleplay_location_backgrounds ADD COLUMN focus TEXT');
+    }
   }
 ];
 

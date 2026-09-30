@@ -3,15 +3,15 @@ import { DEFAULT_SIDEBAR_WIDTH } from './useSidebarWidth';
 
 const NAVIGATION_SCOPE = 'worldbuild-navigation';
 
-export function useWorldbuildNavigationState({ workspaceId, electronAPI, selectedEntityId, sidebarWidth, updateSidebarWidth }) {
+// Layout the person chose, kept across restarts: the sidebar width and which places are expanded.
+// Which sheet was open belongs to the visit instead (see worldbuildViewCache).
+export function useWorldbuildNavigationState({ workspaceId, electronAPI, sidebarWidth, updateSidebarWidth }) {
   const [expandedLocations, setExpandedLocations] = useState({});
-  const [restoredEntityId, setRestoredEntityId] = useState(null);
   const [isNavigationStateReady, setNavigationStateReady] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setNavigationStateReady(false);
-    setRestoredEntityId(null);
     setExpandedLocations({});
 
     if (!workspaceId) return undefined;
@@ -21,7 +21,6 @@ export function useWorldbuildNavigationState({ workspaceId, electronAPI, selecte
         if (cancelled) return;
         const state = response?.value || {};
         setExpandedLocations(state.expandedLocations || {});
-        setRestoredEntityId(state.selectedEntityId || null);
         updateSidebarWidth(Number(state.sidebarWidth) || DEFAULT_SIDEBAR_WIDTH);
       })
       .catch(() => {})
@@ -34,10 +33,9 @@ export function useWorldbuildNavigationState({ workspaceId, electronAPI, selecte
     if (!isNavigationStateReady || !workspaceId) return;
     electronAPI.setWorkspaceUiState(workspaceId, NAVIGATION_SCOPE, {
       expandedLocations,
-      selectedEntityId,
       sidebarWidth,
     }).catch(() => {});
-  }, [isNavigationStateReady, workspaceId, expandedLocations, selectedEntityId, sidebarWidth, electronAPI]);
+  }, [isNavigationStateReady, workspaceId, expandedLocations, sidebarWidth, electronAPI]);
 
-  return { expandedLocations, setExpandedLocations, restoredEntityId, isNavigationStateReady };
+  return { expandedLocations, setExpandedLocations, isNavigationStateReady };
 }

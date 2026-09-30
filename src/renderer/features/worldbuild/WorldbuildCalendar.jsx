@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Popover from '../../components/ui/Popover';
 import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, List, Plus, RotateCcw, Save, Settings2, Trash2, Bookmark } from 'lucide-react';
 import ColorField from '../../components/ui/ColorField';
 import SelectMenu from '../../components/ui/SelectMenu';
@@ -264,43 +265,40 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
   return (
     <div className="mx-auto max-w-6xl space-y-5 p-3 sm:p-5 lg:p-6">
       <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2 text-accent"><CalendarDays className="h-5 w-5" /><span className="text-[0.6875rem] font-bold uppercase tracking-[0.15em]">World Calendar</span></div>
-          <h2 className="mt-1 text-2xl font-semibold text-text-primary">{calendar.name}</h2>
-          <p className="caption mt-1">Canonical dates are stored by day. Hours and minutes belong to each RP history.</p>
+        <div className="min-w-0">
+          <h1 className="text-2xl font-bold text-text-primary">{calendar.name}</h1>
+          <p className="caption mt-1">Dates are kept by day. Hours and minutes belong to each roleplay.</p>
         </div>
-        <div className="flex rounded-full border border-border-subtle bg-surface-panel/70 p-1">
-          {[['month', CalendarDays, 'Calendar'], ['timeline', List, 'Timeline'], ['settings', Settings2, 'Customize']].map(([key, Icon, label]) => (
-            <button key={key} type="button" onClick={() => setView(key)} className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${view === key ? 'bg-accent/15 text-accent' : 'text-text-muted hover:bg-surface-hover/60 hover:text-text-primary'}`}>
-              <Icon className="h-3.5 w-3.5" />{label}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          <div role="tablist" aria-label="Calendar view" className="inline-flex gap-1 rounded-control border border-border-default bg-surface-input p-1">
+            {[['month', CalendarDays, 'Month'], ['timeline', List, 'Timeline']].map(([key, Icon, label]) => (
+              <button key={key} type="button" role="tab" aria-selected={view === key} onClick={() => setView(key)} className={`inline-flex min-h-8 items-center gap-1.5 rounded-md px-3 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${view === key ? 'bg-surface-hover text-text-primary ring-1 ring-inset ring-border-strong' : 'text-text-muted hover:text-text-primary'}`}>
+                <Icon className="h-3.5 w-3.5" aria-hidden="true" />{label}
+              </button>
+            ))}
+          </div>
+          <button type="button" aria-pressed={view === 'settings'} onClick={() => setView(view === 'settings' ? 'month' : 'settings')}
+            className={`inline-flex min-h-10 items-center gap-1.5 rounded-control border px-3 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${view === 'settings' ? 'border-border-strong bg-surface-hover text-text-primary' : 'border-border-default bg-surface-input/60 text-text-secondary hover:border-border-strong hover:text-text-primary'}`}>
+            <Settings2 className="h-3.5 w-3.5" aria-hidden="true" />Customize
+          </button>
         </div>
       </header>
 
       {view !== 'settings' && (
         <section className="calendar-season-surface overflow-hidden rounded-surface border border-border-default" style={{ '--calendar-season-color': seasonColor }}>
-          <div className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
-            <button type="button" onClick={() => moveMonth(-1)} className="rounded-control p-2 text-text-muted transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><ChevronLeft className="h-4 w-4" /></button>
-            <div className="flex min-w-0 items-center justify-center gap-2">
-              <input className={`${INPUT} !w-20 !py-1.5`} type="number" min="1" value={cursor.year} onChange={event => setCursor({ ...cursor, year: Math.max(1, Number(event.target.value) || 1) })} />
-              <SelectMenu ariaLabel="Calendar era" className="w-24" unboxed value={cursor.eraId} onChange={eraId => setCursor({ ...cursor, eraId })} options={calendar.eras.map(era => ({ value: era.id, label: era.shortName }))} />
-              <div className="min-w-40 text-center">
-                <span className="block text-sm font-semibold text-text-primary">{monthName}</span>
-                {monthSeasons.length > 0 && <span className="mt-0.5 flex flex-wrap items-center justify-center gap-x-2 gap-y-0.5 text-[0.6875rem] font-medium text-text-muted">{monthSeasons.map(season => <span key={season.id} className="inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: season.color }} />{season.name}</span>)}</span>}
-              </div>
-            </div>
-            <div className="flex items-center gap-1">
-              <button type="button" onClick={goToStoryDay} disabled={!storyClock} className="inline-flex items-center gap-1.5 rounded-control px-2 py-1.5 text-xs font-semibold text-text-muted transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40" title={storyClock ? `Go to ${formatWorldDate(calendar, storyClock)}` : undefined}><Bookmark className="h-3.5 w-3.5" />Story day</button>
-              <button type="button" onClick={() => moveMonth(1)} className="rounded-control p-2 text-text-muted transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><ChevronRight className="h-4 w-4" /></button>
-            </div>
+          <div className="flex items-center gap-1 border-b border-border-subtle px-3 py-2.5">
+            <button type="button" aria-label="Previous month" onClick={() => moveMonth(-1)} className="rounded-control p-2 text-text-muted transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><ChevronLeft className="h-4 w-4" /></button>
+            <MonthPicker calendar={calendar} cursor={cursor} onChange={setCursor} />
+            <button type="button" aria-label="Next month" onClick={() => moveMonth(1)} className="rounded-control p-2 text-text-muted transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><ChevronRight className="h-4 w-4" /></button>
+            <span className="flex-1" />
+            <button type="button" onClick={goToStoryDay} disabled={!storyClock} className="inline-flex items-center gap-1.5 rounded-control px-2.5 py-1.5 text-xs font-semibold text-text-secondary transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40" data-tooltip={storyClock ? formatWorldDate(calendar, storyClock) : 'No story day yet'}><Bookmark className="h-3.5 w-3.5" />Go to story day</button>
           </div>
 
           {view === 'month' ? (
             <>
-              {monthSeasons.some(season => season.description) && <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-1 border-b border-border-subtle px-4 py-2 text-xs text-text-muted">{monthSeasons.filter(season => season.description).map(season => <span key={season.id} className="inline-flex items-baseline gap-1.5"><strong className="font-semibold" style={{ color: season.color }}>{season.name}</strong><span>{season.description}</span></span>)}</div>}
+              {monthSeasons.length > 0 && <div className="space-y-1 border-b border-border-subtle px-4 py-2.5">{monthSeasons.map(season => <div key={season.id} className="flex min-w-0 items-center gap-2.5 text-sm"><span aria-hidden="true" className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ backgroundColor: season.color }} /><strong className="shrink-0 font-semibold text-text-primary">{season.name}</strong>{season.description && <span className="min-w-0 flex-1 truncate text-text-muted" data-tooltip={season.description}>{season.description}</span>}<span className="ml-auto shrink-0 text-xs text-text-subtle">{formatSeasonRange(calendar, season)}</span></div>)}</div>}
               <div className="grid border-b border-border-subtle bg-surface-canvas/25" style={{ gridTemplateColumns: `repeat(${calendar.weekdays.length}, minmax(0, 1fr))` }}>
-                {calendar.weekdays.map(day => <div key={day} className="px-2 py-2 eyebrow text-center">{day}</div>)}
+                {calendar.weekdays.map(day => <div key={day} className="truncate px-2 py-2 text-xs font-semibold text-text-subtle">{day}</div>)}
               </div>
               <div className="grid" style={{ gridTemplateColumns: `repeat(${calendar.weekdays.length}, minmax(0, 1fr))` }}>
                 {Array.from({ length: monthData?.firstWeekday || 0 }, (_, index) => <div key={`empty-${index}`} className="min-h-28 border-b border-r border-border-subtle bg-surface-canvas/25" />)}
@@ -309,22 +307,21 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
                   const dayEntries = entriesByDay.get(day) || [];
                   const daySeason = seasonForDate(calendar, { month: cursor.month, day });
                   const isStoryDay = sameDate(storyClock, { eraId: cursor.eraId, year: cursor.year, month: cursor.month, day });
-                  return <div key={day} className="calendar-day group min-h-28 border-b border-r border-border-subtle p-2" style={{ '--calendar-day-season': daySeason?.color || seasonColor }}>
+                  return <div key={day} className={`calendar-day group relative min-h-28 border-b border-r border-border-subtle p-2 ${isStoryDay ? 'bg-accent/[0.06] ring-1 ring-inset ring-accent/60' : ''}`} style={{ '--calendar-day-season': daySeason?.color || seasonColor }}>
                     <div className="flex items-center justify-between gap-2">
-                      <span className={`inline-flex items-center gap-1 text-xs font-semibold ${isStoryDay ? 'text-accent' : 'text-text-secondary'}`}>{day}{isStoryDay && <Bookmark className="h-3 w-3 fill-current" aria-label="Current story day" />}</span>
+                      <span className={`inline-flex items-center gap-1.5 text-sm tabular-nums ${isStoryDay ? 'font-bold text-accent' : 'font-medium text-text-secondary'}`}>{day}{isStoryDay && <span className="text-xs font-semibold">Story day</span>}</span>
                       <span className="flex items-center gap-1.5">
-                        {!isStoryDay && <button type="button" onClick={() => setStoryDay(day)} className="opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100" aria-label={`Set day ${day} as current story day`} title="Set as current story day"><Bookmark className="h-3 w-3 text-text-subtle hover:text-accent" /></button>}
-                        {daySeason && <span className="h-1.5 w-1.5 rounded-full opacity-70" style={{ backgroundColor: daySeason.color }} title={daySeason.name} />}
+                        {!isStoryDay && <button type="button" onClick={() => setStoryDay(day)} className="opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100" aria-label={`Set day ${day} as current story day`} data-tooltip="Make this the story day"><Bookmark className="h-3 w-3 text-text-subtle hover:text-accent" /></button>}
                       </span>
                     </div>
                     <div className="mt-1.5 space-y-1">
                       {dayEntries.slice(0, 3).map(entry => {
                         const visual = entryVisual(entry);
-                        return <button key={entry.id} type="button" onClick={() => onOpenEntity(entry.entityId)} className="calendar-entry block w-full rounded-md px-1.5 py-1 text-left text-[0.6875rem] leading-tight transition-colors" style={{ '--calendar-entry-color': visual.color }} title={`${visual.label}: ${entry.title}`}>
-                          <span className="line-clamp-2">{entry.title}</span>
+                        return <button key={entry.id} type="button" onClick={() => onOpenEntity(entry.entityId)} className="flex w-full items-center gap-1.5 rounded-md border border-border-subtle bg-surface-hover/40 px-1.5 py-1 text-left text-xs font-medium leading-tight text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" data-tooltip={`${visual.label}: ${entry.title}`}>
+                          <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: visual.color }} /><span className="min-w-0 truncate">{entry.title}</span>
                         </button>;
                       })}
-                      {dayEntries.length > 3 && <span className="block px-1 text-[0.625rem] font-medium text-text-subtle">+{dayEntries.length - 3} more</span>}
+                      {dayEntries.length > 3 && <span className="block px-1 text-xs font-medium text-text-subtle">+{dayEntries.length - 3} more</span>}
                     </div>
                   </div>;
                 })}
@@ -337,7 +334,7 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
                 return <button key={entry.id} type="button" onClick={() => onOpenEntity(entry.entityId)} className="flex w-full items-center gap-4 px-5 py-3 text-left transition-colors duration-200 ease-standard hover:bg-surface-hover/40">
                   <span className="w-10 font-mono text-sm" style={{ color: visual.color }}>{entry.date.day}</span>
                   <span className="min-w-0 flex-1 text-sm text-text-secondary">{entry.title}</span>
-                  <span className="calendar-entry rounded-full px-2 py-0.5 text-[0.625rem] font-semibold tracking-wide" style={{ '--calendar-entry-color': visual.color }}>{visual.label}</span>
+                  <span className="calendar-entry rounded-full px-2 py-0.5 text-xs font-semibold" style={{ '--calendar-entry-color': visual.color }}>{visual.label}</span>
                 </button>;
               })}
               {!monthData?.entries?.length && <p className="px-5 py-10 text-center text-sm text-text-disabled">No entries in this month.</p>}
@@ -350,16 +347,16 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
         <div className="space-y-2 rounded-surface border border-border-subtle bg-surface-panel/92 p-3 shadow-panel backdrop-blur-md sm:p-4">
           <SettingsPanel
             id="calendar-rules"
-            title="Calendar rules"
-            summary={`${draft.hoursPerDay}-hour days, ${draft.leapRule.type === 'gregorian' ? 'Gregorian leap years' : 'no leap years'}`}
+            title="Rules"
+            summary={`${draft.name || 'Calendar'} · ${draft.hoursPerDay}-hour days · ${draft.leapRule.type === 'gregorian' ? 'Gregorian leap years' : 'no leap years'}`}
             open={openSettingsSection === 'rules'}
             onToggle={() => toggleSettingsSection('rules')}
           >
             <div className="grid gap-3 sm:grid-cols-3">
               <label className="sm:col-span-2"><Label>Name</Label><input className={INPUT} value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} /></label>
               <label><Label>Hours per day</Label><input className={INPUT} type="number" min="1" max="100" value={draft.hoursPerDay} onChange={event => setDraft({ ...draft, hoursPerDay: Number(event.target.value) || 1 })} /></label>
-              <label><Label>Year 1 starts on</Label><select className={INPUT} value={draft.epochWeekday} onChange={event => setDraft({ ...draft, epochWeekday: Number(event.target.value) })}>{draft.weekdays.map((name, index) => <option key={index} value={index}>{name}</option>)}</select></label>
-              <label><Label>Leap years</Label><select className={INPUT} value={draft.leapRule.type} onChange={event => setDraft({ ...draft, leapRule: event.target.value === 'gregorian' ? { type: 'gregorian', month: 2, extraDays: 1 } : { type: 'none' } })}><option value="none">None</option><option value="gregorian">Gregorian rule</option></select></label>
+              <div><Label>Year 1 starts on</Label><SelectMenu ariaLabel="Year 1 starts on" value={draft.epochWeekday} onChange={epochWeekday => setDraft({ ...draft, epochWeekday: Number(epochWeekday) })} options={draft.weekdays.map((name, index) => ({ value: index, label: name }))} /></div>
+              <div><Label>Leap years</Label><SelectMenu ariaLabel="Leap years" value={draft.leapRule.type} onChange={type => setDraft({ ...draft, leapRule: type === 'gregorian' ? { type: 'gregorian', month: 2, extraDays: 1 } : { type: 'none' } })} options={[{ value: 'none', label: 'None' }, { value: 'gregorian', label: 'Gregorian rule' }]} /></div>
             </div>
           </SettingsPanel>
 
@@ -374,7 +371,7 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
             <div className="grid gap-2 md:grid-cols-2">
               {draft.months.map((month, index) => (
                 <div key={month.id} className="grid grid-cols-[1.75rem_minmax(0,1fr)_4.75rem_2.25rem] items-center gap-2 rounded-control border border-border-subtle bg-surface-input/40 p-1.5">
-                  <span className="text-center font-mono text-[0.6875rem] text-text-subtle" aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>
+                  <span className="text-center font-mono text-xs text-text-subtle" aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>
                   <input aria-label={`Month ${index + 1} name`} className={INPUT} value={month.name} onChange={event => updateList('months', index, { name: event.target.value })} />
                   <input aria-label={`${month.name || `Month ${index + 1}`} days`} className={`${INPUT} text-center`} type="number" min="1" value={month.days} onChange={event => updateList('months', index, { days: Number(event.target.value) || 1 })} />
                   <DeleteButton ariaLabel={`Delete ${month.name || `month ${index + 1}`}`} disabled={draft.months.length === 1} onClick={() => setDraft({ ...draft, months: draft.months.filter((_, itemIndex) => itemIndex !== index) })} />
@@ -394,7 +391,7 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
             <div className="grid gap-2 sm:grid-cols-2">
               {draft.weekdays.map((name, index) => (
                 <div key={index} className="grid grid-cols-[1.75rem_minmax(0,1fr)_2.25rem] items-center gap-2 rounded-control border border-border-subtle bg-surface-input/40 p-1.5">
-                  <span className="text-center font-mono text-[0.6875rem] text-text-subtle" aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>
+                  <span className="text-center font-mono text-xs text-text-subtle" aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>
                   <input aria-label={`Weekday ${index + 1} name`} className={INPUT} value={name} onChange={event => updateList('weekdays', index, event.target.value)} />
                   <DeleteButton ariaLabel={`Delete ${name || `weekday ${index + 1}`}`} disabled={draft.weekdays.length === 1} onClick={() => setDraft({ ...draft, weekdays: draft.weekdays.filter((_, itemIndex) => itemIndex !== index) })} />
                 </div>
@@ -415,10 +412,10 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
             <div className="space-y-2">
               {draft.eras.map((era, index) => (
                 <div key={era.id} className="grid gap-2 rounded-control border border-border-subtle bg-surface-input/40 p-2 lg:grid-cols-[minmax(0,1fr)_6rem_9rem_7rem_2.5rem] lg:items-end">
-                  <label className="min-w-0"><span className="mb-1 block text-[0.6875rem] font-bold uppercase tracking-wider text-text-subtle lg:hidden">Name</span><input aria-label={`Era ${index + 1} name`} className={INPUT} value={era.name} onChange={event => updateList('eras', index, { name: event.target.value })} /></label>
-                  <label className="min-w-0"><span className="mb-1 block text-[0.6875rem] font-bold uppercase tracking-wider text-text-subtle lg:hidden">Short name</span><input aria-label={`${era.name || `Era ${index + 1}`} short name`} className={INPUT} value={era.shortName} onChange={event => updateList('eras', index, { shortName: event.target.value })} /></label>
-                  <label className="min-w-0"><span className="mb-1 block text-[0.6875rem] font-bold uppercase tracking-wider text-text-subtle lg:hidden">Direction</span><select aria-label={`${era.name || `Era ${index + 1}`} direction`} className={INPUT} value={era.direction} onChange={event => updateList('eras', index, { direction: event.target.value })}><option value="forward">Counts forward</option><option value="backward">Counts backward</option></select></label>
-                  <label className="min-w-0"><span className="mb-1 block text-[0.6875rem] font-bold uppercase tracking-wider text-text-subtle lg:hidden">Timeline origin</span><input aria-label={`${era.name || `Era ${index + 1}`} timeline origin`} className={INPUT} type="number" value={era.offset} onChange={event => updateList('eras', index, { offset: Number(event.target.value) || 0 })} title="Absolute year offset" /></label>
+                  <label className="min-w-0"><span className="mb-1 block text-xs font-medium text-text-muted lg:hidden">Name</span><input aria-label={`Era ${index + 1} name`} className={INPUT} value={era.name} onChange={event => updateList('eras', index, { name: event.target.value })} /></label>
+                  <label className="min-w-0"><span className="mb-1 block text-xs font-medium text-text-muted lg:hidden">Short name</span><input aria-label={`${era.name || `Era ${index + 1}`} short name`} className={INPUT} value={era.shortName} onChange={event => updateList('eras', index, { shortName: event.target.value })} /></label>
+                  <div className="min-w-0"><span className="mb-1 block text-xs font-medium text-text-muted lg:hidden">Direction</span><SelectMenu ariaLabel={`${era.name || `Era ${index + 1}`} direction`} value={era.direction} onChange={direction => updateList('eras', index, { direction })} options={[{ value: 'forward', label: 'Counts forward' }, { value: 'backward', label: 'Counts backward' }]} /></div>
+                  <label className="min-w-0"><span className="mb-1 block text-xs font-medium text-text-muted lg:hidden">Timeline origin</span><input aria-label={`${era.name || `Era ${index + 1}`} timeline origin`} className={INPUT} type="number" value={era.offset} onChange={event => updateList('eras', index, { offset: Number(event.target.value) || 0 })} data-tooltip="Absolute year offset" /></label>
                   <DeleteButton ariaLabel={`Delete ${era.name || `era ${index + 1}`}`} className="justify-self-end lg:justify-self-stretch" disabled={draft.eras.length === 1} onClick={() => setDraft({ ...draft, eras: draft.eras.filter((_, itemIndex) => itemIndex !== index) })} />
                 </div>
               ))}
@@ -427,7 +424,7 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
 
           <SettingsPanel
             id="calendar-seasons"
-            title="Seasons (optional)"
+            title="Seasons"
             summary={draft.seasons.length ? `${draft.seasons.length} configured` : 'No seasons configured'}
             open={openSettingsSection === 'seasons'}
             onToggle={() => toggleSettingsSection('seasons')}
@@ -454,7 +451,7 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
                           <span className="min-w-0 flex-1">
                             <span className="flex min-w-0 flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-2">
                               <strong className="min-w-0 flex-1 truncate text-sm font-semibold text-text-primary">{season.name || `Season ${index + 1}`}</strong>
-                              <span className="shrink-0 text-[0.6875rem] font-medium text-text-muted">{formatSeasonRange(draft, season)}</span>
+                              <span className="shrink-0 text-xs font-medium text-text-muted">{formatSeasonRange(draft, season)}</span>
                             </span>
                             <span className="mt-0.5 block truncate text-xs text-text-subtle">{season.description || 'No narrative description'}</span>
                           </span>
@@ -488,7 +485,7 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
             <p className="caption mt-1">Nothing changes until you choose how to handle them.</p>
             <div className="mt-3 flex flex-wrap gap-2"><button type="button" onClick={() => resolveAll('adjust')} className="rounded-control bg-status-warning px-3 py-2 text-xs font-bold text-on-accent">Adjust automatically</button><button type="button" onClick={() => resolveAll('discard')} className="rounded-control border border-status-danger/30 px-3 py-2 text-xs font-semibold text-status-danger">Discard affected dates</button></div>
             <div className="mt-4 space-y-3">{invalid.map(item => <div key={item.key} className="rounded-control border border-border-subtle bg-surface-canvas/35 p-3">
-              <div className="mb-2 flex items-center justify-between gap-3"><div><p className="text-xs font-semibold text-text-primary">{item.entityName || item.label}</p><p className="text-[0.6875rem] text-text-subtle">{item.label}: {formatWorldDate(draft, item.date)}</p></div></div>
+              <div className="mb-2 flex items-center justify-between gap-3"><div><p className="text-xs font-semibold text-text-primary">{item.entityName || item.label}</p><p className="text-xs text-text-subtle">{item.label}: {formatWorldDate(draft, item.date)}</p></div></div>
               <WorldDateInput label="Date" emptyLabel="Set a new date" seedValue={item.date} calendar={draft} value={resolutionDraft[item.key]} onChange={date => setResolutionDraft(current => ({ ...current, [item.key]: date }))} />
             </div>)}</div>
             <div className="mt-4 flex justify-end"><button type="button" onClick={applyManualResolutions} className="rounded-control border border-accent/30 px-3 py-2 text-xs font-semibold text-accent">Apply selected dates</button></div>
@@ -496,10 +493,10 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
 
           <div className="sticky bottom-0 z-10 -mx-3 -mb-3 mt-3 flex flex-col gap-3 rounded-b-surface border-t border-border-subtle bg-surface-panel/95 p-3 backdrop-blur-md sm:-mx-4 sm:-mb-4 sm:flex-row sm:items-center sm:justify-between sm:p-4">
             <div className="flex min-w-0 items-center gap-2" aria-live="polite">
-              <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${hasUnsavedChanges ? 'bg-accent' : 'bg-status-success'}`} />
+              <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${hasUnsavedChanges ? 'bg-status-warning' : 'bg-status-success'}`} />
               <div className="min-w-0">
-                <p className={`text-xs font-semibold ${hasUnsavedChanges ? 'text-accent' : 'text-text-secondary'}`}>{saving ? 'Saving calendar…' : hasUnsavedChanges ? 'Unsaved calendar changes' : 'Calendar is up to date'}</p>
-                <p className="caption mt-0.5">Saved rules apply across Worldbuild dates and RP time.</p>
+                <p className={`text-xs font-semibold ${hasUnsavedChanges ? 'text-status-warning' : 'text-text-secondary'}`}>{saving ? 'Saving…' : hasUnsavedChanges ? 'Unsaved changes' : 'Up to date'}</p>
+                <p className="caption mt-0.5">Saved rules apply to every date and to roleplay time.</p>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-2 sm:flex sm:shrink-0 sm:justify-end">
@@ -513,7 +510,43 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
   );
 }
 
-function Label({ children }) { return <span className="eyebrow mb-1.5 block">{children}</span>; }
+function Label({ children }) { return <span className="mb-1.5 block text-xs font-medium text-text-muted">{children}</span>; }
+// Where the calendar is, as one control: the month, the year and the era it counts in.
+function MonthPicker({ calendar, cursor, onChange }) {
+  const anchorRef = useRef(null);
+  const [open, setOpen] = useState(false);
+  const era = calendar.eras.find(item => item.id === cursor.eraId);
+  return (
+    <>
+      <button ref={anchorRef} type="button" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(value => !value)}
+        className="inline-flex min-h-9 items-center gap-2 rounded-control px-2.5 text-left transition-colors hover:bg-surface-hover/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+        <span className="text-[1.0625rem] font-bold text-text-primary">{calendar.months[cursor.month - 1]?.name}</span>
+        <span className="text-[1.0625rem] font-medium tabular-nums text-text-muted">{cursor.year} {era?.shortName}</span>
+        <ChevronDown className="h-4 w-4 text-text-subtle" aria-hidden="true" />
+      </button>
+      <Popover anchorRef={anchorRef} open={open} onClose={() => setOpen(false)} matchAnchorWidth={false} scroll={false} maxHeight={420} className="w-80 border-border-default bg-surface-panel p-3">
+        <div className="grid grid-cols-[minmax(0,1fr)_6rem] gap-2">
+          <label><span className="mb-1 block text-xs font-medium text-text-muted">Year</span>
+            <input className={`${INPUT} w-full`} type="number" min="1" value={cursor.year} onChange={event => onChange({ ...cursor, year: Math.max(1, Number(event.target.value) || 1) })} /></label>
+          <div role="radiogroup" aria-label="Era"><span className="mb-1 block text-xs font-medium text-text-muted">Era</span>
+            <div className="flex flex-wrap gap-1">{calendar.eras.map(item => (
+              <button key={item.id} type="button" role="radio" aria-checked={cursor.eraId === item.id} onClick={() => onChange({ ...cursor, eraId: item.id })} data-tooltip={item.name}
+                className={`min-h-9 rounded-md px-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${cursor.eraId === item.id ? 'bg-surface-hover text-text-primary ring-1 ring-inset ring-border-strong' : 'text-text-muted hover:text-text-primary'}`}>{item.shortName}</button>
+            ))}</div></div>
+        </div>
+        <div className="mt-3 grid grid-cols-3 gap-1">
+          {calendar.months.map((month, index) => (
+            <button key={month.id || index} type="button" onClick={() => { onChange({ ...cursor, month: index + 1 }); setOpen(false); }}
+              className={`truncate rounded-md px-2 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${cursor.month === index + 1 ? 'bg-surface-hover text-text-primary ring-1 ring-inset ring-border-strong' : 'text-text-secondary hover:bg-surface-hover/60 hover:text-text-primary'}`}>
+              {month.name}
+            </button>
+          ))}
+        </div>
+      </Popover>
+    </>
+  );
+}
+
 function SettingsPanel({ id, title, summary, action, open, onToggle, children }) {
   const triggerId = `${id}-trigger`;
   const panelId = `${id}-content`;
@@ -530,11 +563,11 @@ function SettingsPanel({ id, title, summary, action, open, onToggle, children })
         >
           <ChevronDown aria-hidden="true" className={`h-4 w-4 shrink-0 text-text-subtle transition-transform duration-200 ease-standard motion-reduce:transition-none ${open ? 'rotate-0' : '-rotate-90'}`} />
           <span className="min-w-0 flex-1">
-            <span className="eyebrow block text-text-secondary">{title}</span>
+            <span className="block text-sm font-semibold text-text-primary">{title}</span>
             <span className="mt-1 block truncate text-xs text-text-subtle">{summary}</span>
           </span>
         </button>
-        {action}
+        {open && action}
       </div>
       {open && (
         <div id={panelId} role="region" aria-labelledby={triggerId} className="border-t border-border-subtle">
@@ -545,7 +578,7 @@ function SettingsPanel({ id, title, summary, action, open, onToggle, children })
   );
 }
 function AddButton({ onClick, ariaLabel }) {
-  return <button type="button" aria-label={ariaLabel} onClick={onClick} className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-control border border-accent/25 bg-accent/[0.06] px-2.5 text-xs font-semibold text-accent transition-colors duration-200 ease-standard hover:border-accent/40 hover:bg-accent/[0.1] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Plus aria-hidden="true" className="h-3.5 w-3.5" />Add</button>;
+  return <button type="button" aria-label={ariaLabel} onClick={onClick} className="inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-control px-2.5 text-xs font-semibold text-text-muted transition-colors duration-200 ease-standard hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Plus aria-hidden="true" className="h-3.5 w-3.5" />Add</button>;
 }
 function DeleteButton({ onClick, disabled, ariaLabel, className = '' }) {
   return <button type="button" aria-label={ariaLabel} disabled={disabled} onClick={onClick} className={`flex min-h-9 min-w-9 items-center justify-center rounded-control text-text-subtle transition-colors duration-200 ease-standard hover:bg-status-danger/[0.08] hover:text-status-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-danger/40 disabled:cursor-not-allowed disabled:opacity-20 ${className}`}><Trash2 aria-hidden="true" className="h-4 w-4" /></button>;
@@ -558,5 +591,5 @@ function formatSeasonRange(calendar, season) {
   return `${formatBoundary(season.start)} to ${formatBoundary(season.end)}`;
 }
 function SeasonBoundary({ label, calendar, value, onChange }) {
-  return <div><Label>{label}</Label><div className="grid grid-cols-[minmax(0,1fr)_5rem] gap-2"><select aria-label={`${label} month`} className={INPUT} value={value.month} onChange={event => onChange({ ...value, month: Number(event.target.value) })}>{calendar.months.map((month, index) => <option key={month.id} value={index + 1}>{month.name}</option>)}</select><input aria-label={`${label} day`} className={INPUT} type="number" min="1" max={calendar.months[value.month - 1]?.days || 1} value={value.day} onChange={event => onChange({ ...value, day: Number(event.target.value) || 1 })} /></div></div>;
+  return <div><Label>{label}</Label><div className="grid grid-cols-[minmax(0,1fr)_5rem] gap-2"><SelectMenu ariaLabel={`${label} month`} value={value.month} onChange={month => onChange({ ...value, month: Number(month) })} options={calendar.months.map((month, index) => ({ value: index + 1, label: month.name }))} /><input aria-label={`${label} day`} className={INPUT} type="number" min="1" max={calendar.months[value.month - 1]?.days || 1} value={value.day} onChange={event => onChange({ ...value, day: Number(event.target.value) || 1 })} /></div></div>;
 }

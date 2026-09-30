@@ -17,10 +17,11 @@ export default function SegmentedControl({ value, onChange, options, label, clas
             onClick={() => onChange(option.value)}
             className={`inline-flex min-h-8 items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors
               focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50
-              ${selected ? 'bg-accent text-on-accent' : 'text-text-muted hover:bg-surface-hover/55 hover:text-text-primary'}`}
+              ${selected ? 'bg-surface-hover text-text-primary shadow-sm ring-1 ring-inset ring-border-strong' : 'text-text-muted hover:bg-surface-hover/55 hover:text-text-primary'}`}
           >
             {Icon ? <Icon className="h-3.5 w-3.5" aria-hidden="true" /> : null}
             {option.label}
+            {option.count != null && <span className={`font-medium tabular-nums ${option.count === 0 ? 'text-text-disabled' : 'text-text-subtle'}`}>{option.count}</span>}
           </button>
         );
       })}

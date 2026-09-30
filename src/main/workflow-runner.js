@@ -4232,7 +4232,7 @@ async function loadConstantMemoryChunks(workspaceId) {
 
 // aiPolicy: 'open' applies directly, 'review' stages into data._enrichPending without
 // touching live values, 'locked' is skipped. One entity failing never aborts the run.
-async function enrichEntities(workspaceId, progressCallback = null) {
+async function enrichEntities(workspaceId, progressCallback = null, { entityIds = null, shouldCancel = null } = {}) {
     if (!workspaceId) throw new Error('workspaceId is required');
     // Precise extraction: System AI only, never a writing profile.
     const systemAiConfig = getSystemAiConfiguration();
@@ -4244,7 +4244,8 @@ async function enrichEntities(workspaceId, progressCallback = null) {
     const manualJson = null;
 
     const all = entitiesStore.listEntities({ workspaceId });
-    const targets = all.filter(e => e.status !== 'proposed' && (e.data?.aiPolicy || 'review') !== 'locked');
+    const only = Array.isArray(entityIds) && entityIds.length ? new Set(entityIds) : null;
+    const targets = all.filter(e => e.status !== 'proposed' && (e.data?.aiPolicy || 'review') !== 'locked' && (!only || only.has(e.id)));
     const updateState = createEntityUpdateState(db);
     const runId = updateState.startRun(workspaceId, targets.map(entity => entity.id));
     const taggedWritingChunks = db.prepare(`
@@ -4298,14 +4299,22 @@ async function enrichEntities(workspaceId, progressCallback = null) {
     let consecutiveStructuredFailures = 0;
     let processedEntities = 0;
     let stoppedEarly = false;
+    let cancelled = false;
     for (let i = 0; i < targets.length; i++) {
         if (shouldStopEntityUpdates(consecutiveStructuredFailures)) {
             stoppedEarly = true;
             console.error('[Enrich] Stopped after three consecutive structured response failures. Unprocessed evidence remains pending.');
             break;
         }
-        const ent = targets[i];
+        // Stop is honoured between entities, so no sheet is left half updated.
+        if (shouldCancel?.()) { cancelled = true; break; }
         processedEntities++;
+        // The Worldbuild stays editable during a run, so each sheet is read fresh when its turn comes.
+        const ent = entitiesStore.getEntity(targets[i].id);
+        if (!ent || ent.status === 'proposed' || (ent.data?.aiPolicy || 'review') === 'locked') {
+            updateState.updateJob(runId, targets[i].id, { status: 'skipped' });
+            continue;
+        }
         updateState.updateJob(runId, ent.id, { status: 'processing', error: null });
         if (ent.type === 'System' && ent.data?._enrichPending?.lore != null) {
             const pending = { ...ent.data._enrichPending };
@@ -4317,7 +4326,7 @@ async function enrichEntities(workspaceId, progressCallback = null) {
             entitiesStore.updateEntity(ent.id, { data: nextData });
             ent.data = nextData;
         }
-        if (progressCallback) progressCallback({ phase: 'enriching', done: i, total: targets.length, name: ent.canonicalName });
+        if (progressCallback) progressCallback({ phase: 'enriching', done: i, total: targets.length, name: ent.canonicalName, entityId: ent.id });
         const candidates = new Map();
         for (const chunk of taggedWritingChunks.all(ent.id, workspaceId)) {
             if (chunk.text) candidates.set(chunk.id, chunk);
@@ -4928,14 +4937,14 @@ async function enrichEntities(workspaceId, progressCallback = null) {
         }
     }
     if (progressCallback) progressCallback({ phase: 'enriching', done: processedEntities, total: targets.length });
-    const runStatus = stoppedEarly || failed ? (processedEntities > failed ? 'partial' : 'failed') : 'completed';
+    const runStatus = stoppedEarly || cancelled || failed ? (processedEntities > failed ? 'partial' : 'failed') : 'completed';
     const tokenUsage = updateState.finishRun(runId, runStatus);
     return {
         runId, entities: targets.length, processedEntities, updated, staged, upToDate, noEvidence,
         failed, failures, evidenceUsed, taggedEvidenceRemaining, textMatchesDeferred,
         canonicalSuggestionCount, narrativeSuggestionCount, emptyFieldsExamined,
         emptyFieldSuggestions, emptyFieldsWithoutSupport, emptyFieldsAwaitingEvidence,
-        stoppedEarly, remaining: targets.length - processedEntities, tokenUsage
+        stoppedEarly, cancelled, remaining: targets.length - processedEntities, tokenUsage
     };
 }
 

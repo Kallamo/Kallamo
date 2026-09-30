@@ -7,6 +7,7 @@ import IconButton from '../../components/ui/IconButton';
 import { locationPresenceOptions, meta } from '../worldbuild/worldbuildConfig';
 import { locationSizeLabel } from '../../../shared/location-sizes';
 import WorldDateInput from '../worldbuild/WorldDateInput';
+import { PortraitContext, usePortraits } from '../worldbuild/portraits';
 import {
   CastGroup, CastRow, InventoryTab, LocationHero, PanelClock, PanelTabs, PlayerCard, RoleplayRail, RoleplayStatus, SectionHead
 } from './RoleplayPanelParts';
@@ -829,4 +830,10 @@ function presenceOf(entityId, scene) {
   return 'nearby';
 }
 
-export default memo(RoleplayQuickPanel);
+// Portraits reach every avatar in the panel through context, loaded once per workspace.
+function RoleplayQuickPanelWithPortraits(props) {
+  const portraits = usePortraits(props.workspaceId, props.api);
+  return <PortraitContext.Provider value={portraits}><RoleplayQuickPanel {...props} /></PortraitContext.Provider>;
+}
+
+export default memo(RoleplayQuickPanelWithPortraits);

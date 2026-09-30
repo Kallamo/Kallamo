@@ -1,79 +1,47 @@
-import React from 'react';
-import { X, Check, AlertTriangle, Download, Share2 } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import React, { useEffect, useState } from 'react';
+import { AlertTriangle, Check, Download, Info } from 'lucide-react';
+import Modal from '../ui/Modal';
+import Button from '../ui/Button';
+import Checkbox from '../ui/Checkbox';
 
-// Informs only; onConfirm opens the save dialog.
-export default function ExportWorldbuildModal({ entityCount = 0, onClose, onConfirm }) {
-  const { settings } = useApp();
-  const isBlurEnabled = settings?.interface?.blur ?? true;
+const megabytes = (bytes) => bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+
+// Informs only; onConfirm opens the save dialog with the chosen options.
+export default function ExportWorldbuildModal({ workspaceId, api, entityCount = 0, onClose, onConfirm }) {
+  const [summary, setSummary] = useState(null);
+  const [includeImages, setIncludeImages] = useState(true);
+  useEffect(() => {
+    let active = true;
+    api?.worldbuildExportSummary?.(workspaceId).then(result => { if (active && result?.success) setSummary(result); }).catch(() => {});
+    return () => { active = false; };
+  }, [api, workspaceId]);
+  const count = summary?.entities ?? entityCount;
+  const images = summary?.images || 0;
+
+  const Line = ({ icon: Icon, tone, children }) => (
+    <li className="flex gap-2.5 text-sm leading-relaxed text-text-secondary"><Icon className={`mt-0.5 h-4 w-4 shrink-0 ${tone}`} aria-hidden="true" /><span>{children}</span></li>
+  );
 
   return (
-    <div className={`fixed inset-0 z-[80] flex items-center justify-center titlebar-nodrag select-none p-4 ${isBlurEnabled ? 'bg-black/60 backdrop-blur-sm' : 'bg-[#011419]'}`}>
-      <div className="w-full max-w-lg bg-[#000D11] rounded-xl shadow-2xl border border-gray-800/60 flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
-
-        {/* Header */}
-        <div className="shrink-0 flex justify-between items-center h-14 w-full px-6 bg-[#011419] border-b border-gray-800/50">
-          <div className="flex items-center space-x-2.5">
-            <Download className="w-4 h-4 text-accent" />
-            <h2 className="text-sm font-bold text-white uppercase tracking-wider font-sans">Export Worldbuild</h2>
-          </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-status-danger transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Content Body */}
-        <div className="flex-1 p-6 space-y-5 overflow-y-auto max-h-[70vh] custom-scrollbar">
-          <div className="space-y-3">
-            <h3 className="text-xs font-bold text-accent uppercase tracking-wider font-sans">Before you share</h3>
-
-            <div className="space-y-3">
-              <div className="flex items-start space-x-3 p-3 bg-[#051116] border border-gray-800/80 rounded-lg">
-                <Check className="w-4 h-4 text-green-400 shrink-0 mt-0.5" />
-                <div className="text-xs text-gray-300 leading-relaxed font-sans">
-                  <strong className="text-white block mb-0.5 font-sans">Entities &amp; relations packaged</strong>
-                  Every character, location, item, faction, creature and concept in this Worldbuild
-                  {entityCount ? <> (<strong className="text-white">{entityCount}</strong> in total)</> : null}, and the connections between them, is bundled into one portable <span className="text-accent font-semibold">.klwb</span> file.
-                </div>
-              </div>
-
-              <div className="flex items-start space-x-3 p-3 bg-[#051116] border border-gray-800/80 rounded-lg">
-                <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-                <div className="text-xs text-gray-300 leading-relaxed font-sans">
-                  <strong className="text-white block mb-0.5 font-sans">Chapter links stay behind</strong>
-                  Links to Writing Desk chapters and any <strong className="text-amber-400">pending suggestions</strong> awaiting your review are <strong className="text-amber-400">NOT</strong> exported. They belong to this workspace only.
-                </div>
-              </div>
-
-              <div className="flex items-start space-x-3 p-3 bg-[#051116] border border-gray-800/80 rounded-lg">
-                <Share2 className="w-4 h-4 text-accent shrink-0 mt-0.5" />
-                <div className="text-xs text-gray-300 leading-relaxed font-sans">
-                  <strong className="text-white block mb-0.5 font-sans">Safe to share</strong>
-                  Only your world travels: its entities and their lore, and nothing else. No API keys or private settings ride along, so you can share it freely.
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="text-xs text-gray-400 leading-relaxed font-sans bg-[#051116] border border-gray-800/60 rounded-lg p-3">
-            When imported elsewhere, every entity comes in as a suggestion to accept, merge, or dismiss. Nothing is ever overwritten on its own.
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="shrink-0 flex justify-end space-x-3 h-16 px-6 bg-[#011419] border-t border-gray-800/50 items-center">
-          <button onClick={onClose} className="px-4 py-2 text-xs font-bold text-gray-400 hover:text-white transition-colors cursor-pointer font-sans">
-            Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            className="px-5 py-2 bg-accent text-[#011419] font-bold text-xs uppercase tracking-wider rounded transition-all hover:brightness-110 shadow-md flex items-center cursor-pointer font-sans"
-          >
-            Export Worldbuild
-          </button>
-        </div>
-
+    <Modal onClose={onClose} size="lg" title="Export Worldbuild" icon={Download} iconClassName="text-text-muted">
+      <div className="space-y-4 p-5">
+        <p className="text-sm text-text-secondary">Saves {count} {count === 1 ? 'entity' : 'entities'} to a .klwb file that another workspace can import.</p>
+        <ul className="space-y-2.5">
+          <Line icon={Check} tone="text-status-success">Sheets, links, templates, the calendar and facts go in the file.</Line>
+          {images > 0 && (
+            <li className="flex items-center gap-3 rounded-control border border-border-subtle px-3 py-2.5">
+              <span className="shrink-0 whitespace-nowrap"><Checkbox checked={includeImages} onChange={setIncludeImages} label="Include images" /></span>
+              <span className="ml-auto text-right text-xs text-text-subtle">Portraits and scene backgrounds · {images} {images === 1 ? 'image' : 'images'}, {megabytes(summary.imageBytes)}</span>
+            </li>
+          )}
+          <Line icon={Info} tone="text-text-muted">Links to Writing Desk chapters and suggestions still waiting for review stay behind.</Line>
+          <Line icon={AlertTriangle} tone="text-status-warning">Anyone with the file can read everything in it. Share it only as you would share the story.</Line>
+        </ul>
       </div>
-    </div>
+      <div className="flex justify-end gap-2 border-t border-border-subtle px-5 py-3.5">
+        <Button variant="subtle" onClick={onClose}>Cancel</Button>
+        <Button icon={Download} onClick={() => onConfirm({ includeImages: images > 0 && includeImages })}>Export</Button>
+      </div>
+    </Modal>
   );
 }

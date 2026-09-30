@@ -1,4 +1,5 @@
 import React from 'react';
+import { CalendarDays, X } from 'lucide-react';
 import SelectMenu from '../../components/ui/SelectMenu';
 
 const COMPOUND_SEGMENT = 'min-w-0 bg-surface-input px-2 py-1.5 transition-colors focus-within:bg-surface-hover/45';
@@ -70,9 +71,9 @@ export default function WorldDateInput({
           type="button"
           onClick={() => onChange(defaultDate)}
           disabled={disabled}
-          className="flex min-h-11 w-full items-center justify-center rounded-card border border-dashed border-border-default bg-surface-input/45 px-3 text-sm font-semibold text-text-muted transition-[color,background-color,border-color] hover:border-accent/35 hover:bg-accent/[0.04] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:border-border-default disabled:hover:bg-surface-input/45 disabled:hover:text-text-muted"
+          className="inline-flex min-h-10 w-fit items-center gap-2 rounded-control border border-border-default bg-surface-input/45 px-3 text-sm font-semibold text-text-secondary transition-[color,border-color] hover:border-border-strong hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-55"
         >
-          {emptyLabel}
+          <CalendarDays className="h-4 w-4 text-text-muted" aria-hidden="true" />{emptyLabel}
         </button>
       </fieldset>
     );
@@ -81,7 +82,8 @@ export default function WorldDateInput({
   return (
       <fieldset className={`@container min-w-0 ${className}`} aria-describedby={rest['aria-describedby']}>
         <legend className="sr-only">{label}</legend>
-        <div className={`grid min-w-0 gap-2 ${includeTime ? '@min-[34rem]:grid-cols-[minmax(0,1fr)_11rem]' : ''}`}>
+        <div className="flex min-w-0 items-start gap-1.5">
+        <div className={`grid min-w-0 flex-1 gap-2 ${includeTime ? '@min-[34rem]:grid-cols-[minmax(0,1fr)_11rem]' : ''}`}>
           <div className="min-w-0" role="group" aria-label={`${label} date`}>
             {includeTime ? <span className={`${COMPOUND_LABEL} mb-1.5 px-1`}>Date</span> : null}
             <div className="overflow-hidden rounded-card border border-border-default bg-border-subtle transition-[border-color,box-shadow] focus-within:border-accent/50 focus-within:ring-2 focus-within:ring-accent/15">
@@ -140,16 +142,17 @@ export default function WorldDateInput({
         </div>
 
         {allowClear && value && (
-          <div className="mt-1.5 flex justify-end">
-            <button
-              type="button"
-              onClick={() => onChange(null)}
-              className="inline-flex min-h-9 items-center rounded-control px-2.5 text-xs font-semibold text-text-muted transition-colors hover:bg-status-danger/10 hover:text-status-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            >
-              Clear date
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => onChange(null)}
+            aria-label={`Clear ${label.toLowerCase()}`}
+            data-tooltip="Clear date"
+            className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-control text-text-muted transition-colors hover:bg-status-danger/10 hover:text-status-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${includeTime ? 'mt-6' : 'mt-2'}`}
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
         )}
+        </div>
       </fieldset>
   );
 }

@@ -25,7 +25,7 @@ export default function EntityPickerButton({ label = 'Add', title, options, onPi
     <>
       <Button size="sm" variant="ghost" icon={icon} onClick={() => setOpen(true)}>{label}</Button>
       {isOpen ? (
-        <Modal size="md" title={title || 'Choose'} icon={Search} onClose={() => setOpen(false)}>
+        <Modal size="md" title={title || 'Choose'} icon={Search} iconClassName="text-text-muted" onClose={() => setOpen(false)}>
           <div className="p-4">
             {selectOptions.length ? (
               <SearchableSelect
