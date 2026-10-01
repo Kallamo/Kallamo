@@ -3,6 +3,7 @@ import Popover from '../../components/ui/Popover';
 import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, List, Plus, RotateCcw, Save, Settings2, Trash2, Bookmark } from 'lucide-react';
 import ColorField from '../../components/ui/ColorField';
 import SelectMenu from '../../components/ui/SelectMenu';
+import NumberInput from '../../components/ui/NumberInput';
 import WorldDateInput, { formatWorldDate } from './WorldDateInput';
 
 const INPUT = 'field-input px-3 py-2 text-sm outline-none';
@@ -354,7 +355,7 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
           >
             <div className="grid gap-3 sm:grid-cols-3">
               <label className="sm:col-span-2"><Label>Name</Label><input className={INPUT} value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} /></label>
-              <label><Label>Hours per day</Label><input className={INPUT} type="number" min="1" max="100" value={draft.hoursPerDay} onChange={event => setDraft({ ...draft, hoursPerDay: Number(event.target.value) || 1 })} /></label>
+              <label><Label>Hours per day</Label><NumberInput className={INPUT} min={1} max={100} value={draft.hoursPerDay} onChange={hoursPerDay => setDraft({ ...draft, hoursPerDay })} /></label>
               <div><Label>Year 1 starts on</Label><SelectMenu ariaLabel="Year 1 starts on" value={draft.epochWeekday} onChange={epochWeekday => setDraft({ ...draft, epochWeekday: Number(epochWeekday) })} options={draft.weekdays.map((name, index) => ({ value: index, label: name }))} /></div>
               <div><Label>Leap years</Label><SelectMenu ariaLabel="Leap years" value={draft.leapRule.type} onChange={type => setDraft({ ...draft, leapRule: type === 'gregorian' ? { type: 'gregorian', month: 2, extraDays: 1 } : { type: 'none' } })} options={[{ value: 'none', label: 'None' }, { value: 'gregorian', label: 'Gregorian rule' }]} /></div>
             </div>
@@ -373,7 +374,7 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
                 <div key={month.id} className="grid grid-cols-[1.75rem_minmax(0,1fr)_4.75rem_2.25rem] items-center gap-2 rounded-control border border-border-subtle bg-surface-input/40 p-1.5">
                   <span className="text-center font-mono text-xs text-text-subtle" aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>
                   <input aria-label={`Month ${index + 1} name`} className={INPUT} value={month.name} onChange={event => updateList('months', index, { name: event.target.value })} />
-                  <input aria-label={`${month.name || `Month ${index + 1}`} days`} className={`${INPUT} text-center`} type="number" min="1" value={month.days} onChange={event => updateList('months', index, { days: Number(event.target.value) || 1 })} />
+                  <NumberInput aria-label={`${month.name || `Month ${index + 1}`} days`} className={`${INPUT} text-center`} min={1} value={month.days} onChange={days => updateList('months', index, { days })} />
                   <DeleteButton ariaLabel={`Delete ${month.name || `month ${index + 1}`}`} disabled={draft.months.length === 1} onClick={() => setDraft({ ...draft, months: draft.months.filter((_, itemIndex) => itemIndex !== index) })} />
                 </div>
               ))}
@@ -415,7 +416,7 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
                   <label className="min-w-0"><span className="mb-1 block text-xs font-medium text-text-muted lg:hidden">Name</span><input aria-label={`Era ${index + 1} name`} className={INPUT} value={era.name} onChange={event => updateList('eras', index, { name: event.target.value })} /></label>
                   <label className="min-w-0"><span className="mb-1 block text-xs font-medium text-text-muted lg:hidden">Short name</span><input aria-label={`${era.name || `Era ${index + 1}`} short name`} className={INPUT} value={era.shortName} onChange={event => updateList('eras', index, { shortName: event.target.value })} /></label>
                   <div className="min-w-0"><span className="mb-1 block text-xs font-medium text-text-muted lg:hidden">Direction</span><SelectMenu ariaLabel={`${era.name || `Era ${index + 1}`} direction`} value={era.direction} onChange={direction => updateList('eras', index, { direction })} options={[{ value: 'forward', label: 'Counts forward' }, { value: 'backward', label: 'Counts backward' }]} /></div>
-                  <label className="min-w-0"><span className="mb-1 block text-xs font-medium text-text-muted lg:hidden">Timeline origin</span><input aria-label={`${era.name || `Era ${index + 1}`} timeline origin`} className={INPUT} type="number" value={era.offset} onChange={event => updateList('eras', index, { offset: Number(event.target.value) || 0 })} data-tooltip="Absolute year offset" /></label>
+                  <label className="min-w-0"><span className="mb-1 block text-xs font-medium text-text-muted lg:hidden">Timeline origin</span><NumberInput aria-label={`${era.name || `Era ${index + 1}`} timeline origin`} className={INPUT} value={era.offset} onChange={offset => updateList('eras', index, { offset })} data-tooltip="Absolute year offset" /></label>
                   <DeleteButton ariaLabel={`Delete ${era.name || `era ${index + 1}`}`} className="justify-self-end lg:justify-self-stretch" disabled={draft.eras.length === 1} onClick={() => setDraft({ ...draft, eras: draft.eras.filter((_, itemIndex) => itemIndex !== index) })} />
                 </div>
               ))}
@@ -527,7 +528,7 @@ function MonthPicker({ calendar, cursor, onChange }) {
       <Popover anchorRef={anchorRef} open={open} onClose={() => setOpen(false)} matchAnchorWidth={false} scroll={false} maxHeight={420} className="w-80 border-border-default bg-surface-panel p-3">
         <div className="grid grid-cols-[minmax(0,1fr)_6rem] gap-2">
           <label><span className="mb-1 block text-xs font-medium text-text-muted">Year</span>
-            <input className={`${INPUT} w-full`} type="number" min="1" value={cursor.year} onChange={event => onChange({ ...cursor, year: Math.max(1, Number(event.target.value) || 1) })} /></label>
+            <NumberInput className={`${INPUT} w-full`} min={1} value={cursor.year} onChange={year => onChange({ ...cursor, year })} /></label>
           <div role="radiogroup" aria-label="Era"><span className="mb-1 block text-xs font-medium text-text-muted">Era</span>
             <div className="flex flex-wrap gap-1">{calendar.eras.map(item => (
               <button key={item.id} type="button" role="radio" aria-checked={cursor.eraId === item.id} onClick={() => onChange({ ...cursor, eraId: item.id })} data-tooltip={item.name}
@@ -591,5 +592,5 @@ function formatSeasonRange(calendar, season) {
   return `${formatBoundary(season.start)} to ${formatBoundary(season.end)}`;
 }
 function SeasonBoundary({ label, calendar, value, onChange }) {
-  return <div><Label>{label}</Label><div className="grid grid-cols-[minmax(0,1fr)_5rem] gap-2"><SelectMenu ariaLabel={`${label} month`} value={value.month} onChange={month => onChange({ ...value, month: Number(month) })} options={calendar.months.map((month, index) => ({ value: index + 1, label: month.name }))} /><input aria-label={`${label} day`} className={INPUT} type="number" min="1" max={calendar.months[value.month - 1]?.days || 1} value={value.day} onChange={event => onChange({ ...value, day: Number(event.target.value) || 1 })} /></div></div>;
+  return <div><Label>{label}</Label><div className="grid grid-cols-[minmax(0,1fr)_5rem] gap-2"><SelectMenu ariaLabel={`${label} month`} value={value.month} onChange={month => onChange({ ...value, month: Number(month) })} options={calendar.months.map((month, index) => ({ value: index + 1, label: month.name }))} /><NumberInput aria-label={`${label} day`} className={INPUT} min={1} max={calendar.months[value.month - 1]?.days || 1} value={value.day} onChange={day => onChange({ ...value, day })} /></div></div>;
 }

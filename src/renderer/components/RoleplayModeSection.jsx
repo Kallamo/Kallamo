@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Activity, Check, ChevronDown, Gauge, Pencil, Plus, RefreshCw, Trash2, X, Clapperboard, Drama, HeartPulse, Hourglass, UserCog } from 'lucide-react';
 import { AiGlyph } from './ui/glyphs';
 import ColorField from './ui/ColorField';
+import NumberInput from './ui/NumberInput';
 import ConfirmDialog from './ui/ConfirmDialog';
 import SearchableSelect from './ui/SearchableSelect';
 import { locationPresenceOptions } from '../features/worldbuild/worldbuildConfig';
@@ -429,11 +430,11 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, input
                   <div id={panelId} className="border-t border-border-subtle p-3.5 sm:p-4">
                     <div className="grid gap-3 sm:grid-cols-2">
                       {category.id === 'timeskip' ? <>
-                        <Field label="Minimum days" fieldLabel={fieldLabel}><input aria-label={`${category.name} minimum days`} className={inputClass} type="number" min="1" step="1" value={Math.max(1, Math.round(category.minimumMinutes / minutesPerDay))} onChange={event => updateTimeCategory(category.id, { minimumMinutes: Math.max(1, Number(event.target.value) || 1) * minutesPerDay })} /></Field>
-                        <Field label="Maximum days" fieldLabel={fieldLabel}><input aria-label={`${category.name} maximum days`} className={inputClass} type="number" min={Math.max(1, Math.round(category.minimumMinutes / minutesPerDay))} step="1" value={Math.max(1, Math.round(category.maximumMinutes / minutesPerDay))} onChange={event => updateTimeCategory(category.id, { maximumMinutes: Math.max(category.minimumMinutes, (Number(event.target.value) || 1) * minutesPerDay) })} /></Field>
+                        <Field label="Minimum days" fieldLabel={fieldLabel}><NumberInput aria-label={`${category.name} minimum days`} className={inputClass} min={1} value={Math.max(1, Math.round(category.minimumMinutes / minutesPerDay))} onChange={days => updateTimeCategory(category.id, { minimumMinutes: days * minutesPerDay })} /></Field>
+                        <Field label="Maximum days" fieldLabel={fieldLabel}><NumberInput aria-label={`${category.name} maximum days`} className={inputClass} min={Math.max(1, Math.round(category.minimumMinutes / minutesPerDay))} value={Math.max(1, Math.round(category.maximumMinutes / minutesPerDay))} onChange={days => updateTimeCategory(category.id, { maximumMinutes: Math.max(category.minimumMinutes, days * minutesPerDay) })} /></Field>
                       </> : <>
-                        <Field label="Minimum minutes" fieldLabel={fieldLabel}><input aria-label={`${category.name} minimum minutes`} className={inputClass} type="number" min="1" value={category.minimumMinutes} onChange={event => updateTimeCategory(category.id, { minimumMinutes: Number(event.target.value) || 1 })} /></Field>
-                        <Field label="Maximum minutes" fieldLabel={fieldLabel}><input aria-label={`${category.name} maximum minutes`} className={inputClass} type="number" min={category.minimumMinutes} value={category.maximumMinutes} onChange={event => updateTimeCategory(category.id, { maximumMinutes: Math.max(category.minimumMinutes, Number(event.target.value) || category.minimumMinutes) })} /></Field>
+                        <Field label="Minimum minutes" fieldLabel={fieldLabel}><NumberInput aria-label={`${category.name} minimum minutes`} className={inputClass} min={1} value={category.minimumMinutes} onChange={minimumMinutes => updateTimeCategory(category.id, { minimumMinutes })} /></Field>
+                        <Field label="Maximum minutes" fieldLabel={fieldLabel}><NumberInput aria-label={`${category.name} maximum minutes`} className={inputClass} min={category.minimumMinutes} value={category.maximumMinutes} onChange={maximumMinutes => updateTimeCategory(category.id, { maximumMinutes })} /></Field>
                       </>}
                     </div>
                     <Field label="Action guidance" fieldLabel={fieldLabel}><textarea aria-label={`${category.name} action guidance`} className={inputClass + ' custom-scrollbar mt-3 min-h-20 resize-none leading-relaxed'} value={category.guidance} onChange={event => updateTimeCategory(category.id, { guidance: event.target.value })} /></Field>

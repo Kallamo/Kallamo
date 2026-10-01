@@ -1065,6 +1065,38 @@ const MIGRATIONS = [
       const columns = db.prepare('PRAGMA table_info(roleplay_location_backgrounds)').all().map(column => column.name);
       if (columns.length && !columns.includes('focus')) db.exec('ALTER TABLE roleplay_location_backgrounds ADD COLUMN focus TEXT');
     }
+  },
+  {
+    // A Writing Desk result keeps what it cost and what it read, for the token and retrieval readouts.
+    id: 'writing_desk_invocation_debug_v1',
+    up: (db) => {
+      for (const table of ['pending_suggestions', 'document_notes']) {
+        const columns = db.prepare(`PRAGMA table_info(${table})`).all().map(column => column.name);
+        if (columns.length && !columns.includes('debug')) db.exec(`ALTER TABLE ${table} ADD COLUMN debug TEXT`);
+      }
+    }
+  },
+  {
+    // Analyze results are their own history per chapter; a writer copies one into Notes on purpose.
+    id: 'writing_desk_analyses_v1',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS document_analyses (
+          id TEXT PRIMARY KEY,
+          documentId TEXT NOT NULL,
+          workspaceId TEXT NOT NULL,
+          body TEXT NOT NULL,
+          excerpt TEXT,
+          profileId TEXT,
+          instruction TEXT,
+          status TEXT NOT NULL DEFAULT 'ok',
+          debug TEXT,
+          notedAt INTEGER,
+          createdAt INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_document_analyses_document ON document_analyses(documentId, createdAt);
+      `);
+    }
   }
 ];
 

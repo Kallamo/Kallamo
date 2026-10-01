@@ -1,6 +1,7 @@
 import React from 'react';
 import { CalendarDays, X } from 'lucide-react';
 import SelectMenu from '../../components/ui/SelectMenu';
+import NumberInput from '../../components/ui/NumberInput';
 
 const COMPOUND_SEGMENT = 'min-w-0 bg-surface-input px-2 py-1.5 transition-colors focus-within:bg-surface-hover/45';
 const COMPOUND_LABEL = 'block text-xs font-medium text-text-muted';
@@ -94,7 +95,7 @@ export default function WorldDateInput({
                   min="1"
                   max={maxDay}
                   value={date.day}
-                  onChange={event => set({ day: clampInteger(event.target.value, 1, maxDay) })}
+                  onChange={day => set({ day })}
                 />
                 <div className={COMPOUND_SEGMENT}>
                   <span className={COMPOUND_LABEL}>Month</span>
@@ -105,7 +106,7 @@ export default function WorldDateInput({
                   ariaLabel={`${label} year`}
                   min="1"
                   value={date.year}
-                  onChange={event => setCalendarPart({ year: clampInteger(event.target.value, 1) })}
+                  onChange={year => setCalendarPart({ year })}
                 />
                 <div className={COMPOUND_SEGMENT}>
                   <span className={COMPOUND_LABEL}>Era</span>
@@ -125,7 +126,7 @@ export default function WorldDateInput({
                   min="0"
                   max={calendar.hoursPerDay - 1}
                   value={date.hour ?? 0}
-                  onChange={event => set({ hour: clampInteger(event.target.value, 0, calendar.hoursPerDay - 1) })}
+                  onChange={hour => set({ hour })}
                 />
                 <span aria-hidden="true" className="flex items-end bg-surface-input pb-2.5 text-sm font-semibold text-text-subtle">:</span>
                 <CompoundNumberField
@@ -134,7 +135,7 @@ export default function WorldDateInput({
                   min="0"
                   max="59"
                   value={date.minute ?? 0}
-                  onChange={event => set({ minute: clampInteger(event.target.value, 0, 59) })}
+                  onChange={minute => set({ minute })}
                 />
               </div>
             </div>
@@ -161,7 +162,7 @@ function CompoundNumberField({ label, ariaLabel, min, max, value, onChange }) {
   return (
     <label className={COMPOUND_SEGMENT}>
       <span className={COMPOUND_LABEL}>{label}</span>
-      <input className={COMPOUND_NUMBER} aria-label={ariaLabel} type="number" min={min} max={max} value={value} onChange={onChange} />
+      <NumberInput className={COMPOUND_NUMBER} aria-label={ariaLabel} min={min} max={max} value={value} onChange={onChange} />
     </label>
   );
 }

@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Activity, Brain, Check, ChevronDown, MoreHorizontal, Pencil, Plus, Trash2, Users, X, Backpack, Waypoints } from 'lucide-react';
 import Menu, { MenuItem, MenuSeparator } from '../../components/ui/Menu';
 import IconButton from '../../components/ui/IconButton';
+import NumberInput from '../../components/ui/NumberInput';
 import SelectMenuBase from '../../components/ui/SelectMenu';
 import { AiGlyph, ConnectionsGlyph, StopwatchIcon } from '../../components/ui/glyphs';
 import Button from '../../components/ui/Button';
@@ -602,7 +603,7 @@ function ResourceChangeFields({ editor, setEditor, index, definitions, entities 
   return <div className="grid gap-3 sm:grid-cols-3">
     <ConsequenceField label="Who"><SearchableSelect ariaLabel="State consequence subject" value={change.entityId} onChange={(entityId: string) => put({ entityId, definitionId: '' })} options={options(entities)} placeholder="Choose entity…" searchPlaceholder="Filter entities…" /></ConsequenceField>
     <ConsequenceField label="State"><SearchableSelect ariaLabel="State consequence definition" value={change.definitionId} onChange={(definitionId: string) => put({ definitionId })} options={availableDefinitions.map(definition => ({ id: definition.id, label: definition.name, group: definition.appliesTo.join(', ') }))} placeholder="Choose state…" searchPlaceholder="Filter states…" /></ConsequenceField>
-    <ConsequenceField label="Becomes"><input className={INPUT} type="number" value={change.value} onChange={event => put({ value: Number(event.target.value) })} aria-label="Resulting state value" /></ConsequenceField>
+    <ConsequenceField label="Becomes"><NumberInput className={INPUT} integer={false} value={Number(change.value)} onChange={value => put({ value })} aria-label="Resulting state value" /></ConsequenceField>
   </div>;
 }
 
@@ -617,7 +618,7 @@ function InventoryChangeFields({ editor, setEditor, index, items, actors, locati
   const put = (patch: Partial<typeof change>) => replaceAt(editor.inventoryChanges, index, { ...change, ...patch }, inventoryChanges => setEditor({ ...editor, inventoryChanges }));
   return <div className="grid gap-3 sm:grid-cols-2">
     <ConsequenceField label="Item"><SearchableSelect ariaLabel="Inventory consequence item" value={String(change.itemId || '')} onChange={(itemId: string) => put({ itemId })} options={options(items)} placeholder="Choose item…" searchPlaceholder="Filter items…" /></ConsequenceField>
-    <ConsequenceField label="How many"><input className={INPUT} type="number" min="1" value={Number(change.quantity || 1)} onChange={event => put({ quantity: Math.max(1, Number(event.target.value) || 1) })} aria-label="Quantity" /></ConsequenceField>
+    <ConsequenceField label="How many"><NumberInput className={INPUT} min={1} value={Number(change.quantity || 1)} onChange={quantity => put({ quantity })} aria-label="Quantity" /></ConsequenceField>
     <ConsequenceField label="From"><SearchableSelect ariaLabel="Previous inventory holder" value={String(change.fromHolderId || '')} onChange={(fromHolderId: string) => put({ fromHolderId: fromHolderId || null })} options={options(actors)} placeholder="No previous holder" searchPlaceholder="Filter holders…" /></ConsequenceField>
     <ConsequenceField label="To"><SearchableSelect ariaLabel="New inventory placement" value={destination} onChange={(next: string) => {
       const [kind, id] = next.split(':');

@@ -3,44 +3,35 @@ import { useEditor, EditorContent } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
 import { getHTMLFromFragment } from '@tiptap/core';
 import {
-  Bold, Italic, Underline, Strikethrough, Heading1, Heading2, Heading3, List, ListOrdered,
-  Quote, Palette, FileOutput, ChevronDown, Search, Check, Table as TableIcon,
-  Rows, Columns, Trash2, Combine,
-  ArrowUpToLine, ArrowDownToLine, ArrowLeftToLine, ArrowRightToLine,
-  AlignLeft, AlignCenter, AlignRight, AlignJustify, ALargeSmall, AlignVerticalSpaceAround, Pilcrow, Plus, FileCog, Asterisk,
-  MoreHorizontal, Link2, ExternalLink, Unlink, CircleHelp, Lightbulb, Orbit, UserRound, UsersRound
+  Bold, Italic, Underline, Strikethrough, List, ListOrdered, Quote, ChevronDown, ChevronRight, Search, Check,
+  Table as TableIcon, Rows3, Trash2, Combine, ArrowUpToLine, ArrowDownToLine, ArrowLeftToLine, ArrowRightToLine,
+  AlignLeft, AlignCenter, AlignRight, AlignJustify, AlignVerticalSpaceAround, Plus, FileCog, Asterisk, Download,
+  ExternalLink, Unlink, PanelLeftClose, PanelLeftOpen, Pin, Target, X, AlertTriangle, CircleAlert
 } from 'lucide-react';
-import { AiGlyph, SuggestionPendingGlyph, IndexingGlyph, IndexedGlyph, IndexOutdatedGlyph, IndexErrorGlyph, IndexNeverGlyph, DragonIcon, MoneybagIcon, PennantIcon, StopwatchIcon, WorldbuildGlyph, TextColorGlyph } from './ui/glyphs';
+import {
+  AiGlyph, SuggestionPendingGlyph, IndexingGlyph, IndexedGlyph, IndexOutdatedGlyph, IndexErrorGlyph, IndexNeverGlyph,
+  WorldbuildGlyph, TextColorGlyph, NoteGlyph
+} from './ui/glyphs';
 import ColorPicker from './ui/ColorPicker';
 import Button from './ui/Button';
+import IconButton from './ui/IconButton';
+import Tooltip from './ui/Tooltip';
 import Popover from './ui/Popover';
+import { Menu, MenuItem, MenuNote, MenuSeparator } from './ui/Menu';
 import WritingPageModal from './WritingPageModal';
 import ExportModal from './ExportModal';
-import { InvokeModal } from './WritingInvocation';
+import { InvokeModal, CHANNEL_LABELS } from './WritingInvocation';
 import WritingFindReplace from './WritingFindReplace';
+import WritingDiagnostics from './WritingDiagnostics';
 import { useApp } from '../context/AppContext';
-import { X, Loader2, AlertTriangle, MapPin } from 'lucide-react';
 import { DecorationSet } from '@tiptap/pm/view';
+import { meta as entityTypeMeta, TYPE_ORDER } from '../features/worldbuild/worldbuildConfig';
+import { locationSizeLabel, locationSizeOf } from '../../shared/location-sizes';
 import {
   getEditorExtensions, estimatePagesFromWords,
-  suggestionKey, buildSuggestionDecorations, suggestionCharDelta,
+  suggestionKey, buildSuggestionDecorations, suggestionWordDelta,
   selectionHasTable, sliceToMarkdown, proposalToHtml,
 } from './writingExtensions';
-
-// Type → icon/label for linked-entity affordances (hover card, menu). Mirrors the
-// Worldbuild TYPES map so the in-text bridge speaks the same visual language.
-const ENTITY_TYPE_META = {
-  System:     { label: 'System / Concept', Icon: Orbit },
-  Locations:  { label: 'Location', Icon: MapPin },
-  Items:      { label: 'Item', Icon: MoneybagIcon },
-  Races:      { label: 'Race', Icon: UsersRound },
-  Factions:   { label: 'Faction', Icon: PennantIcon },
-  Characters: { label: 'Character', Icon: UserRound },
-  Creatures:  { label: 'Creature', Icon: DragonIcon },
-  Events:     { label: 'Event', Icon: StopwatchIcon },
-};
-const entityMeta = (t) => ENTITY_TYPE_META[t] || { label: t || 'Entity', Icon: CircleHelp };
-const WB_TYPE_ORDER = ['Characters', 'Locations', 'Factions', 'Items', 'Creatures', 'Races', 'Events', 'System'];
 
 export const PAPER_THEMES = [
   { label: 'Light', color: '#ffffff' },
@@ -50,16 +41,16 @@ export const PAPER_THEMES = [
 ];
 
 const TEXT_SWATCHES = [
-  '#111111', '#374151', '#6b7280', '#e5e7eb',
-  '#ef4444', '#f59e0b', '#eab308', '#10b981',
-  '#3b82f6', '#6366f1', '#8b5cf6', '#ec4899',
+  { label: 'Black', color: '#111111' }, { label: 'Slate', color: '#374151' }, { label: 'Grey', color: '#6b7280' },
+  { label: 'Light grey', color: '#e5e7eb' }, { label: 'Red', color: '#ef4444' }, { label: 'Orange', color: '#f59e0b' },
+  { label: 'Yellow', color: '#eab308' }, { label: 'Green', color: '#10b981' }, { label: 'Blue', color: '#3b82f6' },
+  { label: 'Indigo', color: '#6366f1' }, { label: 'Violet', color: '#8b5cf6' }, { label: 'Pink', color: '#ec4899' },
 ];
 
 const DEFAULT_FONT = 'Arial';
 
 // The font picker is driven entirely by the user's installed system fonts
 // (queryLocalFonts). Arial is the fallback when system fonts are unavailable.
-const FONT_OPTIONS = [];
 const FONT_FALLBACK = [{ label: 'Arial', value: 'Arial' }];
 
 const LINE_HEIGHTS = ['1', '1.15', '1.5', '1.6', '2', '2.5'];
@@ -82,7 +73,7 @@ function useRecentColors() {
   const [colors, setColors] = useState(readRecentColors);
   const add = (hex) => setColors(prev => {
     const next = [hex, ...prev.filter(c => c.toLowerCase() !== hex.toLowerCase())].slice(0, 5);
-    localStorage.setItem(RECENT_COLORS_KEY, JSON.stringify(next));
+    try { localStorage.setItem(RECENT_COLORS_KEY, JSON.stringify(next)); } catch { /* storage unavailable */ }
     return next;
   });
   return [colors, add];
@@ -112,7 +103,7 @@ function useFontOptions() {
     loadSystemFonts().then(f => { if (active) setSystem(f); });
     return () => { active = false; };
   }, []);
-  return system.length ? [...FONT_OPTIONS, ...system] : FONT_FALLBACK;
+  return system.length ? system : FONT_FALLBACK;
 }
 
 // Page dimensions in CSS px at 96dpi.
@@ -183,23 +174,84 @@ function useToolbarTick(editor) {
   }, [editor]);
 }
 
-function ToolbarButton({ active, onClick, title, children }) {
+// Formatting controls act on mousedown so the editor never blurs and the selection stays put.
+function ToolbarButton({ active, onClick, label, danger = false, children }) {
   return (
-    <button
-      type="button"
-      onMouseDown={(e) => { e.preventDefault(); onClick(); }}
-      title={title}
-      className={`p-1.5 rounded-md transition-colors cursor-pointer ${active
-        ? 'bg-accent text-[#011419]'
-        : 'text-gray-400 hover:text-white hover:bg-white/5'}`}
-    >
-      {children}
-    </button>
+    <Tooltip content={label}>
+      <button
+        type="button"
+        aria-label={label}
+        aria-pressed={active === undefined ? undefined : active}
+        onMouseDown={(e) => { e.preventDefault(); onClick(); }}
+        className={`inline-flex h-[1.875rem] w-[1.875rem] shrink-0 items-center justify-center rounded-md transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${active
+          ? 'bg-white/[0.13] text-text-primary'
+          : danger ? 'text-status-danger hover:bg-status-danger/10' : 'text-text-muted hover:bg-white/5 hover:text-text-primary'}`}
+      >
+        {children}
+      </button>
+    </Tooltip>
   );
 }
 
 function Divider() {
-  return <span className="w-px h-5 bg-gray-800 mx-1" />;
+  return <span aria-hidden="true" className="mx-1 h-5 w-px shrink-0 bg-border-subtle" />;
+}
+
+const DROP = 'inline-flex h-[1.875rem] shrink-0 items-center gap-1.5 rounded-md border px-2 text-xs font-medium text-text-secondary transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40';
+const dropClass = (open) => `${DROP} ${open ? 'border-border-strong bg-white/[0.08] text-text-primary' : 'border-border-subtle bg-white/[0.03] hover:border-border-default hover:text-text-primary'}`;
+const Caret = ({ open }) => <ChevronDown aria-hidden="true" className={`h-3.5 w-3.5 shrink-0 text-text-subtle transition-transform ${open ? 'rotate-180' : ''}`} />;
+
+// A menu row that keeps the editor's selection: it acts on mousedown, never takes focus.
+function ChoiceRow({ selected, onChoose, children, className = '', style }) {
+  return (
+    <button
+      type="button"
+      role="menuitemradio"
+      aria-checked={selected}
+      onMouseDown={(e) => { e.preventDefault(); onChoose(); }}
+      style={style}
+      className={`flex min-h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-text-primary transition-colors hover:bg-surface-hover ${selected ? 'bg-white/[0.06]' : ''} ${className}`}
+    >
+      <span className="min-w-0 flex-1 truncate">{children}</span>
+      {selected && <Check className="h-4 w-4 shrink-0" aria-hidden="true" />}
+    </button>
+  );
+}
+
+const TEXT_STYLES = [
+  { key: 'paragraph', label: 'Normal text', style: { fontSize: '0.9375rem' } },
+  { key: 1, label: 'Heading 1', style: { fontSize: '1.3rem', fontWeight: 700 } },
+  { key: 2, label: 'Heading 2', style: { fontSize: '1.1rem', fontWeight: 700 } },
+  { key: 3, label: 'Heading 3', style: { fontSize: '0.95rem', fontWeight: 700 } },
+];
+
+function TextStyleControl({ editor, baseFont }) {
+  const ref = useRef(null);
+  const [open, setOpen] = useState(false);
+  const level = [1, 2, 3].find(l => editor.isActive('heading', { level: l }));
+  const current = TEXT_STYLES.find(s => s.key === (level || 'paragraph'));
+  const choose = (key) => {
+    // Standardized heading (CSS-driven size + weight): clear any inline font size so the preset shows.
+    if (key === 'paragraph') editor.chain().focus().setParagraph().run();
+    else editor.chain().focus().unsetFontSize().setHeading({ level: key }).run();
+    setOpen(false);
+  };
+  return (
+    <div ref={ref} className="relative">
+      <button type="button" aria-label="Text style" aria-haspopup="menu" aria-expanded={open} onMouseDown={(e) => { e.preventDefault(); setOpen(o => !o); }} className={`${dropClass(open)} w-[7.25rem]`}>
+        <span className="min-w-0 flex-1 truncate text-left">{current.label}</span><Caret open={open} />
+      </button>
+      <Popover anchorRef={ref} open={open} onClose={() => setOpen(false)} matchAnchorWidth={false} scroll={false} className="w-56 !p-1.5">
+        <div role="menu" aria-label="Text style" className="flex flex-col">
+          {TEXT_STYLES.map(s => (
+            <ChoiceRow key={s.key} selected={current.key === s.key} onChoose={() => choose(s.key)} style={{ ...s.style, fontFamily: baseFont || undefined }} className={s.key === 1 ? 'min-h-10' : ''}>
+              {s.label}
+            </ChoiceRow>
+          ))}
+        </div>
+      </Popover>
+    </div>
+  );
 }
 
 // Searchable font picker: type to filter, or scroll the full list.
@@ -223,47 +275,32 @@ function FontPicker({ editor, baseFont }) {
   const choose = (value) => {
     if (value) editor.chain().focus().setFontFamily(value).run();
     else editor.chain().focus().unsetFontFamily().run();
-    setOpen(false);
-    setQuery('');
+    close();
   };
 
   return (
     <div className="relative" ref={ref}>
-      <button
-        type="button"
-        onMouseDown={(e) => { e.preventDefault(); setOpen(o => !o); }}
-        title="Font"
-        className="flex items-center gap-1 text-gray-300 text-xs rounded-md px-2 py-1.5 border border-gray-800 hover:border-gray-700 cursor-pointer min-w-[110px] max-w-[150px]"
-      >
-        <span className="truncate" style={{ fontFamily: current || undefined }}>{currentLabel}</span>
-        <ChevronDown className="w-3.5 h-3.5 ml-auto shrink-0 text-gray-500" />
+      <button type="button" aria-label="Font" aria-haspopup="menu" aria-expanded={open} onMouseDown={(e) => { e.preventDefault(); setOpen(o => !o); }} className={`${dropClass(open)} w-[6.5rem]`}>
+        <span className="min-w-0 flex-1 truncate text-left" style={{ fontFamily: current || undefined }}>{currentLabel}</span><Caret open={open} />
       </button>
-      <Popover anchorRef={ref} open={open} onClose={close} matchAnchorWidth={false} scroll={false} className="w-56 !p-0 !rounded-lg overflow-hidden">
-        <div className="flex items-center gap-1.5 px-2.5 py-2 border-b border-gray-800/80">
-          <Search className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+      <Popover anchorRef={ref} open={open} onClose={close} matchAnchorWidth={false} scroll={false} className="w-60 !p-0 overflow-hidden">
+        <label className="flex items-center gap-2 border-b border-border-subtle px-3 py-2.5 text-text-subtle">
+          <Search className="h-4 w-4 shrink-0" aria-hidden="true" />
+          <span className="sr-only">Search fonts</span>
           <input
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search fonts"
-            className="bg-transparent text-xs text-gray-200 w-full focus:outline-none placeholder-gray-600"
+            className="w-full bg-transparent text-sm text-text-primary placeholder:text-text-subtle focus:outline-none"
           />
-        </div>
-        <div className="max-h-64 overflow-y-auto custom-scrollbar py-1">
-          {filtered.length === 0 && (
-            <p className="px-3 py-2 text-xs text-gray-600">No matching fonts</p>
-          )}
+        </label>
+        <div role="menu" aria-label="Fonts" className="custom-scrollbar flex max-h-72 flex-col overflow-y-auto p-1.5">
+          {filtered.length === 0 && <p className="px-2.5 py-2 text-sm text-text-subtle">No matching fonts</p>}
           {filtered.map((f, i) => (
-            <button
-              key={`${f.label}-${i}`}
-              type="button"
-              onMouseDown={(e) => { e.preventDefault(); choose(f.value); }}
-              className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-white/5 ${f.value === current ? 'text-accent' : 'text-gray-300'}`}
-              style={{ fontFamily: f.value || undefined }}
-            >
-              <span className="truncate flex-1">{f.label}</span>
-              {f.value === current && <Check className="w-3.5 h-3.5 shrink-0" />}
-            </button>
+            <ChoiceRow key={`${f.label}-${i}`} selected={f.value === current} onChoose={() => choose(f.value)} style={{ fontFamily: f.value || undefined }}>
+              {f.label}
+            </ChoiceRow>
           ))}
         </div>
       </Popover>
@@ -271,8 +308,7 @@ function FontPicker({ editor, baseFont }) {
   );
 }
 
-// Font size: a preset dropdown plus a type-to-set field. Presets apply via onMouseDown so the
-// editor never blurs and the text selection stays visible while picking.
+// Font size: a preset list plus a type-to-set field.
 function FontSizeControl({ editor, baseSize }) {
   const ref = useRef(null);
   const [open, setOpen] = useState(false);
@@ -289,41 +325,30 @@ function FontSizeControl({ editor, baseSize }) {
     const chain = editor.chain().focus();
     if (editor.isActive('heading')) chain.setParagraph();
     chain.setFontSize(`${ptToPx(sizePt)}px`).run();
-    setOpen(false); setText('');
+    close();
   };
   return (
     <div className="relative" ref={ref}>
-      <button
-        type="button"
-        onMouseDown={(e) => { e.preventDefault(); setOpen(o => { const n = !o; setText(n ? String(value) : ''); return n; }); }}
-        title="Font size"
-        className="flex items-center gap-1 text-gray-300 text-xs rounded-md pl-1.5 pr-1 py-1.5 border border-gray-800 hover:border-gray-700 cursor-pointer"
-      >
-        <ALargeSmall className="w-4 h-4 text-gray-500 shrink-0" />
-        {value}<span className="text-[0.625rem] text-gray-500">pt</span>
-        <ChevronDown className="w-3.5 h-3.5 text-gray-500" />
+      <button type="button" aria-label="Font size" aria-haspopup="menu" aria-expanded={open} onMouseDown={(e) => { e.preventDefault(); setOpen(o => { const n = !o; setText(n ? String(value) : ''); return n; }); }} className={dropClass(open)}>
+        <span className="tabular-nums">{value}</span><span className="text-xs text-text-subtle">pt</span><Caret open={open} />
       </button>
-      <Popover anchorRef={ref} open={open} onClose={close} matchAnchorWidth={false} scroll={false} className="w-20 !rounded-lg">
-        {/* Pre-filled + selected on focus, so typing replaces the current value cleanly. */}
-        <input
-          value={text}
-          autoFocus
-          onFocus={(e) => e.target.select()}
-          inputMode="numeric"
-          onChange={(e) => setText(e.target.value.replace(/[^0-9]/g, ''))}
-          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); apply(parseInt(text, 10)); } }}
-          className="w-full bg-[#00080B] border border-gray-800 text-gray-200 text-xs rounded-md px-2 py-1 mb-1 focus:outline-none focus:border-accent text-center"
-        />
-        <div className="max-h-52 overflow-y-auto custom-scrollbar">
+      <Popover anchorRef={ref} open={open} onClose={close} matchAnchorWidth={false} scroll={false} className="w-24 !p-1.5">
+        <label>
+          <span className="sr-only">Font size in points</span>
+          {/* Pre-filled + selected on focus, so typing replaces the current value cleanly. */}
+          <input
+            value={text}
+            autoFocus
+            onFocus={(e) => e.target.select()}
+            inputMode="numeric"
+            onChange={(e) => setText(e.target.value.replace(/[^0-9]/g, ''))}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); apply(parseInt(text, 10)); } }}
+            className="mb-1 h-8 w-full rounded-md border border-border-default bg-surface-input px-2 text-center text-sm text-text-primary focus:border-accent/70 focus:outline-none"
+          />
+        </label>
+        <div role="menu" aria-label="Font sizes" className="custom-scrollbar flex max-h-56 flex-col overflow-y-auto">
           {FONT_SIZES.map(s => (
-            <button
-              key={s}
-              type="button"
-              onMouseDown={(e) => { e.preventDefault(); apply(parseInt(s, 10)); }}
-              className={`w-full text-center px-3 py-1.5 text-xs hover:bg-white/5 ${value === parseInt(s, 10) ? 'text-accent' : 'text-gray-300'}`}
-            >
-              {s}
-            </button>
+            <ChoiceRow key={s} selected={value === parseInt(s, 10)} onChoose={() => apply(parseInt(s, 10))} className="justify-center tabular-nums">{s}</ChoiceRow>
           ))}
         </div>
       </Popover>
@@ -336,71 +361,93 @@ function blockAttr(editor, key) {
   return editor.getAttributes('paragraph')[key] || editor.getAttributes('heading')[key] || null;
 }
 
-function LineHeightControl({ editor, baseLineHeight }) {
+function Chip({ selected, onChoose, children }) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      onMouseDown={(e) => { e.preventDefault(); onChoose(); }}
+      className={`inline-flex h-7 min-w-[2.375rem] items-center justify-center rounded-md border px-2 text-xs tabular-nums transition-colors ${selected
+        ? 'border-border-strong bg-white/[0.13] font-semibold text-text-primary'
+        : 'border-border-subtle text-text-secondary hover:border-border-default hover:text-text-primary'}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+// Line height and the space after paragraphs, both block-level, in one control.
+function SpacingControl({ editor, baseLineHeight, baseSpacing }) {
   const ref = useRef(null);
   const [open, setOpen] = useState(false);
-  const current = blockAttr(editor, 'lineHeight') || String(baseLineHeight || 1.6);
-  const choose = (v) => { editor.chain().focus().setLineHeight(v).run(); setOpen(false); };
+  const lineHeight = parseFloat(blockAttr(editor, 'lineHeight') || baseLineHeight || 1.6);
+  const spacingAttr = blockAttr(editor, 'paragraphSpacing');
+  const spacing = pxToPt(spacingAttr ? parseInt(spacingAttr, 10) : (baseSpacing ?? 12));
   return (
     <div className="relative" ref={ref}>
-      <button
-        type="button"
-        onMouseDown={(e) => { e.preventDefault(); setOpen(o => !o); }}
-        title="Line spacing"
-        className="flex items-center gap-1 text-gray-300 text-xs rounded-md pl-1.5 pr-1 py-1.5 border border-gray-800 hover:border-gray-700 cursor-pointer"
-      >
-        <AlignVerticalSpaceAround className="w-4 h-4 text-gray-500" />
-        {parseFloat(current)}
-        <ChevronDown className="w-3.5 h-3.5 text-gray-500" />
+      <button type="button" aria-label="Spacing" aria-haspopup="dialog" aria-expanded={open} onMouseDown={(e) => { e.preventDefault(); setOpen(o => !o); }} className={dropClass(open)}>
+        <AlignVerticalSpaceAround className="h-4 w-4 text-text-subtle" aria-hidden="true" /><span className="tabular-nums">{lineHeight}</span><Caret open={open} />
       </button>
-      <Popover anchorRef={ref} open={open} onClose={() => setOpen(false)} matchAnchorWidth={false} className="w-24 !rounded-lg">
-        {LINE_HEIGHTS.map(v => (
-          <button
-            key={v}
-            type="button"
-            onMouseDown={(e) => { e.preventDefault(); choose(v); }}
-            className={`w-full text-left px-3 py-1.5 text-xs hover:bg-white/5 rounded-md ${parseFloat(current) === parseFloat(v) ? 'text-accent' : 'text-gray-300'}`}
-          >
-            {v}
-          </button>
-        ))}
+      <Popover anchorRef={ref} open={open} onClose={() => setOpen(false)} matchAnchorWidth={false} scroll={false} className="w-64 !p-3" role="dialog">
+        <p className="mb-2 text-xs font-semibold text-text-secondary">Line spacing</p>
+        <div role="radiogroup" aria-label="Line spacing" className="flex flex-wrap gap-1.5">
+          {LINE_HEIGHTS.map(v => <Chip key={v} selected={lineHeight === parseFloat(v)} onChoose={() => editor.chain().focus().setLineHeight(v).run()}>{v}</Chip>)}
+        </div>
+        <div className="my-3 h-px bg-border-subtle" />
+        <p className="mb-2 text-xs font-semibold text-text-secondary">Space after paragraphs</p>
+        <div role="radiogroup" aria-label="Space after paragraphs" className="flex flex-wrap gap-1.5">
+          {PARAGRAPH_SPACINGS.map(v => <Chip key={v} selected={spacing === parseInt(v, 10)} onChoose={() => editor.chain().focus().setParagraphSpacing(`${ptToPx(parseInt(v, 10))}px`).run()}>{v}</Chip>)}
+        </div>
+        <p className="mt-2.5 text-xs text-text-subtle">Points. Applies to the paragraph at the cursor.</p>
       </Popover>
     </div>
   );
 }
 
-function ParagraphSpacingControl({ editor, baseSpacing }) {
+const ALIGNMENTS = [
+  { value: 'left', icon: AlignLeft, label: 'Left' },
+  { value: 'center', icon: AlignCenter, label: 'Center' },
+  { value: 'right', icon: AlignRight, label: 'Right' },
+  { value: 'justify', icon: AlignJustify, label: 'Justify' },
+];
+
+function AlignControl({ editor }) {
   const ref = useRef(null);
   const [open, setOpen] = useState(false);
-  const current = blockAttr(editor, 'paragraphSpacing');
-  const valuePx = current ? parseInt(current, 10) : (baseSpacing ?? 12);
-  const value = pxToPt(valuePx);
-  const choose = (pt) => { editor.chain().focus().setParagraphSpacing(`${ptToPx(pt)}px`).run(); setOpen(false); };
+  const active = ALIGNMENTS.find(a => editor.isActive({ textAlign: a.value })) || ALIGNMENTS[0];
   return (
     <div className="relative" ref={ref}>
-      <button
-        type="button"
-        onMouseDown={(e) => { e.preventDefault(); setOpen(o => !o); }}
-        title="Paragraph spacing"
-        className="flex items-center gap-1 text-gray-300 text-xs rounded-md pl-1.5 pr-1 py-1.5 border border-gray-800 hover:border-gray-700 cursor-pointer"
-      >
-        <Pilcrow className="w-4 h-4 text-gray-500" />
-        {value}<span className="text-[0.625rem] text-gray-500">pt</span>
-        <ChevronDown className="w-3.5 h-3.5 text-gray-500" />
-      </button>
-      <Popover anchorRef={ref} open={open} onClose={() => setOpen(false)} matchAnchorWidth={false} className="w-20 !rounded-lg">
-        {PARAGRAPH_SPACINGS.map(v => (
-          <button
-            key={v}
-            type="button"
-            onMouseDown={(e) => { e.preventDefault(); choose(parseInt(v, 10)); }}
-            className={`w-full text-center px-3 py-1.5 text-xs hover:bg-white/5 rounded-md ${value === parseInt(v, 10) ? 'text-accent' : 'text-gray-300'}`}
-          >
-            {v}
-          </button>
-        ))}
+      <Tooltip content="Alignment">
+        <button type="button" aria-label={`Alignment: ${active.label}`} aria-haspopup="menu" aria-expanded={open} onMouseDown={(e) => { e.preventDefault(); setOpen(o => !o); }} className={`${dropClass(open)} px-1.5`}>
+          <active.icon className="h-4 w-4" aria-hidden="true" /><Caret open={open} />
+        </button>
+      </Tooltip>
+      <Popover anchorRef={ref} open={open} onClose={() => setOpen(false)} matchAnchorWidth={false} scroll={false} className="w-44 !p-1.5">
+        <div role="menu" aria-label="Alignment" className="flex flex-col">
+          {ALIGNMENTS.map(a => (
+            <ChoiceRow key={a.value} selected={active.value === a.value} onChoose={() => { editor.chain().focus().setTextAlign(a.value).run(); setOpen(false); }}>
+              <span className="flex items-center gap-2.5"><a.icon className="h-4 w-4 text-text-muted" aria-hidden="true" />{a.label}</span>
+            </ChoiceRow>
+          ))}
+        </div>
       </Popover>
     </div>
+  );
+}
+
+function Swatch({ color, label, selected, onPick, size = 'h-6 w-6' }) {
+  return (
+    <Tooltip content={label}>
+      <button
+        type="button"
+        aria-label={label}
+        aria-pressed={selected}
+        onMouseDown={(e) => { e.preventDefault(); onPick(); }}
+        className={`${size} rounded-full border border-white/15 transition-transform hover:scale-110 ${selected ? 'ring-2 ring-text-primary ring-offset-2 ring-offset-surface-panel' : ''}`}
+        style={{ backgroundColor: color }}
+      />
+    </Tooltip>
   );
 }
 
@@ -411,61 +458,44 @@ function ColorPopover({ editor }) {
   const [draft, setDraft] = useState('#cccccc');
   const [recent, addRecent] = useRecentColors();
   const close = () => { setOpen(false); setShowPicker(false); };
-  const current = editor.getAttributes('textStyle').color || '';
+  const current = (editor.getAttributes('textStyle').color || '').toLowerCase();
   const apply = (c) => editor.chain().focus().setColor(c).run();
 
   const openPicker = () => { setDraft(current || '#cccccc'); setShowPicker(true); };
-  // Only on confirm does the picked color land in the customs row and the window close.
-  const confirmPicker = () => { addRecent(draft); apply(draft); setShowPicker(false); };
-
-  const Swatch = ({ c }) => (
-    <button
-      type="button"
-      title={c}
-      onMouseDown={(e) => { e.preventDefault(); apply(c); }}
-      className={`w-5 h-5 rounded-full border ${current.toLowerCase() === c.toLowerCase() ? 'border-accent ring-1 ring-accent' : 'border-gray-700'}`}
-      style={{ backgroundColor: c }}
-    />
-  );
+  // Only on apply does the picked color land in the recent row.
+  const applyPicker = () => { addRecent(draft); apply(draft); setShowPicker(false); };
 
   return (
     <div className="relative" ref={ref}>
-      <button
-        type="button"
-        onMouseDown={(e) => { e.preventDefault(); setOpen(o => !o); }}
-        title="Text color"
-        className="p-1.5 rounded-md text-gray-400 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
-      >
-        <TextColorGlyph className="w-4 h-4" color={current || undefined} />
-      </button>
-      <Popover anchorRef={ref} open={open} onClose={close} matchAnchorWidth={false} scroll={false} className="w-52 !p-3 !rounded-lg">
-        <div className="grid grid-cols-6 gap-1.5">
-          {TEXT_SWATCHES.map(c => <Swatch key={c} c={c} />)}
+      <ToolbarButton label="Text colour" active={open} onClick={() => setOpen(o => !o)}>
+        <TextColorGlyph className="h-4 w-4" color={current || undefined} />
+      </ToolbarButton>
+      <Popover anchorRef={ref} open={open} onClose={close} matchAnchorWidth={false} scroll={false} className="w-60 !p-3" role="dialog">
+        <div className="grid grid-cols-6 justify-items-center gap-2">
+          {TEXT_SWATCHES.map(s => <Swatch key={s.color} color={s.color} label={s.label} selected={current === s.color} onPick={() => apply(s.color)} />)}
         </div>
-
-        <div className="flex items-center justify-between gap-2 mt-3 pt-2.5 border-t border-gray-800">
-          <span className="text-[0.6875rem] font-bold text-gray-300">Custom</span>
-          <button
-            type="button"
-            onMouseDown={(e) => { e.preventDefault(); openPicker(); }}
-            className="text-[0.6875rem] font-semibold text-accent hover:brightness-110 flex items-center gap-0.5"
-          >
-            <Plus className="w-3.5 h-3.5" /> Add
-          </button>
-        </div>
-
         {recent.length > 0 && (
-          <div className="flex items-center gap-1.5 mt-2.5">
-            {recent.map(c => <Swatch key={c} c={c} />)}
+          <div className="mt-3 flex items-center gap-2">
+            <span className="text-xs font-semibold text-text-secondary">Recent</span>
+            <span className="flex-1" />
+            {recent.map(c => <Swatch key={c} color={c} label={c.toUpperCase()} selected={current === c.toLowerCase()} onPick={() => apply(c)} size="h-5 w-5" />)}
           </div>
         )}
-
+        <div className="mt-3 flex items-center border-t border-border-subtle pt-2.5">
+          <span className="text-xs font-semibold text-text-secondary">Custom</span>
+          <span className="flex-1" />
+          {!showPicker && (
+            <button type="button" onMouseDown={(e) => { e.preventDefault(); openPicker(); }} className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-semibold text-text-secondary hover:bg-surface-hover hover:text-text-primary">
+              <Plus className="h-3.5 w-3.5" aria-hidden="true" /> Pick a colour
+            </button>
+          )}
+        </div>
         {showPicker && (
-          <div className="mt-3 border-t border-gray-800 pt-3">
+          <div className="mt-2.5">
             <ColorPicker value={draft} onChange={setDraft} />
-            <div className="flex justify-end gap-2 mt-3">
-              <Button variant="ghost" size="sm" onMouseDown={(e) => { e.preventDefault(); setShowPicker(false); }}>Cancel</Button>
-              <Button variant="primary" size="sm" onMouseDown={(e) => { e.preventDefault(); confirmPicker(); }}>Confirm</Button>
+            <div className="mt-3 flex justify-end gap-2">
+              <Button variant="subtle" size="sm" onMouseDown={(e) => { e.preventDefault(); setShowPicker(false); }}>Cancel</Button>
+              <Button variant="primary" size="sm" onMouseDown={(e) => { e.preventDefault(); applyPicker(); }}>Apply</Button>
             </div>
           </div>
         )}
@@ -473,13 +503,6 @@ function ColorPopover({ editor }) {
     </div>
   );
 }
-
-const ALIGNMENTS = [
-  { value: 'left', icon: AlignLeft, title: 'Align left' },
-  { value: 'center', icon: AlignCenter, title: 'Align center' },
-  { value: 'right', icon: AlignRight, title: 'Align right' },
-  { value: 'justify', icon: AlignJustify, title: 'Justify' },
-];
 
 // Conventional in-manuscript scene break: a centered "* * *" paragraph.
 function insertSceneBreak(editor) {
@@ -493,52 +516,38 @@ function insertSceneBreak(editor) {
 function Toolbar({ editor, pageConfig }) {
   useToolbarTick(editor);
   if (!editor) return null;
-  const activeAlign = ALIGNMENTS.find(a => editor.isActive({ textAlign: a.value }))?.value || 'left';
   return (
-    <div className="flex items-center gap-0.5 flex-wrap">
-      <ToolbarButton active={editor.isActive('bold')} onClick={() => editor.chain().focus().toggleBold().run()} title="Bold"><Bold className="w-4 h-4" /></ToolbarButton>
-      <ToolbarButton active={editor.isActive('italic')} onClick={() => editor.chain().focus().toggleItalic().run()} title="Italic"><Italic className="w-4 h-4" /></ToolbarButton>
-      <ToolbarButton active={editor.isActive('underline')} onClick={() => editor.chain().focus().toggleUnderline().run()} title="Underline"><Underline className="w-4 h-4" /></ToolbarButton>
-      <ToolbarButton active={editor.isActive('strike')} onClick={() => editor.chain().focus().toggleStrike().run()} title="Strikethrough"><Strikethrough className="w-4 h-4" /></ToolbarButton>
-      <ColorPopover editor={editor} />
+    <div role="toolbar" aria-label="Formatting" className="wd-toolbar flex min-w-0 flex-nowrap items-center gap-0.5 overflow-x-auto">
+      <TextStyleControl editor={editor} baseFont={pageConfig?.defaultFont} />
       <Divider />
       <FontPicker editor={editor} baseFont={pageConfig?.defaultFont} />
+      <span className="w-1" />
       <FontSizeControl editor={editor} baseSize={pageConfig?.defaultFontSize} />
-      <LineHeightControl editor={editor} baseLineHeight={pageConfig?.lineHeight} />
-      <ParagraphSpacingControl editor={editor} baseSpacing={pageConfig?.paragraphSpacing} />
+      <span className="w-1" />
+      <SpacingControl editor={editor} baseLineHeight={pageConfig?.lineHeight} baseSpacing={pageConfig?.paragraphSpacing} />
       <Divider />
-      {[1, 2, 3].map(level => {
-        const Icon = { 1: Heading1, 2: Heading2, 3: Heading3 }[level];
-        return (
-          <ToolbarButton
-            key={level}
-            active={editor.isActive('heading', { level })}
-            // Standardized heading (CSS-driven size + weight): clear any inline font size so the preset shows.
-            onClick={() => editor.chain().focus().unsetFontSize().toggleHeading({ level }).run()}
-            title={`Heading ${level}`}
-          >
-            <Icon className="w-4 h-4" />
-          </ToolbarButton>
-        );
-      })}
+      <ToolbarButton active={editor.isActive('bold')} onClick={() => editor.chain().focus().toggleBold().run()} label="Bold"><Bold className="h-4 w-4" /></ToolbarButton>
+      <ToolbarButton active={editor.isActive('italic')} onClick={() => editor.chain().focus().toggleItalic().run()} label="Italic"><Italic className="h-4 w-4" /></ToolbarButton>
+      <ToolbarButton active={editor.isActive('underline')} onClick={() => editor.chain().focus().toggleUnderline().run()} label="Underline"><Underline className="h-4 w-4" /></ToolbarButton>
+      <ToolbarButton active={editor.isActive('strike')} onClick={() => editor.chain().focus().toggleStrike().run()} label="Strikethrough"><Strikethrough className="h-4 w-4" /></ToolbarButton>
+      <ColorPopover editor={editor} />
       <Divider />
-      {ALIGNMENTS.map(a => (
-        <ToolbarButton key={a.value} active={activeAlign === a.value} onClick={() => editor.chain().focus().setTextAlign(a.value).run()} title={a.title}>
-          <a.icon className="w-4 h-4" />
-        </ToolbarButton>
-      ))}
+      <AlignControl editor={editor} />
       <Divider />
-      <ToolbarButton active={editor.isActive('bulletList')} onClick={() => editor.chain().focus().toggleBulletList().run()} title="Bullet list"><List className="w-4 h-4" /></ToolbarButton>
-      <ToolbarButton active={editor.isActive('orderedList')} onClick={() => editor.chain().focus().toggleOrderedList().run()} title="Numbered list"><ListOrdered className="w-4 h-4" /></ToolbarButton>
-      <ToolbarButton active={editor.isActive('blockquote')} onClick={() => editor.chain().focus().toggleBlockquote().run()} title="Quote"><Quote className="w-4 h-4" /></ToolbarButton>
-      <ToolbarButton onClick={() => insertSceneBreak(editor)} title="Scene break"><Asterisk className="w-4 h-4" /></ToolbarButton>
+      <ToolbarButton active={editor.isActive('bulletList')} onClick={() => editor.chain().focus().toggleBulletList().run()} label="Bullet list"><List className="h-4 w-4" /></ToolbarButton>
+      <ToolbarButton active={editor.isActive('orderedList')} onClick={() => editor.chain().focus().toggleOrderedList().run()} label="Numbered list"><ListOrdered className="h-4 w-4" /></ToolbarButton>
+      <ToolbarButton active={editor.isActive('blockquote')} onClick={() => editor.chain().focus().toggleBlockquote().run()} label="Quote"><Quote className="h-4 w-4" /></ToolbarButton>
       <Divider />
-      <ToolbarButton active={editor.isActive('table')} onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()} title="Insert table"><TableIcon className="w-4 h-4" /></ToolbarButton>
+      <ToolbarButton onClick={() => insertSceneBreak(editor)} label="Scene break"><Asterisk className="h-4 w-4" /></ToolbarButton>
+      <ToolbarButton active={editor.isActive('table')} onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()} label="Insert table"><TableIcon className="h-4 w-4" /></ToolbarButton>
     </div>
   );
 }
 
-const CELL_SWATCHES = ['#fde68a', '#fca5a5', '#86efac', '#93c5fd', '#d8b4fe', '#f9a8d4', '#e5e7eb', '#9ca3af'];
+const CELL_SWATCHES = [
+  { label: 'Yellow', color: '#fde68a' }, { label: 'Red', color: '#fca5a5' }, { label: 'Green', color: '#86efac' }, { label: 'Blue', color: '#93c5fd' },
+  { label: 'Violet', color: '#d8b4fe' }, { label: 'Pink', color: '#f9a8d4' }, { label: 'Light grey', color: '#e5e7eb' }, { label: 'Grey', color: '#9ca3af' },
+];
 
 // Cell background color: swatches + custom picker + clear. Font color stays on
 // the main toolbar; this only fills the selected cell(s).
@@ -548,31 +557,34 @@ function CellColorControl({ editor }) {
   const ref = useRef(null);
   const apply = (color) => editor.chain().focus().setCellBackground(color).run();
   return (
-    <div className="flex items-center gap-1 px-0.5 relative" ref={ref}>
-      <span className="text-[0.625rem] text-gray-500 uppercase tracking-wider mr-1">Cell</span>
-      {CELL_SWATCHES.map(c => (
-        <button key={c} type="button" title={c}
-          onMouseDown={(e) => { e.preventDefault(); apply(c); }}
-          className="w-4 h-4 rounded-sm border border-black/20 cursor-pointer hover:scale-110 transition-transform"
-          style={{ backgroundColor: c }} />
+    <div className="relative flex items-center gap-1.5" ref={ref}>
+      {CELL_SWATCHES.map(s => (
+        <Tooltip key={s.color} content={`Fill ${s.label.toLowerCase()}`}>
+          <button type="button" aria-label={`Fill ${s.label.toLowerCase()}`}
+            onMouseDown={(e) => { e.preventDefault(); apply(s.color); }}
+            className="h-[1.125rem] w-[1.125rem] cursor-pointer rounded border border-black/20 transition-transform hover:scale-110"
+            style={{ backgroundColor: s.color }} />
+        </Tooltip>
       ))}
-      <button type="button" title="Custom color"
-        onMouseDown={(e) => { e.preventDefault(); setShowPicker(s => !s); }}
-        className={`w-4 h-4 rounded-sm border cursor-pointer ${showPicker ? 'border-accent' : 'border-gray-600'}`}
-        style={{ background: 'conic-gradient(red, yellow, lime, aqua, blue, magenta, red)' }} />
-      <button type="button" title="Clear fill"
-        onMouseDown={(e) => { e.preventDefault(); apply(null); }}
-        className="text-[0.625rem] text-gray-500 hover:text-white ml-0.5">Clear</button>
-      <Popover anchorRef={ref} open={showPicker} onClose={() => setShowPicker(false)} matchAnchorWidth={false} scroll={false} className="w-52 !p-3 !rounded-lg">
+      <Tooltip content="Custom fill">
+        <button type="button" aria-label="Custom fill"
+          onMouseDown={(e) => { e.preventDefault(); setShowPicker(s => !s); }}
+          className={`h-[1.125rem] w-[1.125rem] cursor-pointer rounded border ${showPicker ? 'border-text-primary' : 'border-border-strong'}`}
+          style={{ background: 'conic-gradient(red, yellow, lime, aqua, blue, magenta, red)' }} />
+      </Tooltip>
+      <button type="button" onMouseDown={(e) => { e.preventDefault(); apply(null); }} className="rounded-md px-1.5 py-0.5 text-xs font-semibold text-text-muted hover:bg-surface-hover hover:text-text-primary">No fill</button>
+      <Popover anchorRef={ref} open={showPicker} onClose={() => setShowPicker(false)} matchAnchorWidth={false} scroll={false} className="w-56 !p-3">
         <ColorPicker value={draft} onChange={setDraft} />
-        <div className="flex justify-end gap-2 mt-3">
-          <Button variant="ghost" size="sm" onMouseDown={(e) => { e.preventDefault(); setShowPicker(false); }}>Cancel</Button>
+        <div className="mt-3 flex justify-end gap-2">
+          <Button variant="subtle" size="sm" onMouseDown={(e) => { e.preventDefault(); setShowPicker(false); }}>Cancel</Button>
           <Button variant="primary" size="sm" onMouseDown={(e) => { e.preventDefault(); apply(draft); setShowPicker(false); }}>Apply</Button>
         </div>
       </Popover>
     </div>
   );
 }
+
+const GroupLabel = ({ children }) => <span className="px-1 text-xs font-semibold text-text-subtle">{children}</span>;
 
 // Floating panel shown when the cursor is inside a table, structure ops + cell fill.
 function TableBubble({ editor }) {
@@ -584,22 +596,27 @@ function TableBubble({ editor }) {
       pluginKey="tableBubble"
       shouldShow={({ editor }) => editor.isActive('table')}
       updateDelay={0}
-      className="flex flex-col gap-2 bg-[#0a161d] border border-gray-800 rounded-lg p-2 shadow-2xl"
+      className="flex flex-wrap items-center gap-0.5 rounded-card border border-border-default bg-surface-panel px-2 py-1.5 shadow-overlay"
     >
-      <div className="flex items-center gap-0.5">
-        <ToolbarButton onClick={() => editor.chain().focus().addRowBefore().run()} title="Row above"><ArrowUpToLine className="w-4 h-4" /></ToolbarButton>
-        <ToolbarButton onClick={() => editor.chain().focus().addRowAfter().run()} title="Row below"><ArrowDownToLine className="w-4 h-4" /></ToolbarButton>
-        <ToolbarButton onClick={() => editor.chain().focus().addColumnBefore().run()} title="Column left"><ArrowLeftToLine className="w-4 h-4" /></ToolbarButton>
-        <ToolbarButton onClick={() => editor.chain().focus().addColumnAfter().run()} title="Column right"><ArrowRightToLine className="w-4 h-4" /></ToolbarButton>
+      <div role="toolbar" aria-label="Table" className="flex flex-wrap items-center gap-0.5">
+        <GroupLabel>Rows</GroupLabel>
+        <ToolbarButton onClick={() => editor.chain().focus().addRowBefore().run()} label="Row above"><ArrowUpToLine className="h-4 w-4" /></ToolbarButton>
+        <ToolbarButton onClick={() => editor.chain().focus().addRowAfter().run()} label="Row below"><ArrowDownToLine className="h-4 w-4" /></ToolbarButton>
+        <ToolbarButton danger onClick={() => editor.chain().focus().deleteRow().run()} label="Delete row"><Trash2 className="h-4 w-4" /></ToolbarButton>
         <Divider />
-        <ToolbarButton onClick={() => editor.chain().focus().toggleHeaderRow().run()} title="Toggle header row"><Rows className="w-4 h-4" /></ToolbarButton>
-        <ToolbarButton onClick={() => editor.chain().focus().mergeOrSplit().run()} title="Merge / split cells"><Combine className="w-4 h-4" /></ToolbarButton>
+        <GroupLabel>Columns</GroupLabel>
+        <ToolbarButton onClick={() => editor.chain().focus().addColumnBefore().run()} label="Column left"><ArrowLeftToLine className="h-4 w-4" /></ToolbarButton>
+        <ToolbarButton onClick={() => editor.chain().focus().addColumnAfter().run()} label="Column right"><ArrowRightToLine className="h-4 w-4" /></ToolbarButton>
+        <ToolbarButton danger onClick={() => editor.chain().focus().deleteColumn().run()} label="Delete column"><Trash2 className="h-4 w-4" /></ToolbarButton>
         <Divider />
-        <ToolbarButton onClick={() => editor.chain().focus().deleteRow().run()} title="Delete row"><Rows className="w-4 h-4 text-status-danger" /></ToolbarButton>
-        <ToolbarButton onClick={() => editor.chain().focus().deleteColumn().run()} title="Delete column"><Columns className="w-4 h-4 text-status-danger" /></ToolbarButton>
-        <ToolbarButton onClick={() => editor.chain().focus().deleteTable().run()} title="Delete table"><Trash2 className="w-4 h-4 text-status-danger" /></ToolbarButton>
+        <GroupLabel>Cells</GroupLabel>
+        <ToolbarButton onClick={() => editor.chain().focus().toggleHeaderRow().run()} label="Header row"><Rows3 className="h-4 w-4" /></ToolbarButton>
+        <ToolbarButton onClick={() => editor.chain().focus().mergeOrSplit().run()} label="Merge or split cells"><Combine className="h-4 w-4" /></ToolbarButton>
+        <span className="w-1.5" />
+        <CellColorControl editor={editor} />
+        <Divider />
+        <button type="button" onMouseDown={(e) => { e.preventDefault(); editor.chain().focus().deleteTable().run(); }} className="rounded-md px-2 py-1 text-xs font-semibold text-status-danger hover:bg-status-danger/10">Delete table</button>
       </div>
-      <CellColorControl editor={editor} />
     </BubbleMenu>
   );
 }
@@ -609,8 +626,49 @@ function countWords(text) {
   return t ? t.split(/\s+/).length : 0;
 }
 
-export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight = false, pending = null, onDispatch, onResolved, toolbarMode = 'fixed', smartTypography = true, onDocPatch, onRename, jumpRef, onOpenEntity }) {
-  const { showToast, uiFlags, dismissHint } = useApp();
+// Colour carries the state; the accent stays for interaction only.
+const MEMORY_PILL = {
+  busy: { Icon: IndexingGlyph, label: 'Updating memory', cls: 'border-status-info/35 bg-status-info/10 text-status-info' },
+  done: { Icon: IndexedGlyph, label: 'In AI memory', cls: 'border-status-success/30 bg-status-success/[0.08] text-status-success' },
+  outdated: { Icon: IndexOutdatedGlyph, label: 'Memory out of date', cls: 'border-status-warning/35 bg-status-warning/[0.09] text-status-warning' },
+  error: { Icon: IndexErrorGlyph, label: 'Memory update failed', cls: 'border-status-danger/40 bg-status-danger/10 text-status-danger' },
+  never: { Icon: IndexNeverGlyph, label: 'Not in AI memory', cls: 'border-border-default bg-white/[0.04] text-text-secondary' },
+};
+
+const MEMORY_NOTES = {
+  outdated: 'You changed this chapter after the AI last read it, so it still remembers the old version.',
+  never: "This chapter isn't in the AI's memory yet.",
+  done: 'The AI remembers this chapter as it is now.',
+};
+
+// The label folds away when the header runs short, leaving the icon, count and tooltip.
+function PanelToggle({ icon: Icon, label, count, active, onClick }) {
+  return (
+    <Tooltip content={label} side="bottom">
+      <button
+        type="button"
+        aria-label={label}
+        aria-pressed={active}
+        onClick={onClick}
+        className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 @[54rem]:px-2.5 ${active ? 'bg-white/[0.12] text-text-primary' : 'text-text-muted hover:bg-white/5 hover:text-text-primary'}`}
+      >
+        <Icon className="h-4 w-4" aria-hidden="true" />
+        <span className="hidden @[54rem]:inline">{label}</span>
+        {count > 0 && <span className="inline-flex h-[1.125rem] min-w-[1.125rem] items-center justify-center rounded-full bg-white/10 px-1 text-xs tabular-nums text-text-secondary">{count}</span>}
+      </button>
+    </Tooltip>
+  );
+}
+
+export default function WritingEditor({
+  doc, folderName, electronAPI, workspaceId, inFlight = false, inFlightProfileId = null, pending = null, onDispatch, onResolved,
+  toolbarMode = 'fixed', smartTypography = true, onDocPatch, onRename, jumpRef, onOpenEntity,
+  chaptersHidden = false, onToggleChapters, rightPanel = '', onTogglePanel, notesCount = 0, directivesCount = 0, analysesCount = 0,
+  indexingElsewhere = false, indexingProgress = null, onIndexingChange,
+}) {
+  const { showToast, settings } = useApp();
+  const tokenDebug = Boolean(settings?.advanced?.tokenDebug);
+  const ragDebug = Boolean(settings?.advanced?.ragDebug);
   const saveTimer = useRef(null);
   // Tracks genuine unsaved edits, so leaving the chapter never re-saves unchanged
   // content (which would reset the document's vectorized flag every page switch).
@@ -628,53 +686,31 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
   const [stale, setStale] = useState(false);
   // In-text Worldbuild bridge (selection → entity actions).
   const [wbOpen, setWbOpen] = useState(false);
-  const [wbData, setWbData] = useState(null); // { from, to, text, entity, hasMark }
-  const [wbPicker, setWbPicker] = useState(false); // link-to-existing entity list
+  const [wbData, setWbData] = useState(null); // { from, to, text, entity, marked }
   const [wbEntities, setWbEntities] = useState([]);
   const [wbQuery, setWbQuery] = useState('');
   const wbBtnRef = useRef(null);
-  const wbAnchorRef = useRef(null); // where the menu anchors: the ⋯ button OR a clicked entity span
+  const wbAnchorRef = useRef(null); // where the menu anchors: the Link button OR a clicked entity span
   const [entityHover, setEntityHover] = useState(null); // { name, type, x, y } custom card
   // 'done' | 'outdated' | 'never' | 'error'.
   const [vecStatus, setVecStatus] = useState(doc.vectorized ? 'done' : 'never');
   const [vecBusy, setVecBusy] = useState(false);
   const [vecProgress, setVecProgress] = useState(null);
+  const [vecError, setVecError] = useState('');
   const [vecMenuOpen, setVecMenuOpen] = useState(false);
   const vecBtnRef = useRef(null);
+  const goalRef = useRef(null);
+  const [goalOpen, setGoalOpen] = useState(false);
+  const [goalDraft, setGoalDraft] = useState('');
   const locked = inFlight || !!pending;
   const pageConfig = pageConfigFromDoc(doc);
 
-  // Color carries the state; the brand accent stays for interaction only.
-  const vecPill = (() => {
-    if (vecBusy) {
-      const p = vecProgress ? ` ${vecProgress.done}/${vecProgress.total}` : '';
-      return { Icon: IndexingGlyph, animated: true, label: `Indexing${p}`, cls: 'text-gray-400 border-gray-500/35 bg-gray-500/10',
-        title: vecProgress ? `Indexing chapter… (${vecProgress.phase} ${vecProgress.done}/${vecProgress.total})` : 'Indexing chapter…' };
-    }
-    switch (vecStatus) {
-      case 'done':
-        return { Icon: IndexedGlyph, label: 'Indexed', cls: 'text-green-400 border-green-500/40 bg-green-500/10',
-          title: 'Chapter indexed. AI can see it from other chapters' };
-      case 'outdated':
-        return { Icon: IndexOutdatedGlyph, label: 'Out of date', cls: 'text-amber-400 border-amber-500/45 bg-amber-500/10',
-          title: 'Chapter edited since last index — AI is still reading the old version. Reindex to sync.' };
-      case 'error':
-        return { Icon: IndexErrorGlyph, label: 'Index failed', cls: 'text-status-danger border-status-danger/40 bg-status-danger/10',
-          title: 'Last index failed. Click to try again.' };
-      default:
-        return { Icon: IndexNeverGlyph, label: 'Not indexed', cls: 'text-gray-400 border-gray-500/35 bg-gray-500/10',
-          title: 'Index this chapter for cross-chapter AI context' };
-    }
-  })();
-
-  // When the chapter is behind its text, Index new is the answer, so it is emphasized.
+  // An update keeps running when the writer leaves the chapter; the view tracks it so coming back shows it.
+  const busy = vecBusy || indexingElsewhere;
+  const progress = vecProgress || indexingProgress;
+  const pill = MEMORY_PILL[busy ? 'busy' : vecStatus] || MEMORY_PILL.never;
+  // When the chapter is behind its text, updating is the answer, so it becomes the primary action.
   const needsSync = vecStatus === 'never' || vecStatus === 'outdated' || vecStatus === 'error';
-  const vecMenuNote = {
-    outdated: "You've edited this chapter since it was last indexed, so the AI is still reading the old version.",
-    never: "This chapter isn't in the AI's memory yet.",
-    error: 'The last index attempt failed. Try again.',
-    done: "The AI's memory is up to date with this chapter.",
-  }[vecStatus] || '';
 
   useEffect(() => { setTitle(doc.title); }, [doc.id]);
   // Resolve the indexed indicator from the actual content-vs-index comparison (not the
@@ -703,49 +739,61 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     if (res?.success) setVecStatus(res.status || 'never');
   };
 
-  // Index new: embed + tag only new/changed blocks (incremental by content hash).
+  // An update started before this chapter was reopened has just finished.
+  const wasIndexing = useRef(indexingElsewhere);
+  useEffect(() => {
+    if (wasIndexing.current && !indexingElsewhere && !vecBusy) refreshVecStatus();
+    wasIndexing.current = indexingElsewhere;
+  }, [indexingElsewhere]);
+
+  // Update memory: embed + tag only new/changed blocks (incremental by content hash).
   const runVectorize = async () => {
-    if (vecBusy) return;
+    if (busy) return;
     setVecMenuOpen(false);
     setVecBusy(true);
     setVecProgress(null);
+    onIndexingChange?.(doc.id, true);
     try {
       const res = await electronAPI.vectorizeDocument?.(doc.id);
-      console.log('[vectorize-document]', res);
-      if (res?.success) await refreshVecStatus();
+      if (res?.success) { setVecError(''); await refreshVecStatus(); }
       else {
         setVecStatus('error');
-        showToast?.(`Index failed: ${res?.error || 'Unknown error'}`, 'error');
+        setVecError(res?.error || 'Unknown error');
+        showToast?.(`Memory update failed: ${res?.error || 'Unknown error'}`, 'error');
         console.error('[vectorize-document] backend error:', res?.error, res?.stack);
       }
     } catch (e) {
       console.error('[vectorize-document] failed:', e);
       setVecStatus('error');
-      showToast?.(`Index failed: ${e.message}`, 'error');
+      setVecError(e.message);
+      showToast?.(`Memory update failed: ${e.message}`, 'error');
     } finally {
       setVecBusy(false);
       setVecProgress(null);
+      onIndexingChange?.(doc.id, false);
     }
   };
 
-  // Reindex all: re-tag every already-embedded chunk from scratch (no re-embedding),
+  // Refresh tags: re-tag every already-embedded chunk from scratch (no re-embedding),
   // to reflect the current tagger and entity registry.
   const runRetag = async () => {
-    if (vecBusy) return;
+    if (busy) return;
     setVecMenuOpen(false);
     setVecBusy(true);
     setVecProgress(null);
+    onIndexingChange?.(doc.id, true);
     try {
       const res = await electronAPI.retagDocument?.(doc.id);
-      console.log('[retag-document]', res);
-      if (res && !res.success) setVecStatus('error');
+      if (res && !res.success) { setVecStatus('error'); setVecError(res.error || ''); }
       else await refreshVecStatus();
     } catch (e) {
       console.error('[retag-document] failed:', e);
       setVecStatus('error');
+      setVecError(e.message);
     } finally {
       setVecBusy(false);
       setVecProgress(null);
+      onIndexingChange?.(doc.id, false);
     }
   };
 
@@ -818,7 +866,6 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     setCounts({ words: countWords(text), chars: text.length });
   }, [editor, doc.id]);
 
-
   // No stored anchor, so it can't orphan.
   useEffect(() => {
     if (!jumpRef) return;
@@ -850,8 +897,14 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     return () => { if (jumpRef) jumpRef.current = null; };
   }, [editor, jumpRef]);
 
-  // Custom hover card for linked-entity spans (replaces the native title tooltip):
-  // shows the type icon + full entity name, positioned above the span.
+  const loadWbEntities = async () => {
+    try {
+      const res = await electronAPI.listEntities?.(workspaceId);
+      setWbEntities(res?.entities || []);
+    } catch { setWbEntities([]); }
+  };
+
+  // Hover card for linked-entity spans: the type's dot and the full entity name, above the span.
   useEffect(() => {
     if (!editor) return;
     const dom = editor.view.dom;
@@ -879,8 +932,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     const onOut = (e) => {
       if (e.target?.closest?.('.wd-entity-ref')) setEntityHover(null);
     };
-    // Clicking a linked word opens the entity menu right there, no need to reselect
-    // and hit the ⋯ button.
+    // Clicking a linked word opens the entity menu right there.
     const onClick = (e) => {
       const el = e.target?.closest?.('.wd-entity-ref');
       if (!el) return;
@@ -890,7 +942,6 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
       const name = el.getAttribute('data-entity-name') || el.textContent || '';
       const type = el.getAttribute('data-entity-type') || '';
       setEntityHover(null);
-      setWbPicker(false);
       setWbData({ from, to, text: el.textContent || name, marked: true, entity: entityId ? { id: entityId, canonicalName: name, type } : null });
       wbAnchorRef.current = el;
       setWbOpen(true);
@@ -975,8 +1026,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     if (!text) return;
     const marked = editor.isActive('entityRef');
     const attrs = marked ? editor.getAttributes('entityRef') : {};
-    setWbPicker(false);
-    setWbQuery('');
+    setWbQuery(marked ? '' : text);
     setWbData({ from, to, text, entity: null, marked });
     wbAnchorRef.current = wbBtnRef.current;
     setWbOpen(true);
@@ -987,11 +1037,13 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
         // Fall back to the stored mark attrs if the entity was deleted (dangling ref).
         setWbData(d => (d ? { ...d, entity: ent || { id: attrs.entityId, canonicalName: attrs.name, type: attrs.type, missing: true } } : d));
       } catch { /* getEntity best-effort */ }
+    } else {
+      loadWbEntities();
     }
   };
 
   // Presentational mark only, retrieval still runs off chunk_tags. Stores type so the
-  // hover card can render the right icon without a fetch.
+  // hover card can render the right colour without a fetch.
   const applyEntityMark = async (from, to, entity) => {
     if (!editor || !entity) return;
     editor.chain().focus().setTextSelection({ from, to }).setMark('entityRef', { entityId: entity.id, name: entity.canonicalName, type: entity.type }).run();
@@ -1023,14 +1075,6 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     refreshVecStatus(); // mark-only change, doesn't affect chunk hashes
   };
 
-  const loadWbEntities = async () => {
-    setWbPicker(true);
-    try {
-      const res = await electronAPI.listEntities?.(workspaceId);
-      setWbEntities(res?.entities || []);
-    } catch { setWbEntities([]); }
-  };
-
   const submitInvoke = async (profileId, intermediatePrompt, resultChannel) => {
     if (!invokeData) return;
     const channel = resultChannel || 'replacement';
@@ -1052,7 +1096,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     // Remember the choice as the workspace's new default for the next invocation.
     setLastChannel(channel);
     electronAPI.setWdLastChannel?.(workspaceId, channel);
-    onDispatch?.(doc.id);
+    onDispatch?.(doc.id, profileId);
     const res = await electronAPI.invokeWritingDesk(payload);
     if (res && res.error) {
       onResolved?.(doc.id); // clear the in-flight marker the dispatch set
@@ -1086,7 +1130,9 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     onResolved?.(doc.id);
   };
 
-  const delta = pending ? suggestionCharDelta(pending) : { added: 0, removed: 0 };
+  const delta = pending ? suggestionWordDelta(pending) : { added: 0, removed: 0 };
+  const profileName = (id) => profiles.find(p => p.id === id)?.name || 'The AI';
+  const profileColor = (id) => profiles.find(p => p.id === id)?.color || null;
 
   // Text color adapts to the paper so it stays readable on any sheet color.
   const effectiveBg = pageConfig.sheetColor || '#ffffff';
@@ -1097,8 +1143,7 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
   const mL = pageConfig.marginLeft ?? 96;
   const mR = pageConfig.marginRight ?? 96;
 
-  // The content sits transparently on top of a stack of white "page" rectangles
-  // One continuous white sheet; page boundaries are drawn as overlay markers.
+  // One continuous sheet; page boundaries only exist in export.
   const sheetStyle = {
     backgroundColor: effectiveBg,
     color: isLightColor(effectiveBg) ? '#1f2328' : '#e5e7eb',
@@ -1115,90 +1160,97 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
     '--wd-indent': `${pageConfig.firstLineIndent ?? 0}px`,
   };
 
-  const goalPct = doc.wordGoal > 0 ? Math.min(100, Math.round((counts.words / doc.wordGoal) * 100)) : 0;
+  const goal = doc.wordGoal || 0;
+  const goalPct = goal > 0 ? Math.min(100, Math.round((counts.words / goal) * 100)) : 0;
+  const saveGoal = (value) => {
+    onDocPatch?.({ wordGoal: Math.max(0, parseInt(value, 10) || 0) });
+    setGoalOpen(false);
+  };
+
+  const wbQueryText = wbQuery.trim().toLowerCase();
+  const wbMatches = wbEntities
+    .filter(e => !wbQueryText || (e.canonicalName || '').toLowerCase().includes(wbQueryText) || (e.aliases || []).some(a => String(a).toLowerCase().includes(wbQueryText)))
+    // A name that starts with the query outranks one that only carries it as an alias.
+    .sort((a, b) => Number(!(a.canonicalName || '').toLowerCase().startsWith(wbQueryText)) - Number(!(b.canonicalName || '').toLowerCase().startsWith(wbQueryText)))
+    .slice(0, 8);
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden relative">
+    <div className="relative flex flex-1 flex-col overflow-hidden">
       {showFind && editor && (
         <WritingFindReplace editor={editor} locked={locked} onClose={() => setShowFind(false)} />
       )}
-      {/* Title bar, always visible (incl. bubble mode) so Export/Page Setup never disappear. */}
-      <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-gray-800/80 bg-[#011419]/35 shrink-0">
-        <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          onBlur={() => onRename?.(title)}
-          className="bg-transparent text-white font-semibold text-sm focus:outline-none min-w-0 flex-1"
-          placeholder="Untitled"
-        />
-        {counts.words > 0 && (
-          <span title="Estimated pages" className="text-[0.6875rem] text-gray-500 shrink-0 tabular-nums">
-            ~{estimatePagesFromWords(counts.words, pageConfig)} pages
-          </span>
+
+      {/* Chapter header, always visible (incl. bubble mode) so Export and Page setup never disappear. */}
+      <div className="@container glass-panel flex h-[3.25rem] shrink-0 items-center gap-1 border-b border-border-subtle pl-3 pr-3">
+        <IconButton icon={chaptersHidden ? PanelLeftOpen : PanelLeftClose} label={chaptersHidden ? 'Show chapters' : 'Hide chapters'} size="sm" tooltipSide="bottom" onClick={onToggleChapters} />
+        {folderName && (
+          <>
+            <span className="ml-1 max-w-[10rem] shrink truncate text-sm text-text-subtle">{folderName}</span>
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-text-disabled" aria-hidden="true" />
+          </>
         )}
-        <div className="flex items-center gap-0.5 shrink-0">
-          <button
-            type="button"
-            ref={vecBtnRef}
-            onClick={() => !vecBusy && setVecMenuOpen(v => !v)}
-            disabled={vecBusy}
-            title={vecPill.title}
-            className={`flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full border text-xs font-medium transition-colors cursor-pointer disabled:cursor-default hover:bg-white/5 ${vecPill.cls}`}
-          >
-            <vecPill.Icon animated={vecPill.animated} className="w-3.5 h-3.5 shrink-0" />
-            {vecPill.label}
-          </button>
-          <Popover anchorRef={vecBtnRef} open={vecMenuOpen} onClose={() => setVecMenuOpen(false)} matchAnchorWidth={false} align="right" className="w-72 !p-2">
-            {vecMenuNote && (
-              <div className="px-2.5 pt-1 pb-2 text-[0.625rem] leading-snug text-gray-500 border-b border-gray-800/70 mb-1.5">
-                {vecMenuNote}
-              </div>
-            )}
-            <button
-              type="button"
-              onClick={runVectorize}
-              className={`w-full text-left px-3 py-2 rounded-lg transition-colors ${
-                needsSync
-                  ? 'text-white bg-white/[0.04] hover:bg-white/[0.08] ring-1 ring-inset ring-accent/30'
-                  : 'text-gray-200 hover:text-white hover:bg-white/5'
-              }`}
-            >
-              <span className="flex items-center justify-between gap-2 text-xs font-semibold">
-                Update the AI's memory
-                {needsSync && (
-                  <span className="text-[0.5625rem] font-semibold uppercase tracking-wide text-accent bg-accent/10 px-1.5 py-0.5 rounded">Recommended</span>
-                )}
-              </span>
-              <span className="block text-[0.625rem] font-normal text-gray-500 mt-0.5">Reads the blocks you've added or edited into the AI's memory. Do this after writing.</span>
-            </button>
-            <button
-              type="button"
-              onClick={runRetag}
-              className="w-full text-left px-3 py-2 text-xs font-semibold text-gray-200 hover:text-white hover:bg-white/5 rounded-lg transition-colors mt-0.5"
-            >
-              Refresh entity tags
-              <span className="block text-[0.625rem] font-normal text-gray-500 mt-0.5">Re-tags the text already in memory without re-reading it. Use after changing your Worldbuild entities, not after writing.</span>
-            </button>
-          </Popover>
-          <button type="button" onClick={() => setShowFind(v => !v)} title="Find & Replace (Ctrl+F)" className={`p-1.5 rounded-md transition-colors cursor-pointer ${showFind ? 'text-accent bg-white/5' : 'text-gray-500 hover:text-white hover:bg-white/5'}`}>
-            <Search className="w-4 h-4" />
-          </button>
-          <button type="button" onClick={() => setShowExport(true)} title="Export…" className="p-1.5 rounded-md text-gray-500 hover:text-white hover:bg-white/5 transition-colors cursor-pointer">
-            <FileOutput className="w-4 h-4" />
-          </button>
-          <button type="button" onClick={() => setShowPageSetup(true)} title="Page setup" className={`p-1.5 rounded-md transition-colors cursor-pointer ${showPageSetup ? 'text-accent bg-white/5' : 'text-gray-500 hover:text-white hover:bg-white/5'}`}>
-            <FileCog className="w-4 h-4" />
-          </button>
-        </div>
+        <label className="ml-1 min-w-0 flex-1">
+          <span className="sr-only">Chapter title</span>
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            onBlur={() => onRename?.(title)}
+            onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+            className="w-full min-w-0 truncate rounded-md bg-transparent px-1 py-1 text-base font-bold text-text-primary focus:bg-white/[0.04] focus:outline-none"
+            placeholder="Untitled"
+          />
+        </label>
+
+        <button
+          type="button"
+          ref={vecBtnRef}
+          aria-haspopup="menu"
+          aria-expanded={vecMenuOpen}
+          onClick={() => !busy && setVecMenuOpen(v => !v)}
+          disabled={busy}
+          className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border pl-2 pr-2 text-xs font-semibold transition-colors disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${pill.cls}`}
+        >
+          <pill.Icon animated={busy} className="h-3.5 w-3.5 shrink-0" />
+          {pill.label}
+          {busy && progress && <span className="tabular-nums opacity-80">{progress.done} of {progress.total}</span>}
+          {!busy && <ChevronDown className="h-3.5 w-3.5 opacity-70" aria-hidden="true" />}
+        </button>
+        <Menu anchorRef={vecBtnRef} open={vecMenuOpen} onClose={() => setVecMenuOpen(false)} label="AI memory" className="w-72">
+          {vecStatus === 'error'
+            ? <p className="px-2.5 pb-2 pt-1 text-xs leading-snug text-status-danger">The last update failed{vecError ? `: ${vecError}` : '.'}</p>
+            : <MenuNote>{MEMORY_NOTES[vecStatus]}</MenuNote>}
+          {needsSync ? (
+            <div className="px-1 pb-2 pt-1">
+              <Button fullWidth role="menuitem" onClick={runVectorize} icon={vecStatus === 'error' ? null : IndexOutdatedGlyph}>
+                {vecStatus === 'error' ? 'Try again' : "Update the AI's memory"}
+              </Button>
+              {vecStatus !== 'error' && <p className="mt-1.5 px-1.5 text-xs leading-snug text-text-muted">Reads the paragraphs you added or changed. Do this after writing.</p>}
+            </div>
+          ) : (
+            <MenuItem label="Update the AI's memory" description="Reads the paragraphs you added or changed. Do this after writing." onSelect={runVectorize} />
+          )}
+          <MenuSeparator />
+          <MenuItem label="Refresh entity tags" description="Re-tags what the AI already has, without reading it again. Use after changing your Worldbuild entities." onSelect={runRetag} />
+        </Menu>
+
+        <Divider />
+        <IconButton icon={Search} label="Find and replace (Ctrl F)" size="sm" tooltipSide="bottom" aria-pressed={showFind} className={showFind ? '!bg-white/[0.12] !text-text-primary' : ''} onClick={() => setShowFind(v => !v)} />
+        <IconButton icon={FileCog} label="Page setup" size="sm" tooltipSide="bottom" onClick={() => setShowPageSetup(true)} />
+        <IconButton icon={Download} label="Export" size="sm" tooltipSide="bottom" onClick={() => setShowExport(true)} />
+        <Divider />
+        <PanelToggle icon={NoteGlyph} label="Notes" count={notesCount} active={rightPanel === 'notes'} onClick={() => onTogglePanel?.('notes')} />
+        <PanelToggle icon={AiGlyph} label="Analyses" count={analysesCount} active={rightPanel === 'analyses'} onClick={() => onTogglePanel?.('analyses')} />
+        <PanelToggle icon={Pin} label="Directives" count={directivesCount} active={rightPanel === 'directives'} onClick={() => onTogglePanel?.('directives')} />
       </div>
+
       {toolbarMode === 'fixed' && (
-        <div className="flex items-center gap-3 px-5 py-2.5 border-b border-gray-800/80 bg-[#011419]/35 shrink-0">
+        <div className="glass-panel flex min-h-[2.875rem] shrink-0 items-center border-b border-border-subtle px-3.5 py-1.5">
           <Toolbar editor={editor} pageConfig={pageConfig} />
         </div>
       )}
 
       {showPageSetup && (
-        <WritingPageModal config={pageConfig} onChange={onDocPatch} onClose={() => setShowPageSetup(false)} />
+        <WritingPageModal config={pageConfig} chapterTitle={doc.title} onChange={onDocPatch} onClose={() => setShowPageSetup(false)} />
       )}
 
       {showExport && editor && (
@@ -1212,12 +1264,12 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
       )}
 
       {toolbarMode === 'bubble' && editor && (
-        <BubbleMenu editor={editor} shouldShow={({ editor, state }) => !state.selection.empty && !editor.isActive('table')} className="flex items-center gap-0.5 bg-[#0a161d] border border-gray-800 rounded-lg px-1.5 py-1 shadow-xl">
+        <BubbleMenu editor={editor} shouldShow={({ editor, state }) => !inFlight && !state.selection.empty && !editor.isActive('table')} className="flex items-center gap-0.5 rounded-card border border-border-default bg-surface-panel px-2 py-1.5 shadow-overlay">
           <Toolbar editor={editor} pageConfig={pageConfig} />
         </BubbleMenu>
       )}
 
-      {editor && <TableBubble editor={editor} />}
+      {editor && !inFlight && <TableBubble editor={editor} />}
 
       {editor && (
         <BubbleMenu
@@ -1225,136 +1277,105 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
           pluginKey="invokeBubble"
           shouldShow={({ state }) => !state.selection.empty && !locked}
           options={{ placement: 'bottom' }}
-          className="flex flex-col items-end gap-1.5"
+          className="flex gap-1 rounded-card border border-border-default bg-surface-panel p-1 shadow-overlay"
         >
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={openInvoke}
-              className="flex items-center gap-1.5 bg-accent text-white text-xs font-medium rounded-lg px-2.5 py-1.5 shadow-xl hover:brightness-110 cursor-pointer"
-            >
-              <AiGlyph className="w-3.5 h-3.5" /> Invoke AI
-            </button>
-            <button
-              type="button"
-              ref={wbBtnRef}
-              onClick={() => { if (!uiFlags.wdEntityLinkSeen) dismissHint('wdEntityLinkSeen'); wbOpen ? setWbOpen(false) : openWorldbuildMenu(); }}
-              aria-label="More options"
-              className="flex items-center justify-center w-8 h-8 bg-[#1a2b33] text-gray-100 border border-gray-600 rounded-lg shadow-xl hover:bg-[#26424d] hover:text-white cursor-pointer"
-            >
-              <MoreHorizontal className="w-4 h-4" />
-            </button>
-          </div>
-          {!uiFlags.wdEntityLinkSeen && !wbOpen && (
-            <div className="w-60 bg-[#0a161d] border border-accent/40 rounded-lg p-3 shadow-xl">
-              <div className="flex items-start gap-2">
-                <Lightbulb className="w-4 h-4 text-accent shrink-0 mt-0.5" />
-                <div className="flex flex-col gap-1.5">
-                  <span className="text-xs font-bold text-white">Link words to your world</span>
-                  <p className="text-[0.6875rem] leading-relaxed text-gray-300">
-                    Open ⋯ to link this name to a Worldbuild entity, or create one on the spot.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => dismissHint('wdEntityLinkSeen')}
-                    className="self-start mt-1 text-[0.6875rem] font-semibold text-accent hover:brightness-110 cursor-pointer"
-                  >
-                    Got it
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
+          <button
+            type="button"
+            onClick={openInvoke}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-accent px-3 text-xs font-semibold text-on-accent transition-[filter] hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          >
+            <AiGlyph className="h-4 w-4" /> Invoke AI
+          </button>
+          <button
+            type="button"
+            ref={wbBtnRef}
+            aria-haspopup="menu"
+            aria-expanded={wbOpen}
+            onClick={() => (wbOpen ? setWbOpen(false) : openWorldbuildMenu())}
+            className={`inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${wbOpen ? 'bg-white/[0.12] text-text-primary' : 'bg-white/[0.06] text-text-secondary hover:bg-white/10 hover:text-text-primary'}`}
+          >
+            <WorldbuildGlyph className="h-4 w-4" /> Link to world
+            <ChevronDown aria-hidden="true" className={`h-3.5 w-3.5 text-text-subtle transition-transform ${wbOpen ? 'rotate-180' : ''}`} />
+          </button>
         </BubbleMenu>
       )}
 
-      <Popover anchorRef={wbAnchorRef} open={wbOpen} onClose={() => setWbOpen(false)} matchAnchorWidth={false} align="right" scroll={false} className="w-80 !p-1.5">
-        {wbData && (
-          <div className="flex items-center gap-1.5 px-2 py-1 mb-1 border-b border-gray-800/70">
-            <WorldbuildGlyph className="w-3 h-3 text-accent shrink-0" />
-            <span className="text-[0.625rem] uppercase tracking-wider font-bold text-gray-500">Worldbuild</span>
-            <span className="text-[0.625rem] text-gray-600 truncate ml-auto max-w-[130px]">“{wbData.text}”</span>
+      <Popover anchorRef={wbAnchorRef} open={wbOpen} onClose={() => setWbOpen(false)} matchAnchorWidth={false} align="right" scroll={false} maxHeight={wbData?.marked ? 200 : 470} className="w-80 !p-1.5">
+        {wbData && (wbData.marked ? (
+          <div role="menu" aria-label={wbData.entity?.canonicalName || wbData.text} className="flex flex-col">
+            {wbData.entity && (() => {
+              const m = entityTypeMeta(wbData.entity.type);
+              const size = wbData.entity.type === 'Locations' ? locationSizeLabel(locationSizeOf(wbData.entity)) : null;
+              return (
+                <div className="flex items-center gap-2.5 px-1.5 pb-2 pt-1.5">
+                  <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border ${wbData.entity.missing ? 'border-border-default text-text-subtle' : m.medallion}`}>
+                    {wbData.entity.missing ? <IndexNeverGlyph className="h-4 w-4" /> : <m.icon className="h-4 w-4" />}
+                  </span>
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate text-sm font-semibold text-text-primary">{wbData.entity.canonicalName || wbData.text}</span>
+                    <span className={`text-xs ${wbData.entity.missing ? 'text-status-warning' : 'text-text-subtle'}`}>
+                      {wbData.entity.missing ? 'No longer in Worldbuild' : [m.label, size].filter(Boolean).join(' · ')}
+                    </span>
+                  </span>
+                </div>
+              );
+            })()}
+            <MenuSeparator />
+            {wbData.entity && !wbData.entity.missing && (
+              <MenuItem icon={ExternalLink} label="Open in Worldbuild" onSelect={() => { setWbOpen(false); onOpenEntity?.(wbData.entity.id); }} />
+            )}
+            <MenuItem icon={Unlink} label="Unlink" onSelect={unlinkEntity} />
           </div>
-        )}
-        {wbData && wbPicker ? (
-          <div className="flex flex-col gap-1">
-            <input
-              autoFocus
-              value={wbQuery}
-              onChange={(e) => setWbQuery(e.target.value)}
-              placeholder="Search entities…"
-              className="bg-[#00080B] border border-gray-800 text-gray-200 text-xs rounded-md px-2 py-1.5 focus:outline-none focus:border-accent"
-            />
-            <div className="max-h-48 overflow-y-auto custom-scrollbar flex flex-col">
-              {wbEntities.filter(e => !wbQuery || (e.canonicalName || '').toLowerCase().includes(wbQuery.toLowerCase())).slice(0, 30).map(e => {
-                const M = entityMeta(e.type);
+        ) : (
+          <div className="flex flex-col">
+            <div className="flex min-w-0 items-baseline gap-2 px-2 pb-2 pt-1.5">
+              <span className="truncate text-sm font-semibold text-text-primary">“{wbData.text}”</span>
+              <span className="shrink-0 text-xs text-text-subtle">is not linked yet</span>
+            </div>
+            <label className="mx-1 mb-1.5 flex h-9 items-center gap-2 rounded-md border border-border-default bg-surface-input px-2.5 text-text-subtle focus-within:border-accent/70">
+              <Search className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span className="sr-only">Find an entity</span>
+              <input autoFocus value={wbQuery} onChange={(e) => setWbQuery(e.target.value)} placeholder="Find an entity" className="min-w-0 flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-subtle focus:outline-none" />
+            </label>
+            <p className="px-2.5 pb-1 pt-1.5 text-xs font-semibold uppercase tracking-[0.08em] text-text-subtle">Link to</p>
+            <div role="menu" aria-label="Link to" className="custom-scrollbar flex max-h-44 flex-col overflow-y-auto">
+              {wbMatches.map(e => {
+                const m = entityTypeMeta(e.type);
                 return (
-                  <button key={e.id} onClick={() => linkToEntity(e)} className="flex items-center gap-2 text-left px-2 py-1.5 text-xs text-gray-300 hover:text-white hover:bg-white/5 rounded-md">
-                    <M.Icon className="w-3 h-3 shrink-0 text-gray-500" />
-                    <span className="truncate">{e.canonicalName}</span>
-                    <span className="ml-auto text-[0.5625rem] text-gray-600 shrink-0">{M.label}</span>
+                  <button key={e.id} type="button" role="menuitem" onClick={() => linkToEntity(e)} className="flex min-h-8 items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-text-primary hover:bg-surface-hover focus-visible:bg-surface-hover focus-visible:outline-none">
+                    <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${m.dot}`} />
+                    <span className="min-w-0 flex-1 truncate">{e.canonicalName}</span>
+                    <span className="shrink-0 text-xs text-text-subtle">{m.label}</span>
                   </button>
                 );
               })}
-              {wbEntities.length === 0 && <span className="px-2 py-1.5 text-[0.625rem] text-gray-600">No entities yet.</span>}
+              {!wbMatches.length && <p className="px-2.5 py-1.5 text-xs text-text-subtle">{wbEntities.length ? 'No entity matches.' : 'No entities yet.'}</p>}
             </div>
-          </div>
-        ) : wbData && (
-          <div className="flex flex-col gap-0.5">
-            {wbData.marked ? (
-              <>
-                {wbData.entity && (
-                  <div className="flex items-center gap-2 px-2 py-1 text-xs">
-                    {(() => { const M = entityMeta(wbData.entity.type); return <M.Icon className="w-3.5 h-3.5 shrink-0 text-accent" />; })()}
-                    <span className="text-accent font-medium truncate">{wbData.entity.canonicalName || wbData.text}</span>
-                    <span className="ml-auto text-[0.5625rem] text-gray-600 shrink-0">{entityMeta(wbData.entity.type).label}</span>
-                  </div>
-                )}
-                {wbData.entity?.missing && (
-                  <div className="px-2 pb-1 text-[0.625rem] text-amber-400/80">This entity no longer exists.</div>
-                )}
-                {wbData.entity && !wbData.entity.missing && (
-                  <button onClick={() => { setWbOpen(false); onOpenEntity?.(wbData.entity.id); }} className="flex items-center gap-2 text-left px-2 py-1.5 text-xs text-gray-200 hover:text-white hover:bg-white/5 rounded-md">
-                    <ExternalLink className="w-3.5 h-3.5 shrink-0 text-gray-500" /> Open in Worldbuild
+            <MenuSeparator />
+            <p className="px-2.5 pb-1.5 pt-0.5 text-xs font-semibold uppercase tracking-[0.08em] text-text-subtle">Or create as</p>
+            <div className="grid grid-cols-2 gap-1 px-1 pb-1">
+              {TYPE_ORDER.map(t => {
+                const m = entityTypeMeta(t);
+                return (
+                  <button key={t} type="button" onClick={() => createEntityOfType(t)} className="flex h-8 min-w-0 items-center gap-2 rounded-md border border-border-subtle bg-white/[0.03] px-2.5 text-left text-xs text-text-secondary transition-colors hover:bg-white/[0.08] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                    <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${m.dot}`} />
+                    <span className="truncate">{m.label}</span>
                   </button>
-                )}
-                <button onClick={unlinkEntity} className="flex items-center gap-2 text-left px-2 py-1.5 text-xs text-gray-400 hover:text-status-danger hover:bg-white/5 rounded-md">
-                  <Unlink className="w-3.5 h-3.5 shrink-0" /> Unlink
-                </button>
-              </>
-            ) : (
-              <>
-                <div className="px-2 pt-1 pb-0.5 text-[0.625rem] text-gray-600">Create entity as…</div>
-                <div className="grid grid-cols-2 gap-1 px-1 pb-1">
-                  {WB_TYPE_ORDER.map(t => {
-                    const M = entityMeta(t);
-                    return (
-                      <button key={t} onClick={() => createEntityOfType(t)} className="flex items-center gap-1.5 text-left px-2 py-1 text-[0.6875rem] text-gray-300 hover:text-white bg-white/[0.03] hover:bg-white/[0.08] rounded-md">
-                        <M.Icon className="w-3 h-3 shrink-0 text-gray-500" /> {M.label}
-                      </button>
-                    );
-                  })}
-                </div>
-                <button onClick={loadWbEntities} className="flex items-center gap-2 text-left px-2 py-1.5 text-xs text-gray-200 hover:text-white hover:bg-white/5 rounded-md border-t border-gray-800/70 mt-0.5 pt-2">
-                  <Link2 className="w-3.5 h-3.5 shrink-0 text-gray-500" /> Link to existing…
-                </button>
-              </>
-            )}
+                );
+              })}
+            </div>
+            <p className="px-2 pb-1 pt-1.5 text-xs text-text-subtle">Linking also teaches the tagger this spelling.</p>
           </div>
-        )}
+        ))}
       </Popover>
 
       {entityHover && (
         <div style={{ position: 'fixed', left: entityHover.x, top: entityHover.y - 8, transform: 'translate(-50%, -100%)', zIndex: 60 }} className="pointer-events-none">
-          {(() => { const M = entityMeta(entityHover.type); return (
-            <div className="flex items-center gap-2 bg-[#0a161d] border border-gray-700 rounded-lg px-2.5 py-1.5 shadow-2xl whitespace-nowrap">
-              <M.Icon className="w-3.5 h-3.5 text-accent shrink-0" />
-              <div className="flex flex-col leading-tight">
-                <span className="text-xs font-semibold text-gray-100">{entityHover.name}</span>
-                <span className="text-[0.625rem] text-gray-500">{M.label}</span>
-              </div>
-            </div>
-          ); })()}
+          <div role="tooltip" className="flex items-center gap-2 whitespace-nowrap rounded-lg border border-border-default bg-surface-panel px-2.5 py-1.5 shadow-overlay">
+            <span aria-hidden="true" className={`h-2 w-2 rounded-full ${entityTypeMeta(entityHover.type).dot}`} />
+            <span className="text-sm font-semibold text-text-primary">{entityHover.name}</span>
+            <span className="text-xs text-text-subtle">{entityTypeMeta(entityHover.type).label}</span>
+          </div>
         </div>
       )}
 
@@ -1363,86 +1384,119 @@ export default function WritingEditor({ doc, electronAPI, workspaceId, inFlight 
           selection={invokeData.selection}
           profiles={profiles}
           initialChannel={lastChannel}
+          directivesCount={directivesCount}
           onSubmit={submitInvoke}
           onClose={() => setInvokeData(null)}
         />
       )}
 
-      {/* Persistent loading notice, driven by the parent so it survives leaving and
-          returning to this chapter while the AI is still running. */}
-      {inFlight && (
-        <div className="flex items-center gap-2 px-5 py-2 border-b border-gray-800/80 bg-accent/10 text-xs text-accent shrink-0">
-          <Loader2 className="w-3.5 h-3.5 animate-spin" /> AI is working on this chapter… you can keep writing in other chapters.
-        </div>
-      )}
-
-      <div data-writing-scroll-container className="flex-1 overflow-y-auto custom-scrollbar py-8 px-4">
+      <div data-writing-scroll-container className={`custom-scrollbar relative flex-1 px-4 py-7 ${inFlight ? 'overflow-hidden' : 'overflow-y-auto'}`}>
         <div
-          className={`mx-auto relative rounded-xl shadow-xl ring-1 ring-black/10 ${locked ? 'wd-sheet-locked' : ''}`}
+          className={`relative mx-auto rounded-xl shadow-xl ring-1 ring-black/10 ${locked ? 'wd-sheet-locked' : ''}`}
           style={sheetStyle}
         >
           <EditorContent editor={editor} />
 
-          {/* While in flight: gray the page out and block clicks, so it reads as locked. */}
-          {inFlight && (
-            <div data-keep-backdrop className="absolute inset-0 rounded-xl bg-gray-600/40 flex items-center justify-center cursor-not-allowed" style={{ backdropFilter: 'grayscale(0.85)' }}>
-              <div className="flex items-center gap-2 bg-[#0a161d] text-accent text-xs font-medium px-3 py-2 rounded-lg shadow-2xl">
-                <Loader2 className="w-4 h-4 animate-spin" /> AI is rewriting your selection…
-              </div>
-            </div>
-          )}
         </div>
 
-        {/* Floating review controls, counter + Accept/Reject pinned over the page. */}
+        {/* Floating review controls, pinned over the page. */}
         {pending && pending.channel !== 'analysis' && (
-          <div className="sticky bottom-4 z-20 flex flex-col items-center gap-2 pointer-events-none">
-            {pending.status === 'flagged' && (
-              <div className="pointer-events-auto flex items-start gap-2 max-w-md bg-amber-950/90 border border-amber-700/60 rounded-xl shadow-2xl px-3.5 py-2.5">
-                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                <span className="text-[0.6875rem] leading-relaxed text-amber-200">
-                  The AI's reply came back malformed or was cut off, so this suggestion may be incomplete or off. Read it carefully before accepting.
-                </span>
+          <div className="pointer-events-none sticky bottom-4 z-20 mt-4 flex flex-col items-center gap-2">
+            {pending.status === 'flagged' && !stale && (
+              <div role="alert" className="pointer-events-auto flex max-w-md items-center gap-2 rounded-card border border-status-warning/30 bg-surface-panel/95 px-3.5 py-2.5 text-xs leading-relaxed text-status-warning shadow-overlay">
+                <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
+                The reply was cut off or malformed. Read it closely before accepting.
               </div>
             )}
-            <div className="pointer-events-auto flex items-center gap-2 bg-[#0a161d]/95 border border-gray-800 rounded-full shadow-2xl px-3 py-1.5">
-              <span className="flex items-center gap-1.5 text-[0.6875rem] tabular-nums pr-1 border-r border-gray-800">
-                <SuggestionPendingGlyph className="w-3.5 h-3.5 text-accent" />
-                {stale
-                  ? <span className="text-status-danger">text changed, reject</span>
-                  : <span><span className="text-emerald-400">+{delta.added}</span> / <span className="text-status-danger">−{delta.removed}</span></span>}
-              </span>
-              <button onClick={rejectSuggestion} className="flex items-center gap-1 text-xs text-gray-300 hover:text-white px-2 py-1 rounded-full hover:bg-white/5 cursor-pointer">
-                <X className="w-3.5 h-3.5" /> Reject
+            <div role="group" aria-label="Review suggestion" className="pointer-events-auto flex items-center gap-1.5 whitespace-nowrap rounded-full border border-border-default bg-surface-panel/95 py-1 pl-3 pr-1 shadow-overlay">
+              {stale ? (
+                <>
+                  <CircleAlert className="h-4 w-4 text-status-danger" aria-hidden="true" />
+                  <span className="text-xs text-text-secondary">This passage changed, so the suggestion no longer fits.</span>
+                </>
+              ) : (
+                <>
+                  <SuggestionPendingGlyph className="h-4 w-4" style={{ color: profileColor(pending.profileId) || undefined }} />
+                  <span className="text-xs font-semibold text-text-primary">{profileName(pending.profileId)}</span>
+                  <span className="text-xs text-text-subtle">· {CHANNEL_LABELS[pending.channel] || pending.channel}</span>
+                  <span aria-hidden="true" className="mx-1 h-4 w-px bg-border-default" />
+                  <span className="text-xs tabular-nums">
+                    <span className="text-status-success">+{delta.added}</span>
+                    {pending.channel !== 'insertion' && <span className="ml-1.5 text-status-danger">−{delta.removed}</span>}
+                    <span className="ml-1 text-text-subtle">words</span>
+                  </span>
+                </>
+              )}
+              <span aria-hidden="true" className="mx-1 h-4 w-px bg-border-default" />
+              {!stale && <WritingDiagnostics debug={pending.debug} tokenDebug={tokenDebug} ragDebug={ragDebug} align="left" />}
+              <button type="button" onClick={rejectSuggestion} className="inline-flex h-8 items-center gap-1 rounded-full px-3 text-xs font-semibold text-text-secondary transition-colors hover:bg-white/[0.08] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                <X className="h-3.5 w-3.5" aria-hidden="true" /> Reject
               </button>
-              <button onClick={acceptSuggestion} disabled={stale} className="flex items-center gap-1 text-xs font-medium bg-accent text-[#011419] px-2.5 py-1 rounded-full hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer">
-                <Check className="w-3.5 h-3.5" /> Accept
+              <button type="button" onClick={acceptSuggestion} disabled={stale} className="inline-flex h-8 items-center gap-1 rounded-full bg-accent px-3 text-xs font-semibold text-on-accent transition-[filter] hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                <Check className="h-3.5 w-3.5" aria-hidden="true" /> Accept
               </button>
             </div>
           </div>
         )}
-
       </div>
 
-      {/* Status bar: live word/char count + per-chapter word goal */}
-      <div className="flex items-center gap-4 px-5 py-1.5 border-t border-gray-800/80 bg-[#011419]/35 text-[0.6875rem] text-gray-500 shrink-0">
-        <span>{counts.words.toLocaleString()} words</span>
-        <span>{counts.chars.toLocaleString()} chars</span>
-        <label className="flex items-center gap-1.5 ml-auto" title="Word goal for this chapter (0 = none)">
-          Goal
-          <input
-            type="number"
-            min="0"
-            value={doc.wordGoal || 0}
-            onChange={(e) => onDocPatch?.({ wordGoal: parseInt(e.target.value, 10) || 0 })}
-            className="w-16 bg-[#011419] text-gray-300 rounded-md px-1.5 py-0.5 border border-gray-800 focus:outline-none focus:border-accent text-right no-spinner"
-          />
-        </label>
-        {doc.wordGoal > 0 && (
-          <div className="w-28 h-1.5 rounded-full bg-gray-800 overflow-hidden">
-            <div className="h-full bg-accent transition-all" style={{ width: `${goalPct}%` }} />
+      {/* While the AI works, everything under the chapter header is grayed and inert until it returns. */}
+      {inFlight && (
+        <div data-keep-backdrop className="absolute inset-x-0 bottom-0 top-[3.25rem] z-30 flex cursor-not-allowed items-center justify-center bg-surface-canvas/35 p-6" style={{ backdropFilter: 'grayscale(0.9) blur(1px)' }}>
+          <div role="status" className="flex w-[24rem] max-w-full items-start gap-3 rounded-card border border-border-default bg-surface-panel px-4 py-4 shadow-overlay">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-accent/[0.12] text-accent"><AiGlyph animated className="h-5 w-5" /></span>
+            <span className="flex min-w-0 flex-col gap-1">
+              <span className="text-sm font-semibold leading-snug text-text-primary">{profileName(inFlightProfileId)} is working on your selection</span>
+              <span className="text-xs leading-relaxed text-text-muted">This chapter is locked until the result comes back. You can keep writing in other chapters.</span>
+            </span>
           </div>
-        )}
-        {doc.wordGoal > 0 && <span className="text-gray-400">{goalPct}%</span>}
+        </div>
+      )}
+
+      {/* Status bar: counts, then the chapter's word goal. */}
+      <div className="glass-panel flex h-[2.125rem] shrink-0 items-center gap-4 border-t border-border-subtle px-4 text-xs text-text-subtle">
+        <span className="tabular-nums"><b className="font-semibold text-text-secondary">{counts.words.toLocaleString()}</b> words</span>
+        <span className="tabular-nums">{counts.chars.toLocaleString()} characters</span>
+        {counts.words > 0 && <span className="tabular-nums">About {estimatePagesFromWords(counts.words, pageConfig)} {estimatePagesFromWords(counts.words, pageConfig) === 1 ? 'page' : 'pages'}</span>}
+        <span className="flex-1" />
+        <button
+          type="button"
+          ref={goalRef}
+          aria-haspopup="dialog"
+          aria-expanded={goalOpen}
+          onClick={() => { setGoalDraft(goal ? String(goal) : ''); setGoalOpen(v => !v); }}
+          className="inline-flex h-6 items-center gap-2 rounded-md px-2 text-xs text-text-muted transition-colors hover:bg-white/5 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        >
+          <Target className="h-3.5 w-3.5" aria-hidden="true" />
+          {goal > 0 ? (
+            <>
+              <span className="tabular-nums">{counts.words.toLocaleString()} of {goal.toLocaleString()}</span>
+              <span aria-hidden="true" className="block h-1 w-24 overflow-hidden rounded-full bg-white/10">
+                <span className={`block h-full rounded-full ${goalPct >= 100 ? 'bg-status-success' : 'bg-text-secondary'}`} style={{ width: `${goalPct}%` }} />
+              </span>
+              <span className="tabular-nums text-text-secondary">{goalPct}%</span>
+            </>
+          ) : 'Set a word goal'}
+        </button>
+        <Popover anchorRef={goalRef} open={goalOpen} onClose={() => setGoalOpen(false)} matchAnchorWidth={false} align="right" scroll={false} className="w-60 !p-3" role="dialog">
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-semibold text-text-secondary">Word goal for this chapter</span>
+            <input
+              autoFocus
+              type="number"
+              min="0"
+              value={goalDraft}
+              onChange={(e) => setGoalDraft(e.target.value.replace(/[^0-9]/g, ''))}
+              onKeyDown={(e) => { if (e.key === 'Enter') saveGoal(goalDraft); }}
+              placeholder="1200"
+              className="h-9 w-full rounded-md border border-border-default bg-surface-input px-2.5 text-sm tabular-nums text-text-primary focus:border-accent/70 focus:outline-none"
+            />
+          </label>
+          <div className="mt-3 flex justify-end gap-2">
+            {goal > 0 && <Button variant="subtle" size="sm" onClick={() => saveGoal(0)}>Remove goal</Button>}
+            <Button size="sm" onClick={() => saveGoal(goalDraft)}>Save</Button>
+          </div>
+        </Popover>
       </div>
     </div>
   );

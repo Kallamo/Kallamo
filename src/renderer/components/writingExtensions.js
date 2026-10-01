@@ -193,12 +193,10 @@ function addedBlock(pos, html, channel) {
     const wrap = document.createElement('div');
     wrap.className = 'wd-diff-block-added';
     wrap.setAttribute('contenteditable', 'false');
-    if (channel !== 'insertion') {
-      const tag = document.createElement('div');
-      tag.className = 'wd-diff-block-tag';
-      tag.textContent = 'Suggested replacement';
-      wrap.appendChild(tag);
-    }
+    const tag = document.createElement('div');
+    tag.className = 'wd-diff-block-tag';
+    tag.textContent = channel === 'insertion' ? 'Suggested addition' : 'Suggested replacement';
+    wrap.appendChild(tag);
     const body = document.createElement('div');
     body.innerHTML = sanitizeHtml(html);
     wrap.appendChild(body);
@@ -226,15 +224,18 @@ function htmlToPlain(html) {
 }
 
 // Character +added / -removed counts for the floating counter (metric in chars).
-export function suggestionCharDelta(suggestion) {
+const wordCount = (text) => (String(text || '').match(/\S+/g) || []).length;
+
+// Counted in words, the unit a writer judges an edit by.
+export function suggestionWordDelta(suggestion) {
   if (!suggestion) return { added: 0, removed: 0 };
   const proposedPlain = htmlToPlain(suggestion.proposedText || '');
-  if (suggestion.channel === 'insertion') return { added: proposedPlain.length, removed: 0 };
+  if (suggestion.channel === 'insertion') return { added: wordCount(proposedPlain), removed: 0 };
   const parts = diffWords(suggestion.originalText || '', proposedPlain);
   let added = 0, removed = 0;
   for (const p of parts) {
-    if (p.added) added += p.value.length;
-    else if (p.removed) removed += p.value.length;
+    if (p.added) added += wordCount(p.value);
+    else if (p.removed) removed += wordCount(p.value);
   }
   return { added, removed };
 }

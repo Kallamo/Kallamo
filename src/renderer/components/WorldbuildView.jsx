@@ -9,6 +9,7 @@ import {
 import { AiGlyph, PolicyOpenGlyph, PolicyReviewGlyph, PolicyLockedGlyph, KnowledgeGlyph, ConnectionsGlyph, OccurrencesGlyph } from './ui/glyphs';
 import { useApp } from '../context/AppContext';
 import Button from './ui/Button';
+import NumberInput from './ui/NumberInput';
 import Checkbox from './ui/Checkbox';
 import Popover from './ui/Popover';
 import Menu, { MenuItem, MenuLabel, MenuSeparator } from './ui/Menu';
@@ -1752,7 +1753,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           {worldCalendar && (selected.data.eventNature || 'one-time') === 'recurring' ? (
             <>
               <Edit label="First time"><WorldDateInput label="First time" emptyLabel="Set the first occurrence" calendar={worldCalendar} value={selected.data.recurrence?.anchorDate} onChange={anchorDate => patchData({ recurrence: { ...(selected.data.recurrence || {}), anchorDate } })} /></Edit>
-              <Edit label="Repeats every"><div className="grid grid-cols-[7rem_1fr] gap-2"><LInput type="number" min="1" value={selected.data.recurrence?.interval || 1} onChange={event => patchData({ recurrence: { ...(selected.data.recurrence || {}), interval: Math.max(1, Number(event.target.value) || 1) } })} /><SelectMenu ariaLabel="Repeat unit" value={selected.data.recurrence?.unit || 'year'} onChange={unit => patchData({ recurrence: { ...(selected.data.recurrence || {}), unit } })} options={[{ value: 'day', label: 'Days' }, { value: 'week', label: 'Weeks' }, { value: 'month', label: 'Months' }, { value: 'year', label: 'Years' }]} /></div></Edit>
+              <Edit label="Repeats every"><div className="grid grid-cols-[7rem_1fr] gap-2"><NumberInput className={FIELD} min={1} value={selected.data.recurrence?.interval || 1} onChange={interval => patchData({ recurrence: { ...(selected.data.recurrence || {}), interval } })} /><SelectMenu ariaLabel="Repeat unit" value={selected.data.recurrence?.unit || 'year'} onChange={unit => patchData({ recurrence: { ...(selected.data.recurrence || {}), unit } })} options={[{ value: 'day', label: 'Days' }, { value: 'week', label: 'Weeks' }, { value: 'month', label: 'Months' }, { value: 'year', label: 'Years' }]} /></div></Edit>
             </>
           ) : worldCalendar ? (
             <>

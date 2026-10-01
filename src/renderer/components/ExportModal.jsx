@@ -1,44 +1,8 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Modal from './ui/Modal';
-import Button from './ui/Button';
-import { Download, ChevronLeft, ChevronRight, FileText, Hash, FileType } from 'lucide-react';
+import { Download } from 'lucide-react';
+import { ExportFooter, FormatChoice, OptionGroup, PageNav, PageNumberOptions } from './WritingExportParts';
 import { proseCss, buildExportHtml } from './writingExport';
-
-function Segmented({ value, options, onChange }) {
-  return (
-    <div className="flex bg-[#011419] border border-gray-700 rounded-lg p-1 gap-1">
-      {options.map(opt => (
-        <button
-          key={opt.value}
-          type="button"
-          onClick={() => onChange(opt.value)}
-          className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-semibold cursor-pointer transition-all ${value === opt.value
-            ? 'bg-[#1a2d32] text-white border border-accent/30 shadow'
-            : 'text-gray-500 hover:text-white'}`}
-        >
-          {opt.icon && <opt.icon className="w-3.5 h-3.5" />}
-          {opt.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function Toggle({ checked, onChange, label, disabled }) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={`flex items-center justify-between w-full gap-3 ${disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}
-    >
-      <span className="text-sm font-semibold text-gray-200">{label}</span>
-      <span className={`relative w-9 h-5 rounded-full transition-colors ${checked ? 'bg-accent' : 'bg-gray-700'}`}>
-        <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${checked ? 'translate-x-4' : ''}`} />
-      </span>
-    </button>
-  );
-}
 
 // Whole blocks never split; `.wd-chapter-start` forces a page, like the PDF's page-break-before.
 function paginateBlocks(container, pageContentHeight) {
@@ -156,14 +120,13 @@ export default function ExportModal({ editor, pageConfig, title, electronAPI, on
   const posClass = numberPos === 'left' ? 'text-left' : numberPos === 'right' ? 'text-right' : 'text-center';
 
   return (
-    <Modal onClose={onClose} size="xl" title="Export" icon={Download} className="!max-w-5xl">
+    <Modal onClose={onClose} size="2xl" title="Export" subtitle={title || null} icon={Download} className="!max-w-5xl">
       <div className="flex min-h-0" style={{ height: '78vh' }}>
-        {/* Preview */}
-        <div ref={previewColRef} className="flex-1 min-w-0 bg-[#00080B] overflow-y-auto custom-scrollbar flex flex-col items-center py-6 px-4">
+        <div ref={previewColRef} className="custom-scrollbar flex min-w-0 flex-1 flex-col items-center overflow-y-auto bg-black/30 px-4 py-6">
           <style>{previewCss}</style>
           <div style={{ width: pw * scale, height: boxHeight * scale }} className="shrink-0">
             <div
-              className="bg-white shadow-2xl relative origin-top-left"
+              className="relative origin-top-left bg-white shadow-overlay"
               style={{
                 width: pw, height: boxHeight,
                 paddingTop: mTop, paddingBottom: mBottom, paddingLeft: mLeft, paddingRight: mRight,
@@ -182,62 +145,24 @@ export default function ExportModal({ editor, pageConfig, title, electronAPI, on
               )}
             </div>
           </div>
-          {showPaged && total > 1 && (
-            <div className="flex items-center gap-4 mt-4 text-gray-300">
-              <button type="button" disabled={pageIndex === 0} onClick={() => setPageIndex(i => i - 1)}
-                className="p-1.5 rounded-md hover:bg-white/5 disabled:opacity-30 cursor-pointer disabled:cursor-default">
-                <ChevronLeft className="w-5 h-5" />
-              </button>
-              <span className="text-xs font-semibold tabular-nums">Page {pageIndex + 1} of {total}</span>
-              <button type="button" disabled={pageIndex === total - 1} onClick={() => setPageIndex(i => i + 1)}
-                className="p-1.5 rounded-md hover:bg-white/5 disabled:opacity-30 cursor-pointer disabled:cursor-default">
-                <ChevronRight className="w-5 h-5" />
-              </button>
-            </div>
-          )}
+          {showPaged && <PageNav index={pageIndex} total={total} onChange={setPageIndex} />}
         </div>
 
-        {/* Options */}
-        <div className="w-72 shrink-0 border-l border-gray-800/60 bg-[#011419] p-5 flex flex-col gap-5 overflow-y-auto custom-scrollbar">
-          <div className="space-y-2">
-            <span className="caption">Format</span>
-            <Segmented value={format} onChange={setFormat} options={[
-              { value: 'pdf', label: 'PDF', icon: FileText },
-              { value: 'docx', label: 'Word', icon: FileType },
-            ]} />
+        <div className="flex w-[21rem] shrink-0 flex-col border-l border-border-subtle">
+          <div className="custom-scrollbar flex flex-1 flex-col gap-5 overflow-y-auto p-5">
+            <OptionGroup title="Format">
+              <FormatChoice value={format} onChange={setFormat} />
+            </OptionGroup>
+            <OptionGroup>
+              <PageNumberOptions
+                enabled={pageNumbers} onEnabled={setPageNumbers}
+                position={numberPos} onPosition={setNumberPos}
+                format={format} start={pageNumberStart} onStart={setPageNumberStart}
+              />
+            </OptionGroup>
+            <p className="text-xs leading-relaxed text-text-subtle">Paper size, margins and fonts come from this chapter's page setup.</p>
           </div>
-
-          <div className="space-y-3 border-t border-gray-800/50 pt-4">
-            <Toggle checked={pageNumbers} onChange={setPageNumbers} label="Page numbers" />
-            {pageNumbers && (
-              <div className="space-y-2">
-                <span className="caption flex items-center gap-1"><Hash className="w-3 h-3" /> Position</span>
-                <Segmented value={numberPos} onChange={setNumberPos} options={[
-                  { value: 'left', label: 'Left' },
-                  { value: 'center', label: 'Center' },
-                  { value: 'right', label: 'Right' },
-                ]} />
-                {format === 'docx' && (
-                  <div className="space-y-1 pt-1">
-                    <span className="caption">Start at page</span>
-                    <input
-                      type="number" min="1"
-                      value={pageNumberStart}
-                      onChange={(e) => setPageNumberStart(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                      className="w-20 bg-[#00080B] border border-gray-800 text-gray-200 text-sm rounded-md px-2.5 py-1.5 focus:outline-none focus:border-accent"
-                    />
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="mt-auto pt-4 border-t border-gray-800/50 flex gap-2">
-            <Button variant="ghost" onClick={onClose} className="flex-1">Cancel</Button>
-            <Button variant="primary" onClick={handleExport} disabled={exporting} className="flex-1">
-              {exporting ? 'Exporting…' : 'Export'}
-            </Button>
-          </div>
+          <ExportFooter format={format} exporting={exporting} onCancel={onClose} onExport={handleExport} />
         </div>
       </div>
 

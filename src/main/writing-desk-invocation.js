@@ -291,6 +291,7 @@ async function runWritingDeskInvocation({
     );
     const packedRag = packContextItems(ragItems, retrievalBudget, { estimate: countTokens });
     const retrieved = renderContextSections(packedRag.kept, SECTION_ORDER);
+    const retrieval = describeRetrieval(ragItems, packedRag, retrievalBudget);
 
     // The active chat window travels as chatHistory, never inside the system prompt.
     let systemPrompt = baseSystemPrompt;
@@ -350,12 +351,32 @@ async function runWritingDeskInvocation({
         truncated: Boolean(result?.truncated)
     });
 
-    let reply = readReply(await callApi(maxTokens));
+    // Every call is counted, retries included, so the readout shows what the result really cost.
+    const calls = [];
+    const call = async (reason, budget, prompt) => {
+        const result = await callApi(budget, prompt);
+        calls.push(describeCall(reason, result, { systemPrompt, history: activeWindow, prompt: prompt || newPrompt }));
+        return readReply(result);
+    };
+    const debug = () => ({
+        usage: summarizeCalls(calls),
+        calls,
+        input: {
+            instructions: coreTokens,
+            chapter: chapterTokens,
+            retrieved: packedRag.usedTokens,
+            history: activeWindow.reduce((sum, message) => sum + countTokens(message.content || ''), 0)
+        },
+        limit: { payload: payload.limit, source: payload.source, output: maxTokens, outputCap: MAXTOKENS_CAP },
+        retrieval
+    });
+
+    let reply = await call('first', maxTokens);
 
     // Analysis: the whole response is the note; a truncated one is retried at the cap.
     if (channel === 'analysis') {
         if (reply.truncated && maxTokens < MAXTOKENS_CAP) {
-            reply = readReply(await callApi(MAXTOKENS_CAP));
+            reply = await call('output-cap', MAXTOKENS_CAP);
         }
         const note = reply.text.trim();
         if (!note) {
@@ -366,7 +387,8 @@ async function runWritingDeskInvocation({
             status: reply.truncated ? 'flagged' : 'ok',
             proposedText: reply.truncated ? `${note}\n\n_This analysis reached the output limit and may be incomplete._` : note,
             fromPos,
-            toPos
+            toPos,
+            debug: debug()
         };
     }
 
@@ -374,7 +396,7 @@ async function runWritingDeskInvocation({
 
     // Truncation means it wanted more room: retry straight at the cap.
     if (parsed && parsed.truncated && maxTokens < MAXTOKENS_CAP) {
-        reply = readReply(await callApi(MAXTOKENS_CAP));
+        reply = await call('output-cap', MAXTOKENS_CAP);
         parsed = extractFence(reply.text, outOpen, outClose);
     }
 
@@ -382,16 +404,65 @@ async function runWritingDeskInvocation({
     if (!parsed || parsed.content == null) {
         // Hold the truncated body from the earlier attempt in case the retry also fails.
         const priorPartial = parsed && parsed.partial;
-        const correction = readReply(await callApi(maxTokens, `${newPrompt}${correctionSuffix}`));
+        const correction = await call('correction', maxTokens, `${newPrompt}${correctionSuffix}`);
         parsed = extractFence(correction.text, outOpen, outClose);
         if (!parsed || parsed.content == null) {
             // Salvage the cleanest partial, sentinel-stripped, and flag it as possibly incomplete.
             const salvage = (parsed && parsed.partial) || priorPartial || correction.text || reply.text || '';
-            return { channel, status: 'flagged', proposedText: stripSentinels(salvage), fromPos, toPos };
+            return { channel, status: 'flagged', proposedText: stripSentinels(salvage), fromPos, toPos, debug: debug() };
         }
     }
 
-    return { channel, status: 'ok', proposedText: stripSentinels(parsed.content), fromPos, toPos };
+    return { channel, status: 'ok', proposedText: stripSentinels(parsed.content), fromPos, toPos, debug: debug() };
+}
+
+// Provider numbers when the reply carries them, the local estimate otherwise.
+function describeCall(reason, result, { systemPrompt, history, prompt }) {
+    const reported = Boolean(result && typeof result === 'object' && result.usage);
+    const text = typeof result === 'string' ? result : (result?.content || '');
+    const estimatedInput = countTokens(systemPrompt) + countTokens(prompt)
+        + (history || []).reduce((sum, message) => sum + countTokens(message.content || ''), 0);
+    return {
+        reason,
+        input: reported ? (result.totalInputTokens ?? result.inputTokens ?? 0) : estimatedInput,
+        output: reported ? (result.outputTokens || 0) : countTokens(text),
+        cacheRead: reported ? (result.cacheReadTokens || 0) : 0,
+        cacheWrite: reported ? (result.cacheWriteTokens || 0) : 0,
+        truncated: Boolean(result?.truncated),
+        accuracy: reported ? 'reported' : 'estimated'
+    };
+}
+
+function summarizeCalls(calls) {
+    const sum = key => calls.reduce((total, c) => total + (c[key] || 0), 0);
+    const input = sum('input');
+    const output = sum('output');
+    return {
+        input,
+        output,
+        total: input + output,
+        cacheRead: sum('cacheRead'),
+        cacheWrite: sum('cacheWrite'),
+        accuracy: calls.every(c => c.accuracy === 'reported') ? 'reported' : 'estimated'
+    };
+}
+
+const SECTION_KEYS = Object.fromEntries(Object.entries(SECTIONS).map(([key, header]) => [header, key]));
+const PREVIEW_CHARS = 280;
+
+// packContextItems keeps each item's input position, which is how a kept item is matched back.
+function describeRetrieval(items, packed, budget) {
+    const keptPositions = new Set(packed.kept.map(item => item.position));
+    const sources = {};
+    const detail = items.map((item, position) => {
+        const source = SECTION_KEYS[item.section] || 'other';
+        const sent = keptPositions.has(position);
+        sources[source] = sources[source] || { found: 0, sent: 0 };
+        sources[source].found += 1;
+        if (sent) sources[source].sent += 1;
+        return { source, score: Number(item.score) || 0, sent, text: String(item.text || '').slice(0, PREVIEW_CHARS) };
+    });
+    return { budget, used: packed.usedTokens, found: items.length, sent: packed.kept.length, sources, items: detail };
 }
 
 module.exports = { runWritingDeskInvocation };

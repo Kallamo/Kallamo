@@ -372,18 +372,25 @@ body {
   background: var(--theme-surface-canvas);
 }
 
-/* In-text Worldbuild entity reference: a soft accent highlight + underline so linked
-   words clearly stand out as tied to an entity (title shows which one on hover). */
+/* In-text Worldbuild entity reference: underlined in its entity type's colour, the same
+   colour the type carries in Worldbuild, so a linked name reads as part of the world. */
 .wd-entity-ref {
-  background: color-mix(in srgb, var(--app-accent) 16%, transparent);
-  border-bottom: 1.5px solid color-mix(in srgb, var(--app-accent) 60%, transparent);
-  border-radius: 2px;
-  padding: 0 1px;
+  --wd-entity: var(--theme-entity-concept);
+  border-bottom: 2px solid var(--wd-entity);
+  border-radius: 1px;
+  padding-bottom: 1px;
   cursor: pointer;
   transition: background 0.12s ease;
 }
+.wd-entity-ref[data-entity-type="Characters"] { --wd-entity: var(--theme-entity-character); }
+.wd-entity-ref[data-entity-type="Locations"] { --wd-entity: var(--theme-entity-location); }
+.wd-entity-ref[data-entity-type="Factions"] { --wd-entity: var(--theme-entity-faction); }
+.wd-entity-ref[data-entity-type="Items"] { --wd-entity: var(--theme-entity-item); }
+.wd-entity-ref[data-entity-type="Creatures"] { --wd-entity: var(--theme-entity-creature); }
+.wd-entity-ref[data-entity-type="Races"] { --wd-entity: var(--theme-entity-race); }
+.wd-entity-ref[data-entity-type="Events"] { --wd-entity: var(--theme-entity-event); }
 .wd-entity-ref:hover {
-  background: color-mix(in srgb, var(--app-accent) 30%, transparent);
+  background: color-mix(in srgb, var(--wd-entity) 18%, transparent);
 }
 
 /* Worldbuild form controls: render the native <select> dropdown options in the
@@ -475,10 +482,10 @@ select.wb-input option:hover {
    place; the full proposal is shown in a green block right below it (block-level,
    so paragraph breaks can't desync a per-word overlay). */
 .writing-prose .wd-diff-removed { background-color: rgba(239, 68, 68, 0.16); color: #b91c1c; text-decoration: line-through; border-radius: 2px; }
-.writing-prose .wd-diff-block-added { background-color: rgba(16, 185, 129, 0.14); border-left: 3px solid #10b981; border-radius: 4px; padding: 0.5em 0.75em; margin: 0.4em 0 0.85em; }
+.writing-prose .wd-diff-block-added { background-color: rgba(16, 185, 129, 0.12); border-radius: 8px; padding: 0.6em 0.8em; margin: 0.4em 0 0.85em; }
 .writing-prose .wd-diff-block-added p { margin: 0 0 0.5em; color: #047857; }
 .writing-prose .wd-diff-block-added p:last-child { margin-bottom: 0; }
-.writing-prose .wd-diff-block-tag { font-size: 0.7em; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #059669; opacity: 0.8; margin-bottom: 0.35em; }
+.writing-prose .wd-diff-block-tag { font-family: Inter, system-ui, sans-serif; font-size: 0.7em; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #047857; margin-bottom: 0.35em; }
 /* The chapter is locked while a suggestion is in flight or under review. */
 .wd-sheet-locked { cursor: default; }
 .wd-sheet-locked .writing-prose { caret-color: transparent; }
@@ -623,3 +630,10 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .has-backdrop .chat-hint { background-color: color-mix(in srgb, var(--theme-surface-canvas) 55%, transparent); }
 .has-backdrop .glass-panel.glass-dense { background-color: color-mix(in srgb, var(--theme-surface-editor) 90%, transparent); }
 .has-backdrop .glass-rail.glass-dense { background-color: color-mix(in srgb, var(--theme-surface-sidebar) 82%, transparent); }
+
+/* The Writing Desk toolbar scrolls sideways when the panels leave it little room, rather than wrapping. */
+.wd-toolbar { scrollbar-width: none; }
+.wd-toolbar::-webkit-scrollbar { display: none; }
+
+/* Notes and Analyses read as prose: bold is emphasis, not the accent the shared Markdown gives it. */
+.wd-note-body strong { color: var(--theme-text-primary); }

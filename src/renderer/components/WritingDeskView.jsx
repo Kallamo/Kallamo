@@ -1,18 +1,21 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import WritingEditor, { DEFAULT_WRITING_DESK } from './WritingEditor';
 import ExportBookModal from './ExportBookModal';
 import { importedContentToJson } from './writingExtensions';
 import ConfirmDialog from './ui/ConfirmDialog';
-import Popover from './ui/Popover';
+import Button from './ui/Button';
+import IconButton from './ui/IconButton';
+import Tooltip from './ui/Tooltip';
+import { Menu, MenuItem, MenuLabel, MenuSeparator } from './ui/Menu';
 import WritingDirectivesPanel from './WritingDirectivesPanel';
 import WritingNotesPanel from './WritingNotesPanel';
+import WritingAnalysesPanel from './WritingAnalysesPanel';
 import {
-  Folder, FolderPlus, FilePlus, ChevronRight, ChevronDown,
-  FileText, Trash2, FolderInput, PenLine, Download,
-  PanelLeftClose, PanelLeftOpen, Pin, FileInput
+  Folder, FolderOpen, FolderPlus, Plus, ChevronDown, ChevronLeft, FileText, Trash2, FolderInput,
+  PenLine, Download, FileInput, MoreHorizontal
 } from 'lucide-react';
-import { AiGlyph, SuggestionPendingGlyph, NoteGlyph } from './ui/glyphs';
+import { AiGlyph, AiNoteGlyph, IndexingGlyph, SuggestionPendingGlyph, WritingGlyph } from './ui/glyphs';
 
 export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
   const { settings, showToast } = useApp();
@@ -29,17 +32,30 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
   const [editValue, setEditValue] = useState('');
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [exportFolderTarget, setExportFolderTarget] = useState(null);
-  const [moveMenuId, setMoveMenuId] = useState(null);
-  const moveAnchorRef = useRef(null);
+  const [rowMenu, setRowMenu] = useState(null); // { item, view: 'actions' | 'move' }
+  const rowMenuAnchorRef = useRef(null);
   const [dragItem, setDragItem] = useState(null);
   const [dropInfo, setDropInfo] = useState(null); // { id, zone: 'before'|'after'|'inside' }
   const sidebarKey = `wd-sidebar-collapsed-${workspaceId}`;
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem(sidebarKey) === '1');
   const rightPanelKey = `wd-rightpanel-${workspaceId}`;
-  const [rightPanel, setRightPanel] = useState(() => localStorage.getItem(rightPanelKey) || ''); // '' | 'directives' | 'notes'
+  const [rightPanel, setRightPanel] = useState(() => localStorage.getItem(rightPanelKey) || ''); // '' | 'directives' | 'notes' | 'analyses'
   const editorJumpRef = useRef(null); // set by the editor; lets the Notes panel scroll to a passage
   const [notesRefresh, setNotesRefresh] = useState(0);
   const [justAddedNoteId, setJustAddedNoteId] = useState(null); // note to auto-expand once
+  const [analysesRefresh, setAnalysesRefresh] = useState(0);
+  const [justAddedAnalysisId, setJustAddedAnalysisId] = useState(null);
+  const [analysesCount, setAnalysesCount] = useState(0);
+  // Chapters whose memory update is running, kept here so it survives switching chapters.
+  const [indexing, setIndexing] = useState({}); // { [docId]: { done, total } }
+  // Chapters with an analysis the writer has not opened yet.
+  const unreadKey = `wd-unread-analyses-${workspaceId}`;
+  const [unreadAnalyses, setUnreadAnalyses] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem(unreadKey) || '[]')); } catch { return new Set(); }
+  });
+  const [openNotes, setOpenNotes] = useState(0);
+  const [directivesOn, setDirectivesOn] = useState(0);
+  const [directivesRefresh, setDirectivesRefresh] = useState(0);
 
   const getWritingDeskState = useCallback(async () => {
     if (electronAPI.getWritingDeskState) {
@@ -89,8 +105,9 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
     updateNavigationState(navigationStateRef.current.expanded, documentId);
   }, [updateNavigationState]);
 
-  const openPanel = (name) => {
+  const togglePanel = (name) => {
     setJustAddedNoteId(null); // a manual open shows every note minimized
+    setJustAddedAnalysisId(null);
     setRightPanel(prev => {
       const next = prev === name ? '' : name;
       localStorage.setItem(rightPanelKey, next);
@@ -146,13 +163,71 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
     return () => { active = false; };
   }, [selectedDocId, electronAPI]);
 
+  // The header buttons carry counts, so they are read here rather than inside the panels.
+  useEffect(() => {
+    if (!currentDoc?.id) { setOpenNotes(0); return; }
+    let active = true;
+    electronAPI.getDocumentNotes(currentDoc.id).then(res => {
+      if (active) setOpenNotes((res?.notes || []).filter(n => n.status !== 'resolved').length);
+    });
+    return () => { active = false; };
+  }, [electronAPI, currentDoc?.id, notesRefresh]);
+
+  useEffect(() => {
+    if (!currentDoc?.id) { setAnalysesCount(0); return; }
+    let active = true;
+    electronAPI.getDocumentAnalyses?.(currentDoc.id).then(res => {
+      if (active) setAnalysesCount((res?.analyses || []).length);
+    });
+    return () => { active = false; };
+  }, [electronAPI, currentDoc?.id, analysesRefresh]);
+
+  useEffect(() => {
+    let active = true;
+    electronAPI.getDirectives(workspaceId).then(res => {
+      if (active) setDirectivesOn((res?.directives || []).filter(d => d.enabled !== 0).length);
+    });
+    return () => { active = false; };
+  }, [electronAPI, workspaceId, directivesRefresh]);
+
+  const updateUnread = useCallback((update) => {
+    setUnreadAnalyses(prev => {
+      const next = update(new Set(prev));
+      try { localStorage.setItem(unreadKey, JSON.stringify([...next])); } catch { /* storage unavailable */ }
+      return next;
+    });
+  }, [unreadKey]);
+
+  // Opening a chapter's Analyses counts as reading them.
+  useEffect(() => {
+    if (rightPanel === 'analyses' && selectedDocId && unreadAnalyses.has(selectedDocId)) {
+      updateUnread(set => { set.delete(selectedDocId); return set; });
+    }
+  }, [rightPanel, selectedDocId, unreadAnalyses, updateUnread]);
+
+  useEffect(() => {
+    if (!electronAPI.onVectorizeDocumentProgress) return undefined;
+    return electronAPI.onVectorizeDocumentProgress((d) => {
+      setIndexing(prev => (prev[d.documentId] ? { ...prev, [d.documentId]: { done: d.done, total: d.total } } : prev));
+    });
+  }, [electronAPI]);
+
+  const handleIndexing = useCallback((docId, on) => {
+    setIndexing(prev => {
+      const next = { ...prev };
+      if (on) next[docId] = next[docId] || {};
+      else delete next[docId];
+      return next;
+    });
+  }, []);
+
   // AI select->invoke state lives HERE (above the editor, which remounts per chapter)
   // so the loading notice, lock, and sidebar markers survive switching chapters.
-  const [inFlight, setInFlight] = useState({});       // { [docId]: true } while running
+  const [inFlight, setInFlight] = useState({});       // { [docId]: { profileId } } while running
   const [pendingIds, setPendingIds] = useState(new Set()); // docs with a ready suggestion
   const [currentPending, setCurrentPending] = useState(null); // full suggestion for open doc
 
-  // Which chapters hold an unresolved suggestion (drives the sidebar "ready" dot).
+  // Which chapters hold an unresolved suggestion (drives the sidebar "ready" mark).
   useEffect(() => {
     let active = true;
     electronAPI.getPendingSuggestionIds?.(workspaceId).then(res => {
@@ -180,26 +255,29 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
       if (data.error) { showToast?.(`AI invocation failed: ${data.error}`, 'error'); return; }
       electronAPI.getPendingSuggestion(data.documentId).then(async (res) => {
         const sug = res && res.suggestion ? res.suggestion : null;
-        // Analysis results are read-only notes, not diffs: persist them straight into the
-        // chapter's Notes and open the panel, instead of an ephemeral floating card.
+        // Analysis results are readings, not diffs: they join the chapter's Analyze history
+        // and open beside the text, never over it.
         if (sug && sug.channel === 'analysis') {
-          const created = await electronAPI.createDocumentNote({
+          const created = await electronAPI.createDocumentAnalysis({
             documentId: sug.documentId,
             workspaceId,
             body: sug.proposedText || '',
             excerpt: sug.originalText || null,
-            source: 'ai',
             profileId: sug.profileId || null,
             instruction: sug.intermediatePrompt || null,
+            status: sug.status,
+            debug: sug.debug || null,
           });
           await electronAPI.resolvePendingSuggestion(sug.id);
           setPendingIds(prev => { const n = new Set(prev); n.delete(data.documentId); return n; });
-          if (data.documentId === selectedDocId) {
+          if (data.documentId !== selectedDocId) {
+            updateUnread(set => set.add(data.documentId));
+          } else {
             setCurrentPending(null);
-            setJustAddedNoteId(created?.id || null);
-            setNotesRefresh(x => x + 1);
-            setRightPanel('notes');
-            localStorage.setItem(rightPanelKey, 'notes');
+            setJustAddedAnalysisId(created?.id || null);
+            setAnalysesRefresh(x => x + 1);
+            setRightPanel('analyses');
+            localStorage.setItem(rightPanelKey, 'analyses');
           }
           return;
         }
@@ -208,9 +286,9 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
       });
     });
     return off;
-  }, [electronAPI, workspaceId, selectedDocId, showToast]);
+  }, [electronAPI, workspaceId, selectedDocId, showToast, rightPanelKey, updateUnread]);
 
-  const handleDispatch = (docId) => setInFlight(prev => ({ ...prev, [docId]: true }));
+  const handleDispatch = (docId, profileId) => setInFlight(prev => ({ ...prev, [docId]: { profileId } }));
   const handleResolved = (docId) => {
     setInFlight(prev => { const n = { ...prev }; delete n[docId]; return n; });
     setPendingIds(prev => { const n = new Set(prev); n.delete(docId); return n; });
@@ -219,6 +297,9 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
 
   const newDocument = async (folderId = null) => {
     const doc = await electronAPI.createDocument(workspaceId, folderId, 'Untitled', null, DEFAULT_WRITING_DESK);
+    if (folderId && !navigationStateRef.current.expanded[folderId]) {
+      updateNavigationState({ ...navigationStateRef.current.expanded, [folderId]: true }, navigationStateRef.current.selectedDocId);
+    }
     await loadTree();
     selectDocument(doc.id);
   };
@@ -267,7 +348,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
   };
 
   const doMove = async (item, folderId) => {
-    setMoveMenuId(null);
+    setRowMenu(null);
     if (item.type === 'folder') {
       if (folderId === item.id) return;
       await electronAPI.moveFolder(item.id, folderId);
@@ -286,6 +367,19 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
 
   const childFolders = (parentId) => tree.folders.filter(f => (f.parentId || null) === parentId);
   const childDocs = (folderId) => tree.documents.filter(d => (d.folderId || null) === folderId);
+
+  // Chapters anywhere under a folder, so a folder of folders still shows its size.
+  const chapterCounts = useMemo(() => {
+    const counts = {};
+    const countOf = (folderId) => {
+      if (counts[folderId] != null) return counts[folderId];
+      const own = tree.documents.filter(d => d.folderId === folderId).length;
+      counts[folderId] = own + tree.folders.filter(f => f.parentId === folderId).reduce((sum, f) => sum + countOf(f.id), 0);
+      return counts[folderId];
+    };
+    tree.folders.forEach(f => countOf(f.id));
+    return counts;
+  }, [tree]);
 
   // --- Drag & drop: reorder within a sibling group and move between folders ---
   const siblings = (type, parentId) => (type === 'folder' ? childFolders(parentId) : childDocs(parentId));
@@ -352,9 +446,18 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
     }
   };
 
+  // Stops here so the workspace's file-drop handler above never overrides the move with 'none'.
+  const allowRootDrop = (e) => {
+    if (!dragItem) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
   const onRootDrop = (e) => {
     if (!dragItem) return;
     e.preventDefault();
+    e.stopPropagation();
     const item = dragItem;
     setDragItem(null);
     setDropInfo(null);
@@ -362,162 +465,208 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
   };
 
   const dropLine = (item, zone) => (dropInfo && dropInfo.id === item.id && dropInfo.zone === zone
-    ? <span className={`absolute left-2 right-2 h-0.5 bg-accent rounded ${zone === 'before' ? 'top-0' : 'bottom-0'}`} />
+    ? <span aria-hidden="true" className={`pointer-events-none absolute left-2 right-2 h-0.5 rounded bg-accent ${zone === 'before' ? '-top-px' : '-bottom-px'}`} />
     : null);
-  const dropInsideRing = (item) => (dropInfo && dropInfo.id === item.id && dropInfo.zone === 'inside' ? 'ring-1 ring-accent bg-accent/10' : '');
+  const dropInside = (item) => dropInfo && dropInfo.id === item.id && dropInfo.zone === 'inside';
+
+  const openRowMenu = (event, item) => {
+    event.stopPropagation();
+    rowMenuAnchorRef.current = event.currentTarget;
+    setRowMenu(current => (current?.item.id === item.id ? null : { item, view: 'actions' }));
+  };
+
+  const startRename = (item) => {
+    setEditingId(item.id);
+    setEditValue(item.type === 'folder' ? item.name : item.title);
+  };
 
   const renderEditable = (item) => (
-    <input
-      autoFocus
-      value={editValue}
-      onChange={(e) => setEditValue(e.target.value)}
-      onBlur={() => commitRename(item)}
-      onKeyDown={(e) => { if (e.key === 'Enter') commitRename(item); if (e.key === 'Escape') setEditingId(null); }}
-      className="bg-[#000d11] text-white text-xs rounded px-1 py-0.5 border border-accent/60 focus:outline-none w-full"
-    />
+    <label className="min-w-0 flex-1">
+      <span className="sr-only">{item.type === 'folder' ? 'Folder name' : 'Chapter name'}</span>
+      <input
+        autoFocus
+        value={editValue}
+        onChange={(e) => setEditValue(e.target.value)}
+        onClick={(e) => e.stopPropagation()}
+        onFocus={(e) => e.target.select()}
+        onBlur={() => commitRename(item)}
+        onKeyDown={(e) => { if (e.key === 'Enter') commitRename(item); if (e.key === 'Escape') setEditingId(null); }}
+        className="h-7 w-full rounded-md border border-accent/60 bg-surface-input px-2 text-sm text-text-primary focus:outline-none"
+      />
+    </label>
   );
 
-  const ItemActions = ({ item }) => (
-    <span className="ml-auto items-center gap-0.5 hidden group-hover:flex shrink-0">
-      {item.type === 'folder' && (
-        <button
-          title={childDocs(item.id).length ? 'Export folder…' : 'No chapters to export'}
-          disabled={!childDocs(item.id).length}
-          onClick={(e) => { e.stopPropagation(); setExportFolderTarget(item); }}
-          className="p-1 text-gray-500 hover:text-white disabled:opacity-30 disabled:hover:text-gray-500"
-        ><Download className="w-3.5 h-3.5" /></button>
-      )}
-      <button title="Rename" onClick={(e) => { e.stopPropagation(); setEditingId(item.id); setEditValue(item.name || item.title); }} className="p-1 text-gray-500 hover:text-white"><PenLine className="w-3.5 h-3.5" /></button>
-      <button ref={moveMenuId === item.id ? moveAnchorRef : null} title="Move to" onClick={(e) => { e.stopPropagation(); setMoveMenuId(moveMenuId === item.id ? null : item.id); }} className="p-1 text-gray-500 hover:text-white"><FolderInput className="w-3.5 h-3.5" /></button>
-      <button title="Delete" onClick={(e) => { e.stopPropagation(); setDeleteTarget(item); }} className="p-1 text-gray-500 hover:text-status-danger"><Trash2 className="w-3.5 h-3.5" /></button>
-    </span>
-  );
+  // Row actions take no room until the row is hovered or focused, so names keep their width.
+  const rowActionClass = (item) => `h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-white/10 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${rowMenu?.item.id === item.id ? 'inline-flex bg-white/10 text-text-primary' : 'hidden group-hover:inline-flex group-focus-within:inline-flex'}`;
 
-  const MoveMenu = ({ item }) => (
-    <Popover anchorRef={moveAnchorRef} open onClose={() => setMoveMenuId(null)} matchAnchorWidth={false} align="right" maxHeight={280} className="w-44 py-1 text-xs">
-      <div className="px-2 py-1 text-gray-500">Move to…</div>
-      <button onClick={() => doMove(item, null)} className="w-full text-left px-2 py-1 text-gray-300 hover:bg-white/5">Root</button>
-      {tree.folders.filter(f => f.id !== item.id).map(f => (
-        <button key={f.id} onClick={() => doMove(item, f.id)} className="w-full text-left px-2 py-1 text-gray-300 hover:bg-white/5 truncate">{f.name}</button>
-      ))}
-    </Popover>
-  );
+  const dragProps = (item) => ({
+    draggable: editingId !== item.id,
+    onDragStart: (e) => {
+      e.stopPropagation();
+      // Chromium only delivers a drop when the drag carries data and a matching effect.
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', item.id);
+      setDragItem(item.type === 'folder' ? { id: item.id, type: 'folder', parentId: item.parentId || null } : { id: item.id, type: 'document', folderId: item.folderId || null });
+    },
+    onDragOver: (e) => onRowDragOver(e, item),
+    onDrop: (e) => onRowDrop(e, item),
+    onDragEnd: () => { setDragItem(null); setDropInfo(null); },
+  });
 
-  const renderFolder = (folder, depth) => {
-    const isOpen = expanded[folder.id];
+  const renderFolder = (folder) => {
+    const item = { ...folder, type: 'folder' };
+    const isOpen = !!expanded[folder.id];
+    const FolderIcon = isOpen ? FolderOpen : Folder;
     return (
       <div key={folder.id}>
         <div
-          draggable={editingId !== folder.id}
-          onDragStart={(e) => { e.stopPropagation(); setDragItem({ id: folder.id, type: 'folder', parentId: folder.parentId || null }); }}
-          onDragOver={(e) => onRowDragOver(e, { ...folder, type: 'folder' })}
-          onDrop={(e) => onRowDrop(e, { ...folder, type: 'folder' })}
-          onDragEnd={() => { setDragItem(null); setDropInfo(null); }}
-          className={`group relative flex items-center gap-1 px-2 py-1 rounded-md hover:bg-white/5 cursor-pointer text-xs text-gray-300 ${dropInsideRing(folder)}`}
-          style={{ paddingLeft: `${8 + depth * 12}px` }}
-          onClick={() => toggleFolder(folder.id)}
+          {...dragProps(item)}
+          role="button"
+          tabIndex={0}
+          aria-expanded={isOpen}
+          onClick={() => editingId !== folder.id && toggleFolder(folder.id)}
+          onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); toggleFolder(folder.id); } }}
+          className={`group relative flex min-h-[1.875rem] cursor-pointer items-center gap-2 rounded-md py-0.5 pl-2 pr-8 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${dropInside(item) ? 'bg-accent/10 ring-1 ring-inset ring-accent/60' : 'hover:bg-white/5'} ${dragItem?.id === folder.id ? 'opacity-40' : ''}`}
         >
-          {dropLine(folder, 'before')}
-          {dropLine(folder, 'after')}
-          {isOpen ? <ChevronDown className="w-3.5 h-3.5 shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 shrink-0" />}
-          <Folder className="w-3.5 h-3.5 shrink-0 text-gray-500" />
-          {editingId === folder.id ? renderEditable({ ...folder, type: 'folder' }) : <span className="truncate">{folder.name}</span>}
-          <ItemActions item={{ ...folder, type: 'folder' }} />
-          {moveMenuId === folder.id && <MoveMenu item={{ ...folder, type: 'folder' }} />}
+          {dropLine(item, 'before')}
+          {dropLine(item, 'after')}
+          <FolderIcon className="h-4 w-4 shrink-0 text-text-subtle" aria-hidden="true" />
+          {editingId === folder.id ? renderEditable(item) : (
+            <>
+              <span className="min-w-0 flex-1 truncate text-text-secondary group-hover:text-text-primary">{folder.name}</span>
+              <span className={`shrink-0 text-xs tabular-nums text-text-disabled group-hover:hidden group-focus-within:hidden ${rowMenu?.item.id === folder.id ? 'hidden' : ''}`}>{chapterCounts[folder.id] || 0}</span>
+              <Tooltip content={`New chapter in ${folder.name}`}>
+                <button type="button" aria-label={`New chapter in ${folder.name}`} onClick={(e) => { e.stopPropagation(); newDocument(folder.id); }} className={rowActionClass({ id: `new-${folder.id}` })}>
+                  <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              </Tooltip>
+              <button type="button" aria-label={`${folder.name} actions`} aria-haspopup="menu" aria-expanded={rowMenu?.item.id === folder.id} onClick={(e) => openRowMenu(e, item)} className={rowActionClass(item)}>
+                <MoreHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            </>
+          )}
+          <ChevronDown aria-hidden="true" className={`absolute right-2 h-3.5 w-3.5 text-text-subtle transition-transform ${isOpen ? '' : '-rotate-90'}`} />
         </div>
         {isOpen && (
-          <div>
-            {childFolders(folder.id).map(f => renderFolder(f, depth + 1))}
-            {childDocs(folder.id).map(d => renderDoc(d, depth + 1))}
-            <button onClick={() => newDocument(folder.id)} className="flex items-center gap-1 text-[0.6875rem] text-gray-600 hover:text-gray-300 px-2 py-0.5" style={{ paddingLeft: `${8 + (depth + 1) * 12}px` }}>
-              <FilePlus className="w-3 h-3" /> chapter
-            </button>
+          <div className="ml-[0.9375rem] flex flex-col gap-px border-l border-border-subtle pl-1.5">
+            {childFolders(folder.id).map(renderFolder)}
+            {childDocs(folder.id).map(renderDoc)}
+            {!childFolders(folder.id).length && !childDocs(folder.id).length && (
+              <p className="px-2 py-1 text-xs text-text-subtle">Empty folder</p>
+            )}
           </div>
         )}
       </div>
     );
   };
 
-  const renderDoc = (doc, depth) => (
-    <div
-      key={doc.id}
-      draggable={editingId !== doc.id}
-      onDragStart={(e) => { e.stopPropagation(); setDragItem({ id: doc.id, type: 'document', folderId: doc.folderId || null }); }}
-      onDragOver={(e) => onRowDragOver(e, { ...doc, type: 'document' })}
-      onDrop={(e) => onRowDrop(e, { ...doc, type: 'document' })}
-      onDragEnd={() => { setDragItem(null); setDropInfo(null); }}
-      className={`group relative flex items-center gap-1 px-2 py-1 rounded-md cursor-pointer text-xs ${selectedDocId === doc.id ? 'bg-accent/15 text-accent' : 'text-gray-300 hover:bg-white/5'}`}
-      style={{ paddingLeft: `${8 + depth * 12 + 16}px` }}
-      onClick={() => selectDocument(doc.id)}
-    >
-      {dropLine(doc, 'before')}
-      {dropLine(doc, 'after')}
-      <FileText className="w-3.5 h-3.5 shrink-0" />
-      {editingId === doc.id ? renderEditable({ ...doc, type: 'document' }) : <span className="truncate">{doc.title}</span>}
-      {inFlight[doc.id] && (
-        <AiGlyph animated title="AI is working on this chapter" className="w-3.5 h-3.5 shrink-0 text-accent" />
-      )}
-      {!inFlight[doc.id] && pendingIds.has(doc.id) && (
-        <SuggestionPendingGlyph title="AI suggestion ready" className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
-      )}
-      <ItemActions item={{ ...doc, type: 'document', name: doc.title }} />
-      {moveMenuId === doc.id && <MoveMenu item={{ ...doc, type: 'document' }} />}
-    </div>
-  );
+  const renderDoc = (doc) => {
+    const item = { ...doc, type: 'document' };
+    const active = selectedDocId === doc.id;
+    return (
+      <div
+        key={doc.id}
+        {...dragProps(item)}
+        role="button"
+        tabIndex={0}
+        aria-current={active ? 'page' : undefined}
+        onClick={() => editingId !== doc.id && selectDocument(doc.id)}
+        onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); selectDocument(doc.id); } }}
+        className={`group relative flex min-h-[1.875rem] cursor-pointer items-center gap-2 rounded-md py-0.5 pl-2 pr-1 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${active ? 'bg-accent/[0.13] text-accent' : 'text-text-secondary hover:bg-white/5 hover:text-text-primary'} ${dragItem?.id === doc.id ? 'opacity-40' : ''}`}
+      >
+        {dropLine(item, 'before')}
+        {dropLine(item, 'after')}
+        <FileText className={`h-4 w-4 shrink-0 ${active ? '' : 'text-text-subtle'}`} aria-hidden="true" />
+        {editingId === doc.id ? renderEditable(item) : (
+          <>
+            <span className={`min-w-0 flex-1 truncate ${active ? 'font-semibold' : ''}`}>{doc.title || 'Untitled'}</span>
+            {indexing[doc.id] && (
+              <Tooltip content={indexing[doc.id].total ? `Updating the AI's memory, ${indexing[doc.id].done} of ${indexing[doc.id].total}` : "Updating the AI's memory"}>
+                <span className="inline-flex shrink-0 text-status-info"><IndexingGlyph animated className="h-4 w-4" /></span>
+              </Tooltip>
+            )}
+            {inFlight[doc.id] && (
+              <Tooltip content="The AI is working on this chapter">
+                <span className="inline-flex shrink-0 text-accent"><AiGlyph animated className="h-4 w-4" /></span>
+              </Tooltip>
+            )}
+            {!inFlight[doc.id] && pendingIds.has(doc.id) && (
+              <Tooltip content="An AI suggestion is waiting for your review">
+                <span className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-status-success"><SuggestionPendingGlyph className="h-4 w-4" />Review</span>
+              </Tooltip>
+            )}
+            {!inFlight[doc.id] && !pendingIds.has(doc.id) && unreadAnalyses.has(doc.id) && (
+              <Tooltip content="A new analysis is waiting in Analyses">
+                <span className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-status-success"><AiNoteGlyph className="h-4 w-4" />Read</span>
+              </Tooltip>
+            )}
+            <button type="button" aria-label={`${doc.title || 'Untitled'} actions`} aria-haspopup="menu" aria-expanded={rowMenu?.item.id === doc.id} onClick={(e) => openRowMenu(e, item)} className={rowActionClass(item)}>
+              <MoreHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          </>
+        )}
+      </div>
+    );
+  };
+
+  const menuItem = rowMenu?.item;
+  const moveTargets = menuItem
+    ? tree.folders.filter(f => f.id !== menuItem.id && !(menuItem.type === 'folder' && isWithinSubtree(f.id, menuItem.id)))
+    : [];
+  const currentParent = menuItem ? (menuItem.type === 'folder' ? menuItem.parentId || null : menuItem.folderId || null) : null;
+  const currentFolder = currentDoc?.folderId ? tree.folders.find(f => f.id === currentDoc.folderId) : null;
+  const showSidebar = !sidebarCollapsed || !currentDoc;
+  const isEmpty = tree.folders.length === 0 && tree.documents.length === 0;
 
   return (
-    <div className="flex-1 flex overflow-hidden bg-[#000508]/40 select-none relative">
-      {/* Collapsed: thin rail with a reopen handle + quick new-chapter */}
-      {sidebarCollapsed && (
-        <div className="w-10 shrink-0 border-r border-gray-800/40 flex flex-col items-center py-3 gap-1 bg-[#011419]/25">
-          <button title="Show chapters" onClick={toggleSidebar} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md"><PanelLeftOpen className="w-4 h-4" /></button>
-          <button title="New chapter" onClick={() => newDocument(null)} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md"><FilePlus className="w-4 h-4" /></button>
-        </div>
-      )}
-
-      {/* Chapter tree */}
-      {!sidebarCollapsed && (
-      <div className="w-60 shrink-0 border-r border-gray-800/40 flex flex-col bg-[#011419]/25">
-        <div className="flex items-center gap-1 px-3 py-3 border-b border-gray-800/80 bg-[#011419]/35">
-          <span className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-500 mr-auto">Chapters</span>
-          <button title="New chapter" onClick={() => newDocument(null)} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md"><FilePlus className="w-4 h-4" /></button>
-          <button title="New folder" onClick={() => newFolder(null)} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md"><FolderPlus className="w-4 h-4" /></button>
-          <button title="Import .docx/.pdf" onClick={importDocument} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md"><FileInput className="w-4 h-4" /></button>
-          <button title="Hide chapters" onClick={toggleSidebar} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md"><PanelLeftClose className="w-4 h-4" /></button>
-        </div>
-        <div
-          className="flex-1 overflow-y-auto custom-scrollbar py-1 flex flex-col"
-          onDragOver={(e) => { if (dragItem) e.preventDefault(); }}
-          onDrop={onRootDrop}
-        >
-          {childFolders(null).map(f => renderFolder(f, 0))}
-          {childDocs(null).map(d => renderDoc(d, 0))}
-          {tree.folders.length === 0 && tree.documents.length === 0 && (
-            <p className="text-xs text-gray-600 px-3 py-4 leading-relaxed">No chapters yet. Create one with the + above, or import a .docx/.pdf.</p>
-          )}
-          {/* Fills remaining space so there's always a drop target to send items back to the root. */}
+    <div className="relative flex flex-1 overflow-hidden select-none">
+      {showSidebar && (
+        <aside aria-label="Chapters" className="glass-rail flex w-[21rem] shrink-0 flex-col border-r border-border-subtle">
+          <div className="flex h-[3.25rem] shrink-0 items-center gap-1 pl-4 pr-3">
+            <h2 className="text-[0.9375rem] font-bold text-text-primary">Chapters</h2>
+            <span className="text-xs tabular-nums text-text-subtle">{tree.documents.length}</span>
+            <span className="flex-1" />
+            <Button size="sm" icon={Plus} className="whitespace-nowrap !px-2.5" onClick={() => newDocument(null)}>New chapter</Button>
+            <IconButton icon={FolderPlus} label="New folder" size="sm" tooltipSide="bottom" onClick={() => newFolder(null)} />
+            <IconButton icon={FileInput} label="Import .docx or .pdf" size="sm" tooltipSide="bottom" onClick={importDocument} />
+          </div>
           <div
-            className="flex-1 min-h-[32px]"
-            onDragOver={(e) => { if (dragItem) { e.preventDefault(); setDropInfo({ id: '__root__', zone: 'inside' }); } }}
+            className="custom-scrollbar flex flex-1 flex-col overflow-y-auto px-2 pb-2"
+            onDragOver={allowRootDrop}
             onDrop={onRootDrop}
           >
-            {dragItem && dropInfo?.id === '__root__' && (
-              <div className="mx-2 mt-1 border border-dashed border-accent/60 rounded-md py-1.5 text-center text-[0.625rem] text-accent/80">Move to root</div>
+            <div className="flex flex-col gap-px">
+              {childFolders(null).map(renderFolder)}
+              {childDocs(null).map(renderDoc)}
+            </div>
+            {isEmpty && (
+              <p className="px-2 py-4 text-sm leading-relaxed text-text-subtle">No chapters yet. Start one above, or import a .docx or .pdf.</p>
             )}
+            {/* Fills remaining space so there's always a drop target to send items back to the top level. */}
+            <div
+              className="min-h-10 flex-1"
+              onDragOver={(e) => { allowRootDrop(e); if (dragItem && dropInfo?.id !== '__root__') setDropInfo({ id: '__root__', zone: 'inside' }); }}
+              onDrop={onRootDrop}
+            >
+              {/* Always in the layout, so starting a drag never shifts the list under the pointer. */}
+              <div aria-hidden={!dragItem} className={`pointer-events-none mx-0.5 mt-2 flex h-9 items-center justify-center rounded-md border border-dashed text-xs transition-colors ${!dragItem ? 'invisible' : dropInfo?.id === '__root__' ? 'border-accent/70 bg-accent/10 text-accent' : 'border-border-default text-text-subtle'}`}>
+                Move to top level
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
+        </aside>
       )}
 
-      {/* Editor */}
       {currentDoc ? (
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex flex-1 flex-col overflow-hidden">
           <WritingEditor
             key={currentDoc.id}
             doc={currentDoc}
+            folderName={currentFolder?.name || null}
             electronAPI={electronAPI}
             workspaceId={workspaceId}
             inFlight={!!inFlight[currentDoc.id]}
+            inFlightProfileId={inFlight[currentDoc.id]?.profileId || null}
             pending={currentPending && currentPending.documentId === currentDoc.id ? currentPending : null}
             onDispatch={handleDispatch}
             onResolved={handleResolved}
@@ -526,6 +675,16 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
             onDocPatch={onDocPatch}
             jumpRef={editorJumpRef}
             onOpenEntity={onOpenEntity}
+            chaptersHidden={sidebarCollapsed}
+            onToggleChapters={toggleSidebar}
+            rightPanel={rightPanel}
+            onTogglePanel={togglePanel}
+            notesCount={openNotes}
+            directivesCount={directivesOn}
+            analysesCount={analysesCount}
+            indexingElsewhere={!!indexing[currentDoc.id]}
+            indexingProgress={indexing[currentDoc.id]?.total ? indexing[currentDoc.id] : null}
+            onIndexingChange={handleIndexing}
             onRename={(title) => {
               setCurrentDoc({ ...currentDoc, title });
               electronAPI.renameDocument(currentDoc.id, title).then(loadTree);
@@ -533,42 +692,98 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
           />
         </div>
       ) : (
-        <div className="flex-1 flex items-center justify-center text-gray-600 text-sm">
-          Select or create a chapter to start writing.
+        <div className="flex flex-1 items-center justify-center p-6">
+          <section aria-label="No chapter open" className="glass-panel flex w-full max-w-md flex-col items-center gap-3 rounded-surface border border-border-subtle px-8 py-8 text-center">
+            <span className="flex h-12 w-12 items-center justify-center rounded-card bg-white/[0.06] text-text-primary"><WritingGlyph className="h-6 w-6" /></span>
+            <h2 className="mt-1 text-lg font-bold text-text-primary">{isEmpty ? 'Start your first chapter' : 'Pick a chapter, or start one'}</h2>
+            <p className="mb-2 text-sm leading-relaxed text-text-muted">
+              {isEmpty ? 'Write here from scratch, or bring in a manuscript you already have.' : 'Chapters live in the list on the left. You can also bring in a manuscript you already have.'}
+            </p>
+            <div className="flex flex-wrap justify-center gap-2">
+              <Button icon={Plus} onClick={() => newDocument(null)}>New chapter</Button>
+              <Button variant="ghost" icon={FileInput} onClick={importDocument}>Import .docx or .pdf</Button>
+            </div>
+          </section>
         </div>
       )}
 
-      {/* Right rail: pinned directives (workspace) + review notes (per chapter). */}
-      {rightPanel === 'directives' ? (
-        <WritingDirectivesPanel workspaceId={workspaceId} electronAPI={electronAPI} onClose={() => openPanel('directives')} />
-      ) : rightPanel === 'notes' ? (
+      {rightPanel === 'directives' && (
+        <WritingDirectivesPanel
+          workspaceId={workspaceId}
+          workspaceTitle={chat.title}
+          electronAPI={electronAPI}
+          onChange={() => setDirectivesRefresh(x => x + 1)}
+          onClose={() => togglePanel('directives')}
+        />
+      )}
+      {rightPanel === 'notes' && currentDoc && (
         <WritingNotesPanel
-          documentId={currentDoc?.id}
+          documentId={currentDoc.id}
+          documentTitle={currentDoc.title}
           workspaceId={workspaceId}
           electronAPI={electronAPI}
           refreshKey={notesRefresh}
           expandId={justAddedNoteId}
+          onChange={() => setNotesRefresh(x => x + 1)}
           onJump={(excerpt) => editorJumpRef.current?.(excerpt)}
-          onClose={() => openPanel('notes')}
+          onClose={() => togglePanel('notes')}
         />
-      ) : (
-        <div className="w-10 shrink-0 border-l border-gray-800/40 flex flex-col items-center gap-1 py-3 bg-[#011419]/25">
-          <button title="Directives" onClick={() => openPanel('directives')} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md">
-            <Pin className="w-4 h-4" />
-          </button>
-          <button title="Notes" onClick={() => openPanel('notes')} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md">
-            <NoteGlyph className="w-4 h-4" />
-          </button>
-        </div>
       )}
+
+      {rightPanel === 'analyses' && currentDoc && (
+        <WritingAnalysesPanel
+          documentId={currentDoc.id}
+          documentTitle={currentDoc.title}
+          workspaceId={workspaceId}
+          electronAPI={electronAPI}
+          refreshKey={analysesRefresh}
+          expandId={justAddedAnalysisId}
+          onJump={(excerpt) => editorJumpRef.current?.(excerpt)}
+          onChange={() => setAnalysesRefresh(x => x + 1)}
+          onNotesChange={() => setNotesRefresh(x => x + 1)}
+          onClose={() => togglePanel('analyses')}
+        />
+      )}
+
+      <Menu anchorRef={rowMenuAnchorRef} open={!!rowMenu} onClose={() => setRowMenu(null)} label={menuItem ? `${menuItem.name || menuItem.title} actions` : 'Actions'} className="w-60">
+        {close => menuItem && (rowMenu.view === 'move' ? (
+          <>
+            <MenuItem icon={ChevronLeft} label="Back" onSelect={() => setRowMenu({ ...rowMenu, view: 'actions' })} />
+            <MenuSeparator />
+            <MenuLabel>Move to</MenuLabel>
+            <div className="custom-scrollbar max-h-72 overflow-y-auto">
+              <MenuItem label="Top level" checked={currentParent === null} onSelect={() => { close(); doMove(menuItem, null); }} />
+              {moveTargets.map(f => (
+                <MenuItem key={f.id} label={f.name} checked={currentParent === f.id} onSelect={() => { close(); doMove(menuItem, f.id); }} />
+              ))}
+            </div>
+          </>
+        ) : (
+          <>
+            <MenuItem icon={PenLine} label="Rename" onSelect={() => { close(); startRename(menuItem); }} />
+            <MenuItem icon={FolderInput} label="Move to" onSelect={() => setRowMenu({ ...rowMenu, view: 'move' })} />
+            {menuItem.type === 'folder' && (
+              <MenuItem
+                icon={Download}
+                label="Export folder"
+                description={childDocs(menuItem.id).length ? null : 'No chapters directly inside'}
+                disabled={!childDocs(menuItem.id).length}
+                onSelect={() => { close(); setExportFolderTarget(menuItem); }}
+              />
+            )}
+            <MenuSeparator />
+            <MenuItem icon={Trash2} label={menuItem.type === 'folder' ? 'Delete folder' : 'Delete chapter'} danger onSelect={() => { close(); setDeleteTarget(menuItem); }} />
+          </>
+        ))}
+      </Menu>
 
       {deleteTarget && (
         <ConfirmDialog
           tone="danger"
           title={deleteTarget.type === 'folder' ? 'Delete folder' : 'Delete chapter'}
           message={deleteTarget.type === 'folder'
-            ? <>The folder <strong className="text-gray-200">“{deleteTarget.name}”</strong> and every chapter inside it will be permanently deleted. This cannot be undone.</>
-            : <>The chapter <strong className="text-gray-200">“{deleteTarget.title}”</strong> will be permanently deleted. This cannot be undone.</>}
+            ? <>The folder <strong className="text-text-primary">“{deleteTarget.name}”</strong> and every chapter inside it will be permanently deleted. This cannot be undone.</>
+            : <>The chapter <strong className="text-text-primary">“{deleteTarget.title}”</strong> will be permanently deleted. This cannot be undone.</>}
           actions={[
             { label: 'Cancel', variant: 'ghost', onClick: () => setDeleteTarget(null) },
             { label: 'Delete', variant: 'danger', autoFocus: true, onClick: () => doDelete(deleteTarget) },

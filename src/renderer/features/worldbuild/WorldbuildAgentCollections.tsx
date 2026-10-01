@@ -3,6 +3,7 @@ import { Check, ChevronRight, MoreHorizontal, Pencil, Plus, Trash2, Users, Backp
 import { useRef } from 'react';
 import Menu, { MenuItem, MenuSeparator } from '../../components/ui/Menu';
 import IconButton from '../../components/ui/IconButton';
+import NumberInput from '../../components/ui/NumberInput';
 import { ConnectionsGlyph } from '../../components/ui/glyphs';
 import Button from '../../components/ui/Button';
 import SearchableSelect from '../../components/ui/SearchableSelect';
@@ -339,7 +340,7 @@ function InventoryEditor({ draft, setDraft, options, onSave, onClose, saving }: 
     <div className="space-y-5 p-5">
       <div className={`grid gap-4 ${isUnique ? 'grid-cols-1' : 'grid-cols-[minmax(0,1fr)_8rem]'}`}>
         <Field label="Item"><SearchableSelect value={draft.itemId} disabled={Boolean(draft.link)} onChange={(itemId: string) => update({ itemId })} options={options.map(option => ({ id: option.id, label: option.canonicalName, aliases: option.aliases, group: itemMeta(option.data?.itemType).label, icon: itemMeta(option.data?.itemType).icon }))} placeholder="Search for an item" /></Field>
-        {!isUnique && <Field label="Quantity"><input className={INPUT} type="number" min="1" step="1" value={draft.quantity} onChange={event => update({ quantity: Number(event.target.value) })} /></Field>}
+        {!isUnique && <Field label="Quantity"><NumberInput className={INPUT} min={1} value={Number(draft.quantity)} onChange={quantity => update({ quantity })} /></Field>}
       </div>
       <Field label="Condition"><input className={INPUT} value={draft.condition} onChange={event => update({ condition: event.target.value })} placeholder="Worn, pristine, damaged…" /></Field>
       <Field label="Notes"><textarea className={`${INPUT} min-h-28 resize-y`} value={draft.notes} onChange={event => update({ notes: event.target.value })} placeholder="How it is carried, used, or distinguished…" /></Field>

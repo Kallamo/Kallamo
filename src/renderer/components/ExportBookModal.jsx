@@ -1,46 +1,11 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Modal from './ui/Modal';
-import Button from './ui/Button';
 import Checkbox from './ui/Checkbox';
-import { ChevronLeft, ChevronRight, FileText, Hash, Book, FileType } from 'lucide-react';
+import SegmentedControl from './ui/SegmentedControl';
+import { Book } from 'lucide-react';
+import { ExportFooter, FormatChoice, OptionGroup, PageNav, PageNumberOptions, ToggleRow } from './WritingExportParts';
 import { proseCss, buildExportHtml } from './writingExport';
 import { chapterJsonToHtml } from './writingExtensions';
-
-function Segmented({ value, options, onChange }) {
-  return (
-    <div className="flex bg-[#011419] border border-gray-700 rounded-lg p-1 gap-1">
-      {options.map(opt => (
-        <button
-          key={opt.value}
-          type="button"
-          onClick={() => onChange(opt.value)}
-          className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-semibold cursor-pointer transition-all ${value === opt.value
-            ? 'bg-[#1a2d32] text-white border border-accent/30 shadow'
-            : 'text-gray-500 hover:text-white'}`}
-        >
-          {opt.icon && <opt.icon className="w-3.5 h-3.5" />}
-          {opt.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function Toggle({ checked, onChange, label, disabled }) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={`flex items-center justify-between w-full gap-3 ${disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}
-    >
-      <span className="text-sm font-semibold text-gray-200">{label}</span>
-      <span className={`relative w-9 h-5 rounded-full transition-colors ${checked ? 'bg-accent' : 'bg-gray-700'}`}>
-        <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${checked ? 'translate-x-4' : ''}`} />
-      </span>
-    </button>
-  );
-}
 
 // Greedy block-level pagination; a `.wd-chapter-start` block always forces a new page.
 function paginateBlocks(container, pageContentHeight) {
@@ -267,21 +232,20 @@ export default function ExportBookModal({ folderTitle, documents, electronAPI, o
 
   if (loading || !pageConfig) {
     return (
-      <Modal onClose={onClose} size="xl" title="Export Folder" icon={Book} className="!max-w-5xl">
-        <div className="h-64 flex items-center justify-center text-gray-500 text-sm">Loading chapters…</div>
+      <Modal onClose={onClose} size="2xl" title="Export folder" subtitle={folderTitle} icon={Book} className="!max-w-5xl">
+        <div className="flex h-64 items-center justify-center text-sm text-text-subtle">Loading chapters…</div>
       </Modal>
     );
   }
 
   return (
-    <Modal onClose={onClose} size="xl" title={`Export Folder: ${folderTitle}`} icon={Book} className="!max-w-5xl">
+    <Modal onClose={onClose} size="2xl" title="Export folder" subtitle={folderTitle} icon={Book} className="!max-w-5xl">
       <div className="flex min-h-0" style={{ height: '78vh' }}>
-        {/* Preview */}
-        <div ref={previewColRef} className="flex-1 min-w-0 bg-[#00080B] overflow-y-auto custom-scrollbar flex flex-col items-center py-6 px-4">
+        <div ref={previewColRef} className="custom-scrollbar flex min-w-0 flex-1 flex-col items-center overflow-y-auto bg-black/30 px-4 py-6">
           <style>{previewCss}</style>
           <div style={{ width: pw * scale, height: boxHeight * scale }} className="shrink-0">
             <div
-              className="bg-white shadow-2xl relative origin-top-left"
+              className="relative origin-top-left bg-white shadow-overlay"
               style={{
                 width: pw, height: boxHeight,
                 paddingTop: mTop, paddingBottom: mBottom, paddingLeft: mLeft, paddingRight: mRight,
@@ -300,111 +264,73 @@ export default function ExportBookModal({ folderTitle, documents, electronAPI, o
               )}
             </div>
           </div>
-          {total > 1 && (
-            <div className="flex items-center gap-4 mt-4 text-gray-300">
-              <button type="button" disabled={pageIndex === 0} onClick={() => setPageIndex(i => i - 1)}
-                className="p-1.5 rounded-md hover:bg-white/5 disabled:opacity-30 cursor-pointer disabled:cursor-default">
-                <ChevronLeft className="w-5 h-5" />
-              </button>
-              <span className="text-xs font-semibold tabular-nums">Page {pageIndex + 1} of {total}</span>
-              <button type="button" disabled={pageIndex === total - 1} onClick={() => setPageIndex(i => i + 1)}
-                className="p-1.5 rounded-md hover:bg-white/5 disabled:opacity-30 cursor-pointer disabled:cursor-default">
-                <ChevronRight className="w-5 h-5" />
-              </button>
-            </div>
-          )}
+          <PageNav index={pageIndex} total={total} onChange={setPageIndex} />
         </div>
 
-        {/* Options */}
-        <div className="w-72 shrink-0 border-l border-gray-800/60 bg-[#011419] p-5 flex flex-col gap-5 overflow-y-auto custom-scrollbar">
-          <p className="text-[0.6875rem] text-gray-500 leading-snug">
-            {activeChapters.length} of {chapters.length} chapter{chapters.length === 1 ? '' : 's'} · using page setup from "{firstTitle}"
-          </p>
-
-          <div className="space-y-2">
-            <span className="caption">Format</span>
-            <Segmented value={format} onChange={setFormat} options={[
-              { value: 'pdf', label: 'PDF', icon: FileText },
-              { value: 'docx', label: 'Word', icon: FileType },
-            ]} />
-          </div>
-
-          <div className="space-y-3 border-t border-gray-800/50 pt-4">
-            <Toggle checked={includeToc} onChange={setIncludeToc} label="Table of contents" disabled={activeChapters.length < 2} />
-            {includeToc && (
-              <div className="space-y-2">
-                <div className="space-y-1">
-                  <span className="caption">Heading</span>
-                  <input
-                    value={tocTitle}
-                    onChange={(e) => setTocTitle(e.target.value)}
-                    placeholder="Table of Contents"
-                    className="w-full bg-[#00080B] border border-gray-800 text-gray-200 text-sm rounded-md px-2.5 py-1.5 focus:outline-none focus:border-accent"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <span className="caption">Heading position</span>
-                  <Segmented value={tocPos} onChange={setTocPos} options={[
-                    { value: 'left', label: 'Left' },
-                    { value: 'center', label: 'Center' },
-                    { value: 'right', label: 'Right' },
-                  ]} />
-                </div>
-              </div>
-            )}
-            <Toggle checked={chapterTitles} onChange={setChapterTitles} label="Chapter titles" />
-            <Toggle checked={numberChapters} onChange={setNumberChapters} label="Number chapters" disabled={!chapterTitles && !includeToc} />
-            <div className="space-y-1.5">
-              <span className="caption">Chapters to include</span>
-              <div className="space-y-1.5 max-h-44 overflow-y-auto custom-scrollbar pr-1">
+        <div className="flex w-[22rem] shrink-0 flex-col border-l border-border-subtle">
+          <div className="custom-scrollbar flex flex-1 flex-col gap-5 overflow-y-auto p-5">
+            <OptionGroup title="Chapters" trailing={<span className="text-xs tabular-nums text-text-subtle">{activeChapters.length} of {chapters.length}</span>}>
+              <div className="custom-scrollbar -mx-1 flex max-h-56 flex-col gap-0.5 overflow-y-auto px-1">
                 {chapters.map((ch, idx) => {
                   const activeIndex = activeChapters.findIndex(a => a.id === ch.id);
-                  const num = numberChapters && activeIndex >= 0 ? `${activeIndex + 1}. ` : '';
                   return (
-                    <Checkbox
-                      key={ch.id}
-                      size="sm"
-                      checked={isIn(ch.id)}
-                      onChange={(v) => setIncluded(prev => ({ ...prev, [ch.id]: v }))}
-                      label={`${num}${ch.title || `Chapter ${idx + 1}`}`}
-                    />
+                    <div key={ch.id} className="flex min-h-8 items-center gap-2.5">
+                      <Checkbox
+                        size="sm"
+                        checked={isIn(ch.id)}
+                        onChange={(v) => setIncluded(prev => ({ ...prev, [ch.id]: v }))}
+                        ariaLabel={`Include ${ch.title || `Chapter ${idx + 1}`}`}
+                      />
+                      <span className="w-4 shrink-0 text-right text-xs tabular-nums text-text-subtle">{activeIndex >= 0 ? activeIndex + 1 : ''}</span>
+                      <span className={`min-w-0 flex-1 text-sm leading-snug ${isIn(ch.id) ? 'text-text-secondary' : 'text-text-subtle'}`}>{ch.title || `Chapter ${idx + 1}`}</span>
+                    </div>
                   );
                 })}
               </div>
-            </div>
-          </div>
+              <p className="text-xs leading-relaxed text-text-subtle">Paper and margins come from the first chapter, {firstTitle || 'Untitled'}.</p>
+            </OptionGroup>
 
-          <div className="space-y-3 border-t border-gray-800/50 pt-4">
-            <Toggle checked={pageNumbers} onChange={setPageNumbers} label="Page numbers" />
-            {pageNumbers && (
-              <div className="space-y-2">
-                <span className="caption flex items-center gap-1"><Hash className="w-3 h-3" /> Position</span>
-                <Segmented value={numberPos} onChange={setNumberPos} options={[
-                  { value: 'left', label: 'Left' },
-                  { value: 'center', label: 'Center' },
-                  { value: 'right', label: 'Right' },
-                ]} />
-                {format === 'docx' && (
-                  <div className="space-y-1 pt-1">
-                    <span className="caption">Start at page</span>
+            <OptionGroup>
+              <ToggleRow label="Table of contents" checked={includeToc} onChange={setIncludeToc} disabled={activeChapters.length < 2} bold />
+              {includeToc && activeChapters.length >= 2 && (
+                <>
+                  <label className="block">
+                    <span className="mb-1.5 block text-xs font-medium text-text-subtle">Heading</span>
                     <input
-                      type="number" min="1"
-                      value={pageNumberStart}
-                      onChange={(e) => setPageNumberStart(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                      className="no-spinner w-20 bg-[#00080B] border border-gray-800 text-gray-200 text-sm rounded-md px-2.5 py-1.5 focus:outline-none focus:border-accent"
+                      value={tocTitle}
+                      onChange={(e) => setTocTitle(e.target.value)}
+                      placeholder="Table of Contents"
+                      className="h-9 w-full rounded-control border border-border-default bg-surface-input px-2.5 text-sm text-text-primary focus:border-accent/70 focus:outline-none"
                     />
+                  </label>
+                  <div>
+                    <span className="mb-1.5 block text-xs font-medium text-text-subtle">Heading position</span>
+                    <SegmentedControl label="Heading position" value={tocPos} onChange={setTocPos} className="w-full [&>button]:flex-1 [&>button]:justify-center"
+                      options={[{ value: 'left', label: 'Left' }, { value: 'center', label: 'Center' }, { value: 'right', label: 'Right' }]} />
                   </div>
-                )}
-              </div>
-            )}
-          </div>
+                </>
+              )}
+              {activeChapters.length < 2 && <p className="text-xs text-text-subtle">Needs at least two chapters.</p>}
+            </OptionGroup>
 
-          <div className="mt-auto pt-4 border-t border-gray-800/50 flex gap-2">
-            <Button variant="ghost" onClick={onClose} className="flex-1">Cancel</Button>
-            <Button variant="primary" onClick={handleExport} disabled={exporting || !activeChapters.length} className="flex-1">
-              {exporting ? 'Exporting…' : 'Export'}
-            </Button>
+            <OptionGroup>
+              <ToggleRow label="Chapter titles" checked={chapterTitles} onChange={setChapterTitles} />
+              <ToggleRow label="Number chapters" checked={numberChapters} onChange={setNumberChapters} disabled={!chapterTitles && !includeToc} />
+            </OptionGroup>
+
+            <OptionGroup>
+              <PageNumberOptions
+                enabled={pageNumbers} onEnabled={setPageNumbers}
+                position={numberPos} onPosition={setNumberPos}
+                format={format} start={pageNumberStart} onStart={setPageNumberStart}
+              />
+            </OptionGroup>
+
+            <OptionGroup title="Format" last>
+              <FormatChoice value={format} onChange={setFormat} />
+            </OptionGroup>
           </div>
+          <ExportFooter format={format} exporting={exporting} disabled={!activeChapters.length} onCancel={onClose} onExport={handleExport} />
         </div>
       </div>
 

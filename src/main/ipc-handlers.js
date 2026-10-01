@@ -2280,7 +2280,10 @@ ipcMain.handle('delete-folder', async (event, { id }) => {
     const delFolder = db.prepare('DELETE FROM folders WHERE id = ?');
     for (const folderId of toDelete) {
       const docs = db.prepare('SELECT id FROM documents WHERE folderId = ?').all(folderId);
-      for (const d of docs) deleteDocumentChunks(d.id);
+      for (const d of docs) {
+        deleteDocumentChunks(d.id);
+        db.prepare('DELETE FROM document_analyses WHERE documentId = ?').run(d.id);
+      }
       delDoc.run(folderId);
       delFolder.run(folderId);
     }
@@ -2337,6 +2340,7 @@ ipcMain.handle('move-document', async (event, { id, folderId }) => {
 ipcMain.handle('delete-document', async (event, { id }) => {
   try {
     deleteDocumentChunks(id);
+    db.prepare('DELETE FROM document_analyses WHERE documentId = ?').run(id);
     db.prepare('DELETE FROM documents WHERE id = ?').run(id);
     return { success: true };
   } catch (e) {
@@ -2389,6 +2393,12 @@ function broadcast(channel, payload) {
   if (wins.length > 0) wins[0].webContents.send(channel, payload);
 }
 
+// Writing Desk results store their token and retrieval readout as JSON.
+function withDebug(row) {
+  if (!row.debug) return row;
+  try { return { ...row, debug: JSON.parse(row.debug) }; } catch { return { ...row, debug: null }; }
+}
+
 // Detached: returns an invocationId, emits 'wd-invocation-complete', persists to pending_suggestions.
 ipcMain.handle('invoke-writing-desk', async (event, payload) => {
   if (wdInFlight) {
@@ -2405,13 +2415,13 @@ ipcMain.handle('invoke-writing-desk', async (event, payload) => {
       const id = `psug_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       db.prepare(`
         INSERT INTO pending_suggestions
-          (id, documentId, workspaceId, channel, fromPos, toPos, originalText, proposedText, profileId, intermediatePrompt, status, createdAt, last_modified)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (id, documentId, workspaceId, channel, fromPos, toPos, originalText, proposedText, profileId, intermediatePrompt, status, createdAt, last_modified, debug)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         id, payload.documentId, payload.workspaceId, result.channel,
         result.fromPos, result.toPos, payload.selection || '', result.proposedText || '',
         payload.profileId, payload.intermediatePrompt || '', result.status || 'ok',
-        Date.now(), Date.now()
+        Date.now(), Date.now(), result.debug ? JSON.stringify(result.debug) : null
       );
       broadcast('wd-invocation-complete', {
         invocationId, suggestionId: id, documentId: payload.documentId,
@@ -2437,7 +2447,7 @@ ipcMain.handle('get-pending-suggestion', async (event, { documentId }) => {
   const row = db.prepare(
     "SELECT * FROM pending_suggestions WHERE documentId = ? AND status != 'resolved' ORDER BY createdAt DESC LIMIT 1"
   ).get(documentId);
-  return { suggestion: row || null };
+  return { suggestion: row ? withDebug(row) : null };
 });
 
 ipcMain.handle('resolve-pending-suggestion', async (event, { id }) => {
@@ -2502,15 +2512,15 @@ ipcMain.handle('get-document-notes', (event, { documentId }) => {
   const notes = db.prepare(
     "SELECT * FROM document_notes WHERE documentId = ? ORDER BY (status = 'resolved'), createdAt DESC"
   ).all(documentId);
-  return { notes };
+  return { notes: notes.map(withDebug) };
 });
 
-ipcMain.handle('create-document-note', (event, { documentId, workspaceId, body, excerpt, source, profileId, instruction }) => {
+ipcMain.handle('create-document-note', (event, { documentId, workspaceId, body, excerpt, source, profileId, instruction, debug }) => {
   const id = `note_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   db.prepare(`
-    INSERT INTO document_notes (id, documentId, workspaceId, body, excerpt, status, source, profileId, instruction, createdAt, resolvedAt)
-    VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, NULL)
-  `).run(id, documentId, workspaceId, body, excerpt || null, source || 'manual', profileId || null, instruction || null, Date.now());
+    INSERT INTO document_notes (id, documentId, workspaceId, body, excerpt, status, source, profileId, instruction, createdAt, resolvedAt, debug)
+    VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, NULL, ?)
+  `).run(id, documentId, workspaceId, body, excerpt || null, source || 'manual', profileId || null, instruction || null, Date.now(), debug ? JSON.stringify(debug) : null);
   return { id };
 });
 
@@ -2522,6 +2532,31 @@ ipcMain.handle('update-document-note', (event, { id, body, status }) => {
 
 ipcMain.handle('delete-document-note', (event, { id }) => {
   db.prepare('DELETE FROM document_notes WHERE id = ?').run(id);
+  return { success: true };
+});
+
+// --- Per-chapter Analyze history (Writing Desk right rail) ---
+ipcMain.handle('get-document-analyses', (event, { documentId }) => {
+  const analyses = db.prepare('SELECT * FROM document_analyses WHERE documentId = ? ORDER BY createdAt DESC').all(documentId);
+  return { analyses: analyses.map(withDebug) };
+});
+
+ipcMain.handle('create-document-analysis', (event, { documentId, workspaceId, body, excerpt, profileId, instruction, status, debug }) => {
+  const id = `anl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  db.prepare(`
+    INSERT INTO document_analyses (id, documentId, workspaceId, body, excerpt, profileId, instruction, status, debug, notedAt, createdAt)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+  `).run(id, documentId, workspaceId, body, excerpt || null, profileId || null, instruction || null, status || 'ok', debug ? JSON.stringify(debug) : null, Date.now());
+  return { id };
+});
+
+ipcMain.handle('mark-document-analysis-noted', (event, { id }) => {
+  db.prepare('UPDATE document_analyses SET notedAt = ? WHERE id = ?').run(Date.now(), id);
+  return { success: true };
+});
+
+ipcMain.handle('delete-document-analysis', (event, { id }) => {
+  db.prepare('DELETE FROM document_analyses WHERE id = ?').run(id);
   return { success: true };
 });
 
