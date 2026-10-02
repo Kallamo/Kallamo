@@ -11,6 +11,7 @@ export default function Toggle({
   description = null,
   disabled = false,
   className = '',
+  ariaLabel,
 }) {
   const handle = () => { if (!disabled) onChange?.(!checked); };
 
@@ -19,6 +20,7 @@ export default function Toggle({
       type="button"
       role="switch"
       aria-checked={checked}
+      aria-label={ariaLabel ?? (typeof label === 'string' ? label : undefined)}
       disabled={disabled}
       onClick={handle}
       className={`relative w-9 h-5 rounded-full shrink-0 transition-colors duration-200 cursor-pointer

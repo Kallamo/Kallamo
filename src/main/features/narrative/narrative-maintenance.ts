@@ -29,6 +29,8 @@ export interface NarrativeCompactionReport {
   retired: number;
   /** A short, readable sample of what would be or was retired, for the confirmation step. */
   samples: Array<{ recordType: string; reason: RetirementReason; summary: string }>;
+  /** The same, one row per statement with how many copies of it would go. */
+  groups: Array<{ recordType: string; reason: RetirementReason; summary: string; count: number }>;
 }
 
 interface MaintenanceRow {
@@ -50,6 +52,7 @@ const RETIRED_STATUS: Record<string, string> = {
 };
 
 const SAMPLE_LIMIT = 12;
+const GROUP_LIMIT = 60;
 
 export class NarrativeMaintenance {
   constructor(private readonly db: Database.Database) {}
@@ -85,8 +88,10 @@ export class NarrativeMaintenance {
       sceneState: 0,
       identifierContent: 0,
       retired: 0,
-      samples: []
+      samples: [],
+      groups: []
     };
+    const groups = new Map<string, NarrativeCompactionReport['groups'][number]>();
     const seen = new Set<string>();
     const retire = this.db.prepare(`
       UPDATE narrative_records
@@ -111,11 +116,17 @@ export class NarrativeMaintenance {
       if (reason === 'scene-state') report.sceneState += 1;
       if (reason === 'identifier-content') report.identifierContent += 1;
       report.retired += 1;
+      const summary = describe(row.record_type, payload, proposition);
       if (report.samples.length < SAMPLE_LIMIT) {
-        report.samples.push({ recordType: row.record_type, reason, summary: describe(row.record_type, payload, proposition) });
+        report.samples.push({ recordType: row.record_type, reason, summary });
       }
+      const groupKey = `${row.record_type}\u0000${reason}\u0000${summary}`;
+      const group = groups.get(groupKey);
+      if (group) group.count += 1;
+      else if (groups.size < GROUP_LIMIT) groups.set(groupKey, { recordType: row.record_type, reason, summary, count: 1 });
       if (apply) retire.run(RETIRED_STATUS[row.record_type] ?? 'superseded', workspaceId, row.record_type, row.record_id);
     }
+    report.groups = [...groups.values()];
     return report;
   }
 

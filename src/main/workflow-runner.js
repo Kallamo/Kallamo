@@ -2256,6 +2256,7 @@ function safeParseObject(body) {
 
 const ENRICH_RELATION_GUIDANCE = {
     'Characters.race': 'Only an explicitly established ancestry, species, lineage, or people.',
+    'Creatures.species': 'Only an explicitly established species or kind this specific being belongs to, never a resemblance or comparison.',
     'Characters.factions': 'Only explicit membership or formal allegiance, not cooperation, employment, sympathy, or proximity.',
     'Characters.locations': 'Only a persistent meaningful connection, such as residence, origin, rule, or established base; not presence in one scene.',
     'Characters.relationships': 'Only an explicitly established directional personal relationship. targetRole states what TARGET is to SOURCE. value and sourcePerspective state how SOURCE feels about and relates to TARGET.',
@@ -2340,8 +2341,10 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     const roleplay = new RoleplaySystem(db);
     const scene = roleplay.getScene(workspaceId);
     const startClock = calendarService.getRoleplayClock(db, workspaceId);
-    const recordTimeFrame = (timeAdvance, endLocationId = roleplay.getScene(workspaceId)?.locationId, minimumMinutes = 0) =>
-        calendarService.applyRoleplayTurnFrame(db, {
+    // Resources that recover or drain follow the time the turn moved the clock, for the player
+    // and whoever is in the scene; a manual clock correction is not story time and moves nothing.
+    const recordTimeFrame = (timeAdvance, endLocationId = roleplay.getScene(workspaceId)?.locationId, minimumMinutes = 0) => {
+        const frame = calendarService.applyRoleplayTurnFrame(db, {
             workspaceId,
             originId: provenanceId,
             startClock,
@@ -2350,6 +2353,20 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             timeAdvance,
             minimumMinutes
         });
+        if (frame?.advance?.duration) {
+            try {
+                const minutes = calendarService.durationTotalMinutes(calendarService.getCalendar(db, workspaceId), frame.advance.duration);
+                const present = roleplay.getScene(workspaceId);
+                roleplay.applyElapsedTime(workspaceId, provenanceId, minutes, [
+                    roleplay.getSettings(workspaceId).playerEntityId,
+                    ...(present?.participantIds || [])
+                ].filter(Boolean));
+            } catch (error) {
+                console.warn('[Roleplay Time] Could not apply resource changes over time:', error.message);
+            }
+        }
+        return frame;
+    };
 
     const { ROLE_IDS, resolveAiEngineRole } = require('./features/ai-engine/role-resolver');
     const role = resolveAiEngineRole(ROLE_IDS.NARRATIVE_STATE);
@@ -2396,6 +2413,9 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     const startedAt = Date.now();
     const definitions = roleplay.listDefinitions(workspaceId)
         .filter(definition => definition.enabled && definition.updatePolicy !== 'manual');
+    const { RoleplayProgression } = require('../../dist-main/main/features/narrative/roleplay-progression');
+    const progression = new RoleplayProgression(db);
+    let progressionContext = loadNarrativeProgressionContext(progression, workspaceId);
     const allEntities = db.prepare(`
         SELECT id, type, canonicalName, aliases, lore, data FROM entities
         WHERE workspaceId = ? AND status != 'proposed'
@@ -2424,6 +2444,11 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         entities: allEntities
     });
     const mentionedEntityIds = new Set(narrativeSignals.mentionedEntityIds);
+    // Only who is in the scene or named this turn can grow, so Everyone never sends the whole cast.
+    if (progressionContext) {
+        const ids = progressionContext.ids.filter(id => activeIds.has(id) || mentionedEntityIds.has(id));
+        progressionContext = ids.length ? { ...progressionContext, ids } : null;
+    }
     const entities = allEntities.filter(entity => {
         if (activeIds.has(entity.id)) return true;
         return mentionedEntityIds.has(entity.id);
@@ -2480,6 +2505,9 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         },
         timeMatrix,
         availableEntities: compactEntities,
+        progression: progressionContext ? {
+            characterIds: progressionContext.ids
+        } : undefined,
         candidateSignals: narrativeSignals,
         userMessage,
         narrativeResponse
@@ -2668,16 +2696,21 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             ? relevantEntities
             : relevantEntities.map(entity => compactEntities.find(candidate => candidate.id === entity.id)),
         availableResources: shouldAnalyzeResources
-            ? definitions.map(({ key, name, description, minimum, maximum, updatePolicy }) => ({
+            ? definitions.map(({ key, name, description, minimum, maximum, unit, lowestEffect, updatePolicy }) => ({
                 key,
                 name,
                 description,
                 minimum,
                 maximum,
+                ...(unit ? { unit } : {}),
+                ...(lowestEffect ? { lowestEffect } : {}),
                 updatePolicy
             }))
             : undefined,
         currentResourceStates: shouldAnalyzeResources ? currentResourceStates : undefined,
+        progression: shouldAnalyzeResources && progressionContext
+            ? describeNarrativeProgression(progression, workspaceId, progressionContext)
+            : undefined,
         currentInventoryState: shouldAnalyzeInventory ? currentInventoryState : undefined,
         currentLocationInventoryState: shouldAnalyzeInventory ? currentLocationInventoryState : undefined,
         reachableLocationIds: shouldAnalyzeScene ? [...reachableLocationIds] : undefined,
@@ -2688,7 +2721,11 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         userMessage,
         narrativeResponse
     };
-    const narrativeStateSystemPrompt = buildNarrativeStateSystemPrompt(selectedDomains, narrativeLanguageInstruction);
+    const narrativeStateSystemPrompt = buildNarrativeStateSystemPrompt(
+        selectedDomains,
+        narrativeLanguageInstruction,
+        Boolean(shouldAnalyzeResources && progressionContext)
+    );
     const stateOutputBudget = Math.min(
         8192,
         Math.max(2048, 1024 + (relevantEntities.length * 64) + (shouldAnalyzeResources ? definitions.length * 96 : 0))
@@ -2810,15 +2847,44 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     generatedContactEventCount = initialContactEvents.length;
     resolvedEvents.push(...initialContactEvents);
     for (const [index, proposal] of (Array.isArray(resolved.resourceChanges) ? resolved.resourceChanges : []).entries()) {
+        if (typeof proposal?.entityId !== 'string') continue;
+        if (proposal.progress) {
+            const trait = progressionContext?.traitsByKey.get(String(proposal.key || '').toLowerCase());
+            if (proposal.progress !== 'xp' && (proposal.progress !== 'attribute' || !trait)) continue;
+            try {
+                const change = progression.proposeChange({
+                    id: `${provenanceId}:progress:${index}`,
+                    workspaceId,
+                    entityId: proposal.entityId,
+                    kind: proposal.progress === 'attribute' ? 'attribute' : 'xp',
+                    traitId: trait?.id ?? null,
+                    delta: Number(proposal.change),
+                    reason: typeof proposal.reason === 'string' ? proposal.reason : '',
+                    source: 'ai',
+                    provenanceId
+                });
+                if (change) changes.push({ kind: 'progress', changeId: change.id, ...change });
+            } catch (error) {
+                console.warn('[Roleplay State] Ignored invalid progression change:', error.message);
+            }
+            continue;
+        }
         const definition = definitionsByKey.get(proposal?.resourceKey);
-        if (!definition || typeof proposal?.entityId !== 'string' || !Number.isFinite(proposal?.value)) continue;
+        // The amount is what the story shows; an older absolute value is turned into one.
+        const delta = Number.isFinite(proposal?.change)
+            ? Number(proposal.change)
+            : Number.isFinite(proposal?.value)
+                ? Number(proposal.value) - (currentResourceStates.find(state => state.entityId === proposal.entityId && state.key === definition?.key)?.current ?? Number(proposal.value))
+                : NaN;
+        if (!definition || !Number.isFinite(delta) || delta === 0) continue;
         try {
             const change = roleplay.proposeChange({
                 id: `${provenanceId}:resource:${index}`,
                 workspaceId,
                 definitionId: definition.id,
                 entityId: proposal.entityId,
-                value: proposal.value,
+                delta,
+                reason: typeof proposal.reason === 'string' ? proposal.reason : '',
                 source: 'ai',
                 provenanceId
             });
@@ -3276,7 +3342,7 @@ const NARRATIVE_TRIAGE_SYSTEM_PROMPT = `You route Roleplay turns to durable-stat
 Return JSON only with {"consequential":boolean,"types":["entity","scene","resource","inventory","awareness","knowledge","belief","memory","relationship","fact"],"entityIds":["existing-id"],"confidence":0.0,"evidence":["short verbatim excerpt"],"requiresFullAnalysis":boolean,"reason":"brief","timeAdvance":null}.
 Always evaluate elapsed time, even when no other durable domain is consequential. For an in-world action, timeAdvance is {"actionType":"short_snake_case","basis":"explicit|matrix","duration":{"years":0,"months":0,"days":0,"hours":0,"minutes":0},"targetPosition":null,"confidence":0.0,"evidence":"short verbatim excerpt"}. When the final narrative establishes an absolute ending date or time, set basis to "explicit", copy the complete resulting calendar position into targetPosition, and also return the calculated duration. Use null for out-of-character instructions, corrections, hypothetical actions, or when no in-world time passed. A skip of days, months or years is returned in the same duration object and is accepted only when the turn says so in words, so return the span the text states and never one it merely recounts as history: an estimate on its own is held to a week. Travel always costs time: when the turn completes a journey between places, timeAdvance is never null, and its duration must match the distance actually crossed rather than the length of the passage describing it. Walking somewhere is usually described in two lines and still takes as long as the walk takes, so read the duration off the timeMatrix category the journey belongs to and never below that category's minimumMinutes.
 An explicit final position or duration in the narrative wins over the matrix. Reconcile every clock reference with currentTime; do not describe a turn as reaching a later time while returning null or a conflicting duration. Otherwise choose a reasonable value within the supplied matrix: Micro for dialogue lines, combat rounds, lockpicking, and quick scans; Local for same-district walking, wound care, and careful room inspection; Transit for cross-district travel, crowds, minor repairs, and setting camp; Macro for crafting, deep study, rest, and inter-city travel; Timeskip for supported downtime, recovery, waiting, long-distance travel, or another transition spanning one or more calendar days. Do not advance hours during line-by-line dialogue. Do not use a tiny advance for substantial travel. A jump of one day or more must be explicitly supported by the final narrative or by a completed action whose duration is covered by the configured Timeskip range. Return calendar units directly instead of assuming a 24-hour day.
-Mark inventory for explicit pickup, drop, transfer, gift, theft, loss, consumption, equip, unequip, drawing, sheathing, or quantity change. Mark scene for explicit arrival, departure, movement, participation, observer, nearby, object, or location change. Mark epistemic domains only for information actually communicated, perceived, discovered, remembered, believed, or relationally consequential. Mark relationship for a first demonstrated encounter or interaction that must initialize a directional relationship, even when its initial value is 0, and for an event that materially and durably changes an existing value. Direct conversation is mutual interaction. Listening or overhearing is interaction only from the aware listener toward the speaker unless the speaker also perceives the listener. Mere co-presence is not interaction. Ordinary politeness, irritation, banter, compliance, disagreement, or passing mood does not change an existing value. Mark resource for an actual value change, not a price mention or hypothetical. A concrete edition of a supplied recurring Event is consequential when it actually takes place, even if the tradition itself is already known.
+Mark inventory for explicit pickup, drop, transfer, gift, theft, loss, consumption, equip, unequip, drawing, sheathing, or quantity change. Mark scene for explicit arrival, departure, movement, participation, observer, nearby, object, or location change. Mark epistemic domains only for information actually communicated, perceived, discovered, remembered, believed, or relationally consequential. Mark relationship for a first demonstrated encounter or interaction that must initialize a directional relationship, even when its initial value is 0, and for an event that materially and durably changes an existing value. Direct conversation is mutual interaction. Listening or overhearing is interaction only from the aware listener toward the speaker unless the speaker also perceives the listener. Mere co-presence is not interaction. Ordinary politeness, irritation, banter, compliance, disagreement, or passing mood does not change an existing value. Mark resource for an actual value change, not a price mention or hypothetical. When progression is supplied, also mark resource for an outcome that earns experience, or training that changes an attribute, for one of progression.characterIds. A concrete edition of a supplied recurring Event is consequential when it actually takes place, even if the tradition itself is already known.
 A newly introduced persistent named character, stably identifiable individual creature, named location, or narratively important unique item is consequential even without an existing ID. An unnamed person distinguished only by appearance, ancestry, clothing, age, expression, or scene position may be routed as a sparse entity candidate, but is not yet a Worldbuild identity. Mark false for crowds, atmosphere, repetition, casual dialogue, hypotheticals, offers not completed, item mentions without possession changes, and events without durable consequences. Presence alone never grants awareness or knowledge. Set requiresFullAnalysis only when four or more domains interact or the consequence cannot be safely isolated.`;
 const NARRATIVE_REPAIR_SYSTEM_PROMPT = 'Repair the supplied response into one valid JSON object that follows the required schema. Preserve supported values. Return JSON only.';
 
@@ -3297,7 +3363,11 @@ When an existing Character or individual Creature is explicitly identified by a 
 
 const NARRATIVE_SCENE_SCOPED_PROMPT = `SCENE DOMAIN: scenePatch may contain locationId, participantIds, possibleObserverIds, nearbyIds, and objectIds. Return complete replacement arrays only for fields that changed. Participants are directly involved, possible observers can witness, nearby entities are in the broader location, and objects are physically present. Explicit completed arrivals, departures, joining a conversation, sitting with the group, leaving, and deliberate movement can change scene membership independently from locationId. Include newly introduced entity referenceIds in the appropriate array. When inventory is also selected, dropping a unique item may add it to objectIds, while picking up, consuming, destroying, or removing it may remove it. Keep unrelated existing objectIds. Change location only after movement is completed and use reachableLocationIds. Intention, preparation, a destination plan, an open door, or a visible route is not a completed location change. reachableLocationIds already spans the whole surrounding region, so a completed journey across a city, district, or road belongs here. A scene patch is applied whole or not at all: if the destination is not in reachableLocationIds, the participant and object arrays are discarded with it, so return the arrays that match the location you actually set. Presence is not ownership or knowledge.`;
 
-const NARRATIVE_RESOURCE_SCOPED_PROMPT = `RESOURCE DOMAIN: resourceChanges contain {"entityId":"id","resourceKey":"key","value":absolute-number}. Use currentResourceStates and return the absolute result. Apply only explicit mechanical gains, losses, recovery, damage, or expenditure. Prices, wages, comparisons, plans, hypotheticals, and narration without an actual value change are not resource changes.`;
+const NARRATIVE_RESOURCE_SCOPED_PROMPT = `RESOURCE DOMAIN: resourceChanges contain {"entityId":"id","resourceKey":"key","change":signed-number,"reason":"short phrase from the story"}. change is the amount gained (+) or lost (-), never the resulting total; currentResourceStates shows where each value stands, and the value is kept within its range for you. Use only resources listed for that entity in currentResourceStates. Apply only explicit mechanical gains, losses, recovery, damage, or expenditure. Each resource description says what moves it, and lowestEffect says what happens at its lowest. Prices, wages, comparisons, plans, hypotheticals, and narration without an actual value change are not resource changes. Elapsed time is handled separately: never report recovery or drain that comes only from time passing.`;
+
+const NARRATIVE_PROGRESSION_PROMPT = `PROGRESSION: progression.characters are the only characters who grow. Report their growth as extra items in resourceChanges.
+- XP: {"entityId":"id","progress":"xp","change":positive-integer,"reason":"short phrase"} for an outcome that earns experience as progression.xpGuidance describes, such as a won fight, a finished quest or a clever solution. Never for routine actions. XP is only added, unless progression.xpCanDrop is true and the story takes experience away. Never report a level: levels follow from XP.
+- Attribute: {"entityId":"id","progress":"attribute","key":"attribute-key","change":1,"reason":"short phrase"} only when the story clearly earns a lasting change: sustained training, a hard-won lesson, a breakthrough. When progression.attributeRules.whenToRaise is given, it is the world's own bar for a raise and is stricter than any general reason: follow it. One point at a time, and rarely. Use change -1 only when progression.attributeRules.lower is true and the story shows a lasting injury, curse or age. When progression.attributeRules.raise is false, report no attribute raise.`;
 
 const NARRATIVE_INVENTORY_SCOPED_PROMPT = `INVENTORY DOMAIN: Track explicit pickup, drop, deliberate placement, gift, transfer, theft, loss, consumption, destruction, equip, unequip, drawing, sheathing, and quantity changes. currentInventoryState and currentLocationInventoryState are the pre-turn truth.
 For a unique item move return {"itemId":"id","fromHolderId":"id-or-null","toHolderId":"id-or-null","locationId":"id-or-null","equipped":boolean-when-explicit}. It has exactly one holder or location. Dropping or deliberately leaving it uses locationId. Loss, consumption, or destruction with no destination uses null targets.
@@ -3332,10 +3402,49 @@ A proposition object is a statement in words, never an id and never a bare key. 
 Relationship changes only the directional numeric bar. Never return a title or description. currentScene.playerEntityId identifies the Player. The Player's feelings are unknowable: never emit a relationship operation whose sourceEntityId is the Player. You may emit Awareness with the Player as subject or target. When an NPC is explicitly presented to the Player, record Player-to-NPC Awareness, NPC-to-Player Awareness, and only the NPC-to-Player directional relationship. Use currentRelationshipState as the baseline and return an absolute value. On a first demonstrated encounter or interaction, initialize the supported non-Player directional relationship and Awareness card with cause first-impression. Direct mutual interaction normally requires both directions. Listening or overhearing requires listener-to-speaker only unless the speaker perceives the listener. Default a new relationship to 0. Prior favorable or adverse information normally supports an initial value within -25 to 25 with meaningful impact. Significant explicit evidence may support up to -50 or 50 with significant impact. Set drastic impact and use values approaching -100 or 100 only for extreme explicit evidence such as established hatred, mortal enmity, absolute devotion, or an equivalent relationship-defining fact. Directions may differ. For an existing relationship, a meaningful durable shift should stay near 5 points, a significant major act or repeated pattern may move up to 15, and drastic is reserved for explicit betrayal, sacrifice, life-saving action, devastating revelation, or equivalent rupture.
 Ignore existing knowledge and existing memories when deciding what happened, but never restate something the campaign already holds. A turn that changes nothing durable returns no events at all, and that is a correct answer. Most turns produce at most one or two records, and returning many is a sign the durability test was skipped.`;
 
-function buildNarrativeStateSystemPrompt(domains, languageInstruction = '') {
+// Progression reaches the analysis only when it is on, its rule lets the AI change it, and
+// someone progresses; everyone else stays a fixed NPC with nothing to report.
+function loadNarrativeProgressionContext(progression, workspaceId) {
+    const settings = progression.getSettings(workspaceId);
+    if (settings.mode === 'off' || settings.config.policy === 'manual') return null;
+    const ids = progression.progressingIds(workspaceId);
+    if (!ids.length) return null;
+    const traits = progression.listTraits(workspaceId);
+    return { settings, ids, traits, traitsByKey: new Map(traits.map(trait => [trait.key.toLowerCase(), trait])) };
+}
+
+function describeNarrativeProgression(progression, workspaceId, context) {
+    const { settings, ids, traits } = context;
+    const characters = ids.map(entityId => {
+        const progress = progression.getEntityProgress(workspaceId, entityId);
+        return {
+            entityId,
+            level: progress.level,
+            xp: progress.xp,
+            xpForNextLevel: progress.goal,
+            attributes: Object.fromEntries(progress.attributes.map(attribute => [attribute.key, attribute.value]))
+        };
+    });
+    return {
+        characters,
+        attributes: traits.map(trait => ({ key: trait.key, name: trait.name, meaning: trait.description, minimum: trait.minimum, maximum: trait.maximum })),
+        attributeRules: {
+            raise: settings.config.attributes.aiRaises,
+            lower: settings.config.attributes.aiLowers,
+            whenToRaise: (settings.config.attributes.aiRaises && settings.config.attributes.guidance.trim()) || undefined
+        },
+        xpCanDrop: !settings.config.xp.aiOnlyAdds || undefined,
+        xpGuidance: settings.config.xp.guidance || undefined
+    };
+}
+
+function buildNarrativeStateSystemPrompt(domains, languageInstruction = '', withProgression = false) {
     const sections = languageInstruction ? [languageInstruction] : [];
+    const progressionPrompt = domains.includes('resource') && withProgression ? NARRATIVE_PROGRESSION_PROMPT : null;
     if (domains.length >= 4) {
         sections.push(NARRATIVE_FULL_STATE_SYSTEM_PROMPT);
+        if (domains.includes('resource')) sections.push(NARRATIVE_RESOURCE_SCOPED_PROMPT);
+        if (progressionPrompt) sections.push(progressionPrompt);
         // Events and the durability taxonomy are defined once, in the epistemic prompt.
         if (hasEpistemicDomain(domains)) sections.push(NARRATIVE_EPISTEMIC_SCOPED_PROMPT);
         sections.push(`Selected domains: ${domains.join(', ')}. Leave unselected domains empty.`);
@@ -3345,6 +3454,7 @@ function buildNarrativeStateSystemPrompt(domains, languageInstruction = '') {
     if (domains.includes('entity')) sections.push(NARRATIVE_ENTITY_SCOPED_PROMPT);
     if (domains.includes('scene')) sections.push(NARRATIVE_SCENE_SCOPED_PROMPT);
     if (domains.includes('resource')) sections.push(NARRATIVE_RESOURCE_SCOPED_PROMPT);
+    if (progressionPrompt) sections.push(progressionPrompt);
     if (domains.includes('inventory')) sections.push(NARRATIVE_INVENTORY_SCOPED_PROMPT);
     if (hasEpistemicDomain(domains)) sections.push(NARRATIVE_EPISTEMIC_SCOPED_PROMPT);
     sections.push(`Selected domains: ${domains.join(', ')}.`);
@@ -3985,6 +4095,8 @@ const ENRICH_RELATIONS = {
     ],
     Creatures: [
         { key: 'habitat', label: 'Habitat', relType: 'found_in', targetType: 'Locations', from: 'self', single: false },
+        // A specific being's species is the same edge as a character's race, pointing at a species sheet.
+        { key: 'species', label: 'Species', relType: 'is_race', targetType: 'Creatures', targetScope: 'group', from: 'self', single: true, individualOnly: true },
         { key: 'factions', label: 'Faction', relType: 'member_of', targetType: 'Factions', from: 'self', single: false, individualOnly: true },
         { key: 'relationships', label: 'Relationship', relType: 'related_to', targetTypes: ['Characters', 'Creatures'], from: 'self', single: false, labeled: true, detailed: true, individualOnly: true },
     ],
@@ -4096,12 +4208,14 @@ function submitEntityNarrativeSuggestions({ workspaceId, entity, changes, allEnt
     return records.length ? { record: records[0], records } : null;
 }
 
+// Creature targets are specific beings, unless the relation points at a species.
 function relationCandidates(all, entity, spec) {
     const targetTypes = spec.targetTypes || [spec.targetType];
+    const wantsGroup = spec.targetScope === 'group';
     return all.filter(candidate => candidate.status !== 'proposed'
         && candidate.id !== entity.id
         && targetTypes.includes(candidate.type)
-        && !(candidate.type === 'Creatures' && (candidate.data?.scope || 'individual') === 'group'));
+        && (candidate.type !== 'Creatures' || ((candidate.data?.scope || 'individual') === 'group') === wantsGroup));
 }
 
 function resolveRelationTarget(name, spec, workspaceId) {
@@ -4801,6 +4915,8 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                     const label = spec.labeled && rawTargetRole != null ? normalizeRelationshipLabel(rawTargetRole) : null;
                     const targetId = resolveRelationTarget(name, spec, workspaceId);
                     if (!targetId || targetId === ent.id) continue;
+                    // A name shared by a specific being and a species must land on the shape asked for.
+                    if (spec.targetScope && !relationCandidates(all, ent, spec).some(candidate => candidate.id === targetId)) continue;
                     const existingLink = existing.get(targetId);
                     const metadata = spec.detailed ? normalizeDirectionalRelationship(item, ent.canonicalName) : undefined;
                     if (spec.detailed && !metadata) continue;

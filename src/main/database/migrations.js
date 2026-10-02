@@ -450,13 +450,6 @@ const MIGRATIONS = [
           ON DELETE CASCADE
       );
 
-      CREATE TABLE IF NOT EXISTS roleplay_species_memberships (
-        workspace_id TEXT NOT NULL,
-        entity_id TEXT NOT NULL,
-        species_id TEXT NOT NULL,
-        PRIMARY KEY (workspace_id, entity_id)
-      );
-
       CREATE TABLE IF NOT EXISTS roleplay_resource_changes (
         workspace_id TEXT NOT NULL,
         change_id TEXT NOT NULL,
@@ -1095,6 +1088,117 @@ const MIGRATIONS = [
           createdAt INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_document_analyses_document ON document_analyses(documentId, createdAt);
+      `);
+    }
+  },
+  {
+    // A resource can belong to chosen characters only, say what happens at its lowest, and move
+    // with story time. Its changes carry the amount and a reason, and progression (levels, XP,
+    // attributes) gets its own definitions, values and history.
+    id: 'kallamo_roleplay_progression_v1',
+    up: (db) => {
+      if (!hasTable(db, 'roleplay_resource_definitions')) return;
+      const columns = db.prepare('PRAGMA table_info(roleplay_resource_definitions)').all().map(column => column.name);
+      const add = (name, sql) => { if (!columns.includes(name)) db.exec(`ALTER TABLE roleplay_resource_definitions ADD COLUMN ${sql}`); };
+      add('scope', "scope TEXT NOT NULL DEFAULT 'everyone' CHECK (scope IN ('everyone', 'chosen'))");
+      add('lowest_effect', "lowest_effect TEXT NOT NULL DEFAULT ''");
+      add('time_rate', 'time_rate REAL NOT NULL DEFAULT 0 CHECK (time_rate >= 0)');
+      add('time_direction', "time_direction TEXT NOT NULL DEFAULT 'recovers' CHECK (time_direction IN ('recovers', 'drains'))");
+      add('time_period', "time_period TEXT NOT NULL DEFAULT 'hour' CHECK (time_period IN ('hour', 'day'))");
+
+      db.exec(`
+        CREATE TABLE roleplay_resource_changes_next (
+          workspace_id TEXT NOT NULL,
+          change_id TEXT NOT NULL,
+          definition_id TEXT NOT NULL,
+          entity_id TEXT NOT NULL,
+          previous_value REAL NOT NULL,
+          next_value REAL NOT NULL,
+          delta REAL,
+          maximum_delta REAL NOT NULL DEFAULT 0,
+          reason TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL CHECK (status IN ('pending', 'applied', 'rejected')),
+          source TEXT NOT NULL CHECK (source IN ('manual', 'ai', 'time', 'level')),
+          provenance_id TEXT,
+          created_at INTEGER NOT NULL,
+          resolved_at INTEGER,
+          PRIMARY KEY (workspace_id, change_id),
+          FOREIGN KEY (workspace_id, definition_id)
+            REFERENCES roleplay_resource_definitions (workspace_id, definition_id)
+        );
+        INSERT INTO roleplay_resource_changes_next (
+          workspace_id, change_id, definition_id, entity_id, previous_value, next_value, delta,
+          status, source, provenance_id, created_at, resolved_at
+        )
+        SELECT workspace_id, change_id, definition_id, entity_id, previous_value, next_value,
+          next_value - previous_value, status, source, provenance_id, created_at, resolved_at
+        FROM roleplay_resource_changes;
+        DROP TABLE roleplay_resource_changes;
+        ALTER TABLE roleplay_resource_changes_next RENAME TO roleplay_resource_changes;
+        CREATE INDEX IF NOT EXISTS idx_roleplay_changes_entity
+          ON roleplay_resource_changes (workspace_id, entity_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS roleplay_progression_settings (
+          workspace_id TEXT PRIMARY KEY,
+          mode TEXT NOT NULL DEFAULT 'off' CHECK (mode IN ('off', 'levels')),
+          config_json TEXT NOT NULL DEFAULT '{}',
+          updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS roleplay_progression_members (
+          workspace_id TEXT NOT NULL,
+          target_type TEXT NOT NULL CHECK (target_type IN ('everyone', 'entity', 'race', 'species', 'type')),
+          target_id TEXT NOT NULL DEFAULT '',
+          added_at INTEGER NOT NULL,
+          PRIMARY KEY (workspace_id, target_type, target_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS roleplay_trait_definitions (
+          workspace_id TEXT NOT NULL,
+          trait_id TEXT NOT NULL,
+          trait_key TEXT NOT NULL,
+          name TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          initial_value REAL NOT NULL DEFAULT 0,
+          minimum REAL NOT NULL DEFAULT 0,
+          maximum REAL NOT NULL DEFAULT 20,
+          position INTEGER NOT NULL DEFAULT 0,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (workspace_id, trait_id),
+          UNIQUE (workspace_id, trait_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS roleplay_progress_values (
+          workspace_id TEXT NOT NULL,
+          target_type TEXT NOT NULL CHECK (target_type IN ('entity', 'race', 'species')),
+          target_id TEXT NOT NULL,
+          trait_id TEXT NOT NULL,
+          value REAL NOT NULL,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (workspace_id, target_type, target_id, trait_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS roleplay_progress_changes (
+          workspace_id TEXT NOT NULL,
+          change_id TEXT NOT NULL,
+          entity_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('xp', 'level', 'attribute')),
+          trait_id TEXT,
+          delta REAL NOT NULL,
+          previous_value REAL NOT NULL,
+          next_value REAL NOT NULL,
+          reason TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL CHECK (status IN ('pending', 'applied', 'rejected')),
+          source TEXT NOT NULL CHECK (source IN ('manual', 'ai', 'level')),
+          provenance_id TEXT,
+          created_at INTEGER NOT NULL,
+          resolved_at INTEGER,
+          PRIMARY KEY (workspace_id, change_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_roleplay_progress_changes_entity
+          ON roleplay_progress_changes (workspace_id, entity_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_roleplay_progress_values_target
+          ON roleplay_progress_values (workspace_id, target_type, target_id);
       `);
     }
   }

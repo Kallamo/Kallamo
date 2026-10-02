@@ -73,7 +73,7 @@ describe('Kallamo roleplay system', () => {
       maximum: 60, initialValue: 60, appliesTo: ['Creatures'], updatePolicy: 'manual'
     });
     roleplay.setTargetValue('workspace-one', stamina.id, 'species', 'wolves', { current: 75, maximum: 75 });
-    roleplay.linkEntitySpecies('workspace-one', 'wolf-one', 'wolves');
+    db.prepare("INSERT INTO entity_links (id, workspaceId, fromId, relType, toId, createdAt) VALUES ('wolf-species', 'workspace-one', 'wolf-one', 'is_race', 'wolves', 1)").run();
 
     expect(roleplay.listEntityResources('workspace-one', 'wolf-one')[0]).toMatchObject({
       current: 75, maximum: 75, inheritedFrom: 'wolves'
@@ -338,6 +338,50 @@ describe('Kallamo roleplay system', () => {
     expect(() => roleplay.deleteDefinition('workspace-one', health.id)).not.toThrow();
     expect(roleplay.listDefinitions('workspace-one')).toEqual([]);
     expect(roleplay.listChanges('workspace-one')).toEqual([]);
+  });
+
+  test('an approved change moves the value as it is at approval, not as it was when proposed', () => {
+    const health = createHealth('review');
+    roleplay.setTargetValue('workspace-one', health.id, 'entity', 'elias', { current: 100, maximum: 100 });
+    const loss = roleplay.proposeChange({
+      id: 'bolt', workspaceId: 'workspace-one', definitionId: health.id,
+      entityId: 'elias', delta: -26, reason: 'Crossbow bolt', source: 'ai', provenanceId: 'turn-41'
+    });
+    roleplay.proposeChange({
+      id: 'potion', workspaceId: 'workspace-one', definitionId: health.id,
+      entityId: 'elias', value: 60, source: 'manual'
+    });
+
+    expect(loss).toMatchObject({ status: 'pending', delta: -26, reason: 'Crossbow bolt' });
+    roleplay.resolveChange('workspace-one', loss.id, 'approved');
+    expect(roleplay.listEntityResources('workspace-one', 'elias')[0].current).toBe(34);
+    expect(roleplay.listChanges('workspace-one', 'elias').find(change => change.id === 'bolt'))
+      .toMatchObject({ previousValue: 60, nextValue: 34, status: 'applied' });
+  });
+
+  test('a chosen resource belongs only to who was given it, directly or through their race', () => {
+    const mana = roleplay.saveDefinition('workspace-one', {
+      name: 'Mana', key: 'mana', color: '#2563eb', minimum: 0, maximum: 50,
+      initialValue: 50, appliesTo: [], scope: 'chosen', updatePolicy: 'review'
+    });
+
+    expect(roleplay.listEntityResources('workspace-one', 'mara')).toEqual([]);
+    roleplay.setTargetValue('workspace-one', mana.id, 'race', 'human', { current: 40, maximum: 50 });
+    expect(roleplay.listEntityResources('workspace-one', 'elias')[0]).toMatchObject({ key: 'mana', current: 40 });
+    expect(roleplay.listEntityResources('workspace-one', 'mara')).toEqual([]);
+  });
+
+  test('story time recovers a resource for the given people and stops at the highest value', () => {
+    const health = roleplay.saveDefinition('workspace-one', {
+      name: 'Health', key: 'health', color: '#dc2626', minimum: 0, maximum: 100,
+      initialValue: 100, appliesTo: ['Characters'], updatePolicy: 'automatic', timeRate: 2, timeDirection: 'recovers'
+    });
+    roleplay.setTargetValue('workspace-one', health.id, 'entity', 'elias', { current: 80, maximum: 100 });
+
+    const changes = roleplay.applyElapsedTime('workspace-one', 'turn-9', 8 * 60, ['elias', 'mara']);
+    expect(changes).toEqual([expect.objectContaining({ entityId: 'elias', source: 'time', nextValue: 96, reason: '8 hours passed' })]);
+    roleplay.applyElapsedTime('workspace-one', 'turn-10', 8 * 60, ['elias']);
+    expect(roleplay.listEntityResources('workspace-one', 'elias')[0].current).toBe(100);
   });
 
   function createHealth(updatePolicy: 'manual' | 'review' | 'automatic') {

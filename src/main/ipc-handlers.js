@@ -3038,15 +3038,23 @@ ipcMain.handle('worldbuild-export-summary', async (event, { workspaceId } = {}) 
   try {
     const data = entitiesStore.exportWorldbuild(workspaceId);
     const images = entityImages.listForExport(workspaceId, data.entities.map(entity => entity.ref));
-    return { success: true, entities: data.entities.length, images: images.length, imageBytes: images.reduce((total, image) => total + image.bytes, 0) };
+    const packager = getRulesPackager();
+    const rules = packager.hasRules(workspaceId)
+      ? { ...packager.summary(workspaceId), timeRanges: getCalendarService().getTimeMatrix(db, workspaceId).categories.length }
+      : null;
+    return { success: true, entities: data.entities.length, images: images.length, imageBytes: images.reduce((total, image) => total + image.bytes, 0), rules };
   } catch (e) { return { success: false, error: e.message }; }
 });
 
-ipcMain.handle('export-worldbuild', async (event, { workspaceId, includeImages = true } = {}) => {
+ipcMain.handle('export-worldbuild', async (event, { workspaceId, includeImages = true, includeCurrentValues = false } = {}) => {
   try {
     const win = BrowserWindow.fromWebContents(event.sender);
     const data = entitiesStore.exportWorldbuild(workspaceId);
     data.calendar = getCalendarService().getCalendar(db, workspaceId);
+    const packager = getRulesPackager();
+    if (packager.hasRules(workspaceId)) {
+      data.roleplayRules = packager.export(workspaceId, new Set(data.entities.map(entity => entity.ref)), Boolean(includeCurrentValues), getCalendarService().getTimeMatrix(db, workspaceId));
+    }
     if (!data.entities.length) return { success: false, error: 'This Worldbuild is empty — nothing to export.' };
     const { filePath, canceled } = await dialog.showSaveDialog(win, {
       title: 'Export Worldbuild Package',
@@ -3073,8 +3081,15 @@ ipcMain.handle('export-worldbuild', async (event, { workspaceId, includeImages =
   }
 });
 
-// Import a .klwb package: unzip, read worldbuild.json, merge into the workspace.
-ipcMain.handle('import-worldbuild', async (event, { workspaceId } = {}) => {
+function readWorldbuildPackage(filePath) {
+  const zip = new AdmZip(filePath);
+  const entry = zip.getEntry('worldbuild.json');
+  if (!entry) throw new Error('Invalid package: worldbuild.json not found inside.');
+  return JSON.parse(zip.readAsText(entry));
+}
+
+// Picks a package and says whether its roleplay rules need a choice before anything is written.
+ipcMain.handle('inspect-worldbuild-package', async (event, { workspaceId } = {}) => {
   try {
     const win = BrowserWindow.fromWebContents(event.sender);
     const { filePaths, canceled } = await dialog.showOpenDialog(win, {
@@ -3084,14 +3099,26 @@ ipcMain.handle('import-worldbuild', async (event, { workspaceId } = {}) => {
     });
     if (canceled || !filePaths || !filePaths.length) return { cancelled: true };
     let payload;
-    try {
-      const zip = new AdmZip(filePaths[0]);
-      const entry = zip.getEntry('worldbuild.json');
-      if (!entry) return { success: false, error: 'Invalid package: worldbuild.json not found inside.' };
-      payload = JSON.parse(zip.readAsText(entry));
-    } catch (e) {
-      return { success: false, error: 'Could not read the package — it is not a valid Worldbuild file.' };
-    }
+    try { payload = readWorldbuildPackage(filePaths[0]); }
+    catch (e) { return { success: false, error: 'Could not read the package. It is not a valid Worldbuild file.' }; }
+    const entities = Array.isArray(payload?.entities) ? payload.entities.length : 0;
+    const rules = payload?.roleplayRules
+      ? getRulesPackager().difference(workspaceId, payload.roleplayRules, getCalendarService().getTimeMatrix(db, workspaceId))
+      : null;
+    return { success: true, filePath: filePaths[0], entities, rules, currentValues: Boolean(payload?.roleplayRules?.currentValues) };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Import a .klwb package: read worldbuild.json and merge it into the workspace.
+ipcMain.handle('import-worldbuild', async (event, { workspaceId, filePath, rulesMode = 'merge' } = {}) => {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return { success: false, error: 'Choose a Worldbuild package to import.' };
+    const filePaths = [filePath];
+    let payload;
+    try { payload = readWorldbuildPackage(filePath); }
+    catch (e) { return { success: false, error: 'Could not read the package. It is not a valid Worldbuild file.' }; }
     const existingEntityCount = db.prepare(
       "SELECT COUNT(*) AS count FROM entities WHERE workspaceId = ? AND status != 'proposed'"
     ).get(workspaceId)?.count || 0;
@@ -3124,8 +3151,14 @@ ipcMain.handle('import-worldbuild', async (event, { workspaceId } = {}) => {
         } catch (error) { console.warn('[import-worldbuild] skipped an image:', error.message); }
       }
     }
+    let rulesImported = false;
+    if (payload.roleplayRules && ['merge', 'replace', 'skip'].includes(rulesMode)) {
+      const outcome = getRulesPackager().import(workspaceId, payload.roleplayRules, rulesMode, idMap);
+      if (outcome.timeMatrix) getCalendarService().saveTimeMatrix(db, workspaceId, payload.roleplayRules.timeMatrix);
+      rulesImported = rulesMode !== 'skip';
+    }
     refreshNameTagsFor(workspaceId);
-    return { success: true, ...res, imagesAdded, calendarImported, calendarConflict };
+    return { success: true, ...res, imagesAdded, calendarImported, calendarConflict, rulesImported };
   } catch (e) {
     console.error('[import-worldbuild] failed:', e);
     return { success: false, error: e.message };
@@ -3529,6 +3562,16 @@ function getRoleplaySystem() {
   return new RoleplaySystem(db);
 }
 
+function getRoleplayProgression() {
+  const { RoleplayProgression } = require('../../dist-main/main/features/narrative/roleplay-progression');
+  return new RoleplayProgression(db);
+}
+
+function getRulesPackager() {
+  const { RoleplayRulesPackager } = require('../../dist-main/main/features/narrative/roleplay-rules-package');
+  return new RoleplayRulesPackager(db);
+}
+
 function getNarrativeStateSystem() {
   const { NarrativeStateSystem } = require('../../dist-main/main/features/narrative/narrative-state');
   return new NarrativeStateSystem(db);
@@ -3546,10 +3589,14 @@ function getCalendarService() {
 ipcMain.handle('get-roleplay-configuration', async (event, { workspaceId } = {}) => {
   try {
     const roleplay = getRoleplaySystem();
+    const progression = getRoleplayProgression();
     const calendarService = getCalendarService();
     return {
       success: true,
       settings: roleplay.getSettings(workspaceId),
+      progression: { ...progression.getSettings(workspaceId), progressingIds: progression.progressingIds(workspaceId) },
+      traits: progression.listTraits(workspaceId),
+      progressChanges: progression.listChanges(workspaceId),
       calendar: calendarService.getCalendar(db, workspaceId),
       clock: calendarService.getRoleplayClock(db, workspaceId),
       timeMatrix: calendarService.getTimeMatrix(db, workspaceId),
@@ -3782,11 +3829,6 @@ ipcMain.handle('remove-entity-portrait', async (event, { workspaceId, entityId }
   catch (error) { return { success: false, error: error.message }; }
 });
 
-ipcMain.handle('link-roleplay-entity-species', async (event, payload = {}) => {
-  try { getRoleplaySystem().linkEntitySpecies(payload.workspaceId, payload.entityId, payload.speciesId); return { success: true }; }
-  catch (error) { return { success: false, error: error.message }; }
-});
-
 ipcMain.handle('get-roleplay-entity-resources', async (event, { workspaceId, entityId } = {}) => {
   try { return { success: true, resources: getRoleplaySystem().listEntityResources(workspaceId, entityId) }; }
   catch (error) { return { success: false, error: error.message }; }
@@ -3799,6 +3841,61 @@ ipcMain.handle('change-roleplay-resource', async (event, payload = {}) => {
 
 ipcMain.handle('resolve-roleplay-resource-change', async (event, { workspaceId, changeId, decision } = {}) => {
   try { return { success: true, change: getRoleplaySystem().resolveChange(workspaceId, changeId, decision) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('save-roleplay-progression', async (event, { workspaceId, mode, config } = {}) => {
+  try { return { success: true, progression: getRoleplayProgression().saveSettings(workspaceId, { mode, config }), traits: getRoleplayProgression().listTraits(workspaceId) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('set-roleplay-progression-members', async (event, { workspaceId, members } = {}) => {
+  try { return { success: true, progression: getRoleplayProgression().setMembers(workspaceId, Array.isArray(members) ? members : []) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('save-roleplay-trait', async (event, { workspaceId, trait } = {}) => {
+  try { return { success: true, trait: getRoleplayProgression().saveTrait(workspaceId, trait || {}) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('delete-roleplay-trait', async (event, { workspaceId, traitId } = {}) => {
+  try { getRoleplayProgression().deleteTrait(workspaceId, traitId); return { success: true }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('get-roleplay-entity-progress', async (event, { workspaceId, entityId } = {}) => {
+  try { return { success: true, progress: getRoleplayProgression().getEntityProgress(workspaceId, entityId) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('set-roleplay-entity-progress', async (event, { workspaceId, entityId, kind, traitId, value } = {}) => {
+  try {
+    const progress = getRoleplayProgression().setEntityValue(workspaceId, entityId, { kind, traitId, value });
+    event.sender.send('roleplay-resource-changes', { workspaceId, changes: [{ kind: 'progress', entityId }] });
+    return { success: true, progress };
+  } catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('get-roleplay-race-progress', async (event, { workspaceId, raceId } = {}) => {
+  try { return { success: true, values: getRoleplayProgression().listRaceValues(workspaceId, raceId) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('set-roleplay-race-progress', async (event, { workspaceId, raceId, traitId, value } = {}) => {
+  try {
+    getRoleplayProgression().setRaceValue(workspaceId, raceId, traitId, value === null || value === '' ? null : Number(value));
+    return { success: true, values: getRoleplayProgression().listRaceValues(workspaceId, raceId) };
+  } catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('resolve-roleplay-progress-change', async (event, { workspaceId, changeId, decision } = {}) => {
+  try { return { success: true, change: getRoleplayProgression().resolveChange(workspaceId, changeId, decision) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('get-roleplay-entity-history', async (event, { workspaceId, entityId, limit } = {}) => {
+  try { return { success: true, history: getRoleplayProgression().listHistory(workspaceId, entityId, limit) }; }
   catch (error) { return { success: false, error: error.message }; }
 });
 

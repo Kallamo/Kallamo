@@ -11,6 +11,7 @@ import { PortraitContext, usePortraits } from '../worldbuild/portraits';
 import {
   CastGroup, CastRow, InventoryTab, LocationHero, PanelClock, PanelTabs, PlayerCard, RoleplayRail, RoleplayStatus, SectionHead
 } from './RoleplayPanelParts';
+import { kindOf } from './changeKinds';
 
 const EMPTY_SCENE = {
   locationId: null,
@@ -21,6 +22,7 @@ const EMPTY_SCENE = {
 };
 
 const RECENT_TURN_LIMIT = 5;
+const EMPTY_VITALS = { resources: new Map(), progress: null };
 
 function RoleplayQuickPanel({
   workspaceId,
@@ -47,6 +49,7 @@ function RoleplayQuickPanel({
   const [templates, setTemplates] = useState([]);
   const [definitions, setDefinitions] = useState([]);
   const [inventory, setInventory] = useState([]);
+  const [vitals, setVitals] = useState(EMPTY_VITALS);
   const [background, setBackground] = useState(null);
   const [addingCharacter, setAddingCharacter] = useState(false);
   const [transfer, setTransfer] = useState(null);
@@ -70,12 +73,29 @@ function RoleplayQuickPanel({
       const locationId = configuration?.scene?.locationId;
       return locationId ? api.getRoleplayLocationBackground(workspaceId, locationId) : null;
     });
-    const [configuration, worldbuild, templateResult, inventoryResult, backgroundResult] = await Promise.all([
+    // The player shows every resource and their progression; others only their first resource.
+    const vitalsPromise = configurationPromise.then(async configuration => {
+      const playerEntityId = configuration?.settings?.playerEntityId;
+      const present = configuration?.scene
+        ? [...new Set([...(configuration.scene.participantIds || []), ...(configuration.scene.possibleObserverIds || []), ...(configuration.scene.nearbyIds || [])])]
+        : [];
+      const ids = [...new Set([playerEntityId, ...present].filter(Boolean))];
+      const [resourceResults, progressResult] = await Promise.all([
+        Promise.all(ids.map(id => api.getRoleplayEntityResources(workspaceId, id).catch(() => null))),
+        playerEntityId ? api.getRoleplayEntityProgress?.(workspaceId, playerEntityId).catch(() => null) : null
+      ]);
+      return {
+        resources: new Map(ids.map((id, index) => [id, resourceResults[index]?.success ? resourceResults[index].resources || [] : []])),
+        progress: progressResult?.success ? progressResult.progress : null
+      };
+    });
+    const [configuration, worldbuild, templateResult, inventoryResult, backgroundResult, vitalsResult] = await Promise.all([
       configurationPromise,
       api.listEntities(workspaceId),
       api.listWorldbuildEntityTemplates?.(workspaceId),
       inventoryPromise,
-      backgroundPromise
+      backgroundPromise,
+      vitalsPromise
     ]);
     if (!configuration?.success) throw new Error(configuration?.error || 'Could not load Roleplay state.');
     const nextSettings = configuration.settings || {};
@@ -94,10 +114,12 @@ function RoleplayQuickPanel({
       ...(configuration.sceneChanges || []),
       ...(configuration.inventoryChanges || []),
       ...(configuration.changes || []),
+      ...(configuration.progressChanges || []),
       ...(configuration.entityChanges || []),
       ...(configuration.narrativeEvents || [])
     ].filter(change => change.status === 'pending' || change.status === 'proposed' || change.status === 'conflicting').length);
     setInventory(inventoryResult?.success ? inventoryResult.inventory || [] : []);
+    setVitals(vitalsResult || EMPTY_VITALS);
     const nextBackground = backgroundResult?.success ? backgroundResult.background : null;
     setBackground(nextBackground);
     onBackgroundChange(nextBackground);
@@ -305,6 +327,7 @@ function RoleplayQuickPanel({
   const resolveRecentChange = async (change, decision) => {
     const methods = {
       resource: api.resolveRoleplayResourceChange,
+      progress: api.resolveRoleplayProgressChange,
       scene: api.resolveRoleplaySceneChange,
       inventory: api.resolveRoleplayInventoryChange,
       entity: api.resolveRoleplayEntityChange,
@@ -362,6 +385,7 @@ function RoleplayQuickPanel({
       entity={entity}
       typeLabel={typeLabels.get(entity.type)}
       presence={presenceOf(entity.id, scene)}
+      mark={vitals.resources.get(entity.id)?.[0] || null}
       onPlay={() => setPlayer(entity.id)}
       onPresence={presence => changePresence(entity.id, presence)}
       onRemove={() => removeCharacter(entity.id)}
@@ -440,7 +464,7 @@ function RoleplayQuickPanel({
                 </div>
               )}
               {player
-                ? <PlayerCard entity={player} typeLabel={typeLabels.get(player.type)} />
+                ? <PlayerCard entity={player} typeLabel={typeLabels.get(player.type)} resources={vitals.resources.get(player.id) || []} progress={vitals.progress?.entityId === player.id ? vitals.progress : null} />
                 : <p className="rounded-card border border-dashed border-border-subtle px-3 py-5 text-center text-xs text-text-disabled">Choose who you play in Roleplay settings.</p>}
               {participants.length > 0 && <CastGroup presence="participating" count={participants.length}>{participants.map(castRow)}</CastGroup>}
               {nearby.length > 0 && <CastGroup presence="nearby" count={nearby.length}>{nearby.map(castRow)}</CastGroup>}
@@ -526,16 +550,6 @@ function TransferEditor({ transfer, setTransfer, item, actors, locations, curren
   );
 }
 
-// Colour names the kind of change; whole class strings so Tailwind can see them.
-const CHANGE_KINDS = {
-  scene: { label: 'Scene', chip: 'bg-entity-location/14 text-entity-location', dot: 'bg-entity-location', bullet: 'text-entity-location' },
-  narrative: { label: 'Narrative', chip: 'bg-entity-event/14 text-entity-event', dot: 'bg-entity-event', bullet: 'text-entity-event' },
-  inventory: { label: 'Inventory', chip: 'bg-entity-item/14 text-entity-item', dot: 'bg-entity-item', bullet: 'text-entity-item' },
-  resource: { label: 'State', chip: 'bg-status-warning/14 text-status-warning', dot: 'bg-status-warning', bullet: 'text-status-warning' },
-  entity: { label: 'Entity', chip: 'bg-entity-concept/12 text-entity-concept', dot: 'bg-entity-concept', bullet: 'text-entity-concept' },
-  time: { label: 'Time', chip: 'bg-status-info/14 text-status-info', dot: 'bg-status-info', bullet: 'text-status-info' }
-};
-const kindOf = kind => CHANGE_KINDS[kind] || CHANGE_KINDS.entity;
 
 function turnTitle(turn) {
   if (turn.manual) return 'You';
@@ -659,6 +673,8 @@ function groupRecentTurns(configuration) {
   (configuration.sceneChanges || []).forEach(change => add(change.provenanceId, { ...change, kind: 'scene' }));
   (configuration.inventoryChanges || []).forEach(change => add(change.provenanceId, { ...change, kind: 'inventory' }));
   (configuration.changes || []).forEach(change => add(change.provenanceId, { ...change, kind: 'resource' }));
+  const traitNames = new Map((configuration.traits || []).map(trait => [trait.id, trait.name]));
+  (configuration.progressChanges || []).forEach(change => add(change.provenanceId, { ...change, kind: 'progress', progressKind: change.kind, traitName: traitNames.get(change.traitId) }));
   (configuration.entityChanges || []).forEach(change => add(change.provenanceId, { ...change, kind: 'entity' }));
   (configuration.narrativeEvents || []).forEach(record => {
     const originId = record.proposal?.evidence?.[0]?.originId;
@@ -701,7 +717,18 @@ function describeRecentChange(change, names, definitions) {
   if (change.kind === 'inventory') return describeInventoryChange(change.patch, names);
   if (change.kind === 'resource') {
     const definition = definitions.find(item => item.id === change.definitionId);
-    return [`${definition?.name || 'Tracked state'} for ${names.get(change.entityId) || 'entity'}: ${change.previousValue} → ${change.nextValue}`];
+    const delta = change.delta ?? change.nextValue - change.previousValue;
+    const amount = change.status === 'pending' ? `${delta > 0 ? '+' : '−'}${Math.abs(delta)}` : `${change.previousValue} → ${change.nextValue}`;
+    return [`${definition?.name || 'Tracked state'} for ${names.get(change.entityId) || 'entity'}: ${amount}`, ...(change.reason ? [change.reason] : [])];
+  }
+  if (change.kind === 'progress') {
+    const who = names.get(change.entityId) || 'Someone';
+    const lead = change.progressKind === 'xp'
+      ? `${who}: XP ${change.delta > 0 ? '+' : '−'}${Math.abs(change.delta)}`
+      : change.progressKind === 'level'
+        ? `${who} reached level ${change.nextValue}`
+        : `${who}: ${change.traitName || 'Attribute'} ${change.previousValue} → ${change.nextValue}`;
+    return [lead, ...(change.reason ? [change.reason] : [])];
   }
   if (change.kind === 'entity') {
     if (change.identityUpdate) {

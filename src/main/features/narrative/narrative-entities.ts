@@ -65,7 +65,7 @@ interface EntityRow {
 }
 
 const AUTO_TYPES = new Set<NarrativeEntityType>(['Characters', 'Creatures']);
-const OPEN_CHANGE_TABLES = ['roleplay_resource_changes', 'roleplay_scene_changes', 'roleplay_inventory_changes', 'roleplay_entity_changes'];
+const OPEN_CHANGE_TABLES = ['roleplay_resource_changes', 'roleplay_progress_changes', 'roleplay_scene_changes', 'roleplay_inventory_changes', 'roleplay_entity_changes'];
 
 type TurnSnapshot = Record<string, Array<Record<string, unknown>> | undefined>;
 
@@ -83,6 +83,7 @@ export const SNAPSHOT_ENTITY_COLUMNS: Record<string, { table: string; required?:
   equipment: { table: 'roleplay_equipment', required: ['entity_id', 'item_id'] },
   locationInventory: { table: 'roleplay_location_inventory', required: ['location_id', 'item_id'] },
   resources: { table: 'roleplay_resource_values', required: ['target_id'] },
+  progress: { table: 'roleplay_progress_values', required: ['target_id'] },
   links: { table: 'entity_links', required: ['fromId', 'toId'] }
 };
 
@@ -238,7 +239,7 @@ export class NarrativeEntitySystem {
       )
     `).run(entityStatus, Date.now(), workspaceId, workspaceId, originId);
     if (status !== 'active') {
-      for (const table of ['roleplay_resource_changes', 'roleplay_scene_changes', 'roleplay_inventory_changes']) {
+      for (const table of ['roleplay_resource_changes', 'roleplay_progress_changes', 'roleplay_scene_changes', 'roleplay_inventory_changes']) {
         this.db.prepare(`UPDATE ${table} SET status = 'rejected', resolved_at = ? WHERE workspace_id = ? AND provenance_id = ? AND status = 'pending'`)
           .run(Date.now(), workspaceId, originId);
       }
@@ -427,6 +428,7 @@ export class NarrativeEntitySystem {
       equipment: this.hasTable('roleplay_equipment') ? this.rows('roleplay_equipment', workspaceId) : [],
       locationInventory: this.hasTable('roleplay_location_inventory') ? this.rows('roleplay_location_inventory', workspaceId) : [],
       resources: this.rows('roleplay_resource_values', workspaceId),
+      progress: this.hasTable('roleplay_progress_values') ? this.rows('roleplay_progress_values', workspaceId) : [],
       timeState: this.hasTable('roleplay_time_state') ? this.rows('roleplay_time_state', workspaceId) : [],
       timeAdvances: this.hasTable('roleplay_time_advances') ? this.rows('roleplay_time_advances', workspaceId) : [],
       links: (this.db.prepare(`
@@ -506,6 +508,7 @@ export class NarrativeEntitySystem {
         if (snapshot[key] && this.hasTable(table)) this.replaceRows(table, workspaceId, snapshot[key]!);
       }
       this.replaceRows('roleplay_resource_values', workspaceId, snapshot.resources ?? []);
+      if (snapshot.progress && this.hasTable('roleplay_progress_values')) this.replaceRows('roleplay_progress_values', workspaceId, snapshot.progress);
       if (this.hasTable('roleplay_time_state')) {
         this.replaceRows('roleplay_time_state', workspaceId, snapshot.timeState ?? []);
       }

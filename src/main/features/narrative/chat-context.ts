@@ -16,6 +16,7 @@ import {
   type KallamoContextStrategy
 } from './mode-orchestration';
 import { RoleplaySystem } from './roleplay-system';
+import { RoleplayProgression } from './roleplay-progression';
 import { createWorldbuildKnowledgeService, type WorldbuildKnowledgeService } from '../worldbuild/knowledge-service';
 import { normalizeRetrievalSettings } from '../../../shared/retrieval-settings-runtime';
 import { EpistemicResolver } from './epistemic-resolver';
@@ -342,20 +343,80 @@ export class NarrativeChatContext {
     const settings = this.roleplay.getSettings(workspaceId);
     const ids = new Set(entityIds);
     if (settings.playerEntityId) ids.add(settings.playerEntityId);
-    return [...ids].flatMap(entityId => {
+    const usedDefinitions = new Map<string, ReturnType<RoleplaySystem['listEntityResources']>[number]>();
+    const values = [...ids].flatMap(entityId => {
       const entity = this.db.prepare(`
         SELECT 1 FROM entities WHERE workspaceId = ? AND id = ? AND status != 'proposed'
       `).get(workspaceId, entityId);
       if (!entity) return [];
-      return this.roleplay.listEntityResources(workspaceId, entityId).map(resource => this.candidate({
-        id: `roleplay-state:${entityId}:${resource.definitionId}`,
-        workspaceId, sourceType: 'state', sourceId: `${entityId}:${resource.key}`,
-        content: `${resource.name}: ${resource.current} / ${resource.maximum}${resource.unit ? ` ${resource.unit}` : ''}`,
+      return this.roleplay.listEntityResources(workspaceId, entityId).map(resource => {
+        usedDefinitions.set(resource.definitionId, resource);
+        return this.candidate({
+          id: `roleplay-state:${entityId}:${resource.definitionId}`,
+          workspaceId, sourceType: 'state', sourceId: `${entityId}:${resource.key}`,
+          content: `${resource.name}: ${resource.current} / ${resource.maximum}${resource.unit ? ` ${resource.unit}` : ''}`,
+          relevance: 1,
+          epistemic: { kind: 'knowledge', subjectId: entityId, accessibility: 'available' },
+          provenanceIds: [resource.definitionId, entityId]
+        });
+      });
+    });
+    // What a resource means travels once, beside the values, so the narrator plays it as written.
+    const rules = [...usedDefinitions.values()].flatMap(resource => {
+      const lines = [
+        resource.description ? `${resource.name}: ${resource.description}` : '',
+        resource.lowestEffect ? `At ${resource.minimum}${resource.unit ? ` ${resource.unit}` : ''} ${resource.name}: ${resource.lowestEffect}` : ''
+      ].filter(Boolean);
+      return lines.length ? [this.candidate({
+        id: `roleplay-resource-rule:${resource.definitionId}`,
+        workspaceId, sourceType: 'state', sourceId: resource.definitionId,
+        content: lines.join('\n'),
+        relevance: 1,
+        epistemic: { kind: 'canon', access: 'public' },
+        provenanceIds: [resource.definitionId]
+      })] : [];
+    });
+    return [...values, ...rules, ...this.loadProgressionCandidates(workspaceId, ids)];
+  }
+
+  // Only who progresses carries a level and attributes; everyone else is a fixed NPC.
+  private loadProgressionCandidates(workspaceId: string, ids: Set<string>): ContextCandidate[] {
+    const progression = new RoleplayProgression(this.db);
+    const settings = progression.getSettings(workspaceId);
+    if (settings.mode === 'off') return [];
+    const present = progression.progressingIds(workspaceId).filter(id => ids.has(id));
+    if (!present.length) return [];
+    const names = this.getEntityNames(workspaceId, present);
+    const traits = progression.listTraits(workspaceId);
+    const states = present.map(entityId => {
+      const progress = progression.getEntityProgress(workspaceId, entityId);
+      const name = names.get(entityId) ?? entityId;
+      const content = [
+        `${name}: level ${progress.level}${progress.goal ? ` (${progress.xp} of ${progress.goal} XP to the next)` : ''}.`,
+        progress.attributes.length ? `Attributes: ${progress.attributes.map(attribute => `${attribute.name} ${attribute.value}`).join(', ')}.` : ''
+      ].filter(Boolean).join(' ');
+      return this.candidate({
+        id: `roleplay-progress:${entityId}`,
+        workspaceId, sourceType: 'state', sourceId: entityId,
+        content,
         relevance: 1,
         epistemic: { kind: 'knowledge', subjectId: entityId, accessibility: 'available' },
-        provenanceIds: [resource.definitionId, entityId]
-      }));
+        provenanceIds: [entityId]
+      });
     });
+    const meanings = traits.filter(trait => trait.description);
+    if (!meanings.length) return states;
+    return [...states, this.candidate({
+      id: `roleplay-progress-rules:${workspaceId}`,
+      workspaceId, sourceType: 'state', sourceId: `progression:${settings.mode}`,
+      content: [
+        `Attributes (${meanings[0].minimum} to ${meanings[0].maximum}):`,
+        ...meanings.map(trait => `- ${trait.name}: ${trait.description}`)
+      ].join('\n'),
+      relevance: 1,
+      epistemic: { kind: 'canon', access: 'public' },
+      provenanceIds: meanings.map(trait => trait.id)
+    })];
   }
 
   private loadSceneCandidates(workspaceId: string): ContextCandidate[] {

@@ -383,23 +383,70 @@ export function LocationHero({ locationId, locationName, locationOptions, onChan
   );
 }
 
-export function PlayerCard({ entity, typeLabel }) {
+const shareOf = (value, minimum, maximum) => Math.max(0, Math.min(100, ((value - minimum) / Math.max(1, maximum - minimum)) * 100));
+const shortName = name => (name.length <= 4 ? name : name.slice(0, 3));
+
+// The played character carries their resources, and their level and attributes when they progress.
+export function PlayerCard({ entity, typeLabel, resources = [], progress = null }) {
+  const levels = progress?.progresses && progress.mode === 'levels';
+  const hasVitals = resources.length > 0 || levels;
   return (
-    <div className="flex items-center gap-3 rounded-card border border-accent/30 bg-gradient-to-br from-accent/12 to-accent/[0.03] p-2.5">
-      <Avatar entity={entity} player size="lg" />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-[0.9375rem] font-semibold text-text-primary">{entity.canonicalName}</span>
-        <span className="flex items-center gap-1.5 text-xs">
-          <span className={`font-medium ${meta(entity.type).soft}`}>{typeLabel || meta(entity.type).label}</span>
-          <span aria-hidden="true" className="text-text-disabled">·</span>
-          <span className="inline-flex items-center gap-1 text-accent/90"><Gamepad2 aria-hidden="true" className="h-3.5 w-3.5" />You play them</span>
+    <div className="rounded-card border border-accent/30 bg-gradient-to-br from-accent/12 to-accent/[0.03] p-2.5">
+      <div className="flex items-center gap-3">
+        <Avatar entity={entity} player size="lg" />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[0.9375rem] font-semibold text-text-primary">{entity.canonicalName}</span>
+          <span className="flex items-center gap-1.5 text-xs">
+            <span className={`font-medium ${meta(entity.type).soft}`}>{typeLabel || meta(entity.type).label}</span>
+            <span aria-hidden="true" className="text-text-disabled">·</span>
+            <span className="inline-flex items-center gap-1 text-accent/90"><Gamepad2 aria-hidden="true" className="h-3.5 w-3.5" />You play them</span>
+          </span>
         </span>
-      </span>
+      </div>
+      {hasVitals && (
+        <div className="mt-2.5 flex flex-col gap-2.5 border-t border-white/[0.07] px-0.5 pt-2.5">
+          {resources.map(resource => (
+            <div key={resource.definitionId}>
+              <div className="flex items-baseline gap-2 text-[0.8125rem]">
+                <span className="flex-1 font-semibold text-text-secondary">{resource.name}</span>
+                <span className="tabular-nums text-text-muted">{resource.current} / {resource.maximum}</span>
+              </div>
+              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-white/[0.08]" role="progressbar" aria-label={resource.name} aria-valuemin={resource.minimum} aria-valuemax={resource.maximum} aria-valuenow={resource.current}>
+                <div className="h-full rounded-full" style={{ width: `${shareOf(resource.current, resource.minimum, resource.maximum)}%`, backgroundColor: resource.color }} />
+              </div>
+            </div>
+          ))}
+          {levels && (
+            <div>
+              <div className="flex items-baseline gap-2 text-[0.8125rem]">
+                <span className="font-semibold text-text-secondary">XP</span>
+                <span className="flex-1 text-xs font-semibold text-entity-event">Level {progress.level}</span>
+                <span className="tabular-nums text-text-muted">{progress.xp} / {progress.goal ?? '—'}</span>
+              </div>
+              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-white/[0.08]">
+                <div className="h-full rounded-full bg-entity-event" style={{ width: `${progress.goal ? shareOf(progress.xp, 0, progress.goal) : 100}%` }} />
+              </div>
+            </div>
+          )}
+          {levels && progress.attributes.length > 0 && (
+            <div className="grid grid-cols-4 gap-1.5">
+              {progress.attributes.map(attribute => (
+                <Tooltip key={attribute.traitId} content={attribute.name}>
+                  <span className="flex flex-col items-center rounded-lg bg-white/[0.04] py-1.5">
+                    <span className="text-xs text-text-muted">{shortName(attribute.name)}</span>
+                    <span className="text-[0.9375rem] font-bold tabular-nums text-text-primary">{attribute.value}</span>
+                  </span>
+                </Tooltip>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-export function CastRow({ entity, typeLabel, presence, onPlay, onPresence, onRemove }) {
+export function CastRow({ entity, typeLabel, presence, mark = null, onPlay, onPresence, onRemove }) {
   const [open, setOpen] = useState(false);
   const anchorRef = useRef(null);
   const typeMeta = meta(entity.type);
@@ -420,6 +467,16 @@ export function CastRow({ entity, typeLabel, presence, onPlay, onPresence, onRem
           <span className="inline-flex items-center gap-1 text-text-muted"><PresenceIcon aria-hidden="true" className="h-3 w-3" />{presenceMeta.label}</span>
         </span>
       </span>
+      {mark && (
+        <Tooltip content={`${mark.name} ${mark.current} / ${mark.maximum}`}>
+          <span className="flex shrink-0 items-center gap-1.5 text-xs text-text-muted">
+            <span aria-hidden="true" className="h-1 w-9 overflow-hidden rounded-full bg-white/[0.08]">
+              <span className="block h-full rounded-full" style={{ width: `${shareOf(mark.current, mark.minimum, mark.maximum)}%`, backgroundColor: mark.color }} />
+            </span>
+            {mark.name}
+          </span>
+        </Tooltip>
+      )}
       <button
         ref={anchorRef}
         type="button"

@@ -33,15 +33,19 @@ export default function Popover({
 }) {
   const panelRef = useRef(null);
   const onCloseRef = useRef(onClose);
+  const seenAnchorRef = useRef(false);
   const [style, setStyle] = useState(null);
   onCloseRef.current = onClose;
 
   const reposition = useCallback(() => {
     const el = anchorRef?.current;
+    // A panel that mounts open runs this before the parent's ref is attached; wait for the next frame.
+    if (!el && !seenAnchorRef.current) return;
     if (!el || !el.isConnected) {
       onCloseRef.current?.();
       return;
     }
+    seenAnchorRef.current = true;
     const rect = el.getBoundingClientRect();
     const spaceBelow = window.innerHeight - rect.bottom;
     const spaceAbove = rect.top;
@@ -65,6 +69,7 @@ export default function Popover({
   useLayoutEffect(() => {
     if (!open) return;
     reposition();
+    const frame = window.requestAnimationFrame(reposition);
 
     const onDown = (e) => {
       const anchor = anchorRef?.current;
@@ -80,6 +85,7 @@ export default function Popover({
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
     return () => {
+      window.cancelAnimationFrame(frame);
       window.removeEventListener('scroll', reposition, true);
       window.removeEventListener('resize', reposition);
       document.removeEventListener('mousedown', onDown);

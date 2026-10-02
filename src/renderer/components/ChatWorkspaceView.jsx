@@ -261,6 +261,17 @@ export default function ChatWorkspaceView() {
     setWorldbuildFocusId(entityId || null);
     setActiveSubView('worldbuild');
   };
+  // Other views open one of Worldbuild's own pages, such as Rules, by name.
+  const [worldbuildSurface, setWorldbuildSurface] = useState(null);
+  useEffect(() => {
+    const open = event => {
+      if (!event.detail?.surface) return;
+      setWorldbuildSurface(event.detail.surface);
+      setActiveSubView('worldbuild');
+    };
+    window.addEventListener('open-worldbuild-surface', open);
+    return () => window.removeEventListener('open-worldbuild-surface', open);
+  }, [setActiveSubView]);
   const [previewFile, setPreviewFile] = useState(null);
 
   const handleReinjectFile = (file) => {
@@ -1197,6 +1208,8 @@ export default function ChatWorkspaceView() {
                 electronAPI={electronAPI}
                 focusEntityId={worldbuildFocusId}
                 onFocusHandled={() => setWorldbuildFocusId(null)}
+                focusSurface={worldbuildSurface}
+                onSurfaceHandled={() => setWorldbuildSurface(null)}
               />
             ) : activeSubView === 'configuration' ? (
               <ConfigurationView

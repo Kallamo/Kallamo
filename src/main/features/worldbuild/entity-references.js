@@ -30,9 +30,10 @@ const ENTITY_REFERENCE_COLUMNS = [
   { table: 'roleplay_workspace_settings', column: 'player_entity_id', merge: 'repoint', delete: 'clear' },
   { table: 'roleplay_workspace_settings', column: 'location_entity_id', merge: 'repoint', delete: 'clear' },
   { table: 'roleplay_resource_values', column: 'target_id', merge: 'repoint, preferred side wins', delete: 'remove' },
-  { table: 'roleplay_species_memberships', column: 'entity_id', merge: 'repoint, preferred side wins', delete: 'remove' },
-  { table: 'roleplay_species_memberships', column: 'species_id', merge: 'repoint', delete: 'remove' },
   { table: 'roleplay_resource_changes', column: 'entity_id', merge: 'repoint', delete: 'reject pending' },
+  { table: 'roleplay_progression_members', column: 'target_id', merge: 'repoint', delete: 'remove' },
+  { table: 'roleplay_progress_values', column: 'target_id', merge: 'repoint, preferred side wins', delete: 'remove' },
+  { table: 'roleplay_progress_changes', column: 'entity_id', merge: 'repoint', delete: 'reject pending' },
   { table: 'roleplay_equipment', column: 'entity_id', merge: 'repoint', delete: 'remove' },
   { table: 'roleplay_equipment', column: 'item_id', merge: 'repoint', delete: 'remove' },
   { table: 'roleplay_location_inventory', column: 'location_id', merge: 'repoint, quantities add', delete: 'remove' },
@@ -247,20 +248,28 @@ function repointEntityReferences(db, { workspaceId, sourceId, targetId, prefer =
     db.prepare('UPDATE OR IGNORE roleplay_resource_values SET target_id = ? WHERE workspace_id = ? AND target_id = ?').run(targetId, workspaceId, sourceId);
     db.prepare('DELETE FROM roleplay_resource_values WHERE workspace_id = ? AND target_id = ?').run(workspaceId, sourceId);
   }
-  if (has('roleplay_species_memberships')) {
-    if (preferSource) {
-      db.prepare(`
-        DELETE FROM roleplay_species_memberships WHERE workspace_id = ? AND entity_id = ?
-          AND EXISTS (SELECT 1 FROM roleplay_species_memberships AS other WHERE other.workspace_id = ? AND other.entity_id = ?)
-      `).run(workspaceId, targetId, workspaceId, sourceId);
-    }
-    db.prepare('UPDATE OR IGNORE roleplay_species_memberships SET entity_id = ? WHERE workspace_id = ? AND entity_id = ?').run(targetId, workspaceId, sourceId);
-    db.prepare('DELETE FROM roleplay_species_memberships WHERE workspace_id = ? AND entity_id = ?').run(workspaceId, sourceId);
-    db.prepare('UPDATE roleplay_species_memberships SET species_id = ? WHERE workspace_id = ? AND species_id = ?').run(targetId, workspaceId, sourceId);
-    db.prepare('DELETE FROM roleplay_species_memberships WHERE workspace_id = ? AND entity_id = species_id').run(workspaceId);
-  }
   if (has('roleplay_resource_changes')) {
     db.prepare('UPDATE roleplay_resource_changes SET entity_id = ? WHERE workspace_id = ? AND entity_id = ?').run(targetId, workspaceId, sourceId);
+  }
+  if (has('roleplay_progression_members')) {
+    db.prepare("UPDATE OR IGNORE roleplay_progression_members SET target_id = ? WHERE workspace_id = ? AND target_id = ? AND target_type NOT IN ('everyone', 'type')").run(targetId, workspaceId, sourceId);
+    db.prepare("DELETE FROM roleplay_progression_members WHERE workspace_id = ? AND target_id = ? AND target_type NOT IN ('everyone', 'type')").run(workspaceId, sourceId);
+  }
+  if (has('roleplay_progress_values')) {
+    if (preferSource) {
+      db.prepare(`
+        DELETE FROM roleplay_progress_values WHERE workspace_id = ? AND target_id = ? AND EXISTS (
+          SELECT 1 FROM roleplay_progress_values AS other WHERE other.workspace_id = roleplay_progress_values.workspace_id
+            AND other.target_type = roleplay_progress_values.target_type
+            AND other.trait_id = roleplay_progress_values.trait_id AND other.target_id = ?
+        )
+      `).run(workspaceId, targetId, sourceId);
+    }
+    db.prepare('UPDATE OR IGNORE roleplay_progress_values SET target_id = ? WHERE workspace_id = ? AND target_id = ?').run(targetId, workspaceId, sourceId);
+    db.prepare('DELETE FROM roleplay_progress_values WHERE workspace_id = ? AND target_id = ?').run(workspaceId, sourceId);
+  }
+  if (has('roleplay_progress_changes')) {
+    db.prepare('UPDATE roleplay_progress_changes SET entity_id = ? WHERE workspace_id = ? AND entity_id = ?').run(targetId, workspaceId, sourceId);
   }
   if (has('roleplay_equipment')) {
     for (const column of ['entity_id', 'item_id']) {
@@ -443,10 +452,9 @@ function releaseEntityReferences(db, { workspaceId, entityId }) {
       where: "workspace_id = ? AND allowed_subject_ids_json LIKE ? ESCAPE '\\'", params: [workspaceId, like], transform: unlist
     });
   }
-  for (const table of ['narrative_scene_participants', 'narrative_scene_possible_observers', 'roleplay_scene_objects', 'roleplay_scene_nearby', 'roleplay_species_memberships']) {
+  for (const table of ['narrative_scene_participants', 'narrative_scene_possible_observers', 'roleplay_scene_objects', 'roleplay_scene_nearby']) {
     if (has(table)) db.prepare(`DELETE FROM ${table} WHERE workspace_id = ? AND entity_id = ?`).run(workspaceId, entityId);
   }
-  if (has('roleplay_species_memberships')) db.prepare('DELETE FROM roleplay_species_memberships WHERE workspace_id = ? AND species_id = ?').run(workspaceId, entityId);
   if (has('roleplay_workspace_settings')) {
     db.prepare('UPDATE roleplay_workspace_settings SET player_entity_id = NULL WHERE workspace_id = ? AND player_entity_id = ?').run(workspaceId, entityId);
     db.prepare('UPDATE roleplay_workspace_settings SET location_entity_id = NULL WHERE workspace_id = ? AND location_entity_id = ?').run(workspaceId, entityId);
@@ -459,6 +467,11 @@ function releaseEntityReferences(db, { workspaceId, entityId }) {
 
   if (has('roleplay_resource_changes')) {
     db.prepare("UPDATE roleplay_resource_changes SET status = 'rejected', resolved_at = ? WHERE workspace_id = ? AND entity_id = ? AND status = 'pending'").run(now, workspaceId, entityId);
+  }
+  if (has('roleplay_progression_members')) db.prepare("DELETE FROM roleplay_progression_members WHERE workspace_id = ? AND target_id = ? AND target_type NOT IN ('everyone', 'type')").run(workspaceId, entityId);
+  if (has('roleplay_progress_values')) db.prepare('DELETE FROM roleplay_progress_values WHERE workspace_id = ? AND target_id = ?').run(workspaceId, entityId);
+  if (has('roleplay_progress_changes')) {
+    db.prepare("UPDATE roleplay_progress_changes SET status = 'rejected', resolved_at = ? WHERE workspace_id = ? AND entity_id = ? AND status = 'pending'").run(now, workspaceId, entityId);
   }
   if (has('roleplay_entity_changes')) {
     db.prepare(`
@@ -561,7 +574,6 @@ function releaseOrphanedEntityReferences(db) {
     ['roleplay_equipment', 'item_id'],
     ['roleplay_location_inventory', 'location_id'],
     ['roleplay_location_inventory', 'item_id'],
-    ['roleplay_species_memberships', 'entity_id'],
     ['worldbuild_knowledge_cards', 'owner_id'],
     ['worldbuild_knowledge_cards', 'target_id'],
     ['worldbuild_knowledge_audience_members', 'member_id']

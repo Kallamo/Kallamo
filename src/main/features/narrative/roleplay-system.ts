@@ -5,6 +5,8 @@ import { NarrativeSceneRepository } from '../../../narrative/scenes';
 
 export type RoleplayUpdatePolicy = 'manual' | 'review' | 'automatic';
 export type RoleplayTargetType = 'entity' | 'race' | 'species';
+export type RoleplayResourceScope = 'everyone' | 'chosen';
+export type RoleplayChangeSource = 'manual' | 'ai' | 'time' | 'level';
 
 export interface RoleplaySettings {
   workspaceId: string;
@@ -31,6 +33,11 @@ export interface RoleplayResourceDefinition {
   updatePolicy: RoleplayUpdatePolicy;
   position: number;
   enabled: boolean;
+  scope: RoleplayResourceScope;
+  lowestEffect: string;
+  timeRate: number;
+  timeDirection: 'recovers' | 'drains';
+  timePeriod: 'hour' | 'day';
 }
 
 export interface EntityResourceState extends RoleplayResourceDefinition {
@@ -117,27 +124,33 @@ export interface RoleplayResourceAssignment {
   maximum: number;
 }
 
+/** A change names either the value to set or the amount to move it by. */
 export interface ResourceChangeInput {
   id: string;
   workspaceId: string;
   definitionId: string;
   entityId: string;
-  value: number;
-  source: 'manual' | 'ai';
+  value?: number;
+  delta?: number;
+  maximumDelta?: number;
+  reason?: string;
+  source: RoleplayChangeSource;
   provenanceId?: string;
 }
 
 export interface RoleplayResourceChange {
   id: string; workspaceId: string; definitionId: string; entityId: string;
-  previousValue: number; nextValue: number; status: 'pending' | 'applied' | 'rejected';
-  source: 'manual' | 'ai'; provenanceId: string | null; createdAt: number; resolvedAt: number | null;
+  previousValue: number; nextValue: number; delta: number | null; maximumDelta: number;
+  reason: string; status: 'pending' | 'applied' | 'rejected';
+  source: RoleplayChangeSource; provenanceId: string | null; createdAt: number; resolvedAt: number | null;
 }
 
 interface DefinitionRow {
   workspace_id: string; definition_id: string; resource_key: string; name: string;
   description: string; color: string; minimum: number; maximum: number;
   initial_value: number; unit: string; applies_to_json: string; update_policy: RoleplayUpdatePolicy;
-  position: number; enabled: number;
+  position: number; enabled: number; scope?: string; lowest_effect?: string; time_rate?: number;
+  time_direction?: string; time_period?: string;
 }
 
 interface ValueRow { target_id: string; current_value: number; maximum_value: number }
@@ -300,24 +313,32 @@ export class RoleplaySystem {
     workspaceId: string,
     input: Partial<RoleplayResourceDefinition> & Pick<RoleplayResourceDefinition, 'name' | 'key' | 'color' | 'minimum' | 'maximum' | 'initialValue' | 'appliesTo' | 'updatePolicy'>
   ): RoleplayResourceDefinition {
-    validateDefinition(input);
+    const scope: RoleplayResourceScope = input.scope === 'chosen' ? 'chosen' : 'everyone';
+    // Only who I choose needs no kinds: the list of holders is the whole rule.
+    const appliesTo = scope === 'chosen' && !input.appliesTo?.length ? ['Characters', 'Creatures'] : input.appliesTo;
+    validateDefinition({ ...input, appliesTo });
     const id = input.id || randomUUID();
     this.db.prepare(`
       INSERT INTO roleplay_resource_definitions (
         workspace_id, definition_id, resource_key, name, description, color,
         minimum, maximum, initial_value, unit, applies_to_json, update_policy,
-        position, enabled, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        position, enabled, scope, lowest_effect, time_rate, time_direction, time_period, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(workspace_id, definition_id) DO UPDATE SET
         resource_key = excluded.resource_key, name = excluded.name,
         description = excluded.description, color = excluded.color,
         minimum = excluded.minimum, maximum = excluded.maximum,
         initial_value = excluded.initial_value, unit = excluded.unit,
         applies_to_json = excluded.applies_to_json, update_policy = excluded.update_policy,
-        position = excluded.position, enabled = excluded.enabled, updated_at = excluded.updated_at
+        position = excluded.position, enabled = excluded.enabled, scope = excluded.scope,
+        lowest_effect = excluded.lowest_effect, time_rate = excluded.time_rate,
+        time_direction = excluded.time_direction, time_period = excluded.time_period,
+        updated_at = excluded.updated_at
     `).run(workspaceId, id, input.key.trim(), input.name.trim(), input.description?.trim() || '', input.color,
-      input.minimum, input.maximum, input.initialValue, input.unit?.trim() || '', JSON.stringify(input.appliesTo),
-      input.updatePolicy, input.position ?? 0, input.enabled === false ? 0 : 1, Date.now());
+      input.minimum, input.maximum, input.initialValue, input.unit?.trim() || '', JSON.stringify(appliesTo),
+      input.updatePolicy, input.position ?? 0, input.enabled === false ? 0 : 1, scope,
+      input.lowestEffect?.trim() || '', Math.max(0, Number(input.timeRate) || 0),
+      input.timeDirection === 'drains' ? 'drains' : 'recovers', input.timePeriod === 'day' ? 'day' : 'hour', Date.now());
     return this.requireDefinition(workspaceId, id);
   }
 
@@ -372,21 +393,14 @@ export class RoleplaySystem {
     `).run(workspaceId, definitionId, targetType, targetId);
   }
 
-  linkEntitySpecies(workspaceId: string, entityId: string, speciesId: string): void {
-    this.validateReference(workspaceId, entityId, ['Creatures']);
-    this.validateReference(workspaceId, speciesId, ['Creatures']);
-    this.db.prepare(`
-      INSERT INTO roleplay_species_memberships (workspace_id, entity_id, species_id)
-      VALUES (?, ?, ?) ON CONFLICT(workspace_id, entity_id) DO UPDATE SET species_id = excluded.species_id
-    `).run(workspaceId, entityId, speciesId);
-  }
-
   listEntityResources(workspaceId: string, entityId: string): EntityResourceState[] {
     const entity = this.requireEntity(workspaceId, entityId);
     return this.listDefinitions(workspaceId).flatMap(definition => {
       if (!definition.enabled || !definition.appliesTo.includes(entity.type)) return [];
       const direct = this.getValue(workspaceId, definition.id, 'entity', entityId);
       const inherited = direct ? null : this.getInheritedValue(workspaceId, definition.id, entityId);
+      // A chosen resource exists only where someone gave it: the character, their race or species.
+      if (definition.scope === 'chosen' && !direct && !inherited) return [];
       const value = direct ?? inherited?.value;
       return [{
         ...definition,
@@ -407,34 +421,49 @@ export class RoleplaySystem {
     const state = this.listEntityResources(input.workspaceId, input.entityId)
       .find(item => item.definitionId === input.definitionId);
     if (!state) throw new Error('Resource does not apply to this entity.');
-    const nextValue = clamp(input.value, definition.minimum, state.maximum);
-    const status = input.source === 'manual' || definition.updatePolicy === 'automatic' ? 'applied' : 'pending';
+    const hasDelta = Number.isFinite(input.delta);
+    if (!hasDelta && !Number.isFinite(input.value)) throw new Error('Resource value must be finite.');
+    const maximumDelta = Number.isFinite(input.maximumDelta) ? Number(input.maximumDelta) : 0;
+    const maximum = Math.max(definition.minimum, state.maximum + maximumDelta);
+    const nextValue = clamp(hasDelta ? state.current + Number(input.delta) : Number(input.value), definition.minimum, maximum);
+    const status = input.source === 'ai' && definition.updatePolicy !== 'automatic' ? 'pending' : 'applied';
     this.db.transaction(() => {
       this.db.prepare(`
         INSERT INTO roleplay_resource_changes (
-          workspace_id, change_id, definition_id, entity_id, previous_value,
-          next_value, status, source, provenance_id, created_at, resolved_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          workspace_id, change_id, definition_id, entity_id, previous_value, next_value,
+          delta, maximum_delta, reason, status, source, provenance_id, created_at, resolved_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(input.workspaceId, input.id, input.definitionId, input.entityId, state.current,
-        nextValue, status, input.source, input.provenanceId ?? null, Date.now(), status === 'applied' ? Date.now() : null);
+        nextValue, hasDelta ? Number(input.delta) : nextValue - state.current, maximumDelta,
+        String(input.reason || '').trim().slice(0, 240), status, input.source,
+        input.provenanceId ?? null, Date.now(), status === 'applied' ? Date.now() : null);
       if (status === 'applied') this.setTargetValue(input.workspaceId, input.definitionId, 'entity', input.entityId, {
-        current: nextValue, maximum: state.maximum
+        current: nextValue, maximum
       });
     })();
     return this.getChange(input.workspaceId, input.id)!;
   }
 
+  // A pending change is an amount, applied to the value as it is when approved: the value may
+  // have moved since, and writing the stored result back would undo whatever moved it.
   resolveChange(workspaceId: string, changeId: string, decision: 'approved' | 'rejected') {
     const change = this.getChange(workspaceId, changeId);
     if (!change) throw new Error('Roleplay change was not found.');
     if (change.status !== 'pending') return change;
     this.db.transaction(() => {
       if (decision === 'approved') {
+        const definition = this.requireDefinition(workspaceId, change.definitionId);
         const state = this.listEntityResources(workspaceId, change.entityId)
-          .find(item => item.definitionId === change.definitionId)!;
-        this.setTargetValue(workspaceId, change.definitionId, 'entity', change.entityId, {
-          current: change.nextValue, maximum: state.maximum
-        });
+          .find(item => item.definitionId === change.definitionId);
+        if (!state) throw new Error('Resource no longer applies to this entity.');
+        const maximum = Math.max(definition.minimum, state.maximum + change.maximumDelta);
+        const delta = change.delta ?? change.nextValue - change.previousValue;
+        const nextValue = clamp(state.current + delta, definition.minimum, maximum);
+        this.setTargetValue(workspaceId, change.definitionId, 'entity', change.entityId, { current: nextValue, maximum });
+        this.db.prepare(`
+          UPDATE roleplay_resource_changes SET previous_value = ?, next_value = ?
+          WHERE workspace_id = ? AND change_id = ?
+        `).run(state.current, nextValue, workspaceId, changeId);
       }
       this.db.prepare(`
         UPDATE roleplay_resource_changes SET status = ?, resolved_at = ?
@@ -442,6 +471,48 @@ export class RoleplaySystem {
       `).run(decision === 'approved' ? 'applied' : 'rejected', Date.now(), workspaceId, changeId);
     })();
     return this.getChange(workspaceId, changeId)!;
+  }
+
+  /**
+   * Story time moves resources that recover or drain. It reaches the given people and anyone
+   * already holding a value of their own, so a world of untouched NPCs stays untouched.
+   */
+  applyElapsedTime(workspaceId: string, provenanceId: string, minutes: number, entityIds: string[]): RoleplayResourceChange[] {
+    if (!(minutes > 0)) return [];
+    const definitions = this.listDefinitions(workspaceId).filter(item => item.enabled && item.timeRate > 0);
+    if (!definitions.length) return [];
+    const hoursPerDay = this.hoursPerDay(workspaceId);
+    const changes: RoleplayResourceChange[] = [];
+    for (const definition of definitions) {
+      const perMinute = definition.timeRate / (definition.timePeriod === 'day' ? hoursPerDay * 60 : 60);
+      const amount = Math.round(perMinute * minutes * 100) / 100;
+      if (!amount) continue;
+      const holders = new Set([
+        ...entityIds,
+        ...(this.db.prepare(`
+          SELECT target_id FROM roleplay_resource_values
+          WHERE workspace_id = ? AND definition_id = ? AND target_type = 'entity'
+        `).all(workspaceId, definition.id) as Array<{ target_id: string }>).map(row => row.target_id)
+      ].filter(Boolean));
+      for (const entityId of holders) {
+        let state: EntityResourceState | undefined;
+        try {
+          state = this.listEntityResources(workspaceId, entityId).find(item => item.definitionId === definition.id);
+        } catch {
+          continue;
+        }
+        if (!state) continue;
+        const delta = definition.timeDirection === 'drains' ? -amount : amount;
+        if (clamp(state.current + delta, definition.minimum, state.maximum) === state.current) continue;
+        changes.push(this.proposeChange({
+          id: `${provenanceId}:time:${definition.id}:${entityId}`,
+          workspaceId, definitionId: definition.id, entityId, delta,
+          reason: describeElapsedMinutes(minutes, hoursPerDay),
+          source: 'time', provenanceId
+        }));
+      }
+    }
+    return changes;
   }
 
   listChanges(workspaceId: string, entityId?: string) {
@@ -829,6 +900,15 @@ export class RoleplaySystem {
     `).run(randomUUID(), workspaceId, itemId, holderId, JSON.stringify({ quantity: next }), Date.now());
   }
 
+  private hoursPerDay(workspaceId: string): number {
+    const hasCalendars = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'worldbuild_calendars'").get();
+    const row = hasCalendars
+      ? this.db.prepare('SELECT definition_json FROM worldbuild_calendars WHERE workspace_id = ?').get(workspaceId) as { definition_json: string } | undefined
+      : undefined;
+    const hours = Number(parseObject(row?.definition_json).hoursPerDay);
+    return Number.isFinite(hours) && hours > 0 ? hours : 24;
+  }
+
   private nextSceneSequence(workspaceId: string): number {
     const row = this.db.prepare(`
       SELECT COALESCE(MAX(narrative_sequence), -1) + 1 AS sequence
@@ -859,19 +939,17 @@ export class RoleplaySystem {
   }
 
   private getInheritedValue(workspaceId: string, definitionId: string, entityId: string) {
-    const species = this.db.prepare(`
-      SELECT species_id FROM roleplay_species_memberships WHERE workspace_id = ? AND entity_id = ?
-    `).get(workspaceId, entityId) as { species_id: string } | undefined;
-    if (species) {
-      const value = this.getValue(workspaceId, definitionId, 'species', species.species_id);
-      if (value) return { value, targetId: species.species_id, targetType: 'species' as const };
-    }
-    const race = this.db.prepare(`
-      SELECT toId AS id FROM entity_links
-      WHERE workspaceId = ? AND fromId = ? AND relType = 'is_race' LIMIT 1
-    `).get(workspaceId, entityId) as { id: string } | undefined;
-    const value = race ? this.getValue(workspaceId, definitionId, 'race', race.id) : undefined;
-    return value && race ? { value, targetId: race.id, targetType: 'race' as const } : undefined;
+    // A character's race and a specific being's species are the same link; the target's type tells them apart.
+    const group = this.db.prepare(`
+      SELECT groups.id, groups.type FROM entity_links AS links
+      JOIN entities AS groups ON groups.id = links.toId AND groups.workspaceId = links.workspaceId
+      WHERE links.workspaceId = ? AND links.fromId = ? AND links.relType = 'is_race' AND groups.status != 'proposed'
+      LIMIT 1
+    `).get(workspaceId, entityId) as { id: string; type: string } | undefined;
+    if (!group) return undefined;
+    const targetType = group.type === 'Races' ? 'race' as const : 'species' as const;
+    const value = this.getValue(workspaceId, definitionId, targetType, group.id);
+    return value ? { value, targetId: group.id, targetType } : undefined;
   }
 
   private validateTarget(workspaceId: string, targetType: RoleplayTargetType, targetId: string): void {
@@ -908,7 +986,12 @@ function hydrateDefinition(row: DefinitionRow): RoleplayResourceDefinition {
     name: row.name, description: row.description, color: row.color,
     minimum: row.minimum, maximum: row.maximum, initialValue: row.initial_value,
     unit: row.unit, appliesTo: JSON.parse(row.applies_to_json) as string[],
-    updatePolicy: row.update_policy, position: row.position, enabled: row.enabled === 1
+    updatePolicy: row.update_policy, position: row.position, enabled: row.enabled === 1,
+    scope: row.scope === 'chosen' ? 'chosen' : 'everyone',
+    lowestEffect: String(row.lowest_effect ?? ''),
+    timeRate: Number(row.time_rate ?? 0),
+    timeDirection: row.time_direction === 'drains' ? 'drains' : 'recovers',
+    timePeriod: row.time_period === 'day' ? 'day' : 'hour'
   };
 }
 
@@ -917,8 +1000,11 @@ function hydrateChange(row: Record<string, unknown>): RoleplayResourceChange {
     id: String(row.change_id), workspaceId: String(row.workspace_id),
     definitionId: String(row.definition_id), entityId: String(row.entity_id),
     previousValue: Number(row.previous_value), nextValue: Number(row.next_value),
+    delta: row.delta === null || row.delta === undefined ? null : Number(row.delta),
+    maximumDelta: Number(row.maximum_delta ?? 0),
+    reason: String(row.reason ?? ''),
     status: String(row.status) as 'pending' | 'applied' | 'rejected',
-    source: String(row.source) as 'manual' | 'ai',
+    source: String(row.source) as RoleplayChangeSource,
     provenanceId: row.provenance_id ? String(row.provenance_id) : null,
     createdAt: Number(row.created_at),
     resolvedAt: row.resolved_at === null ? null : Number(row.resolved_at)
@@ -996,6 +1082,19 @@ function parseObject(value: unknown): Record<string, any> {
   } catch {
     return {};
   }
+}
+
+function describeElapsedMinutes(minutes: number, hoursPerDay: number): string {
+  const day = hoursPerDay * 60;
+  const days = Math.floor(minutes / day);
+  const hours = Math.floor((minutes % day) / 60);
+  const rest = Math.round(minutes % 60);
+  const parts = [
+    days ? `${days} ${days === 1 ? 'day' : 'days'}` : '',
+    hours ? `${hours} ${hours === 1 ? 'hour' : 'hours'}` : '',
+    !days && rest ? `${rest} ${rest === 1 ? 'minute' : 'minutes'}` : ''
+  ].filter(Boolean);
+  return `${parts.join(' ') || 'Time'} passed`;
 }
 
 function unique(values: string[]): string[] {

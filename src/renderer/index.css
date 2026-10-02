@@ -595,6 +595,34 @@ textarea::-webkit-scrollbar-corner { background: transparent; }
 }
 
 .relationship-range:focus-visible { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--app-accent) 40%, transparent); }
+
+/* A setting slider: the accent fills up to the value (set inline as --range-value). */
+.setting-range {
+  width: 100%;
+  height: 0.375rem;
+  appearance: none;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, var(--app-accent) var(--range-value, 0%), var(--theme-surface-hover) var(--range-value, 0%));
+  cursor: pointer;
+}
+.setting-range::-webkit-slider-thumb {
+  width: 1rem;
+  height: 1rem;
+  appearance: none;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--theme-text-primary);
+  box-shadow: 0 0.0625rem 0.25rem rgb(0 0 0 / 50%);
+}
+.setting-range::-moz-range-thumb {
+  width: 1rem;
+  height: 1rem;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--theme-text-primary);
+  box-shadow: 0 0.0625rem 0.25rem rgb(0 0 0 / 50%);
+}
+.setting-range:focus-visible { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--app-accent) 40%, transparent); }
 input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 
 /* Older chat rows skip layout and paint while far off screen. `auto` makes the browser
