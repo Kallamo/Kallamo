@@ -4,7 +4,7 @@ import {
   Plus, Search, BookOpen, Package, Users, 
   Trash2, Save, X, Pencil, Check, Link2, Globe, Tag, ScrollText, Info, Replace,
   RefreshCw, Upload, Download, ChevronRight, ChevronDown, MoreHorizontal, ListChecks, Loader2, Gem, 
-  NotebookText, Backpack, Braces, AlertTriangle, LayoutTemplate, BookCheck, CircleHelp, ChevronLeft, UserMinus, Undo2, Crown, AlignLeft, CalendarDays, CalendarRange, Drama, GripVertical, IdCard, Landmark, Lightbulb, ListTree, LogOut, MapPinned, Merge, PencilLine, ScanEye, ScanFace, Shield, UserRound, ImagePlus, Image as ImageIcon, Crop, Flag, MapPin, ChevronsDownUp, ChevronsUpDown,
+  NotebookText, Backpack, Braces, AlertTriangle, LayoutTemplate, BookCheck, CircleHelp, ChevronLeft, UserMinus, Undo2, Crown, AlignLeft, CalendarDays, CalendarRange, Drama, GripVertical, Gamepad2, IdCard, Landmark, Scale, Lightbulb, ListTree, LogOut, MapPinned, Merge, PencilLine, ScanEye, ScanFace, Shield, UserRound, ImagePlus, Image as ImageIcon, Crop, Flag, MapPin, ChevronsDownUp, ChevronsUpDown,
 } from 'lucide-react';
 import { AiGlyph, PolicyOpenGlyph, PolicyReviewGlyph, PolicyLockedGlyph, KnowledgeGlyph, ConnectionsGlyph, OccurrencesGlyph } from './ui/glyphs';
 import { useApp } from '../context/AppContext';
@@ -25,6 +25,7 @@ import { framedImageStyle, loadPortraits, usePortraits } from '../features/world
 import SearchableSelect from './ui/SearchableSelect';
 import ConfirmDialog from './ui/ConfirmDialog';
 import ExportWorldbuildModal from './modals/ExportWorldbuildModal';
+import RulesImportDialog from '../features/worldbuild/RulesImportDialog';
 import { buildLocationTree } from '../features/worldbuild/locationTree';
 import EntityPickerButton from '../features/worldbuild/EntityPickerButton';
 import { useSidebarWidth } from '../features/worldbuild/useSidebarWidth';
@@ -35,6 +36,7 @@ import WorldbuildKnowledgeTab from '../features/worldbuild/WorldbuildKnowledgeTa
 import WorldbuildNarrativeReview from '../features/worldbuild/WorldbuildNarrativeReview';
 import WorldbuildFactsRegistry from '../features/worldbuild/WorldbuildFactsRegistry';
 import WorldbuildCalendar from '../features/worldbuild/WorldbuildCalendar';
+import WorldbuildRules from '../features/worldbuild/WorldbuildRules';
 import WorldbuildEventOccurrences from '../features/worldbuild/WorldbuildEventOccurrences';
 import WorldDateInput, { formatWorldDate } from '../features/worldbuild/WorldDateInput';
 import { WorldbuildInventory, WorldbuildRelationships } from '../features/worldbuild/WorldbuildAgentCollections';
@@ -637,7 +639,7 @@ function MemberList({ links, calendar, kind = 'member', leaderId, editing, optio
 const registryCache = new Map();
 const viewCache = worldbuildViewCache;
 
-export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFocusHandled }) {
+export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFocusHandled, focusSurface, onSurfaceHandled }) {
   const { showToast, settings, openSettings } = useApp();
   // Update Entities always uses System AI, independently of the Tagger executor.
   const hasSystemAi = !!settings?.advanced?.systemApiProfileId && !!settings?.advanced?.systemModelName;
@@ -733,6 +735,34 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     return () => { active = false; };
   }, [workspaceId, selected?.id, selected?.type, charTab, electronAPI]); // eslint-disable-line react-hooks/exhaustive-deps
   const [locationCover, setLocationCover] = useState(null);
+  const [playerEntityId, setPlayerEntityId] = useState(null);
+  const [rulesImport, setRulesImport] = useState(null);
+  const [rulesMeta, setRulesMeta] = useState('');
+  // The played character's sheet says so while the workspace is in Roleplay; the Rules tile
+  // summarizes the world's rules.
+  useEffect(() => {
+    if (!workspaceId) return undefined;
+    let cancelled = false;
+    const read = () => Promise.all([
+      electronAPI.getWorkspaceExperienceMode?.(workspaceId),
+      electronAPI.getRoleplayConfiguration?.(workspaceId)
+    ]).then(([mode, result]) => {
+      if (cancelled) return;
+      setPlayerEntityId(mode?.mode === 'roleplay' && result?.success ? result.settings?.playerEntityId || null : null);
+      const resources = result?.definitions?.length || 0;
+      const style = result?.progression?.mode === 'levels' ? 'Levels' : '';
+      setRulesMeta([resources ? `${resources} ${resources === 1 ? 'resource' : 'resources'}` : '', style || ''].filter(Boolean).join(' · '));
+    }).catch(() => {});
+    read();
+    const refresh = event => { if (!event.detail?.workspaceId || event.detail.workspaceId === workspaceId) read(); };
+    window.addEventListener('roleplay-state-change', refresh);
+    window.addEventListener('roleplay-mode-change', refresh);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('roleplay-state-change', refresh);
+      window.removeEventListener('roleplay-mode-change', refresh);
+    };
+  }, [electronAPI, workspaceId]);
   const [imageDialog, setImageDialog] = useState(null); // 'portrait' | 'background' while choosing or framing
   const [imageBusy, setImageBusy] = useState(false);
   const coverFileRef = useRef(null);
@@ -951,6 +981,15 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     loadEnrichErrors();
   }, [load, loadEnrichErrors]);
 
+  // Declared after the restore above, so a page asked for from outside wins over the saved one.
+  useEffect(() => {
+    if (!focusSurface) return;
+    setSurface(focusSurface);
+    setSelected(null);
+    setEditingSection(null);
+    onSurfaceHandled?.();
+  }, [focusSurface]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Saved when the reader leaves, not on every change: a workspace switch would otherwise
   // store one workspace's search under the next one before the restore above lands.
   const liveView = useRef(null);
@@ -1017,10 +1056,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
         foundIn: ['from', 'found_in'], soldIn: ['from', 'sold_in'],
       },
       Races: { members: ['to', 'is_race'] },
-      Creatures: {
-        foundIn: ['from', 'found_in'], memberOf: ['from', 'member_of'],
-        formerMemberOf: ['from', 'former_member_of'],
-      },
+      // A specific being's species is the same link as a character's race.
+      Creatures: (ent.data?.scope || 'individual') === 'group'
+        ? { foundIn: ['from', 'found_in'], members: ['to', 'is_race'] }
+        : { foundIn: ['from', 'found_in'], isRace: ['from', 'is_race'], memberOf: ['from', 'member_of'], formerMemberOf: ['from', 'former_member_of'] },
       Events: { happenedAt: ['from', 'happened_at'], involved: ['from', 'involved'] },
       Factions: {
         operatesIn: ['from', 'operates_in'], members: ['to', 'member_of'],
@@ -1311,23 +1350,34 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
 
   // Export this workspace's Worldbuild to a portable file; import merges one back in
   // (de-duped by name+type, non-destructive).
-  const exportWorld = async (includeImages = true) => {
-    const r = await electronAPI.exportWorldbuild(workspaceId, includeImages);
+  const exportWorld = async (includeImages = true, includeCurrentValues = false) => {
+    const r = await electronAPI.exportWorldbuild(workspaceId, includeImages, includeCurrentValues);
     if (r?.cancelled) return;
     if (!r?.success) { showToast(`Export failed: ${r?.error || 'unknown error'}`, 'error'); return; }
     const ent = `${r.entities} ${r.entities === 1 ? 'entity' : 'entities'}`;
     const con = r.links ? ` and ${r.links} ${r.links === 1 ? 'connection' : 'connections'}` : '';
     showToast(`Exported ${ent}${con}.`, 'success');
   };
+  // The package is read first, so a world with rules of its own can choose how to take the package's.
   const importWorld = async () => {
-    const r = await electronAPI.importWorldbuild(workspaceId);
+    const inspected = await electronAPI.inspectWorldbuildPackage(workspaceId);
+    if (inspected?.cancelled) return;
+    if (!inspected?.success) { showToast(`Import failed: ${inspected?.error || 'unknown error'}`, 'error'); return; }
+    if (inspected.rules?.differs) { setRulesImport(inspected); return; }
+    await finishImport(inspected.filePath, 'merge');
+  };
+  const finishImport = async (filePath, rulesMode) => {
+    setRulesImport(null);
+    const r = await electronAPI.importWorldbuild(workspaceId, filePath, rulesMode);
     if (r?.cancelled) return;
     if (!r?.success) { showToast(`Import failed: ${r?.error || 'unknown error'}`, 'error'); return; }
     await load();
     const linkBit = r.linksAdded ? ` and ${r.linksAdded} link${r.linksAdded === 1 ? '' : 's'}` : '';
     const imageBit = r.imagesAdded ? `, with ${r.imagesAdded} image${r.imagesAdded === 1 ? '' : 's'},` : '';
     const calendarBit = r.calendarConflict ? ' The package uses a different calendar, so your current calendar was preserved.' : r.calendarImported ? ' Its calendar was imported too.' : '';
-    showToast(`Imported ${r.entitiesAdded} entit${r.entitiesAdded === 1 ? 'y' : 'ies'}${linkBit}${imageBit} for review. Accept, merge, or dismiss each in the sidebar.${calendarBit}`, r.calendarConflict ? 'info' : 'success');
+    const rulesBit = r.rulesImported ? ' Its roleplay rules came in as you chose.' : '';
+    showToast(`Imported ${r.entitiesAdded} entit${r.entitiesAdded === 1 ? 'y' : 'ies'}${linkBit}${imageBit} for review. Accept, merge, or dismiss each in the sidebar.${calendarBit}${rulesBit}`, r.calendarConflict ? 'info' : 'success');
+    window.dispatchEvent(new CustomEvent('roleplay-state-change', { detail: { workspaceId } }));
   };
 
   // The sheet reloads so remaining staged items stay visible.
@@ -1688,6 +1738,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           <FactGrid>
             <ViewField label="Nature" value={selected.data.nature} />
             <ViewField label="Disposition" value={<StateTag map={DISPOSITION} value={selected.data.disposition || 'unknown'} />} />
+            {isIndividual && <ViewField label="Species" value={rel.isRace?.entity ? <EntityChip entity={rel.isRace.entity} onOpen={openEntityById} /> : null} />}
             {!isIndividual && <ViewField label="How common" value={selected.data.abundance} />}
             <ViewField label="Threat" value={selected.data.threat} />
             {isIndividual && <ViewField label="Born" value={formatWorldDate(worldCalendar, selected.data.birthDate)} />}
@@ -1705,6 +1756,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               <Hint>Turning this into a group hides its inventory, connections and knowledge. Nothing is deleted, and switching back brings them into view again.</Hint>
             )}
           </Edit>
+          {isIndividual && <SingleRelation label="Species" disabled={unsaved} current={rel.isRace?.entity?.id} options={byType.Creatures.filter(creature => creature.data?.scope === 'group' && creature.id !== selected.id)} onSet={(id) => setSingle('is_race', id)} />}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Edit label="Nature"><FreeDatalist value={selected.data.nature} onChange={(e) => patchData({ nature: e.target.value })} options={natureOpts} placeholder="e.g. Beast, Spirit, Deity" /></Edit>
             <Edit label="Threat"><ChoiceSelect label="Threat" value={selected.data.threat} onChange={(e) => patchData({ threat: e.target.value })} options={THREAT} /></Edit>
@@ -1724,6 +1776,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       // A species has a shared look worth describing, but no single temperament: a
       // personality belongs to one being, never to every member of a kind.
       S.push({ key: 'appearance', title: 'Appearance', icon: ScanFace, scalar: true, empty: !String(selected.data.appearance || '').trim(), view: <Prose text={selected.data.appearance} />, edit: <Edit hint={isIndividual ? undefined : 'What members of this kind typically look like.'}><LTextarea aria-label="Appearance" rows={5} placeholder={isIndividual ? 'Physical presence and distinguishing features.' : 'Shared build, markings, and distinguishing features.'} value={selected.data.appearance || ''} onChange={(e) => patchData({ appearance: e.target.value })} /></Edit> });
+      if (!isIndividual && !unsaved && selected.status !== 'proposed') S.push({ key: 'roleplay', raw: <RaceRoleplayDefaults workspaceId={workspaceId} race={selected} api={electronAPI} showToast={showToast} /> });
+      if (!isIndividual) S.push({ key: 'members', title: 'Known members', icon: Users, scalar: false, derived: true, relationalOnly: true, count: rel.members?.length || null, empty: !(rel.members || []).length, emptyNote: 'Filled in as specific beings take this species',
+        right: <span className="mr-2 text-xs text-text-subtle">Filled from each specific being's species</span>,
+        view: <KnownMembers links={rel.members || []} portraits={portraits} onOpen={openEntityById} /> });
       if (isIndividual) S.push({ key: 'personality', title: 'Personality', icon: Drama, scalar: true, empty: !String(selected.data.personality || '').trim(), view: <Prose text={selected.data.personality} />, edit: <Edit><LTextarea aria-label="Personality" rows={5} placeholder="Temperament, instincts, habits, and values." value={selected.data.personality || ''} onChange={(e) => patchData({ personality: e.target.value })} /></Edit> });
       S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, empty: loreEmpty, view: loreView, edit: loreEdit });
     }
@@ -2198,8 +2254,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           api={electronAPI}
           entityCount={exportableCount}
           onClose={() => setShowExportModal(false)}
-          onConfirm={({ includeImages }) => { setShowExportModal(false); exportWorld(includeImages); }}
+          onConfirm={({ includeImages, includeCurrentValues }) => { setShowExportModal(false); exportWorld(includeImages, includeCurrentValues); }}
         />, document.body)}
+      {rulesImport && createPortal(
+        <RulesImportDialog inspected={rulesImport} onCancel={() => setRulesImport(null)} onImport={mode => finishImport(rulesImport.filePath, mode)} />, document.body)}
       {bulkDialog && (
         <ConfirmDialog
           tone={bulkDialog.tone}
@@ -2329,10 +2387,11 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                 <span className="text-xs font-semibold uppercase tracking-[0.08em] text-text-subtle">World</span>
                 <span aria-hidden="true" className="h-px flex-1 bg-border-subtle" />
               </div>
-              <div className="grid grid-cols-3 gap-1.5">
+              <div className="grid grid-cols-2 gap-1.5">
                 {[
                   { key: 'calendar', icon: CalendarDays, label: 'Calendar', meta: (worldClock && worldCalendar && formatWorldDate(worldCalendar, worldClock)) || worldCalendar?.name || 'Not set up' },
                   { key: 'facts', icon: BookCheck, label: 'Facts', meta: String(factCount || 0) },
+                  { key: 'rules', icon: Scale, label: 'Rules', meta: rulesMeta || 'Not set up' },
                   { key: 'types', icon: LayoutTemplate, label: 'Entity types', meta: `${TYPE_ORDER.length} types`, open: () => setShowTemplateManager(true) },
                 ].map(link => {
                   const on = surface === link.key;
@@ -2421,7 +2480,16 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       </div>
 
       <div ref={sheetScrollRef} onScroll={(e) => { scrollOffsets.current.sheet = e.currentTarget.scrollTop; }} className="flex-1 min-w-0 overflow-y-auto custom-scrollbar">
-        {surface === 'calendar' ? (
+        {surface === 'rules' ? (
+          <WorldbuildRules
+            workspaceId={workspaceId}
+            api={electronAPI}
+            showToast={showToast}
+            entities={entities}
+            worldName={chat?.title}
+            onOpenCalendar={() => { setSurface('calendar'); setSelected(null); setEditingSection(null); }}
+          />
+        ) : surface === 'calendar' ? (
           <WorldbuildCalendar
             workspaceId={workspaceId}
             api={electronAPI}
@@ -2515,6 +2583,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                       <span className={`font-semibold ${m.soft}`}>{sheetTypeLabel}</span>
                       {sheetVariantLabel && <><span className="text-text-disabled" aria-hidden="true">·</span><span className="text-text-secondary">{sheetVariantLabel}</span></>}
                       {hasLifeStatus && <><span className="text-text-disabled" aria-hidden="true">·</span><StateTag map={STATUS} value={selected.data.status || 'unknown'} /></>}
+                      {rel.isRace?.entity && <><span className="text-text-disabled" aria-hidden="true">·</span><span className="text-text-secondary">{rel.isRace.entity.canonicalName}</span></>}
+                      {playerEntityId && playerEntityId === selected.id && <span className="ml-1 inline-flex h-5.5 items-center gap-1 rounded-full border border-accent/30 px-2 font-medium text-accent"><Gamepad2 aria-hidden="true" className="h-3.5 w-3.5" />You play them</span>}
                     </div>
                     <h1 className="mt-1 line-clamp-2 break-words text-2xl font-bold leading-tight text-text-primary">{selected.canonicalName}</h1>
                     {coverAllowed && locationCover?.inherited && (() => {

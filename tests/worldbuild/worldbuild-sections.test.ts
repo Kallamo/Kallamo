@@ -22,7 +22,7 @@ describe('Worldbuild sheet sections', () => {
 
     expect(individual).toEqual(['details', 'appearance', 'personality', 'lore', 'inv', 'fac', 'rels', 'knowledge']);
     // A species has a shared look worth describing, but no single temperament.
-    expect(group).toEqual(['details', 'appearance', 'lore']);
+    expect(group).toEqual(['details', 'appearance', 'lore', 'members']);
     expect(variantsOf('Creatures')).toEqual(['individual', 'group']);
     expect(variantsOf('Characters')).toEqual([]);
   });
@@ -52,7 +52,7 @@ describe('Worldbuild sheet sections', () => {
     }
     expect(templateSections('Characters').map(section => section.id)).toEqual(['identity', 'appearance', 'personality', 'lore']);
     expect(templateSections('Factions').map(section => section.id)).toEqual(['desc', 'lore']);
-    expect(templateSections('Creatures').map(section => section.id)).toEqual(['details', 'appearance', 'personality', 'lore']);
+    expect(templateSections('Creatures').map(section => section.id)).toEqual(['details', 'appearance', 'personality', 'lore', 'members']);
   });
 
   test('templates saved against the old section ids keep pointing at a real section', () => {

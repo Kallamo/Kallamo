@@ -59,6 +59,7 @@ export const TYPE_SECTIONS = {
     section('appearance', 'Appearance'),
     section('personality', 'Personality', 'data', { variant: 'individual' }),
     section('lore', 'Lore'),
+    section('members', 'Known members', 'data', { variant: 'group', derived: true }),
     section('inv', 'Inventory', 'inventory', { variant: 'individual' }),
     // A specific being can belong to a group the same way a person can: a bonded mount,
     // a familiar, a dragon that rules a cult. Only the species-wide shape cannot.
