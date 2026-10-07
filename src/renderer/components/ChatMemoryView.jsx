@@ -1417,7 +1417,7 @@ export default function ChatMemoryView({
                   aria-selected={selected}
                   onClick={() => setActiveFilter(value)}
                   className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-sm font-medium transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-                    selected ? 'bg-surface-hover text-text-primary' : 'text-text-muted hover:bg-white/[0.03] hover:text-text-primary'
+                    selected ? 'bg-surface-hover text-text-primary' : 'text-text-muted hover:bg-tint/[0.03] hover:text-text-primary'
                   }`}
                 >
                   {dot && <span className={`h-[0.4375rem] w-[0.4375rem] rounded-full ${dot}`} aria-hidden="true" />}
@@ -1462,7 +1462,7 @@ export default function ChatMemoryView({
             </div>
           ) : combinedBlocks.length === 0 ? (
             <div className="flex flex-col items-center gap-2.5 rounded-card border border-border-subtle glass-panel px-6 py-10 text-center">
-              <span className="flex h-11 w-11 items-center justify-center rounded-control bg-white/5"><Database className="h-5 w-5 text-text-muted" /></span>
+              <span className="flex h-11 w-11 items-center justify-center rounded-control bg-tint/5"><Database className="h-5 w-5 text-text-muted" /></span>
               <span className="text-[0.9375rem] font-semibold text-text-primary">No memory yet</span>
               <span className="max-w-xs text-sm leading-relaxed text-text-muted">Write a note or upload a file. Summaries appear here as the chat grows.</span>
               <Button icon={Plus} onClick={() => setAddDropdownOpen(true)} className="mt-1">Add</Button>
@@ -1625,7 +1625,7 @@ export default function ChatMemoryView({
               {simHasResults && (
                 <div className="flex flex-col gap-2.5 select-text">
                   {simResults.isAgenticApplied && (
-                    <div className="flex flex-col gap-0.5 rounded-control border border-border-subtle bg-white/[0.03] px-3 py-2.5">
+                    <div className="flex flex-col gap-0.5 rounded-control border border-border-subtle bg-tint/[0.03] px-3 py-2.5">
                       <span className="text-xs text-text-subtle">Searched as</span>
                       <span className="text-sm text-text-primary">"{simResults.searchQuery}"</span>
                     </div>
@@ -1679,7 +1679,7 @@ export default function ChatMemoryView({
                   disabled={savingSnippet}
                 />
               ) : (
-                <div className="flex items-start gap-2 rounded-control border border-border-subtle bg-white/[0.03] px-3 py-2.5">
+                <div className="flex items-start gap-2 rounded-control border border-border-subtle bg-tint/[0.03] px-3 py-2.5">
                   <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-text-subtle" aria-hidden="true" />
                   <span className="text-xs leading-relaxed text-text-muted">This chunk comes from a file, so its title and mode follow the file. Your edit is marked as manual and survives re-indexing.</span>
                 </div>

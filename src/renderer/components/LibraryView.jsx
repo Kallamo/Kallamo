@@ -1,8 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { copyText } from '../utils/clipboard';
-import { ArrowLeft, Plus, Trash2, Database, Workflow, Play, Copy, AlertTriangle, Download, Variable, Pencil, Upload } from 'lucide-react';
-import { AiGlyph } from './ui/glyphs';
 import ProfileModal from './modals/ProfileModal';
 import WorkflowModal from './modals/WorkflowModal';
 import DeleteModal from './modals/DeleteModal';
@@ -11,8 +9,10 @@ import VariableModal from './modals/VariableModal';
 import ExportProfileModal from './modals/ExportProfileModal';
 import ExportWorkflowModal from './modals/ExportWorkflowModal';
 import ImportProgressModal from './modals/ImportProgressModal';
-import Button from './ui/Button';
-import EmptyState from './ui/EmptyState';
+import { ProfileAvatar } from './modals/ProfileModal';
+import { ReedPen } from '../logo';
+import { PROFILE_STARTERS, ProfilesIntro, VariablesIntro, WorkflowsIntro } from '../features/library/LibraryIntros';
+import { LibraryRail, RailItem, RailEmpty, ProfileDetail, WorkflowDetail, VariableDetail } from '../features/library/LibraryInspector';
 
 export default function LibraryView() {
   const { 
@@ -23,19 +23,22 @@ export default function LibraryView() {
     handleSaveProfile,
     workflows,
     setWorkflows,
+    handleSaveWorkflow,
     handleDeleteWorkflow,
     apiProfiles,
     electronAPI,
     showToast,
     variables,
     handleSaveVariable,
-    handleDeleteVariable
+    handleDeleteVariable,
+    chats
   } = useApp();
 
   const [activeTab, setActiveTab] = useState('profiles'); // 'profiles' | 'workflows' | 'variables'
   
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [profileToEdit, setProfileToEdit] = useState(null);
+  const [profileModalTab, setProfileModalTab] = useState('rules');
   const [showKbManager, setShowKbManager] = useState(false);
   const [showWorkflowModal, setShowWorkflowModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
@@ -45,6 +48,8 @@ export default function LibraryView() {
   const [workflowToEdit, setWorkflowToEdit] = useState(null);
   const [showVariableModal, setShowVariableModal] = useState(false);
   const [variableToEdit, setVariableToEdit] = useState(null);
+  const [variablePreset, setVariablePreset] = useState(null);
+  const [profilePreset, setProfilePreset] = useState(null);
 
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null); // { type: 'profile'|'workflow'|'variable', id, name }
@@ -52,23 +57,11 @@ export default function LibraryView() {
   const [importStatus, setImportStatus] = useState('');
   const [isImporting, setIsImporting] = useState(false);
   const [importType, setImportType] = useState('profile'); // 'profile' | 'workflow'
+  const [searches, setSearches] = useState({});
+  const [selected, setSelected] = useState({});
 
-  const triggerDeleteProfile = (e, profile) => {
-    e.stopPropagation();
-    setDeleteTarget({ type: 'profile', id: profile.id, name: profile.name });
-    setShowDeleteModal(true);
-  };
-
-
-  const triggerDeleteWorkflow = (e, workflow) => {
-    e.stopPropagation();
-    setDeleteTarget({ type: 'workflow', id: workflow.id, name: workflow.name });
-    setShowDeleteModal(true);
-  };
-
-  const triggerDeleteVariable = (e, variable) => {
-    e.stopPropagation();
-    setDeleteTarget({ type: 'variable', id: variable.id, name: variable.name });
+  const askDelete = (type, item) => {
+    setDeleteTarget({ type, id: item.id, name: item.name });
     setShowDeleteModal(true);
   };
 
@@ -85,23 +78,42 @@ export default function LibraryView() {
     setDeleteTarget(null);
   };
 
-  const openNewVariable = () => {
+  // Editors open in the right pane, one at a time.
+  const closeEditors = () => {
+    setShowProfileModal(false);
+    setShowWorkflowModal(false);
+    setShowVariableModal(false);
+  };
+
+  const openNewVariable = (preset = null) => {
+    closeEditors();
+    setActiveTab('variables');
     setVariableToEdit(null);
+    setVariablePreset(preset);
     setShowVariableModal(true);
   };
 
   const openEditVariable = (variable) => {
+    closeEditors();
     setVariableToEdit(variable);
     setShowVariableModal(true);
   };
 
-  const openNewProfile = () => {
+  const openNewProfile = (preset = null) => {
+    closeEditors();
+    setActiveTab('profiles');
     setProfileToEdit(null);
+    setProfilePreset(preset);
+    setProfileModalTab('rules');
     setShowProfileModal(true);
   };
 
-  const openEditProfile = (profile) => {
+  const openEditProfile = (profile, tab = 'rules') => {
+    closeEditors();
+    setActiveTab('profiles');
+    setSelected(prev => ({ ...prev, profiles: profile.id }));
     setProfileToEdit(profile);
+    setProfileModalTab(tab);
     setShowProfileModal(true);
   };
 
@@ -232,403 +244,286 @@ export default function LibraryView() {
   };
 
   const openNewWorkflow = () => {
+    closeEditors();
     setWorkflowToEdit(null);
     setShowWorkflowModal(true);
   };
 
   const openEditWorkflow = (workflow) => {
+    closeEditors();
     setWorkflowToEdit(workflow);
     setShowWorkflowModal(true);
   };
 
-  return (
-    <div className="flex flex-col w-full h-full px-8 pb-8 pt-6 relative bg-[#011419] overflow-hidden select-none">
-      
-      {/* Back button and Tabs switcher */}
-      <div className="flex items-center justify-between mb-8 w-full max-w-6xl mx-auto shrink-0 mt-4">
-        <button 
-          onClick={() => setCurrentView('dashboard')}
-          className="p-2 text-gray-400 hover:text-white hover:bg-[#0a161d] rounded-lg border border-transparent hover:border-gray-800 transition-colors flex items-center space-x-2 cursor-pointer font-medium"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          <span className="text-sm font-semibold">Back to Chats</span>
-        </button>
+  const profilesById = new Map(writingProfiles.map(profile => [profile.id, profile]));
+  const profileOf = id => profilesById.get(id);
+  const parseIds = value => {
+    try {
+      const list = typeof value === 'string' ? JSON.parse(value || '[]') : (value || []);
+      return Array.isArray(list) ? list : [];
+    } catch {
+      return [];
+    }
+  };
+  const chatsWith = (field, id) => chats.filter(chat => parseIds(chat[field]).includes(id));
+  const stepsOf = workflow => parseIds(workflow.steps);
+  const query = (searches[activeTab] || '').trim().toLowerCase();
+  const matches = (...fields) => !query || fields.some(field => (field || '').toLowerCase().includes(query));
 
-        <div className="flex bg-[#0a161d] border border-gray-800 rounded-lg p-1 space-x-1 shadow-lg mx-auto relative right-6">
-          <button 
-            onClick={() => setActiveTab('profiles')}
-            className={`px-6 py-2 rounded-md text-sm font-semibold transition-all cursor-pointer ${
-              activeTab === 'profiles' 
-                ? 'bg-[#1a2d32] text-white shadow-sm' 
-                : 'text-gray-500 hover:text-gray-300'
-            }`}
-          >
-            AI Profiles
-          </button>
-          <button 
-            onClick={() => setActiveTab('workflows')}
-            className={`px-6 py-2 rounded-md text-sm font-semibold transition-all cursor-pointer ${
-              activeTab === 'workflows' 
-                ? 'bg-[#1a2d32] text-white shadow-sm' 
-                : 'text-gray-500 hover:text-gray-300'
-            }`}
-          >
-            Agent Workflows
-          </button>
-          <button 
-            onClick={() => setActiveTab('variables')}
-            className={`px-6 py-2 rounded-md text-sm font-semibold transition-all cursor-pointer ${
-              activeTab === 'variables' 
-                ? 'bg-[#1a2d32] text-white shadow-sm' 
-                : 'text-gray-500 hover:text-gray-300'
-            }`}
-          >
-            Variables
-          </button>
-        </div>
-      </div>
+  const shownProfiles = writingProfiles.filter(profile => matches(profile.name, profile.description, profile.model));
+  const shownWorkflows = workflows.filter(workflow => matches(workflow.name, ...stepsOf(workflow).map(step => profileOf(step.profileId)?.name)));
+  const shownVariables = variables
+    .filter(variable => matches(variable.name, variable.key, variable.description, variable.value))
+    .sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
 
-      {/* Main Tab Views */}
-      <div className="w-full max-w-6xl mx-auto h-full flex flex-col overflow-hidden pb-6">
-        
-        {/* --- AI Profiles Tab --- */}
-        {activeTab === 'profiles' && (
-          <div className="w-full h-full flex flex-col overflow-hidden">
-            <div className="flex justify-between items-end mb-6 shrink-0">
-              <div>
-                <h2 className="text-2xl font-bold text-white tracking-wide">AI Profiles</h2>
-                <p className="text-gray-400 text-sm mt-1">Manage and edit your AI personalities and Knowledge Bases.</p>
-              </div>
-              <div className="flex items-center space-x-3">
-                <button 
-                  onClick={handleImportProfile}
-                  className="flex items-center space-x-2 border border-gray-800 hover:border-accent hover:bg-accent/5 text-gray-300 hover:text-white px-4 py-2 rounded-md transition-all active:scale-95 text-sm cursor-pointer font-bold animate-in duration-200"
-                >
-                  <Upload className="w-4 h-4 text-accent" />
-                  <span>Import</span>
-                </button>
-                <button 
-                  onClick={openNewProfile}
-                  className="flex items-center space-x-2 bg-accent hover:brightness-110 text-[#011419] font-bold px-4 py-2 rounded-md transition-all shadow-sm active:scale-95 text-sm cursor-pointer"
-                >
-                  <Plus className="w-4 h-4" strokeWidth={2.5} />
-                  <span>New Profile</span>
-                </button>
-              </div>
-            </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 overflow-y-auto custom-scrollbar pb-8 pr-2">
-              {writingProfiles.length === 0 ? (
-                <EmptyState className="col-span-full" icon={AiGlyph} title="No AI profiles yet" subtitle="Create a reusable voice, model connection, and behavior rule set." action={<Button icon={Plus} onClick={openNewProfile}>New Profile</Button>} />
-              ) : (
-                writingProfiles.map(profile => {
-                  const linkedApi = apiProfiles.find(ap => ap.id === profile.apiProfileId);
-                  const apiName = linkedApi ? linkedApi.name : 'Unknown API';
+  const pick = (list, tab) => list.find(item => item.id === selected[tab]) || list[0] || null;
+  const currentProfile = pick(shownProfiles, 'profiles');
+  const currentWorkflow = pick(shownWorkflows, 'workflows');
+  const currentVariable = pick(shownVariables, 'variables');
+  const select = (tab, id) => { closeEditors(); setSelected(prev => ({ ...prev, [tab]: id })); };
 
-                  return (
-                    <div 
-                      key={profile.id}
-                      className="bg-[#111f2e] border border-gray-800/80 rounded-xl p-5 hover:border-gray-600 transition-all group flex flex-col h-[180px] relative overflow-hidden shadow-lg hover:-translate-y-1"
-                    >
-                      {/* Accent color bar */}
-                      <div className="absolute top-0 left-0 right-0 h-1.5" style={{ backgroundColor: profile.color }}></div>
-                      
-                      {/* Title & Actions */}
-                      <div className="flex justify-between items-start mb-2 mt-1 w-full">
-                        <div className="flex items-center space-x-2 flex-1 min-w-0 pr-2">
-                          <h3 className="text-white font-bold text-lg truncate" title={profile.name}>{profile.name}</h3>
-                          {profile.needsSetup && (
-                            <div className="flex items-center shrink-0">
-                              <AlertTriangle
-                                className="w-4 h-4 text-amber-500 cursor-help"
-                                data-tooltip="No API connection, model, or credentials linked. This profile cannot generate responses until configured."
-                              />
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex space-x-1 z-10 hover-reveal shrink-0">
-                          <button 
-                            onClick={() => handleExportProfileClick(profile)}
-                            className="text-gray-400 hover:text-accent hover:bg-accent/10 p-1.5 bg-[#0a141d] rounded-md transition-colors cursor-pointer" 
-                            title="Export Profile"
-                          >
-                            <Download className="w-3.5 h-3.5" />
-                          </button>
-                          <button 
-                            onClick={() => openManageKb(profile)}
-                            className="text-gray-400 hover:text-accent hover:bg-accent/10 p-1.5 bg-[#0a141d] rounded-md transition-colors cursor-pointer" 
-                            title="Manage Knowledge Base"
-                          >
-                            <Database className="w-3.5 h-3.5" />
-                          </button>
-                          <button 
-                            onClick={() => openEditProfile(profile)}
-                            className="text-gray-400 hover:text-white p-1.5 bg-[#0a141d] rounded-md transition-colors cursor-pointer" 
-                            title="Edit Profile"
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
-                          <button 
-                            onClick={(e) => triggerDeleteProfile(e, profile)}
-                            className="text-gray-500 hover:text-status-danger p-1.5 bg-[#0a141d] rounded-md transition-colors cursor-pointer" 
-                            title="Delete Profile"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
+  const tabs = [
+    { id: 'profiles', label: 'AI profiles', count: writingProfiles.length },
+    { id: 'workflows', label: 'Workflows', count: workflows.length },
+    { id: 'variables', label: 'Variables', count: variables.length },
+  ];
+  const rail = {
+    profiles: { newLabel: 'New profile', onNew: () => openNewProfile(), onImport: handleImportProfile },
+    workflows: { newLabel: 'New workflow', onNew: openNewWorkflow, onImport: handleImportWorkflow },
+    variables: { newLabel: 'New variable', onNew: () => openNewVariable(), onImport: null },
+  }[activeTab];
 
-                      {/* Description */}
-                      <p className="text-sm text-gray-400 line-clamp-2 mb-auto leading-relaxed">
-                        {profile.description || 'No description provided.'}
-                      </p>
+  const duplicateProfile = async (profile) => {
+    // The copy starts without the original's knowledge files, which live in the original's own folder.
+    const { needsSetup, ...rest } = profile;
+    const copy = { ...rest, id: 'profile_' + Math.random().toString(36).substr(2, 9), name: `${profile.name} copy`, knowledgeFiles: '[]' };
+    await handleSaveProfile(copy);
+    setSelected(prev => ({ ...prev, profiles: copy.id }));
+    showToast(`“${copy.name}” created. Knowledge files were not copied.`, 'success');
+  };
 
-                      {/* Model & API Info */}
-                      <div className="mt-4 flex items-center justify-between text-xs font-semibold">
-                        <span className="bg-[#1a2d3d] text-gray-300 px-2.5 py-1 rounded-md border border-gray-700/50 truncate max-w-[140px]">{apiName}</span>
-                        <span className="text-gray-500 truncate max-w-[140px]" title={profile.model}>{profile.model || 'No model'}</span>
-                      </div>
-                    </div>
-                  );
-                })
+  const duplicateWorkflow = async (workflow) => {
+    const copy = { ...workflow, id: 'wf_' + Math.random().toString(36).substr(2, 9), name: `${workflow.name} copy` };
+    await handleSaveWorkflow(copy);
+    setSelected(prev => ({ ...prev, workflows: copy.id }));
+    showToast(`“${copy.name}” created.`, 'success');
+  };
+
+  const knowledgeCount = profile => parseIds(profile.knowledgeFiles).length;
+  const variableUses = variable => {
+    const tag = new RegExp(`\\{\\{\\s*${variable.key}\\s*\\}\\}`);
+    return [
+      ...writingProfiles
+        .filter(profile => tag.test(profile.systemPrompt || '') || tag.test(profile.agenticPrompt || ''))
+        .map(profile => ({ key: `p-${profile.id}`, name: profile.name, color: profile.color || '#FBCB2D' })),
+      ...workflows
+        .filter(workflow => stepsOf(workflow).some(step => tag.test(step.prompt || '')))
+        .map(workflow => ({ key: `w-${workflow.id}`, name: workflow.name })),
+    ];
+  };
+
+  const newItem = label => (
+    <RailItem active title={label} leading={<span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[0.5625rem] border border-dashed border-tint/20 text-text-muted">+</span>} />
+  );
+
+  const railList = {
+    profiles: (
+      <>
+        {shownProfiles.map(profile => (
+          <RailItem
+            key={profile.id}
+            active={showProfileModal ? profileToEdit?.id === profile.id : currentProfile?.id === profile.id}
+            onClick={() => select('profiles', profile.id)}
+            leading={<ProfileAvatar color={profile.color || '#FBCB2D'} size={32} muted={profile.needsSetup} />}
+            title={profile.name}
+            meta={profile.needsSetup
+              ? <span className="text-xs font-semibold text-status-setup">Needs a model</span>
+              : <span className="font-mono text-[0.6875rem] text-text-subtle">{profile.model}</span>}
+          />
+        ))}
+        {showProfileModal && !profileToEdit && newItem('New profile')}
+        {writingProfiles.length > 0 && shownProfiles.length === 0 && <RailEmpty>Nothing matches the search.</RailEmpty>}
+        {writingProfiles.length === 0 && !showProfileModal && <RailEmpty>No profiles yet.</RailEmpty>}
+      </>
+    ),
+    workflows: (
+      <>
+        {shownWorkflows.map(workflow => {
+          const steps = stepsOf(workflow);
+          const blocked = steps.some(step => !profileOf(step.profileId) || profileOf(step.profileId).needsSetup);
+          return (
+            <RailItem
+              key={workflow.id}
+              active={showWorkflowModal ? workflowToEdit?.id === workflow.id : currentWorkflow?.id === workflow.id}
+              onClick={() => select('workflows', workflow.id)}
+              title={workflow.name}
+              meta={(
+                <span className="mt-0.5 flex items-center gap-1.5">
+                  {steps.slice(0, 6).map((step, index) => {
+                    const profile = profileOf(step.profileId);
+                    return <ReedPen key={index} size={13} color={profile?.color || 'currentColor'} className={profile ? '' : 'text-text-disabled'} opacity={profile && !profile.needsSetup ? 1 : 0.4} />;
+                  })}
+                  {blocked
+                    ? <span className="ml-1 text-xs font-semibold text-status-setup">A step has no model</span>
+                    : <span className="caption ml-1">{steps.length} step{steps.length === 1 ? '' : 's'}</span>}
+                </span>
               )}
-            </div>
-          </div>
-        )}
+            />
+          );
+        })}
+        {showWorkflowModal && !workflowToEdit && newItem('New workflow')}
+        {workflows.length > 0 && shownWorkflows.length === 0 && <RailEmpty>Nothing matches the search.</RailEmpty>}
+        {workflows.length === 0 && !showWorkflowModal && <RailEmpty>No workflows yet.</RailEmpty>}
+      </>
+    ),
+    variables: (
+      <>
+        {shownVariables.map(variable => (
+          <RailItem
+            key={variable.id}
+            active={showVariableModal ? variableToEdit?.id === variable.id : currentVariable?.id === variable.id}
+            onClick={() => select('variables', variable.id)}
+            title={variable.name}
+            meta={<span className="font-mono text-[0.6875rem] text-accent">{`{{${variable.key}}}`}</span>}
+          />
+        ))}
+        {showVariableModal && !variableToEdit && newItem('New variable')}
+        {variables.length > 0 && shownVariables.length === 0 && <RailEmpty>Nothing matches the search.</RailEmpty>}
+        {variables.length === 0 && !showVariableModal && <RailEmpty>No variables yet.</RailEmpty>}
+      </>
+    ),
+  }[activeTab];
 
-        {/* --- Workflows Tab --- */}
-        {activeTab === 'workflows' && (
-          <div className="w-full h-full flex flex-col overflow-hidden">
-            <div className="flex justify-between items-end mb-6 shrink-0">
-              <div>
-                <h2 className="text-2xl font-bold text-white tracking-wide">Agent Workflows</h2>
-                <p className="text-gray-400 text-sm mt-1">Build step-by-step logic chains to automate complex generations.</p>
-              </div>
-              <div className="flex items-center space-x-3">
-                <button 
-                  onClick={handleImportWorkflow}
-                  className="flex items-center space-x-2 border border-gray-800 hover:border-accent hover:bg-accent/5 text-gray-300 hover:text-white px-4 py-2 rounded-md transition-all active:scale-95 text-sm cursor-pointer font-bold animate-in duration-200"
-                >
-                  <Upload className="w-4 h-4 text-accent" />
-                  <span>Import</span>
-                </button>
-                <button 
-                  onClick={openNewWorkflow}
-                  className="flex items-center space-x-2 bg-accent hover:brightness-110 text-[#011419] font-bold px-4 py-2 rounded-md transition-all shadow-sm active:scale-95 text-sm cursor-pointer"
-                >
-                  <Plus className="w-4 h-4" strokeWidth={2.5} />
-                  <span>New Workflow</span>
-                </button>
-              </div>
-            </div>
+  const intro = children => <div className="mx-auto max-w-[60rem] px-12 pb-16 pt-12">{children}</div>;
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 overflow-y-auto custom-scrollbar pb-8 pr-2">
-              {workflows.length === 0 ? (
-                <EmptyState className="col-span-full" icon={Workflow} title="No workflows yet" subtitle="Chain AI Profiles into a repeatable generation process." action={<Button icon={Plus} onClick={openNewWorkflow}>New Workflow</Button>} />
-              ) : (
-                workflows.map(wf => {
-                  let stepsList = [];
-                  try {
-                    stepsList = typeof wf.steps === 'string' ? JSON.parse(wf.steps) : (wf.steps || []);
-                  } catch (e) {
-                    stepsList = [];
-                  }
-
-                  // Find profile names for the chain
-                  const stepNames = stepsList.map(step => {
-                    const prof = writingProfiles.find(p => p.id === step.profileId);
-                    return prof ? prof.name : 'Unknown';
-                  });
-
-                  return (
-                    <div 
-                      key={wf.id}
-                      className="bg-[#111f2e] border border-gray-800/80 rounded-xl p-5 hover:border-gray-600 transition-all group flex flex-col min-h-[185px] h-auto relative overflow-hidden shadow-lg hover:-translate-y-1 pb-5"
-                    >
-                      {/* Accent color bar (App Theme Color for workflows) */}
-                      <div className="absolute top-0 left-0 right-0 h-1.5 bg-accent"></div>
-                      
-                      {/* Title & Actions */}
-                      <div className="flex justify-between items-start mb-2 mt-1 w-full overflow-hidden">
-                        <h3 className="text-white font-bold text-lg truncate pr-2 flex-1 min-w-0" title={wf.name}>{wf.name}</h3>
-                        <div className="flex space-x-1 z-10 hover-reveal shrink-0">
-                          <button 
-                            onClick={() => handleExportWorkflowClick(wf)}
-                            className="text-gray-400 hover:text-accent hover:bg-accent/10 p-1.5 bg-[#0a141d] rounded-md transition-colors cursor-pointer" 
-                            title="Export Workflow"
-                          >
-                            <Download className="w-3.5 h-3.5" />
-                          </button>
-                          <button 
-                            onClick={() => openEditWorkflow(wf)}
-                            className="text-gray-400 hover:text-white p-1.5 bg-[#0a141d] rounded-md transition-colors cursor-pointer" 
-                            title="Edit Workflow"
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
-                          <button 
-                            onClick={(e) => triggerDeleteWorkflow(e, wf)}
-                            className="text-gray-500 hover:text-status-danger p-1.5 bg-[#0a141d] rounded-md transition-colors cursor-pointer" 
-                            title="Delete Workflow"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Chain visualization */}
-                      <div className="flex flex-col mb-auto">
-                        <span className="text-[0.625rem] text-gray-500 uppercase tracking-wider font-semibold mb-1">Execution Chain</span>
-                        <div className="flex items-center flex-wrap gap-1 text-xs text-gray-300">
-                          {stepNames.length === 0 ? (
-                            <span className="text-gray-500 italic">No steps defined</span>
-                          ) : (
-                            stepNames.map((name, sIdx) => (
-                              <React.Fragment key={sIdx}>
-                                <span className="bg-[#1a2d3d] px-2 py-0.5 rounded border border-gray-700/40 truncate max-w-[90px]">{name}</span>
-                                {sIdx < stepNames.length - 1 && <span className="text-accent text-[0.5625rem]">→</span>}
-                              </React.Fragment>
-                            ))
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Steps Indicator */}
-                      <div className="mt-4 flex items-center justify-between text-xs font-semibold">
-                        <span className="text-gray-500 flex items-center space-x-1">
-                          <Play className="w-3 h-3 text-accent" fill="currentColor" />
-                          <span>{stepsList.length} Steps</span>
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* --- Variables Tab --- */}
-        {activeTab === 'variables' && (
-          <div className="w-full h-full flex flex-col overflow-hidden">
-            <div className="flex justify-between items-end mb-6 shrink-0">
-              <div>
-                <h2 className="text-2xl font-bold text-white tracking-wide">Dynamic Variables</h2>
-                <p className="text-gray-400 text-sm mt-1">Define reusable prompt snippets referenced via double brackets (e.g. &#123;&#123;my_variable&#125;&#125;).</p>
-              </div>
-              <button 
-                onClick={openNewVariable}
-                className="flex items-center space-x-2 bg-accent hover:brightness-110 text-[#011419] font-bold px-4 py-2 rounded-md transition-all shadow-sm active:scale-95 text-sm cursor-pointer"
-              >
-                <Plus className="w-4 h-4" strokeWidth={2.5} />
-                <span>New Variable</span>
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 overflow-y-auto custom-scrollbar pb-8 pr-2">
-              {variables.length === 0 ? (
-                <EmptyState className="col-span-full" icon={Variable} title="No variables yet" subtitle="Create reusable values for prompts and workflow steps." action={<Button icon={Plus} onClick={openNewVariable}>New Variable</Button>} />
-              ) : (
-                variables.map(v => (
-                  <div 
-                    key={v.id}
-                    className="bg-[#111f2e] border border-gray-800/80 rounded-xl p-5 hover:border-gray-600 transition-all group flex flex-col h-[200px] relative overflow-hidden shadow-lg hover:-translate-y-1"
-                  >
-                    <div className="absolute top-0 left-0 right-0 h-1.5 bg-accent/80"></div>
-                    
-                    <div className="flex justify-between items-start mb-2 mt-1">
-                      <h3 className="text-white font-bold text-sm truncate pr-2" title={v.name}>{v.name}</h3>
-                      <div className="flex space-x-1 z-10 hover-reveal">
-                        <button 
-                          onClick={() => openEditVariable(v)}
-                          className="text-gray-400 hover:text-white p-1.5 bg-[#0a141d] rounded-md transition-colors cursor-pointer" 
-                          title="Edit Variable"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
-                        <button 
-                          onClick={(e) => triggerDeleteVariable(e, v)}
-                          className="text-gray-500 hover:text-status-danger p-1.5 bg-[#0a141d] rounded-md transition-colors cursor-pointer" 
-                          title="Delete Variable"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between bg-[#051116] border border-gray-800/60 rounded px-2.5 py-1 mt-1 shrink-0">
-                      <span className="font-mono text-accent text-[0.6875rem] font-bold select-all">&#123;&#123;{v.key}&#125;&#125;</span>
-                      <button 
-                        onClick={() => {
-                          copyText(`{{${v.key}}}`);
-                          showToast("Variable tag copied to clipboard!", "success");
-                        }}
-                        className="text-gray-500 hover:text-white p-1 transition-colors cursor-pointer"
-                        title="Copy variable tag"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-
-                    <p className="caption mt-2 truncate italic shrink-0" title={v.description}>{v.description || 'No description'}</p>
-                    
-                    <div className="mt-2 p-2 rounded bg-black/25 border border-gray-800/40 text-[0.625rem] font-mono text-gray-400 overflow-y-auto max-h-[60px] custom-scrollbar flex-1 whitespace-pre-wrap select-text">
-                      {v.value}
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        )}
-
-      </div>
-
-      {/* Modals wiring */}
-      {showProfileModal && (
+  let pane = null;
+  if (activeTab === 'profiles') {
+    if (showProfileModal) {
+      pane = (
         <ProfileModal
+          key={profileToEdit?.id || 'new'}
+          inline
           profile={profileToEdit}
-          onClose={() => {
-            setShowProfileModal(false);
-            setProfileToEdit(null);
-          }}
+          preset={profilePreset}
+          starters={PROFILE_STARTERS}
+          initialTab={profileModalTab}
+          onClose={() => { setShowProfileModal(false); setProfileToEdit(null); setProfilePreset(null); }}
+          onDelete={target => { setShowProfileModal(false); setProfileToEdit(null); askDelete('profile', target); }}
           onSave={(savedProfile, { isNew } = {}) => {
+            setSelected(prev => ({ ...prev, profiles: savedProfile.id }));
             if (isNew) {
               showToast(
-                `Profile "${savedProfile.name}" created. Give it documents and memory in the Knowledge Base Manager.`,
+                `Profile "${savedProfile.name}" created. Give it documents and memory in its knowledge base.`,
                 'success',
                 8000,
-                { label: 'Open Knowledge Base Manager', onClick: () => openManageKb(savedProfile) }
+                { label: 'Open knowledge base', onClick: () => openManageKb(savedProfile) }
               );
             }
           }}
         />
-      )}
-
-      {showWorkflowModal && (
-        <WorkflowModal 
+      );
+    } else if (currentProfile) {
+      pane = (
+        <ProfileDetail
+          key={currentProfile.id}
+          profile={currentProfile}
+          apiName={apiProfiles.find(ap => ap.id === currentProfile.apiProfileId)?.name || 'Connection'}
+          workspaces={chatsWith('activeProfiles', currentProfile.id).map(chat => chat.title)}
+          workflows={workflows.filter(workflow => stepsOf(workflow).some(step => step.profileId === currentProfile.id))}
+          knowledgeCount={knowledgeCount(currentProfile)}
+          onEdit={() => openEditProfile(currentProfile)}
+          onSetUp={() => openEditProfile(currentProfile)}
+          onSearchInstructions={() => openEditProfile(currentProfile, 'search')}
+          onKnowledge={() => openManageKb(currentProfile)}
+          onDuplicate={() => duplicateProfile(currentProfile)}
+          onExport={() => handleExportProfileClick(currentProfile)}
+          onDelete={() => askDelete('profile', currentProfile)}
+        />
+      );
+    } else if (writingProfiles.length === 0) {
+      pane = intro(<ProfilesIntro onNew={() => openNewProfile()} onImport={handleImportProfile} onStart={openNewProfile} />);
+    }
+  } else if (activeTab === 'workflows') {
+    if (showWorkflowModal) {
+      pane = (
+        <WorkflowModal
+          key={workflowToEdit?.id || 'new'}
+          inline
           workflow={workflowToEdit}
-          onClose={() => {
-            setShowWorkflowModal(false);
-            setWorkflowToEdit(null);
-          }}
+          onSave={saved => setSelected(prev => ({ ...prev, workflows: saved.id }))}
+          onClose={() => { setShowWorkflowModal(false); setWorkflowToEdit(null); }}
         />
-      )}
+      );
+    } else if (currentWorkflow) {
+      pane = (
+        <WorkflowDetail
+          key={currentWorkflow.id}
+          workflow={currentWorkflow}
+          steps={stepsOf(currentWorkflow)}
+          profileOf={profileOf}
+          uses={chatsWith('activeWorkflows', currentWorkflow.id).length}
+          onEdit={() => openEditWorkflow(currentWorkflow)}
+          onSetUp={profile => openEditProfile(profile)}
+          onExport={() => handleExportWorkflowClick(currentWorkflow)}
+          onDuplicate={() => duplicateWorkflow(currentWorkflow)}
+          onDelete={() => askDelete('workflow', currentWorkflow)}
+        />
+      );
+    } else if (workflows.length === 0) {
+      pane = intro(<WorkflowsIntro onNew={openNewWorkflow} onImport={handleImportWorkflow} />);
+    }
+  } else if (showVariableModal) {
+    pane = (
+      <VariableModal
+        key={variableToEdit?.id || `new-${variablePreset?.label || ''}`}
+        inline
+        variable={variableToEdit}
+        preset={variablePreset}
+        onSave={async variable => {
+          await handleSaveVariable(variable);
+          if (variable?.id) setSelected(prev => ({ ...prev, variables: variable.id }));
+        }}
+        onClose={() => { setShowVariableModal(false); setVariableToEdit(null); setVariablePreset(null); }}
+      />
+    );
+  } else if (currentVariable) {
+    pane = (
+      <VariableDetail
+        key={currentVariable.id}
+        variable={currentVariable}
+        usedBy={variableUses(currentVariable)}
+        onEdit={() => openEditVariable(currentVariable)}
+        onCopy={() => { copyText(`{{${currentVariable.key}}}`); showToast('Variable tag copied.', 'success'); }}
+        onDelete={() => askDelete('variable', currentVariable)}
+      />
+    );
+  } else if (variables.length === 0) {
+    pane = intro(<VariablesIntro onNew={() => openNewVariable()} onStart={openNewVariable} />);
+  }
 
-      {showVariableModal && (
-        <VariableModal 
-          variable={variableToEdit}
-          onSave={handleSaveVariable}
-          onClose={() => {
-            setShowVariableModal(false);
-            setVariableToEdit(null);
-          }}
-        />
-      )}
+  return (
+    <div className="relative flex h-full w-full overflow-hidden surface-page select-none">
+      <LibraryRail
+        tabs={tabs}
+        activeTab={activeTab}
+        onTab={tab => { closeEditors(); setActiveTab(tab); }}
+        search={searches[activeTab] || ''}
+        onSearch={value => setSearches(prev => ({ ...prev, [activeTab]: value }))}
+        onBack={() => setCurrentView('dashboard')}
+        newLabel={rail.newLabel}
+        onNew={rail.onNew}
+        onImport={rail.onImport}
+      >
+        {railList}
+      </LibraryRail>
+
+      <div className="relative min-w-0 flex-1 overflow-y-auto custom-scrollbar pt-10 [mask-image:linear-gradient(to_bottom,transparent_0,transparent_2.25rem,black_4.25rem)]">
+        {pane || <p className="caption px-14 pt-12">Nothing matches the search.</p>}
+      </div>
 
       {showDeleteModal && (
-        <DeleteModal 
-          title={deleteTarget?.type === 'profile' ? "Delete Profile" : deleteTarget?.type === 'workflow' ? "Delete Workflow" : "Delete Variable"}
+        <DeleteModal
+          title={deleteTarget?.type === 'profile' ? 'Delete profile' : deleteTarget?.type === 'workflow' ? 'Delete workflow' : 'Delete variable'}
           message={`Are you sure you want to permanently delete "${deleteTarget?.name}"?`}
           onConfirm={confirmDelete}
           onClose={() => {
@@ -639,8 +534,13 @@ export default function LibraryView() {
       )}
 
       {showKbManager && (
-        <KbManagerModal 
+        <KbManagerModal
           profile={profileToEdit}
+          onOpenSmartSearch={() => {
+            const target = profileToEdit;
+            setShowKbManager(false);
+            openEditProfile(target, 'search');
+          }}
           onClose={() => {
             setShowKbManager(false);
             setProfileToEdit(null);
@@ -674,10 +574,9 @@ export default function LibraryView() {
         <ImportProgressModal
           progress={importProgress}
           statusText={importStatus}
-          title={importType === 'profile' ? "Importing AI Profile" : "Importing Workflow"}
+          title={importType === 'profile' ? 'Importing AI Profile' : 'Importing Workflow'}
         />
       )}
-
     </div>
   );
 }

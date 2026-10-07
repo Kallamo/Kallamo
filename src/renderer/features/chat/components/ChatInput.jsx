@@ -72,7 +72,7 @@ export default function ChatInput({
             onClick={isGenerating ? onCancel : submit}
             disabled={isDisabled}
             className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-[filter,background-color,transform] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:pointer-events-none disabled:opacity-50 cursor-pointer ${isGenerating
-              ? 'border border-border-strong bg-white/[0.08] text-text-primary hover:bg-danger-solid hover:border-danger-solid hover:text-on-danger'
+              ? 'border border-border-strong bg-tint/[0.08] text-text-primary hover:bg-danger-solid hover:border-danger-solid hover:text-on-danger'
               : 'bg-accent text-on-accent shadow-sm hover:brightness-110'}`}
           >
             {isGenerating ? <Square aria-hidden="true" className="h-3.5 w-3.5 fill-current" /> : <SendHorizontal aria-hidden="true" className="h-4 w-4" />}

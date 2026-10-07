@@ -28,7 +28,7 @@ export default function CleanupDialog({ report, busy, onCancel, onApply }) {
         <p className="text-[0.8125rem] leading-relaxed text-text-secondary"><b className="font-semibold text-text-primary">{report.retired}</b> of {report.scanned} stored records repeat something already there or will not last.</p>
         <div className="flex flex-wrap gap-1.5">
           {reasons.map(([reason, count]) => (
-            <span key={reason} className="inline-flex h-5.5 items-center rounded-md bg-white/[0.06] px-2 text-xs font-medium text-text-secondary">{count} {REASON_LABELS[reason]}</span>
+            <span key={reason} className="inline-flex h-5.5 items-center rounded-md bg-tint/[0.06] px-2 text-xs font-medium text-text-secondary">{count} {REASON_LABELS[reason]}</span>
           ))}
         </div>
         <div className="max-h-60 divide-y divide-border-subtle overflow-y-auto rounded-card border border-border-subtle bg-surface-canvas/50 custom-scrollbar">

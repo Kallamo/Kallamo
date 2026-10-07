@@ -124,7 +124,7 @@ export default function SummaryLogModal({ block, chatId, electronAPI, background
           type="button"
           onClick={onClose}
           aria-label="Close summary"
-          className="absolute right-3.5 top-3.5 flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-surface-canvas/55 text-text-primary backdrop-blur-md hover:bg-surface-canvas/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 cursor-pointer"
+          className="absolute right-3.5 top-3.5 flex h-9 w-9 items-center justify-center rounded-full border border-tint/20 bg-surface-canvas/55 text-text-primary backdrop-blur-md hover:bg-surface-canvas/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 cursor-pointer"
         >
           <X className="h-4 w-4" />
         </button>
@@ -133,11 +133,11 @@ export default function SummaryLogModal({ block, chatId, electronAPI, background
             <span className="inline-flex h-6 items-center gap-1.5 self-start rounded-full border border-mode-history/35 bg-surface-canvas/60 px-2.5 text-xs font-medium text-mode-history backdrop-blur-md">
               <History className="h-3.5 w-3.5" aria-hidden="true" />{isRoleplay ? 'History summary · Roleplay' : 'History summary'}
             </span>
-            <h2 className="truncate text-2xl font-semibold tracking-tight text-text-primary [text-shadow:0_1px_12px_rgb(0_0_0/50%)]">{block?.title}</h2>
+            <h2 className="truncate text-2xl font-semibold tracking-tight text-text-primary [text-shadow:0_1px_12px_color-mix(in_srgb,var(--theme-shade)_50%,transparent)]">{block?.title}</h2>
             <span className="text-sm text-text-secondary tabular-nums">{meta}</span>
           </div>
           {isRoleplay && activeScene?.point?.locationName && (
-            <span className="hidden h-7 shrink-0 items-center gap-1.5 rounded-lg border border-white/15 bg-surface-canvas/60 px-2.5 text-xs text-text-secondary backdrop-blur-md sm:inline-flex">
+            <span className="hidden h-7 shrink-0 items-center gap-1.5 rounded-lg border border-tint/15 bg-surface-canvas/60 px-2.5 text-xs text-text-secondary backdrop-blur-md sm:inline-flex">
               <MapPin className="h-3.5 w-3.5 text-status-success" aria-hidden="true" />Scene in view: {activeScene.point.locationName}
             </span>
           )}
@@ -147,7 +147,7 @@ export default function SummaryLogModal({ block, chatId, electronAPI, background
       <div ref={scrollRef} className="flex-1 overflow-y-auto overscroll-contain custom-scrollbar select-text">
         <div className="flex flex-col gap-5 px-7 pb-8 pt-3">
           {isRoleplay ? (
-            <div className="flex items-start gap-3 rounded-card border border-border-subtle bg-white/[0.03] px-4 py-3">
+            <div className="flex items-start gap-3 rounded-card border border-border-subtle bg-tint/[0.03] px-4 py-3">
               <div className="min-w-0 flex-1">
                 <span className="block text-sm font-semibold text-text-secondary">Recap</span>
                 {block?.summary
@@ -166,7 +166,7 @@ export default function SummaryLogModal({ block, chatId, electronAPI, background
               {block?.summary
                 ? <div className="markdown-content text-[0.9375rem] leading-relaxed text-text-primary" dangerouslySetInnerHTML={{ __html: parseMarkdown(block.summary) }} />
                 : <p className="text-sm italic text-text-muted">No recap was written for this archive. The saved history below is complete and searchable either way.</p>}
-              <div className="flex items-start gap-2 rounded-control border border-border-subtle bg-white/[0.03] px-3 py-2.5">
+              <div className="flex items-start gap-2 rounded-control border border-border-subtle bg-tint/[0.03] px-3 py-2.5">
                 <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-text-subtle" aria-hidden="true" />
                 <span className="text-xs leading-relaxed text-text-muted">This recap is for you. The AI does not read it: it searches the saved messages below and pulls back the passages that matter.</span>
               </div>
@@ -193,7 +193,7 @@ export default function SummaryLogModal({ block, chatId, electronAPI, background
               return (
                 <div key={item.key} data-scene={item.index} className="relative h-[4.75rem] shrink-0 overflow-hidden rounded-card border border-border-default">
                   {image && <img src={fileUrl(image)} alt="" className="absolute inset-0 h-full w-full object-cover" />}
-                  <div className={`absolute inset-0 ${image ? 'bg-gradient-to-r from-surface-canvas/95 via-surface-canvas/75 to-surface-canvas/35' : 'bg-white/[0.03]'}`} />
+                  <div className={`absolute inset-0 ${image ? 'bg-gradient-to-r from-surface-canvas/95 via-surface-canvas/75 to-surface-canvas/35' : 'bg-tint/[0.03]'}`} />
                   <div className="absolute inset-0 flex items-center justify-between gap-4 px-4">
                     <span className="flex min-w-0 flex-col gap-0.5">
                       <span className="flex items-center gap-1.5 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-status-success">

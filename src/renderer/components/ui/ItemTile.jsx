@@ -5,7 +5,7 @@ const TONES = {
   always: 'bg-mode-always/12 text-mode-always',
   searchable: 'bg-mode-searchable/12 text-mode-searchable',
   history: 'bg-mode-history/12 text-mode-history',
-  neutral: 'bg-white/5 text-text-muted',
+  neutral: 'bg-tint/5 text-text-muted',
 };
 
 /** Square icon holder that carries an item's mode colour. */

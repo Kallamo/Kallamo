@@ -14,7 +14,7 @@ export default function CollapsibleSection({ icon: Icon, title, description, tot
         onClick={() => onToggle?.(!open)}
         aria-expanded={open}
         aria-controls={bodyId}
-        className="flex w-full items-center gap-2.5 px-4 py-3 text-left cursor-pointer hover:bg-white/[0.02] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+        className="flex w-full items-center gap-2.5 px-4 py-3 text-left cursor-pointer hover:bg-tint/[0.02] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
       >
         {Icon && <Icon className={`h-4 w-4 shrink-0 ${toneClass}`} aria-hidden="true" />}
         <span className={`text-sm font-semibold ${toneClass}`}>{title}</span>

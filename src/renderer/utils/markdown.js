@@ -26,7 +26,7 @@ export function parseInlineMarkdown(text) {
     let safeText = escapeHTML(text);
     safeText = safeText.replace(/\*\*(.*?)\*\*/g, '<strong class="text-accent font-bold">$1</strong>');
     safeText = safeText.replace(/\*(.*?)\*/g, '<em class="italic text-gray-300">$1</em>');
-    safeText = safeText.replace(/`(.*?)`/g, '<code class="bg-[#1a2d32] text-accent px-1.5 py-0.5 rounded text-xs font-mono border border-gray-700/60" style="display: inline !important; width: auto !important; white-space: normal !important; vertical-align: baseline;">$1</code>');
+    safeText = safeText.replace(/`(.*?)`/g, '<code class="bg-surface-hover text-accent px-1.5 py-0.5 rounded text-xs font-mono border border-gray-700/60" style="display: inline !important; width: auto !important; white-space: normal !important; vertical-align: baseline;">$1</code>');
 
     return safeText;
 }
@@ -60,8 +60,8 @@ export function parseMarkdown(text, lineNumbersEnabled = false) {
         }
 
         const codeWidgetHtml = `
-        <div class="my-4 rounded-lg overflow-hidden bg-[#011419] border border-gray-800 shadow-lg font-sans select-none w-full min-w-0 max-w-full">
-            <div class="flex items-center justify-between px-4 py-2 bg-[#0a161d] border-b border-gray-800 shrink-0">
+        <div class="my-4 rounded-lg overflow-hidden bg-surface-canvas border border-gray-800 shadow-lg font-sans select-none w-full min-w-0 max-w-full">
+            <div class="flex items-center justify-between px-4 py-2 bg-surface-panel border-b border-gray-800 shrink-0">
                 <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider font-mono">${langLabel}</span>
                 <button class="text-xs text-gray-400 hover:text-accent transition-colors flex items-center space-x-1 bg-transparent border-none cursor-pointer btn-copy-code" data-code-id="${id}">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
@@ -155,14 +155,14 @@ export function parseMarkdown(text, lineNumbersEnabled = false) {
                     let tableHtml = `
                     <div class="my-4 overflow-x-auto border border-gray-800 rounded-lg select-text">
                         <table class="min-w-full divide-y divide-gray-800 text-xs text-left text-gray-200">
-                            <thead class="bg-[#0a161d] text-gray-400 font-bold uppercase tracking-wider text-[0.625rem]">
+                            <thead class="bg-surface-panel text-gray-400 font-bold uppercase tracking-wider text-[0.625rem]">
                                 <tr>
                                     ${headers.map(h => `<th class="px-4 py-2 border-r border-gray-800 last:border-r-0">${parseInlineMarkdown(h)}</th>`).join('')}
                                 </tr>
                             </thead>
-                            <tbody class="divide-y divide-gray-800/60 bg-[#051116]/50">
+                            <tbody class="divide-y divide-gray-800/60 bg-surface-editor/50">
                                 ${rows.map(row => `
-                                    <tr class="hover:bg-white/5 transition-colors">
+                                    <tr class="hover:bg-tint/5 transition-colors">
                                         ${row.map(cell => `<td class="px-4 py-2 border-r border-gray-800 last:border-r-0">${parseInlineMarkdown(cell)}</td>`).join('')}
                                     </tr>
                                 `).join('')}
@@ -180,8 +180,8 @@ export function parseMarkdown(text, lineNumbersEnabled = false) {
             closeListIfNeeded();
             const level = headingMatch[1].length;
             const headingClasses = {
-                1: 'text-lg font-bold text-white border-b border-gray-800 pb-2 mt-6 mb-3',
-                2: 'text-base font-bold text-white border-b border-gray-800 pb-1 mt-6 mb-2',
+                1: 'text-lg font-bold text-text-primary border-b border-gray-800 pb-2 mt-6 mb-3',
+                2: 'text-base font-bold text-text-primary border-b border-gray-800 pb-1 mt-6 mb-2',
                 3: 'text-sm font-bold text-accent uppercase tracking-wider mt-5 mb-2',
                 4: 'text-sm font-bold text-accent mt-4 mb-2',
                 5: 'text-sm font-semibold text-gray-200 mt-4 mb-2',

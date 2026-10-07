@@ -15,6 +15,34 @@
   --theme-surface-input: #07171d;
   --theme-surface-hover: #14282e;
   --theme-surface-overlay: rgb(0 8 11 / 78%);
+  /* Depth: pages run from a lifted top to a deep bottom; rails sit a step below the page;
+     cards are a step above it, lighter at their top edge. */
+  --theme-surface-canvas-lift: #04212b;
+  --theme-surface-canvas-mid: #021a22;
+  --theme-surface-canvas-deep: #01111a;
+  --theme-surface-rail-top: #03171f;
+  --theme-surface-rail: #02121a;
+  --theme-surface-rail-bottom: #010e14;
+  --theme-surface-raised: #0a222c;
+  --theme-surface-raised-low: #061920;
+  --theme-surface-inset: rgb(1 13 18 / 72%);
+  --theme-highlight: color-mix(in srgb, var(--theme-tint) 5%, transparent);
+  --theme-glow-cool: rgb(46 140 170 / 10%);
+  --theme-titlebar-shade: rgb(0 8 11 / 55%);
+  --theme-surface-abyss: #000b0f;
+  --theme-surface-danger: #1a0a0d;
+  /* Veils over photos and covers, so text on an image stays readable. */
+  --theme-scrim: #010e12;
+  /* Tint lifts a surface (white on dark themes); shade darkens it (overlays, shadows). */
+  --theme-tint: #ffffff;
+  --theme-shade: #000000;
+  --theme-bubble-user: #182c32;
+  /* Scrollbars and range thumbs are pseudo-elements, where the build cannot mix colours, so they get ready-made values. */
+  --theme-scrollbar-thumb: rgb(255 255 255 / 18%);
+  --theme-scrollbar-thumb-hover: rgb(255 255 255 / 30%);
+  --theme-scrollbar-track: rgb(255 255 255 / 3%);
+  --theme-thumb-shadow: rgb(0 0 0 / 35%);
+  --theme-thumb-shadow-strong: rgb(0 0 0 / 50%);
 
   --theme-text-primary: #f3f4f6;
   --theme-text-secondary: #d1d5db;
@@ -24,13 +52,27 @@
   --theme-text-on-accent: #011419;
   --theme-text-on-danger: #ffffff;
 
-  --theme-border-subtle: rgb(255 255 255 / 8%);
-  --theme-border-default: rgb(255 255 255 / 14%);
-  --theme-border-strong: rgb(255 255 255 / 22%);
+  --theme-border-subtle: color-mix(in srgb, var(--theme-tint) 8%, transparent);
+  --theme-border-default: color-mix(in srgb, var(--theme-tint) 14%, transparent);
+  --theme-border-strong: color-mix(in srgb, var(--theme-tint) 22%, transparent);
 
   --theme-status-info: #60a5fa;
   --theme-status-success: #34d399;
   --theme-status-warning: #fbbf24;
+  --theme-status-warning-strong: #f3d38a;
+  --theme-roleplay: #fb7185;
+  --theme-roleplay-soft: #4c1220;
+  --theme-roleplay-text: #fecdd3;
+  /* Discord's own colours, for the community button. */
+  --theme-discord: #5865f2;
+  --theme-discord-soft: #181e40;
+  --theme-discord-soft-hover: #242c5c;
+  --theme-discord-text: #eef0ff;
+  --theme-discord-on: #ffffff;
+  /* Something the user has to set up before it works, such as a profile without a model. */
+  --theme-status-setup: #ff9400;
+  --theme-status-setup-strong: #ffb54d;
+  --theme-text-on-setup: #1a0f00;
   /* Danger has two tones: status-danger is readable as text on the canvas,
      danger-solid is dark enough to carry on-danger text as a fill. */
   --theme-status-danger: #f2555a;
@@ -69,9 +111,9 @@
 
   /* Depth. Panels stay flat and rely on borders; only floating surfaces cast a
      shadow, so stacked cards never read as a pile of boxes. */
-  --theme-shadow-raised: 0 0.0625rem 0.125rem rgb(0 0 0 / 28%);
-  --theme-shadow-panel: 0 0.5rem 1.5rem -0.5rem rgb(0 0 0 / 45%);
-  --theme-shadow-overlay: 0 1.25rem 3rem -1rem rgb(0 0 0 / 62%);
+  --theme-shadow-raised: 0 0.0625rem 0.125rem color-mix(in srgb, var(--theme-shade) 28%, transparent);
+  --theme-shadow-panel: 0 0.5rem 1.5rem -0.5rem color-mix(in srgb, var(--theme-shade) 45%, transparent);
+  --theme-shadow-overlay: 0 1.25rem 3rem -1rem color-mix(in srgb, var(--theme-shade) 62%, transparent);
 
   /* Radius scale: controls, cards, and full surfaces. */
   --theme-radius-control: 0.625rem;
@@ -106,6 +148,30 @@
   --color-status-info: var(--theme-status-info);
   --color-status-success: var(--theme-status-success);
   --color-status-warning: var(--theme-status-warning);
+  --color-status-setup: var(--theme-status-setup);
+  --color-status-setup-strong: var(--theme-status-setup-strong);
+  --color-on-setup: var(--theme-text-on-setup);
+  --color-surface-canvas-lift: var(--theme-surface-canvas-lift);
+  --color-surface-rail: var(--theme-surface-rail);
+  --color-surface-raised: var(--theme-surface-raised);
+  --color-surface-raised-low: var(--theme-surface-raised-low);
+  --color-surface-inset: var(--theme-surface-inset);
+  --color-titlebar-shade: var(--theme-titlebar-shade);
+  --color-surface-abyss: var(--theme-surface-abyss);
+  --color-surface-danger: var(--theme-surface-danger);
+  --color-scrim: var(--theme-scrim);
+  --color-tint: var(--theme-tint);
+  --color-shade: var(--theme-shade);
+  --color-bubble-user: var(--theme-bubble-user);
+  --color-status-warning-strong: var(--theme-status-warning-strong);
+  --color-roleplay: var(--theme-roleplay);
+  --color-roleplay-soft: var(--theme-roleplay-soft);
+  --color-roleplay-text: var(--theme-roleplay-text);
+  --color-discord: var(--theme-discord);
+  --color-discord-soft: var(--theme-discord-soft);
+  --color-discord-soft-hover: var(--theme-discord-soft-hover);
+  --color-discord-text: var(--theme-discord-text);
+  --color-discord-on: var(--theme-discord-on);
   --color-status-danger: var(--theme-status-danger);
   --color-danger-solid: var(--theme-danger-solid);
   --color-danger-solid-hover: var(--theme-danger-solid-hover);
@@ -184,6 +250,17 @@ body {
   color: var(--theme-text-primary);
   /* text-gray-100 */
   font-family: 'Inter Variable', 'Inter', system-ui, sans-serif;
+  /* No single word stranded on the last line of a label, hint or paragraph. */
+  text-wrap: pretty;
+}
+
+h1, h2, h3, h4 {
+  text-wrap: balance;
+}
+
+/* Text being typed keeps the plain wrap, so lines don't re-flow under the caret. */
+textarea, input, [contenteditable], .ProseMirror {
+  text-wrap: wrap;
 }
 
 /* Auxiliary / help text — single source of truth for small caption text.
@@ -267,6 +344,24 @@ body {
 
 /* Height-animated disclosure. Wrap the content in a child element; the grid
    row goes 0fr -> 1fr, which animates without measuring or fixed heights. */
+/* Surfaces step from deep to lifted. A page is lit at the top by the accent, so changing
+   the accent changes the whole room, not only the buttons. */
+@utility surface-page {
+  background:
+    radial-gradient(70rem 26rem at 18% -6rem, color-mix(in srgb, var(--app-accent) 9%, transparent), transparent 70%),
+    radial-gradient(60rem 30rem at 92% -10rem, var(--theme-glow-cool), transparent 70%),
+    linear-gradient(180deg, var(--theme-surface-canvas-lift) 0, var(--theme-surface-canvas-mid) 22rem, var(--theme-surface-canvas) 44rem, var(--theme-surface-canvas-deep) 100%);
+}
+
+@utility surface-rail {
+  background: linear-gradient(180deg, var(--theme-surface-rail-top) 0%, var(--theme-surface-rail) 55%, var(--theme-surface-rail-bottom) 100%);
+}
+
+@utility surface-card {
+  background: linear-gradient(180deg, var(--theme-surface-raised) 0%, var(--theme-surface-raised-low) 100%);
+  box-shadow: inset 0 1px 0 var(--theme-highlight), 0 0.75rem 1.75rem -1.125rem color-mix(in srgb, var(--theme-shade) 60%, transparent);
+}
+
 @utility reveal {
   display: grid;
   grid-template-rows: 0fr;
@@ -349,27 +444,31 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background-color: var(--theme-surface-canvas);
-  border-radius: 4px;
+  background-color: var(--theme-scrollbar-thumb);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 6px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background-color: var(--theme-surface-hover);
+  background-color: var(--theme-scrollbar-thumb-hover);
 }
 
-/* Custom Scrollbar Helper for Inner Containers */
+/* Inner containers: a faint track so the thumb reads against any background. */
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background-color: var(--theme-surface-panel);
-  border: 2px solid var(--theme-surface-canvas);
-  border-radius: 4px;
+  background-color: var(--theme-scrollbar-thumb);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 6px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background-color: var(--theme-surface-hover);
+  background-color: var(--theme-scrollbar-thumb-hover);
 }
 
 .custom-scrollbar::-webkit-scrollbar-track {
-  background: var(--theme-surface-canvas);
+  background: var(--theme-scrollbar-track);
+  border-radius: 6px;
 }
 
 /* In-text Worldbuild entity reference: underlined in its entity type's colour, the same
@@ -545,7 +644,7 @@ textarea::-webkit-scrollbar-corner { background: transparent; }
 }
 
 .calendar-day:hover {
-  background: linear-gradient(145deg, color-mix(in srgb, var(--calendar-day-season) 8%, transparent), rgb(255 255 255 / 1%) 65%);
+  background: linear-gradient(145deg, color-mix(in srgb, var(--calendar-day-season) 8%, transparent), color-mix(in srgb, var(--theme-tint) 1%, transparent) 65%);
 }
 
 .calendar-entry {
@@ -582,7 +681,7 @@ textarea::-webkit-scrollbar-corner { background: transparent; }
   border: 0;
   border-radius: 9999px;
   background: var(--theme-text-primary);
-  box-shadow: 0 0.125rem 0.5rem rgb(0 0 0 / 35%);
+  box-shadow: 0 0.125rem 0.5rem var(--theme-thumb-shadow);
 }
 
 .relationship-range::-moz-range-thumb {
@@ -591,7 +690,7 @@ textarea::-webkit-scrollbar-corner { background: transparent; }
   border: 0;
   border-radius: 9999px;
   background: var(--theme-text-primary);
-  box-shadow: 0 0.125rem 0.5rem rgb(0 0 0 / 35%);
+  box-shadow: 0 0.125rem 0.5rem var(--theme-thumb-shadow);
 }
 
 .relationship-range:focus-visible { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--app-accent) 40%, transparent); }
@@ -612,7 +711,7 @@ textarea::-webkit-scrollbar-corner { background: transparent; }
   border: 0;
   border-radius: 9999px;
   background: var(--theme-text-primary);
-  box-shadow: 0 0.0625rem 0.25rem rgb(0 0 0 / 50%);
+  box-shadow: 0 0.0625rem 0.25rem var(--theme-thumb-shadow-strong);
 }
 .setting-range::-moz-range-thumb {
   width: 1rem;
@@ -620,7 +719,7 @@ textarea::-webkit-scrollbar-corner { background: transparent; }
   border: 0;
   border-radius: 9999px;
   background: var(--theme-text-primary);
-  box-shadow: 0 0.0625rem 0.25rem rgb(0 0 0 / 50%);
+  box-shadow: 0 0.0625rem 0.25rem var(--theme-thumb-shadow-strong);
 }
 .setting-range:focus-visible { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--app-accent) 40%, transparent); }
 input[type="number"] { -moz-appearance: textfield; appearance: textfield; }

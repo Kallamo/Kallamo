@@ -96,13 +96,13 @@ export default function AppearanceSection({ sectionRef, activeChat, handleSaveCh
             <div className="relative z-10 flex h-full flex-col justify-end gap-2.5 p-4">
               <div
                 className="max-w-[75%] self-end rounded-surface border px-3 py-2 text-[0.8125rem] leading-snug text-text-secondary backdrop-blur-md"
-                style={{ backgroundColor: `rgba(26, 45, 50, ${userOpacity / 100})`, borderColor: 'rgba(221, 186, 110, 0.15)' }}
+                style={{ backgroundColor: `color-mix(in srgb, var(--theme-bubble-user) ${userOpacity}%, transparent)`, borderColor: 'color-mix(in srgb, var(--app-accent) 15%, transparent)' }}
               >
                 How does the northern keep look at dawn?
               </div>
               <div
                 className="max-w-[85%] rounded-surface border px-3 py-2 text-[0.8125rem] leading-snug text-text-secondary backdrop-blur-md"
-                style={{ backgroundColor: `rgba(10, 22, 29, ${aiOpacity / 100})`, borderColor: 'rgba(255, 255, 255, 0.05)' }}
+                style={{ backgroundColor: `color-mix(in srgb, var(--theme-surface-panel) ${aiOpacity}%, transparent)`, borderColor: 'var(--theme-highlight)' }}
               >
                 Mist clings to the ramparts as first light spills over the valley, gilding the old stone.
               </div>

@@ -1,22 +1,47 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { Plug, Trash2 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { X, SlidersHorizontal, IdCard, Plug, ScrollText } from 'lucide-react';
 import { parseMarkdown, escapeHTML } from '../../utils/markdown';
+import Modal from '../ui/Modal';
+import Button from '../ui/Button';
+import TextInput from '../ui/TextInput';
+import Textarea from '../ui/Textarea';
+import Toggle from '../ui/Toggle';
+import SelectMenu from '../ui/SelectMenu';
+import NumberInput from '../ui/NumberInput';
+import SegmentedControl from '../ui/SegmentedControl';
 import Popover from '../ui/Popover';
+import { ReedPen } from '../../logo';
 
-export default function ProfileModal({ profile, onClose, onSave }) {
-  const {
-    apiProfiles,
-    handleSaveProfile,
-    settings,
-    variables
-  } = useApp();
+const COLORS = ['#FBCB2D', '#ff5f56', '#3b82f6', '#10b981', '#9c27b0', '#ec4899', '#6366f1', '#14b8a6', '#f97316', '#4b5563'];
+const ROUNDS = [1, 2, 3, 4, 5].map(n => ({ value: n, label: String(n) }));
+const MODES = [{ value: 'editor', label: 'Write' }, { value: 'preview', label: 'Preview' }];
+const clampTurns = (value) => (Number.isInteger(value) ? Math.min(5, Math.max(1, value)) : 3);
 
+// A profile without a working model keeps its colour but sits dimmed in a neutral tile.
+export function ProfileAvatar({ color, size = 44, muted = false }) {
+  return (
+    <span
+      className="inline-flex shrink-0 items-center justify-center border"
+      style={{
+        width: size,
+        height: size,
+        borderRadius: Math.round(size * 0.3),
+        background: muted ? 'color-mix(in srgb, var(--theme-tint) 4%, transparent)' : `color-mix(in srgb, ${color} 15%, var(--theme-surface-raised-low))`,
+        borderColor: muted ? 'color-mix(in srgb, var(--theme-tint) 10%, transparent)' : `color-mix(in srgb, ${color} 32%, transparent)`,
+      }}
+    >
+      <ReedPen size={Math.round(size * 0.74)} color={color} opacity={muted ? 0.45 : 1} />
+    </span>
+  );
+}
+
+export default function ProfileModal({ profile, preset, starters = null, onClose, onSave, onDelete, initialTab = 'rules', inline = false }) {
+  const { apiProfiles, handleSaveProfile, variables, chats } = useApp();
   const isEditing = !!profile;
 
   // Stable id for new profiles so the KB Manager (opened later) targets the right folder.
   const [profileId] = useState(() => profile?.id || 'profile_' + Math.random().toString(36).substr(2, 9));
-
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [color, setColor] = useState('#FBCB2D');
@@ -27,174 +52,52 @@ export default function ProfileModal({ profile, onClose, onSave }) {
   const [manualMode, setManualMode] = useState(false);
   const [manualJson, setManualJson] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
-  const [systemPromptMode, setSystemPromptMode] = useState('editor');
-
-  const [acState, setAcState] = useState({ isOpen: false, search: '', triggerIndex: -1 });
-  const [acIndex, setAcIndex] = useState(0);
-
-  const systemTextareaRef = useRef(null);
-
-  const colors = ['#FBCB2D', '#ff5f56', '#3b82f6', '#10b981', '#9c27b0', '#ec4899', '#6366f1', '#14b8a6', '#f97316', '#4b5563'];
+  const [isAgentic, setIsAgentic] = useState(false);
+  const [agenticPrompt, setAgenticPrompt] = useState('');
+  const [agenticMaxTurns, setAgenticMaxTurns] = useState(3);
+  const [tab, setTab] = useState(initialTab);
+  const [chosenPreset, setChosenPreset] = useState(preset);
 
   useEffect(() => {
-    if (profile) {
-      setName(profile.name || '');
-      setDescription(profile.description || '');
-      setColor(profile.color || '#FBCB2D');
-      setApiProfileId(profile.apiProfileId || '');
-      setModel(profile.model || '');
-      setTemperature(profile.temperature ?? 0.7);
-      setMaxTokens(profile.maxTokens ?? 2048);
-      setManualMode(profile.manualMode === true || profile.manualMode === 1);
-      setManualJson(profile.manualJson || '');
-      setSystemPrompt(profile.systemPrompt || '');
+    // A starter fills a new profile's identity and rules; the connection stays the user's choice.
+    if (!profile && chosenPreset) {
+      setName(chosenPreset.name || '');
+      setDescription(chosenPreset.description || '');
+      setColor(chosenPreset.color || '#FBCB2D');
+      setSystemPrompt(chosenPreset.systemPrompt || '');
+      return;
     }
-  }, [profile]);
+    if (!profile) return;
+    setName(profile.name || '');
+    setDescription(profile.description || '');
+    setColor(profile.color || '#FBCB2D');
+    setApiProfileId(profile.apiProfileId || '');
+    setModel(profile.model || '');
+    setTemperature(profile.temperature ?? 0.7);
+    setMaxTokens(profile.maxTokens ?? 2048);
+    setManualMode(profile.manualMode === true || profile.manualMode === 1);
+    setManualJson(profile.manualJson || '');
+    setSystemPrompt(profile.systemPrompt || '');
+    setIsAgentic(profile.isAgentic === true || profile.isAgentic === 1);
+    setAgenticPrompt(profile.agenticPrompt || '');
+    setAgenticMaxTurns(clampTurns(profile.agenticMaxTurns));
+  }, [profile, chosenPreset]);
 
   const selectedApi = apiProfiles.find(ap => ap.id === apiProfileId);
-  const availableModels = selectedApi ? (typeof selectedApi.models === 'string' ? JSON.parse(selectedApi.models) : selectedApi.models) : [];
-  // Keep the saved model selectable, or the controlled <select> shows the first option
-  // while saving the stale value.
+  const availableModels = selectedApi ? (typeof selectedApi.models === 'string' ? JSON.parse(selectedApi.models) : selectedApi.models) || [] : [];
+  // Keep the saved model selectable, or the picker shows the first option while saving the stale value.
   const modelOptions = (model && !availableModels.includes(model)) ? [model, ...availableModels] : availableModels;
+  const workspaceUses = useMemo(() => chats.filter(chat => {
+    const ids = typeof chat.activeProfiles === 'string' ? JSON.parse(chat.activeProfiles || '[]') : (chat.activeProfiles || []);
+    return ids.includes(profileId);
+  }).length, [chats, profileId]);
 
-  // --- Variable autocomplete & preview (System Prompt) ---
-  const closeAc = () => {
-    setAcState({ isOpen: false, search: '', triggerIndex: -1 });
-    setAcIndex(0);
-  };
-
-  const handleTextareaChange = (e) => {
-    const val = e.target.value;
-    setSystemPrompt(val);
-
-    const cursor = e.target.selectionStart;
-    const textBeforeCursor = val.substring(0, cursor);
-    const openBracesIndex = textBeforeCursor.lastIndexOf('{{');
-    const closeBracesIndex = textBeforeCursor.lastIndexOf('}}');
-
-    if (openBracesIndex !== -1 && openBracesIndex > closeBracesIndex) {
-      const searchStr = textBeforeCursor.substring(openBracesIndex + 2);
-      if (!/\s/.test(searchStr)) {
-        setAcState({ isOpen: true, search: searchStr, triggerIndex: openBracesIndex });
-        setAcIndex(0);
-        return;
-      }
-    }
-    closeAc();
-  };
-
-  const insertVariable = (variable) => {
-    if (!variable || !systemTextareaRef.current) return;
-
-    const cursor = systemTextareaRef.current.selectionStart;
-    const beforeText = systemPrompt.substring(0, acState.triggerIndex);
-    const afterText = systemPrompt.substring(cursor);
-    const insertedText = `{{${variable.key}}}`;
-    const newValue = beforeText + insertedText + afterText;
-
-    setSystemPrompt(newValue);
-    closeAc();
-
-    setTimeout(() => {
-      if (systemTextareaRef.current) {
-        systemTextareaRef.current.focus();
-        const pos = beforeText.length + insertedText.length;
-        systemTextareaRef.current.setSelectionRange(pos, pos);
-      }
-    }, 50);
-  };
-
-  const filteredVariables = variables.filter(v =>
-    v.key.toLowerCase().includes(acState.search.toLowerCase())
-  );
-
-  const handleTextareaKeyDown = (e) => {
-    if (!acState.isOpen) return;
-
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setAcIndex(prev => (prev + 1) % filteredVariables.length);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setAcIndex(prev => (prev - 1 + filteredVariables.length) % filteredVariables.length);
-    } else if (e.key === 'Enter' || e.key === 'Tab') {
-      e.preventDefault();
-      insertVariable(filteredVariables[acIndex]);
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      closeAc();
-    }
-  };
-
-  const renderPromptPreview = (promptText) => {
-    if (!promptText) return '<p class="text-gray-500 italic text-xs">No prompt content defined.</p>';
-
-    let html = parseMarkdown(promptText);
-
-    const varRegex = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
-    html = html.replace(varRegex, (match, key) => {
-      const found = variables.find(v => v.key === key);
-      if (found) {
-        return `
-          <div class="my-3 border border-gray-800 rounded-lg overflow-hidden bg-[#030d11] select-text">
-            <div class="px-3 py-1.5 bg-[#0a161d] border-b border-gray-800 text-[0.625rem] font-mono font-bold text-accent select-none">
-              &lt;${key}&gt;
-            </div>
-            <div class="p-3 text-xs font-mono text-gray-300 whitespace-pre-wrap leading-relaxed">${escapeHTML(found.value)}</div>
-            <div class="px-3 py-1 bg-[#0a161d]/50 border-t border-gray-800/40 text-[0.5625rem] font-mono text-gray-500 select-none">
-              &lt;${key}/&gt;
-            </div>
-          </div>
-        `;
-      } else {
-        return `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-status-danger/10 text-status-danger border border-status-danger/30 select-none">⚠️ {{${key} (not found)}}</span>`;
-      }
-    });
-
-    return html;
-  };
-
-  const renderAutocompleteDropdown = () => {
-    if (filteredVariables.length === 0) return null;
-
-    return (
-      <Popover anchorRef={systemTextareaRef} open={acState.isOpen} onClose={closeAc} maxHeight={180} scroll={false} className="border-border-default bg-surface-panel-muted p-2">
-        <div className="max-h-44 overflow-y-auto custom-scrollbar">
-        <div className="text-xs text-text-muted px-2 pb-1 border-b border-border-subtle font-semibold tracking-wider uppercase flex justify-between select-none">
-          <span>Variables matching: "{acState.search}"</span>
-          <span>⇅ Navigate · ↵ Select</span>
-        </div>
-        {filteredVariables.map((v, idx) => (
-          <button
-            key={v.id}
-            type="button"
-            onClick={() => insertVariable(v)}
-            className={`w-full flex items-center justify-between text-left px-2 py-1.5 rounded transition-colors text-xs font-semibold cursor-pointer ${idx === acIndex
-              ? 'bg-accent text-[#011419]'
-              : 'text-gray-300 hover:bg-white/5'
-              }`}
-          >
-            <div className="flex items-center space-x-2 truncate">
-              <span className="font-mono font-bold">&#123;&#123;{v.key}&#125;&#125;</span>
-              <span className={`text-xs truncate ${idx === acIndex ? 'text-on-accent/70' : 'text-text-muted'}`}>{v.name}</span>
-            </div>
-            <span className={`text-xs font-mono truncate ml-4 ${idx === acIndex ? 'text-on-accent/60' : 'text-text-muted'}`}>{v.description || 'No description'}</span>
-          </button>
-        ))}
-        </div>
-      </Popover>
-    );
-  };
-
-  // --- Save Profile ---
   // The KB is authored in the KB Manager; carry it through untouched.
   const handleSave = async () => {
     if (!name.trim()) return;
-
     const preservedKb = profile?.knowledgeFiles
       ? (typeof profile.knowledgeFiles === 'string' ? profile.knowledgeFiles : JSON.stringify(profile.knowledgeFiles))
       : JSON.stringify([]);
-
     const updatedProfile = {
       id: profileId,
       name: name.trim(),
@@ -208,284 +111,351 @@ export default function ProfileModal({ profile, onClose, onSave }) {
       knowledgeFiles: preservedKb,
       manualMode: manualMode ? 1 : 0,
       manualJson: manualJson.trim(),
-      isAgentic: profile?.isAgentic ? 1 : 0,
-      agenticPrompt: profile?.agenticPrompt || '',
-      agenticMaxTurns: Number.isInteger(profile?.agenticMaxTurns)
-        ? Math.min(5, Math.max(1, profile.agenticMaxTurns))
-        : 3,
-      syncToCloud: profile?.syncToCloud ?? 0
+      isAgentic: isAgentic ? 1 : 0,
+      agenticPrompt: agenticPrompt.trim(),
+      agenticMaxTurns: clampTurns(agenticMaxTurns),
+      syncToCloud: profile?.syncToCloud ?? 0,
     };
-
     try {
       await handleSaveProfile(updatedProfile);
       if (onSave) onSave(updatedProfile, { isNew: !isEditing });
       onClose();
     } catch (e) {
-      console.error("Error saving profile:", e);
+      console.error('Error saving profile:', e);
     }
   };
 
-  const isBlurEnabled = settings?.interface?.blur ?? true;
-
-  // Shared visual language, aligned with the Configuration view:
-  // breathing cards + accent-medallion section heads instead of underlined titles.
-  const cardCls = "bg-surface-panel/50 border border-border-subtle rounded-2xl p-5";
-  const labelCls = "block text-xs font-semibold text-text-muted uppercase tracking-wider mb-1.5";
-  const fieldCls = "min-h-10 w-full bg-surface-input border border-border-default text-text-secondary text-sm rounded-lg px-3 py-2.5 focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-colors";
-  const Head = ({ icon: Icon, title, right }) => (
-    <div className="flex items-center justify-between mb-4">
-      <div className="flex items-center gap-2.5">
-        <span className="w-8 h-8 rounded-lg bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-          <Icon className="w-4 h-4 text-accent" />
-        </span>
-        <h3 className="text-xs font-bold text-white uppercase tracking-wider">{title}</h3>
-      </div>
-      {right}
-    </div>
-  );
+  const subtitle = isEditing
+    ? `AI profile · ${workspaceUses === 0 ? 'not used in any workspace' : `in ${workspaceUses} workspace${workspaceUses === 1 ? '' : 's'}`}`
+    : 'A voice, a model and the rules it follows, usable in any workspace.';
+  const apiLabel = selectedApi ? [selectedApi.provider, 'Keys and endpoints live in Settings, API profiles.'].filter(Boolean).join('. ') : 'Connections are set up in Settings, API profiles.';
 
   return (
-    <div className={`fixed inset-0 z-50 flex items-center justify-center titlebar-nodrag select-none p-4 lg:p-8 ${isBlurEnabled ? 'bg-surface-overlay backdrop-blur-sm' : 'bg-surface-canvas'}`}>
-      <div role="dialog" aria-modal="true" aria-labelledby="profile-dialog-title" className="w-full max-w-6xl h-full max-h-[880px] bg-surface-sidebar rounded-xl shadow-2xl border border-border-default flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
-
-        {/* Header */}
-        <div className="shrink-0 flex justify-between items-center h-14 w-full px-6 bg-[#011419] border-b border-gray-800/50">
-          <h2 id="profile-dialog-title" className="text-lg font-bold text-text-primary tracking-wide">
-            {isEditing ? 'Edit AI Profile' : 'Create AI Profile'}
-          </h2>
-          <button
-            onClick={onClose}
-            aria-label="Close profile editor"
-            className="text-gray-400 hover:text-status-danger transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5"
-          >
-            <X className="w-5 h-5" />
-          </button>
+    <Modal
+      onClose={onClose}
+      size="editor"
+      title={name.trim() || (isEditing ? 'Untitled profile' : 'New AI profile')}
+      subtitle={subtitle}
+      leading={<ProfileAvatar color={color} size={40} />}
+      className={inline ? '' : 'h-[min(55rem,calc(100vh-2rem))]'}
+      inline={inline}
+    >
+      {!isEditing && starters && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-tint/[0.06] px-6 py-3">
+          <span className="caption mr-1">Start from</span>
+          {starters.map(starter => (
+            <button
+              key={starter.label}
+              type="button"
+              onClick={() => setChosenPreset(starter)}
+              aria-pressed={chosenPreset?.label === starter.label}
+              className={`inline-flex h-7 items-center gap-2 rounded-full border px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${chosenPreset?.label === starter.label ? 'border-accent/55 text-text-primary' : 'border-border-default text-text-secondary hover:border-border-strong hover:text-text-primary'}`}
+            >
+              <ReedPen size={13} color={starter.color} />
+              {starter.label}
+            </button>
+          ))}
         </div>
-
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto p-6 relative custom-scrollbar">
-          <div className="grid grid-cols-1 gap-6 min-h-0 xl:grid-cols-12 xl:h-full">
-
-            {/* Left Column (Inputs) */}
-            <div className="space-y-4 flex flex-col xl:col-span-5">
-              {/* Identity */}
-              <div className={cardCls}>
-                <Head icon={IdCard} title="Identity" />
-                <div className="space-y-3.5">
-                  <div>
-                    <label className={labelCls}>Profile Name</label>
-                    <input
-                      type="text"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      placeholder="Enter profile name..."
-                      className={fieldCls}
-                    />
-                  </div>
-                  <div>
-                    <label className={labelCls}>Description</label>
-                    <textarea
-                      value={description}
-                      onChange={(e) => setDescription(e.target.value)}
-                      placeholder="Enter description..."
-                      rows={2}
-                      className={`${fieldCls} resize-y min-h-[64px] custom-scrollbar`}
-                    />
-                  </div>
-                  <div>
-                    <label className={labelCls}>Theme Color</label>
-                    <div className="flex flex-wrap gap-2.5">
-                      {colors.map(c => (
-                        <button
-                          key={c}
-                          onClick={() => setColor(c)}
-                          aria-label={`Use theme color ${c}`}
-                          aria-pressed={color === c}
-                          style={{ backgroundColor: c }}
-                          className={`w-6 h-6 rounded-full border-2 focus:outline-none cursor-pointer transition-all ${color === c ? 'border-white scale-110 shadow-md' : 'border-transparent hover:border-white/50'
-                            }`}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Engine Connection + Generation, one card: the model and how it generates
-                  belong together. Params sit as a lighter sub-section, not a second medallion. */}
-              <div className={`${cardCls} flex-1 flex flex-col`}>
-                <Head icon={Plug} title="Engine Connection" />
-                <div className="space-y-3.5">
-                  <div>
-                    <label className={labelCls}>Linked API Profile</label>
-                    <select
-                      value={apiProfileId}
-                      onChange={(e) => {
-                        setApiProfileId(e.target.value);
-                        setModel('');
-                      }}
-                      className={`${fieldCls} appearance-none cursor-pointer`}
-                    >
-                      <option value="">None / Not linked</option>
-                      {apiProfiles.map(ap => (
-                        <option key={ap.id} value={ap.id}>{ap.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className={labelCls}>AI Model</label>
-                    <select
-                      value={model}
-                      onChange={(e) => setModel(e.target.value)}
-                      disabled={!apiProfileId}
-                      className={`${fieldCls} appearance-none cursor-pointer disabled:opacity-50`}
-                    >
-                      <option value="">{apiProfileId ? 'Select a model' : 'None / Not linked'}</option>
-                      {modelOptions.map(m => (
-                        <option key={m} value={m}>{m}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div className="mt-auto pt-4 border-t border-gray-800/60">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-[0.625rem] font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
-                      <SlidersHorizontal className="w-3 h-3 text-gray-500" /> Generation
-                    </span>
-                    <div className="flex items-center space-x-2">
-                      <span className="text-[0.5625rem] text-gray-500 font-bold uppercase tracking-wider">Manual JSON</span>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={manualMode}
-                          onChange={(e) => setManualMode(e.target.checked)}
-                          className="sr-only peer"
-                        />
-                        <div className="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
-                      </label>
-                    </div>
-                  </div>
-
-                  {!manualMode ? (
-                    <div className="flex gap-3">
-                      <div className="flex-1 bg-[#011419] p-3 rounded-lg border border-gray-800/80">
-                        <div className="flex justify-between text-[0.6875rem] text-gray-400 mb-1.5">
-                          <span>Temperature</span>
-                          <span className="font-mono text-accent">{temperature}</span>
-                        </div>
-                        <input
-                          type="range"
-                          min="0"
-                          max="2"
-                          step="0.1"
-                          value={temperature}
-                          onChange={(e) => setTemperature(parseFloat(e.target.value))}
-                          className="w-full accent-accent cursor-pointer"
-                        />
-                      </div>
-                      <div className="flex-1 bg-[#011419] p-3 rounded-lg border border-gray-800/80">
-                        <div className="flex justify-between text-[0.6875rem] text-gray-400 mb-1.5">
-                          <span>Max Tokens</span>
-                          <span className="font-mono text-accent">{maxTokens}</span>
-                        </div>
-                        <input
-                          type="range"
-                          min="256"
-                          max="8192"
-                          step="256"
-                          value={maxTokens}
-                          onChange={(e) => setMaxTokens(parseInt(e.target.value))}
-                          className="w-full accent-accent cursor-pointer"
-                        />
-                      </div>
-                    </div>
-                  ) : (
-                    <div>
-                      <p className="caption mb-2">Inject raw JSON properties into the API payload.</p>
-                      <textarea
-                        value={manualJson}
-                        onChange={(e) => setManualJson(e.target.value)}
-                        rows="4"
-                        className="w-full bg-[#011419] border border-gray-800 text-accent text-xs font-mono rounded-lg px-3 py-2 focus:outline-none focus:border-accent custom-scrollbar resize-y"
-                        placeholder={`{\n  "presence_penalty": 0.5,\n  "top_p": 0.9\n}`}
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
-
-            </div>
-
-            {/* Right Column (System Prompt) */}
-            <div className="flex min-h-[32rem] flex-col overflow-hidden xl:col-span-7 xl:h-full xl:min-h-0">
-              <div className={`${cardCls} flex flex-col h-full min-h-0`}>
-                <Head icon={ScrollText} title="Behavior & Rules" right={
-                  <div className="flex bg-[#011419] p-0.5 rounded-lg border border-gray-800 text-[0.625rem] font-bold uppercase tracking-wider select-none shrink-0 z-10 space-x-0.5">
-                    <button
-                      type="button"
-                      onClick={() => setSystemPromptMode('editor')}
-                      className={`px-3 py-1 rounded-md cursor-pointer transition-colors ${systemPromptMode === 'editor' ? 'bg-[#1a2d32] text-white' : 'text-gray-500 hover:text-gray-300'
-                        }`}
-                    >
-                      Editor
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSystemPromptMode('preview');
-                        closeAc();
-                      }}
-                      className={`px-3 py-1 rounded-md cursor-pointer transition-colors ${systemPromptMode === 'preview' ? 'bg-[#1a2d32] text-white' : 'text-gray-500 hover:text-gray-300'
-                        }`}
-                    >
-                      Preview
-                    </button>
-                  </div>
-                } />
-
-                {systemPromptMode === 'editor' ? (
-                  <div className="flex-1 relative flex flex-col min-h-0">
-                    <textarea
-                      ref={systemTextareaRef}
-                      value={systemPrompt}
-                      onChange={handleTextareaChange}
-                      onKeyDown={handleTextareaKeyDown}
-                      className="flex-1 w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-lg p-4 focus:outline-none focus:border-accent resize-none font-mono custom-scrollbar"
-                      placeholder="Define behavior rules, tone of voice, formatting instructions, and goals for this agent profile..."
-                    />
-                    {acState.isOpen && renderAutocompleteDropdown()}
-                  </div>
-                ) : (
-                  <div
-                    className="flex-1 w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-lg p-4 overflow-y-auto custom-scrollbar select-text leading-relaxed markdown-body"
-                    dangerouslySetInnerHTML={{ __html: renderPromptPreview(systemPrompt) }}
+      )}
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        <div className="flex shrink-0 flex-col gap-6 overflow-y-auto custom-scrollbar border-border-subtle px-6 py-5 lg:w-[26rem] lg:border-r">
+          <section className="flex flex-col gap-3.5">
+            <h3 className="text-sm font-bold text-text-primary">Identity</h3>
+            <TextInput label="Name" value={name} onChange={e => setName(e.target.value)} placeholder="Line editor" autoFocus={!isEditing} />
+            <Textarea label="Description" value={description} onChange={e => setDescription(e.target.value)} placeholder="Tightens prose in the Writing Desk without changing your voice." rows={3} className="min-h-[5.25rem]" />
+            <div>
+              <span className="mb-1.5 block text-sm font-medium text-text-secondary">
+                Colour <span className="caption">(names this profile in the chat)</span>
+              </span>
+              <div className="flex flex-wrap gap-2.5">
+                {COLORS.map(c => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setColor(c)}
+                    aria-label={`Use colour ${c}`}
+                    aria-pressed={color === c}
+                    style={{ backgroundColor: c, boxShadow: color === c ? '0 0 0 2px var(--theme-surface-canvas), 0 0 0 4px var(--theme-text-primary)' : undefined }}
+                    className="h-[1.625rem] w-[1.625rem] rounded-full transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                   />
+                ))}
+              </div>
+            </div>
+          </section>
+
+          <section className="flex flex-col gap-3.5">
+            <h3 className="text-sm font-bold text-text-primary">Connection</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <span className="mb-1.5 block text-sm font-medium text-text-secondary">API profile</span>
+                <SelectMenu
+                  ariaLabel="API profile"
+                  value={apiProfileId}
+                  onChange={value => { setApiProfileId(value); setModel(''); }}
+                  options={[{ value: '', label: 'Not linked' }, ...apiProfiles.map(ap => ({ value: ap.id, label: ap.name }))]}
+                />
+              </div>
+              <div>
+                <span className="mb-1.5 block text-sm font-medium text-text-secondary">Model</span>
+                {apiProfileId ? (
+                  <SelectMenu
+                    ariaLabel="Model"
+                    value={model}
+                    onChange={setModel}
+                    options={[{ value: '', label: 'Choose a model' }, ...modelOptions.map(m => ({ value: m, label: m }))]}
+                  />
+                ) : (
+                  <div className="flex min-h-9 min-w-0 items-center rounded-control border border-border-default bg-surface-input px-3 text-sm text-text-disabled"><span className="truncate">No connection</span></div>
                 )}
               </div>
             </div>
+            {!apiProfiles.length ? (
+              <p className="flex items-center gap-2 text-xs text-status-warning"><Plug className="h-3.5 w-3.5" aria-hidden="true" />No connections yet. Add one in Settings, API profiles.</p>
+            ) : (!apiProfileId || !model) ? (
+              <p className="flex items-center gap-2 text-xs text-status-warning"><Plug className="h-3.5 w-3.5" aria-hidden="true" />Without a connection and a model this profile can't reply.</p>
+            ) : (
+              <span className="caption">{apiLabel}</span>
+            )}
+          </section>
 
+          <section className="flex flex-col gap-3.5">
+            <div className="flex items-center gap-2">
+              <h3 className="flex-1 text-sm font-bold text-text-primary">Generation</h3>
+              <span className="caption">Custom JSON</span>
+              <Toggle checked={manualMode} onChange={setManualMode} ariaLabel="Custom JSON" />
+            </div>
+            {!manualMode ? (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <div className="mb-1.5 flex justify-between">
+                    <label htmlFor="profile-temperature" className="text-sm font-medium text-text-secondary">Temperature</label>
+                    <span className="text-sm tabular-nums text-text-primary">{temperature}</span>
+                  </div>
+                  <input
+                    id="profile-temperature"
+                    type="range"
+                    min="0"
+                    max="2"
+                    step="0.1"
+                    value={temperature}
+                    onChange={e => setTemperature(parseFloat(e.target.value))}
+                    className="mt-2 w-full cursor-pointer accent-text-secondary"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="profile-max-tokens" className="mb-1.5 block text-sm font-medium text-text-secondary">Max reply tokens</label>
+                  <NumberInput
+                    id="profile-max-tokens"
+                    value={maxTokens}
+                    onChange={setMaxTokens}
+                    min={64}
+                    max={200000}
+                    step={256}
+                    className="min-h-9 w-full rounded-control border border-border-default bg-surface-input px-3 text-sm tabular-nums text-text-secondary focus:border-accent focus:outline-none"
+                  />
+                </div>
+              </div>
+            ) : (
+              <Textarea
+                hint="Raw JSON properties added to the API request."
+                value={manualJson}
+                onChange={e => setManualJson(e.target.value)}
+                rows={4}
+                monospace
+                placeholder={`{\n  "presence_penalty": 0.5,\n  "top_p": 0.9\n}`}
+              />
+            )}
+          </section>
+        </div>
+
+        <div className="flex min-h-[28rem] min-w-0 flex-1 flex-col px-6 pb-5">
+          <div role="tablist" aria-label="Profile instructions" className="flex shrink-0 border-b border-border-subtle">
+            <TabButton active={tab === 'rules'} onClick={() => setTab('rules')}>Behavior and rules</TabButton>
+            <TabButton active={tab === 'search'} onClick={() => setTab('search')}>
+              Smart search
+              {isAgentic && <span className="rounded-full bg-tint/[0.07] px-1.5 py-px text-xs font-medium text-text-secondary">On</span>}
+            </TabButton>
           </div>
+
+          {tab === 'rules' ? (
+            <PromptEditor
+              key="rules"
+              value={systemPrompt}
+              onChange={setSystemPrompt}
+              variables={variables}
+              caption="How this profile writes: voice, rules, format."
+              placeholder="Edit the selected text for clarity and rhythm. Keep the author's voice, names and facts exactly as written. Return only the edited text."
+            />
+          ) : (
+            <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4">
+              <div className="rounded-[0.875rem] border border-border-subtle bg-tint/[0.02] px-4 py-3.5">
+                <Toggle
+                  checked={isAgentic}
+                  onChange={setIsAgentic}
+                  label="Search before replying"
+                  description="The AI reads the conversation and writes its own searches through Memory, Worldbuild and this profile's knowledge base, instead of matching your message word for word."
+                />
+              </div>
+              {isAgentic ? (
+                <>
+                  <div className="flex flex-wrap items-center gap-4 px-0.5">
+                    <div className="min-w-0 flex-1">
+                      <span className="block text-sm font-bold text-text-secondary">Search rounds</span>
+                      <p className="caption mt-1">One round is a search and a look at what came back. 1 is cheapest, 3 is balanced, more follows leads further and costs more.</p>
+                    </div>
+                    <SegmentedControl label="Search rounds" value={agenticMaxTurns} onChange={setAgenticMaxTurns} options={ROUNDS} />
+                  </div>
+                  <PromptEditor
+                    key="search"
+                    title="Search instructions"
+                    value={agenticPrompt}
+                    onChange={setAgenticPrompt}
+                    variables={variables}
+                    caption="Tells the search step what to look for. The reply itself still follows Behavior and rules."
+                    placeholder="Find the passages where the selected characters and places appear, so the edit keeps every fact consistent."
+                  />
+                </>
+              ) : (
+                <p className="caption max-w-lg px-0.5 leading-relaxed">
+                  Off: retrieval runs a plain similarity search against your message text. Turn it on to let the AI write its own searches.
+                </p>
+              )}
+            </div>
+          )}
         </div>
+      </div>
 
-        {/* Footer Actions */}
-        <div className="shrink-0 flex justify-between items-center h-16 px-6 bg-surface-canvas border-t border-border-subtle">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-sm font-medium text-gray-400 hover:text-white transition-colors cursor-pointer"
-          >
-            Cancel
-          </button>
+      <footer className="flex shrink-0 items-center gap-2.5 border-t border-border-subtle px-6 py-3.5">
+        {isEditing && onDelete && (
+          <Button variant="subtle" icon={Trash2} className="!text-status-danger hover:!bg-status-danger/10" onClick={() => onDelete(profile)}>Delete</Button>
+        )}
+        <span className="flex-1" />
+        <Button variant="subtle" onClick={onClose}>Cancel</Button>
+        <Button onClick={handleSave} disabled={!name.trim()}>Save profile</Button>
+      </footer>
+    </Modal>
+  );
+}
 
-          <button
-            onClick={handleSave}
-            disabled={!name.trim()}
-            className="px-5 py-2 text-sm font-medium bg-accent hover:brightness-110 text-on-accent rounded-lg transition-colors shadow-md font-bold cursor-pointer disabled:opacity-50"
-          >
-            Save Profile
-          </button>
+function TabButton({ active, onClick, children }) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={`relative mr-6 inline-flex h-[3.25rem] items-center gap-2 px-0.5 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${active ? 'text-text-primary' : 'text-text-subtle hover:text-text-secondary'}`}
+    >
+      {children}
+      {active && <span aria-hidden="true" className="absolute inset-x-0 -bottom-px h-0.5 rounded-full bg-accent" />}
+    </button>
+  );
+}
+
+// A prompt field with Write / Preview, {{variable}} autocomplete and an expanded preview.
+function PromptEditor({ title, value, onChange, variables, caption, placeholder }) {
+  const [mode, setMode] = useState('editor');
+  const [ac, setAc] = useState({ isOpen: false, search: '', triggerIndex: -1 });
+  const [acIndex, setAcIndex] = useState(0);
+  const textareaRef = useRef(null);
+
+  const closeAc = () => {
+    setAc({ isOpen: false, search: '', triggerIndex: -1 });
+    setAcIndex(0);
+  };
+
+  const handleChange = (e) => {
+    const next = e.target.value;
+    onChange(next);
+    const before = next.substring(0, e.target.selectionStart);
+    const open = before.lastIndexOf('{{');
+    if (open !== -1 && open > before.lastIndexOf('}}')) {
+      const search = before.substring(open + 2);
+      if (!/\s/.test(search)) {
+        setAc({ isOpen: true, search, triggerIndex: open });
+        setAcIndex(0);
+        return;
+      }
+    }
+    closeAc();
+  };
+
+  const matches = variables.filter(v => v.key.toLowerCase().includes(ac.search.toLowerCase()));
+
+  const insertVariable = (variable) => {
+    const area = textareaRef.current;
+    if (!variable || !area) return;
+    const before = value.substring(0, ac.triggerIndex);
+    const inserted = `{{${variable.key}}}`;
+    onChange(before + inserted + value.substring(area.selectionStart));
+    closeAc();
+    setTimeout(() => {
+      area.focus();
+      const pos = before.length + inserted.length;
+      area.setSelectionRange(pos, pos);
+    }, 50);
+  };
+
+  const handleKeyDown = (e) => {
+    if (!ac.isOpen || !matches.length) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); setAcIndex(i => (i + 1) % matches.length); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setAcIndex(i => (i - 1 + matches.length) % matches.length); }
+    else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); insertVariable(matches[acIndex]); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeAc(); }
+  };
+
+  const preview = useMemo(() => {
+    if (!value) return '<p class="caption italic">Nothing written yet.</p>';
+    return parseMarkdown(value).replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (match, key) => {
+      const found = variables.find(v => v.key === key);
+      if (!found) return `<span class="inline-flex items-center rounded px-2 py-0.5 text-xs font-semibold bg-status-danger/10 text-status-danger border border-status-danger/30">{{${key}}} not found</span>`;
+      return `<div class="my-3 overflow-hidden rounded-lg border border-border-subtle bg-surface-input"><div class="border-b border-border-subtle px-3 py-1.5 font-mono text-xs text-text-muted">{{${key}}}</div><div class="whitespace-pre-wrap p-3 font-mono text-xs leading-relaxed text-text-secondary">${escapeHTML(found.value)}</div></div>`;
+    });
+  }, [value, variables]);
+
+  return (
+    <div className="mt-3.5 flex min-h-0 flex-1 flex-col gap-3">
+      <div className="flex items-center gap-2.5">
+        {title ? <h3 className="flex-1 text-sm font-bold text-text-primary">{title}</h3> : <span className="caption flex-1">{caption}</span>}
+        <SegmentedControl label="Editor mode" value={mode} onChange={(next) => { setMode(next); closeAc(); }} options={MODES} />
+      </div>
+      {mode === 'editor' ? (
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <textarea
+            ref={textareaRef}
+            value={value}
+            onChange={handleChange}
+            onKeyDown={handleKeyDown}
+            placeholder={placeholder}
+            className="min-h-[14rem] flex-1 resize-none rounded-xl border border-border-default bg-surface-input p-4 font-mono text-[0.8125rem] leading-[1.7] text-text-secondary custom-scrollbar placeholder:text-text-subtle focus:border-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+          />
+          {ac.isOpen && matches.length > 0 && (
+            <Popover anchorRef={textareaRef} open onClose={closeAc} maxHeight={200} scroll={false} className="p-1.5">
+              <div className="max-h-48 overflow-y-auto custom-scrollbar">
+                {matches.map((v, idx) => (
+                  <button
+                    key={v.id}
+                    type="button"
+                    onClick={() => insertVariable(v)}
+                    className={`flex w-full items-center gap-3 rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors ${idx === acIndex ? 'bg-surface-hover text-text-primary' : 'text-text-secondary hover:bg-surface-hover/60'}`}
+                  >
+                    <span className="font-mono font-semibold">{`{{${v.key}}}`}</span>
+                    <span className="truncate text-text-subtle">{v.name}</span>
+                  </button>
+                ))}
+              </div>
+            </Popover>
+          )}
         </div>
-
+      ) : (
+        <div
+          className="markdown-body min-h-[14rem] flex-1 overflow-y-auto rounded-xl border border-border-default bg-surface-input p-4 text-sm leading-relaxed text-text-secondary custom-scrollbar select-text"
+          dangerouslySetInnerHTML={{ __html: preview }}
+        />
+      )}
+      <div className="flex items-center gap-3">
+        {title && caption && <span className="caption">{caption}</span>}
+        <span className="caption ml-auto">Type <span className="font-mono text-text-secondary">{'{{'}</span> to insert a variable.</span>
       </div>
     </div>
   );

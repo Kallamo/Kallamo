@@ -65,7 +65,7 @@ export default function WritingDirectivesPanel({ workspaceId, workspaceTitle, el
       <div className="custom-scrollbar flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-3 py-3.5 [&>*]:shrink-0">
         {directives.length === 0 ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-2.5 px-3 text-center">
-            <span className="flex h-11 w-11 items-center justify-center rounded-card bg-white/5 text-text-subtle"><Pin className="h-5 w-5" /></span>
+            <span className="flex h-11 w-11 items-center justify-center rounded-card bg-tint/5 text-text-subtle"><Pin className="h-5 w-5" /></span>
             <p className="text-sm font-semibold text-text-secondary">No directives yet</p>
             <p className="text-xs leading-relaxed text-text-subtle">Rules the AI always follows here, like “Keep a formal, third-person tone” or “British spelling”.</p>
           </div>

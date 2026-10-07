@@ -215,7 +215,7 @@ export function PanelTabs({ tab, onChange, inventoryCount }) {
   ];
   return (
     <div className="px-3 pb-1 pt-3">
-      <div role="tablist" aria-label="Roleplay panel" className="flex gap-0.5 rounded-card border border-white/[0.06] bg-black/25 p-[3px]">
+      <div role="tablist" aria-label="Roleplay panel" className="flex gap-0.5 rounded-card border border-tint/[0.06] bg-shade/25 p-[3px]">
         {tabs.map(([id, label, Icon]) => (
           <button
             key={id}
@@ -227,7 +227,7 @@ export function PanelTabs({ tab, onChange, inventoryCount }) {
           >
             <Icon aria-hidden="true" className="h-4 w-4" />
             {label}
-            {id === 'inventory' && inventoryCount > 0 && <span className="rounded-full bg-white/[0.08] px-1.5 text-[0.6875rem] font-semibold text-text-secondary tabular-nums">{inventoryCount}</span>}
+            {id === 'inventory' && inventoryCount > 0 && <span className="rounded-full bg-tint/[0.08] px-1.5 text-[0.6875rem] font-semibold text-text-secondary tabular-nums">{inventoryCount}</span>}
           </button>
         ))}
       </div>
@@ -340,7 +340,7 @@ export function LocationHero({ locationId, locationName, locationOptions, onChan
         aria-expanded={menuOpen}
         disabled={!locationId}
         onClick={() => setMenuOpen(value => !value)}
-        className="absolute right-2 top-2 inline-flex h-[1.875rem] w-[1.875rem] items-center justify-center rounded-lg border border-white/20 bg-surface-canvas/55 text-text-primary backdrop-blur-md transition-colors hover:bg-surface-canvas/75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
+        className="absolute right-2 top-2 inline-flex h-[1.875rem] w-[1.875rem] items-center justify-center rounded-lg border border-tint/20 bg-surface-canvas/55 text-text-primary backdrop-blur-md transition-colors hover:bg-surface-canvas/75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
       >
         <ImageIcon aria-hidden="true" className="h-4 w-4" />
       </button>
@@ -364,10 +364,10 @@ export function LocationHero({ locationId, locationName, locationOptions, onChan
           <MapPin aria-hidden="true" className="h-4 w-4" />
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[0.9375rem] font-semibold text-white">{locationName || 'Choose a location'}</span>
+          <span className="block truncate text-[0.9375rem] font-semibold text-text-primary">{locationName || 'Choose a location'}</span>
           <span className="block truncate text-xs text-entity-location">{inheritedFrom ? `Background from ${inheritedFrom}` : 'Current location'}</span>
         </span>
-        <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/15 bg-surface-canvas/55 text-text-primary backdrop-blur-md transition-colors group-hover/place:bg-surface-canvas/80">
+        <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-tint/15 bg-surface-canvas/55 text-text-primary backdrop-blur-md transition-colors group-hover/place:bg-surface-canvas/80">
           <ChevronDown aria-hidden="true" className={`h-4 w-4 transition-transform ${pickerOpen ? 'rotate-180' : ''}`} />
         </span>
       </button>
@@ -404,14 +404,14 @@ export function PlayerCard({ entity, typeLabel, resources = [], progress = null 
         </span>
       </div>
       {hasVitals && (
-        <div className="mt-2.5 flex flex-col gap-2.5 border-t border-white/[0.07] px-0.5 pt-2.5">
+        <div className="mt-2.5 flex flex-col gap-2.5 border-t border-tint/[0.07] px-0.5 pt-2.5">
           {resources.map(resource => (
             <div key={resource.definitionId}>
               <div className="flex items-baseline gap-2 text-[0.8125rem]">
                 <span className="flex-1 font-semibold text-text-secondary">{resource.name}</span>
                 <span className="tabular-nums text-text-muted">{resource.current} / {resource.maximum}</span>
               </div>
-              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-white/[0.08]" role="progressbar" aria-label={resource.name} aria-valuemin={resource.minimum} aria-valuemax={resource.maximum} aria-valuenow={resource.current}>
+              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-tint/[0.08]" role="progressbar" aria-label={resource.name} aria-valuemin={resource.minimum} aria-valuemax={resource.maximum} aria-valuenow={resource.current}>
                 <div className="h-full rounded-full" style={{ width: `${shareOf(resource.current, resource.minimum, resource.maximum)}%`, backgroundColor: resource.color }} />
               </div>
             </div>
@@ -423,7 +423,7 @@ export function PlayerCard({ entity, typeLabel, resources = [], progress = null 
                 <span className="flex-1 text-xs font-semibold text-entity-event">Level {progress.level}</span>
                 <span className="tabular-nums text-text-muted">{progress.xp} / {progress.goal ?? '—'}</span>
               </div>
-              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-white/[0.08]">
+              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-tint/[0.08]">
                 <div className="h-full rounded-full bg-entity-event" style={{ width: `${progress.goal ? shareOf(progress.xp, 0, progress.goal) : 100}%` }} />
               </div>
             </div>
@@ -432,7 +432,7 @@ export function PlayerCard({ entity, typeLabel, resources = [], progress = null 
             <div className="grid grid-cols-4 gap-1.5">
               {progress.attributes.map(attribute => (
                 <Tooltip key={attribute.traitId} content={attribute.name}>
-                  <span className="flex flex-col items-center rounded-lg bg-white/[0.04] py-1.5">
+                  <span className="flex flex-col items-center rounded-lg bg-tint/[0.04] py-1.5">
                     <span className="text-xs text-text-muted">{shortName(attribute.name)}</span>
                     <span className="text-[0.9375rem] font-bold tabular-nums text-text-primary">{attribute.value}</span>
                   </span>
@@ -457,7 +457,7 @@ export function CastRow({ entity, typeLabel, presence, mark = null, onPlay, onPr
     action();
   };
   return (
-    <div className={`group/cast flex items-center gap-2.5 rounded-card px-2 py-1.5 transition-colors ${open ? 'bg-white/[0.05]' : 'hover:bg-white/[0.03]'}`}>
+    <div className={`group/cast flex items-center gap-2.5 rounded-card px-2 py-1.5 transition-colors ${open ? 'bg-tint/[0.05]' : 'hover:bg-tint/[0.03]'}`}>
       <Avatar entity={entity} />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-semibold text-text-primary">{entity.canonicalName}</span>
@@ -470,7 +470,7 @@ export function CastRow({ entity, typeLabel, presence, mark = null, onPlay, onPr
       {mark && (
         <Tooltip content={`${mark.name} ${mark.current} / ${mark.maximum}`}>
           <span className="flex shrink-0 items-center gap-1.5 text-xs text-text-muted">
-            <span aria-hidden="true" className="h-1 w-9 overflow-hidden rounded-full bg-white/[0.08]">
+            <span aria-hidden="true" className="h-1 w-9 overflow-hidden rounded-full bg-tint/[0.08]">
               <span className="block h-full rounded-full" style={{ width: `${shareOf(mark.current, mark.minimum, mark.maximum)}%`, backgroundColor: mark.color }} />
             </span>
             {mark.name}
@@ -484,7 +484,7 @@ export function CastRow({ entity, typeLabel, presence, mark = null, onPlay, onPr
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen(value => !value)}
-        className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-[color,background-color,opacity] focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${open ? 'bg-white/[0.08] text-text-primary opacity-100' : 'text-text-subtle opacity-0 hover:text-text-primary group-hover/cast:opacity-100 group-focus-within/cast:opacity-100'}`}
+        className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-[color,background-color,opacity] focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${open ? 'bg-tint/[0.08] text-text-primary opacity-100' : 'text-text-subtle opacity-0 hover:text-text-primary group-hover/cast:opacity-100 group-focus-within/cast:opacity-100'}`}
       >
         <MoreHorizontal aria-hidden="true" className="h-4 w-4" />
       </button>
@@ -542,7 +542,7 @@ function EquippedSlot({ item, onToggle, onTransfer }) {
   const anchorRef = useRef(null);
   const family = itemFamily(item.data?.itemType);
   return (
-    <div className={`group/slot relative flex w-[7.25rem] shrink-0 snap-start flex-col items-start gap-2 rounded-card border bg-gradient-to-b ${family.wash} to-transparent p-2.5 transition-colors ${open ? 'bg-white/[0.04]' : 'hover:bg-white/[0.03]'}`}>
+    <div className={`group/slot relative flex w-[7.25rem] shrink-0 snap-start flex-col items-start gap-2 rounded-card border bg-gradient-to-b ${family.wash} to-transparent p-2.5 transition-colors ${open ? 'bg-tint/[0.04]' : 'hover:bg-tint/[0.03]'}`}>
       <ItemTile item={item} large />
       <button
         type="button"
@@ -559,7 +559,7 @@ function EquippedSlot({ item, onToggle, onTransfer }) {
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen(value => !value)}
-        className={`absolute right-1.5 top-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${open ? 'bg-white/[0.1] text-text-primary' : 'text-text-muted hover:bg-white/[0.08] hover:text-text-primary'}`}
+        className={`absolute right-1.5 top-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${open ? 'bg-tint/[0.1] text-text-primary' : 'text-text-muted hover:bg-tint/[0.08] hover:text-text-primary'}`}
       >
         <MoreHorizontal aria-hidden="true" className="h-4 w-4" />
       </button>
@@ -617,13 +617,13 @@ function CarriedRow({ item, onToggle, onTransfer }) {
   const anchorRef = useRef(null);
   const family = itemFamily(item.data?.itemType);
   return (
-    <div className={`group/item flex items-center gap-3 rounded-lg px-2 py-1.5 transition-colors ${open ? 'bg-white/[0.05]' : 'hover:bg-white/[0.03]'}`}>
+    <div className={`group/item flex items-center gap-3 rounded-lg px-2 py-1.5 transition-colors ${open ? 'bg-tint/[0.05]' : 'hover:bg-tint/[0.03]'}`}>
       <ItemTile item={item} />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-semibold text-text-primary">{item.name}</span>
         <span className={`block text-xs ${family.soft}`}>{itemMeta(item.data?.itemType).label}</span>
       </span>
-      {item.nature !== 'unique' && <span className="rounded-md bg-white/[0.07] px-1.5 text-xs font-semibold text-text-secondary tabular-nums">×{item.quantity}</span>}
+      {item.nature !== 'unique' && <span className="rounded-md bg-tint/[0.07] px-1.5 text-xs font-semibold text-text-secondary tabular-nums">×{item.quantity}</span>}
       <button
         ref={anchorRef}
         type="button"
@@ -631,7 +631,7 @@ function CarriedRow({ item, onToggle, onTransfer }) {
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen(value => !value)}
-        className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-[color,background-color,opacity] focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${open ? 'bg-white/[0.08] text-text-primary opacity-100' : 'text-text-subtle opacity-0 hover:text-text-primary group-hover/item:opacity-100 group-focus-within/item:opacity-100'}`}
+        className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-[color,background-color,opacity] focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${open ? 'bg-tint/[0.08] text-text-primary opacity-100' : 'text-text-subtle opacity-0 hover:text-text-primary group-hover/item:opacity-100 group-focus-within/item:opacity-100'}`}
       >
         <MoreHorizontal aria-hidden="true" className="h-4 w-4" />
       </button>

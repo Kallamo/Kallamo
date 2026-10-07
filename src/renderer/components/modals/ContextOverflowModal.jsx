@@ -18,14 +18,14 @@ export default function ContextOverflowModal() {
   const sizeKb = overflowData.sizeBytes ? Math.ceil(overflowData.sizeBytes / 1024) : 'unknown';
 
   return (
-    <div className={`fixed inset-0 z-50 flex items-center justify-center titlebar-nodrag select-none p-8 ${(settings?.interface?.blur ?? true) ? 'bg-black/60 backdrop-blur-sm' : 'bg-[#011419]'}`}>
-      <div className="w-full max-w-3xl h-full max-h-[600px] bg-[#011419] border border-orange-950 rounded-xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
+    <div className={`fixed inset-0 z-50 flex items-center justify-center titlebar-nodrag select-none p-8 ${(settings?.interface?.blur ?? true) ? 'bg-shade/60 backdrop-blur-sm' : 'bg-surface-canvas'}`}>
+      <div className="w-full max-w-3xl h-full max-h-[600px] bg-surface-canvas border border-orange-950 rounded-xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
         
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-gray-800/80 bg-[#0a161d] shrink-0 text-orange-400">
+        <div className="flex items-center justify-between p-4 border-b border-gray-800/80 bg-surface-panel shrink-0 text-orange-400">
           <div className="flex items-center space-x-2">
             <AlertTriangle className="w-5 h-5 animate-pulse" />
-            <h3 className="text-white font-bold text-base">Output Context Overflow Warning</h3>
+            <h3 className="text-text-primary font-bold text-base">Output Context Overflow Warning</h3>
           </div>
           <span className="text-[0.625rem] bg-orange-500/10 text-orange-400 border border-orange-500/20 font-bold px-2 py-0.5 rounded uppercase">
             Size: {sizeKb} KB
@@ -47,16 +47,16 @@ export default function ContextOverflowModal() {
           <textarea 
             value={editedText}
             onChange={(e) => setEditedText(e.target.value)}
-            className="flex-1 w-full bg-[#051116] border border-gray-800 hover:border-gray-700 focus:border-accent text-gray-200 text-xs font-mono rounded-lg p-4 focus:outline-none resize-none custom-scrollbar"
+            className="flex-1 w-full bg-surface-editor border border-gray-800 hover:border-gray-700 focus:border-accent text-gray-200 text-xs font-mono rounded-lg p-4 focus:outline-none resize-none custom-scrollbar"
             placeholder="Edit context payload here..."
           />
         </div>
 
         {/* Footer Actions */}
-        <div className="flex items-center justify-end p-4 border-t border-gray-800/80 bg-[#0a161d] space-x-3 shrink-0">
+        <div className="flex items-center justify-end p-4 border-t border-gray-800/80 bg-surface-panel space-x-3 shrink-0">
           <button 
             onClick={() => handleRespondToOverflow('send_anyway', overflowData.text)}
-            className="px-4 py-2 bg-[#011419] hover:bg-[#1a2d32] border border-gray-800 text-gray-300 rounded-lg text-xs font-semibold transition-colors cursor-pointer flex items-center space-x-1.5"
+            className="px-4 py-2 bg-surface-canvas hover:bg-surface-hover border border-gray-800 text-gray-300 rounded-lg text-xs font-semibold transition-colors cursor-pointer flex items-center space-x-1.5"
           >
             <Send className="w-3.5 h-3.5" />
             <span>Send Anyway</span>
@@ -64,7 +64,7 @@ export default function ContextOverflowModal() {
           
           <button 
             onClick={() => handleRespondToOverflow('send_edited', editedText)}
-            className="px-4 py-2 bg-accent hover:brightness-110 text-[#011419] rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center space-x-1.5"
+            className="px-4 py-2 bg-accent hover:brightness-110 text-on-accent rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center space-x-1.5"
           >
             <Save className="w-3.5 h-3.5" />
             <span>Send Edited Content</span>

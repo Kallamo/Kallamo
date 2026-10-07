@@ -1,118 +1,78 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Database, Image as ImageIcon, Search, Workflow as WorkflowIcon } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { X, Image as ImageIcon, Search, Brain, Check, AlertTriangle } from 'lucide-react';
+import Modal from '../ui/Modal';
+import Button from '../ui/Button';
+import TextInput from '../ui/TextInput';
+import Textarea from '../ui/Textarea';
+import Checkbox from '../ui/Checkbox';
+import ProfileModal from './ProfileModal';
+import ContourCover from '../../features/workspaces/ContourCover';
+import { coverUrl, plural, timeAgo } from '../../features/workspaces/workspaceFormat';
+
+const parseList = (value) => {
+  try {
+    const list = typeof value === 'string' ? JSON.parse(value) : value;
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+};
+
+const stepsOf = (workflow) => parseList(workflow.steps);
 
 export default function ChatModal({ chat, onClose }) {
-  const { 
-    handleCreateChat, 
-    handleSaveChat, 
-    writingProfiles, 
-    workflows, 
-    electronAPI, 
-    settings 
-  } = useApp();
-  
+  const { handleCreateChat, handleSaveChat, writingProfiles, workflows, electronAPI } = useApp();
   const isEditing = !!chat;
-  
+
   // Keep a single unique ID for the chat being configured
   const [chatId] = useState(() => chat?.id || 'chat_' + Math.random().toString(36).substr(2, 9));
-  
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [bgImage, setBgImage] = useState('');
-  
-  // Custom Opacity sliders (defaults are fetched from chat or preset)
   const [backdropOpacity, setBackdropOpacity] = useState(75);
   const [userBubbleOpacity, setUserBubbleOpacity] = useState(100);
   const [aiBubbleOpacity, setAiBubbleOpacity] = useState(0);
-
   const [activeProfiles, setActiveProfiles] = useState([]);
   const [activeWorkflows, setActiveWorkflows] = useState([]);
-
   const [searchProfiles, setSearchProfiles] = useState('');
-  const [searchWorkflows, setSearchWorkflows] = useState('');
-
   // Preserved so editing an older workspace doesn't wipe legacy knowledge files.
   const [knowledgeFiles, setKnowledgeFiles] = useState([]);
-
+  const [profileToSetUp, setProfileToSetUp] = useState(null);
   const bgInputRef = useRef(null);
 
   useEffect(() => {
-    if (chat) {
-      setTitle(chat.title || '');
-      setDescription(chat.description || '');
-      setBgImage(chat.backgroundImage || '');
-      setBackdropOpacity(chat.backdropOpacity ?? 75);
-      setUserBubbleOpacity(chat.userBubbleOpacity ?? 100);
-      setAiBubbleOpacity(chat.aiBubbleOpacity ?? 0);
-      
-      let loadedProfiles = [];
-      try {
-        loadedProfiles = chat.activeProfiles 
-          ? (typeof chat.activeProfiles === 'string' ? JSON.parse(chat.activeProfiles) : chat.activeProfiles) 
-          : [];
-        if (!Array.isArray(loadedProfiles)) loadedProfiles = [];
-      } catch (err) {
-        console.error("Error parsing chat.activeProfiles:", err);
-      }
-
-      let loadedWorkflows = [];
-      try {
-        loadedWorkflows = chat.activeWorkflows 
-          ? (typeof chat.activeWorkflows === 'string' ? JSON.parse(chat.activeWorkflows) : chat.activeWorkflows) 
-          : [];
-        if (!Array.isArray(loadedWorkflows)) loadedWorkflows = [];
-      } catch (err) {
-        console.error("Error parsing chat.activeWorkflows:", err);
-      }
-
-      let loadedKbFiles = [];
-      try {
-        loadedKbFiles = chat.knowledgeFiles 
-          ? (typeof chat.knowledgeFiles === 'string' ? JSON.parse(chat.knowledgeFiles) : chat.knowledgeFiles) 
-          : [];
-        if (!Array.isArray(loadedKbFiles)) loadedKbFiles = [];
-      } catch (err) {
-        console.error("Error parsing chat.knowledgeFiles:", err);
-      }
-        
-      setActiveProfiles(loadedProfiles);
-      setActiveWorkflows(loadedWorkflows);
-      setKnowledgeFiles(loadedKbFiles);
-    }
+    if (!chat) return;
+    setTitle(chat.title || '');
+    setDescription(chat.description || '');
+    setBgImage(chat.backgroundImage || '');
+    setBackdropOpacity(chat.backdropOpacity ?? 75);
+    setUserBubbleOpacity(chat.userBubbleOpacity ?? 100);
+    setAiBubbleOpacity(chat.aiBubbleOpacity ?? 0);
+    setActiveProfiles(parseList(chat.activeProfiles));
+    setActiveWorkflows(parseList(chat.activeWorkflows));
+    setKnowledgeFiles(parseList(chat.knowledgeFiles));
   }, [chat]);
 
   const handleBgImageUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
     try {
       const destBgPath = await electronAPI.uploadChatBgImage(chatId, file.path || '', file.name);
       setBgImage(destBgPath);
     } catch (err) {
-      console.error("Error uploading cover image:", err);
+      console.error('Error uploading cover image:', err);
+    } finally {
+      e.target.value = '';
     }
   };
 
-  const handleRemoveBgImage = () => {
-    setBgImage('');
-  };
-
-  const handleToggleProfile = (profileId) => {
-    setActiveProfiles(prev => 
-      prev.includes(profileId) ? prev.filter(id => id !== profileId) : [...prev, profileId]
-    );
-  };
-
-  const handleToggleWorkflow = (workflowId) => {
-    setActiveWorkflows(prev => 
-      prev.includes(workflowId) ? prev.filter(id => id !== workflowId) : [...prev, workflowId]
-    );
-  };
+  const toggle = (setter) => (id) => setter(prev => (prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]));
+  const handleToggleProfile = toggle(setActiveProfiles);
+  const handleToggleWorkflow = toggle(setActiveWorkflows);
 
   const handleSave = async () => {
     if (!title.trim()) return;
-
     const chatData = {
       id: chatId,
       title: title.trim(),
@@ -130,245 +90,170 @@ export default function ChatModal({ chat, onClose }) {
       aiBubbleOpacity: Number(aiBubbleOpacity),
       showContextBar: chat?.showContextBar ?? 0,
       memoryBlocks: JSON.stringify(chat?.memoryBlocks || []),
-      knowledgeFiles: JSON.stringify(knowledgeFiles)
+      knowledgeFiles: JSON.stringify(knowledgeFiles),
     };
-
-    if (isEditing) {
-      await handleSaveChat(chatData);
-    } else {
-      await handleCreateChat(chatData);
-    }
+    if (isEditing) await handleSaveChat(chatData);
+    else await handleCreateChat(chatData);
     onClose();
   };
 
-  // Filtering profiles & workflows
-  const filteredProfiles = writingProfiles.filter(p => 
-    p.name.toLowerCase().includes(searchProfiles.toLowerCase())
-  );
-  
-  const filteredWorkflows = workflows.filter(w => 
-    w.name.toLowerCase().includes(searchWorkflows.toLowerCase())
-  );
-
-  const isBlurEnabled = settings?.interface?.blur ?? true;
+  const filteredProfiles = writingProfiles.filter(p => p.name.toLowerCase().includes(searchProfiles.toLowerCase()));
+  const profileName = id => writingProfiles.find(p => p.id === id)?.name || 'Unknown profile';
+  const cover = coverUrl(bgImage);
+  const previewTitle = title.trim() || 'Untitled workspace';
+  const previewMeta = isEditing
+    ? `${chat.messageCount ? plural(chat.messageCount, 'message') : 'No messages yet'} · ${timeAgo(chat.updatedAt)}`
+    : 'No messages yet · Just now';
 
   return (
-    <div className={`fixed inset-0 z-50 flex items-center justify-center titlebar-nodrag select-none p-4 ${isBlurEnabled ? 'bg-black/60 backdrop-blur-sm' : 'bg-[#011419]'}`}>
-      <div className="bg-[#051116] border border-gray-800 rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6 custom-scrollbar flex flex-col space-y-5 animate-in fade-in zoom-in-95 duration-200 shadow-2xl">
-        
-        {/* Header */}
-        <div className="flex justify-between items-start">
-          <div>
-            <h2 className="text-xl font-bold text-white tracking-wide font-sans">Workspace Settings</h2>
-            <p className="text-xs text-gray-400 mt-1 font-sans">Configure your workspace environment and the profiles it starts with.</p>
-          </div>
-          <button 
-            onClick={onClose}
-            className="text-gray-500 hover:text-status-danger hover:bg-white/5 p-1 rounded-md transition-colors cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-        
-        <div className="space-y-5 flex-1">
-          {/* Cover Image & Basic Settings Column */}
-          <div className="grid grid-cols-3 gap-5">
-            <div className="col-span-1 flex flex-col">
-              <label className="block text-xs font-bold text-gray-200 mb-1.5 font-sans">Cover Image</label>
-              
-              <div 
-                onClick={() => bgInputRef.current?.click()}
-                style={bgImage ? { backgroundImage: `url("app-file:///${bgImage.replace(/\\/g, '/')}")` } : {}}
-                className="w-full flex-1 min-h-[110px] rounded-lg bg-transparent border-2 border-dashed border-gray-800 hover:border-accent flex flex-col items-center justify-center cursor-pointer transition-colors bg-cover bg-center bg-no-repeat relative group overflow-hidden"
-              >
-                {!bgImage ? (
-                  <div className="flex flex-col items-center justify-center transition-all duration-200">
-                    <ImageIcon className="text-gray-600 group-hover:text-accent transition-colors w-6 h-6 mb-1" />
-                    <span className="text-[0.625rem] text-gray-500 uppercase tracking-widest font-semibold opacity-0 group-hover:opacity-100 transition-opacity font-sans">Upload Image</span>
-                  </div>
-                ) : (
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); handleRemoveBgImage(); }}
-                    className="absolute inset-0 w-full h-full bg-black/75 text-white text-[0.625rem] font-bold tracking-widest opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer font-sans"
-                  >
-                    REMOVE IMAGE
-                  </button>
-                )}
+    <>
+      <Modal
+        onClose={onClose}
+        size="wide"
+        title={isEditing ? 'Workspace settings' : 'New workspace'}
+        subtitle="A story with its own chat, world, memory and writing."
+        className="max-h-[calc(100vh-2rem)]"
+      >
+        <div className="flex-1 overflow-y-auto custom-scrollbar px-7 py-6 flex flex-col gap-6">
+          <div className="flex flex-col gap-6 md:flex-row">
+            <div className="flex w-full flex-col gap-2.5 md:w-[18.75rem] md:shrink-0">
+              <div className="relative h-[12.25rem] overflow-hidden rounded-2xl border border-border-default">
+                {cover ? <img src={cover} alt="" className="absolute inset-0 h-full w-full object-cover" /> : <ContourCover title={previewTitle} />}
+                <span aria-hidden="true" className="absolute inset-0 bg-gradient-to-t from-scrim/95 from-[10%] to-transparent to-[70%]" />
+                <span className="absolute inset-x-4 bottom-3.5">
+                  <span className="block truncate text-[1.0625rem] font-bold text-text-primary">{previewTitle}</span>
+                  <span className="block text-xs font-semibold text-accent">{previewMeta}</span>
+                </span>
               </div>
-              <input 
-                type="file" 
-                ref={bgInputRef}
-                accept="image/*" 
-                onChange={handleBgImageUpload}
-                className="hidden" 
+              <div className="flex gap-2">
+                <Button variant="ghost" size="sm" icon={ImageIcon} fullWidth onClick={() => bgInputRef.current?.click()}>
+                  {cover ? 'Change cover' : 'Add cover image'}
+                </Button>
+                {cover && <Button variant="subtle" size="sm" onClick={() => setBgImage('')}>Remove</Button>}
+              </div>
+              <span className="caption">Without an image the card gets a map drawn from its name. The image also sits behind the chat.</span>
+              <input type="file" ref={bgInputRef} accept="image/*" onChange={handleBgImageUpload} className="hidden" />
+            </div>
+
+            <div className="flex flex-1 flex-col gap-4">
+              <TextInput
+                label="Name"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="e.g. Novel project, Campaign, Sandbox"
+                error={isEditing && !title.trim() ? 'A workspace needs a name.' : null}
+                autoFocus={!isEditing}
+              />
+              <Textarea
+                label="Description (optional)"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="What this story is about, for you. The AI doesn't read it."
+                className="min-h-[5.75rem]"
               />
             </div>
-
-            <div className="col-span-2 flex flex-col space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-gray-200 mb-1.5 font-sans">Workspace Name</label>
-                <input 
-                  type="text" 
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  className={`w-full bg-[#011419] border text-white text-sm rounded-md px-3 py-2 focus:outline-none focus:border-accent transition-colors font-sans ${!title.trim() && isEditing ? 'border-status-danger/50' : 'border-gray-800'}`}
-                  placeholder="e.g., Novel Project, Code Sandbox..."
-                />
-              </div>
-              <div className="flex-1 flex flex-col">
-                <label className="block text-xs font-bold text-gray-200 mb-1.5 font-sans">Description (Optional)</label>
-                <textarea 
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  className="w-full flex-1 bg-[#011419] border border-gray-800 text-white text-sm rounded-md px-3 py-2 focus:outline-none focus:border-accent resize-none min-h-[70px] font-sans" 
-                  placeholder="Brief summary of this workspace..."
-                />
-              </div>
-            </div>
           </div>
 
-          {/* Pre-activate Lists Columns */}
-          <div className="grid grid-cols-2 gap-4 pt-2">
-            <div className="flex flex-col h-56">
-              <label className="block text-xs font-bold text-gray-200 mb-1.5 font-sans">Pre-activate Profiles</label>
-              <div className="bg-[#011419] border border-gray-800 rounded-lg flex flex-col flex-1 overflow-hidden">
-                <div className="p-2 border-b border-gray-800/80">
-                  <div className="relative">
-                    <Search className="absolute left-2.5 top-1/2 transform -translate-y-1/2 text-gray-500 w-3 h-3" />
-                    <input 
-                      type="text" 
+          <section className="flex flex-col gap-2.5">
+            <div className="flex flex-wrap items-baseline gap-2.5">
+              <h3 className="text-sm font-bold text-text-primary">Starts with</h3>
+              <span className="caption">Profiles and workflows switched on when it opens. You can change them later in Configuration.</span>
+            </div>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div className="overflow-hidden rounded-[0.875rem] border border-border-subtle bg-tint/[0.02]">
+                <div className="flex items-center gap-2 px-3 py-2.5">
+                  <span className="flex-1 text-xs font-semibold text-text-primary">
+                    AI profiles <span className="caption tabular-nums">{activeProfiles.length} on</span>
+                  </span>
+                  <div className="relative w-40">
+                    <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-text-subtle" aria-hidden="true" />
+                    <input
                       value={searchProfiles}
                       onChange={(e) => setSearchProfiles(e.target.value)}
-                      placeholder="Search profiles..." 
-                      className="w-full bg-[#051116] border border-gray-800/50 text-gray-300 text-[0.6875rem] rounded pl-7 pr-2 py-1.5 focus:outline-none focus:border-accent transition-colors font-sans"
+                      placeholder="Search"
+                      aria-label="Search profiles"
+                      className="h-[1.875rem] w-full rounded-lg border border-border-default bg-surface-input pl-7 pr-2 text-xs text-text-secondary placeholder:text-text-subtle focus:border-accent focus:outline-none"
                     />
                   </div>
                 </div>
-                
-                <div className="flex-1 overflow-y-auto custom-scrollbar p-1.5 space-y-1">
+                <div className="max-h-64 overflow-y-auto overflow-x-hidden custom-scrollbar">
                   {filteredProfiles.length === 0 ? (
-                    <span className="caption italic block p-1">No profiles found</span>
-                  ) : (
-                    filteredProfiles.map(p => {
-                      const isSelected = activeProfiles.includes(p.id);
-                      // Incomplete profiles can't be pre-activated, show a warning
-                      // badge in place of the checkbox.
-                      if (p.needsSetup) {
-                        return (
-                          <div
-                            key={p.id}
-                            className="relative flex items-center space-x-2.5 p-1.5 rounded hover:z-20"
-                          >
-                            <div className="flex items-center shrink-0">
-                              <AlertTriangle className="w-3.5 h-3.5 text-amber-500 cursor-help" data-tooltip="To activate: create an API profile in Settings, then link it to this profile in the Library." />
-                            </div>
-                            <span className="w-2 h-2 rounded-full shrink-0 opacity-40" style={{ backgroundColor: p.color }} />
-                            <span className="text-xs text-gray-500 truncate font-sans">{p.name}</span>
-                          </div>
-                        );
-                      }
-                      return (
-                        <label
-                          key={p.id}
-                          className="flex items-center space-x-2.5 p-1.5 hover:bg-[#0a161d] rounded cursor-pointer transition-colors"
-                        >
-                          <div className={`w-3.5 h-3.5 rounded-sm border flex items-center justify-center transition-all duration-200 hover:scale-105 active:scale-95 shrink-0 ${
-                            isSelected ? 'bg-accent border-accent text-[#011419] shadow-[0_0_8px_rgba(221,186,110,0.4)]' : 'border-gray-700 bg-[#011419]/90 hover:border-accent/50'
-                          }`}>
-                            {isSelected && <Check className="w-2.5 h-2.5 text-[#011419] stroke-[3.5]" />}
-                          </div>
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => handleToggleProfile(p.id)}
-                            className="hidden"
-                          />
-                          <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: p.color }} />
-                          <span className="text-xs text-gray-300 truncate font-sans">{p.name}</span>
-                        </label>
-                      );
-                    })
-                  )}
+                    <p className="caption border-t border-border-subtle px-3 py-3">No profiles found.</p>
+                  ) : filteredProfiles.map(p => (
+                    p.needsSetup ? (
+                      <div key={p.id} className="flex items-center gap-2.5 border-t border-tint/5 px-3 py-2">
+                        <Checkbox size="sm" checked={false} disabled ariaLabel={`${p.name} can't be switched on yet`} />
+                        <span className="h-2 w-2 shrink-0 rounded-full opacity-50" style={{ backgroundColor: p.color }} />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm text-text-subtle">{p.name}</span>
+                          <span className="block text-xs text-status-warning">No model linked</span>
+                        </span>
+                        <button type="button" onClick={() => setProfileToSetUp(p)} className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-status-setup transition-colors hover:bg-tint/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                          Set up
+                        </button>
+                      </div>
+                    ) : (
+                      <div key={p.id} className="border-t border-tint/5 px-3 py-2 transition-colors hover:bg-tint/[0.03]">
+                        <Checkbox
+                          size="sm"
+                          checked={activeProfiles.includes(p.id)}
+                          onChange={() => handleToggleProfile(p.id)}
+                          label={(
+                            <span className="flex min-w-0 items-center gap-2.5">
+                              <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: p.color }} />
+                              <span className="min-w-0">
+                                <span className="block truncate text-text-primary">{p.name}</span>
+                                {p.model && <span className="block truncate font-mono text-xs text-text-subtle">{p.model}</span>}
+                              </span>
+                            </span>
+                          )}
+                        />
+                      </div>
+                    )
+                  ))}
+                </div>
+              </div>
+
+              <div className="self-start overflow-hidden rounded-[0.875rem] border border-border-subtle bg-tint/[0.02]">
+                <div className="px-3 py-2.5 text-xs font-semibold text-text-primary">
+                  Workflows <span className="caption tabular-nums">{activeWorkflows.length} on</span>
+                </div>
+                <div className="max-h-64 overflow-y-auto overflow-x-hidden custom-scrollbar">
+                  {workflows.length === 0 ? (
+                    <p className="caption border-t border-border-subtle px-3 py-3">No workflows yet. Build one in the Library.</p>
+                  ) : workflows.map(w => (
+                    <div key={w.id} className="border-t border-tint/5 px-3 py-2 transition-colors hover:bg-tint/[0.03]">
+                      <Checkbox
+                        size="sm"
+                        checked={activeWorkflows.includes(w.id)}
+                        onChange={() => handleToggleWorkflow(w.id)}
+                        label={(
+                          <span className="flex min-w-0 items-center gap-2.5">
+                            <WorkflowIcon className="h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden="true" />
+                            <span className="min-w-0">
+                              <span className="block truncate text-text-primary">{w.name}</span>
+                              <span className="block truncate text-xs text-text-subtle">{stepsOf(w).map(step => profileName(step.profileId)).join(', then ') || 'No steps'}</span>
+                            </span>
+                          </span>
+                        )}
+                      />
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>
-            
-            <div className="flex flex-col h-56">
-              <label className="block text-xs font-bold text-gray-200 mb-1.5 font-sans">Pre-activate Workflows</label>
-              <div className="bg-[#011419] border border-gray-800 rounded-lg flex flex-col flex-1 overflow-hidden">
-                <div className="p-2 border-b border-gray-800/80">
-                  <div className="relative">
-                    <Search className="absolute left-2.5 top-1/2 transform -translate-y-1/2 text-gray-500 w-3 h-3" />
-                    <input 
-                      type="text" 
-                      value={searchWorkflows}
-                      onChange={(e) => setSearchWorkflows(e.target.value)}
-                      placeholder="Search workflows..." 
-                      className="w-full bg-[#051116] border border-gray-800/50 text-gray-300 text-[0.6875rem] rounded pl-7 pr-2 py-1.5 focus:outline-none focus:border-accent transition-colors font-sans"
-                    />
-                  </div>
-                </div>
-                
-                <div className="flex-1 overflow-y-auto custom-scrollbar p-1.5 space-y-1">
-                  {filteredWorkflows.length === 0 ? (
-                    <span className="caption italic block p-1">No workflows found</span>
-                  ) : (
-                    filteredWorkflows.map(w => {
-                      const isSelected = activeWorkflows.includes(w.id);
-                      return (
-                        <label 
-                          key={w.id} 
-                          className="flex items-center space-x-2.5 p-1.5 hover:bg-[#0a161d] rounded cursor-pointer transition-colors"
-                        >
-                          <div className={`w-3.5 h-3.5 rounded-sm border flex items-center justify-center transition-all duration-200 hover:scale-105 active:scale-95 shrink-0 ${
-                            isSelected ? 'bg-accent border-accent text-[#011419] shadow-[0_0_8px_rgba(221,186,110,0.4)]' : 'border-gray-700 bg-[#011419]/90 hover:border-accent/50'
-                          }`}>
-                            {isSelected && <Check className="w-2.5 h-2.5 text-[#011419] stroke-[3.5]" />}
-                          </div>
-                          <input 
-                            type="checkbox" 
-                            checked={isSelected} 
-                            onChange={() => handleToggleWorkflow(w.id)}
-                            className="hidden"
-                          />
-                          <span className="text-xs text-gray-300 truncate font-sans">{w.name}</span>
-                        </label>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Memory pointer */}
-          <div className="flex items-center space-x-2.5 bg-[#011419] border border-gray-800/80 rounded-lg px-3.5 py-3">
-            <Brain className="w-4 h-4 text-accent shrink-0" />
-            <p className="caption">
-              Want the AI to know facts, documents or lore? Add them anytime from the <span className="text-accent font-semibold">Memory</span> tab inside the workspace.
-            </p>
-          </div>
+          </section>
         </div>
 
-        {/* Footer */}
-        <div className="flex justify-end space-x-3 pt-2 shrink-0 border-t border-gray-800/60">
-          <button 
-            type="button" 
-            onClick={onClose} 
-            className="px-4 py-2 text-xs font-semibold text-gray-400 hover:text-white transition-colors cursor-pointer"
-          >
-            Cancel
-          </button>
-          <button 
-            type="button" 
-            onClick={handleSave}
-            disabled={!title.trim()}
-            className="px-4 py-2 text-xs bg-accent text-[#011419] font-bold rounded-md hover:brightness-110 disabled:opacity-50 transition-colors shadow-sm min-w-24 flex items-center justify-center cursor-pointer font-sans"
-          >
-            {isEditing ? 'Save Changes' : 'Create Workspace'}
-          </button>
-        </div>
-      </div>
-    </div>
+        <footer className="flex shrink-0 items-center gap-2.5 border-t border-border-subtle bg-tint/[0.015] px-7 py-4">
+          <Database className="h-4 w-4 shrink-0 text-text-subtle" aria-hidden="true" />
+          <span className="caption flex-1">Facts, files and lore go in the Memory tab once the workspace is open.</span>
+          <Button variant="subtle" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSave} disabled={!title.trim()}>{isEditing ? 'Save changes' : 'Create workspace'}</Button>
+        </footer>
+      </Modal>
+
+      {profileToSetUp && <ProfileModal profile={profileToSetUp} onClose={() => setProfileToSetUp(null)} />}
+    </>
   );
 }

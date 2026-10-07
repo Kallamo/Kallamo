@@ -1,243 +1,182 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Search, Plus, LibraryBig } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { Search, Plus, MoreVertical, Pin, Trash2, LibraryBig, Pencil } from 'lucide-react';
-import { WorkspaceGlyph } from './ui/glyphs';
 import ChatModal from './modals/ChatModal';
 import DeleteModal from './modals/DeleteModal';
-import Popover from './ui/Popover';
-import Button from './ui/Button';
+import SegmentedControl from './ui/SegmentedControl';
 import EmptyState from './ui/EmptyState';
-import TextInput from './ui/TextInput';
+import ContinueHero from '../features/workspaces/ContinueHero';
+import WorkspaceCard, { NewWorkspaceTile } from '../features/workspaces/WorkspaceCard';
+import SetupStrip from '../features/workspaces/SetupStrip';
+import EmptyWorkspaces, { EmptyBackdrop } from '../features/workspaces/EmptyWorkspaces';
+import DiscordButton from '../features/workspaces/DiscordButton';
+import { leadImage } from '../features/workspaces/workspaceFormat';
+
+const SORTS = [
+  { value: 'recent', label: 'Recent' },
+  { value: 'name', label: 'Name' },
+];
 
 export default function DashboardView() {
-  const { 
-    chats, 
-    handleSelectChat, 
-    handleDeleteChat, 
-    handleSaveChat, 
+  const {
+    chats,
+    setChats,
+    writingProfiles,
+    apiProfiles,
+    handleSelectChat,
+    handleDeleteChat,
+    handleSaveChat,
     setCurrentView,
+    setActiveWorkspaceView,
+    openSettings,
     electronAPI,
-    showToast
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeDropdownId, setActiveDropdownId] = useState(null);
-  const [showChatModal, setShowChatModal] = useState(false);
-  const [chatToEdit, setChatToEdit] = useState(null);
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [sort, setSort] = useState('recent');
+  const [chatModal, setChatModal] = useState(null); // { chat } while the create/edit dialog is open
   const [chatToDelete, setChatToDelete] = useState(null);
-  
-  // One stable anchor per card: a ref attached only when the menu opens is still null
-  // when the Popover measures it, which closes the menu on the same render.
-  const dropdownRefs = useRef(new Map());
-  const dropdownRefFor = id => {
-    if (!dropdownRefs.current.has(id)) dropdownRefs.current.set(id, { current: null });
-    return dropdownRefs.current.get(id);
+
+  // Counts and the latest reply change while you work inside a workspace; refresh on return.
+  useEffect(() => {
+    let cancelled = false;
+    electronAPI.getChats?.().then(fresh => { if (!cancelled && Array.isArray(fresh)) setChats(fresh); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const profilesById = useMemo(() => new Map(writingProfiles.map(profile => [profile.id, profile])), [writingProfiles]);
+  const profilesOf = chat => (chat.activeProfiles || []).map(id => profilesById.get(id)).filter(Boolean);
+
+  const recent = useMemo(() => [...chats].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)), [chats]);
+  const hero = recent[0] || null;
+  const query = searchQuery.trim().toLowerCase();
+  const listed = useMemo(() => {
+    const filtered = chats.filter(chat => (chat.title || '').toLowerCase().includes(query));
+    return filtered.sort((a, b) => {
+      if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
+      return sort === 'name'
+        ? (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' })
+        : (b.updatedAt || 0) - (a.updatedAt || 0);
+    });
+  }, [chats, query, sort]);
+
+  const noProfileReady = writingProfiles.length === 0 || writingProfiles.every(profile => profile.needsSetup);
+  const isEmpty = chats.length === 0;
+  const ambient = !isEmpty && hero ? leadImage(hero)?.src : null;
+
+  const openWorkspace = (chat, view = 'chat') => {
+    setActiveWorkspaceView(view);
+    handleSelectChat(chat.id);
   };
-
-  const filteredChats = chats.filter(c => 
-    (c.title || '').toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
-  const sortedChats = [...filteredChats].sort((a, b) => {
-    if (a.isPinned && !b.isPinned) return -1;
-    if (!a.isPinned && b.isPinned) return 1;
-    return b.updatedAt - a.updatedAt;
-  });
-
-  const togglePin = async (e, chat) => {
-    e.stopPropagation();
-    setActiveDropdownId(null);
-    const updated = { ...chat, isPinned: chat.isPinned ? 0 : 1 };
-    await handleSaveChat(updated);
-  };
-
-  const openEditModal = (e, chat) => {
-    e.stopPropagation();
-    setActiveDropdownId(null);
-    setChatToEdit(chat);
-    setShowChatModal(true);
-  };
-
-  const triggerDelete = (e, chat) => {
-    e.stopPropagation();
-    setActiveDropdownId(null);
-    setChatToDelete(chat);
-    setShowDeleteModal(true);
-  };
-
+  const togglePin = chat => handleSaveChat({ ...chat, isPinned: chat.isPinned ? 0 : 1 });
+  const openCreate = () => setChatModal({ chat: null });
   const confirmDelete = async () => {
-    if (chatToDelete) {
-      await handleDeleteChat(chatToDelete.id);
-      setShowDeleteModal(false);
-      setChatToDelete(null);
-    }
+    if (!chatToDelete) return;
+    await handleDeleteChat(chatToDelete.id);
+    setChatToDelete(null);
   };
-
 
   return (
-    <div className="flex flex-col w-full h-full px-8 pb-8 pt-6 relative overflow-hidden bg-[#011419] select-none">
-      
-      {/* Header Area */}
-      <div className="flex items-center justify-between mb-8 w-full max-w-7xl mx-auto shrink-0 mt-4">
-        <h1 className="text-3xl font-bold text-white tracking-wide">Workspaces</h1>
-        
-        <div className="flex items-center space-x-4">
-          {/* Search bar */}
-          <div className="w-64">
-            <TextInput
-              icon={Search}
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search workspaces…"
-              aria-label="Search workspaces"
-            />
+    <div className="relative flex h-full w-full flex-col overflow-hidden surface-page select-none">
+      {isEmpty ? <EmptyBackdrop /> : ambient && (
+        <>
+          <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-[40rem] overflow-hidden">
+            <img src={ambient} alt="" className="absolute -left-16 -top-16 h-[44rem] w-[calc(100%+8rem)] max-w-none object-cover opacity-50 blur-[56px] saturate-[1.25]" />
           </div>
+          <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-[40rem] bg-[linear-gradient(to_bottom,color-mix(in_srgb,var(--theme-surface-canvas)_35%,transparent)_0%,color-mix(in_srgb,var(--theme-surface-canvas)_75%,transparent)_55%,var(--theme-surface-canvas)_100%)]" />
+        </>
+      )}
 
-          {/* Library Link */}
-          <Button variant="ghost" icon={LibraryBig} onClick={() => setCurrentView('library')}>Library</Button>
+      <div className="relative z-10 flex-1 overflow-y-auto custom-scrollbar [mask-image:linear-gradient(to_bottom,transparent_0,transparent_2.25rem,black_4.25rem)]">
+        <div className={`mx-auto flex w-full max-w-[75rem] flex-col gap-[1.375rem] px-8 pb-20 pt-[4.25rem] ${isEmpty ? 'min-h-full' : ''}`}>
+          <header className="flex flex-wrap items-center gap-3">
+            <h1 className="flex-1 text-[1.875rem] font-extrabold tracking-[-0.02em] text-text-primary">Workspaces</h1>
+            {!isEmpty && (
+              <div className="relative w-64">
+                <Search className="pointer-events-none absolute left-3 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-text-subtle" aria-hidden="true" />
+                <input
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  placeholder="Search workspaces"
+                  aria-label="Search workspaces"
+                  className="h-[2.375rem] w-full rounded-[0.625rem] border border-border-default bg-surface-inset/55 pl-9 pr-3 text-sm text-text-secondary backdrop-blur-xl placeholder:text-text-subtle focus:border-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+                />
+              </div>
+            )}
+            <GlassButton icon={LibraryBig} onClick={() => setCurrentView('library')}>Library</GlassButton>
+            {!isEmpty && <GlassButton icon={Plus} onClick={openCreate} primary>New workspace</GlassButton>}
+          </header>
 
-          {/* New Chat Button */}
-          <Button
-            icon={Plus}
-            onClick={() => {
-              setChatToEdit(null);
-              setShowChatModal(true);
-            }}
-          >
-            New Workspace
-          </Button>
+          {isEmpty ? (
+            <EmptyWorkspaces onCreate={openCreate} needsModel={noProfileReady} onOpenSettings={() => openSettings('api')} />
+          ) : (
+            <>
+              {!query && hero && <ContinueHero chat={hero} onOpen={openWorkspace} />}
+              {!query && noProfileReady && (
+                <SetupStrip
+                  hasApiProfile={apiProfiles.length > 0}
+                  onOpenSettings={() => openSettings('api')}
+                  onOpenLibrary={() => setCurrentView('library')}
+                  workspaceLabel={hero?.title}
+                />
+              )}
+
+              <div className="mt-2.5 flex items-center gap-3">
+                <h2 className="text-base font-bold text-text-primary">{query ? 'Results' : 'All workspaces'}</h2>
+                <span className="caption tabular-nums">{listed.length}</span>
+                <span className="flex-1" />
+                <SegmentedControl label="Sort workspaces" value={sort} onChange={setSort} options={SORTS} />
+              </div>
+
+              {listed.length === 0 ? (
+                <EmptyState title="No matching workspaces" subtitle="Try a different title or clear the search." />
+              ) : (
+                <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                  {listed.map(chat => (
+                    <WorkspaceCard
+                      key={chat.id}
+                      chat={chat}
+                      profiles={profilesOf(chat)}
+                      onOpen={openWorkspace}
+                      onTogglePin={togglePin}
+                      onEdit={target => setChatModal({ chat: target })}
+                      onDelete={setChatToDelete}
+                    />
+                  ))}
+                  {!query && <NewWorkspaceTile onClick={openCreate} />}
+                </div>
+              )}
+            </>
+          )}
         </div>
       </div>
 
-      {/* Grid Area */}
-      <div className="w-full max-w-7xl mx-auto flex-1 overflow-y-auto custom-scrollbar pr-2 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 content-start pb-8">
-        {sortedChats.length === 0 ? (
-          <EmptyState
-            className="col-span-full mt-6"
-            icon={WorkspaceGlyph}
-            title={searchQuery ? 'No matching workspaces' : 'Create your first workspace'}
-            subtitle={searchQuery ? 'Try a different title or clear the search.' : 'Keep a story, its Worldbuild, memory, files, and writing tools together.'}
-            action={!searchQuery ? <Button icon={Plus} onClick={() => { setChatToEdit(null); setShowChatModal(true); }}>New Workspace</Button> : null}
-          />
-        ) : (
-          sortedChats.map(chat => {
-            // Background image resolution
-            const hasBg = chat.backgroundImage && chat.backgroundImage.trim() !== '';
+      <DiscordButton />
 
-            const messagesCount = chat.messageCount || 0;
-
-            return (
-              <div
-                key={chat.id}
-                onClick={() => handleSelectChat(chat.id)}
-                className="group relative rounded-xl border border-gray-800/80 hover:border-accent/50 cursor-pointer transition-all duration-300 shadow-lg hover:-translate-y-1 h-40 flex flex-col justify-end p-5 bg-[#0a161d]"
-              >
-                {/* Custom blur/overlay background image container */}
-                {hasBg && (
-                  <div className="absolute inset-0 rounded-xl overflow-hidden pointer-events-none z-0">
-                    <div 
-                      className="absolute inset-0 bg-cover bg-center transition-transform duration-500 group-hover:scale-105"
-                      style={{ backgroundImage: `url("app-file:///${chat.backgroundImage.replace(/\\/g, '/')}")` }}
-                    />
-                    <div className="absolute inset-0 bg-[#0a161d]/85 backdrop-blur-[2px] transition-colors group-hover:bg-[#0a161d]/75" />
-                  </div>
-                )}
-                {/* Pin Icon indicator */}
-                {chat.isPinned === 1 && (
-                  <Pin className="absolute top-4 left-4 text-accent w-4 h-4 fill-accent z-10" />
-                )}
-
-                {/* Card options area */}
-                <div className="absolute top-4 right-4 flex items-center space-x-1.5 z-30" onClick={(e) => e.stopPropagation()}>
-
-                  <div ref={dropdownRefFor(chat.id)} className="relative">
-                    <button 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setActiveDropdownId(activeDropdownId === chat.id ? null : chat.id);
-                      }}
-                      className="hover-reveal text-gray-400 hover:text-white transition-opacity p-1.5 rounded-md hover:bg-black/50 backdrop-blur-sm shadow-sm cursor-pointer" 
-                      title="Options"
-                    >
-                      <MoreVertical className="w-4 h-4" />
-                    </button>
-
-                    <Popover anchorRef={dropdownRefFor(chat.id)}open={activeDropdownId === chat.id} onClose={() => setActiveDropdownId(null)} matchAnchorWidth={false} align="right" maxHeight={180} scroll={false} className="w-36 overflow-hidden rounded-md py-1">
-                        <button 
-                          onClick={(e) => togglePin(e, chat)}
-                          className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-[#1a2d32] hover:text-white transition-colors flex items-center space-x-2 cursor-pointer font-medium"
-                        >
-                          <Pin className="w-3 h-3" />
-                          <span>{chat.isPinned ? 'Unpin' : 'Pin'}</span>
-                        </button>
-                        <button 
-                          onClick={(e) => openEditModal(e, chat)}
-                          className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-[#1a2d32] hover:text-white transition-colors flex items-center space-x-2 cursor-pointer font-medium"
-                        >
-                          <Pencil className="w-3 h-3" />
-                          <span>Edit</span>
-                        </button>
-                        <div className="h-px bg-gray-800 w-full my-1"></div>
-                        <button 
-                          onClick={(e) => triggerDelete(e, chat)}
-                          className="w-full text-left px-3 py-2 text-xs text-status-danger hover:bg-status-danger/10 transition-colors flex items-center space-x-2 cursor-pointer font-medium"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                          <span>Delete</span>
-                        </button>
-                    </Popover>
-                  </div>
-                </div>
-
-                {/* Card Title & message count */}
-                <div className="relative z-10 w-full pr-4 select-none pointer-events-none">
-                  <h3 className="text-white font-bold text-lg truncate drop-shadow-md">{chat.title}</h3>
-                  <p className="text-xs text-accent mt-1.5 drop-shadow-md font-semibold">{messagesCount} messages</p>
-                </div>
-              </div>
-            );
-          })
-        )}
-      </div>
-
-      {/* Workspace Creator/Editor Modal */}
-      {showChatModal && (
-        <ChatModal 
-          chat={chatToEdit} 
-          onClose={() => {
-            setShowChatModal(false);
-            setChatToEdit(null);
-          }} 
-        />
-      )}
-
-      {/* Workspace Delete Modal */}
-      {showDeleteModal && (
-        <DeleteModal 
+      {chatModal && <ChatModal chat={chatModal.chat} onClose={() => setChatModal(null)} />}
+      {chatToDelete && (
+        <DeleteModal
           title="Delete Workspace"
-          message={`Are you sure you want to permanently delete "${chatToDelete?.title}"?`}
+          message={`Are you sure you want to permanently delete "${chatToDelete.title}"?`}
           onConfirm={confirmDelete}
-          onClose={() => {
-            setShowDeleteModal(false);
-            setChatToDelete(null);
-          }}
+          onClose={() => setChatToDelete(null)}
         />
       )}
-
-      {/* Discord Floating Button */}
-      <a
-        href="https://discord.com/invite/CE4C9JRS9H"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="absolute bottom-6 right-6 z-30 flex items-center space-x-2.5 px-4.5 py-3 bg-[#0a161d] hover:bg-[#5865F2] border border-gray-800 hover:border-transparent rounded-full text-gray-400 hover:text-white font-bold transition-all duration-300 ease-in-out shadow-lg hover:shadow-[0_0_15px_rgba(88,101,242,0.5)] active:scale-95 text-xs cursor-pointer font-sans select-none"
-      >
-        <svg viewBox="0 0 127.14 96.36" fill="currentColor" className="w-4.5 h-4.5">
-          <path d="M107.7,8.07A105.15,105.15,0,0,0,77.26,0a77.19,77.19,0,0,0-3.3,6.83A96.67,96.67,0,0,0,53.22,6.83,77.19,77.19,0,0,0,49.88,0,105.15,105.15,0,0,0,19.44,8.07C3.66,31.58-1.86,54.65,1,77.53A105.73,105.73,0,0,0,32,96.36a77.7,77.7,0,0,0,6.63-10.85,68.43,68.43,0,0,1-10.5-5A52.57,52.57,0,0,0,31,77.53,74.37,74.37,0,0,0,96.19,77.53a52.57,52.57,0,0,0,2.83,3a68.43,68.43,0,0,1-10.5,5,77.7,77.7,0,0,0,6.63,10.85,105.73,105.73,0,0,0,31-18.83C129.87,50.84,123.3,28,107.7,8.07ZM42.45,65.69C36.18,65.69,31,60,31,53S36.18,40.36,42.45,40.36,53.83,46,53.83,53,48.72,65.69,42.45,65.69Zm42.24,0C78.41,65.69,73.24,60,73.24,53S78.41,40.36,84.69,40.36,96.07,46,96.07,53,91,65.69,84.69,65.69Z"/>
-        </svg>
-        <span className="leading-none">Join our Discord Community!</span>
-      </a>
-
     </div>
+  );
+}
+
+function GlassButton({ icon: Icon, children, onClick, primary = false }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex h-9 items-center gap-2 rounded-[0.625rem] px-3.5 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${primary
+        ? 'bg-accent/90 text-on-accent shadow-[0_0.375rem_1.125rem_-0.5rem] shadow-accent/50 hover:bg-accent'
+        : 'border border-border-default bg-surface-inset/45 text-text-primary backdrop-blur-xl hover:bg-surface-hover'}`}
+    >
+      <Icon className="h-4 w-4" aria-hidden="true" />
+      {children}
+    </button>
   );
 }

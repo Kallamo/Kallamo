@@ -671,14 +671,14 @@ export default function ChatWorkspaceView() {
       isDocumentMode,
       softBlur,
       userBubbleStyle: {
-        backgroundColor: `rgba(24, 44, 50, ${userAlpha})`,
-        borderColor: 'rgba(255, 255, 255, 0.1)',
+        backgroundColor: `color-mix(in srgb, var(--theme-bubble-user) ${userAlpha * 100}%, transparent)`,
+        borderColor: 'color-mix(in srgb, var(--theme-tint) 10%, transparent)',
         ...blurStyle(userAlpha),
         ...(isDocumentMode ? { padding: '1.25rem', borderRadius: '0.75rem' } : {})
       },
       aiBubbleStyle: {
-        backgroundColor: `rgba(10, 22, 29, ${aiAlpha})`,
-        borderColor: 'rgba(255, 255, 255, 0.08)',
+        backgroundColor: `color-mix(in srgb, var(--theme-surface-panel) ${aiAlpha * 100}%, transparent)`,
+        borderColor: 'var(--theme-border-subtle)',
         ...(isDocumentMode ? { padding: '1.25rem', borderRadius: '0.75rem' } : blurStyle(aiAlpha))
       },
       entityNames,
@@ -947,7 +947,7 @@ export default function ChatWorkspaceView() {
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className={`flex w-full h-full relative overflow-hidden bg-[#011419] ${hasBg ? 'has-backdrop' : ''}`}
+      className={`flex w-full h-full relative overflow-hidden bg-surface-canvas pt-10 ${hasBg ? 'has-backdrop' : ''}`}
     >
       {/* Visual Background Layers */}
       {hasBg && <div style={bgStyle} className="absolute inset-0 z-0" />}
@@ -957,24 +957,24 @@ export default function ChatWorkspaceView() {
       <div className="flex-1 flex flex-col h-full relative z-10 overflow-hidden">
         {/* Drag and drop overlay */}
         {isDragging && (
-          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/70 border-2 border-dashed border-accent/40 m-4 rounded-xl pointer-events-none animate-in fade-in duration-200">
+          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-shade/70 border-2 border-dashed border-accent/40 m-4 rounded-xl pointer-events-none animate-in fade-in duration-200">
             <div className="flex flex-col items-center space-y-4">
               <Paperclip className="w-12 h-12 text-accent animate-bounce" />
-              <span className="text-sm font-bold text-white tracking-wide">Drop files here to attach to chat</span>
+              <span className="text-sm font-bold text-text-primary tracking-wide">Drop files here to attach to chat</span>
             </div>
           </div>
         )}
 
         {/* Workspace Chat Header */}
-        <div className={`flex items-center justify-between h-14 border-b border-gray-800/80 px-6 shrink-0 bg-[#011419]/80 z-10 relative ${(settings?.interface?.blur ?? true) ? 'backdrop-blur-md' : ''}`}>
+        <div className={`flex items-center justify-between h-14 border-b border-gray-800/80 px-6 shrink-0 bg-surface-canvas/80 z-10 relative ${(settings?.interface?.blur ?? true) ? 'backdrop-blur-md' : ''}`}>
           <div className="flex items-center space-x-3 min-w-0 mr-4 flex-1">
             <button
               onClick={() => setCurrentView('dashboard')}
-              className="p-1.5 text-gray-400 hover:text-white hover:bg-white/10 rounded-md transition-colors mr-2 cursor-pointer shrink-0"
+              className="p-1.5 text-gray-400 hover:text-text-primary hover:bg-tint/10 rounded-md transition-colors mr-2 cursor-pointer shrink-0"
             >
               <ArrowLeft className="w-4.5 h-4.5" />
             </button>
-            <h2 className="text-white font-semibold text-sm truncate">
+            <h2 className="text-text-primary font-semibold text-sm truncate">
               {activeChat.title}
             </h2>
           </div>
@@ -995,7 +995,7 @@ export default function ChatWorkspaceView() {
                 aria-current={activeSubView === id ? 'page' : undefined}
                 className={`group inline-flex h-8 shrink-0 items-center overflow-hidden rounded-md text-xs font-semibold transition-[max-width,padding,background-color,color,box-shadow] duration-300 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${activeSubView === id
                   ? 'max-w-36 bg-accent px-3 text-on-accent shadow-sm'
-                  : 'max-w-8 px-2 text-text-muted hover:max-w-36 hover:bg-white/5 hover:px-3 hover:text-text-primary'
+                  : 'max-w-8 px-2 text-text-muted hover:max-w-36 hover:bg-tint/5 hover:px-3 hover:text-text-primary'
                   }`}
               >
                 <Icon className="h-4 w-4 shrink-0" />
@@ -1013,7 +1013,7 @@ export default function ChatWorkspaceView() {
               onMouseEnter={() => workspaceTabViews.configuration.preload()}
               className={`inline-flex min-h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-semibold transition-colors cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${activeSubView === 'configuration'
                 ? 'text-accent bg-accent/10'
-                : 'text-text-muted hover:text-text-primary hover:bg-white/5'
+                : 'text-text-muted hover:text-text-primary hover:bg-tint/5'
                 }`}
             >
               <SlidersHorizontal className="h-4 w-4" />
@@ -1254,7 +1254,7 @@ export default function ChatWorkspaceView() {
 
       {/* Floating Error modal for failed message edit */}
       {editError && (
-        <div className="absolute bottom-28 right-6 w-80 bg-[#1a0a0d] border border-status-danger/30 rounded-xl p-4 shadow-[0_0_20px_rgba(0,0,0,0.6)] z-50 animate-in fade-in slide-in-from-bottom-5 duration-300 flex flex-col space-y-3">
+        <div className="absolute bottom-28 right-6 w-80 bg-surface-danger border border-status-danger/30 rounded-xl p-4 shadow-[0_0_20px_color-mix(in_srgb,var(--theme-shade)_60%,transparent)] z-50 animate-in fade-in slide-in-from-bottom-5 duration-300 flex flex-col space-y-3">
           <div className="flex items-start justify-between">
             <div className="flex items-center space-x-2 text-status-danger">
               <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
@@ -1264,7 +1264,7 @@ export default function ChatWorkspaceView() {
             </div>
             <button
               onClick={() => setEditError(null)}
-              className="text-gray-500 hover:text-white transition-colors cursor-pointer"
+              className="text-gray-500 hover:text-text-primary transition-colors cursor-pointer"
             >
               <X className="w-3.5 h-3.5" />
             </button>
@@ -1277,7 +1277,7 @@ export default function ChatWorkspaceView() {
           <div className="flex items-center justify-end space-x-2 pt-1 select-none">
             <button
               onClick={() => setEditError(null)}
-              className="px-2.5 py-1 text-[0.625rem] font-bold uppercase text-gray-400 hover:text-white cursor-pointer transition-colors"
+              className="px-2.5 py-1 text-[0.625rem] font-bold uppercase text-gray-400 hover:text-text-primary cursor-pointer transition-colors"
             >
               Dismiss
             </button>
@@ -1289,7 +1289,7 @@ export default function ChatWorkspaceView() {
                 setEditError(null);
                 await handleEditUserMessage(msgId, editedText, targetId);
               }}
-              className="px-3 py-1 bg-danger-solid hover:bg-danger-solid-hover text-white rounded text-[0.625rem] font-bold uppercase hover:scale-[1.02] active:scale-95 transition-[background-color,transform] cursor-pointer"
+              className="px-3 py-1 bg-danger-solid hover:bg-danger-solid-hover text-on-danger rounded text-[0.625rem] font-bold uppercase hover:scale-[1.02] active:scale-95 transition-[background-color,transform] cursor-pointer"
             >
               Retry
             </button>

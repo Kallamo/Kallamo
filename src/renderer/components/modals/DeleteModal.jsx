@@ -24,7 +24,7 @@ export default function DeleteModal({
           <div className="rounded-lg bg-status-danger/10 p-2 text-status-danger">
             <AlertTriangle className="w-5 h-5" />
           </div>
-          <h3 className="text-white font-bold text-lg">{title || 'Confirm Deletion'}</h3>
+          <h3 className="text-text-primary font-bold text-lg">{title || 'Confirm Deletion'}</h3>
         </div>
 
         {/* Message */}
@@ -33,7 +33,7 @@ export default function DeleteModal({
         </p>
 
         {showCheckbox && (
-          <div className="flex items-center space-x-3 bg-[#0a161d] border border-gray-800/80 p-3 rounded-lg select-none">
+          <div className="flex items-center space-x-3 bg-surface-panel border border-gray-800/80 p-3 rounded-lg select-none">
             <div className="flex-1">
               <span className="text-xs text-gray-200 block font-medium">{checkboxLabel}</span>
             </div>
@@ -41,8 +41,8 @@ export default function DeleteModal({
               <div
                 onClick={() => onCheckboxChange && onCheckboxChange(!checkboxValue)}
                 className={`w-5 h-5 rounded-sm border flex items-center justify-center cursor-pointer transition-all duration-200 hover:scale-105 active:scale-95 ${checkboxValue
-                  ? 'bg-accent border-accent text-[#011419] shadow-[0_0_8px_rgba(221,186,110,0.4)]'
-                  : 'border-gray-700 bg-[#011419]/90 hover:border-accent/50'
+                  ? 'bg-accent border-accent text-on-accent shadow-[0_0_8px_color-mix(in_srgb,var(--app-accent)_40%,transparent)]'
+                  : 'border-gray-700 bg-surface-canvas/90 hover:border-accent/50'
                   }`}
               >
                 {checkboxValue && <Check className="w-3.5 h-3.5 stroke-[3.5]" />}

@@ -184,7 +184,7 @@ export default function ProgressionSection({ sectionRef, workspaceId, api, showT
                 </div>
               )}
               {rewardDraft ? (
-                <div className="flex flex-wrap items-center gap-2 rounded-card border border-border-subtle bg-white/[0.02] p-3">
+                <div className="flex flex-wrap items-center gap-2 rounded-card border border-border-subtle bg-tint/[0.02] p-3">
                   <SearchableSelect className="min-w-[11rem] flex-1" value={rewardDraft.definitionId} onChange={definitionId => setRewardDraft(current => ({ ...current, definitionId }))} options={definitions.filter(definition => !rewards.some(reward => reward.definitionId === definition.id)).map(definition => ({ id: definition.id, label: definition.name, color: definition.color }))} placeholder="Resource" ariaLabel="Resource to reward" />
                   <label className="flex items-center gap-1.5 text-xs text-text-muted">Highest +<NumberInput className="field-input h-10 w-18 px-2.5 text-sm tabular-nums" min={0} value={rewardDraft.maximumIncrease} onChange={maximumIncrease => setRewardDraft(current => ({ ...current, maximumIncrease }))} /></label>
                   <Checkbox checked={rewardDraft.refill} onChange={refill => setRewardDraft(current => ({ ...current, refill }))} label="Refill" />
@@ -264,7 +264,7 @@ function WhoProgresses({ progression, groups, names, onChange }) {
     const index = key.indexOf(':');
     onChange([...members, { targetType: key.slice(0, index), targetId: key.slice(index + 1) }]);
   };
-  const chip = 'inline-flex h-7 items-center gap-1.5 rounded-control bg-white/[0.06] pl-2.5 text-[0.8125rem] text-text-primary';
+  const chip = 'inline-flex h-7 items-center gap-1.5 rounded-control bg-tint/[0.06] pl-2.5 text-[0.8125rem] text-text-primary';
 
   return (
     <>
@@ -294,7 +294,7 @@ function WhoProgresses({ progression, groups, names, onChange }) {
                   <span aria-hidden="true" className={`h-2 w-2 rounded-full ${view.dot}`} />
                   {view.name}
                   {view.kind && <span className="text-xs text-text-subtle">whole {view.kind.toLowerCase()}</span>}
-                  <button type="button" onClick={() => onChange(members.filter(item => lineKey(item) !== lineKey(member)))} aria-label={`Remove ${view.name}`} className="inline-flex h-5 w-5 items-center justify-center rounded text-text-subtle hover:bg-white/10 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><X aria-hidden="true" className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => onChange(members.filter(item => lineKey(item) !== lineKey(member)))} aria-label={`Remove ${view.name}`} className="inline-flex h-5 w-5 items-center justify-center rounded text-text-subtle hover:bg-tint/10 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><X aria-hidden="true" className="h-3.5 w-3.5" /></button>
                 </span>
               );
             })}
@@ -391,7 +391,7 @@ function TraitTable({ traits, onEdit, onDelete, onStart }) {
   }
   return (
     <div className="overflow-hidden rounded-card border border-border-subtle bg-surface-canvas/45">
-      <div className={`grid ${TRAIT_COLUMNS} items-center gap-3 bg-white/[0.025] py-2 pl-3.5 pr-2 text-xs font-semibold text-text-subtle`}>
+      <div className={`grid ${TRAIT_COLUMNS} items-center gap-3 bg-tint/[0.025] py-2 pl-3.5 pr-2 text-xs font-semibold text-text-subtle`}>
         <span>Attribute</span>
         <span>Starts at</span>
         <span>Range</span>

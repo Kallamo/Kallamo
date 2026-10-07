@@ -41,7 +41,7 @@ export default function MemoryRow({
   const hasControls = Boolean(onToggleEnabled || menuItems);
 
   return (
-    <div className={`group relative flex items-center gap-3 border-t border-border-subtle px-4 py-2.5 transition-colors ${selected ? 'bg-accent/5' : 'hover:bg-white/[0.02]'}`}>
+    <div className={`group relative flex items-center gap-3 border-t border-border-subtle px-4 py-2.5 transition-colors ${selected ? 'bg-accent/5' : 'hover:bg-tint/[0.02]'}`}>
       {selectable && (
         <span className={`flex shrink-0 transition-opacity ${selected || selectionActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'}`}>
           <Checkbox size="sm" checked={selected} onChange={() => onToggleSelect?.()} ariaLabel={`Select ${title}`} />

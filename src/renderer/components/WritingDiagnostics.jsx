@@ -71,7 +71,7 @@ function TokensView({ debug }) {
       </div>
       <div>
         <SectionTitle>Each call's input</SectionTitle>
-        <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-white/[0.06]" role="img" aria-label={parts.map(part => `${part.label} ${fmt(part.value)}`).join(', ')}>
+        <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-tint/[0.06]" role="img" aria-label={parts.map(part => `${part.label} ${fmt(part.value)}`).join(', ')}>
           {parts.map(part => part.value > 0 && <span key={part.label} className={part.tone} style={{ width: `${(part.value / partsTotal) * 100}%` }} />)}
         </div>
         <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">

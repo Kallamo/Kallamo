@@ -407,7 +407,7 @@ export function RaceRoleplayDefaults({ workspaceId, race, api, showToast }) {
                 <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">{traits.map(trait => {
                   const value = traitValues[trait.id];
                   return (
-                    <div key={trait.id} className={`flex items-center justify-between rounded-control border border-border-subtle bg-white/[0.025] px-3 py-2.5 text-[0.8125rem] ${value ? 'text-text-secondary' : 'text-text-subtle'}`}>
+                    <div key={trait.id} className={`flex items-center justify-between rounded-control border border-border-subtle bg-tint/[0.025] px-3 py-2.5 text-[0.8125rem] ${value ? 'text-text-secondary' : 'text-text-subtle'}`}>
                       <span className="truncate">{trait.name}</span>
                       {value
                         ? <b className={`font-semibold tabular-nums ${value > 0 ? 'text-status-success' : 'text-status-danger'}`}>{`${value > 0 ? '+' : '−'}${Math.abs(value)}`}</b>

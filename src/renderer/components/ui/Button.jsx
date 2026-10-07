@@ -14,7 +14,7 @@ import { Loader2 } from 'lucide-react';
  * a comfortable hit area, never a bare borderless primary action.
  */
 const VARIANTS = {
-  primary: 'bg-accent/90 text-on-accent hover:bg-accent shadow-sm',
+  primary: 'bg-accent/90 text-on-accent hover:bg-accent shadow-[0_0.375rem_1.125rem_-0.5rem] shadow-accent/50',
   danger: 'bg-danger-solid text-on-danger hover:bg-danger-solid-hover shadow-sm',
   ghost: 'bg-surface-panel/70 border border-border-default text-text-secondary hover:bg-surface-hover hover:text-text-primary',
   subtle: 'bg-transparent text-text-muted hover:bg-surface-hover/45 hover:text-text-primary',

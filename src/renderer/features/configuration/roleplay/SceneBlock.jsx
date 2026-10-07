@@ -115,10 +115,10 @@ function ChipRow({ label, help, ids, byId, options, onAdd, onRemove, addLabel, e
           const entity = byId.get(id);
           const name = entity?.canonicalName || 'Unknown';
           return (
-            <span key={id} className="inline-flex h-7 items-center gap-1.5 rounded-control bg-white/[0.06] pl-2.5 pr-1 text-[0.8125rem] text-text-primary">
+            <span key={id} className="inline-flex h-7 items-center gap-1.5 rounded-control bg-tint/[0.06] pl-2.5 pr-1 text-[0.8125rem] text-text-primary">
               <span aria-hidden="true" className={`h-2 w-2 rounded-full ${entity ? meta(entity.type).dot : 'bg-text-subtle'}`} />
               <span className="max-w-[14rem] truncate">{name}</span>
-              <button type="button" onClick={() => onRemove(id)} aria-label={`Remove ${name}`} className="inline-flex h-5 w-5 items-center justify-center rounded text-text-subtle hover:bg-white/10 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              <button type="button" onClick={() => onRemove(id)} aria-label={`Remove ${name}`} className="inline-flex h-5 w-5 items-center justify-center rounded text-text-subtle hover:bg-tint/10 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                 <X aria-hidden="true" className="h-3.5 w-3.5" />
               </button>
             </span>

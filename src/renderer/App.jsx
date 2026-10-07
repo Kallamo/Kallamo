@@ -41,12 +41,12 @@ function EngineDownloadStatus() {
 
   if (engineDownloadProgress.isBackground) {
     return (
-      <div className="fixed bottom-6 right-6 z-50 w-76 bg-[#051116] border border-gray-800 rounded-xl p-4 shadow-2xl flex flex-col space-y-3 animate-in slide-in-from-bottom duration-300">
+      <div className="fixed bottom-6 right-6 z-50 w-76 bg-surface-editor border border-gray-800 rounded-xl p-4 shadow-2xl flex flex-col space-y-3 animate-in slide-in-from-bottom duration-300">
         <div className="flex items-center space-x-2.5">
           <div className="relative">
             <Spinner className="w-4 h-4" />
           </div>
-          <span className="text-[0.6875rem] font-bold text-white uppercase tracking-wider">
+          <span className="text-[0.6875rem] font-bold text-text-primary uppercase tracking-wider">
             {engineDownloadProgress.status === 'downloading' && 'Downloading Local AI Engine...'}
             {engineDownloadProgress.status === 'verifying' && 'Verifying Integrity...'}
             {engineDownloadProgress.status === 'extracting' && 'Setting up AI files...'}
@@ -55,7 +55,7 @@ function EngineDownloadStatus() {
         </div>
         {engineDownloadProgress.status === 'downloading' && (
           <div className="w-full">
-            <div className="w-full bg-[#0a161d] rounded-full h-1.5 overflow-hidden">
+            <div className="w-full bg-surface-panel rounded-full h-1.5 overflow-hidden">
               <div
                 className="bg-accent h-full rounded-full transition-[width] duration-300"
                 style={{ width: `${engineDownloadProgress.percent || 0}%` }}
@@ -67,7 +67,7 @@ function EngineDownloadStatus() {
               </span>
               <button
                 onClick={() => cancelEngineDownload()}
-                className="text-[0.625rem] text-gray-400 hover:text-white transition-colors cursor-pointer underline"
+                className="text-[0.625rem] text-gray-400 hover:text-text-primary transition-colors cursor-pointer underline"
               >
                 Cancel
               </button>
@@ -79,7 +79,7 @@ function EngineDownloadStatus() {
   }
 
   return (
-    <div className="absolute inset-0 z-[9999] flex items-center justify-center bg-[#011419]/95 backdrop-blur-sm">
+    <div className="absolute inset-0 z-[9999] flex items-center justify-center bg-surface-canvas/95 backdrop-blur-sm">
       <div className="flex flex-col items-center space-y-6 max-w-md text-center px-8 animate-in fade-in zoom-in-95 duration-300">
         <div className="relative">
           {engineDownloadProgress.status === 'error' ? (
@@ -91,7 +91,7 @@ function EngineDownloadStatus() {
           )}
         </div>
 
-        <h2 className="text-xl font-bold text-white capitalize">
+        <h2 className="text-xl font-bold text-text-primary capitalize">
           {engineDownloadProgress.status === 'downloading' && 'Downloading Local AI Engine'}
           {engineDownloadProgress.status === 'verifying' && 'Verifying Integrity Check'}
           {engineDownloadProgress.status === 'extracting' && 'Extracting Local AI Files'}
@@ -109,7 +109,7 @@ function EngineDownloadStatus() {
 
         {/* Progress Bar */}
         {engineDownloadProgress.status === 'downloading' && (
-          <div className="w-full bg-[#0a161d] rounded-full h-2 overflow-hidden">
+          <div className="w-full bg-surface-panel rounded-full h-2 overflow-hidden">
             <div
               className="bg-accent h-full rounded-full transition-[width] duration-300"
               style={{ width: `${engineDownloadProgress.percent || 0}%` }}
@@ -129,7 +129,7 @@ function EngineDownloadStatus() {
         {engineDownloadProgress.status === 'downloading' && (
           <button
             onClick={() => cancelEngineDownload()}
-            className="mt-2 px-5 py-2 bg-transparent hover:bg-gray-800/50 text-gray-400 hover:text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer border border-gray-700/50"
+            className="mt-2 px-5 py-2 bg-transparent hover:bg-gray-800/50 text-gray-400 hover:text-text-primary rounded-lg text-xs font-semibold transition-colors cursor-pointer border border-gray-700/50"
           >
             Cancel Download
           </button>
@@ -138,7 +138,7 @@ function EngineDownloadStatus() {
         {engineDownloadProgress.status === 'error' && (
           <button
             onClick={() => setEngineDownloadProgress(null)}
-            className="mt-4 px-5 py-2 bg-danger-solid hover:bg-danger-solid-hover text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+            className="mt-4 px-5 py-2 bg-danger-solid hover:bg-danger-solid-hover text-on-danger rounded-lg text-xs font-semibold transition-colors cursor-pointer"
           >
             Close
           </button>
@@ -152,17 +152,17 @@ function ReindexOverlay() {
   const reindexingProgress = useReindexingProgress();
   if (!reindexingProgress || (reindexingProgress.status !== 'started' && reindexingProgress.status !== 'running')) return null;
   return (
-    <div className="absolute inset-0 z-[9999] flex items-center justify-center bg-[#011419]/95 backdrop-blur-sm">
+    <div className="absolute inset-0 z-[9999] flex items-center justify-center bg-surface-canvas/95 backdrop-blur-sm">
       <div className="flex flex-col items-center space-y-6 max-w-md text-center px-8">
         <div className="relative">
           <Spinner className="w-12 h-12" />
         </div>
-        <h2 className="text-xl font-bold text-white">Upgrading Knowledge Base</h2>
+        <h2 className="text-xl font-bold text-text-primary">Upgrading Knowledge Base</h2>
         <p className="text-sm text-gray-400 leading-relaxed">
           Kallamo is upgrading your local AI to a new multilingual model.
           This only happens once and may take a few minutes depending on your data.
         </p>
-        <div className="w-full bg-[#0a161d] rounded-full h-2 overflow-hidden">
+        <div className="w-full bg-surface-panel rounded-full h-2 overflow-hidden">
           <div
             className="bg-accent h-full rounded-full transition-[width] duration-500"
             style={{ width: reindexingProgress.total ? `${Math.round((reindexingProgress.current / reindexingProgress.total) * 100)}%` : '30%' }}
@@ -248,7 +248,7 @@ function VectorizationTasks() {
       {Object.entries(activeTasks).map(([key, task]) => (
         <div
           key={key}
-          className="w-72 bg-[#051116] border border-gray-800 rounded-lg p-3 shadow-2xl flex flex-col space-y-2 relative pointer-events-auto animate-in slide-in-from-bottom duration-300"
+          className="w-72 bg-surface-editor border border-gray-800 rounded-lg p-3 shadow-2xl flex flex-col space-y-2 relative pointer-events-auto animate-in slide-in-from-bottom duration-300"
         >
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-2">
@@ -260,7 +260,7 @@ function VectorizationTasks() {
               {task.status === 'completed' && <span className="w-2.5 h-2.5 rounded-full bg-green-500" />}
               {task.status === 'error' && <span className="w-2.5 h-2.5 rounded-full bg-status-danger" />}
 
-              <span className="text-[0.625rem] font-bold text-white uppercase tracking-wider truncate max-w-[180px]">
+              <span className="text-[0.625rem] font-bold text-text-primary uppercase tracking-wider truncate max-w-[180px]">
                 {task.name}
               </span>
             </div>
@@ -273,7 +273,7 @@ function VectorizationTasks() {
                   return copy;
                 });
               }}
-              className="text-gray-500 hover:text-white p-0.5 rounded transition-colors cursor-pointer"
+              className="text-gray-500 hover:text-text-primary p-0.5 rounded transition-colors cursor-pointer"
             >
               <X className="w-3.5 h-3.5" />
             </button>
@@ -293,7 +293,7 @@ function ToastNotification() {
   const toast = useToast();
   if (!toast || !toast.show) return null;
   return (
-    <div className="fixed bottom-6 right-6 z-[9999] flex items-start space-x-3 bg-[#0a161d]/95 border border-gray-800 rounded-xl px-4 py-3.5 shadow-2xl animate-in slide-in-from-bottom-4 duration-300 max-w-md">
+    <div className="fixed bottom-6 right-6 z-[9999] flex items-start space-x-3 bg-surface-panel/95 border border-gray-800 rounded-xl px-4 py-3.5 shadow-2xl animate-in slide-in-from-bottom-4 duration-300 max-w-md">
       <div className="shrink-0 mt-0.5">
         {toast.type === 'success' && <CircleCheck className="w-5.5 h-5.5 text-emerald-400" />}
         {toast.type === 'error' && <AlertCircle className="w-5.5 h-5.5 text-status-danger" />}
@@ -309,7 +309,7 @@ function ToastNotification() {
               toast.action.onClick();
               showToast(toast.message, toast.type, 0);
             }}
-            className="mt-2 text-xs font-bold text-accent hover:text-white transition-colors cursor-pointer"
+            className="mt-2 text-xs font-bold text-accent hover:text-text-primary transition-colors cursor-pointer"
           >
             {toast.action.label}
           </button>
@@ -317,7 +317,7 @@ function ToastNotification() {
       </div>
       <button
         onClick={() => showToast(toast.message, toast.type, 0)}
-        className="text-gray-500 hover:text-white transition-colors cursor-pointer shrink-0 self-start"
+        className="text-gray-500 hover:text-text-primary transition-colors cursor-pointer shrink-0 self-start"
       >
         <X className="w-4 h-4" />
       </button>
@@ -444,7 +444,7 @@ function MainLayout() {
       : 'font-sans';
 
   return (
-    <div className={`flex-1 relative flex flex-col pt-10 overflow-hidden bg-[#011419] w-full h-full select-none ${fontClass}`}>
+    <div className={`flex-1 relative flex flex-col pt-10 overflow-hidden bg-surface-canvas w-full h-full select-none ${fontClass}`}>
       <TitleBar onOpenSettings={() => setShowSettingsModal(true)} onPreloadSettings={() => SettingsModal.preload()} />
 
       {/* Local AI Engine download: full-screen overlay, or a discreet card when it runs in the background */}
@@ -453,7 +453,8 @@ function MainLayout() {
       {/* Full-screen Re-Index Upgrade Overlay */}
       <ReindexOverlay />
 
-      <main className="flex-1 relative flex flex-col overflow-hidden w-full h-full z-10">
+      {/* Every screen runs under the transparent title bar and keeps its own content below it. */}
+      <main className="flex-1 relative flex flex-col overflow-hidden w-full h-full z-10 -mt-10">
         <Suspense fallback={null}>
           {currentView === 'dashboard' && <DashboardView />}
           {currentView === 'library' && <LibraryView />}

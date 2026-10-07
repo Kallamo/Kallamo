@@ -113,7 +113,7 @@ export default function WritingFindReplace({ editor, locked, onClose }) {
 
   if (!panelStyle) return null;
 
-  const iconBtn = (active) => `inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${active ? 'bg-white/[0.13] text-text-primary' : 'text-text-muted hover:bg-white/5 hover:text-text-primary'}`;
+  const iconBtn = (active) => `inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${active ? 'bg-tint/[0.13] text-text-primary' : 'text-text-muted hover:bg-tint/5 hover:text-text-primary'}`;
   const field = 'flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md border border-border-default bg-surface-input px-2.5 focus-within:border-accent/70';
 
   return createPortal(

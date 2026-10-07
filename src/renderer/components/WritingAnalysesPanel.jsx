@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Check, ChevronDown, CornerDownLeft, NotebookPen, Trash2, X, AlertTriangle } from 'lucide-react';
 import { AiGlyph } from './ui/glyphs';
+import { ReedPen } from '../logo';
 import { parseMarkdown } from '../utils/markdown';
 import { useApp } from '../context/AppContext';
 import Button from './ui/Button';
@@ -99,7 +100,7 @@ export default function WritingAnalysesPanel({ documentId, documentTitle, worksp
       <div className="custom-scrollbar flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3.5 py-4 [&>*]:shrink-0">
         {analyses.length === 0 ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-2.5 px-4 text-center">
-            <span className="flex h-11 w-11 items-center justify-center rounded-card bg-white/5 text-text-subtle"><AiGlyph className="h-5 w-5" /></span>
+            <span className="flex h-11 w-11 items-center justify-center rounded-card bg-tint/5 text-text-subtle"><AiGlyph className="h-5 w-5" /></span>
             <p className="text-sm font-semibold text-text-secondary">No analyses on this chapter</p>
             <p className="text-xs leading-relaxed text-text-subtle">Select a passage, choose Invoke AI, then Analyze. Each reading is kept here, and you can add the useful ones to your notes.</p>
           </div>
@@ -111,7 +112,7 @@ export default function WritingAnalysesPanel({ documentId, documentTitle, worksp
               <div className="flex items-start gap-2 py-2.5 pl-3.5 pr-1.5">
                 <button type="button" aria-expanded={isOpen} onClick={() => toggle(a.id)} className="flex w-0 min-w-0 flex-1 flex-col gap-1 overflow-hidden text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                   <span className="flex min-w-0 items-center gap-2">
-                    <AiGlyph className="h-4 w-4 shrink-0" style={{ color: profile?.color || undefined }} />
+                    <ReedPen size={16} color={profile?.color || 'currentColor'} />
                     <span className="min-w-0 truncate text-sm font-semibold text-text-primary">{profile?.name || 'AI'}</span>
                   </span>
                   <span className="block w-full truncate text-xs text-text-subtle">
@@ -138,7 +139,7 @@ export default function WritingAnalysesPanel({ documentId, documentTitle, worksp
                     <button
                       type="button"
                       onClick={() => onJump?.(a.excerpt)}
-                      className="flex items-start gap-2 rounded-md bg-white/[0.04] px-3 py-2 text-left text-xs leading-relaxed text-text-muted transition-colors hover:bg-white/[0.07] hover:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                      className="flex items-start gap-2 rounded-md bg-tint/[0.04] px-3 py-2 text-left text-xs leading-relaxed text-text-muted transition-colors hover:bg-tint/[0.07] hover:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                     >
                       <span className="line-clamp-3 flex-1 break-words italic">“{a.excerpt}”</span>
                       <CornerDownLeft className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-label="Go to the passage" />

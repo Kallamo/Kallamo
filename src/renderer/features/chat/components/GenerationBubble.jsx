@@ -29,7 +29,7 @@ export default function GenerationBubble({ progress, color, style, sizeClass = '
       {(streamingContent || streamingReasoning) && (
         <div style={style} className={`max-w-[86%] rounded-surface border px-4.5 py-4 text-text-secondary shadow-sm ${sizeClass}`}>
           {streamingReasoning && (
-            <div className="mb-3 max-h-48 overflow-y-auto border-b border-white/[0.07] pb-3 text-xs italic text-text-muted whitespace-pre-wrap custom-scrollbar">
+            <div className="mb-3 max-h-48 overflow-y-auto border-b border-tint/[0.07] pb-3 text-xs italic text-text-muted whitespace-pre-wrap custom-scrollbar">
               {streamingReasoning}
             </div>
           )}

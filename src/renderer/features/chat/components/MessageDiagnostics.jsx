@@ -108,7 +108,7 @@ function Stat({ label, value, sub, tone = 'text-text-primary' }) {
   );
 }
 
-function Chip({ children, tone = 'bg-white/[0.06] text-text-secondary' }) {
+function Chip({ children, tone = 'bg-tint/[0.06] text-text-secondary' }) {
   return <span className={`inline-flex h-6 max-w-full items-center gap-1 truncate rounded-md px-2 text-xs font-medium ${tone}`}>{children}</span>;
 }
 
@@ -163,7 +163,7 @@ function TokensView({ debug }) {
 
       <div>
         <SectionTitle>Main input</SectionTitle>
-        <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-white/[0.06]" role="img" aria-label={parts.map(part => `${part.label} ${fmt(part.value)}`).join(', ')}>
+        <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-tint/[0.06]" role="img" aria-label={parts.map(part => `${part.label} ${fmt(part.value)}`).join(', ')}>
           {parts.map(part => part.value > 0 && <span key={part.label} className={part.tone} style={{ width: `${(part.value / partsTotal) * 100}%` }} />)}
         </div>
         <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
@@ -229,7 +229,7 @@ function AgenticView({ debug, copy }) {
       {planner && (
         <div>
           <SectionTitle>Planner window</SectionTitle>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-white/[0.06]">
+          <div className="h-2 w-full overflow-hidden rounded-full bg-tint/[0.06]">
             <span className="block h-full bg-status-info" style={{ width: `${Math.min(100, (planner.limit / (planner.configured || planner.limit)) * 100)}%` }} />
           </div>
           <p className="mt-1.5 text-xs text-text-muted tabular-nums">
@@ -264,7 +264,7 @@ function AgenticView({ debug, copy }) {
                 <div className="mt-1.5 flex flex-wrap gap-1.5">
                   {(turn.calls || []).length
                     ? turn.calls.map((call, index) => (
-                      <Chip key={index} tone={call.status && call.status !== 'ran' ? 'bg-status-warning/12 text-status-warning' : 'bg-white/[0.06] text-text-secondary'}>
+                      <Chip key={index} tone={call.status && call.status !== 'ran' ? 'bg-status-warning/12 text-status-warning' : 'bg-tint/[0.06] text-text-secondary'}>
                         <span className="text-text-subtle">{call.tool}</span>
                         <span className="truncate text-text-primary">{call.arg}</span>
                         <span className="text-text-subtle">→</span>
@@ -324,7 +324,7 @@ function SourceList({ items, excluded = false }) {
           <li key={index} className="flex items-center gap-2 px-3 py-1.5 text-xs">
             <span className="min-w-0 flex-1 truncate text-text-secondary" data-tooltip={item.source}>{item.source}</span>
             {excluded && item.reason && <span className="shrink-0 text-status-warning">{item.reason}</span>}
-            <span className="shrink-0 rounded bg-white/[0.06] px-1.5 text-[0.6875rem] text-text-muted">{kindLabel(item.kind)}</span>
+            <span className="shrink-0 rounded bg-tint/[0.06] px-1.5 text-[0.6875rem] text-text-muted">{kindLabel(item.kind)}</span>
             {item.count > 1 && <span className="shrink-0 font-semibold text-text-muted tabular-nums">×{item.count}</span>}
           </li>
         ))}
@@ -389,7 +389,7 @@ function RetrievalView({ debug, copy }) {
 const NARRATIVE_STATUS = {
   completed: { label: 'Completed', tone: 'bg-status-success/12 text-status-success' },
   'completed-with-warnings': { label: 'Completed with warnings', tone: 'bg-status-warning/12 text-status-warning' },
-  skipped: { label: 'Nothing to record', tone: 'bg-white/[0.06] text-text-secondary' },
+  skipped: { label: 'Nothing to record', tone: 'bg-tint/[0.06] text-text-secondary' },
   deferred: { label: 'Waiting for the next turn', tone: 'bg-status-info/12 text-status-info' },
   failed: { label: 'Failed', tone: 'bg-status-danger/12 text-status-danger' }
 };
@@ -405,7 +405,7 @@ const DOMAIN_TONES = {
   event: 'bg-entity-event/14 text-entity-event',
   time: 'bg-status-info/14 text-status-info'
 };
-const domainTone = domain => DOMAIN_TONES[domain] || 'bg-white/[0.06] text-text-secondary';
+const domainTone = domain => DOMAIN_TONES[domain] || 'bg-tint/[0.06] text-text-secondary';
 const humanize = value => String(value || '').replace(/[-_]/g, ' ').replace(/^\w/, letter => letter.toUpperCase());
 const seconds = ms => (Number(ms) > 0 ? `${(ms / 1000).toFixed(1)} s` : null);
 
@@ -427,7 +427,7 @@ function ContextSections({ usage }) {
   const total = parts.reduce((sum, part) => sum + part.tokens, 0) || 1;
   return (
     <div>
-      <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-white/[0.06]" role="img" aria-label={parts.map(part => `${part.key} ${fmt(part.tokens)}`).join(', ')}>
+      <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-tint/[0.06]" role="img" aria-label={parts.map(part => `${part.key} ${fmt(part.tokens)}`).join(', ')}>
         {parts.map(part => <span key={part.key} className={part.tone} style={{ width: `${(part.tokens / total) * 100}%` }} />)}
       </div>
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
@@ -446,7 +446,7 @@ function ContextSections({ usage }) {
 function NarrativeView({ debug, names, copy }) {
   const state = debug.narrativeState;
   if (!state || typeof state !== 'object') return <Disclosure title="Report">{copy}</Disclosure>;
-  const status = NARRATIVE_STATUS[state.status] || { label: humanize(state.status || 'unknown'), tone: 'bg-white/[0.06] text-text-secondary' };
+  const status = NARRATIVE_STATUS[state.status] || { label: humanize(state.status || 'unknown'), tone: 'bg-tint/[0.06] text-text-secondary' };
   const triage = state.triage || {};
   const routing = state.routing || {};
   const analysis = state.analysis;
@@ -512,7 +512,7 @@ function NarrativeView({ debug, names, copy }) {
           <SectionTitle>Involved · {entityIds.length}</SectionTitle>
           <div className="flex flex-wrap gap-1">
             {named.map(name => <Chip key={name}>{name}</Chip>)}
-            {unnamed > 0 && <Chip tone="bg-white/[0.04] text-text-subtle">{named.length ? `+${unnamed} more` : `${unnamed} ${unnamed === 1 ? 'entity' : 'entities'}`}</Chip>}
+            {unnamed > 0 && <Chip tone="bg-tint/[0.04] text-text-subtle">{named.length ? `+${unnamed} more` : `${unnamed} ${unnamed === 1 ? 'entity' : 'entities'}`}</Chip>}
           </div>
         </div>
       )}
@@ -593,7 +593,7 @@ function DiagnosticsPanel({ debug, items, names, onCopy, copiedKey }) {
     <div className="w-[min(42rem,calc(100vw-2rem))] rounded-card rounded-tr-none border border-border-default bg-surface-panel p-3.5 shadow-overlay select-none">
       <div className="mb-3.5 flex items-center gap-2">
         {items.length > 1 && (
-          <div role="tablist" aria-label="Diagnostics" className="flex min-w-0 flex-1 flex-wrap gap-0.5 rounded-control bg-black/25 p-0.5">
+          <div role="tablist" aria-label="Diagnostics" className="flex min-w-0 flex-1 flex-wrap gap-0.5 rounded-control bg-shade/25 p-0.5">
             {items.map(item => (
               <button
                 key={item.key}
@@ -601,7 +601,7 @@ function DiagnosticsPanel({ debug, items, names, onCopy, copiedKey }) {
                 role="tab"
                 aria-selected={item.key === active.key}
                 onClick={() => setActiveKey(item.key)}
-                className={`h-7 flex-1 whitespace-nowrap rounded-md px-2.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${item.key === active.key ? 'bg-white/10 text-text-primary' : 'text-text-muted hover:text-text-secondary'}`}
+                className={`h-7 flex-1 whitespace-nowrap rounded-md px-2.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${item.key === active.key ? 'bg-tint/10 text-text-primary' : 'text-text-muted hover:text-text-secondary'}`}
               >
                 {item.label}
               </button>

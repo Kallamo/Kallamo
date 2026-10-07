@@ -184,8 +184,8 @@ function ToolbarButton({ active, onClick, label, danger = false, children }) {
         aria-pressed={active === undefined ? undefined : active}
         onMouseDown={(e) => { e.preventDefault(); onClick(); }}
         className={`inline-flex h-[1.875rem] w-[1.875rem] shrink-0 items-center justify-center rounded-md transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${active
-          ? 'bg-white/[0.13] text-text-primary'
-          : danger ? 'text-status-danger hover:bg-status-danger/10' : 'text-text-muted hover:bg-white/5 hover:text-text-primary'}`}
+          ? 'bg-tint/[0.13] text-text-primary'
+          : danger ? 'text-status-danger hover:bg-status-danger/10' : 'text-text-muted hover:bg-tint/5 hover:text-text-primary'}`}
       >
         {children}
       </button>
@@ -198,7 +198,7 @@ function Divider() {
 }
 
 const DROP = 'inline-flex h-[1.875rem] shrink-0 items-center gap-1.5 rounded-md border px-2 text-xs font-medium text-text-secondary transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40';
-const dropClass = (open) => `${DROP} ${open ? 'border-border-strong bg-white/[0.08] text-text-primary' : 'border-border-subtle bg-white/[0.03] hover:border-border-default hover:text-text-primary'}`;
+const dropClass = (open) => `${DROP} ${open ? 'border-border-strong bg-tint/[0.08] text-text-primary' : 'border-border-subtle bg-tint/[0.03] hover:border-border-default hover:text-text-primary'}`;
 const Caret = ({ open }) => <ChevronDown aria-hidden="true" className={`h-3.5 w-3.5 shrink-0 text-text-subtle transition-transform ${open ? 'rotate-180' : ''}`} />;
 
 // A menu row that keeps the editor's selection: it acts on mousedown, never takes focus.
@@ -210,7 +210,7 @@ function ChoiceRow({ selected, onChoose, children, className = '', style }) {
       aria-checked={selected}
       onMouseDown={(e) => { e.preventDefault(); onChoose(); }}
       style={style}
-      className={`flex min-h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-text-primary transition-colors hover:bg-surface-hover ${selected ? 'bg-white/[0.06]' : ''} ${className}`}
+      className={`flex min-h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-text-primary transition-colors hover:bg-surface-hover ${selected ? 'bg-tint/[0.06]' : ''} ${className}`}
     >
       <span className="min-w-0 flex-1 truncate">{children}</span>
       {selected && <Check className="h-4 w-4 shrink-0" aria-hidden="true" />}
@@ -369,7 +369,7 @@ function Chip({ selected, onChoose, children }) {
       aria-checked={selected}
       onMouseDown={(e) => { e.preventDefault(); onChoose(); }}
       className={`inline-flex h-7 min-w-[2.375rem] items-center justify-center rounded-md border px-2 text-xs tabular-nums transition-colors ${selected
-        ? 'border-border-strong bg-white/[0.13] font-semibold text-text-primary'
+        ? 'border-border-strong bg-tint/[0.13] font-semibold text-text-primary'
         : 'border-border-subtle text-text-secondary hover:border-border-default hover:text-text-primary'}`}
     >
       {children}
@@ -444,7 +444,7 @@ function Swatch({ color, label, selected, onPick, size = 'h-6 w-6' }) {
         aria-label={label}
         aria-pressed={selected}
         onMouseDown={(e) => { e.preventDefault(); onPick(); }}
-        className={`${size} rounded-full border border-white/15 transition-transform hover:scale-110 ${selected ? 'ring-2 ring-text-primary ring-offset-2 ring-offset-surface-panel' : ''}`}
+        className={`${size} rounded-full border border-tint/15 transition-transform hover:scale-110 ${selected ? 'ring-2 ring-text-primary ring-offset-2 ring-offset-surface-panel' : ''}`}
         style={{ backgroundColor: color }}
       />
     </Tooltip>
@@ -562,7 +562,7 @@ function CellColorControl({ editor }) {
         <Tooltip key={s.color} content={`Fill ${s.label.toLowerCase()}`}>
           <button type="button" aria-label={`Fill ${s.label.toLowerCase()}`}
             onMouseDown={(e) => { e.preventDefault(); apply(s.color); }}
-            className="h-[1.125rem] w-[1.125rem] cursor-pointer rounded border border-black/20 transition-transform hover:scale-110"
+            className="h-[1.125rem] w-[1.125rem] cursor-pointer rounded border border-shade/20 transition-transform hover:scale-110"
             style={{ backgroundColor: s.color }} />
         </Tooltip>
       ))}
@@ -632,7 +632,7 @@ const MEMORY_PILL = {
   done: { Icon: IndexedGlyph, label: 'In AI memory', cls: 'border-status-success/30 bg-status-success/[0.08] text-status-success' },
   outdated: { Icon: IndexOutdatedGlyph, label: 'Memory out of date', cls: 'border-status-warning/35 bg-status-warning/[0.09] text-status-warning' },
   error: { Icon: IndexErrorGlyph, label: 'Memory update failed', cls: 'border-status-danger/40 bg-status-danger/10 text-status-danger' },
-  never: { Icon: IndexNeverGlyph, label: 'Not in AI memory', cls: 'border-border-default bg-white/[0.04] text-text-secondary' },
+  never: { Icon: IndexNeverGlyph, label: 'Not in AI memory', cls: 'border-border-default bg-tint/[0.04] text-text-secondary' },
 };
 
 const MEMORY_NOTES = {
@@ -650,11 +650,11 @@ function PanelToggle({ icon: Icon, label, count, active, onClick }) {
         aria-label={label}
         aria-pressed={active}
         onClick={onClick}
-        className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 @[54rem]:px-2.5 ${active ? 'bg-white/[0.12] text-text-primary' : 'text-text-muted hover:bg-white/5 hover:text-text-primary'}`}
+        className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 @[54rem]:px-2.5 ${active ? 'bg-tint/[0.12] text-text-primary' : 'text-text-muted hover:bg-tint/5 hover:text-text-primary'}`}
       >
         <Icon className="h-4 w-4" aria-hidden="true" />
         <span className="hidden @[54rem]:inline">{label}</span>
-        {count > 0 && <span className="inline-flex h-[1.125rem] min-w-[1.125rem] items-center justify-center rounded-full bg-white/10 px-1 text-xs tabular-nums text-text-secondary">{count}</span>}
+        {count > 0 && <span className="inline-flex h-[1.125rem] min-w-[1.125rem] items-center justify-center rounded-full bg-tint/10 px-1 text-xs tabular-nums text-text-secondary">{count}</span>}
       </button>
     </Tooltip>
   );
@@ -1196,7 +1196,7 @@ export default function WritingEditor({
             onChange={(e) => setTitle(e.target.value)}
             onBlur={() => onRename?.(title)}
             onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-            className="w-full min-w-0 truncate rounded-md bg-transparent px-1 py-1 text-base font-bold text-text-primary focus:bg-white/[0.04] focus:outline-none"
+            className="w-full min-w-0 truncate rounded-md bg-transparent px-1 py-1 text-base font-bold text-text-primary focus:bg-tint/[0.04] focus:outline-none"
             placeholder="Untitled"
           />
         </label>
@@ -1234,7 +1234,7 @@ export default function WritingEditor({
         </Menu>
 
         <Divider />
-        <IconButton icon={Search} label="Find and replace (Ctrl F)" size="sm" tooltipSide="bottom" aria-pressed={showFind} className={showFind ? '!bg-white/[0.12] !text-text-primary' : ''} onClick={() => setShowFind(v => !v)} />
+        <IconButton icon={Search} label="Find and replace (Ctrl F)" size="sm" tooltipSide="bottom" aria-pressed={showFind} className={showFind ? '!bg-tint/[0.12] !text-text-primary' : ''} onClick={() => setShowFind(v => !v)} />
         <IconButton icon={FileCog} label="Page setup" size="sm" tooltipSide="bottom" onClick={() => setShowPageSetup(true)} />
         <IconButton icon={Download} label="Export" size="sm" tooltipSide="bottom" onClick={() => setShowExport(true)} />
         <Divider />
@@ -1292,7 +1292,7 @@ export default function WritingEditor({
             aria-haspopup="menu"
             aria-expanded={wbOpen}
             onClick={() => (wbOpen ? setWbOpen(false) : openWorldbuildMenu())}
-            className={`inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${wbOpen ? 'bg-white/[0.12] text-text-primary' : 'bg-white/[0.06] text-text-secondary hover:bg-white/10 hover:text-text-primary'}`}
+            className={`inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${wbOpen ? 'bg-tint/[0.12] text-text-primary' : 'bg-tint/[0.06] text-text-secondary hover:bg-tint/10 hover:text-text-primary'}`}
           >
             <WorldbuildGlyph className="h-4 w-4" /> Link to world
             <ChevronDown aria-hidden="true" className={`h-3.5 w-3.5 text-text-subtle transition-transform ${wbOpen ? 'rotate-180' : ''}`} />
@@ -1357,7 +1357,7 @@ export default function WritingEditor({
               {TYPE_ORDER.map(t => {
                 const m = entityTypeMeta(t);
                 return (
-                  <button key={t} type="button" onClick={() => createEntityOfType(t)} className="flex h-8 min-w-0 items-center gap-2 rounded-md border border-border-subtle bg-white/[0.03] px-2.5 text-left text-xs text-text-secondary transition-colors hover:bg-white/[0.08] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                  <button key={t} type="button" onClick={() => createEntityOfType(t)} className="flex h-8 min-w-0 items-center gap-2 rounded-md border border-border-subtle bg-tint/[0.03] px-2.5 text-left text-xs text-text-secondary transition-colors hover:bg-tint/[0.08] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                     <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${m.dot}`} />
                     <span className="truncate">{m.label}</span>
                   </button>
@@ -1392,7 +1392,7 @@ export default function WritingEditor({
 
       <div data-writing-scroll-container className={`custom-scrollbar relative flex-1 px-4 py-7 ${inFlight ? 'overflow-hidden' : 'overflow-y-auto'}`}>
         <div
-          className={`relative mx-auto rounded-xl shadow-xl ring-1 ring-black/10 ${locked ? 'wd-sheet-locked' : ''}`}
+          className={`relative mx-auto rounded-xl shadow-xl ring-1 ring-shade/10 ${locked ? 'wd-sheet-locked' : ''}`}
           style={sheetStyle}
         >
           <EditorContent editor={editor} />
@@ -1429,7 +1429,7 @@ export default function WritingEditor({
               )}
               <span aria-hidden="true" className="mx-1 h-4 w-px bg-border-default" />
               {!stale && <WritingDiagnostics debug={pending.debug} tokenDebug={tokenDebug} ragDebug={ragDebug} align="left" />}
-              <button type="button" onClick={rejectSuggestion} className="inline-flex h-8 items-center gap-1 rounded-full px-3 text-xs font-semibold text-text-secondary transition-colors hover:bg-white/[0.08] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              <button type="button" onClick={rejectSuggestion} className="inline-flex h-8 items-center gap-1 rounded-full px-3 text-xs font-semibold text-text-secondary transition-colors hover:bg-tint/[0.08] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                 <X className="h-3.5 w-3.5" aria-hidden="true" /> Reject
               </button>
               <button type="button" onClick={acceptSuggestion} disabled={stale} className="inline-flex h-8 items-center gap-1 rounded-full bg-accent px-3 text-xs font-semibold text-on-accent transition-[filter] hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
@@ -1465,13 +1465,13 @@ export default function WritingEditor({
           aria-haspopup="dialog"
           aria-expanded={goalOpen}
           onClick={() => { setGoalDraft(goal ? String(goal) : ''); setGoalOpen(v => !v); }}
-          className="inline-flex h-6 items-center gap-2 rounded-md px-2 text-xs text-text-muted transition-colors hover:bg-white/5 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          className="inline-flex h-6 items-center gap-2 rounded-md px-2 text-xs text-text-muted transition-colors hover:bg-tint/5 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
         >
           <Target className="h-3.5 w-3.5" aria-hidden="true" />
           {goal > 0 ? (
             <>
               <span className="tabular-nums">{counts.words.toLocaleString()} of {goal.toLocaleString()}</span>
-              <span aria-hidden="true" className="block h-1 w-24 overflow-hidden rounded-full bg-white/10">
+              <span aria-hidden="true" className="block h-1 w-24 overflow-hidden rounded-full bg-tint/10">
                 <span className={`block h-full rounded-full ${goalPct >= 100 ? 'bg-status-success' : 'bg-text-secondary'}`} style={{ width: `${goalPct}%` }} />
               </span>
               <span className="tabular-nums text-text-secondary">{goalPct}%</span>

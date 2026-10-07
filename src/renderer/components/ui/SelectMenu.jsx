@@ -27,7 +27,9 @@ export default function SelectMenu({
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => setOpen(current => !current)}
-        className={`flex min-h-9 w-full items-center justify-between gap-2 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent/40 ${unboxed
+        className={`flex min-h-9 w-full items-center justify-between gap-2 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent/40 ${unboxed === 'strong'
+          ? 'rounded-md px-3 text-text-primary hover:bg-surface-hover/45'
+          : unboxed
           ? 'rounded-md px-1.5 text-text-muted hover:bg-surface-hover/45 hover:text-text-primary'
           : 'rounded-control border border-border-default bg-surface-input px-3 text-text-secondary hover:border-border-strong'
         }`}
@@ -40,7 +42,8 @@ export default function SelectMenu({
         open={open}
         onClose={() => setOpen(false)}
         maxHeight={280}
-        className="border-border-default bg-surface-panel-muted p-1.5 shadow-black/60"
+        fitWidth={432}
+        className="border-border-default bg-surface-panel-muted p-1.5 shadow-shade/60"
         role="listbox"
       >
         {options.map(option => {

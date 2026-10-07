@@ -2,7 +2,7 @@ import type { ComponentType, ReactNode } from 'react';
 
 export interface ModalProps {
   onClose?: () => void;
-  size?: 'sm' | 'md' | 'lg' | 'xl' | 'wide' | '2xl';
+  size?: 'sm' | 'md' | 'lg' | 'xl' | 'wide' | '2xl' | 'editor';
   title?: ReactNode;
   icon?: ComponentType<{ className?: string }> | null;
   iconClassName?: string;

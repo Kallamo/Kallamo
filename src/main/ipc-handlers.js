@@ -3358,14 +3358,67 @@ ipcMain.handle('import-document', async (event, { } = {}) => {
   }
 });
 
+// First prose paragraph of a reply as plain text: skips stat headers, rules and lists.
+function replyExcerpt(content, max = 240) {
+  const paragraphs = String(content || '')
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .split(/\n\s*\n/)
+    .map(p => p
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/[*_`#>~]+/g, '')
+      .replace(/\s+/g, ' ')
+      .trim())
+    .filter(Boolean);
+  const prose = paragraphs.find(p => p.length >= 60 && !/^[-=]{3,}$/.test(p) && (p.match(/\|/g) || []).length < 2) || paragraphs[0] || '';
+  return prose.length > max ? `${prose.slice(0, max).replace(/\s+\S*$/, '')}…` : prose;
+}
+
 ipcMain.handle('get-chats', async () => {
   try {
     const rows = db.prepare(`
-      SELECT c.*, (SELECT COUNT(*) FROM messages m WHERE m.chatId = c.id) as messageCount
+      SELECT c.*,
+        (SELECT COUNT(*) FROM messages m WHERE m.chatId = c.id) as messageCount,
+        (SELECT COUNT(*) FROM entities e WHERE e.workspaceId = c.id) as entityCount,
+        (SELECT COUNT(*) FROM documents d WHERE d.workspaceId = c.id) as documentCount,
+        (SELECT mode FROM workspace_experience_modes x WHERE x.workspace_id = c.id) as experienceMode
       FROM chats c
     `).all();
+    // The home screen previews each workspace's latest AI reply.
+    const lastReply = db.prepare(`
+      SELECT aiName, aiColor, content, createdAt FROM messages
+      WHERE chatId = ? AND role != 'user' ORDER BY createdAt DESC LIMIT 1
+    `);
+    const locationName = db.prepare('SELECT canonicalName FROM entities WHERE id = ? AND workspaceId = ?');
+    // Where a roleplay stopped: the scene's location, its background and the story clock.
+    const roleplayScene = (workspaceId) => {
+      try {
+        const roleplay = getRoleplaySystem();
+        const calendar = getCalendarService();
+        const locationId = roleplay.getScene(workspaceId)?.locationId || null;
+        const location = locationId ? locationName.get(locationId, workspaceId) : null;
+        const background = location ? withBackground(workspaceId, roleplay.getLocationBackground(workspaceId, locationId)) : null;
+        const clock = calendar.formatClock(calendar.getCalendar(db, workspaceId), calendar.getRoleplayClock(db, workspaceId));
+        return {
+          locationName: location?.canonicalName || null,
+          // A missing file falls back to the cover instead of a broken image.
+          background: background?.imagePath && fs.existsSync(background.imagePath) ? { path: background.imagePath, focus: background.focus || null } : null,
+          time: clock.time || null,
+          date: clock.date || null,
+        };
+      } catch (error) {
+        console.warn('[get-chats] roleplay scene unavailable:', error.message);
+        return null;
+      }
+    };
     return rows.map(r => ({
       ...r,
+      experienceMode: r.experienceMode === 'roleplay' ? 'roleplay' : 'standard',
+      roleplayScene: r.experienceMode === 'roleplay' ? roleplayScene(r.id) : null,
+      lastReply: (() => {
+        const reply = lastReply.get(r.id);
+        return reply ? { aiName: reply.aiName, aiColor: reply.aiColor, excerpt: replyExcerpt(reply.content), createdAt: reply.createdAt } : null;
+      })(),
       activeProfiles: JSON.parse(r.activeProfiles || '[]'),
       activeWorkflows: JSON.parse(r.activeWorkflows || '[]'),
       memoryBlocks: JSON.parse(r.memoryBlocks || '[]'),

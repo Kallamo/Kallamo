@@ -12,6 +12,7 @@ import { useApp } from '../../context/AppContext';
  * header with close button, or omit it for a fully custom body.
  *
  * Never hand-roll overlay markup elsewhere, build on this.
+ * `inline` renders the same content as a pane inside the page instead of over it.
  */
 const SIZES = {
   sm: 'max-w-sm',
@@ -20,6 +21,7 @@ const SIZES = {
   xl: 'max-w-2xl',
   wide: 'max-w-4xl',
   '2xl': 'max-w-5xl',
+  editor: 'max-w-6xl',
 };
 
 export default function Modal({
@@ -34,6 +36,7 @@ export default function Modal({
   closeOnEsc = true,
   showClose = true,
   className = '',
+  inline = false,
   children,
 }) {
   const { settings } = useApp();
@@ -44,12 +47,14 @@ export default function Modal({
 
   useEffect(() => {
     if (!closeOnEsc) return;
+    if (inline) return;
     const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [closeOnEsc, onClose]);
 
   useEffect(() => {
+    if (inline) return;
     restoreFocusRef.current = document.activeElement;
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -85,6 +90,23 @@ export default function Modal({
       first.focus();
     }
   };
+
+  if (inline) {
+    return (
+      <section aria-labelledby={title ? generatedTitleId : undefined} className={`flex h-full min-h-0 w-full flex-col ${className}`}>
+        {title && (
+          <div className="flex shrink-0 items-center gap-4 border-b border-tint/[0.06] px-8 py-5">
+            {leading || (Icon && <Icon className={`h-4 w-4 shrink-0 ${iconClassName}`} />)}
+            <div className="min-w-0 flex-1">
+              <h2 id={generatedTitleId} className="truncate text-xl font-extrabold tracking-[-0.015em] text-text-primary">{title}</h2>
+              {subtitle && <p className="caption mt-0.5 truncate">{subtitle}</p>}
+            </div>
+          </div>
+        )}
+        {children}
+      </section>
+    );
+  }
 
   return createPortal(
     <div

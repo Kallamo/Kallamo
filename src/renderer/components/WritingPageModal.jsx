@@ -91,7 +91,7 @@ export default function WritingPageModal({ config, chapterTitle, onChange, onClo
   return (
     <Modal onClose={onClose} size="wide" title="Page setup" subtitle={chapterTitle || null} icon={FileCog}>
       <div className="flex min-h-0">
-        <div className="hidden w-64 shrink-0 items-center justify-center bg-black/25 p-6 sm:flex">
+        <div className="hidden w-64 shrink-0 items-center justify-center bg-shade/25 p-6 sm:flex">
           <PagePreview config={config} />
         </div>
         <div className="custom-scrollbar flex max-h-[70vh] min-w-0 flex-1 flex-col gap-6 overflow-y-auto px-6 py-5">
@@ -121,7 +121,7 @@ export default function WritingPageModal({ config, chapterTitle, onChange, onClo
                         aria-label={`${t.label} paper`}
                         aria-pressed={sheet === t.color.toLowerCase()}
                         onClick={() => onChange({ sheetColor: t.color })}
-                        className={`h-7 w-7 rounded-full border border-white/20 transition-transform hover:scale-105 ${sheet === t.color.toLowerCase() ? 'ring-2 ring-text-primary ring-offset-2 ring-offset-surface-canvas' : ''}`}
+                        className={`h-7 w-7 rounded-full border border-tint/20 transition-transform hover:scale-105 ${sheet === t.color.toLowerCase() ? 'ring-2 ring-text-primary ring-offset-2 ring-offset-surface-canvas' : ''}`}
                         style={{ backgroundColor: t.color }}
                       />
                     </Tooltip>
@@ -132,7 +132,7 @@ export default function WritingPageModal({ config, chapterTitle, onChange, onClo
                       aria-label="Custom paper colour"
                       aria-expanded={showColorPicker}
                       onClick={() => setShowColorPicker(s => !s)}
-                      className={`h-7 w-7 rounded-full border border-white/20 transition-transform hover:scale-105 ${!isPreset || showColorPicker ? 'ring-2 ring-text-primary ring-offset-2 ring-offset-surface-canvas' : ''}`}
+                      className={`h-7 w-7 rounded-full border border-tint/20 transition-transform hover:scale-105 ${!isPreset || showColorPicker ? 'ring-2 ring-text-primary ring-offset-2 ring-offset-surface-canvas' : ''}`}
                       style={{ background: isPreset ? 'conic-gradient(red, yellow, lime, aqua, blue, magenta, red)' : config.sheetColor }}
                     />
                   </Tooltip>

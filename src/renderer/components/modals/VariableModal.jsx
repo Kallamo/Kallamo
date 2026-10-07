@@ -1,164 +1,102 @@
 import React, { useState, useEffect } from 'react';
-import { X, HelpCircle, Variable } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import Modal from '../ui/Modal';
+import Button from '../ui/Button';
+import TextInput from '../ui/TextInput';
+import Textarea from '../ui/Textarea';
 
-export default function VariableModal({ variable, onClose, onSave }) {
-  const { settings } = useApp();
-  
+const KEY_PATTERN = /^[a-zA-Z0-9_]+$/;
+const keyFromName = (name) => name.trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+
+export default function VariableModal({ variable, preset, onClose, onSave, inline = false }) {
   const isEditing = !!variable;
-  
   const [name, setName] = useState('');
   const [key, setKey] = useState('');
+  const [keyTouched, setKeyTouched] = useState(false);
   const [value, setValue] = useState('');
   const [description, setDescription] = useState('');
-  
-  const [keyError, setKeyError] = useState('');
 
   useEffect(() => {
-    if (variable) {
-      setName(variable.name || '');
-      setKey(variable.key || '');
-      setValue(variable.value || '');
-      setDescription(variable.description || '');
-    }
-  }, [variable]);
-
-  const validateKey = (val) => {
-    setKey(val);
-    if (!val.trim()) {
-      setKeyError('Key is required');
+    // A starter fills the name and description of a new variable; the text stays the user's.
+    if (!variable && preset) {
+      setName(preset.name || '');
+      setKey(keyFromName(preset.name || ''));
+      setDescription(preset.description || '');
       return;
     }
-    // Regex for only letters, numbers, and underscores
-    const regex = /^[a-zA-Z0-9_]+$/;
-    if (!regex.test(val)) {
-      setKeyError('Key can only contain letters, numbers, and underscores');
-    } else {
-      setKeyError('');
-    }
+    if (!variable) return;
+    setName(variable.name || '');
+    setKey(variable.key || '');
+    setValue(variable.value || '');
+    setDescription(variable.description || '');
+  }, [variable, preset]);
+
+  // A new variable's tag follows its name until the tag is edited by hand.
+  const changeName = (next) => {
+    setName(next);
+    if (!isEditing && !keyTouched) setKey(keyFromName(next));
   };
 
+  const keyError = !key.trim() ? (keyTouched ? 'A tag is required.' : '') : (KEY_PATTERN.test(key) ? '' : 'Use only letters, numbers and _.');
+  const canSave = !keyError && key.trim() && name.trim() && value.trim();
+
   const handleSave = () => {
-    if (keyError || !key.trim() || !name.trim() || !value.trim()) return;
-    
-    const updated = {
+    if (!canSave) return;
+    onSave?.({
       id: variable?.id || 'var_' + Math.random().toString(36).substr(2, 9),
       name: name.trim(),
       key: key.trim(),
       value: value.trim(),
-      description: description.trim()
-    };
-    
-    if (onSave) onSave(updated);
+      description: description.trim(),
+    });
     onClose();
   };
 
-  const isBlurEnabled = settings?.interface?.blur ?? true;
-
   return (
-    <div className={`fixed inset-0 z-50 flex items-center justify-center titlebar-nodrag select-none p-8 ${isBlurEnabled ? 'bg-black/60 backdrop-blur-sm' : 'bg-[#011419]'}`}>
-      <div className="w-full max-w-2xl bg-[#000D11] rounded-xl shadow-2xl border border-gray-800/60 flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
-        
-        {/* Header */}
-        <div className="shrink-0 flex justify-between items-center h-14 w-full px-6 bg-[#011419] border-b border-gray-800/50">
-          <div className="flex items-center space-x-2.5">
-            <Variable className="w-5 h-5 text-accent" />
-            <h2 className="text-lg font-bold text-white tracking-wide">
-              {isEditing ? 'Edit Variable' : 'Create Variable'}
-            </h2>
-          </div>
-          <button 
-            onClick={onClose}
-            className="text-gray-400 hover:text-status-danger transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        {/* Form Body */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar">
-          
-          <div className="grid grid-cols-2 gap-4">
-            {/* Friendly Name */}
-            <div>
-              <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Friendly Name</label>
-              <input 
-                type="text" 
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="e.g., General Writing Rules"
-                className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 focus:outline-none focus:border-accent"
-              />
-            </div>
-            
-            {/* Tag/Key */}
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider">
-                  Variable Key
-                </label>
-                <div className="text-[0.625rem] text-gray-500 font-mono">
-                  {'{{' + (key || 'key') + '}}'}
-                </div>
-              </div>
-              <input 
-                type="text" 
+    <Modal
+      onClose={onClose}
+      size="xl"
+      inline={inline}
+      title={isEditing ? 'Edit variable' : 'New variable'}
+      subtitle="A piece of text you can drop into any profile or workflow step."
+      className="max-h-[calc(100vh-2rem)]"
+    >
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto custom-scrollbar px-7 py-5">
+        <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
+          <TextInput label="Name" value={name} onChange={e => changeName(e.target.value)} placeholder="Tone" autoFocus={!isEditing} />
+          <div className="flex flex-col">
+            <label htmlFor="variable-key" className="mb-1.5 block text-sm font-medium text-text-secondary">Tag</label>
+            <div className={`flex min-h-10 items-center rounded-control border bg-surface-input px-3 font-mono text-sm ${keyError ? 'border-status-danger/60' : 'border-border-default focus-within:border-accent'} ${isEditing ? 'opacity-60' : ''}`}>
+              <span className="text-text-disabled">{'{{'}</span>
+              <input
+                id="variable-key"
                 value={key}
-                onChange={(e) => validateKey(e.target.value)}
+                onChange={e => { setKeyTouched(true); setKey(e.target.value); }}
                 disabled={isEditing}
-                placeholder="e.g., writing_rules"
-                className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 focus:outline-none focus:border-accent disabled:opacity-50 disabled:cursor-not-allowed font-mono"
+                placeholder="tone"
+                aria-invalid={!!keyError || undefined}
+                className="min-w-0 flex-1 bg-transparent py-2 text-text-secondary placeholder:text-text-subtle focus:outline-none disabled:cursor-not-allowed"
               />
-              {keyError && (
-                <p className="text-[0.625rem] text-status-danger mt-1 font-semibold">{keyError}</p>
-              )}
+              <span className="text-text-disabled">{'}}'}</span>
             </div>
+            <span className={`mt-1 ${keyError ? 'text-xs font-semibold text-status-danger' : 'caption'}`}>
+              {keyError || (isEditing ? "A saved tag can't change; profiles already use it." : 'Filled in from the name. Letters, numbers and _.')}
+            </span>
           </div>
-
-          {/* Description */}
-          <div>
-            <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Description</label>
-            <input 
-              type="text" 
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Provide a brief explanation of what this variable is used for..."
-              className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 focus:outline-none focus:border-accent"
-            />
-          </div>
-
-          {/* Content (Value) */}
-          <div className="flex flex-col h-64">
-            <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Variable Content</label>
-            <textarea 
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              placeholder="Paste or write the rule text / instructions that this variable expands to..."
-              className="flex-1 w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md p-4 focus:outline-none focus:border-accent resize-none font-mono custom-scrollbar"
-            />
-          </div>
-
         </div>
-
-        {/* Footer Actions */}
-        <div className="shrink-0 flex justify-between items-center h-16 px-6 bg-[#011419] border-t border-gray-800/50">
-          <button 
-            onClick={onClose}
-            className="px-4 py-2 text-sm font-medium text-gray-400 hover:text-white transition-colors cursor-pointer"
-          >
-            Cancel
-          </button>
-          
-          <button 
-            onClick={handleSave}
-            disabled={keyError || !key.trim() || !name.trim() || !value.trim()}
-            className="px-5 py-2 text-sm bg-accent hover:brightness-110 text-[#011419] rounded transition-colors shadow-md font-bold cursor-pointer disabled:opacity-50"
-          >
-            Save Variable
-          </button>
-        </div>
-
+        <TextInput label="Description (optional)" value={description} onChange={e => setDescription(e.target.value)} placeholder="The voice every narrator profile writes in" />
+        <Textarea
+          label="Text"
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          placeholder="A dry, wry voice with short sentences."
+          monospace
+          className="min-h-[15rem]"
+        />
       </div>
-    </div>
+      <footer className="flex shrink-0 items-center justify-end gap-2.5 border-t border-border-subtle px-6 py-3.5">
+        <Button variant="subtle" onClick={onClose}>Cancel</Button>
+        <Button onClick={handleSave} disabled={!canSave}>{isEditing ? 'Save variable' : 'Create variable'}</Button>
+      </footer>
+    </Modal>
   );
 }

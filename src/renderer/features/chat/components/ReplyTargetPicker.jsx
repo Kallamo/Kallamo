@@ -26,7 +26,7 @@ export default function ReplyTargetPicker({ profiles, workflows, selectedId, onS
         aria-expanded={open}
         aria-label={`Reply with ${selected?.name || 'no profile chosen'}`}
         onClick={() => setOpen(value => !value)}
-        className={`inline-flex h-8 max-w-[14rem] items-center gap-2 rounded-control border px-2.5 text-[0.8125rem] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${open ? 'border-border-strong bg-white/[0.07] text-text-primary' : 'border-border-default bg-white/[0.03] text-text-secondary hover:text-text-primary'}`}
+        className={`inline-flex h-8 max-w-[14rem] items-center gap-2 rounded-control border px-2.5 text-[0.8125rem] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${open ? 'border-border-strong bg-tint/[0.07] text-text-primary' : 'border-border-default bg-tint/[0.03] text-text-secondary hover:text-text-primary'}`}
       >
         {selectedIsWorkflow
           ? <Workflow aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-text-muted" />

@@ -30,7 +30,7 @@ export default function ProfileScopeButton({ profiles = [], selectedIds = [], on
           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 disabled:pointer-events-none
           ${fullWidth ? 'w-full max-w-none justify-between' : ''}
           ${restricted
-            ? 'border-border-strong bg-white/[0.04] text-text-primary hover:bg-surface-hover'
+            ? 'border-border-strong bg-tint/[0.04] text-text-primary hover:bg-surface-hover'
             : 'border-border-subtle text-text-muted hover:bg-surface-hover hover:text-text-secondary'}
           ${open ? 'bg-surface-hover' : ''}`}
       >

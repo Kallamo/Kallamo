@@ -76,7 +76,7 @@ export default function TimeCostsSection({ sectionRef, matrix, calendar, onSave,
                   <div key={category.id} className="grid h-5 grid-cols-[5.25rem_minmax(0,1fr)] items-center gap-3">
                     <span className={`text-xs font-semibold ${active ? 'text-text-primary' : 'text-text-muted'}`}>{category.name}</span>
                     <span className="relative h-2">
-                      {ticks.slice(1, -1).map(tick => <span key={tick.label} className="absolute inset-y-0 w-px bg-white/[0.07]" style={{ left: `${scale(tick.minutes)}%` }} />)}
+                      {ticks.slice(1, -1).map(tick => <span key={tick.label} className="absolute inset-y-0 w-px bg-tint/[0.07]" style={{ left: `${scale(tick.minutes)}%` }} />)}
                       <b className={`absolute inset-y-0 rounded-full bg-accent ${active ? 'opacity-100 ring-[3px] ring-accent/20' : 'opacity-75'}`} style={{ left: `${left}%`, width: `${Math.max(0.8, right - left)}%`, minWidth: '0.5rem' }} />
                     </span>
                   </div>
@@ -104,7 +104,7 @@ export default function TimeCostsSection({ sectionRef, matrix, calendar, onSave,
               const dirtyMax = original.maximumMinutes !== category.maximumMinutes;
               const field = dirty => `field-input h-8 px-2.5 text-right text-[0.8125rem] tabular-nums ${dirty ? '!border-accent/60 shadow-[0_0_0_3px_color-mix(in_srgb,var(--app-accent)_12%,transparent)]' : ''}`;
               return (
-                <div key={category.id} className={`${index ? 'border-t border-border-subtle' : ''} ${open ? 'bg-white/[0.025]' : ''}`}>
+                <div key={category.id} className={`${index ? 'border-t border-border-subtle' : ''} ${open ? 'bg-tint/[0.025]' : ''}`}>
                   <div className="grid grid-cols-[6rem_minmax(0,1fr)_5.5rem_1rem_5.5rem_3rem_2rem] items-center gap-2.5 py-2.5 pl-4 pr-2.5">
                     <span className="text-[0.8125rem] font-semibold text-text-primary">{category.name}</span>
                     <span className="truncate text-xs text-text-muted">{open ? `${describeMinutes(category.maximumMinutes, minutesPerDay)} at most` : category.guidance || 'No guidance yet'}</span>

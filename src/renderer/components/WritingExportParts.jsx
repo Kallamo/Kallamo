@@ -24,7 +24,7 @@ export function FormatChoice({ value, onChange }) {
             role="radio"
             aria-checked={on}
             onClick={() => onChange(f.value)}
-            className={`flex flex-col gap-1.5 rounded-card border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${on ? 'border-accent/60 bg-accent/[0.07]' : 'border-border-subtle bg-white/[0.025] hover:border-border-default'}`}
+            className={`flex flex-col gap-1.5 rounded-card border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${on ? 'border-accent/60 bg-accent/[0.07]' : 'border-border-subtle bg-tint/[0.025] hover:border-border-default'}`}
           >
             <span className="flex items-center gap-2 text-sm font-bold text-text-primary"><f.icon className="h-4 w-4" aria-hidden="true" />{f.label}</span>
             <span className="text-xs leading-snug text-text-muted">{f.description}</span>
@@ -88,7 +88,7 @@ export function PageNumberOptions({ enabled, onEnabled, position, onPosition, fo
 
 export function PageNav({ index, total, onChange }) {
   if (total <= 1) return null;
-  const nav = 'inline-flex h-8 w-8 items-center justify-center rounded-md text-text-secondary transition-colors hover:bg-white/[0.07] disabled:opacity-30 disabled:hover:bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40';
+  const nav = 'inline-flex h-8 w-8 items-center justify-center rounded-md text-text-secondary transition-colors hover:bg-tint/[0.07] disabled:opacity-30 disabled:hover:bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40';
   return (
     <div className="mt-4 flex items-center gap-3">
       <button type="button" aria-label="Previous page" disabled={index === 0} onClick={() => onChange(index - 1)} className={nav}><ChevronLeft className="h-4 w-4" /></button>

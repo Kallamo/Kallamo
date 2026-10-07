@@ -167,7 +167,7 @@ export default function ChatFilesView({
     const type = getFileType(filename);
     switch (type) {
       case 'image': return <ImageIcon className="w-5 h-5 text-emerald-400" />;
-      case 'video': return <Video className="w-5 h-5 text-[#3b82f6]" />;
+      case 'video': return <Video className="w-5 h-5 text-status-info" />;
       case 'audio': return <Music className="w-5 h-5 text-rose-400" />;
       case 'code': return <Code className="w-5 h-5 text-accent" />;
       default: return <FileText className="w-5 h-5 text-gray-400" />;
@@ -175,10 +175,10 @@ export default function ChatFilesView({
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-[#000508]/40 overflow-hidden relative">
+    <div className="flex-1 flex flex-col h-full bg-surface-abyss/40 overflow-hidden relative">
 
       {/* Top Filter and Search Bar */}
-      <div className="shrink-0 p-5 border-b border-gray-800/80 bg-[#011419]/35 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="shrink-0 p-5 border-b border-gray-800/80 bg-surface-canvas/35 flex flex-col md:flex-row md:items-center justify-between gap-4">
 
         {/* Category Pills */}
         <div className="flex flex-wrap gap-1.5 select-none">
@@ -188,7 +188,7 @@ export default function ChatFilesView({
               onClick={() => setActiveFilter(category)}
               className={`px-3 py-1.5 text-[0.625rem] font-bold uppercase tracking-wider rounded-lg border transition-all cursor-pointer ${activeFilter === category
                 ? 'bg-accent/20 border-accent/40 text-accent shadow-md shadow-accent/5'
-                : 'bg-transparent border-gray-800 text-gray-400 hover:text-white hover:border-gray-700'
+                : 'bg-transparent border-gray-800 text-gray-400 hover:text-text-primary hover:border-gray-700'
                 }`}
             >
               {category}
@@ -204,7 +204,7 @@ export default function ChatFilesView({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search workspace files..."
-            className="w-full bg-[#011419] border border-gray-800/80 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-accent transition-colors"
+            className="w-full bg-surface-canvas border border-gray-800/80 rounded-xl pl-8 pr-3 py-1.5 text-xs text-text-primary placeholder-gray-600 focus:outline-none focus:border-accent transition-colors"
           />
         </div>
 
@@ -237,11 +237,11 @@ export default function ChatFilesView({
               return (
                 <div
                   key={file.path || file.name}
-                  className="group relative bg-[#0a161d]/45 border border-gray-800/80 rounded-xl overflow-hidden shadow-md hover:border-accent/30 transition-all flex flex-col aspect-[4/5] justify-between cursor-pointer"
+                  className="group relative bg-surface-panel/45 border border-gray-800/80 rounded-xl overflow-hidden shadow-md hover:border-accent/30 transition-all flex flex-col aspect-[4/5] justify-between cursor-pointer"
                   onClick={() => onPreviewFile(file)}
                 >
                   {/* Thumbnail / Icon Area */}
-                  <div className="flex-1 flex items-center justify-center bg-[#000508]/20 relative overflow-hidden">
+                  <div className="flex-1 flex items-center justify-center bg-surface-abyss/20 relative overflow-hidden">
                     {fileType === 'image' && fileUrl ? (
                       <img
                         src={fileUrl}
@@ -257,7 +257,7 @@ export default function ChatFilesView({
                         preload="metadata"
                       />
                     ) : (
-                      <div className="p-4 rounded-full bg-[#011419]/50 border border-gray-800/40">
+                      <div className="p-4 rounded-full bg-surface-canvas/50 border border-gray-800/40">
                         {getFileIcon(file.name)}
                       </div>
                     )}
@@ -265,7 +265,7 @@ export default function ChatFilesView({
                     {/* Overlay badge (Pinned / AI Generated) */}
                     <div className="absolute top-2 left-2 flex flex-col space-y-1 z-10">
                       {isPinned && (
-                        <span className="bg-[#FBCB2D]/15 border border-[#FBCB2D]/30 text-[#FBCB2D] text-[0.4375rem] font-bold px-1.5 py-0.5 rounded tracking-wider uppercase font-sans">
+                        <span className="bg-accent/15 border border-accent/30 text-accent text-[0.4375rem] font-bold px-1.5 py-0.5 rounded tracking-wider uppercase font-sans">
                           Pinned
                         </span>
                       )}
@@ -277,13 +277,13 @@ export default function ChatFilesView({
                     </div>
 
                     {/* Hover actions panel */}
-                    <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center space-x-2.5 z-10">
+                    <div className="absolute inset-0 bg-shade/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center space-x-2.5 z-10">
                       {/* Reinject button */}
                       {!file.isAiGenerated && (
                         <button
                           onClick={(e) => { e.stopPropagation(); onReinject(file); }}
                           title="Attach to current draft message"
-                          className="p-2 bg-[#1a2d32] hover:bg-[#FBCB2D] text-[#FBCB2D] hover:text-[#011419] rounded-lg transition-colors border border-[#FBCB2D]/20"
+                          className="p-2 bg-surface-hover hover:bg-accent text-accent hover:text-on-accent rounded-lg transition-colors border border-accent/20"
                         >
                           <Paperclip className="w-3.5 h-3.5" />
                         </button>
@@ -295,8 +295,8 @@ export default function ChatFilesView({
                           onClick={(e) => { e.stopPropagation(); handlePinToggle(file); }}
                           title={isPinned ? "Unpin file" : "Pin file"}
                           className={`p-2 rounded-lg transition-colors border ${isPinned
-                            ? 'bg-[#FBCB2D] text-[#011419] border-[#FBCB2D]'
-                            : 'bg-[#1a2d32] hover:bg-[#FBCB2D]/20 text-gray-400 hover:text-white border-[#FBCB2D]/20'
+                            ? 'bg-accent text-on-accent border-accent'
+                            : 'bg-surface-hover hover:bg-accent/20 text-gray-400 hover:text-text-primary border-accent/20'
                             }`}
                         >
                           <Pin className="w-3.5 h-3.5" />
@@ -308,7 +308,7 @@ export default function ChatFilesView({
                         <button
                           onClick={(e) => { e.stopPropagation(); setDeleteTarget(file); }}
                           title="Delete file permanently"
-                          className="p-2 bg-status-danger/15 hover:bg-danger-solid-hover text-status-danger hover:text-white border border-status-danger/30 rounded-lg transition-colors"
+                          className="p-2 bg-status-danger/15 hover:bg-danger-solid-hover text-status-danger hover:text-on-danger border border-status-danger/30 rounded-lg transition-colors"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -317,7 +317,7 @@ export default function ChatFilesView({
                   </div>
 
                   {/* Metadata Footer bar */}
-                  <div className="p-3 bg-[#011419]/70 border-t border-gray-800/80 shrink-0">
+                  <div className="p-3 bg-surface-canvas/70 border-t border-gray-800/80 shrink-0">
                     <p className="text-[0.625rem] text-gray-200 font-bold truncate tracking-wide" title={file.name}>
                       {file.name}
                     </p>

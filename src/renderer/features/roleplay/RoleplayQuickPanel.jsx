@@ -577,7 +577,7 @@ function RecentTurn({ turn, last, names, definitions, open, onToggle, onResolve,
         aria-expanded={open}
         onClick={onToggle}
         data-tooltip={moment && weekday ? `${moment} · ${weekday}` : undefined}
-        className={`relative flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${open ? 'bg-white/[0.05]' : 'hover:bg-white/[0.03]'}`}
+        className={`relative flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${open ? 'bg-tint/[0.05]' : 'hover:bg-tint/[0.03]'}`}
       >
         <span className="flex w-3.5 shrink-0 justify-center">
           <span aria-hidden="true" className={`h-2.5 w-2.5 rounded-full border ${turn.manual ? 'border-accent' : 'border-entity-event'} ${open ? (turn.manual ? 'bg-accent' : 'bg-entity-event') : 'bg-surface-panel'}`} />

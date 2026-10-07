@@ -28,7 +28,7 @@ export default function NarrativeStateSection({
     ? { label: 'Reading the last reply', icon: Loader2, className: 'bg-status-info/12 text-status-info', spin: true }
     : pendingCount
       ? { label: `${pendingCount} to review`, className: 'bg-status-warning/12 text-status-warning' }
-      : { label: 'Up to date', icon: CheckCircle2, className: 'bg-white/[0.06] text-text-secondary' };
+      : { label: 'Up to date', icon: CheckCircle2, className: 'bg-tint/[0.06] text-text-secondary' };
   const StatusIcon = status.icon;
   const groups = GROUP_ORDER.map(kind => ({ kind, items: pending.filter(item => item.kind === kind) })).filter(group => group.items.length);
   const totals = metrics.reduce((sum, metric) => ({
@@ -99,7 +99,7 @@ export default function NarrativeStateSection({
             <div className="overflow-hidden rounded-card border border-border-subtle bg-surface-canvas/45">
               {groups.map((group, groupIndex) => (
                 <div key={group.kind}>
-                  <div className={`flex items-center gap-2 bg-white/[0.025] px-3.5 py-2 text-xs font-semibold text-text-muted ${groupIndex ? 'border-t border-border-subtle' : ''}`}>
+                  <div className={`flex items-center gap-2 bg-tint/[0.025] px-3.5 py-2 text-xs font-semibold text-text-muted ${groupIndex ? 'border-t border-border-subtle' : ''}`}>
                     <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${kindOf(group.kind).dot}`} />
                     {kindOf(group.kind).group}
                     <span className="font-medium tabular-nums text-text-subtle">{group.items.length}</span>

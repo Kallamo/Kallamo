@@ -90,7 +90,7 @@ export default function FilePreviewModal({ file, onClose }) {
     if (isAud) {
       return (
         <div className="flex flex-col items-center justify-center py-10 w-full max-w-md select-none">
-          <div className="w-16 h-16 rounded-full bg-[#1a2d32]/50 border border-[#FBCB2D]/15 flex items-center justify-center mb-6">
+          <div className="w-16 h-16 rounded-full bg-surface-hover/50 border border-accent/15 flex items-center justify-center mb-6">
             <svg className="w-6 h-6 text-accent animate-pulse" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
             </svg>
@@ -118,7 +118,7 @@ export default function FilePreviewModal({ file, onClose }) {
     if (isTxt) {
       const highlighted = hljs.highlightAuto(textContent).value;
       return (
-        <pre className="w-full max-h-[65vh] overflow-auto text-left rounded-xl p-4 bg-[#01070a] border border-gray-900 custom-scrollbar text-xs font-mono leading-relaxed whitespace-pre-wrap select-text">
+        <pre className="w-full max-h-[65vh] overflow-auto text-left rounded-xl p-4 bg-surface-abyss border border-gray-900 custom-scrollbar text-xs font-mono leading-relaxed whitespace-pre-wrap select-text">
           <code
             className="hljs"
             dangerouslySetInnerHTML={{ __html: highlighted || textContent }}
@@ -138,26 +138,26 @@ export default function FilePreviewModal({ file, onClose }) {
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 backdrop-blur-sm select-none p-4 animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-shade/85 backdrop-blur-sm select-none p-4 animate-in fade-in duration-200">
       <div
-        className="w-full max-w-4xl max-h-[85vh] bg-[#020d12] border border-gray-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col animate-in zoom-in-95 duration-200"
+        className="w-full max-w-4xl max-h-[85vh] bg-surface-abyss border border-gray-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col animate-in zoom-in-95 duration-200"
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-gray-800/80 bg-[#011419]/50 shrink-0">
+        <div className="flex items-center justify-between p-4 border-b border-gray-800/80 bg-surface-canvas/50 shrink-0">
           <div className="flex flex-col min-w-0 mr-4 select-text">
-            <span className="text-xs font-bold text-white truncate font-sans">{file.name}</span>
+            <span className="text-xs font-bold text-text-primary truncate font-sans">{file.name}</span>
             <span className="text-[0.5625rem] text-gray-500 font-mono mt-0.5">{Math.round(file.size / 1024)} KB</span>
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-md text-gray-400 hover:text-white hover:bg-white/5 cursor-pointer transition-colors"
+            className="p-1 rounded-md text-gray-400 hover:text-text-primary hover:bg-tint/5 cursor-pointer transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Body content */}
-        <div className="flex-1 overflow-auto p-5 flex items-center justify-center bg-[#000508]/40">
+        <div className="flex-1 overflow-auto p-5 flex items-center justify-center bg-surface-abyss/40">
           {renderContent()}
         </div>
       </div>

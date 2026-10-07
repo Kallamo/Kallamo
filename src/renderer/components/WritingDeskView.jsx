@@ -497,7 +497,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
   );
 
   // Row actions take no room until the row is hovered or focused, so names keep their width.
-  const rowActionClass = (item) => `h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-white/10 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${rowMenu?.item.id === item.id ? 'inline-flex bg-white/10 text-text-primary' : 'hidden group-hover:inline-flex group-focus-within:inline-flex'}`;
+  const rowActionClass = (item) => `h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-tint/10 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${rowMenu?.item.id === item.id ? 'inline-flex bg-tint/10 text-text-primary' : 'hidden group-hover:inline-flex group-focus-within:inline-flex'}`;
 
   const dragProps = (item) => ({
     draggable: editingId !== item.id,
@@ -526,7 +526,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
           aria-expanded={isOpen}
           onClick={() => editingId !== folder.id && toggleFolder(folder.id)}
           onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); toggleFolder(folder.id); } }}
-          className={`group relative flex min-h-[1.875rem] cursor-pointer items-center gap-2 rounded-md py-0.5 pl-2 pr-8 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${dropInside(item) ? 'bg-accent/10 ring-1 ring-inset ring-accent/60' : 'hover:bg-white/5'} ${dragItem?.id === folder.id ? 'opacity-40' : ''}`}
+          className={`group relative flex min-h-[1.875rem] cursor-pointer items-center gap-2 rounded-md py-0.5 pl-2 pr-8 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${dropInside(item) ? 'bg-accent/10 ring-1 ring-inset ring-accent/60' : 'hover:bg-tint/5'} ${dragItem?.id === folder.id ? 'opacity-40' : ''}`}
         >
           {dropLine(item, 'before')}
           {dropLine(item, 'after')}
@@ -572,7 +572,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
         aria-current={active ? 'page' : undefined}
         onClick={() => editingId !== doc.id && selectDocument(doc.id)}
         onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); selectDocument(doc.id); } }}
-        className={`group relative flex min-h-[1.875rem] cursor-pointer items-center gap-2 rounded-md py-0.5 pl-2 pr-1 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${active ? 'bg-accent/[0.13] text-accent' : 'text-text-secondary hover:bg-white/5 hover:text-text-primary'} ${dragItem?.id === doc.id ? 'opacity-40' : ''}`}
+        className={`group relative flex min-h-[1.875rem] cursor-pointer items-center gap-2 rounded-md py-0.5 pl-2 pr-1 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${active ? 'bg-accent/[0.13] text-accent' : 'text-text-secondary hover:bg-tint/5 hover:text-text-primary'} ${dragItem?.id === doc.id ? 'opacity-40' : ''}`}
       >
         {dropLine(item, 'before')}
         {dropLine(item, 'after')}
@@ -694,7 +694,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
       ) : (
         <div className="flex flex-1 items-center justify-center p-6">
           <section aria-label="No chapter open" className="glass-panel flex w-full max-w-md flex-col items-center gap-3 rounded-surface border border-border-subtle px-8 py-8 text-center">
-            <span className="flex h-12 w-12 items-center justify-center rounded-card bg-white/[0.06] text-text-primary"><WritingGlyph className="h-6 w-6" /></span>
+            <span className="flex h-12 w-12 items-center justify-center rounded-card bg-tint/[0.06] text-text-primary"><WritingGlyph className="h-6 w-6" /></span>
             <h2 className="mt-1 text-lg font-bold text-text-primary">{isEmpty ? 'Start your first chapter' : 'Pick a chapter, or start one'}</h2>
             <p className="mb-2 text-sm leading-relaxed text-text-muted">
               {isEmpty ? 'Write here from scratch, or bring in a manuscript you already have.' : 'Chapters live in the list on the left. You can also bring in a manuscript you already have.'}

@@ -13,8 +13,8 @@ export default function WorkflowErrorModal() {
   const canResume = isRetryableGenerationError(errorData);
 
   return (
-    <div className={`fixed inset-0 z-50 flex items-center justify-center titlebar-nodrag select-none ${(settings?.interface?.blur ?? true) ? 'bg-black/70 backdrop-blur-sm' : 'bg-[#011419]'}`}>
-      <div className="w-[480px] bg-[#011419] border border-status-danger/30 rounded-xl shadow-2xl p-6 flex flex-col space-y-4 animate-in fade-in zoom-in duration-200">
+    <div className={`fixed inset-0 z-50 flex items-center justify-center titlebar-nodrag select-none ${(settings?.interface?.blur ?? true) ? 'bg-shade/70 backdrop-blur-sm' : 'bg-surface-canvas'}`}>
+      <div className="w-[480px] bg-surface-canvas border border-status-danger/30 rounded-xl shadow-2xl p-6 flex flex-col space-y-4 animate-in fade-in zoom-in duration-200">
         
         {/* Error Header */}
         <div className="flex items-center space-x-3 text-status-danger">
@@ -22,7 +22,7 @@ export default function WorkflowErrorModal() {
             <AlertCircle className="w-6 h-6 animate-pulse" />
           </div>
           <div className="flex flex-col">
-            <h3 className="text-white font-bold text-base">Workflow Execution Error</h3>
+            <h3 className="text-text-primary font-bold text-base">Workflow Execution Error</h3>
             <span className="text-[0.625rem] text-status-danger font-bold uppercase tracking-wider">Failed at: {stepName}</span>
           </div>
         </div>
@@ -57,9 +57,9 @@ export default function WorkflowErrorModal() {
             <>
               <button
                 onClick={() => handleRespondToError('skip')}
-                className="flex flex-col items-center justify-center p-3 bg-[#0a161d] hover:bg-[#1a2d32] border border-gray-800 hover:border-gray-500 rounded-xl transition-all cursor-pointer group"
+                className="flex flex-col items-center justify-center p-3 bg-surface-panel hover:bg-surface-hover border border-gray-800 hover:border-gray-500 rounded-xl transition-all cursor-pointer group"
               >
-                <SkipForward className="w-5 h-5 text-gray-400 group-hover:text-white mb-1 group-hover:scale-110 transition-transform" />
+                <SkipForward className="w-5 h-5 text-gray-400 group-hover:text-text-primary mb-1 group-hover:scale-110 transition-transform" />
                 <span className="text-[0.625rem] font-bold text-gray-300 uppercase tracking-wider">Skip Step</span>
                 <span className="text-[0.5rem] text-gray-500 text-center mt-0.5 leading-tight">Pass prev output to next step</span>
               </button>

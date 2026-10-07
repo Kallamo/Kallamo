@@ -180,7 +180,7 @@ export default function SearchableSelect({
         </div>
       ) : null}
 
-      <Popover anchorRef={rootRef} open={isOpen} onClose={close} maxHeight={320} scroll={false} className="border-border-default bg-surface-panel-muted p-0 shadow-black/50">
+      <Popover anchorRef={rootRef} open={isOpen} onClose={close} maxHeight={320} scroll={false} className="border-border-default bg-surface-panel-muted p-0 shadow-shade/50">
         {!searchInTrigger && <div className="relative border-b border-border-subtle bg-surface-panel-muted">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-subtle" />
           <input

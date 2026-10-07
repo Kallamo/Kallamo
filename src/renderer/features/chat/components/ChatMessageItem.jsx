@@ -33,7 +33,7 @@ function RoleplayMessageFrame({ frame }) {
   const timeChanged = shouldShowTimeTransition(frame);
   const weekday = formatFrameWeekday(frame.end);
   return (
-    <div className="mb-3.5 flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 border-b border-white/[0.07] pb-3 text-xs text-text-muted select-none">
+    <div className="mb-3.5 flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 border-b border-tint/[0.07] pb-3 text-xs text-text-muted select-none">
       <span className="flex min-w-0 items-center gap-2">
         <MapPin aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-entity-location" />
         <span className="min-w-0 truncate font-medium text-text-secondary">
@@ -44,7 +44,7 @@ function RoleplayMessageFrame({ frame }) {
         {frame.pending && (
           <span
             data-tooltip="Place and time for this reply update when the story continues."
-            className="inline-flex h-5 shrink-0 items-center gap-1.5 rounded-full bg-white/[0.06] px-2 text-[0.6875rem] font-medium text-text-muted"
+            className="inline-flex h-5 shrink-0 items-center gap-1.5 rounded-full bg-tint/[0.06] px-2 text-[0.6875rem] font-medium text-text-muted"
           >
             <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-text-subtle" />
             Pending
@@ -102,7 +102,7 @@ function ActionButton({ icon: Icon, label, onClick }) {
     <button
       type="button"
       onClick={onClick}
-      className="chat-action inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-text-muted transition-colors hover:bg-white/[0.06] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      className="chat-action inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-text-muted transition-colors hover:bg-tint/[0.06] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
     >
       <Icon aria-hidden="true" className="h-3.5 w-3.5" />
       {label}
@@ -156,7 +156,7 @@ function MessageMenu({ message, actions }) {
           event.stopPropagation();
           setOpen(value => !value);
         }}
-        className={`chat-action inline-flex h-7 w-7 items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${open ? 'bg-white/[0.08] text-text-primary' : 'text-text-muted hover:bg-white/[0.06] hover:text-text-primary'}`}
+        className={`chat-action inline-flex h-7 w-7 items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${open ? 'bg-tint/[0.08] text-text-primary' : 'text-text-muted hover:bg-tint/[0.06] hover:text-text-primary'}`}
       >
         <MoreHorizontal aria-hidden="true" className="h-4 w-4" />
       </button>
@@ -201,7 +201,7 @@ function Notice({ children }) {
 
 function DroppedChip() {
   return (
-    <span className="inline-flex h-6 items-center gap-1.5 rounded-full bg-white/[0.06] px-2.5 text-xs text-text-muted select-none">
+    <span className="inline-flex h-6 items-center gap-1.5 rounded-full bg-tint/[0.06] px-2.5 text-xs text-text-muted select-none">
       <EyeOff aria-hidden="true" className="h-3.5 w-3.5" />
       Not in the AI&apos;s context
     </span>
@@ -245,7 +245,7 @@ function UserMessage({ message, isEditing, isLastUser, playerName, view, actions
       ) : (
         <div
           style={isDropped ? undefined : view.userBubbleStyle}
-          className={`relative max-w-full rounded-surface border text-text-secondary ${sizeClass} ${isDocumentMode ? 'w-full p-5' : 'px-4.5 py-3.5'} ${isDropped ? 'border-dashed border-white/20 text-text-muted' : 'shadow-sm'}`}
+          className={`relative max-w-full rounded-surface border text-text-secondary ${sizeClass} ${isDocumentMode ? 'w-full p-5' : 'px-4.5 py-3.5'} ${isDropped ? 'border-dashed border-tint/20 text-text-muted' : 'shadow-sm'}`}
         >
           <MessageMarkdown content={message.content} className="select-text text-left markdown-content leading-relaxed" />
         </div>
@@ -257,7 +257,7 @@ function UserMessage({ message, isEditing, isLastUser, playerName, view, actions
             <button
               type="button"
               onClick={() => actions.toggleExcluded(message.id, false)}
-              className="chat-action inline-flex h-7 items-center gap-1.5 rounded-lg border border-border-default px-2.5 text-xs font-semibold text-text-primary transition-colors hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              className="chat-action inline-flex h-7 items-center gap-1.5 rounded-lg border border-border-default px-2.5 text-xs font-semibold text-text-primary transition-colors hover:bg-tint/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
               <Eye aria-hidden="true" className="h-3.5 w-3.5" />
               Restore to context
@@ -308,7 +308,7 @@ function AiMessage({ message, isEditing, isLastAi, isTyping, frame, view, action
 
       <div
         style={isEditing || isDropped ? undefined : view.aiBubbleStyle}
-        className={`relative max-w-full overflow-hidden rounded-surface border ${sizeClass} ${isEditing ? 'w-full border-border-subtle bg-surface-panel p-4' : isDocumentMode ? 'w-full p-5' : 'px-4.5 py-4'} ${isDropped ? 'border-dashed border-white/20 text-text-muted' : 'text-text-secondary shadow-sm'}`}
+        className={`relative max-w-full overflow-hidden rounded-surface border ${sizeClass} ${isEditing ? 'w-full border-border-subtle bg-surface-panel p-4' : isDocumentMode ? 'w-full p-5' : 'px-4.5 py-4'} ${isDropped ? 'border-dashed border-tint/20 text-text-muted' : 'text-text-secondary shadow-sm'}`}
       >
         <RoleplayMessageFrame frame={frame} />
         {isEditing ? (
@@ -322,7 +322,7 @@ function AiMessage({ message, isEditing, isLastAi, isTyping, frame, view, action
         ) : (
           <>
             {thinking && (
-              <div className="mb-3 border-b border-white/[0.07] pb-3 select-none">
+              <div className="mb-3 border-b border-tint/[0.07] pb-3 select-none">
                 <button
                   type="button"
                   aria-expanded={thinkingOpen}
@@ -334,7 +334,7 @@ function AiMessage({ message, isEditing, isLastAi, isTyping, frame, view, action
                   <ChevronRight aria-hidden="true" className={`ml-auto h-3.5 w-3.5 transition-transform ${thinkingOpen ? 'rotate-90' : ''}`} />
                 </button>
                 {thinkingOpen && (
-                  <div className="mt-2 rounded-xl border border-white/5 bg-white/5 p-3 font-mono text-xs italic text-text-muted whitespace-pre-wrap select-text animate-in fade-in duration-200">
+                  <div className="mt-2 rounded-xl border border-tint/5 bg-tint/5 p-3 font-mono text-xs italic text-text-muted whitespace-pre-wrap select-text animate-in fade-in duration-200">
                     {thinking}
                   </div>
                 )}
@@ -358,7 +358,7 @@ function AiMessage({ message, isEditing, isLastAi, isTyping, frame, view, action
             <button
               type="button"
               onClick={() => actions.toggleExcluded(message.id, false)}
-              className="chat-action inline-flex h-7 items-center gap-1.5 rounded-lg border border-border-default px-2.5 text-xs font-semibold text-text-primary transition-colors hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              className="chat-action inline-flex h-7 items-center gap-1.5 rounded-lg border border-border-default px-2.5 text-xs font-semibold text-text-primary transition-colors hover:bg-tint/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
               <Eye aria-hidden="true" className="h-3.5 w-3.5" />
               Restore to context

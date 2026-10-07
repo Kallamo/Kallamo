@@ -13,8 +13,8 @@ export default function ProfileErrorModal() {
   const canRetry = isRetryableGenerationError(errorData);
 
   return (
-    <div className={`fixed inset-0 z-50 flex items-center justify-center titlebar-nodrag select-none ${(settings?.interface?.blur ?? true) ? 'bg-black/70 backdrop-blur-sm' : 'bg-[#011419]'}`}>
-      <div className="w-[480px] bg-[#011419] border border-status-danger/30 rounded-xl shadow-2xl p-6 flex flex-col space-y-4 animate-in fade-in zoom-in duration-200">
+    <div className={`fixed inset-0 z-50 flex items-center justify-center titlebar-nodrag select-none ${(settings?.interface?.blur ?? true) ? 'bg-shade/70 backdrop-blur-sm' : 'bg-surface-canvas'}`}>
+      <div className="w-[480px] bg-surface-canvas border border-status-danger/30 rounded-xl shadow-2xl p-6 flex flex-col space-y-4 animate-in fade-in zoom-in duration-200">
         
         {/* Error Header */}
         <div className="flex items-center space-x-3 text-status-danger">
@@ -22,7 +22,7 @@ export default function ProfileErrorModal() {
             <AlertCircle className="w-6 h-6 animate-pulse" />
           </div>
           <div className="flex flex-col">
-            <h3 className="text-white font-bold text-base">AI Profile Execution Error</h3>
+            <h3 className="text-text-primary font-bold text-base">AI Profile Execution Error</h3>
             <span className="text-[0.625rem] text-status-danger font-bold uppercase tracking-wider">Failed at: {profileName}</span>
           </div>
         </div>

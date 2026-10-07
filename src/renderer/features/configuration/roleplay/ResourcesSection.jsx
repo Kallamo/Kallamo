@@ -163,10 +163,10 @@ function ResourceRow({ definition, holders, open, onToggle, onEdit, onDelete, gr
           </div>
           {lowest && !open && <p className="mt-0.5 truncate text-xs text-text-subtle">{lowest}</p>}
         </div>
-        <span className="inline-flex h-5.5 shrink-0 items-center whitespace-nowrap rounded-md bg-white/[0.06] px-2 text-xs font-medium text-text-secondary">
+        <span className="inline-flex h-5.5 shrink-0 items-center whitespace-nowrap rounded-md bg-tint/[0.06] px-2 text-xs font-medium text-text-secondary">
           {chosen ? `Only: ${holders.length} chosen` : `Everyone: ${definition.appliesTo.map(kind => KIND_LABELS[kind] || kind).join(', ')}`}
         </span>
-        <span className="inline-flex h-5.5 shrink-0 items-center whitespace-nowrap rounded-md bg-white/[0.06] px-2 text-xs font-medium text-text-secondary">AI: {POLICY_LABEL[definition.updatePolicy] || definition.updatePolicy}</span>
+        <span className="inline-flex h-5.5 shrink-0 items-center whitespace-nowrap rounded-md bg-tint/[0.06] px-2 text-xs font-medium text-text-secondary">AI: {POLICY_LABEL[definition.updatePolicy] || definition.updatePolicy}</span>
         <IconButton ref={menuRef} icon={MoreHorizontal} size="sm" label={`${definition.name} actions`} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen(value => !value)} />
         <Menu anchorRef={menuRef} open={menuOpen} onClose={() => setMenuOpen(false)} label={`${definition.name} actions`} className="w-52">
           <MenuItem icon={Pencil} label="Edit" onSelect={() => { setMenuOpen(false); onEdit(); }} />
@@ -213,7 +213,7 @@ function ResourceRow({ definition, holders, open, onToggle, onEdit, onDelete, gr
             )}
           </div>
 
-          <div className="flex flex-col gap-2.5 rounded-card border border-border-subtle bg-white/[0.02] p-3">
+          <div className="flex flex-col gap-2.5 rounded-card border border-border-subtle bg-tint/[0.02] p-3">
             <FieldLabel>{updating ? `Change ${definition.name} for` : chosen ? `Give ${definition.name} to` : 'Set a different value for'}</FieldLabel>
             <div className="flex flex-wrap items-center gap-2">
               <SegmentedControl label="Give to" value={give.targetType} onChange={targetType => setGive(current => ({ ...current, targetType, targetIds: [] }))} options={['entity', 'race', 'species'].map(value => ({ value, label: TARGET_LABEL[value] }))} />

@@ -134,7 +134,7 @@ export default function WritingNotesPanel({ documentId, documentTitle, workspace
           <button
             type="button"
             onClick={() => onJump?.(n.excerpt)}
-            className="flex items-start gap-2 rounded-md bg-white/[0.04] px-2.5 py-2 text-left text-xs leading-relaxed text-text-muted transition-colors hover:bg-white/[0.07] hover:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            className="flex items-start gap-2 rounded-md bg-tint/[0.04] px-2.5 py-2 text-left text-xs leading-relaxed text-text-muted transition-colors hover:bg-tint/[0.07] hover:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
             <span className="line-clamp-2 flex-1 break-words italic">“{n.excerpt}”</span>
             <CornerDownLeft className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-label="Go to the passage" />
@@ -197,7 +197,7 @@ export default function WritingNotesPanel({ documentId, documentTitle, workspace
       <div className="custom-scrollbar flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-3 py-3.5 [&>*]:shrink-0">
         {notes.length === 0 ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-2.5 px-3 text-center">
-            <span className="flex h-11 w-11 items-center justify-center rounded-card bg-white/5 text-text-subtle"><NoteGlyph className="h-5 w-5" /></span>
+            <span className="flex h-11 w-11 items-center justify-center rounded-card bg-tint/5 text-text-subtle"><NoteGlyph className="h-5 w-5" /></span>
             <p className="text-sm font-semibold text-text-secondary">No notes on this chapter</p>
             <p className="text-xs leading-relaxed text-text-subtle">Write a reminder below. When you ask the AI to analyze a passage, its reading lands here too.</p>
           </div>

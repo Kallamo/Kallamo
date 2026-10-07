@@ -1,320 +1,232 @@
 import React, { useState, useEffect } from 'react';
+import { AlertTriangle, ArrowDown, ArrowUp, ChevronDown, GripVertical, MessageSquare, Plus, Trash2 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { X, Plus, Trash2, ArrowUp, ArrowDown, ListOrdered, HelpCircle, Workflow } from 'lucide-react';
+import Modal from '../ui/Modal';
+import Button from '../ui/Button';
+import TextInput from '../ui/TextInput';
+import Toggle from '../ui/Toggle';
+import SelectMenu from '../ui/SelectMenu';
+import IconButton from '../ui/IconButton';
 
-export default function WorkflowModal({ workflow, onClose, onSave }) {
-  const {
-    writingProfiles,
-    handleSaveWorkflow,
-    settings
-  } = useApp();
+const newStepId = () => `step_${Date.now()}_${Math.random()}`;
+// Short chains read best fully open; longer ones open one step at a time.
+const OPEN_ALL_UP_TO = 3;
 
+export default function WorkflowModal({ workflow, onClose, onSave, inline = false }) {
+  const { writingProfiles, handleSaveWorkflow } = useApp();
   const isEditing = !!workflow;
   const [name, setName] = useState('');
-  const [steps, setSteps] = useState([]); // Array of { id, profileId, prompt, includeContext }
+  const [steps, setSteps] = useState([]); // [{ id, profileId, prompt, includeContext, includeChatHistory }]
+  const [expanded, setExpanded] = useState(() => new Set());
+  const [dragIndex, setDragIndex] = useState(null);
 
   useEffect(() => {
-    if (workflow) {
-      setName(workflow.name || '');
-      let loadedSteps = [];
-      try {
-        loadedSteps = typeof workflow.steps === 'string'
-          ? JSON.parse(workflow.steps)
-          : (workflow.steps || []);
-      } catch (e) {
-        loadedSteps = [];
-      }
-      // Add local unique IDs for keys and editing, default includeChatHistory to true
-      setSteps(loadedSteps.map((s, idx) => ({
-        ...s,
-        id: s.id || `step_${Date.now()}_${idx}_${Math.random()}`,
-        includeChatHistory: s.includeChatHistory !== false
-      })));
+    if (!workflow) return;
+    setName(workflow.name || '');
+    let loaded = [];
+    try {
+      loaded = typeof workflow.steps === 'string' ? JSON.parse(workflow.steps) : (workflow.steps || []);
+    } catch {
+      loaded = [];
     }
+    const withIds = loaded.map((s, idx) => ({
+      ...s,
+      id: s.id || `step_${Date.now()}_${idx}_${Math.random()}`,
+      includeChatHistory: s.includeChatHistory !== false,
+    }));
+    setSteps(withIds);
+    setExpanded(new Set(withIds.length <= OPEN_ALL_UP_TO ? withIds.map(s => s.id) : withIds.slice(0, 1).map(s => s.id)));
   }, [workflow]);
 
+  const profileOf = (id) => writingProfiles.find(p => p.id === id);
+  const toggleExpanded = (id) => setExpanded(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const allExpanded = steps.length > 0 && steps.every(s => expanded.has(s.id));
+
   const addStep = () => {
-    const defaultProfile = writingProfiles[0]?.id || '';
-    setSteps(prev => [...prev, {
-      id: `step_${Date.now()}_${Math.random()}`,
-      profileId: defaultProfile,
-      prompt: '',
-      includeContext: true,
-      includeChatHistory: true
-    }]);
+    const step = { id: newStepId(), profileId: writingProfiles[0]?.id || '', prompt: '', includeContext: true, includeChatHistory: true };
+    setSteps(prev => [...prev, step]);
+    setExpanded(prev => new Set([...prev, step.id]));
   };
-
-  const removeStep = (id) => {
-    setSteps(prev => prev.filter(s => s.id !== id));
-  };
-
-  const updateStepField = (id, field, value) => {
-    setSteps(prev => prev.map(s => s.id === id ? { ...s, [field]: value } : s));
-  };
-
-  const moveStep = (index, direction) => {
-    if (direction === 'up' && index === 0) return;
-    if (direction === 'down' && index === steps.length - 1) return;
-
-    const targetIndex = direction === 'up' ? index - 1 : index + 1;
-    const newSteps = [...steps];
-
-    // Swap
-    const temp = newSteps[index];
-    newSteps[index] = newSteps[targetIndex];
-    newSteps[targetIndex] = temp;
-
-    setSteps(newSteps);
+  const removeStep = (id) => setSteps(prev => prev.filter(s => s.id !== id));
+  const updateStep = (id, field, value) => setSteps(prev => prev.map(s => (s.id === id ? { ...s, [field]: value } : s)));
+  const moveStep = (from, to) => {
+    if (to < 0 || to >= steps.length || from === to) return;
+    setSteps(prev => {
+      const next = [...prev];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
   };
 
   const handleSave = async () => {
     if (!name.trim()) return;
-
-    // Filter out invalid steps (no profile selected)
     const validSteps = steps.filter(s => s.profileId).map(s => ({
       profileId: s.profileId,
-      prompt: s.prompt.trim(),
+      prompt: (s.prompt || '').trim(),
       includeContext: !!s.includeContext,
-      includeChatHistory: s.includeChatHistory !== false
+      includeChatHistory: s.includeChatHistory !== false,
     }));
-
-    const targetId = workflow?.id || 'wf_' + Math.random().toString(36).substr(2, 9);
     const updatedWorkflow = {
-      id: targetId,
+      id: workflow?.id || 'wf_' + Math.random().toString(36).substr(2, 9),
       name: name.trim(),
       entryProfileId: validSteps[0]?.profileId || '',
-      steps: JSON.stringify(validSteps)
+      steps: JSON.stringify(validSteps),
     };
-
     await handleSaveWorkflow(updatedWorkflow);
     if (onSave) onSave(updatedWorkflow);
     onClose();
   };
 
-  return (
-    <div className={`fixed inset-0 z-50 flex items-center justify-center titlebar-nodrag select-none p-8 ${(settings?.interface?.blur ?? true) ? 'bg-black/60 backdrop-blur-sm' : 'bg-[#011419]'}`}>
-      <div className="w-full max-w-4xl h-full max-h-[680px] bg-[#000D11] border border-gray-800/60 rounded-xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
+  const blocked = steps.map((s, i) => ({ step: s, index: i, profile: profileOf(s.profileId) })).find(({ profile }) => profile?.needsSetup);
+  const profileOptions = writingProfiles.map(p => ({ value: p.id, label: p.name }));
 
-        {/* Header */}
-        <div className="shrink-0 flex justify-between items-center h-14 w-full px-6 bg-[#011419] border-b border-gray-800/50">
-          <h2 className="text-lg font-bold text-white tracking-wide">
-            {isEditing ? 'Configure Workflow' : 'Build Agent Workflow'}
-          </h2>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-status-danger transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5"
-          >
-            <X className="w-5 h-5" />
-          </button>
+  return (
+    <Modal
+      onClose={onClose}
+      size="wide"
+      title={isEditing ? 'Edit workflow' : 'New workflow'}
+      subtitle="Each step runs in order and hands its reply to the next. The chat shows the last step's reply."
+      className={inline ? '' : 'h-[min(58rem,calc(100vh-2rem))]'}
+      inline={inline}
+    >
+      <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto custom-scrollbar px-7 py-5">
+        <div className="flex items-end gap-3.5">
+          <TextInput label="Name" value={name} onChange={e => setName(e.target.value)} placeholder="Draft, then check the canon" containerClassName="w-full max-w-[26rem]" autoFocus={!isEditing} />
+          <span className="flex-1" />
+          {steps.length > 1 && (
+            <Button variant="subtle" size="sm" onClick={() => setExpanded(allExpanded ? new Set() : new Set(steps.map(s => s.id)))}>
+              {allExpanded ? 'Collapse all' : 'Expand all'}
+            </Button>
+          )}
         </div>
 
-        {/* Form Body */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {/* Workflow Name */}
-          <div className="flex flex-col space-y-1.5 w-full max-w-md">
-            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Workflow Name</label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Translate and Summarize"
-              className="bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 focus:outline-none focus:border-accent"
-            />
+        <div className="flex flex-col">
+          <div className="mb-2 flex items-center gap-4">
+            <span className="flex w-[2.125rem] justify-center"><MessageSquare className="h-4 w-4 text-text-subtle" aria-hidden="true" /></span>
+            <span className="caption">Your message</span>
           </div>
 
-          {/* Steps Section */}
-          <div className="flex flex-col space-y-4">
-            <div className="flex justify-between items-center">
-              <div className="flex items-center gap-2.5">
-                <span className="w-8 h-8 rounded-lg bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-                  <ListOrdered className="w-4 h-4 text-accent" />
-                </span>
-                <div>
-                  <h3 className="text-xs font-bold text-white uppercase tracking-wider">Execution Steps Chain</h3>
-                  <p className="caption mt-0.5">Each step runs in order; its output feeds the next.</p>
-                </div>
-              </div>
-              <button
-                onClick={addStep}
-                className="flex items-center space-x-1 px-3 py-1.5 bg-accent/15 hover:bg-accent/25 border border-accent/30 text-accent rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+          {steps.map((step, index) => {
+            const profile = profileOf(step.profileId);
+            const tint = profile?.color || 'var(--theme-text-muted)';
+            const open = expanded.has(step.id);
+            const sub = profile?.needsSetup
+              ? <span className="text-xs text-status-warning">No model linked</span>
+              : <span className="truncate font-mono text-xs text-text-subtle">{profile?.model || 'Choose a profile'}</span>;
+            return (
+              <div
+                key={step.id}
+                className={`flex gap-4 ${dragIndex === index ? 'opacity-50' : ''}`}
+                onDragOver={e => { if (dragIndex !== null) e.preventDefault(); }}
+                onDrop={e => { e.preventDefault(); if (dragIndex !== null) moveStep(dragIndex, index); setDragIndex(null); }}
               >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Add Step</span>
-              </button>
-            </div>
-
-            {/* List of Steps */}
-            <div className="space-y-4 max-h-[360px] overflow-y-auto custom-scrollbar pr-1">
-              {steps.length === 0 ? (
-                <div className="flex flex-col items-center justify-center text-gray-500 py-20 bg-[#0a161d]/20 border border-dashed border-gray-800/80 rounded-2xl">
-                  <Workflow className="w-8 h-8 opacity-30 mb-2 animate-spin-slow" />
-                  <p className="text-xs font-medium">No steps added to the workflow yet.</p>
-                  <button
-                    onClick={addStep}
-                    className="mt-3 text-xs text-accent font-semibold hover:underline"
+                <div className="flex w-[2.125rem] shrink-0 flex-col items-center">
+                  <span
+                    className="inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded-full border-[1.5px] text-sm font-bold tabular-nums"
+                    style={{ color: tint, background: `color-mix(in srgb, ${tint} 16%, var(--theme-surface-canvas))`, borderColor: `color-mix(in srgb, ${tint} 55%, transparent)` }}
                   >
-                    Click here to add the first execution step
-                  </button>
+                    {index + 1}
+                  </span>
+                  <span aria-hidden="true" className="mt-1.5 w-0.5 flex-1 bg-tint/[0.08]" />
                 </div>
-              ) : (
-                steps.map((step, index) => {
-                  const selectedProfile = writingProfiles.find(p => p.id === step.profileId);
-                  const stepColor = selectedProfile ? selectedProfile.color : '#FBCB2D';
 
-                  return (
-                    <div key={step.id} className="flex gap-3.5 group">
-                      {/* Timeline rail: the chain, tinted by the step's AI Profile color */}
-                      <div className="flex flex-col items-center shrink-0 pt-0.5">
-                        <span
-                          className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold shrink-0"
-                          style={{ backgroundColor: `${stepColor}22`, border: `1px solid ${stepColor}66`, color: stepColor }}
-                        >
-                          {index + 1}
-                        </span>
-                        {index < steps.length - 1 && (
-                          <span className="w-0.5 flex-1 rounded-full mt-2" style={{ backgroundColor: stepColor, opacity: 0.3 }} />
-                        )}
-                      </div>
-
-                      {/* Step card */}
-                      <div className="flex-1 min-w-0 bg-[#0a161d]/60 border border-gray-800/70 rounded-xl p-4 space-y-3 shadow-md hover:border-gray-700 transition-colors">
-                        {/* Header row */}
-                        <div className="flex items-center justify-between">
-                          <span className="text-[0.6875rem] font-bold text-gray-300 uppercase tracking-wider">Execution Step</span>
-
-                        <div className="flex items-center space-x-1.5 hover-reveal">
-                          <button
-                            disabled={index === 0}
-                            onClick={() => moveStep(index, 'up')}
-                            className="p-1 hover:bg-[#111f2e] text-gray-400 hover:text-white rounded transition-colors disabled:opacity-30 cursor-pointer"
-                          >
-                            <ArrowUp className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            disabled={index === steps.length - 1}
-                            onClick={() => moveStep(index, 'down')}
-                            className="p-1 hover:bg-[#111f2e] text-gray-400 hover:text-white rounded transition-colors disabled:opacity-30 cursor-pointer"
-                          >
-                            <ArrowDown className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => removeStep(step.id)}
-                            className="p-1 hover:bg-status-danger/10 text-gray-500 hover:text-status-danger rounded transition-colors cursor-pointer"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Config parameters for step */}
-                      {/* Profile & Switches Row */}
-                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-gray-800/40 pb-2.5">
-                        {/* Profile Selector */}
-                        <div className="flex-1 flex flex-col space-y-1">
-                          <label className="text-[0.625rem] font-bold text-gray-500 uppercase tracking-wide">AI Profile</label>
-                          <div className="relative flex items-center max-w-xs">
-                            <span
-                              className="absolute left-3 w-2.5 h-2.5 rounded-full"
-                              style={{ backgroundColor: stepColor }}
-                            />
-                            <select
-                              value={step.profileId}
-                              onChange={(e) => updateStepField(step.id, 'profileId', e.target.value)}
-                              className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-xs rounded-md pl-8 pr-8 py-1.5 focus:outline-none focus:border-accent appearance-none cursor-pointer"
-                            >
-                              <option value="" disabled>Select Profile...</option>
-                              {writingProfiles.map(p => (
-                                <option key={p.id} value={p.id}>{p.name}</option>
-                              ))}
-                            </select>
-                            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-400">
-                              <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
-                                <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/>
-                              </svg>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Switches container */}
-                        <div className="flex items-center gap-6 mt-2 sm:mt-0">
-                          {/* Switch: Include Chat Context */}
-                          <div className="flex items-center space-x-2">
-                            <span className="text-[0.625rem] font-bold text-gray-400 uppercase leading-none">Include Chat Context</span>
-                            <div className="flex items-center">
-                              <HelpCircle className="w-3.5 h-3.5 text-gray-500 hover:text-gray-300 transition-colors mr-2 cursor-help" data-tooltip="When enabled, this step receives chat and memory context. The AI Profile's Knowledge Base is always included." />
-                            </div>
-                            <label className="relative inline-flex items-center cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={step.includeContext}
-                                onChange={(e) => updateStepField(step.id, 'includeContext', e.target.checked)}
-                                className="sr-only peer"
-                              />
-                              <div className="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
-                            </label>
-                          </div>
-
-                          {/* Switch: Include Chat History */}
-                          {index > 0 && (
-                            <div className="flex items-center space-x-2">
-                              <span className="text-[0.625rem] font-bold text-gray-400 uppercase leading-none">Include Chat History</span>
-                              <div className="flex items-center">
-                                <HelpCircle className="w-3.5 h-3.5 text-gray-500 hover:text-gray-300 transition-colors mr-2 cursor-help" data-tooltip="If disabled, this step ignores prior chat history and processes only the previous step's output." />
-                              </div>
-                              <label className="relative inline-flex items-center cursor-pointer">
-                                <input
-                                  type="checkbox"
-                                  checked={step.includeChatHistory !== false}
-                                  onChange={(e) => updateStepField(step.id, 'includeChatHistory', e.target.checked)}
-                                  className="sr-only peer"
-                                />
-                                <div className="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
-                              </label>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Textarea: Instructions */}
-                      <div className="flex flex-col space-y-1">
-                        <label className="text-[0.625rem] font-bold text-gray-500 uppercase tracking-wide">Step Prompt Instructions</label>
-                        <textarea
-                          rows={3}
-                          value={step.prompt}
-                          onChange={(e) => updateStepField(step.id, 'prompt', e.target.value)}
-                          placeholder="Additional instructions concatenated to System Prompt..."
-                          className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-xs rounded-md px-3 py-2 focus:outline-none focus:border-accent resize-y min-h-[72px] custom-scrollbar"
+                {open ? (
+                  <div className="mb-3 flex-1 rounded-[0.875rem] border border-border-default bg-tint/[0.035] px-4 pb-1 pt-3.5">
+                    <div className="flex items-center gap-2">
+                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: tint }} />
+                      <SelectMenu ariaLabel={`Profile for step ${index + 1}`} value={step.profileId} onChange={value => updateStep(step.id, 'profileId', value)} options={profileOptions} className="w-full max-w-[18rem]" />
+                      <span className="min-w-0 flex-1 truncate">{sub}</span>
+                      <IconButton icon={ArrowUp} label="Move up" size="sm" disabled={index === 0} onClick={() => moveStep(index, index - 1)} />
+                      <IconButton icon={ArrowDown} label="Move down" size="sm" disabled={index === steps.length - 1} onClick={() => moveStep(index, index + 1)} />
+                      <IconButton icon={Trash2} label="Remove step" tone="danger" size="sm" onClick={() => removeStep(step.id)} />
+                      {steps.length > 1 && <IconButton icon={ChevronDown} label="Collapse step" size="sm" className="rotate-180" onClick={() => toggleExpanded(step.id)} />}
+                    </div>
+                    <label className="mt-3.5 block">
+                      <span className="mb-1.5 block text-sm font-medium text-text-secondary">Instructions for this step <span className="caption">(optional)</span></span>
+                      <textarea
+                        rows={2}
+                        value={step.prompt}
+                        onChange={e => updateStep(step.id, 'prompt', e.target.value)}
+                        placeholder={index === 0 ? 'Write the next scene from the latest message.' : 'Check the text above against the canon and fix only what contradicts it.'}
+                        className="w-full resize-y rounded-control border border-border-default bg-surface-input px-3 py-2.5 text-sm text-text-secondary custom-scrollbar placeholder:text-text-subtle focus:border-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+                      />
+                    </label>
+                    <div className="mt-2 border-t border-border-subtle py-3">
+                      <Toggle
+                        checked={!!step.includeContext}
+                        onChange={value => updateStep(step.id, 'includeContext', value)}
+                        label="Use the workspace context"
+                        description="Memory, Worldbuild and retrieved lore. The profile's own knowledge base is always included."
+                      />
+                    </div>
+                    {index > 0 && (
+                      <div className="border-t border-border-subtle py-3">
+                        <Toggle
+                          checked={step.includeChatHistory !== false}
+                          onChange={value => updateStep(step.id, 'includeChatHistory', value)}
+                          label="Read the chat history"
+                          description={`Off: this step only reads the reply from step ${index}.`}
                         />
                       </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className={`mb-2.5 flex h-14 min-w-0 flex-1 items-center gap-3 rounded-xl border pl-2 pr-2 ${profile?.needsSetup ? 'border-status-warning/25' : 'border-border-subtle'} bg-tint/[0.02]`}>
+                    <span
+                      draggable
+                      onDragStart={() => setDragIndex(index)}
+                      onDragEnd={() => setDragIndex(null)}
+                      aria-hidden="true"
+                      className="cursor-grab text-text-disabled hover:text-text-muted"
+                    >
+                      <GripVertical className="h-4 w-4" />
+                    </span>
+                    <button type="button" onClick={() => toggleExpanded(step.id)} className="flex min-w-0 flex-1 items-center gap-3 text-left focus-visible:outline-none">
+                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: tint }} />
+                      <span className="flex w-52 shrink-0 flex-col">
+                        <span className="truncate text-sm font-semibold text-text-primary">{profile?.name || 'No profile'}</span>
+                        {sub}
+                      </span>
+                      <span className="caption min-w-0 flex-1 truncate">{step.prompt || 'No extra instructions'}</span>
+                      {!step.includeContext && <StepChip>No context</StepChip>}
+                      {index > 0 && step.includeChatHistory === false && <StepChip>No history</StepChip>}
+                      <ChevronDown className="h-4 w-4 shrink-0 text-text-subtle" aria-label="Expand step" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
 
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
+          <div className="flex items-center gap-4">
+            <span className="flex w-[2.125rem] justify-center">
+              <span className="inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded-full border-[1.5px] border-dashed border-tint/20 text-text-muted"><Plus className="h-4 w-4" aria-hidden="true" /></span>
+            </span>
+            <Button variant="ghost" size="sm" onClick={addStep} disabled={!writingProfiles.length}>Add a step</Button>
+            <span className="caption">{steps.length ? 'Then the reply goes to the chat.' : 'Steps run one after the other; the last one answers in the chat.'}</span>
           </div>
         </div>
-
-        {/* Footer Actions */}
-        <div className="shrink-0 flex justify-between items-center h-16 px-6 bg-[#011419] border-t border-gray-800/50">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-sm font-medium text-gray-400 hover:text-white transition-colors cursor-pointer"
-          >
-            Cancel
-          </button>
-
-          <button
-            onClick={handleSave}
-            disabled={!name.trim() || steps.length === 0}
-            className="px-5 py-2 text-sm font-medium bg-accent hover:brightness-110 text-[#011419] rounded transition-colors shadow-md font-bold cursor-pointer disabled:opacity-50"
-          >
-            Save Workflow
-          </button>
-        </div>
-
       </div>
-    </div>
+
+      <footer className="flex shrink-0 items-center gap-2.5 border-t border-border-subtle px-6 py-3.5">
+        {blocked ? (
+          <span className="flex flex-1 items-center gap-1.5 text-xs text-status-warning-strong">
+            <AlertTriangle className="h-3.5 w-3.5 text-status-warning" aria-hidden="true" />
+            {blocked.profile.name} has no model. Running stops at step {blocked.index + 1}.
+          </span>
+        ) : <span className="flex-1" />}
+        <Button variant="subtle" onClick={onClose}>Cancel</Button>
+        <Button onClick={handleSave} disabled={!name.trim() || steps.length === 0}>Save workflow</Button>
+      </footer>
+    </Modal>
   );
+}
+
+function StepChip({ children }) {
+  return <span className="inline-flex h-[1.375rem] shrink-0 items-center rounded-full border border-border-default bg-tint/[0.03] px-2.5 text-xs font-medium text-text-secondary">{children}</span>;
 }

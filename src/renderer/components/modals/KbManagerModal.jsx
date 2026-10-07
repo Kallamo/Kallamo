@@ -1,26 +1,26 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
-import { X, Search, Database, FileText, Trash2, Edit3, Save, Plus, Info, Check, HelpCircle, Download, Pin, FileSearch, Loader2, Pencil, Upload } from 'lucide-react';
-import { AiGlyph } from '../ui/glyphs';
-import { parseMarkdown, escapeHTML } from '../../utils/markdown';
+import { X, Search, Database, FileText, Trash2, Save, Plus, Download, FileSearch, Loader2, Pencil, Upload } from 'lucide-react';
 import ImportProgressModal from './ImportProgressModal';
 import ConfirmDialog from '../ui/ConfirmDialog';
 import TextInput from '../ui/TextInput';
 import Textarea from '../ui/Textarea';
-import Badge from '../ui/Badge';
-import TokenBadge from '../ui/TokenBadge';
 import EmptyState from '../ui/EmptyState';
 import Checkbox from '../ui/Checkbox';
 import Toggle from '../ui/Toggle';
 import RenameFilesModal from '../ui/RenameFilesModal';
 import Popover from '../ui/Popover';
+import Button from '../ui/Button';
+import IconButton from '../ui/IconButton';
+import { Menu, MenuItem, MenuSeparator } from '../ui/Menu';
+import { ProfileAvatar } from './ProfileModal';
 
-export default function KbManagerModal({ profile, onClose }) {
-  const { electronAPI, settings, handleSaveProfile, variables, showToast, openSettings } = useApp();
+export default function KbManagerModal({ profile, onClose, onOpenSmartSearch }) {
+  const { electronAPI, settings, showToast, openSettings } = useApp();
   const [blocks, setBlocks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeFilter, setActiveFilter] = useState('all'); // 'all', 'manual', 'constant', 'rag', 'agentic-rag'
+  const [activeFilter, setActiveFilter] = useState('all'); // 'all', 'manual', 'constant', 'rag'
   const [confirmDialog, setConfirmDialog] = useState(null); // { message, onConfirm }
   const [vectorizeError, setVectorizeError] = useState(null);
   const [pendingUpload, setPendingUpload] = useState(null);
@@ -64,6 +64,7 @@ export default function KbManagerModal({ profile, onClose }) {
   const editorTagAnchorRef = useRef(null);
   const [editorStrategy, setEditorStrategy] = useState('rag_search');
   const [viewingFileBlock, setViewingFileBlock] = useState(null);
+  const [expandedBlockId, setExpandedBlockId] = useState(null);
   const [tokenMap, setTokenMap] = useState({}); // blockId -> count, fallback for blocks lacking a stored tokenCount
 
   const handleAddTag = () => {
@@ -85,19 +86,6 @@ export default function KbManagerModal({ profile, onClose }) {
   const searchableInputRef = useRef(null);
   const constantInputRef = useRef(null);
   const editorTextareaRef = useRef(null);
-  const agenticTextareaRef = useRef(null);
-
-  const [isAgentic, setIsAgentic] = useState(profile?.isAgentic === 1 || profile?.isAgentic === true);
-  const [agenticPrompt, setAgenticPrompt] = useState(profile?.agenticPrompt || '');
-  const [agenticMaxTurns, setAgenticMaxTurns] = useState(
-    Number.isInteger(profile?.agenticMaxTurns)
-      ? Math.min(5, Math.max(1, profile.agenticMaxTurns))
-      : 3
-  );
-  const [agenticPromptMode, setAgenticPromptMode] = useState('editor'); // 'editor' | 'preview'
-  const [savingAgenticSettings, setSavingAgenticSettings] = useState(false);
-  const [saveSuccess, setSaveSuccess] = useState(false);
-
   const [isAddMenuOpen, setIsAddMenuOpen] = useState(false);
   const addMenuAnchorRef = useRef(null);
   const [exportingKb, setExportingKb] = useState(false);
@@ -105,14 +93,6 @@ export default function KbManagerModal({ profile, onClose }) {
   const [kbProgress, setKbProgress] = useState(0);
   const [kbProgressStatus, setKbProgressStatus] = useState('');
   const [kbOpType, setKbOpType] = useState(null); // 'export' | 'import' | null
-
-  const [acState, setAcState] = useState({
-    isOpen: false,
-    search: '',
-    triggerIndex: -1,
-    activeField: null // 'agentic'
-  });
-  const [acIndex, setAcIndex] = useState(0);
 
   const handleExportKb = async () => {
     if (!profile) return;
@@ -637,167 +617,6 @@ export default function KbManagerModal({ profile, onClose }) {
     }
   };
 
-  // --- Autocomplete & Preview Logic for Agentic RAG system prompt ---
-  const handleTextareaChange = (e, field) => {
-    const val = e.target.value;
-    setAgenticPrompt(val);
-
-    const cursor = e.target.selectionStart;
-    const textBeforeCursor = val.substring(0, cursor);
-
-    const openBracesIndex = textBeforeCursor.lastIndexOf('{{');
-    const closeBracesIndex = textBeforeCursor.lastIndexOf('}}');
-
-    if (openBracesIndex !== -1 && openBracesIndex > closeBracesIndex) {
-      const searchStr = textBeforeCursor.substring(openBracesIndex + 2);
-      if (!/\s/.test(searchStr)) {
-        setAcState({
-          isOpen: true,
-          search: searchStr,
-          triggerIndex: openBracesIndex,
-          activeField: field
-        });
-        setAcIndex(0);
-        return;
-      }
-    }
-
-    closeAc();
-  };
-
-  const closeAc = () => {
-    setAcState({ isOpen: false, search: '', triggerIndex: -1, activeField: null });
-    setAcIndex(0);
-  };
-
-  const insertVariable = (variable) => {
-    if (!variable || !agenticTextareaRef.current) return;
-
-    const cursor = agenticTextareaRef.current.selectionStart;
-    const beforeText = agenticPrompt.substring(0, acState.triggerIndex);
-    const afterText = agenticPrompt.substring(cursor);
-
-    const insertedText = `{{${variable.key}}}`;
-    const newValue = beforeText + insertedText + afterText;
-
-    setAgenticPrompt(newValue);
-    closeAc();
-
-    setTimeout(() => {
-      if (agenticTextareaRef.current) {
-        agenticTextareaRef.current.focus();
-        const newCursorPos = beforeText.length + insertedText.length;
-        agenticTextareaRef.current.setSelectionRange(newCursorPos, newCursorPos);
-      }
-    }, 50);
-  };
-
-  const handleTextareaKeyDown = (e, field) => {
-    if (!acState.isOpen) return;
-
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setAcIndex(prev => (prev + 1) % filteredVariables.length);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setAcIndex(prev => (prev - 1 + filteredVariables.length) % filteredVariables.length);
-    } else if (e.key === 'Enter' || e.key === 'Tab') {
-      e.preventDefault();
-      insertVariable(filteredVariables[acIndex]);
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      closeAc();
-    }
-  };
-
-  const renderPromptPreview = (promptText) => {
-    if (!promptText) return '<p class="text-gray-500 italic text-xs">No prompt content defined.</p>';
-
-    let html = parseMarkdown(promptText);
-
-    const varRegex = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
-    html = html.replace(varRegex, (match, key) => {
-      const found = (variables || []).find(v => v.key === key);
-      if (found) {
-        return `
-          <div class="my-3 border border-gray-800 rounded-lg overflow-hidden bg-[#030d11] select-text">
-            <div class="px-3 py-1.5 bg-[#0a161d] border-b border-gray-800 text-[0.625rem] font-mono font-bold text-accent select-none">
-              &lt;${key}&gt;
-            </div>
-            <div class="p-3 text-xs font-mono text-gray-300 whitespace-pre-wrap leading-relaxed">${escapeHTML(found.value)}</div>
-            <div class="px-3 py-1 bg-[#0a161d]/50 border-t border-gray-800/40 text-[0.5625rem] font-mono text-gray-500 select-none">
-              &lt;${key}/&gt;
-            </div>
-          </div>
-        `;
-      } else {
-        return `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-status-danger/10 text-status-danger border border-status-danger/30 select-none">⚠️ {{${key} (not found)}}</span>`;
-      }
-    });
-
-    return html;
-  };
-
-  const filteredVariables = (variables || []).filter(v =>
-    v.key.toLowerCase().includes(acState.search.toLowerCase())
-  );
-
-  const handleSaveAgenticSettings = async () => {
-    if (!profile) return;
-    setSavingAgenticSettings(true);
-    setSaveSuccess(false);
-
-    const updatedProfile = {
-      ...profile,
-      isAgentic: isAgentic ? 1 : 0,
-      agenticPrompt: agenticPrompt.trim(),
-      agenticMaxTurns: agenticMaxTurns
-    };
-
-    try {
-      await handleSaveProfile(updatedProfile);
-      setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 3000);
-    } catch (err) {
-      console.error("Error saving Agentic RAG settings:", err);
-      showToast("Failed to save Agentic RAG settings.", "error");
-    } finally {
-      setSavingAgenticSettings(false);
-    }
-  };
-
-  const renderAutocompleteDropdown = () => {
-    if (filteredVariables.length === 0) return null;
-
-    return (
-      <Popover anchorRef={agenticTextareaRef} open={acState.isOpen} onClose={closeAc} maxHeight={180} scroll={false} className="border-border-default bg-surface-panel-muted p-2">
-        <div className="max-h-44 overflow-y-auto custom-scrollbar">
-        <div className="text-xs text-text-muted px-2 pb-1 border-b border-border-subtle font-semibold tracking-wider uppercase flex justify-between select-none">
-          <span>Variables matching: "{acState.search}"</span>
-          <span>⇅ Navigate · ↵ Select</span>
-        </div>
-        {filteredVariables.map((v, idx) => (
-          <button
-            key={v.id}
-            type="button"
-            onClick={() => insertVariable(v)}
-            className={`w-full flex items-center justify-between text-left px-2 py-1.5 rounded transition-colors text-xs font-semibold cursor-pointer ${idx === acIndex
-              ? 'bg-accent text-[#011419]'
-              : 'text-gray-300 hover:bg-white/5'
-              }`}
-          >
-            <div className="flex items-center space-x-2 truncate">
-              <span className="font-mono font-bold">&#123;&#123;{v.key}&#125;&#125;</span>
-              <span className={`text-xs truncate ${idx === acIndex ? 'text-on-accent/70' : 'text-text-muted'}`}>{v.name}</span>
-            </div>
-            <span className={`text-xs font-mono truncate ml-4 ${idx === acIndex ? 'text-on-accent/60' : 'text-text-muted'}`}>{v.description || 'No description'}</span>
-          </button>
-        ))}
-        </div>
-      </Popover>
-    );
-  };
-
   // Group searchable chunks by their parent file name
   const groupedBlocks = React.useMemo(() => {
     const list = [];
@@ -886,597 +705,291 @@ export default function KbManagerModal({ profile, onClose }) {
   const isBlurEnabled = settings?.interface?.blur ?? true;
 
 
-  const getBadgeLabel = (block) => {
-    if (block.type === 'constant') return 'CONSTANT';
-    if (block.type === 'manual') {
-      return block.strategy === 'constant' ? 'CUSTOM (CONSTANT)' : 'CUSTOM (SEARCHABLE)';
-    }
-    if (block.type === 'rag_file') return 'SEARCHABLE FILE';
-    return 'SEARCHABLE';
+  const isAlwaysOn = (b) => b.type === 'constant'
+    || (b.type === 'manual' && (b.strategy === 'constant' || b.rawItem?.strategy === 'constant'));
+  const kindOf = (b) => {
+    if (b.type === 'rag_file') return { label: 'Searchable file', Icon: FileSearch };
+    if (b.type === 'constant') return { label: 'Always-on file', Icon: FileText };
+    return { label: 'Custom memory', Icon: Pencil };
   };
-
-  // Color-coded so the grid scans by type, not just label.
-  const blockVisual = (block) => {
-    const isConst = block.type === 'constant'
-      || (block.type === 'manual' && (block.strategy === 'constant' || block.rawItem?.strategy === 'constant'));
-    if (block.type === 'rag_file') return { tone: 'blue', hex: '#3b82f6', Icon: FileText };
-    if (block.type === 'manual') {
-      return isConst
-        ? { tone: 'amber', hex: '#FBCB2D', Icon: Pin }
-        : { tone: 'emerald', hex: '#10b981', Icon: Edit3 };
-    }
-    return { tone: 'amber', hex: '#FBCB2D', Icon: Pin };
+  const counts = {
+    all: groupedBlocks.length,
+    manual: groupedBlocks.filter(b => b.type === 'manual').length,
+    constant: groupedBlocks.filter(b => b.type === 'constant').length,
+    rag: groupedBlocks.filter(b => b.type === 'rag_file').length,
   };
-  const HOVER_BORDER = {
-    amber: 'hover:border-[#FBCB2D]/40',
-    emerald: 'hover:border-emerald-500/40',
-    blue: 'hover:border-[#3b82f6]/50',
-  };
+  const FILTERS = [
+    { id: 'all', label: 'All' },
+    { id: 'manual', label: 'Custom memory' },
+    { id: 'constant', label: 'Always-on files' },
+    { id: 'rag', label: 'Searchable files' },
+  ];
+  const ADD_OPTIONS = [
+    { id: 'memory', Icon: Pencil, title: 'Custom memory', text: 'Write a fact or rule by hand. Tags decide when it comes up.', mode: 'var(--theme-mode-always)', onClick: () => openEditor(null) },
+    { id: 'constant', Icon: FileText, title: 'Always-on file', text: 'Sent with every reply. Best for short, essential canon.', mode: 'var(--theme-mode-always)', onClick: () => constantInputRef.current?.click() },
+    { id: 'searchable', Icon: FileSearch, title: 'Searchable file', text: 'Split into chunks; only the relevant parts are sent.', mode: 'var(--theme-mode-searchable)', onClick: () => searchableInputRef.current?.click() },
+  ];
+  const profileColor = profile?.color || '#FBCB2D';
 
   return (
-    <div className={`fixed inset-0 z-50 flex items-center justify-center titlebar-nodrag select-none p-8 ${isBlurEnabled ? 'bg-black/60 backdrop-blur-sm' : 'bg-[#011419]'}`}>
-      <div className="w-full max-w-6xl h-full max-h-[750px] bg-[#000D11] rounded-xl shadow-2xl border border-gray-800/60 flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
+    <div className={`fixed inset-0 z-50 flex items-center justify-center titlebar-nodrag select-none p-8 ${isBlurEnabled ? 'bg-surface-overlay backdrop-blur-sm' : 'bg-surface-canvas'}`}>
+      <div role="dialog" aria-modal="true" aria-label="Knowledge base" className="w-full max-w-6xl h-full max-h-[50rem] bg-surface-canvas rounded-[1.25rem] shadow-2xl border border-border-default flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
 
-        {/* Header */}
-        <div className="shrink-0 flex justify-between items-center h-16 w-full px-6 bg-[#011419] border-b border-gray-800/50">
-          <div className="flex items-center space-x-3">
-            <div
-              className="p-2 rounded-lg shrink-0"
-              style={{
-                backgroundColor: `${profile?.color || '#FBCB2D'}1a`,
-                color: profile?.color || '#FBCB2D',
-                border: `1px solid ${profile?.color || '#FBCB2D'}33`,
-              }}
-            >
-              <Database className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center space-x-2">
-                <h2 className="text-base font-bold text-white tracking-wide">Knowledge Base Manager</h2>
-                <span className="inline-flex items-center gap-1.5 text-[0.625rem] font-bold px-2 py-0.5 rounded bg-gray-800 text-gray-300 uppercase tracking-wider">
-                  <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: profile?.color || '#FBCB2D' }} />
-                  {profile?.name}
-                </span>
-              </div>
-              <p className="caption mt-0.5">Edit, delete or inject manual memories into the Vector Database.</p>
-            </div>
+        <header
+          className="shrink-0 flex items-center gap-3.5 border-b border-border-subtle py-4 pl-6 pr-5"
+          style={{ background: `linear-gradient(90deg, color-mix(in srgb, ${profileColor} 9%, transparent), transparent 50%)` }}
+        >
+          <ProfileAvatar color={profileColor} size={40} />
+          <div className="min-w-0 flex-1">
+            <h2 className="text-lg font-bold text-text-primary">Knowledge base</h2>
+            <p className="caption truncate text-[0.8125rem]">{profile?.name} · goes with this profile into every workspace that uses it</p>
           </div>
-
-          <div className="flex items-center space-x-3">
-            {/* Action buttons */}
-            {activeFilter !== 'agentic-rag' && (
-              <div className="relative" ref={addMenuAnchorRef}>
-                <button
-                  onClick={() => setIsAddMenuOpen(!isAddMenuOpen)}
-                  disabled={isProcessing}
-                  className="flex items-center space-x-1.5 px-3.5 py-1.5 bg-accent hover:brightness-110 text-[#011419] rounded font-bold text-[0.6875rem] transition-all cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
-                >
-                  <Plus className="w-3.5 h-3.5" strokeWidth={2.5} />
-                  <span>Add</span>
-                </button>
-
-                <Popover anchorRef={addMenuAnchorRef} open={isAddMenuOpen} onClose={() => setIsAddMenuOpen(false)} matchAnchorWidth={false} align="right" className="w-48 !p-1.5 flex flex-col space-y-0.5">
-                      <button
-                        onClick={() => {
-                          setIsAddMenuOpen(false);
-                          openEditor(null);
-                        }}
-                        className="w-full flex items-center space-x-2.5 text-left px-3 py-2 rounded-lg text-xs font-semibold text-gray-300 hover:text-white hover:bg-white/5 cursor-pointer transition-colors"
-                      >
-                        <Pencil className="w-3.5 h-3.5 text-accent" />
-                        <span>Add Custom Memory</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          setIsAddMenuOpen(false);
-                          constantInputRef.current?.click();
-                        }}
-                        className="w-full flex items-center space-x-2.5 text-left px-3 py-2 rounded-lg text-xs font-semibold text-gray-300 hover:text-white hover:bg-white/5 cursor-pointer transition-colors"
-                      >
-                        <FileText className="w-3.5 h-3.5 text-amber-500" />
-                        <span>Add Constant File</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          setIsAddMenuOpen(false);
-                          searchableInputRef.current?.click();
-                        }}
-                        className="w-full flex items-center space-x-2.5 text-left px-3 py-2 rounded-lg text-xs font-semibold text-gray-300 hover:text-white hover:bg-white/5 cursor-pointer transition-colors"
-                      >
-                        <FileSearch className="w-3.5 h-3.5 text-blue-400" />
-                        <span>Add Searchable File</span>
-                      </button>
-                      <div className="h-px bg-gray-800/60 my-1" />
-                      <button
-                        onClick={() => {
-                          setIsAddMenuOpen(false);
-                          handleImportKb();
-                        }}
-                        className="w-full flex items-center space-x-2.5 text-left px-3 py-2 rounded-lg text-xs font-semibold text-gray-300 hover:text-white hover:bg-white/5 cursor-pointer transition-colors"
-                      >
-                        <Upload className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>Import Knowledge Base</span>
-                      </button>
-                </Popover>
-              </div>
-            )}
-
-            {/* Hidden inputs */}
-            <input
-              type="file"
-              ref={searchableInputRef}
-              onChange={handleAddSearchableFile}
-              accept=".txt,.pdf,.md,.docx"
-              multiple
-              className="hidden"
-            />
-            <input
-              type="file"
-              ref={constantInputRef}
-              onChange={handleAddConstantFile}
-              accept=".txt,.pdf,.md,.docx"
-              multiple
-              className="hidden"
-            />
-
-            {activeFilter !== 'agentic-rag' && <div className="w-px h-6 bg-gray-800/80 mx-1"></div>}
-
-            <button
-              onClick={onClose}
-              className="text-gray-400 hover:text-status-danger transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5"
-            >
-              <X className="w-5 h-5" />
-            </button>
+          <div ref={addMenuAnchorRef}>
+            <Button variant="ghost" size="sm" icon={Plus} disabled={isProcessing} onClick={() => setIsAddMenuOpen(open => !open)} aria-haspopup="menu" aria-expanded={isAddMenuOpen}>
+              Add
+            </Button>
           </div>
-        </div>
+          <Menu anchorRef={addMenuAnchorRef} open={isAddMenuOpen} onClose={() => setIsAddMenuOpen(false)} label="Add to knowledge base" className="w-60">
+            {ADD_OPTIONS.map(option => (
+              <MenuItem key={option.id} icon={option.Icon} label={option.title} onSelect={() => { setIsAddMenuOpen(false); option.onClick(); }} />
+            ))}
+            <MenuSeparator />
+            <MenuItem icon={Upload} label="Import knowledge base" onSelect={() => { setIsAddMenuOpen(false); handleImportKb(); }} />
+          </Menu>
+          <input type="file" ref={searchableInputRef} onChange={handleAddSearchableFile} accept=".txt,.pdf,.md,.docx" multiple className="hidden" />
+          <input type="file" ref={constantInputRef} onChange={handleAddConstantFile} accept=".txt,.pdf,.md,.docx" multiple className="hidden" />
+          <IconButton icon={X} label="Close knowledge base" onClick={onClose} />
+        </header>
 
-        {/* Ingest Progress bar */}
         {isProcessing && (
-          <div className="shrink-0 bg-[#051116] border-b border-gray-800/50 px-6 py-2 flex items-center justify-between text-xs animate-in slide-in-from-top duration-200">
-            <div className="flex items-center space-x-2.5 text-accent font-medium">
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              <span className="animate-pulse">{progressMsg}</span>
+          <div className="shrink-0 flex items-center justify-between gap-4 border-b border-border-subtle bg-surface-editor px-6 py-2 text-xs animate-in slide-in-from-top duration-200">
+            <div className="flex items-center gap-2.5 font-medium text-text-secondary">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              <span>{progressMsg}</span>
             </div>
             {progressDetail && (
-              <div className="flex items-center space-x-3 w-72 shrink-0">
-                <span className="text-gray-500 font-mono text-[0.625rem] shrink-0">
-                  {progressDetail.current} / {progressDetail.total} chunks
-                </span>
-                <div className="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-accent transition-all duration-300 rounded-full"
-                    style={{ width: `${Math.round((progressDetail.current / progressDetail.total) * 100)}%` }}
-                  />
+              <div className="flex w-72 shrink-0 items-center gap-3">
+                <span className="caption shrink-0 tabular-nums">{progressDetail.current} / {progressDetail.total} chunks</span>
+                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-tint/10">
+                  <div className="h-full rounded-full bg-accent transition-all duration-300" style={{ width: `${Math.round((progressDetail.current / progressDetail.total) * 100)}%` }} />
                 </div>
               </div>
             )}
           </div>
         )}
 
-        {/* Body Container */}
         <div className="flex-1 flex overflow-hidden min-h-0 relative">
 
-          {/* Left Sidebar Filter */}
-          <div className="w-56 shrink-0 bg-[#011419] border-r border-gray-800/60 p-4 flex flex-col space-y-6">
-            <div>
-              <span className="block text-[0.5625rem] font-bold text-gray-500 uppercase tracking-widest mb-3 px-2">Filter By Source</span>
-              <nav className="flex flex-col space-y-1">
-                {[
-                  { id: 'all', label: 'All Memories' },
-                  { id: 'manual', label: 'Custom Memory' },
-                  { id: 'constant', label: 'Constant Files' },
-                  { id: 'rag', label: 'Searchable Chunks' }
-                ].map(item => (
-                  <button
-                    key={item.id}
-                    onClick={() => setActiveFilter(item.id)}
-                    className={`w-full text-left px-3 py-2 text-xs font-semibold rounded-md transition-all cursor-pointer ${activeFilter === item.id
-                      ? 'bg-[#1a2d32] text-white shadow-sm border-l-2 border-accent'
-                      : 'text-gray-400 hover:text-gray-200 hover:bg-[#071318]'
-                      }`}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </nav>
-            </div>
-
-            <div className="mt-auto flex flex-col space-y-3">
-              <button
-                type="button"
-                onClick={() => setActiveFilter('agentic-rag')}
-                className={`w-full text-left px-3 py-2.5 text-xs font-semibold rounded-md transition-all cursor-pointer flex items-center space-x-2 border ${activeFilter === 'agentic-rag'
-                  ? 'bg-accent text-[#011419] border-accent font-extrabold shadow-md'
-                  : 'bg-[#051116] text-gray-400 border-gray-800/60 hover:text-white hover:border-gray-700'
-                  }`}
-              >
-                <AiGlyph className="w-3.5 h-3.5" />
-                <span>Agentic RAG Settings</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleExportKb}
-                disabled={exportingKb || isProcessing}
-                className="w-full text-left px-3 py-2.5 text-xs font-semibold rounded-md transition-all cursor-pointer flex items-center space-x-2 border bg-[#051116] text-gray-400 border-gray-800/60 hover:text-white hover:border-gray-700 disabled:opacity-50 font-bold"
-              >
-                <Download className="w-3.5 h-3.5 text-accent" />
-                <span>Export Knowledge Base</span>
-              </button>
-
-              <div className="bg-[#051116] border border-gray-800/60 rounded-lg p-3">
-                <span className="text-[0.625rem] text-gray-500 font-bold uppercase tracking-wider block mb-1">Knowledge Stats</span>
-                <div className="text-xs text-gray-300 font-mono space-y-1">
-                  <div className="flex justify-between">
-                    <span>Total Blocks:</span>
-                    <span className="text-white font-bold">{blocks.length}</span>
-                  </div>
-                  <div className="flex justify-between text-[0.625rem] text-gray-400">
-                    <span>Searchable:</span>
-                    <span>{blocks.filter(b => !(b.type === 'constant' || (b.type === 'manual' && (b.strategy === 'constant' || b.rawItem?.strategy === 'constant')))).length}</span>
-                  </div>
-                  <div className="flex justify-between text-[0.625rem] text-gray-400">
-                    <span>Constant:</span>
-                    <span>{blocks.filter(b => b.type === 'constant' || (b.type === 'manual' && (b.strategy === 'constant' || b.rawItem?.strategy === 'constant'))).length}</span>
-                  </div>
-                </div>
+          <nav aria-label="Filter knowledge" className="flex w-60 shrink-0 flex-col gap-0.5 border-r border-border-subtle px-3 py-4">
+            {FILTERS.map(item => {
+              const active = activeFilter === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  aria-current={active ? 'true' : undefined}
+                  onClick={() => setActiveFilter(item.id)}
+                  className={`flex h-9 w-full items-center rounded-[0.5625rem] px-3 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${active ? 'bg-tint/[0.07] font-semibold text-text-primary' : 'font-medium text-text-muted hover:bg-tint/[0.04] hover:text-text-secondary'}`}
+                >
+                  <span className="flex-1">{item.label}</span>
+                  <span className="caption tabular-nums">{counts[item.id]}</span>
+                </button>
+              );
+            })}
+            <span className="flex-1" />
+            <div className="mb-2.5 flex flex-col gap-2.5 rounded-xl border border-border-subtle bg-tint/[0.025] p-3">
+              <div className="flex items-center gap-2">
+                <span className="h-2 w-2 shrink-0 rounded-full bg-[var(--theme-mode-always)]" />
+                <span className="caption flex-1">Sent every reply</span>
+                <span className="text-xs tabular-nums text-text-secondary">{tokenTotals.alwaysOn.toLocaleString()} tokens</span>
               </div>
+              <div className="flex items-center gap-2">
+                <span className="h-2 w-2 shrink-0 rounded-full bg-[var(--theme-mode-searchable)]" />
+                <span className="caption flex-1">Searchable</span>
+                <span className="text-xs tabular-nums text-text-secondary">{tokenTotals.searchable.toLocaleString()} tokens</span>
+              </div>
+              <span className="caption">Switched-off items count for nothing.</span>
             </div>
-          </div>
+            {onOpenSmartSearch && (
+              <button type="button" onClick={onOpenSmartSearch} className="flex h-9 items-center gap-2.5 rounded-[0.5625rem] px-3 text-left text-sm text-text-muted transition-colors hover:bg-tint/[0.04] hover:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                <Search className="h-4 w-4" aria-hidden="true" />
+                Smart search settings
+              </button>
+            )}
+            <button type="button" onClick={handleExportKb} disabled={exportingKb || isProcessing} className="flex h-9 items-center gap-2.5 rounded-[0.5625rem] px-3 text-left text-sm text-text-muted transition-colors hover:bg-tint/[0.04] hover:text-text-secondary disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              <Download className="h-4 w-4" aria-hidden="true" />
+              Export
+            </button>
+          </nav>
 
-          {/* Right Main Grid */}
-          <div
-            className="flex-1 flex flex-col p-6 overflow-hidden min-h-0 relative"
-            style={{ background: 'radial-gradient(130% 90% at 100% 0%, rgba(221,186,110,0.045), transparent 55%), #00080B' }}
-          >
-            {activeFilter === 'agentic-rag' ? (
-              <div className="flex-1 flex flex-col h-full overflow-hidden animate-in fade-in duration-200">
-                <div className="flex items-center gap-2.5 mb-5 shrink-0">
-                  <span className="w-9 h-9 rounded-lg bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-                    <AiGlyph className="w-4.5 h-4.5 text-accent" />
-                  </span>
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 px-6 py-5">
+            <div className="flex shrink-0 items-center gap-3">
+              <h3 className="flex-1 text-[0.9375rem] font-bold text-text-primary">
+                {FILTERS.find(item => item.id === activeFilter)?.label} <span className="caption tabular-nums">{filteredBlocks.length}</span>
+              </h3>
+              <TextInput placeholder="Search in content" aria-label="Search in content" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} icon={Search} containerClassName="w-64" />
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar pr-1">
+              {loading ? (
+                <div className="flex h-full flex-col items-center justify-center py-20 text-text-subtle">
+                  <Loader2 className="mb-2 h-7 w-7 animate-spin" aria-hidden="true" />
+                  <span className="text-xs">Loading the knowledge base…</span>
+                </div>
+              ) : groupedBlocks.length === 0 ? (
+                <div className="flex min-h-full flex-col items-center justify-center gap-6 rounded-2xl border-[1.5px] border-dashed border-border-default p-8 text-center">
                   <div>
-                    <h3 className="text-sm font-bold text-white uppercase tracking-wider">Smart Search Agent</h3>
-                    <p className="caption mt-0.5">Autonomous context retrieval for this profile.</p>
+                    <span className="block text-[1.0625rem] font-bold text-text-primary">Nothing here yet</span>
+                    <span className="caption text-[0.8125rem]">What this profile should always know, wherever it's used. For a single story, use that workspace's Memory tab.</span>
                   </div>
-                </div>
-
-                <div className="flex-1 overflow-y-auto custom-scrollbar pr-1 min-h-0 pb-4 space-y-4">
-                  {/* Settings: enable + research turns in one balanced card */}
-                  <div className="bg-[#0a161d]/50 border border-gray-800/60 rounded-2xl divide-y divide-gray-800/60">
-                    <div className="flex items-center justify-between gap-4 p-4">
-                      <div className="pr-2">
-                        <span className="text-sm font-semibold text-gray-200">Enable Agentic RAG</span>
-                        <p className="caption mt-0.5 max-w-md">The AI reads the conversation and writes its own vector queries instead of matching your raw text.</p>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                        <input
-                          type="checkbox"
-                          checked={isAgentic}
-                          onChange={(e) => setIsAgentic(e.target.checked)}
-                          className="sr-only peer"
-                        />
-                        <div className="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-accent"></div>
-                      </label>
-                    </div>
-
-                    {isAgentic && (
-                      <div className="flex items-center justify-between gap-4 p-4">
-                        <div className="pr-2">
-                          <span className="text-sm font-semibold text-gray-200">Max research turns</span>
-                          <p className="caption mt-0.5">THOUGHT/ACTION loops. 1 = cheapest, 3 = balanced, more = deeper multi-hop.</p>
-                        </div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          {[1, 2, 3, 4, 5].map((n) => (
-                            <button
-                              key={n}
-                              type="button"
-                              onClick={() => setAgenticMaxTurns(n)}
-                              className={`w-8 h-8 rounded-md text-sm font-medium transition-colors cursor-pointer ${agenticMaxTurns === n
-                                ? 'bg-accent text-[#011419]'
-                                : 'bg-[#011419] border border-gray-800 text-gray-400 hover:text-gray-200'
-                                }`}
-                            >
-                              {n}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* System Prompt block */}
-                  {isAgentic && (
-                    <div className="bg-[#0a161d]/50 border border-gray-800/60 rounded-2xl p-4 flex flex-col min-h-[240px] relative">
-                      <div className="flex justify-between items-center mb-3 shrink-0">
-                        <span className="text-[0.625rem] font-semibold text-gray-400 uppercase tracking-wider">Agentic System Prompt</span>
-
-                        {/* Editor / Preview Toggles */}
-                        <div className="flex bg-[#011419] p-0.5 rounded border border-gray-800 text-[0.625rem] font-bold uppercase tracking-wider select-none shrink-0 z-10 space-x-0.5">
-                          <button
-                            type="button"
-                            onClick={() => setAgenticPromptMode('editor')}
-                            className={`px-3 py-1 rounded cursor-pointer transition-colors ${agenticPromptMode === 'editor' ? 'bg-[#1a2d32] text-white' : 'text-gray-500 hover:text-gray-300'
-                              }`}
-                          >
-                            Editor
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setAgenticPromptMode('preview');
-                              closeAc();
-                            }}
-                            className={`px-3 py-1 rounded cursor-pointer transition-colors ${agenticPromptMode === 'preview' ? 'bg-[#1a2d32] text-white' : 'text-gray-500 hover:text-gray-300'
-                              }`}
-                          >
-                            Preview
-                          </button>
-                        </div>
-                      </div>
-
-                      {agenticPromptMode === 'editor' ? (
-                        <div className="flex-1 relative flex flex-col min-h-[200px]">
-                          <textarea
-                            ref={agenticTextareaRef}
-                            value={agenticPrompt}
-                            onChange={(e) => handleTextareaChange(e, 'agentic')}
-                            onKeyDown={(e) => handleTextareaKeyDown(e, 'agentic')}
-                            className="flex-1 w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md p-4 focus:outline-none focus:border-accent resize-none font-mono custom-scrollbar leading-relaxed"
-                            placeholder='e.g., You are a search query optimizer. Extract the specific names, proper nouns, and primary search keywords from the user prompt. Always keep specific names and proper nouns intact. Output ONLY the optimized query terms without quotes, introduction, or explanation.'
-                          />
-
-                          {/* Autocomplete Dropdown */}
-                          {acState.isOpen && acState.activeField === 'agentic' && renderAutocompleteDropdown()}
-                        </div>
-                      ) : (
-                        <div
-                          className="flex-1 w-full min-h-[200px] bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md p-4 overflow-y-auto custom-scrollbar select-text leading-relaxed markdown-body"
-                          dangerouslySetInnerHTML={{ __html: renderPromptPreview(agenticPrompt) }}
-                        />
-                      )}
-                    </div>
-                  )}
-
-                  {/* Non-agentic hint */}
-                  {!isAgentic && (
-                    <p className="caption px-1 leading-relaxed max-w-lg">
-                      When disabled, retrieval falls back to a plain similarity search against your raw message text. Turn it on above to let the AI craft its own queries.
-                    </p>
-                  )}
-
-                  {/* Save row */}
-                  <div className="flex items-center justify-end gap-3 pt-2 shrink-0">
-                    <div className="flex items-center space-x-2">
-                      {saveSuccess && (
-                        <span className="text-xs text-green-400 font-bold uppercase tracking-wider animate-pulse flex items-center space-x-1">
-                          <Check className="w-3.5 h-3.5 stroke-[3]" />
-                          <span>Settings Saved successfully!</span>
+                  <div className="grid w-full max-w-3xl grid-cols-1 gap-3.5 text-left md:grid-cols-3">
+                    {ADD_OPTIONS.map(option => (
+                      <button
+                        key={option.id}
+                        type="button"
+                        onClick={option.onClick}
+                        className="flex flex-col items-start gap-2.5 rounded-[0.875rem] border border-border-subtle bg-tint/[0.025] p-4.5 text-left transition-colors hover:border-border-strong hover:bg-tint/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                      >
+                        <span className="inline-flex h-9 w-9 items-center justify-center rounded-[0.6875rem]" style={{ color: option.mode, background: `color-mix(in srgb, ${option.mode} 14%, transparent)` }}>
+                          <option.Icon className="h-[1.125rem] w-[1.125rem]" aria-hidden="true" />
                         </span>
-                      )}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handleSaveAgenticSettings}
-                      disabled={savingAgenticSettings}
-                      className="px-5 py-2 bg-accent text-[#011419] font-bold text-xs uppercase tracking-wider rounded transition-all hover:brightness-110 shadow-md flex items-center space-x-2 cursor-pointer disabled:opacity-50"
-                    >
-                      {savingAgenticSettings ? (
-                        <>
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          <span>Saving...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Save className="w-3.5 h-3.5" />
-                          <span>Save Agentic RAG Settings</span>
-                        </>
-                      )}
-                    </button>
+                        <span className="text-sm font-semibold text-text-primary">{option.title}</span>
+                        <span className="caption">{option.text}</span>
+                      </button>
+                    ))}
                   </div>
                 </div>
-              </div>
-            ) : (
-              <>
-                {/* Search inputs */}
-                <div className="shrink-0 flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs text-gray-400 font-bold font-sans">
-                      STORED KNOWLEDGE BLOCKS ({filteredBlocks.length})
-                    </span>
-                    <span className="flex flex-col gap-1 text-[0.625rem] text-gray-500">
-                      <span className="flex items-center gap-1.5" title="Always-on context is injected into every prompt.">
-                        <span className="uppercase tracking-wider w-16">Always-on</span>
-                        <TokenBadge tokens={tokenTotals.alwaysOn} />
-                      </span>
-                      <span className="flex items-center gap-1.5" title="Searchable knowledge is retrieved on demand, not injected into every prompt.">
-                        <span className="uppercase tracking-wider w-16">Searchable</span>
-                        <TokenBadge tokens={tokenTotals.searchable} severity="neutral" />
-                      </span>
-                    </span>
+              ) : filteredBlocks.length === 0 ? (
+                <EmptyState icon={Database} title="Nothing matches" subtitle="Try another search or filter." />
+              ) : (
+                <div className="overflow-hidden rounded-2xl border border-border-subtle bg-tint/[0.015]">
+                  <div className="flex items-center gap-3.5 px-4 py-2.5">
+                    <span className="w-4" />
+                    <span className="caption flex-1 pl-[2.875rem]">Item</span>
+                    <span className="caption w-28">How it's used</span>
+                    <span className="w-16" />
+                    <span className="caption w-9">On</span>
                   </div>
-                  <TextInput
-                    placeholder="Search in content..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    icon={Search}
-                    containerClassName="w-64"
-                  />
-                </div>
-
-                {/* List of cards */}
-                <div className="flex-1 overflow-y-auto custom-scrollbar pr-1 min-h-0">
-                  {loading ? (
-                    <div className="w-full h-full flex flex-col items-center justify-center text-gray-500 py-20">
-                      <Loader2 className="w-8 h-8 animate-spin text-accent mb-2" />
-                      <span className="text-xs">Loading Knowledge Base chunks...</span>
-                    </div>
-                  ) : filteredBlocks.length === 0 ? (
-                    <EmptyState
-                      icon={Database}
-                      title="No knowledge blocks found"
-                      subtitle="Upload document files or add manual snippets to populate the brain."
-                      className="min-h-[360px] justify-center"
-                    />
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pb-4">
-                      {filteredBlocks.map((block) => {
-                        const vis = blockVisual(block);
-                        const selected = selectedBlockIds.includes(block.id);
-                        const dimmed = block.enabled === false;
-                        return (
-                        <div
-                          key={block.id}
-                          onClick={() => {
-                            if (block.type === 'rag_file') {
-                              setViewingFileBlock(block);
-                            }
-                          }}
-                          className={`relative bg-[#0a161d] border rounded-xl flex flex-col overflow-hidden transition-all group h-[184px] hover:shadow-xl hover:shadow-black/40 ${block.type === 'rag_file' ? 'cursor-pointer' : ''
-                            } ${selected
-                              ? 'border-accent/50 bg-accent/[0.04]'
-                              : `border-gray-800/80 ${HOVER_BORDER[vis.tone] || 'hover:border-gray-700'}`
-                            } ${dimmed ? 'opacity-45' : ''}`}
-                        >
-                          {/* Card Header band */}
-                          <div className="flex justify-between items-center gap-2 pl-4 pr-2.5 py-2.5 bg-white/[0.015] border-b border-gray-800/60 shrink-0">
-                            <div className="flex items-center space-x-2 overflow-hidden flex-1">
-                              {/* Selection Checkbox */}
-                              {block.type !== 'rag_file' && (
-                                <div className="shrink-0 select-none" onClick={(e) => e.stopPropagation()}>
-                                  <Checkbox
-                                    checked={selected}
-                                    onChange={() => handleToggleSelectBlock(block.id)}
-                                    size="sm"
-                                  />
-                                </div>
-                              )}
-                              {/* Type medallion */}
-                              <span
-                                className="w-6 h-6 rounded-md flex items-center justify-center shrink-0"
-                                style={{ backgroundColor: `${vis.hex}1f`, border: `1px solid ${vis.hex}40`, color: vis.hex }}
-                              >
-                                <vis.Icon className="w-3 h-3" />
+                  {filteredBlocks.map((block) => {
+                    const always = isAlwaysOn(block);
+                    const mode = always ? 'var(--theme-mode-always)' : 'var(--theme-mode-searchable)';
+                    const kind = kindOf(block);
+                    const selectable = block.type !== 'rag_file';
+                    const selected = selectedBlockIds.includes(block.id);
+                    const open = expandedBlockId === block.id;
+                    const meta = [kind.label];
+                    if (block.type === 'rag_file') meta.push(`${block.chunks.length} chunk${block.chunks.length === 1 ? '' : 's'}`);
+                    meta.push(`${tokenOf(block).toLocaleString()} tokens`);
+                    const isFile = block.type !== 'manual';
+                    return (
+                      <div key={block.id} className={`group border-t border-tint/[0.06] ${open || selected ? 'bg-tint/[0.03]' : 'hover:bg-tint/[0.02]'}`}>
+                        <div className="flex items-center gap-3.5 px-4 py-3">
+                          <span className="flex w-4 justify-center">
+                            {selectable && (
+                              <span className={`transition-opacity ${selected || selectedBlockIds.length ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'}`}>
+                                <Checkbox checked={selected} onChange={() => handleToggleSelectBlock(block.id)} size="sm" ariaLabel={`Select ${block.source}`} />
                               </span>
-                              <Badge tone={vis.tone} className="shrink-0">
-                                {getBadgeLabel(block)}
-                              </Badge>
-                              <span className="text-[0.6875rem] text-gray-400 font-semibold truncate" title={block.source}>
-                                {block.source}
+                            )}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => (block.type === 'rag_file' ? setViewingFileBlock(block) : setExpandedBlockId(open ? null : block.id))}
+                            className={`flex min-w-0 flex-1 items-center gap-3.5 text-left focus-visible:outline-none ${block.enabled === false ? 'opacity-55' : ''}`}
+                          >
+                            <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[0.625rem]" style={{ color: mode, background: `color-mix(in srgb, ${mode} 14%, transparent)` }}>
+                              <kind.Icon className="h-4 w-4" aria-hidden="true" />
+                            </span>
+                            <span className="flex min-w-0 flex-1 flex-col gap-1">
+                              <span className="flex min-w-0 flex-wrap items-center gap-2">
+                                <span className={`truncate text-sm font-semibold text-text-primary ${isFile ? 'font-mono text-[0.8125rem]' : ''}`}>{block.source}</span>
+                                {(block.keywords || []).slice(0, 4).map(tag => (
+                                  <span key={tag} className="inline-flex h-[1.375rem] items-center rounded-full border border-border-default bg-tint/[0.03] px-2 text-xs font-medium text-text-secondary">{tag.replace(/^#/, '')}</span>
+                                ))}
                               </span>
-                              <TokenBadge tokens={tokenOf(block)} className="shrink-0" />
-                            </div>
-                            <div className="flex items-center space-x-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
-                              <Toggle
-                                checked={block.enabled !== false}
-                                onChange={(next) => handleToggleEnabled(block, next)}
-                                className="shrink-0"
-                              />
-                              <div className="flex space-x-1 hover-reveal shrink-0">
-                                {block.type !== 'rag_file' && (
-                                  <button
-                                    onClick={() => openEditor(block)}
-                                    className="p-1 text-gray-500 hover:text-white hover:bg-white/5 rounded transition-colors cursor-pointer"
-                                    title="Edit Block"
-                                  >
-                                    <Pencil className="w-3.5 h-3.5" />
-                                  </button>
-                                )}
-                                <button
-                                  onClick={() => {
-                                    if (block.type === 'rag_file') {
-                                      setConfirmDialog({
-                                        message: `Delete the Searchable File "${block.source}"? This erases all of its indexed chunks. To remove a single chunk instead, open the file block and delete the chunk from inside it.`,
-                                        confirmLabel: "Delete Searchable File",
-                                        onConfirm: () => handleDeleteEntireFile(block.source)
-                                      });
-                                    } else {
-                                      handleDeleteBlock(block);
-                                    }
-                                  }}
-                                  className="p-1 text-gray-500 hover:text-status-danger hover:bg-status-danger/10 rounded transition-colors cursor-pointer"
-                                  title={block.type === 'rag_file' ? "Delete Searchable File" : "Delete Block"}
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
+                              <span className="caption tabular-nums">{meta.join(' · ')}</span>
+                            </span>
+                            <span className="inline-flex w-28 shrink-0 items-center gap-1.5 text-xs font-semibold" style={{ color: mode }}>
+                              <span className="h-2 w-2 rounded-full" style={{ background: mode }} />
+                              {always ? 'Always sent' : 'Searched'}
+                            </span>
+                          </button>
+                          <span className="flex w-16 justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                            {block.type !== 'rag_file' && <IconButton icon={Pencil} label={`Edit ${block.source}`} size="sm" onClick={() => openEditor(block)} />}
+                            <IconButton
+                              icon={Trash2}
+                              label={block.type === 'rag_file' ? `Delete ${block.source}` : `Delete ${block.source}`}
+                              tone="danger"
+                              size="sm"
+                              onClick={() => {
+                                if (block.type === 'rag_file') {
+                                  setConfirmDialog({
+                                    message: `Delete the searchable file "${block.source}"? This erases all of its indexed chunks. To remove a single chunk, open the file and delete it there.`,
+                                    confirmLabel: 'Delete file',
+                                    onConfirm: () => handleDeleteEntireFile(block.source),
+                                  });
+                                } else {
+                                  handleDeleteBlock(block);
+                                }
+                              }}
+                            />
+                          </span>
+                          <span className="flex w-9 justify-start">
+                            <Toggle checked={block.enabled !== false} onChange={(next) => handleToggleEnabled(block, next)} ariaLabel={`Use ${block.source}`} />
+                          </span>
+                        </div>
+                        {open && (
+                          <div className="flex flex-col gap-3 pb-4 pl-[4.875rem] pr-4">
+                            <p className="max-h-60 overflow-y-auto whitespace-pre-wrap break-words rounded-xl border border-border-subtle bg-surface-input px-4 py-3.5 text-[0.8125rem] leading-relaxed text-text-secondary custom-scrollbar select-text">
+                              {block.text}
+                            </p>
+                            <div className="flex items-center gap-2">
+                              <span className="caption flex-1">{always ? 'Sent with every reply while it is on.' : 'Comes up when the turn is about it, or mentions one of its tags.'}</span>
+                              <Button variant="ghost" size="sm" icon={Pencil} onClick={() => openEditor(block)}>Edit</Button>
                             </div>
                           </div>
-
-                          {/* Card Content */}
-                          <p className="text-[0.6875rem] text-gray-300 leading-relaxed font-mono px-4 py-3 overflow-y-auto custom-scrollbar flex-1 whitespace-pre-wrap break-words select-text">
-                            {block.text}
-                          </p>
-
-                          {/* Display tag chips */}
-                          {block.keywords && block.keywords.length > 0 && (
-                            <div className="flex flex-wrap gap-1 px-4 pb-3 select-none shrink-0">
-                              {block.keywords.map((tag, tagIdx) => (
-                                <Badge
-                                  key={tagIdx}
-                                  tone="accent"
-                                >
-                                  {tag}
-                                </Badge>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                        );
-                      })}
-                    </div>
-                  )}
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
-              </>
-            )}
+              )}
+            </div>
           </div>
 
-          {/* Slide-out File Chunks Viewer Panel / Drawer overlay */}
+          {/* A searchable file opens over the list with its chunks. */}
           {viewingFileBlock && (
-            <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[560px] max-h-[calc(100%-3rem)] bg-[#0a161d] border border-gray-800/70 rounded-2xl shadow-[0_0_0_100vmax_rgba(0,0,0,0.55)] flex flex-col p-6 z-40 animate-in zoom-in-95 fade-in duration-200">
-              <div className="flex justify-between items-center mb-4 shrink-0 pb-2 border-b border-gray-800">
-                <div>
-                  <h3 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5">
-                    <FileText className="w-4 h-4 text-blue-400" />
-                    <span>File Chunks Viewer</span>
-                  </h3>
-                  <span className="text-[0.625rem] font-mono text-gray-500 truncate block mt-0.5 max-w-[380px]" title={viewingFileBlock.source}>
-                    {viewingFileBlock.source}
-                  </span>
+            <div className="absolute left-1/2 top-1/2 z-40 flex max-h-[calc(100%-3rem)] w-[35rem] -translate-x-1/2 -translate-y-1/2 flex-col rounded-2xl border border-border-default bg-surface-panel p-5 shadow-[0_0_0_100vmax_color-mix(in_srgb,var(--theme-shade)_55%,transparent)] animate-in zoom-in-95 fade-in duration-200">
+              <div className="mb-4 flex shrink-0 items-center gap-3 border-b border-border-subtle pb-3">
+                <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[0.625rem] text-[var(--theme-mode-searchable)]" style={{ background: 'color-mix(in srgb, var(--theme-mode-searchable) 14%, transparent)' }}>
+                  <FileSearch className="h-4 w-4" aria-hidden="true" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-sm font-bold text-text-primary">Searchable file</h3>
+                  <span className="block truncate font-mono text-xs text-text-subtle">{viewingFileBlock.source} · {viewingFileBlock.chunks.length} chunks</span>
                 </div>
-                <button
-                  onClick={() => setViewingFileBlock(null)}
-                  className="text-gray-400 hover:text-status-danger transition-colors cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+                <IconButton icon={X} label="Close file" size="sm" onClick={() => setViewingFileBlock(null)} />
               </div>
 
-              {/* Chunks List */}
-              <div className="flex-1 overflow-y-auto custom-scrollbar space-y-4 pr-1">
+              <div className="flex-1 space-y-3 overflow-y-auto pr-1 custom-scrollbar">
                 {viewingFileBlock.chunks.map((chunk, idx) => (
-                  <div key={chunk.id} className="bg-[#00080B] border border-gray-800/80 rounded-lg p-3 flex flex-col relative group/chunk">
-                    <div className="flex justify-between items-center mb-2">
-                      <span className="text-[0.5625rem] font-mono text-gray-500 flex items-center gap-1.5">
-                        Chunk #{idx + 1} (~{(chunk.tokenCount || tokenMap[chunk.id] || 0).toLocaleString()} tokens)
+                  <div key={chunk.id} className="group/chunk relative flex flex-col rounded-xl border border-border-subtle bg-surface-input p-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="caption flex items-center gap-1.5 tabular-nums">
+                        Chunk {idx + 1} · {(chunk.tokenCount || tokenMap[chunk.id] || 0).toLocaleString()} tokens
                         {chunk.manuallyEdited && (
-                          <Badge tone="accent" title="Manually edited. Survives Knowledge Base re-indexing.">edited</Badge>
+                          <span data-tooltip="Edited by hand. Survives re-indexing." className="inline-flex h-5 items-center rounded-full border border-border-default px-2 text-xs font-medium text-text-secondary">Edited</span>
                         )}
                       </span>
-                      <div className="flex space-x-1 opacity-0 group-hover/chunk:opacity-100 transition-opacity">
-                        <button
-                          onClick={() => {
-                            openEditor(chunk);
-                          }}
-                          className="p-1 text-gray-500 hover:text-white hover:bg-white/5 rounded cursor-pointer"
-                          title="Edit Chunk"
-                        >
-                          <Pencil className="w-3 h-3" />
-                        </button>
-                        <button
+                      <div className="flex gap-0.5 opacity-0 transition-opacity group-hover/chunk:opacity-100 focus-within:opacity-100">
+                        <IconButton icon={Pencil} label="Edit chunk" size="sm" onClick={() => openEditor(chunk)} />
+                        <IconButton
+                          icon={Trash2}
+                          label="Delete chunk"
+                          tone="danger"
+                          size="sm"
                           onClick={() => {
                             setConfirmDialog({
-                              message: "Are you sure you want to delete this specific chunk?",
+                              message: 'Delete this chunk? The rest of the file stays.',
                               onConfirm: async () => {
                                 if (viewingFileBlock.chunks.length === 1) {
                                   await handleDeleteEntireFile(viewingFileBlock.source);
@@ -1486,259 +999,158 @@ export default function KbManagerModal({ profile, onClose }) {
                                   setBlocks(remainingBlocks);
                                   try {
                                     await electronAPI.saveProfileKbBlocks(profile.id, remainingBlocks);
-                                    setViewingFileBlock(curr => ({
-                                      ...curr,
-                                      chunks: curr.chunks.filter(c => c.id !== chunk.id)
-                                    }));
+                                    setViewingFileBlock(curr => ({ ...curr, chunks: curr.chunks.filter(c => c.id !== chunk.id) }));
                                   } catch (err) {
-                                    console.error("Error deleting chunk:", err);
-                                    showToast("Failed to delete chunk.", "error");
+                                    console.error('Error deleting chunk:', err);
+                                    showToast('Failed to delete chunk.', 'error');
                                     loadBlocks();
                                   }
                                 }
-                              }
+                              },
                             });
                           }}
-                          className="p-1 text-gray-500 hover:text-status-danger hover:bg-status-danger/10 rounded cursor-pointer"
-                          title="Delete Chunk"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
+                        />
                       </div>
                     </div>
-                    <p className="text-[0.6875rem] text-gray-300 font-mono whitespace-pre-wrap leading-relaxed max-h-[150px] overflow-y-auto custom-scrollbar select-text bg-[#011419]/30 p-2 rounded border border-gray-900/60">
-                      {chunk.text}
-                    </p>
+                    <p className="max-h-[9.5rem] overflow-y-auto whitespace-pre-wrap text-[0.8125rem] leading-relaxed text-text-secondary custom-scrollbar select-text">{chunk.text}</p>
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          {/* Slide-out Editor Panel / Drawer overlay */}
+          {/* Writing or editing one memory, over the list. */}
           {editorOpen && (
-            <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[460px] max-h-[calc(100%-3rem)] bg-[#0a161d] border border-gray-800/70 rounded-2xl shadow-[0_0_0_100vmax_rgba(0,0,0,0.55)] flex flex-col p-6 z-40 animate-in zoom-in-95 fade-in duration-200">
-              <div className="flex justify-between items-center mb-4 shrink-0 pb-2 border-b border-gray-800">
-                <h3 className="text-xs font-bold text-accent uppercase tracking-widest">
-                  {editingBlock ? 'Edit Memory Block' : 'Add Custom Memory'}
-                </h3>
-                <button
-                  onClick={() => setEditorOpen(false)}
-                  className="text-gray-400 hover:text-status-danger transition-colors cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+            <div className="absolute left-1/2 top-1/2 z-40 flex max-h-[calc(100%-3rem)] w-[30rem] -translate-x-1/2 -translate-y-1/2 flex-col rounded-2xl border border-border-default bg-surface-panel p-5 shadow-[0_0_0_100vmax_color-mix(in_srgb,var(--theme-shade)_55%,transparent)] animate-in zoom-in-95 fade-in duration-200">
+              <div className="mb-4 flex shrink-0 items-center justify-between border-b border-border-subtle pb-3">
+                <h3 className="text-sm font-bold text-text-primary">{editingBlock ? 'Edit memory' : 'New custom memory'}</h3>
+                <IconButton icon={X} label="Close editor" size="sm" onClick={() => setEditorOpen(false)} />
               </div>
 
-              <div className="flex-1 flex flex-col space-y-4 min-h-0">
+              <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto custom-scrollbar">
                 <TextInput
-                  label="Title / Source"
+                  label="Title"
                   value={editorTitle}
                   onChange={(e) => setEditorTitle(e.target.value)}
                   readOnly={editingBlock && editingBlock.type !== 'manual'}
-                  placeholder="e.g. Lore Bible Rule #1"
+                  placeholder="e.g. Dice and checks"
+                  hint={editingBlock && editingBlock.type !== 'manual' ? 'A file keeps its own name.' : null}
                 />
-                {editingBlock && editingBlock.type !== 'manual' && (
-                  <span className="caption mt-1 flex items-center space-x-1">
-                    <Info className="w-3 h-3 text-gray-500" />
-                    <span>Original file sources are read-only.</span>
-                  </span>
-                )}
 
                 {(!editingBlock || editingBlock.type === 'manual') && (
                   <div>
-                    <label className="block text-[0.625rem] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Storage Strategy</label>
-                    <div className="flex space-x-2">
-                      <button
-                        type="button"
-                        onClick={() => setEditorStrategy('rag_search')}
-                        className={`flex-1 py-1.5 rounded-lg border text-xs font-bold transition-all flex flex-col items-center justify-center space-y-0.5 cursor-pointer ${editorStrategy === 'rag_search'
-                          ? 'bg-[#3b82f6]/20 border-[#3b82f6] text-[#3b82f6] shadow-[0_0_12px_rgba(59,130,246,0.2)]'
-                          : 'bg-[#00080B] border-gray-850 text-gray-500 hover:text-gray-300 hover:border-gray-700'
-                          }`}
-                      >
-                        <span>Searchable (RAG)</span>
-                        <span className="text-[0.5rem] font-normal opacity-70">Indexed for vector searches</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setEditorStrategy('constant')}
-                        className={`flex-1 py-1.5 rounded-lg border text-xs font-bold transition-all flex flex-col items-center justify-center space-y-0.5 cursor-pointer ${editorStrategy === 'constant'
-                          ? 'bg-[#FBCB2D]/20 border-[#FBCB2D] text-[#FBCB2D] shadow-[0_0_12px_rgba(251,203,45,0.2)]'
-                          : 'bg-[#00080B] border-gray-850 text-gray-500 hover:text-gray-300 hover:border-gray-700'
-                          }`}
-                      >
-                        <span>Constant (Injected)</span>
-                        <span className="text-[0.5rem] font-normal opacity-70">Always in AI prompt context</span>
-                      </button>
+                    <span className="mb-1.5 block text-sm font-medium text-text-secondary">How it's used</span>
+                    <div className="grid grid-cols-2 gap-2">
+                      {[
+                        { id: 'rag_search', label: 'Searched', text: 'Sent only when the turn is about it', mode: 'var(--theme-mode-searchable)' },
+                        { id: 'constant', label: 'Always sent', text: 'Part of every reply', mode: 'var(--theme-mode-always)' },
+                      ].map(option => {
+                        const active = editorStrategy === option.id;
+                        return (
+                          <button
+                            key={option.id}
+                            type="button"
+                            aria-pressed={active}
+                            onClick={() => setEditorStrategy(option.id)}
+                            className={`flex flex-col items-start gap-0.5 rounded-[0.625rem] border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${active ? '' : 'border-border-default hover:border-border-strong'}`}
+                            style={active ? { borderColor: option.mode, background: `color-mix(in srgb, ${option.mode} 10%, transparent)` } : undefined}
+                          >
+                            <span className="flex items-center gap-1.5 text-sm font-semibold" style={{ color: active ? option.mode : undefined }}>
+                              <span className="h-2 w-2 rounded-full" style={{ background: option.mode }} />
+                              {option.label}
+                            </span>
+                            <span className="caption">{option.text}</span>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
 
                 <Textarea
                   ref={editorTextareaRef}
-                  label="Memory Text Content"
+                  label="Text"
                   value={editorText}
                   onChange={(e) => setEditorText(e.target.value)}
-                  placeholder="Type raw knowledge data here..."
-                  monospace
-                  className="flex-1 min-h-[150px]"
+                  placeholder="What the AI should know"
+                  className="min-h-[9.5rem] flex-1"
                 />
 
                 {(!editingBlock || editingBlock.type === 'manual') && (
-                  <div className="flex flex-col space-y-1.5 shrink-0">
-                    <label className="block text-[0.625rem] font-bold text-gray-400 uppercase tracking-wider mb-1">Tags (Categorization)</label>
-
-                    {/* Current Tags Chips */}
+                  <div className="flex shrink-0 flex-col gap-2">
+                    <span className="block text-sm font-medium text-text-secondary">Tags <span className="caption">(it comes up when the turn mentions one)</span></span>
                     {editorKeywords.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 mb-1 p-2 bg-[#00080B] border border-gray-800/80 rounded-md">
+                      <div className="flex flex-wrap gap-1.5">
                         {editorKeywords.map((tag, idx) => (
-                          <Badge
-                            key={idx}
-                            tone="accent"
-                            className="flex items-center space-x-1.5"
-                          >
-                            <span>{tag}</span>
+                          <span key={idx} className="inline-flex h-6 items-center gap-1 rounded-full border border-border-default bg-tint/[0.04] pl-2.5 pr-1 text-xs font-medium text-text-secondary">
+                            {tag.replace(/^#/, '')}
                             <button
                               type="button"
+                              aria-label={`Remove tag ${tag}`}
                               onClick={() => setEditorKeywords(prev => prev.filter((_, i) => i !== idx))}
-                              className="text-accent hover:text-white transition-colors cursor-pointer"
+                              className="inline-flex h-4 w-4 items-center justify-center rounded-full text-text-subtle hover:text-text-primary"
                             >
-                              <X className="w-3 h-3" />
+                              <X className="h-3 w-3" aria-hidden="true" />
                             </button>
-                          </Badge>
+                          </span>
                         ))}
                       </div>
                     )}
-
-                    {/* Add Tag Row */}
-                    <div className="flex space-x-2">
+                    <div className="flex gap-2">
                       <div className="relative flex-1" ref={editorTagAnchorRef}>
                         <TextInput
                           type="text"
                           value={tagInput}
-                          onChange={(e) => {
-                            setTagInput(e.target.value);
-                            setTagSuggestionsOpen(true);
-                          }}
+                          onChange={(e) => { setTagInput(e.target.value); setTagSuggestionsOpen(true); }}
                           onFocus={() => setTagSuggestionsOpen(true)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              handleAddTag();
-                            }
-                          }}
-                          placeholder="Type a tag..."
+                          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddTag(); } }}
+                          placeholder="Add a tag"
+                          aria-label="Add a tag"
                           disabled={savingEditor}
                         />
-
-                        {/* Suggestions Dropdown */}
                         {(() => {
                           const allTags = Array.from(new Set(
                             blocks.filter(b => b.type === 'manual').flatMap(b => b.keywords || b.rawItem?.keywords || [])
                           )).filter(t => t && !editorKeywords.includes(t));
-
-                          const filteredSuggestions = allTags.filter(t =>
-                            t.toLowerCase().includes(tagInput.toLowerCase())
-                          );
-
+                          const suggestions = allTags.filter(t => t.toLowerCase().includes(tagInput.toLowerCase()));
                           return (
-                            <Popover
-                              anchorRef={editorTagAnchorRef}
-                              open={tagSuggestionsOpen && filteredSuggestions.length > 0}
-                              onClose={() => setTagSuggestionsOpen(false)}
-                              maxHeight={160}
-                            >
-                              {filteredSuggestions.map((tag) => (
+                            <Popover anchorRef={editorTagAnchorRef} open={tagSuggestionsOpen && suggestions.length > 0} onClose={() => setTagSuggestionsOpen(false)} maxHeight={160}>
+                              {suggestions.map((tag) => (
                                 <button
                                   key={tag}
                                   type="button"
-                                  onClick={() => {
-                                    setEditorKeywords(prev => [...prev, tag]);
-                                    setTagInput('');
-                                    setTagSuggestionsOpen(false);
-                                  }}
-                                  className="w-full text-left px-3 py-1.5 text-[0.625rem] uppercase font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
+                                  onClick={() => { setEditorKeywords(prev => [...prev, tag]); setTagInput(''); setTagSuggestionsOpen(false); }}
+                                  className="w-full rounded-lg px-3 py-1.5 text-left text-xs font-medium text-text-secondary transition-colors hover:bg-tint/5 hover:text-text-primary"
                                 >
-                                  {tag}
+                                  {tag.replace(/^#/, '')}
                                 </button>
                               ))}
                             </Popover>
                           );
                         })()}
                       </div>
-
-                      <button
-                        type="button"
-                        onClick={handleAddTag}
-                        disabled={savingEditor || !tagInput.trim()}
-                        className="px-3.5 py-2 bg-accent hover:brightness-110 disabled:opacity-40 text-[#011419] text-xs font-bold rounded-md transition-all cursor-pointer flex items-center justify-center"
-                      >
-                        <Plus className="w-4 h-4 stroke-[2.5]" />
-                      </button>
+                      <Button variant="ghost" icon={Plus} onClick={handleAddTag} disabled={savingEditor || !tagInput.trim()} aria-label="Add tag" />
                     </div>
                   </div>
                 )}
 
-                {editorError && (
-                  <p className="text-[0.625rem] text-status-danger font-semibold px-1">{editorError}</p>
-                )}
+                {editorError && <p className="text-xs font-semibold text-status-danger">{editorError}</p>}
               </div>
 
-              <div className="shrink-0 flex justify-end space-x-2.5 pt-4 border-t border-gray-800 mt-4">
-                <button
-                  onClick={() => setEditorOpen(false)}
-                  className="px-3.5 py-1.5 text-xs text-gray-400 hover:text-white transition-colors cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleSaveEditor}
-                  disabled={savingEditor}
-                  className="flex items-center space-x-1.5 px-4 py-1.5 bg-accent text-[#011419] rounded font-bold text-xs hover:brightness-110 transition-colors shadow cursor-pointer disabled:opacity-50"
-                >
-                  {savingEditor ? (
-                    <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      <span>Processing...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Save className="w-3.5 h-3.5" />
-                      <span>Save Memory</span>
-                    </>
-                  )}
-                </button>
+              <div className="mt-4 flex shrink-0 justify-end gap-2.5 border-t border-border-subtle pt-4">
+                <Button variant="subtle" onClick={() => setEditorOpen(false)}>Cancel</Button>
+                <Button icon={Save} loading={savingEditor} onClick={handleSaveEditor}>{savingEditor ? 'Saving…' : 'Save memory'}</Button>
               </div>
             </div>
           )}
 
-          {/* Floating Selection Action Bar */}
           {selectedBlockIds.length > 0 && (
-            <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 px-5 py-3 bg-[#051116]/90 border border-accent/25 backdrop-blur-md rounded-2xl shadow-2xl flex items-center space-x-4 z-30 animate-in slide-in-from-bottom duration-300 select-none">
-              <span className="text-[0.625rem] font-bold text-gray-300 uppercase tracking-wider">
-                {selectedBlockIds.length} Selected
-              </span>
-              <div className="h-4 w-px bg-gray-800" />
-              <button
-                onClick={handleSelectAll}
-                className="text-[0.625rem] font-bold text-gray-400 hover:text-white uppercase tracking-wider cursor-pointer font-sans"
-              >
-                Select All
-              </button>
-              <button
-                onClick={handleClearSelection}
-                className="text-[0.625rem] font-bold text-gray-400 hover:text-white uppercase tracking-wider cursor-pointer font-sans"
-              >
-                Clear
-              </button>
-              <button
-                onClick={() => setIsBulkDeleteConfirmOpen(true)}
-                className="px-3 py-1.5 bg-danger-solid hover:bg-danger-solid-hover text-white text-[0.625rem] font-bold uppercase tracking-wider rounded-lg transition-colors cursor-pointer flex items-center space-x-1.5 shadow-md shadow-black/20"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Delete</span>
-              </button>
+            <div className="absolute bottom-6 left-1/2 z-30 flex -translate-x-1/2 items-center gap-3 rounded-2xl border border-border-default bg-surface-panel/95 py-2 pl-4 pr-2 shadow-2xl backdrop-blur-md animate-in slide-in-from-bottom-4 duration-200">
+              <span className="text-sm font-semibold tabular-nums text-text-primary">{selectedBlockIds.length} selected</span>
+              <span className="h-4 w-px bg-border-default" />
+              <Button variant="subtle" size="sm" onClick={handleSelectAll}>Select all</Button>
+              <Button variant="subtle" size="sm" onClick={handleClearSelection}>Clear</Button>
+              <Button variant="danger" size="sm" icon={Trash2} onClick={() => setIsBulkDeleteConfirmOpen(true)}>Delete</Button>
             </div>
           )}
 

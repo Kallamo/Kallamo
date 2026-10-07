@@ -48,7 +48,7 @@ export function InvokeModal({ selection, profiles, initialChannel, directivesCou
       <div className="custom-scrollbar flex max-h-[70vh] flex-col gap-5 overflow-y-auto px-5 py-5">
         <div>
           <p className="mb-2 text-xs font-semibold text-text-secondary">Selection <span className="font-normal text-text-subtle">· {words} {words === 1 ? 'word' : 'words'}</span></p>
-          <blockquote className="m-0 line-clamp-3 select-text whitespace-pre-wrap rounded-control bg-white/[0.035] px-3 py-2.5 text-sm leading-relaxed text-text-secondary">{selection}</blockquote>
+          <blockquote className="m-0 line-clamp-3 select-text whitespace-pre-wrap rounded-control bg-tint/[0.035] px-3 py-2.5 text-sm leading-relaxed text-text-secondary">{selection}</blockquote>
         </div>
 
         {profiles.length === 0 ? (
@@ -86,7 +86,7 @@ export function InvokeModal({ selection, profiles, initialChannel, directivesCou
                   role="radio"
                   aria-checked={on}
                   onClick={() => setChannel(option.value)}
-                  className={`flex min-w-0 flex-col gap-2 rounded-card border p-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${on ? 'border-accent/60 bg-accent/[0.07]' : 'border-border-subtle bg-white/[0.025] hover:border-border-default'}`}
+                  className={`flex min-w-0 flex-col gap-2 rounded-card border p-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${on ? 'border-accent/60 bg-accent/[0.07]' : 'border-border-subtle bg-tint/[0.025] hover:border-border-default'}`}
                 >
                   <span aria-hidden="true" className="flex h-12 w-full flex-col justify-center gap-1.5 rounded-md bg-[#f7f7f5] px-2.5">{option.preview}</span>
                   <span className="flex items-center gap-2 text-sm font-semibold text-text-primary">

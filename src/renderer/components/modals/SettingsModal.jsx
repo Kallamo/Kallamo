@@ -1,21 +1,36 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
-import { X, Plus, Key, Link2, Eye, EyeOff, Settings, Layout, Layers, HardDrive, Trash2, FolderOpen, RefreshCw, Cpu, Database, Palette, Type, AlertTriangle, Sparkles, SlidersHorizontal, Languages, ChevronDown, FileSearch, LayoutDashboard, Plug, Settings2 } from 'lucide-react';
-import { AiGlyph, WritingGlyph } from '../ui/glyphs';
-import Logo, { Logotype } from '../../logo';
-import AiEngineRoleCard from '../../features/ai-engine/AiEngineRoleCard';
+import { X, Plus, Eye, EyeOff, Layers, HardDrive, Trash2, FolderOpen, RefreshCw, Cpu, Database, Palette, AlertTriangle, Sparkles, FileSearch, Plug, Zap, Activity, ArrowLeft, Search, Server, MoreHorizontal, Copy, Pencil, Info, GitPullRequest, Drama, Tags, Route, Archive, Languages, CircleOff } from 'lucide-react';
+import Logo, { Logotype, ReedPen } from '../../logo';
 import Toggle from '../ui/Toggle';
+import Button from '../ui/Button';
+import IconButton from '../ui/IconButton';
+import SelectMenu from '../ui/SelectMenu';
+import SegmentedControl from '../ui/SegmentedControl';
+import { GithubIcon, DiscordIcon, RedditIcon } from '../ui/BrandIcons';
+import NumberInput from '../ui/NumberInput';
+import ConfirmDialog from '../ui/ConfirmDialog';
+import { Menu, MenuItem, MenuSeparator } from '../ui/Menu';
+import { SettingsHeader, SettingsGroup, SettingsRow, SettingsRadio, IconTile, RunsOnBar, fieldClass } from '../../features/settings/SettingsUi';
+import AppearancePreview, { OptionTile } from '../../features/settings/AppearancePreview';
 import { AI_ENGINE_ROLE_DEFINITIONS, SYSTEM_AI_LANGUAGES } from '../../../shared/contracts/ai-engine-roles';
 import retrievalSettingsContract from '../../../shared/retrieval-settings.json';
 
 const RETRIEVAL_SETTING_DEFINITIONS = retrievalSettingsContract.definitions;
 const rangeProps = ({ min, max, step }) => ({ min, max, step });
 
+// Old callers ask for the four tabs this page had; each now maps to one of its pages.
+function startingPage(tab, section) {
+  if (tab === 'engine') return section === 'embedding' ? 'embeddings' : 'roles';
+  return { api: 'connections', interface: 'appearance', advanced: 'generation', about: 'about' }[tab] || tab || 'connections';
+}
+
 export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const {
     settings,
     handleSaveSettings,
     apiProfiles,
+    writingProfiles,
     handleSaveApiProfile,
     handleDeleteApiProfile,
     electronAPI,
@@ -29,12 +44,15 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     openWhatsNew
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState(initialTab || 'api'); // 'api' | 'interface' | 'advanced'
+  const [activeTab, setActiveTab] = useState(() => startingPage(initialTab, initialSection));
+  const [searchQuery, setSearchQuery] = useState('');
+  const [connectionToDelete, setConnectionToDelete] = useState(null);
+  const [focusModelInput, setFocusModelInput] = useState(false);
 
   useEffect(() => {
-    const sectionIds = { embedding: 'embedding-config', 'system-ai': 'system-ai-config', tagger: 'ai-engine-roles-config' };
+    const sectionIds = { 'system-ai': 'system-ai-config', tagger: 'ai-engine-roles-config' };
     const targetId = sectionIds[initialSection];
-    if (targetId && activeTab === 'engine') {
+    if (targetId && activeTab === 'roles') {
       const timer = setTimeout(() => {
         const el = document.getElementById(targetId);
         if (el) {
@@ -45,6 +63,19 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     }
   }, [initialSection, activeTab]);
 
+  useEffect(() => {
+    const onKey = (event) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      // Menus, pickers and dialogs close themselves first; that Escape is not for the page.
+      const layered = '[role="menu"], [role="listbox"], [aria-modal="true"]';
+      if (event.target?.closest?.(layered) || document.querySelector(layered)) return;
+      onClose?.();
+    };
+    // Capture runs before the layers' own listeners, while they are still on screen.
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [onClose]);
+
   const platformKey = `${engineStatus.platform || ''}-${engineStatus.arch || ''}`;
   const isPlatformUnsupported = engineStatus.platform && !['win32-x64', 'win32-arm64', 'darwin-arm64', 'linux-x64', 'linux-arm64'].includes(platformKey);
 
@@ -54,7 +85,6 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [apiProvider, setApiProvider] = useState('OpenRouter');
   const [showBaseUrl, setShowBaseUrl] = useState(false);
   const [apiBaseUrl, setApiBaseUrl] = useState('');
-  const [apiContextWindow, setApiContextWindow] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
 
@@ -69,7 +99,6 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
 
   const [modelsList, setModelsList] = useState([]);
   const [newModelName, setNewModelName] = useState('');
-  const [showAddModelField, setShowAddModelField] = useState(false);
 
   const [accentColor, setAccentColor] = useState(settings.interface.accentColor || '#FBCB2D');
   const [fontFamily, setFontFamily] = useState(settings.interface.fontFamily || 'sans');
@@ -149,7 +178,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   }, [electronAPI]);
 
   useEffect(() => {
-    if (activeTab !== 'advanced' || !electronAPI?.listMigrationBackups) return;
+    if (activeTab !== 'data' || !electronAPI?.listMigrationBackups) return;
     let cancelled = false;
     electronAPI.listMigrationBackups()
       .then(backups => { if (!cancelled) setMigrationBackups(backups || []); })
@@ -370,7 +399,6 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     setApiName('');
     setApiProvider('OpenRouter');
     setApiBaseUrl('');
-    setApiContextWindow('');
     setShowBaseUrl(false);
     setApiKey('');
     setGcpProjectId('');
@@ -380,7 +408,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     setAwsSecretAccessKey('');
     setAwsRegion('us-east-1');
     setModelsList([]);
-    setShowAddModelField(false);
+    setNewModelName('');
+    setFocusModelInput(false);
     setShowAddApiForm(true);
   };
 
@@ -389,7 +418,6 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     setApiName(apiProf.name);
     setApiProvider(apiProf.provider);
     setApiBaseUrl(apiProf.baseUrl || '');
-    setApiContextWindow(apiProf.contextWindow ? String(apiProf.contextWindow) : '');
     setShowBaseUrl(apiProf.provider === 'Local' || !!apiProf.baseUrl);
     setApiKey(apiProf.apiKey || '');
 
@@ -409,7 +437,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     setAwsRegion(cfg.awsRegion || 'us-east-1');
 
     setModelsList(apiProf.models ? (typeof apiProf.models === 'string' ? JSON.parse(apiProf.models) : apiProf.models) : []);
-    setShowAddModelField(false);
+    setNewModelName('');
+    setFocusModelInput(false);
     setShowAddApiForm(true);
   };
 
@@ -418,7 +447,6 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     if (modelsList.includes(newModelName.trim())) return;
     setModelsList(prev => [...prev, newModelName.trim()]);
     setNewModelName('');
-    setShowAddModelField(false);
   };
 
   const removeModel = (modelName) => {
@@ -443,13 +471,6 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       }
     }
 
-    const contextWindowText = String(apiContextWindow || '').trim();
-    const contextWindow = contextWindowText ? Number(contextWindowText) : null;
-    if (contextWindowText && (!Number.isInteger(contextWindow) || contextWindow < 4096)) {
-      showToast('Model context window must be a whole number of at least 4096 tokens, or empty.', 'error');
-      return;
-    }
-
     const targetId = editingApiId || 'api_' + Math.random().toString(36).substr(2, 9);
     const customConfigObj = {
       gcpProjectId: gcpProjectId.trim(),
@@ -468,7 +489,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       apiKey: apiKey.trim(),
       customConfig: JSON.stringify(customConfigObj),
       models: JSON.stringify(modelsList),
-      contextWindow
+      // The request limit lives in each workspace; a connection no longer carries one of its own.
+      contextWindow: null
     };
 
     await handleSaveApiProfile(apiObject);
@@ -575,1644 +597,1011 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     }
   };
 
-  return (
-    <div className={`fixed inset-0 z-50 flex items-center justify-center titlebar-nodrag select-none p-8 ${(settings?.interface?.blur ?? true) ? 'bg-black/60 backdrop-blur-sm' : 'bg-[#011419]'}`}>
-      <div className="w-full max-w-4xl h-full max-h-[760px] bg-[#000D11] rounded-xl shadow-2xl border border-gray-800/60 flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
+  const parseModels = (profile) => {
+    if (!profile?.models) return [];
+    try { return typeof profile.models === 'string' ? JSON.parse(profile.models) : profile.models; } catch { return []; }
+  };
+  const modelsOfConnection = (id) => parseModels(apiProfiles.find(ap => ap.id === id));
+  const connectionOptions = apiProfiles.map(ap => ({ value: ap.id, label: ap.name }));
+  const modelOptions = (id, emptyLabel) => [{ value: '', label: id ? emptyLabel : 'Pick a connection first' }, ...modelsOfConnection(id).map(m => ({ value: m, label: m }))];
 
-        {/* TitleBar Header */}
-        <div className="shrink-0 flex justify-between items-center h-14 w-full px-6 bg-[#011419] border-b border-gray-800/50">
-          <h2 className="text-lg font-bold text-white tracking-wide">Settings</h2>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-status-danger transition-colors cursor-pointer p-1 rounded-md hover:bg-white/5"
+  const roleStates = {
+    narrativeState: { mode: narrativeStateMode, apiProfileId: narrativeStateApiProfileId, modelName: narrativeStateModelName },
+    tagger: { mode: taggerMode, apiProfileId: taggerApiProfileId, modelName: taggerModelName },
+    retrievalPlanner: { mode: retrievalPlannerMode, apiProfileId: retrievalPlannerApiProfileId, modelName: retrievalPlannerModelName },
+    summarizer: { mode: summarizerMode, apiProfileId: summarizerApiProfileId, modelName: summarizerModelName },
+  };
+  const roleReady = (state) => state.mode === 'disabled' || state.mode === 'off' || state.mode === 'profile'
+    || (state.mode === 'inherit-system' ? systemAiReady : Boolean(state.apiProfileId && state.modelName && modelsOfConnection(state.apiProfileId).includes(state.modelName)));
+  const rolesNeedSetup = !systemAiReady || AI_ENGINE_ROLE_DEFINITIONS.some(definition => !roleReady(roleStates[definition.id]));
+
+  const connectionUsers = (id) => {
+    const profiles = writingProfiles.filter(profile => profile.apiProfileId === id);
+    const engine = [];
+    if (systemApiProfileId === id) engine.push('System AI');
+    AI_ENGINE_ROLE_DEFINITIONS.forEach(definition => {
+      const state = roleStates[definition.id];
+      if (state.mode === 'dedicated' && state.apiProfileId === id) engine.push(definition.title);
+    });
+    if (embeddingEngine === 'external' && embeddingApiProfileId === id) engine.push('Embeddings');
+    return { profiles, engine };
+  };
+
+  const duplicateConnection = async (ap) => {
+    await handleSaveApiProfile({ ...ap, id: 'api_' + Math.random().toString(36).substr(2, 9), name: `${ap.name} copy` });
+  };
+
+  const goTo = (tab) => {
+    setActiveTab(tab);
+    setShowAddApiForm(false);
+    setSearchQuery('');
+  };
+
+  const query = searchQuery.trim().toLowerCase();
+  const searchResults = query
+    ? SEARCH_INDEX.filter(entry => `${entry.label} ${entry.keywords || ''}`.toLowerCase().includes(query)).slice(0, 12)
+    : [];
+
+  const totalModels = apiProfiles.reduce((sum, ap) => sum + parseModels(ap).length, 0);
+  const provider = PROVIDERS.find(p => p.value === apiProvider) || PROVIDERS[0];
+  const canSaveApi = apiName.trim() && modelsList.length > 0;
+
+  const strictnessPct = Math.round(similarity * 100);
+  const strictnessLabel = strictnessPct === 0 ? 'Everything is retrieved, no filtering'
+    : strictnessPct < 30 ? 'Very broad, may include loosely related material'
+      : strictnessPct < 45 ? 'Balanced, good for wide questions'
+        : strictnessPct < 65 ? 'Moderate, a solid general setting'
+          : strictnessPct < 85 ? 'Focused, good for specific lookups'
+            : strictnessPct < 100 ? 'Strict, only strong matches get through' : 'Exact, only the closest matches';
+
+  // ------------------------------------------------------------------ pages
+
+  const connectionsPage = () => (
+    <>
+      <SettingsHeader
+        title="Connections"
+        description="Where requests go. Your AI profiles and Kallamo’s own roles pick their models from these."
+        actions={<Button icon={Plus} onClick={openNewApiForm}>Add connection</Button>}
+      />
+      {apiProfiles.length === 0 ? (
+        <SettingsGroup title="Your connections">
+          <div className="px-[1.125rem] py-6">
+            <p className="text-sm font-semibold text-text-primary">No connections yet</p>
+            <p className="mt-1 max-w-lg text-[0.8125rem] leading-relaxed text-text-muted">Add one to give your AI profiles a model to reply with. It can be a cloud provider with an API key, or a model running on this computer.</p>
+          </div>
+        </SettingsGroup>
+      ) : (
+        <SettingsGroup title="Your connections" aside={`${apiProfiles.length} connection${apiProfiles.length === 1 ? '' : 's'} · ${totalModels} model${totalModels === 1 ? '' : 's'}`}>
+          {apiProfiles.map(ap => (
+            <ConnectionRow
+              key={ap.id}
+              connection={ap}
+              models={parseModels(ap)}
+              users={connectionUsers(ap.id)}
+              onEdit={() => openEditApiForm(ap)}
+              onDuplicate={() => duplicateConnection(ap)}
+              onAddModel={() => { openEditApiForm(ap); setFocusModelInput(true); }}
+              onDelete={() => setConnectionToDelete(ap)}
+            />
+          ))}
+        </SettingsGroup>
+      )}
+      <SettingsGroup title="Adding a local server?">
+        <div className="flex items-start gap-3 px-[1.125rem] py-3.5">
+          <Info className="mt-0.5 h-4 w-4 shrink-0 text-text-subtle" aria-hidden="true" />
+          <p className="text-[0.8125rem] leading-relaxed text-text-muted">
+            Choose <b className="font-semibold text-text-secondary">Local or compatible</b> with a base URL ending in <code className="font-mono text-text-secondary">/v1</code>, like <code className="font-mono text-text-secondary">http://127.0.0.1:1234/v1</code> for LM Studio. Then list the models the server has loaded.
+          </p>
+        </div>
+      </SettingsGroup>
+    </>
+  );
+
+  const connectionEditor = () => (
+    <>
+      <SettingsHeader
+        back={{ label: 'Connections', onClick: () => setShowAddApiForm(false) }}
+        title={editingApiId ? apiName || 'Connection' : 'New connection'}
+        description={editingApiId ? `${provider.label} · used by ${describeUsers(connectionUsers(editingApiId)) || 'nothing yet'}` : 'Choose where the models run, then list the ones you want to use.'}
+        actions={(
+          <>
+            <Button variant="subtle" onClick={() => setShowAddApiForm(false)}>Cancel</Button>
+            <Button onClick={handleSaveApi} disabled={!canSaveApi}>{editingApiId ? 'Save connection' : 'Create connection'}</Button>
+          </>
+        )}
+      />
+
+      <SettingsGroup title="Provider">
+        <div role="radiogroup" aria-label="Provider" className="grid grid-cols-2 gap-2 p-3.5 lg:grid-cols-4">
+          {PROVIDERS.map(p => {
+            const selected = p.value === apiProvider;
+            return (
+              <button
+                key={p.value}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                onClick={() => { setApiProvider(p.value); if (p.value === 'Local') setShowBaseUrl(true); }}
+                className={`flex min-w-0 items-center gap-2.5 rounded-[0.625rem] border px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${selected ? 'border-accent/55 bg-accent/[0.05]' : 'border-tint/[0.08] hover:border-tint/[0.16]'}`}
+              >
+                <ProviderMark provider={p.value} size="sm" />
+                <span className="min-w-0">
+                  <span className={`block truncate text-[0.8125rem] font-semibold ${selected ? 'text-text-primary' : 'text-text-secondary'}`}>{p.label}</span>
+                  <span className="caption block truncate">{p.sub}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </SettingsGroup>
+
+      <SettingsGroup title="Details">
+        <SettingsRow label="Name" description="How it appears in profiles and roles.">
+          <input value={apiName} onChange={e => setApiName(e.target.value)} placeholder={provider.namePlaceholder} className={`${fieldClass} w-80`} />
+        </SettingsRow>
+        {apiProvider === 'Vertex AI' ? (
+          <>
+            <SettingsRow label="Project ID" description="From your Google Cloud console.">
+              <input value={gcpProjectId} onChange={e => setGcpProjectId(e.target.value)} placeholder="my-writing-project" className={`${fieldClass} w-80`} />
+            </SettingsRow>
+            <SettingsRow label="Region" description="Where the Vertex endpoint runs.">
+              <input value={gcpRegion} onChange={e => setGcpRegion(e.target.value)} placeholder="us-central1" className={`${fieldClass} w-80`} />
+            </SettingsRow>
+            <SettingsRow label="Service account key" description="Paste the whole JSON file you downloaded." align="start">
+              <textarea value={gcpServiceAccount} onChange={e => setGcpServiceAccount(e.target.value)} placeholder={'{"type": "service_account", ...}'} rows={4} className={`${fieldClass} w-80 resize-none py-2 font-mono text-xs custom-scrollbar`} />
+            </SettingsRow>
+          </>
+        ) : apiProvider === 'AWS Bedrock' ? (
+          <>
+            <SettingsRow label="Access key ID" description="From your AWS IAM credentials.">
+              <input value={awsAccessKeyId} onChange={e => setAwsAccessKeyId(e.target.value)} placeholder="AKIA…" className={`${fieldClass} w-80 font-mono`} />
+            </SettingsRow>
+            <SettingsRow label="Secret access key">
+              <SecretInput value={awsSecretAccessKey} onChange={setAwsSecretAccessKey} placeholder="The secret that goes with the key ID" shown={showApiKey} onToggle={() => setShowApiKey(!showApiKey)} />
+            </SettingsRow>
+            <SettingsRow label="Region" description="Where your Bedrock models are enabled.">
+              <input value={awsRegion} onChange={e => setAwsRegion(e.target.value)} placeholder="us-east-1" className={`${fieldClass} w-80`} />
+            </SettingsRow>
+          </>
+        ) : (
+          <>
+            <SettingsRow
+              label="Base URL"
+              description={apiProvider === 'Local'
+                ? 'Required. Ends in /v1, or a full chat or embeddings endpoint.'
+                : ['OpenAI', 'OpenRouter'].includes(apiProvider)
+                  ? 'Optional. Only for a proxy or a compatible service. Ends in /v1.'
+                  : 'Optional. The provider’s complete endpoint, used exactly as entered.'}
+            >
+              <input value={apiBaseUrl} onChange={e => setApiBaseUrl(e.target.value)} placeholder={provider.urlPlaceholder} className={`${fieldClass} w-80 font-mono text-[0.8125rem]`} />
+            </SettingsRow>
+            <SettingsRow label="API key" description={apiProvider === 'Local' ? 'Optional. Most local servers do not need one.' : 'Stored on this computer only.'}>
+              <SecretInput value={apiKey} onChange={setApiKey} placeholder={provider.keyPlaceholder} shown={showApiKey} onToggle={() => setShowApiKey(!showApiKey)} />
+            </SettingsRow>
+          </>
+        )}
+      </SettingsGroup>
+
+      <SettingsGroup title="Models" aside="Profiles and roles choose from these">
+        <form
+          className="flex gap-2.5 px-[1.125rem] py-3"
+          onSubmit={e => { e.preventDefault(); handleAddModel(); }}
+        >
+          <input
+            value={newModelName}
+            onChange={e => setNewModelName(e.target.value)}
+            autoFocus={focusModelInput}
+            placeholder={`Type a model ID, like ${provider.modelPlaceholder}`}
+            className={`${fieldClass} flex-1 font-mono text-[0.8125rem]`}
+          />
+          <Button type="submit" variant="ghost" size="sm" icon={Plus} disabled={!newModelName.trim()}>Add</Button>
+        </form>
+        {modelsList.length === 0 ? (
+          <p className="border-t border-tint/[0.055] px-[1.125rem] py-3 text-[0.8125rem] text-text-muted">No models yet. Add at least one.</p>
+        ) : modelsList.map(m => (
+          <div key={m} className="flex items-center gap-3 border-t border-tint/[0.055] px-[1.125rem] py-2.5">
+            <span className="min-w-0 flex-1 truncate font-mono text-[0.8125rem] text-text-secondary">{m}</span>
+            <IconButton icon={X} label={`Remove ${m}`} size="sm" tone="danger" onClick={() => removeModel(m)} />
+          </div>
+        ))}
+      </SettingsGroup>
+
+    </>
+  );
+
+  const modelBar = (owner, apiProfileId, modelName, onConnection, onModel) => (
+    <>
+      <SelectMenu unboxed="strong" ariaLabel={`${owner} connection`} className="w-48 shrink-0 [&_button]:text-[0.8125rem]" value={apiProfileId} onChange={onConnection} options={[{ value: '', label: 'Choose a connection' }, ...connectionOptions]} />
+      <span className="my-2 w-px self-stretch bg-tint/[0.08]" aria-hidden="true" />
+      <SelectMenu unboxed="strong" ariaLabel={`${owner} model`} className="min-w-0 flex-1 font-mono [&_button]:text-[0.8125rem]" value={modelName} onChange={onModel} options={modelOptions(apiProfileId, 'Choose a model')} />
+    </>
+  );
+
+  const roleStatus = (definition, state) => {
+    if (state.mode === 'inherit-system') {
+      return (
+        <span className="flex min-w-0 items-center gap-2 px-3.5 text-[0.8125rem] text-text-muted">
+          <Cpu className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span className="whitespace-nowrap">Same as System AI</span>
+          {systemModelName && <span className="truncate font-mono text-xs text-text-subtle">{systemModelName}</span>}
+        </span>
+      );
+    }
+    const text = state.mode === 'profile' ? 'Uses the model of the profile that replies.' : ROLE_OFF_COPY[definition.id] || definition.modes.find(mode => mode.value === state.mode)?.description;
+    return (
+      <span className="flex min-w-0 items-center gap-2 px-3.5 text-[0.8125rem] text-text-subtle">
+        {state.mode !== 'profile' && <CircleOff className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}
+        <span className="truncate">{text}</span>
+      </span>
+    );
+  };
+
+  const rolesPage = () => (
+    <>
+      <SettingsHeader title="AI roles" description="Kallamo’s helpers that work behind the scenes. Your AI profiles still write every reply." />
+      <SettingsGroup title="Default model" id="system-ai-config">
+        <div className="flex gap-4 px-5 py-[1.125rem]">
+          <IconTile icon={Cpu} color="var(--app-accent)" />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-baseline gap-2.5">
+              <span className="text-[0.9375rem] font-bold text-text-primary">System AI</span>
+              <span className="text-xs font-semibold text-accent">Default</span>
+            </div>
+            <p className="mt-1 text-[0.8125rem] leading-relaxed text-text-muted">Every role set to System AI uses this model.</p>
+            <div className="mt-3.5 flex min-h-[2.875rem] items-center overflow-hidden rounded-xl border border-tint/[0.08] bg-surface-inset">
+              {modelBar('System AI', systemApiProfileId, systemModelName, value => updateSetting('advanced', 'systemApiProfileId', value), value => updateSetting('advanced', 'systemModelName', value))}
+            </div>
+            {!systemAiReady && (
+              <p className="mt-2.5 flex items-center gap-2 text-[0.8125rem] text-status-warning">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />{systemAiRequirement} Roles set to System AI wait for it.
+              </p>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-4 border-t border-tint/[0.055] px-5 py-4">
+          <IconTile icon={Languages} color="var(--theme-mode-always)" />
+          <div className="min-w-0 flex-1">
+            <div className="text-[0.9375rem] font-bold text-text-primary">Language for AI notes</div>
+            <p className="mt-0.5 text-[0.8125rem] leading-relaxed text-text-muted">Summaries, analysis and research are written in it. It does not change how your profiles reply, and names and quotes are never translated.</p>
+          </div>
+          <SelectMenu ariaLabel="Language for AI notes" className="w-52 shrink-0" value={systemOutputLanguage} onChange={value => updateSetting('advanced', 'systemOutputLanguage', value)} options={SYSTEM_AI_LANGUAGES.map(l => ({ value: l.value, label: l.label }))} />
+        </div>
+      </SettingsGroup>
+
+      <section id="ai-engine-roles-config" className="scroll-mt-6">
+        <div className="mb-2.5 mt-7 flex items-baseline justify-between gap-4">
+          <h2 className="text-[0.8125rem] font-semibold text-text-secondary">Roles</h2>
+          <span className="caption text-right">Each one can share System AI, run its own model, or be off</span>
+        </div>
+        <div className="flex flex-col gap-3">
+          {AI_ENGINE_ROLE_DEFINITIONS.map(definition => {
+            const state = roleStates[definition.id];
+            const off = state.mode === 'disabled' || state.mode === 'off';
+            const ready = roleReady(state);
+            const look = ROLE_LOOK[definition.id];
+            const update = key => value => updateSetting('advanced', `${definition.id}${key}`, value);
+            return (
+              <div key={definition.id} className="overflow-hidden rounded-xl border border-tint/[0.08] surface-card">
+                <div className="flex gap-4 px-5 py-[1.125rem]">
+                  <IconTile icon={look.icon} color={look.color} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-baseline gap-2.5">
+                      <span className="text-[0.9375rem] font-bold text-text-primary">{definition.title}</span>
+                      <span className="text-xs font-semibold" style={{ color: look.color }}>{look.where}</span>
+                    </div>
+                    <p className="mt-1 max-w-[35rem] text-[0.8125rem] leading-relaxed text-text-muted">{ROLE_COPY[definition.id]}</p>
+                    <div className="mt-3.5">
+                      <RunsOnBar
+                        mode={(
+                          <SegmentedControl
+                            bare
+                            label={`${definition.title}, how it runs`}
+                            value={state.mode}
+                            onChange={update('Mode')}
+                            options={definition.modes.map(mode => ({ value: mode.value, label: MODE_LABELS[mode.value] || mode.label, tooltip: mode.description }))}
+                          />
+                        )}
+                      >
+                        {state.mode === 'dedicated'
+                          ? <div className="flex min-w-0 flex-1 items-center self-stretch bg-tint/[0.035]">{modelBar(definition.title, state.apiProfileId, state.modelName, update('ApiProfileId'), update('ModelName'))}</div>
+                          : roleStatus(definition, state)}
+                      </RunsOnBar>
+                    </div>
+                    {!ready && (
+                      <p className="mt-2.5 flex items-center gap-2 text-[0.8125rem] text-status-warning">
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                        {state.mode === 'inherit-system' ? 'Waiting for System AI above.' : 'Choose a connection and a model for this role.'}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                {definition.id === 'tagger' && (
+                  <RoleOptions disabled={off}>
+                    <SettingsRow label="Propose unknown entities" description="Suggests new Worldbuild entries for names it cannot match. You review them first.">
+                      <Toggle checked={allowAiEntityCreation} disabled={off} ariaLabel="Propose unknown entities" onChange={value => updateSetting('advanced', 'allowAiEntityCreation', value)} />
+                    </SettingsRow>
+                  </RoleOptions>
+                )}
+                {definition.id === 'retrievalPlanner' && (
+                  <RoleOptions disabled={off}>
+                    <SettingsRow label="Plan every message" description="Off: short follow-ups with no name or question skip planning and use a plain search.">
+                      <Toggle checked={agenticGate === 'always'} disabled={off} ariaLabel="Plan every message" onChange={checked => updateSetting('advanced', 'agenticGate', checked ? 'always' : 'auto')} />
+                    </SettingsRow>
+                    <SettingsRow label="Native tool calling" description="Uses the provider’s own tools when it can, the text protocol when it cannot.">
+                      <Toggle checked={agenticToolProtocol !== 'text'} disabled={off} ariaLabel="Native tool calling" onChange={checked => updateSetting('advanced', 'agenticToolProtocol', checked ? 'auto' : 'text')} />
+                    </SettingsRow>
+                  </RoleOptions>
+                )}
+                {definition.id === 'summarizer' && (
+                  <RoleOptions disabled={off}>
+                    <SettingsRow label="Archive summaries" description="A title and a short summary for each archived conversation.">
+                      <Toggle checked={archiveSummarization} disabled={off} ariaLabel="Archive summaries" onChange={value => updateSetting('advanced', 'archiveSummarization', value)} />
+                    </SettingsRow>
+                  </RoleOptions>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    </>
+  );
+
+  const generationPage = () => (
+    <>
+      <SettingsHeader title="Generation" description="How requests are sent and how replies arrive." />
+      <SettingsGroup title="Replies">
+        <SettingsRow label="Stream replies" description="Show the reply as it is written. Also avoids timeouts on slow local models. Providers without streaming fall back on their own.">
+          <Toggle checked={streamingEnabled} ariaLabel="Stream replies" onChange={value => updateSetting('advanced', 'streaming', value)} />
+        </SettingsRow>
+      </SettingsGroup>
+      <SettingsGroup title="Prompt cache" aside="Cached input is billed at a fraction of the price">
+        <SettingsRow label="Use the prompt cache" description="Send the unchanging part of every request first, so the provider can reuse it. Off sends requests exactly as older versions did.">
+          <Toggle checked={promptCache} ariaLabel="Use the prompt cache" onChange={value => updateSetting('advanced', 'promptCache', value)} />
+        </SettingsRow>
+        {promptCache && (
+          <div className="mx-[1.125rem] mb-3.5 border-l-2 border-tint/[0.08] pl-4">
+            <p className="caption mb-0.5">Where retrieved context, the clock and attachments go</p>
+            <SettingsRadio checked={promptCacheContextPlacement === 'system'} onSelect={() => updateSetting('advanced', 'promptCacheContextPlacement', 'system')} label="In the system prompt" description="Where it has always been." />
+            <SettingsRadio checked={promptCacheContextPlacement === 'turn'} onSelect={() => updateSetting('advanced', 'promptCacheContextPlacement', 'turn')} label="Next to your message" description="The history gets cached too, a bigger saving on long chats. The model reads context in a new place, so compare on one workspace first." />
+          </div>
+        )}
+      </SettingsGroup>
+    </>
+  );
+
+  const retrievalCounts = [
+    ['profileKnowledgeTopK', 'Profile knowledge', 'passages', profileKnowledgeTopK],
+    ['workspaceDocumentsTopK', 'Workspace files', 'passages', workspaceDocumentsTopK],
+    ['longTermMemoryTopK', 'Long-term memory', 'passages', longTermMemoryTopK],
+    ['worldbuildEntityLimit', 'Worldbuild', 'entities', worldbuildEntityLimit],
+  ];
+
+  const retrievalPage = () => (
+    <>
+      <SettingsHeader title="Retrieval" description="How much Kallamo looks up for each reply, and how close a match must be." />
+      <SettingsGroup title="Each search brings at least" aside="More, up to 20, when the request has room" id="retrieval-config">
+        <div className="grid grid-cols-2 lg:grid-cols-4">
+          {retrievalCounts.map(([key, label, unit, value], index) => (
+            <div key={key} className={`px-[1.125rem] py-4 ${index ? 'lg:border-l lg:border-tint/[0.055]' : ''}`}>
+              <div className="text-[0.8125rem] font-semibold text-text-primary">{label}</div>
+              <div className="mt-3 flex items-center gap-2">
+                <NumberInput
+                  value={Number(value)}
+                  onChange={next => updateSettingWithDebounce(key, next)}
+                  {...rangeProps(RETRIEVAL_SETTING_DEFINITIONS[key])}
+                  aria-label={label}
+                  className={`${fieldClass} w-16 text-center tabular-nums`}
+                />
+                <span className="caption">{unit}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+        {Number(worldbuildEntityLimit) > 30 && (
+          <p className="flex items-center gap-2 border-t border-tint/[0.055] px-[1.125rem] py-2.5 text-[0.8125rem] text-status-warning">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />More than 30 Worldbuild entities can slow retrieval and crowd the context in connected worlds.
+          </p>
+        )}
+      </SettingsGroup>
+      <SettingsGroup title="Matching">
+        <div className="px-[1.125rem] py-4">
+          <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+            <span className="text-sm font-semibold text-text-primary">Strictness</span>
+            <span className="text-sm font-bold tabular-nums text-text-primary">{strictnessPct}%</span>
+            <span className="text-[0.8125rem] text-text-muted">{strictnessLabel}</span>
+            <span className="caption ml-auto">Names, IDs and linked facts always get through</span>
+          </div>
+          <input type="range" min="0" max="1" step="0.05" value={similarity} aria-label="Strictness" onChange={e => updateSettingWithDebounce('similarity', parseFloat(e.target.value))} className="mt-3 w-full cursor-pointer accent-accent" />
+          <div className="mt-1 flex justify-between text-xs text-text-subtle">
+            {['Broad', 'Balanced', 'Moderate', 'Focused', 'Strict'].map(band => <span key={band}>{band}</span>)}
+          </div>
+        </div>
+        <SettingsRow label="Worldbuild breadth" description={BREADTH_COPY[worldbuildBreadth] || BREADTH_COPY.balanced}>
+          <SegmentedControl label="Worldbuild breadth" value={worldbuildBreadth} onChange={value => updateSettingWithDebounce('worldbuildBreadth', value)} options={[{ value: 'focused', label: 'Focused' }, { value: 'balanced', label: 'Balanced' }, { value: 'broad', label: 'Broad' }]} />
+        </SettingsRow>
+      </SettingsGroup>
+      <SettingsGroup title="Files">
+        <SettingsRow label="Passage length" description="Characters in each searchable piece of an imported file.">
+          <NumberInput value={Number(chunkSize)} onChange={next => updateSettingWithDebounce('chunkSize', next)} min={200} max={1000} step={50} aria-label="Passage length" className={`${fieldClass} w-20 text-center tabular-nums`} />
+          <span className="caption">characters</span>
+        </SettingsRow>
+      </SettingsGroup>
+    </>
+  );
+
+  const chooseLocalEngine = async () => {
+    if (isPlatformUnsupported) return;
+    updateSetting('advanced', 'embeddingEngine', 'local');
+    if (!engineStatus.installed) await downloadEngine();
+  };
+
+  const embeddingsPage = () => (
+    <>
+      <SettingsHeader title="Embeddings" description="The model that turns your files and chats into something Kallamo can search by meaning." />
+      <SettingsGroup title="Where it runs" id="embedding-config">
+        <div className="px-[1.125rem] py-2">
+          <SettingsRadio
+            checked={embeddingEngine === 'local'}
+            disabled={isPlatformUnsupported}
+            onSelect={chooseLocalEngine}
+            label="On this computer"
+            description={isPlatformUnsupported ? 'Not available on Intel Macs. Use a connection instead.' : <>Private and offline, with <span className="font-mono text-xs">multilingual-e5-small</span>.</>}
           >
-            <X className="w-5 h-5" />
+            {!isPlatformUnsupported && (
+              <span className="mt-2.5 flex items-center gap-2.5 text-[0.8125rem] text-text-secondary">
+                <span className={`h-2 w-2 rounded-full ${engineStatus.installed ? 'bg-emerald-400' : 'bg-tint/30'}`} aria-hidden="true" />
+                {engineStatus.installed ? `Installed · ${engineStatus.platform}-${engineStatus.arch}` : 'Not installed yet. It downloads when first needed.'}
+                {engineStatus.installed
+                  ? <button type="button" onClick={e => { e.preventDefault(); setConfirmAction('deleteEngine'); }} className="font-semibold text-text-muted hover:text-status-danger">Remove</button>
+                  : <button type="button" onClick={e => { e.preventDefault(); downloadEngine(); }} className="font-semibold text-accent hover:brightness-110">Download</button>}
+              </span>
+            )}
+          </SettingsRadio>
+        </div>
+        <div className="border-t border-tint/[0.055] px-[1.125rem] py-2">
+          <SettingsRadio
+            checked={embeddingEngine === 'external'}
+            onSelect={() => updateSetting('advanced', 'embeddingEngine', 'external')}
+            label="Through a connection"
+            description={<>A provider’s embedding model, such as <span className="font-mono text-xs">text-embedding-3-small</span> from OpenAI or <span className="font-mono text-xs">text-embedding-004</span> from Google.</>}
+          />
+          {embeddingEngine === 'external' && (
+            <div className="mb-2 ml-7 mt-1 flex flex-wrap gap-2.5">
+              <SelectMenu ariaLabel="Embedding connection" className="w-56" value={embeddingApiProfileId} onChange={value => updateSetting('advanced', 'embeddingApiProfileId', value)} options={[{ value: '', label: 'Choose a connection' }, ...connectionOptions]} />
+              <input value={embeddingModelName} onChange={e => updateSettingWithDebounce('embeddingModelName', e.target.value)} placeholder="text-embedding-3-small" aria-label="Embedding model" className={`${fieldClass} w-64 font-mono text-[0.8125rem]`} />
+            </div>
+          )}
+        </div>
+      </SettingsGroup>
+      <SettingsGroup title="On this computer" id="embedding-runtime-config">
+        <SettingsRow label="Runs on" description="Native is the stable choice. WebAssembly is the fallback.">
+          <SegmentedControl label="Runs on" value={executionDevice} onChange={value => updateSetting('advanced', 'executionDevice', value)} options={[{ value: 'cpu', label: 'Native CPU' }, { value: 'wasm', label: 'WebAssembly' }]} />
+        </SettingsRow>
+        <SettingsRow label="Downloaded model files" description="Cleared files download again the next time something is indexed.">
+          <Button variant="ghost" size="sm" icon={RefreshCw} onClick={() => setConfirmAction('clearCache')}>Clear cache</Button>
+        </SettingsRow>
+      </SettingsGroup>
+    </>
+  );
+
+  const previewFont = fontFamily === 'serif' ? 'font-serif' : fontFamily === 'monospace' ? 'font-mono' : 'font-sans';
+
+  const appearancePage = () => (
+    <>
+      <SettingsHeader title="Appearance" description="How Kallamo looks. Changes apply right away." />
+      <div className="grid gap-7 xl:grid-cols-[minmax(0,1fr)_21rem]">
+        <div className="min-w-0">
+          <SettingsGroup title="Look">
+            <SettingsRow label="Accent" description="Active items, the main action and the light at the top of each page.">
+              <div className="flex gap-2.5">
+                {colors.map(c => (
+                  <button
+                    key={c}
+                    type="button"
+                    aria-label={`Accent ${c}`}
+                    aria-pressed={accentColor === c}
+                    onClick={() => updateSetting('interface', 'accentColor', c)}
+                    style={{ backgroundColor: c, boxShadow: accentColor === c ? '0 0 0 2px var(--theme-surface-raised), 0 0 0 4px var(--theme-text-primary)' : 'inset 0 0 0 1px color-mix(in srgb, var(--theme-tint) 12%, transparent)' }}
+                    className="h-5 w-5 rounded-full transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                  />
+                ))}
+              </div>
+            </SettingsRow>
+            <SettingsRow label="Font">
+              <SegmentedControl label="Font" value={fontFamily} onChange={value => updateSetting('interface', 'fontFamily', value)} options={[{ value: 'sans', label: 'Inter' }, { value: 'serif', label: 'Merriweather' }, { value: 'monospace', label: 'JetBrains Mono' }]} />
+            </SettingsRow>
+            <SettingsRow label="Text size">
+              <SegmentedControl label="Text size" value={fontSize} onChange={value => updateSetting('interface', 'fontSize', value)} options={[{ value: 'small', label: 'Small' }, { value: 'medium', label: 'Medium' }, { value: 'large', label: 'Large' }]} />
+            </SettingsRow>
+            <SettingsRow label="Background blur" description="Turn off on slower computers.">
+              <Toggle checked={blurEnabled} ariaLabel="Background blur" onChange={value => updateSetting('interface', 'blur', value)} />
+            </SettingsRow>
+          </SettingsGroup>
+          <SettingsGroup title="Chat">
+            <SettingsRow label="Layout" description="Speech bubbles, or one continuous page.">
+              <div role="radiogroup" aria-label="Chat layout" className="flex gap-2.5">
+                <OptionTile kind="bubbles" label="Bubbles" selected={layoutMode === 'bubbles'} onSelect={() => updateSetting('interface', 'layout', 'bubbles')} />
+                <OptionTile kind="document" label="Document" selected={layoutMode === 'document'} onSelect={() => updateSetting('interface', 'layout', 'document')} />
+              </div>
+            </SettingsRow>
+            <SettingsRow label="Code theme">
+              <SelectMenu ariaLabel="Code theme" className="w-44" value={codeTheme} onChange={value => updateSetting('interface', 'codeTheme', value)} options={[{ value: 'github-dark', label: 'GitHub Dark' }, { value: 'atom-one-dark', label: 'Atom One Dark' }, { value: 'tokyo-night-dark', label: 'Tokyo Night Dark' }]} />
+            </SettingsRow>
+            <SettingsRow label="Line numbers in code">
+              <Toggle checked={lineNumbers} ariaLabel="Line numbers in code" onChange={value => updateSetting('interface', 'lineNumbers', value)} />
+            </SettingsRow>
+          </SettingsGroup>
+          <SettingsGroup title="Writing Desk">
+            <SettingsRow label="Formatting toolbar" description="Fixed at the top, or over the selection.">
+              <div role="radiogroup" aria-label="Formatting toolbar" className="flex gap-2.5">
+                <OptionTile kind="fixed" label="Fixed" selected={writingToolbar === 'fixed'} onSelect={() => updateSetting('interface', 'writingToolbar', 'fixed')} />
+                <OptionTile kind="bubble" label="Bubble" selected={writingToolbar === 'bubble'} onSelect={() => updateSetting('interface', 'writingToolbar', 'bubble')} />
+              </div>
+            </SettingsRow>
+            <SettingsRow label="Smart typography" description="Curly quotes, dashes and ellipses as you type, in documents only.">
+              <Toggle checked={smartTypography} ariaLabel="Smart typography" onChange={value => updateSetting('interface', 'smartTypography', value)} />
+            </SettingsRow>
+          </SettingsGroup>
+        </div>
+        <div className="min-w-0">
+          <div className="sticky top-0">
+            <h2 className="mb-2.5 mt-7 text-[0.8125rem] font-semibold text-text-secondary">Preview</h2>
+            <AppearancePreview layout={layoutMode} fontClass={previewFont} blur={blurEnabled} codeTheme={codeTheme} lineNumbers={lineNumbers} />
+          </div>
+        </div>
+      </div>
+    </>
+  );
+
+  const dataPage = () => (
+    <>
+      <SettingsHeader title="Data and backups" description="Everything lives on this computer. Keep a copy somewhere else." />
+      <SettingsGroup title="Backups">
+        <SettingsRow label="Back up" description="Workspaces, settings and downloaded models, in one file.">
+          <Button variant="ghost" size="sm" icon={Database} onClick={handleBackup}>Create backup…</Button>
+        </SettingsRow>
+        <SettingsRow label="Restore" description="Replaces everything with a backup. Kallamo restarts when it finishes.">
+          <Button variant="ghost" size="sm" icon={RefreshCw} onClick={handleRestore}>Restore from file…</Button>
+        </SettingsRow>
+      </SettingsGroup>
+      <SettingsGroup title="Safety copies" aside="Saved before an update changes your data">
+        {migrationBackups.length === 0 ? (
+          <p className="px-[1.125rem] py-3.5 text-[0.8125rem] text-text-muted">No copies yet. One is saved the first time an update changes your data.</p>
+        ) : migrationBackups.map(backup => {
+          const { date, versions, size } = describeMigrationBackup(backup);
+          return (
+            <div key={backup.file} className="flex items-center gap-4 border-t border-tint/[0.055] px-[1.125rem] py-2.5 text-[0.8125rem] first:border-t-0">
+              <span className="w-44 shrink-0 tabular-nums text-text-secondary">{date}</span>
+              <span className="min-w-0 flex-1 truncate text-text-muted">{versions}</span>
+              <span className="shrink-0 tabular-nums text-text-muted">{size}</span>
+            </div>
+          );
+        })}
+        <div className="flex items-center gap-4 border-t border-tint/[0.055] px-[1.125rem] py-3">
+          <span className="flex-1 text-[0.8125rem] text-text-muted">Restore one with Restore from file.</span>
+          <Button variant="ghost" size="sm" icon={FolderOpen} onClick={handleOpenMigrationBackups}>Show folder</Button>
+        </div>
+      </SettingsGroup>
+      <SettingsGroup title="Storage">
+        <SettingsRow label="Data folder" description="Databases, documents and images.">
+          <Button variant="ghost" size="sm" icon={FolderOpen} onClick={handleOpenWorkspace}>Open folder</Button>
+        </SettingsRow>
+        <SettingsRow label={<span className="text-status-danger">Search indexes</span>} description="Deleting them means every file must be indexed again before search works.">
+          <Button variant="ghost" size="sm" icon={Trash2} className="!text-status-danger hover:!bg-status-danger/10" onClick={() => setConfirmAction('purge')}>Delete indexes…</Button>
+        </SettingsRow>
+      </SettingsGroup>
+    </>
+  );
+
+  const diagnosticsPage = () => (
+    <>
+      <SettingsHeader title="Diagnostics" description="Extra detail under each reply, for checking what the AI received and what it cost." />
+      <SettingsGroup title="Under each reply">
+        <SettingsRow label="Retrieval and context" description="What was found, what made it in, perspective scopes, and the exact context sent.">
+          <Toggle checked={ragDebug} ariaLabel="Retrieval and context" onChange={value => updateSetting('advanced', 'ragDebug', value)} />
+        </SettingsRow>
+        <SettingsRow label="Agentic retrieval trace" description="Searches, results, stop reason and cost. Never the model’s private reasoning.">
+          <Toggle checked={agenticDebug} ariaLabel="Agentic retrieval trace" onChange={value => updateSetting('advanced', 'agenticDebug', value)} />
+        </SettingsRow>
+        <SettingsRow label="Narrative State" description="Triage, deep analysis, proposals, retries and timing for roleplay turns.">
+          <Toggle checked={narrativeStateDebug} ariaLabel="Narrative State" onChange={value => updateSetting('advanced', 'narrativeStateDebug', value)} />
+        </SettingsRow>
+        <SettingsRow label="Token usage" description="Estimated tokens for the reply, retrieval and Narrative State, each counted once.">
+          <Toggle checked={tokenDebug} ariaLabel="Token usage" onChange={value => updateSetting('advanced', 'tokenDebug', value)} />
+        </SettingsRow>
+      </SettingsGroup>
+    </>
+  );
+
+  const updateLine = updateStatus === 'downloaded'
+    ? { text: `Version ${updateVersion} is ready. Restart Kallamo to install it.`, action: <Button size="sm" onClick={() => electronAPI.installUpdate()}>Restart and install</Button> }
+    : updateStatus === 'available'
+      ? { text: `Downloading version ${updateVersion}. It installs the next time you restart.` }
+      : updateStatus === 'outdated'
+        ? { text: `Version ${updateVersion} is available. This system can’t update on its own.`, action: updateOutdatedUrl && <a href={updateOutdatedUrl} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-8 items-center rounded-control bg-accent/90 px-3 text-xs font-semibold text-on-accent hover:bg-accent">Download {updateVersion}</a> }
+        : { text: 'Updates download in the background and install when you restart.', action: <span className="inline-flex items-center gap-2 text-[0.8125rem] text-text-secondary"><span className="h-2 w-2 rounded-full bg-status-success shadow-[0_0_0_3px] shadow-status-success/15" aria-hidden="true" />Up to date</span> };
+
+  const aboutPage = () => (
+    <>
+      <section className="overflow-hidden rounded-[1.25rem] border border-tint/[0.08] bg-[radial-gradient(34rem_18rem_at_14%_50%,var(--theme-glow-cool),transparent_70%),radial-gradient(30rem_16rem_at_100%_0%,color-mix(in_srgb,var(--app-accent)_9%,transparent),transparent_70%),linear-gradient(180deg,var(--theme-surface-raised),var(--theme-surface-raised-low))] shadow-[inset_0_1px_0_var(--theme-highlight),0_1.125rem_2.5rem_-1.5rem_color-mix(in_srgb,var(--theme-shade)_70%,transparent)]">
+        <div className="flex items-center gap-7 px-8 pb-6 pt-7">
+          <Logo size={76} className="shrink-0 drop-shadow-[0_0.625rem_1.5rem_color-mix(in_srgb,var(--theme-shade)_45%,transparent)]" />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-end gap-3">
+                <Logotype height={60} className="text-text-primary" />
+                <span className="mb-2 text-[0.8125rem] font-semibold tabular-nums text-text-muted">{appVersion}</span>
+              </div>
+              <div className="flex shrink-0 gap-2.5 pt-2">
+                <a href="https://github.com/Kallamo/Kallamo" target="_blank" rel="noopener noreferrer" className={`${linkButtonClass} gap-2`}><GithubIcon className="h-3.5 w-3.5" />Repository</a>
+                <button type="button" onClick={openWhatsNew} className="inline-flex min-h-8 items-center gap-2 rounded-control border border-accent/45 bg-accent/[0.13] px-3 text-xs font-semibold text-accent transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                  <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />What’s new
+                </button>
+              </div>
+            </div>
+            <p className="mt-2.5 text-[0.9375rem] text-text-secondary">A local-first studio for writing and living worlds.</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-4 border-t border-tint/[0.06] bg-surface-inset/35 px-8 py-3.5">
+          <span className="caption flex-1">{updateLine.text}</span>
+          {updateLine.action}
+        </div>
+      </section>
+      <SettingsGroup title="Made by">
+        <div className="flex items-center gap-4 px-5 py-[1.125rem]">
+          <div className="min-w-0 flex-1">
+            <div className="text-[0.9375rem] font-semibold text-text-primary">Jonathan Ferreira da Conceição</div>
+            <div className="mt-2 flex flex-wrap gap-x-[1.125rem] gap-y-1.5 text-[0.8125rem] text-text-secondary">
+              <span className="inline-flex items-center gap-1.5"><GithubIcon className="h-3.5 w-3.5 text-text-muted" /><span className="sr-only">GitHub </span>Jonathanfcon</span>
+              <span className="inline-flex items-center gap-1.5"><DiscordIcon className="h-3.5 w-3.5 text-text-muted" /><span className="sr-only">Discord </span>_JustAnotherJohn</span>
+              <span className="inline-flex items-center gap-1.5"><RedditIcon className="h-3.5 w-3.5 text-text-muted" /><span className="sr-only">Reddit </span>_JustAnotherJohn</span>
+            </div>
+          </div>
+          <a href="https://github.com/Jonathanfcon" target="_blank" rel="noopener noreferrer" className={`${linkButtonClass} gap-2`}><GithubIcon className="h-3.5 w-3.5" />GitHub profile</a>
+        </div>
+      </SettingsGroup>
+      <SettingsGroup title="Contributors">
+        <div className="flex flex-col gap-4 px-5 py-[1.125rem]">
+          <p className="text-[0.8125rem] leading-relaxed text-text-muted">Kallamo is open source under <span className="font-semibold text-text-primary">AGPL-3.0</span>. Pull requests, bug reports and ideas are welcome on GitHub.</p>
+          <div className="flex items-center gap-4 rounded-xl border border-dashed border-tint/[0.12] bg-surface-inset/60 px-[1.125rem] py-4">
+            <span className="flex shrink-0 pl-2" aria-hidden="true">
+              {[0, 1, 2, 3].map(slot => <span key={slot} className="-ml-2 h-[2.125rem] w-[2.125rem] rounded-full border-[1.5px] border-dashed border-tint/15 bg-surface-raised-low" />)}
+            </span>
+            <span className="flex-1 text-[0.8125rem] text-text-muted">This space is reserved for future contributors.</span>
+            <a href="https://github.com/Kallamo/Kallamo" target="_blank" rel="noopener noreferrer" className={`${linkButtonClass} gap-2`}><GitPullRequest className="h-3.5 w-3.5" aria-hidden="true" />Contribute</a>
+          </div>
+        </div>
+      </SettingsGroup>
+    </>
+  );
+
+  const pages = {
+    connections: showAddApiForm ? connectionEditor : connectionsPage,
+    roles: rolesPage,
+    generation: generationPage,
+    retrieval: retrievalPage,
+    embeddings: embeddingsPage,
+    appearance: appearancePage,
+    data: dataPage,
+    diagnostics: diagnosticsPage,
+    about: aboutPage,
+  };
+  const renderPage = pages[activeTab] || connectionsPage;
+  const deleteUsers = connectionToDelete ? connectionUsers(connectionToDelete.id) : null;
+
+  return (
+    <div role="dialog" aria-label="Settings" className="fixed inset-0 z-40 flex surface-page titlebar-nodrag select-none animate-in fade-in duration-150">
+      <aside className="flex w-[15.25rem] shrink-0 flex-col border-r border-tint/[0.05] surface-rail px-3.5 pb-4 pt-16">
+        <button type="button" onClick={onClose} className="inline-flex items-center gap-1.5 self-start rounded-md px-2.5 text-[0.8125rem] font-semibold text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+          <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />Back
+        </button>
+        <h1 className="mx-2.5 mb-4 mt-3 text-xl font-extrabold tracking-[-0.015em] text-text-primary">Settings</h1>
+        <div className="relative mx-0.5">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-subtle" aria-hidden="true" />
+          <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search settings" aria-label="Search settings" className="h-8 w-full rounded-control border border-border-default bg-surface-input pl-9 pr-3 text-[0.8125rem] text-text-secondary placeholder:text-text-subtle focus:border-accent focus:outline-none" />
+        </div>
+        <nav aria-label="Settings pages" className="mt-1 flex min-h-0 flex-1 flex-col overflow-y-auto custom-scrollbar">
+          {query ? (
+            searchResults.length === 0 ? (
+              <p className="caption mx-2.5 mt-4">Nothing matches “{searchQuery.trim()}”.</p>
+            ) : (
+              <div className="mt-3 flex flex-col gap-0.5">
+                {searchResults.map(entry => (
+                  <button key={`${entry.page}-${entry.label}`} type="button" onClick={() => goTo(entry.page)} className="flex flex-col items-start rounded-lg px-2.5 py-1.5 text-left hover:bg-tint/[0.05] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                    <span className="text-[0.8125rem] font-semibold text-text-secondary">{entry.label}</span>
+                    <span className="caption">{NAV_LABELS[entry.page]}</span>
+                  </button>
+                ))}
+              </div>
+            )
+          ) : (
+            NAV_GROUPS.map(group => (
+              <div key={group.label}>
+                <div className="mx-2.5 mb-1.5 mt-5 text-[0.6875rem] font-bold uppercase tracking-[0.1em] text-text-subtle">{group.label}</div>
+                {group.items.map(item => {
+                  const active = item.id === activeTab;
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      aria-current={active ? 'page' : undefined}
+                      onClick={() => goTo(item.id)}
+                      className={`flex h-[2.125rem] w-full items-center gap-2.5 rounded-lg px-2.5 text-[0.8125rem] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${active ? 'bg-accent/[0.13] font-semibold text-text-primary shadow-[inset_3px_0_0_var(--app-accent)]' : 'text-text-muted hover:bg-tint/[0.035] hover:text-text-secondary'}`}
+                    >
+                      <Icon className={`h-4 w-4 shrink-0 ${active ? 'text-accent' : 'text-text-subtle'}`} aria-hidden="true" />
+                      <span className="flex-1 truncate text-left">{item.label}</span>
+                      {item.id === 'connections' && apiProfiles.length > 0 && <span className="text-xs tabular-nums text-text-subtle">{apiProfiles.length}</span>}
+                      {item.id === 'roles' && rolesNeedSetup && <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-status-warning" aria-label="Needs setup" />}
+                    </button>
+                  );
+                })}
+              </div>
+            ))
+          )}
+        </nav>
+        <div className="mt-3 flex flex-col gap-0.5">
+          <button type="button" onClick={openWhatsNew} className="flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[0.8125rem] text-text-muted hover:bg-tint/[0.035] hover:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            <Sparkles className="h-4 w-4 text-text-subtle" aria-hidden="true" />What’s new
+          </button>
+          <button
+            type="button"
+            onClick={() => goTo('about')}
+            className={`flex h-[2.125rem] items-center gap-2.5 rounded-lg px-2.5 text-[0.8125rem] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${activeTab === 'about' ? 'bg-accent/[0.13] font-semibold text-text-primary shadow-[inset_3px_0_0_var(--app-accent)]' : 'text-text-muted hover:bg-tint/[0.035] hover:text-text-secondary'}`}
+          >
+            <Logo size={16} className="shrink-0" />About Kallamo
           </button>
         </div>
-
-        {/* Sidebar + Tab Content Container */}
-        <div className="flex flex-1 overflow-hidden">
-
-          {/* Settings Sidebar Tabs */}
-          <div className="w-56 bg-[#011419] border-r border-gray-800/50 p-4 pb-8 flex flex-col gap-2 shrink-0">
-            <button
-              onClick={() => { setActiveTab('api'); setShowAddApiForm(false); }}
-              className={`flex items-center gap-2.5 text-left px-4 py-2.5 rounded-md text-sm font-medium transition-colors cursor-pointer ${activeTab === 'api' ? 'bg-[#1a2d32] text-white' : 'text-gray-400 hover:bg-[#1a2d32]/50 hover:text-gray-200'
-                }`}
-            >
-              <Plug className="w-4 h-4 shrink-0" />
-              API Connections
-            </button>
-            <button
-              onClick={() => { setActiveTab('engine'); setShowAddApiForm(false); }}
-              className={`text-left px-4 py-2.5 rounded-md text-sm font-medium transition-colors cursor-pointer flex items-center gap-2.5 ${activeTab === 'engine' ? 'bg-[#1a2d32] text-white' : 'text-gray-400 hover:bg-[#1a2d32]/50 hover:text-gray-200'
-                }`}
-            >
-              <Cpu className="w-4 h-4 shrink-0" />
-              <span className="flex-1">Engine &amp; Memory</span>
-              {!systemAiReady && <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />}
-            </button>
-            <button
-              onClick={() => { setActiveTab('interface'); setShowAddApiForm(false); }}
-              className={`flex items-center gap-2.5 text-left px-4 py-2.5 rounded-md text-sm font-medium transition-colors cursor-pointer ${activeTab === 'interface' ? 'bg-[#1a2d32] text-white' : 'text-gray-400 hover:bg-[#1a2d32]/50 hover:text-gray-200'
-                }`}
-            >
-              <Palette className="w-4 h-4 shrink-0" />
-              Interface
-            </button>
-            <button
-              onClick={() => { setActiveTab('advanced'); setShowAddApiForm(false); }}
-              className={`flex items-center gap-2.5 text-left px-4 py-2.5 rounded-md text-sm font-medium transition-colors cursor-pointer ${activeTab === 'advanced' ? 'bg-[#1a2d32] text-white' : 'text-gray-400 hover:bg-[#1a2d32]/50 hover:text-gray-200'
-                }`}
-            >
-              <SlidersHorizontal className="w-4 h-4 shrink-0" />
-              Advanced
-            </button>
-            <div className="flex-1" />
-            <button
-              onClick={openWhatsNew}
-              className="flex items-center gap-2 text-left px-4 py-1.5 rounded-md text-xs font-medium text-gray-500 hover:bg-[#1a2d32]/50 hover:text-gray-300 transition-colors cursor-pointer"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-accent shrink-0" />
-              What's New
-            </button>
-            <button
-              onClick={() => { setActiveTab('about'); setShowAddApiForm(false); }}
-              className={`flex items-center gap-2.5 text-left px-4 py-2.5 rounded-md text-sm font-medium transition-colors cursor-pointer ${activeTab === 'about' ? 'bg-[#1a2d32] text-white [--logo-cut:#1a2d32]' : 'text-gray-400 hover:bg-[#1a2d32]/50 hover:text-gray-200 [--logo-cut:#011419] hover:[--logo-cut:#0f2227]'
-                }`}
-            >
-              <Logo size={22} fluteColor="currentColor" className="shrink-0 -my-1" />
-              About Kallamo
-            </button>
-
-          </div>
-
-          {/* Active Tab View Panel */}
-          <div className="flex-1 p-8 overflow-y-auto bg-[#000D11] custom-scrollbar flex flex-col">
-
-            {/* =========================================== */}
-            {/* 1. API TAB */}
-            {/* =========================================== */}
-            {activeTab === 'api' && (
-              <div className="h-full flex flex-col">
-
-                {/* List View of API Connections */}
-                {!showAddApiForm ? (
-                  <div className="flex flex-col h-full">
-                    <div className="shrink-0 flex justify-between items-center mb-6 border-b border-gray-800 pb-3">
-                      <h3 className="text-xl font-bold text-white flex items-center space-x-2">
-                        <Plug className="w-5 h-5 text-accent" />
-                        <span>API Connections</span>
-                      </h3>
-                      <button
-                        onClick={openNewApiForm}
-                        className="flex items-center space-x-1 bg-[#1a2d32] hover:bg-[#233a41] text-white text-xs font-semibold py-1.5 px-3 rounded transition-colors border border-gray-700/50 cursor-pointer"
-                      >
-                        <Plus className="w-4 h-4" />
-                        <span>Add Connection</span>
-                      </button>
-                    </div>
-
-                    <div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">
-                      {apiProfiles.length === 0 ? (
-                        <p className="caption italic mt-4">No API profiles configured yet. Click "Add Connection" to create one.</p>
-                      ) : (
-                        apiProfiles.map(ap => {
-                          const mList = ap.models ? (typeof ap.models === 'string' ? JSON.parse(ap.models) : ap.models) : [];
-                          return (
-                            <div
-                              key={ap.id}
-                              className="flex items-center justify-between p-4 bg-[#0a161d] border border-gray-800/80 rounded-lg group"
-                            >
-                              <div className="flex flex-col space-y-1 overflow-hidden">
-                                <span className="text-sm font-bold text-white truncate">{ap.name}</span>
-                                <span className="caption">{ap.provider} · {mList.length} models</span>
-                              </div>
-                              <div className="flex space-x-2 shrink-0">
-                                <button
-                                  onClick={() => openEditApiForm(ap)}
-                                  className="text-xs text-gray-300 hover:text-white px-2.5 py-1.5 bg-[#111f2e] border border-gray-800 rounded-md transition-colors cursor-pointer"
-                                >
-                                  Configure
-                                </button>
-                                <button
-                                  onClick={() => handleDeleteApiProfile(ap.id)}
-                                  className="text-xs text-status-danger p-1.5 hover:bg-status-danger/10 rounded-md transition-colors cursor-pointer"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  /* Form View for Adding / Editing API Connection */
-                  <div className="flex-1 flex flex-col justify-between h-full">
-                    <div className="space-y-4">
-                      <h4 className="text-sm font-bold text-accent uppercase tracking-wider mb-2 border-b border-gray-800 pb-1">
-                        {editingApiId ? 'Edit Connection' : 'New API Connection'}
-                      </h4>
-                      <div>
-                        <label className="block text-xs font-bold text-gray-400 mb-1">Connection Name</label>
-                        <p className="caption mb-1.5">A friendly identifier to reference this client configuration (e.g., Anthropic Prod, Ollama Local).</p>
-                        <input
-                          type="text"
-                          value={apiName}
-                          onChange={(e) => setApiName(e.target.value)}
-                          placeholder="e.g., Anthropic Client, OpenRouter Core"
-                          className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 focus:outline-none focus:border-accent"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-gray-400 mb-1">Provider</label>
-                        <p className="caption mb-1.5">The cloud gateway or local interface hosting the target models.</p>
-                        <select
-                          value={apiProvider}
-                          onChange={(e) => {
-                            const provider = e.target.value;
-                            setApiProvider(provider);
-                            if (provider === 'Local') setShowBaseUrl(true);
-                          }}
-                          className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 focus:outline-none focus:border-accent cursor-pointer"
-                        >
-                          <option value="OpenRouter">OpenRouter</option>
-                          <option value="Anthropic">Anthropic</option>
-                          <option value="Google AI">Google AI</option>
-                          <option value="OpenAI">OpenAI</option>
-                          <option value="Local">Local / OpenAI-compatible (LM Studio, Ollama, NanoGPT...)</option>
-                          <option value="Vertex AI">Google Cloud Vertex AI</option>
-                          <option value="AWS Bedrock">AWS Bedrock</option>
-                        </select>
-                      </div>
-
-                      {apiProvider === 'Vertex AI' ? (
-                        <>
-                          <div>
-                            <label className="block text-xs font-bold text-gray-400 mb-1">GCP Project ID</label>
-                            <p className="caption mb-1.5">The unique project identifier assigned within your Google Cloud console.</p>
-                            <input
-                              type="text"
-                              value={gcpProjectId}
-                              onChange={(e) => setGcpProjectId(e.target.value)}
-                              placeholder="Enter Google Cloud Project ID..."
-                              className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 focus:outline-none focus:border-accent"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-xs font-bold text-gray-400 mb-1">GCP Region</label>
-                            <p className="caption mb-1.5">The regional zone where Vertex endpoint resources are physically hosted.</p>
-                            <input
-                              type="text"
-                              value={gcpRegion}
-                              onChange={(e) => setGcpRegion(e.target.value)}
-                              placeholder="e.g. us-central1"
-                              className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 focus:outline-none focus:border-accent"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-xs font-bold text-gray-400 mb-1">Service Account JSON Key</label>
-                            <p className="caption mb-1.5">Paste the complete text content of the downloaded service account private key JSON file.</p>
-                            <textarea
-                              value={gcpServiceAccount}
-                              onChange={(e) => setGcpServiceAccount(e.target.value)}
-                              placeholder='{"type": "service_account", ...}'
-                              rows={5}
-                              className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 focus:outline-none focus:border-accent font-mono text-xs custom-scrollbar resize-none"
-                            />
-                          </div>
-                        </>
-                      ) : apiProvider === 'AWS Bedrock' ? (
-                        <>
-                          <div>
-                            <label className="block text-xs font-bold text-gray-400 mb-1">AWS Access Key ID</label>
-                            <p className="caption mb-1.5">The access key credential used to verify user signature headers for Bedrock calls.</p>
-                            <input
-                              type="text"
-                              value={awsAccessKeyId}
-                              onChange={(e) => setAwsAccessKeyId(e.target.value)}
-                              placeholder="Enter AWS Access Key ID..."
-                              className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 focus:outline-none focus:border-accent"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-xs font-bold text-gray-400 mb-1">AWS Secret Access Key</label>
-                            <p className="caption mb-1.5">The secret cryptographic access key associated with your IAM credentials.</p>
-                            <div className="relative flex items-center">
-                              <input
-                                type={showApiKey ? 'text' : 'password'}
-                                value={awsSecretAccessKey}
-                                onChange={(e) => setAwsSecretAccessKey(e.target.value)}
-                                placeholder="Enter AWS Secret Access Key..."
-                                className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md pl-3 pr-10 py-2 focus:outline-none focus:border-accent"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => setShowApiKey(!showApiKey)}
-                                className="absolute right-3 text-gray-500 hover:text-white cursor-pointer"
-                              >
-                                {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                              </button>
-                            </div>
-                          </div>
-                          <div>
-                            <label className="block text-xs font-bold text-gray-400 mb-1">AWS Region</label>
-                            <p className="caption mb-1.5">The global AWS datacenter region hosting your Bedrock instances.</p>
-                            <input
-                              type="text"
-                              value={awsRegion}
-                              onChange={(e) => setAwsRegion(e.target.value)}
-                              placeholder="e.g. us-east-1"
-                              className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 focus:outline-none focus:border-accent"
-                            />
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          {/* Custom Base URL Toggle */}
-                          <div>
-                            <button
-                              type="button"
-                              onClick={() => apiProvider !== 'Local' && setShowBaseUrl(!showBaseUrl)}
-                              className="flex items-center text-xs text-gray-400 mb-1.5 space-x-1 cursor-pointer hover:text-gray-300"
-                            >
-                              <Link2 className="w-3.5 h-3.5 text-accent" />
-                              <span>{apiProvider === 'Local' ? 'Base URL (required)' : 'Custom Base URL (optional)'}</span>
-                            </button>
-                            {(apiProvider === 'Local' || showBaseUrl) && (
-                              <>
-                                <p className="caption mb-1.5">
-                                  {['Local', 'OpenAI', 'OpenRouter'].includes(apiProvider)
-                                    ? <>Enter an OpenAI-compatible base ending in <code>/v1</code>, or a full chat or embeddings endpoint. Kallamo resolves the required path for each request.</>
-                                    : <>Enter the provider's complete request endpoint. Kallamo uses this URL exactly as entered.</>}
-                                </p>
-                                <input
-                                  type="text"
-                                  value={apiBaseUrl}
-                                  onChange={(e) => setApiBaseUrl(e.target.value)}
-                                  placeholder={apiProvider === 'Local' ? 'e.g. http://127.0.0.1:5001/v1' : 'Enter a custom HTTP or HTTPS endpoint'}
-                                  className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 focus:outline-none focus:border-accent animate-in slide-in-from-top duration-200"
-                                />
-                              </>
-                            )}
-                          </div>
-
-                          {/* API Key */}
-                          <div>
-                            <label className="block text-xs font-bold text-gray-400 mb-1">API Key / Secret</label>
-                            <p className="caption mb-1.5">The primary verification token or key secret to sign client request calls.</p>
-                            <div className="relative flex items-center">
-                              <input
-                                type={showApiKey ? 'text' : 'password'}
-                                value={apiKey}
-                                onChange={(e) => setApiKey(e.target.value)}
-                                placeholder="Enter credentials..."
-                                className="w-full bg-[#011419] border border-gray-800 text-gray-200 text-sm rounded-md pl-3 pr-10 py-2 focus:outline-none focus:border-accent"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => setShowApiKey(!showApiKey)}
-                                className="absolute right-3 text-gray-500 hover:text-white cursor-pointer"
-                              >
-                                {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                              </button>
-                            </div>
-                          </div>
-                        </>
-                      )}
-
-                      {/* Model context window */}
-                      <div>
-                        <label className="mb-1 block text-xs font-bold text-text-muted">Model Context Window (optional)</label>
-                        <p className="caption mb-1.5">The largest request the model behind this connection accepts, in tokens. Every request sent through it stays under this value or the workspace limit, whichever is smaller. For a local server, use the context length loaded in LM Studio or the num_ctx set in Ollama.</p>
-                        <input
-                          type="number"
-                          min="4096"
-                          step="1024"
-                          value={apiContextWindow}
-                          onChange={(e) => setApiContextWindow(e.target.value)}
-                          placeholder="Empty: the workspace limit applies"
-                          className="field-input px-3 py-2 text-sm"
-                        />
-                      </div>
-
-                      {/* Models List Management */}
-                      <div className="mt-6 border-t border-gray-800/80 pt-4">
-                        <div className="flex items-center justify-between mb-3">
-                          <span className="text-xs font-bold text-gray-300 uppercase tracking-wide">Supported Models</span>
-                          <button
-                            type="button"
-                            onClick={() => setShowAddModelField(true)}
-                            className="bg-transparent border border-gray-700 hover:bg-gray-800 text-white text-[0.625rem] uppercase font-bold px-2 py-1 rounded transition-colors cursor-pointer"
-                          >
-                            + Add Model
-                          </button>
-                        </div>
-
-                        {showAddModelField && (
-                          <div className="flex items-center space-x-2 mb-3 bg-[#0a161d] p-2 rounded-lg border border-gray-800">
-                            <input
-                              type="text"
-                              value={newModelName}
-                              onChange={(e) => setNewModelName(e.target.value)}
-                              placeholder="e.g. claude-3-5-sonnet-20241022"
-                              className="flex-1 bg-[#011419] border border-gray-800 text-gray-200 text-xs rounded-md px-2 py-1 focus:outline-none focus:border-accent"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => { setNewModelName(''); setShowAddModelField(false); }}
-                              className="bg-transparent hover:bg-gray-800 text-gray-400 px-2.5 py-1 rounded text-xs cursor-pointer border border-gray-800"
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              type="button"
-                              onClick={handleAddModel}
-                              className="bg-accent hover:brightness-110 text-[#011419] px-3 py-1 rounded text-xs font-bold cursor-pointer"
-                            >
-                              Add
-                            </button>
-                          </div>
-                        )}
-
-                        <div className="flex flex-wrap gap-1.5 min-h-[36px]">
-                          {modelsList.length === 0 ? (
-                            <span className="caption italic">No models registered. Select "+ Add Model" to support AI execution.</span>
-                          ) : (
-                            modelsList.map(m => (
-                              <span
-                                key={m}
-                                className="flex items-center space-x-1.5 bg-[#1a2d3d] border border-gray-700/50 text-gray-300 text-[0.625rem] font-semibold px-2 py-0.5 rounded-full select-none"
-                              >
-                                <span>{m}</span>
-                                <X
-                                  className="w-3 h-3 text-gray-500 hover:text-status-danger cursor-pointer"
-                                  onClick={() => removeModel(m)}
-                                />
-                              </span>
-                            ))
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="mt-8 flex justify-end space-x-3 border-t border-gray-800 pt-4 shrink-0">
-                      <button
-                        onClick={() => setShowAddApiForm(false)}
-                        className="px-4 py-2 text-xs font-semibold text-gray-400 hover:text-white transition-colors cursor-pointer"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        onClick={handleSaveApi}
-                        disabled={!apiName.trim() || modelsList.length === 0}
-                        className="px-4 py-2 text-xs font-bold bg-accent hover:brightness-110 text-[#011419] rounded transition-colors cursor-pointer disabled:opacity-50"
-                      >
-                        {editingApiId ? 'Save Connection' : 'Create Connection'}
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-              </div>
-            )}
-
-            {/* =========================================== */}
-            {/* 2. INTERFACE TAB */}
-            {/* =========================================== */}
-            {activeTab === 'interface' && (
-              <div className="space-y-6">
-                <div className="shrink-0 mb-4 border-b border-gray-800 pb-3">
-                  <h3 className="text-xl font-bold text-white flex items-center space-x-2">
-                    <LayoutDashboard className="w-5 h-5 text-accent" />
-                    <span>Interface settings</span>
-                  </h3>
-                  <p className="caption mt-1">Customize the visual layout, typography, and default behavior.</p>
-                </div>
-
-                <div className="space-y-6">
-                  {/* SECTION 1: VISUAL THEME & FX */}
-                  <div className="space-y-3">
-                    <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
-                      <Palette className="w-3.5 h-3.5" />
-                      <span>Visual Theme & Effects</span>
-                    </h4>
-                    <div className="bg-[#051116] rounded-xl border border-gray-800/80 divide-y divide-gray-800/80 overflow-hidden">
-                      {/* Theme Accent Color */}
-                      <div className="p-4 flex items-center justify-between">
-                        <div>
-                          <span className="block text-sm text-gray-200 font-bold">Accent Color</span>
-                          <span className="caption">Pick the application gold or color accents for system highlights.</span>
-                        </div>
-                        <div className="flex space-x-2">
-                          {colors.map(c => (
-                            <button
-                              key={c}
-                              onClick={() => updateSetting('interface', 'accentColor', c)}
-                              style={{ backgroundColor: c }}
-                              className={`w-6 h-6 rounded-full transition-all hover:scale-110 cursor-pointer ${accentColor === c ? 'ring-2 ring-white ring-offset-2 ring-offset-[#051116] scale-110' : 'ring-2 ring-transparent'
-                                }`}
-                            />
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Backdrop blur toggling */}
-                      <div className="p-4 flex items-center justify-between">
-                        <div>
-                          <span className="block text-sm text-gray-200 font-bold">Enable Backdrop Blurs</span>
-                          <span className="caption">Apply glassmorphism blur effects to background elements (disabling improves performance on older hardware).</span>
-                        </div>
-                        <label className="relative inline-flex items-center cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={blurEnabled}
-                            onChange={(e) => updateSetting('interface', 'blur', e.target.checked)}
-                            className="sr-only peer"
-                          />
-                          <div className="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
-                        </label>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* SECTION 2: TYPOGRAPHY & SIZING */}
-                  <div className="space-y-3">
-                    <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
-                      <Type className="w-3.5 h-3.5" />
-                      <span>Typography & Font Sizing</span>
-                    </h4>
-                    <div className="bg-[#051116] rounded-xl border border-gray-800/80 divide-y divide-gray-800/80 overflow-hidden">
-                      {/* Typography Font family */}
-                      <div className="p-4 flex items-center justify-between">
-                        <div>
-                          <span className="block text-sm text-gray-200 font-bold">Font Family</span>
-                          <span className="caption">Select the global typography family for active workspace views.</span>
-                        </div>
-                        <select
-                          value={fontFamily}
-                          onChange={(e) => updateSetting('interface', 'fontFamily', e.target.value)}
-                          className="bg-[#011419] border border-gray-700 text-gray-200 text-xs rounded-md px-3 py-1.5 focus:outline-none focus:border-accent cursor-pointer"
-                        >
-                          <option value="sans">Inter (Modern & Clean)</option>
-                          <option value="serif">Merriweather (Classic Book)</option>
-                          <option value="monospace">JetBrains Mono (Tech & Minimalist)</option>
-                        </select>
-                      </div>
-
-                      {/* Font scale */}
-                      <div className="p-4 flex items-center justify-between">
-                        <div>
-                          <span className="block text-sm text-gray-200 font-bold">Global Scale</span>
-                          <span className="caption">Adjust the relative text size inside active workspace views.</span>
-                        </div>
-                        <div className="flex bg-[#011419] border border-gray-700 rounded-lg p-1 space-x-1">
-                          {['small', 'medium', 'large'].map(sz => (
-                            <button
-                              key={sz}
-                              onClick={() => updateSetting('interface', 'fontSize', sz)}
-                              className={`px-3 py-1 rounded-md text-xs font-semibold cursor-pointer transition-all ${fontSize === sz
-                                ? 'bg-[#1a2d32] text-white border border-accent/30 font-bold shadow'
-                                : 'text-gray-500 hover:text-white'
-                                }`}
-                            >
-                              {sz.charAt(0).toUpperCase() + sz.slice(1)}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                    </div>
-                  </div>
-
-                  {/* SECTION: WRITING DESK */}
-                  <div className="space-y-3">
-                    <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
-                      <WritingGlyph className="w-3.5 h-3.5" />
-                      <span>Writing Desk</span>
-                    </h4>
-                    <div className="bg-[#051116] rounded-xl border border-gray-800/80 divide-y divide-gray-800/80 overflow-hidden">
-                      {/* Toolbar placement */}
-                      <div className="p-4 flex items-center justify-between">
-                        <div>
-                          <span className="block text-sm text-gray-200 font-bold">Formatting Toolbar</span>
-                          <span className="caption">Fixed at the top, or as a bubble over the selection.</span>
-                        </div>
-                        <div className="flex bg-[#011419] border border-gray-700 rounded-lg p-1 space-x-1">
-                          {['fixed', 'bubble'].map(mode => (
-                            <button
-                              key={mode}
-                              onClick={() => updateSetting('interface', 'writingToolbar', mode)}
-                              className={`px-3 py-1 rounded-md text-xs font-semibold cursor-pointer transition-all ${writingToolbar === mode
-                                ? 'bg-[#1a2d32] text-white border border-accent/30 font-bold shadow'
-                                : 'text-gray-500 hover:text-white'
-                                }`}
-                            >
-                              {mode.charAt(0).toUpperCase() + mode.slice(1)}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Smart typography */}
-                      <div className="p-4 flex items-center justify-between">
-                        <div>
-                          <span className="block text-sm text-gray-200 font-bold">Smart Typography</span>
-                          <span className="caption">Auto-convert as you type: curly quotes, dashes (-- → –, --- → —), ellipsis, ©™. Document only, never your chat.</span>
-                        </div>
-                        <button
-                          onClick={() => updateSetting('interface', 'smartTypography', !smartTypography)}
-                          className={`relative w-10 h-5.5 rounded-full transition-colors shrink-0 cursor-pointer ${smartTypography ? 'bg-accent' : 'bg-gray-700'}`}
-                        >
-                          <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${smartTypography ? 'translate-x-[18px]' : ''}`} />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* SECTION 3: CHAT LAYOUT & CODE RENDERING */}
-                  <div className="space-y-3">
-                    <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
-                      <LayoutDashboard className="w-3.5 h-3.5" />
-                      <span>Chat Layout & Code Rendering</span>
-                    </h4>
-                    <div className="bg-[#051116] p-5 rounded-xl border border-gray-800/80 space-y-5">
-                      {/* Layout Mode selection */}
-                      <div className="flex flex-col space-y-2.5">
-                        <span className="text-sm font-bold text-gray-200">Chat Layout Mode</span>
-                        <p className="caption">Switch between standard speech bubbles or a clean, distraction-free document layout.</p>
-                        <div className="grid grid-cols-2 gap-4">
-                          <button
-                            onClick={() => updateSetting('interface', 'layout', 'bubbles')}
-                            className={`rounded-xl p-5 flex flex-col items-center gap-4 transition-all shadow-md cursor-pointer border-2 ${layoutMode === 'bubbles'
-                              ? 'border-accent bg-[#1a2d32] opacity-100'
-                              : 'border-gray-800 bg-[#0a161d] opacity-65 hover:opacity-100'
-                              }`}
-                          >
-                            <div className="w-full space-y-2.5">
-                              <div className="w-3/4 h-3 bg-gray-600 rounded-full ml-auto"></div>
-                              <div className="w-3/4 h-3 bg-accent rounded-full"></div>
-                            </div>
-                            <span className="text-xs font-bold text-white">Standard (Bubbles)</span>
-                          </button>
-
-                          <button
-                            onClick={() => updateSetting('interface', 'layout', 'document')}
-                            className={`rounded-xl p-5 flex flex-col items-center gap-4 transition-all shadow-md cursor-pointer border-2 ${layoutMode === 'document'
-                              ? 'border-accent bg-[#1a2d32] opacity-100'
-                              : 'border-gray-800 bg-[#0a161d] opacity-65 hover:opacity-100'
-                              }`}
-                          >
-                            <div className="w-full space-y-2">
-                              <div className="w-full h-2 bg-gray-600 rounded-full"></div>
-                              <div className="w-full h-2 bg-accent rounded-full mt-2"></div>
-                            </div>
-                            <span className="text-xs font-bold text-white">Document (Seamless)</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="h-px bg-gray-800/50 w-full"></div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {/* Markdown Syntax highlight theme */}
-                        <div className="flex flex-col space-y-1.5">
-                          <span className="block text-sm text-gray-200 font-bold">Code Syntax Theme</span>
-                          <span className="caption">Choose the color scheme for code blocks inside chat messages.</span>
-                          <select
-                            value={codeTheme}
-                            onChange={(e) => updateSetting('interface', 'codeTheme', e.target.value)}
-                            className="bg-[#011419] border border-gray-700 text-gray-200 text-xs rounded-md px-3 py-1.5 focus:outline-none focus:border-accent cursor-pointer mt-1"
-                          >
-                            <option value="github-dark">GitHub Dark</option>
-                            <option value="atom-one-dark">Atom One Dark</option>
-                            <option value="tokyo-night-dark">Tokyo Night Dark</option>
-                          </select>
-                        </div>
-
-                        {/* Markdown line numbers */}
-                        <div className="flex flex-col space-y-1.5 justify-between">
-                          <div>
-                            <span className="block text-sm text-gray-200 font-bold">Show Line Numbers</span>
-                            <span className="caption">Render index numbers on the left margin of code blocks.</span>
-                          </div>
-                          <div className="pt-2">
-                            <label className="relative inline-flex items-center cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={lineNumbers}
-                                onChange={(e) => updateSetting('interface', 'lineNumbers', e.target.checked)}
-                                className="sr-only peer"
-                              />
-                              <div className="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
-                            </label>
-                          </div>
-                        </div>
-                      </div>
-
-                    </div>
-                  </div>
-                </div>
-
-              </div>
-            )}
-
-            {activeTab === 'engine' && (
-              <div className="space-y-6">
-                <div className="shrink-0 mb-4 border-b border-gray-800 pb-3">
-                  <h3 className="text-xl font-bold text-white flex items-center space-x-2">
-                    <Cpu className="w-5 h-5 text-accent" />
-                    <span>Engine &amp; Memory</span>
-                  </h3>
-                  <p className="caption mt-1">The machinery behind memory and retrieval: chunking and RAG, the vector embedding engine, and the System AI that summarizes and classifies your history.</p>
-                  <nav aria-label="Engine settings sections" className="mt-4 flex flex-wrap gap-2">
-                    {[
-                      ['system-ai-config', 'System AI'],
-                      ['ai-engine-roles-config', 'AI Roles'],
-                      ['retrieval-config', 'Retrieval'],
-                      ['embedding-config', 'Embeddings'],
-                      ['embedding-runtime-config', 'Runtime'],
-                    ].map(([id, label]) => (
-                      <button key={id} type="button" onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })} className="min-h-8 rounded-lg border border-border-default bg-surface-panel px-3 py-1.5 text-xs font-semibold text-text-muted transition-colors hover:border-border-strong hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                        {label}
-                      </button>
-                    ))}
-                  </nav>
-                </div>
-
-                <div className="space-y-6">
-
-                  {/* SYSTEM AI (the most important setting here) */}
-                  <div id="system-ai-config" className="space-y-3">
-                    <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
-                      <Cpu className="w-3.5 h-3.5" />
-                      <span>System AI</span>
-                      {!systemAiReady && <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />}
-                    </h4>
-                    <div className="bg-[#051116] p-5 rounded-xl border border-gray-800/80 space-y-4">
-                      <p className="caption">The global base model for Kallamo's internal AI work. Tagger and Summarizer inherit it by default, or you can assign dedicated models below. Kallamo never selects a provider default silently.</p>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-xs font-bold text-gray-400 mb-1.5">API Connection</label>
-                          <select
-                            value={systemApiProfileId}
-                            onChange={(e) => updateSetting('advanced', 'systemApiProfileId', e.target.value)}
-                            className="w-full bg-[#011419] border border-gray-700 text-gray-200 text-xs rounded-md px-3 py-2 focus:outline-none focus:border-accent cursor-pointer"
-                          >
-                            <option value="">Select API Connection</option>
-                            {apiProfiles.map(apiProf => (
-                              <option key={apiProf.id} value={apiProf.id}>{apiProf.name} ({apiProf.provider})</option>
-                            ))}
-                          </select>
-                        </div>
-                        <div>
-                          <label className="block text-xs font-bold text-gray-400 mb-1.5">Model</label>
-                          <select
-                            value={systemModelName}
-                            disabled={!systemApiProfileId}
-                            onChange={(e) => updateSetting('advanced', 'systemModelName', e.target.value)}
-                            className="w-full bg-[#011419] border border-gray-700 text-gray-200 text-xs rounded-md px-3 py-2 focus:outline-none focus:border-accent cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            <option value="">{systemApiProfileId ? 'Select model' : 'Pick a connection first'}</option>
-                            {systemProfileModels.map(m => (
-                              <option key={m} value={m}>{m}</option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
-
-                      <div className="flex flex-col gap-3 rounded-lg border border-gray-800 bg-[#021015] p-4 md:flex-row md:items-center md:justify-between">
-                        <div className="flex min-w-0 gap-3">
-                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-accent/15 bg-accent/[0.06] text-accent">
-                            <Languages className="h-4 w-4" />
-                          </div>
-                          <div>
-                            <label htmlFor="system-output-language" className="block text-xs font-bold text-gray-200">Internal Output Language</label>
-                            <p className="mt-1 max-w-xl text-[0.6875rem] leading-relaxed text-gray-500">Used for summaries, analysis, and internal research. Proper nouns, canonical names, identifiers, and quoted evidence are never translated.</p>
-                          </div>
-                        </div>
-                        <select
-                          id="system-output-language"
-                          value={systemOutputLanguage}
-                          onChange={(e) => updateSetting('advanced', 'systemOutputLanguage', e.target.value)}
-                          className="w-full shrink-0 bg-[#011419] border border-gray-700 text-gray-200 text-xs rounded-md px-3 py-2 focus:outline-none focus:border-accent cursor-pointer md:w-56"
-                        >
-                          {SYSTEM_AI_LANGUAGES.map(language => (
-                            <option key={language.value} value={language.value}>{language.label}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {!systemAiReady && <p className="text-xs text-amber-300 flex items-center gap-2"><AlertTriangle className="w-3.5 h-3.5 shrink-0" />{systemAiRequirement} Roles that inherit System AI remain unavailable until both are selected.</p>}
-
-                    </div>
-                  </div>
-
-                  <div id="ai-engine-roles-config" className="space-y-3 scroll-mt-6">
-                    <div>
-                      <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
-                        <AiGlyph className="w-3.5 h-3.5" />
-                        <span>AI Engine Roles</span>
-                      </h4>
-                      <p className="caption mt-1">Assign a global execution model to each internal responsibility. AI Profiles still control visible responses, voice, and creative behavior.</p>
-                    </div>
-                    <div className="space-y-4">
-                      {AI_ENGINE_ROLE_DEFINITIONS.map((definition) => {
-                        const roleState = definition.id === 'tagger'
-                          ? { mode: taggerMode, apiProfileId: taggerApiProfileId, modelName: taggerModelName }
-                          : definition.id === 'summarizer'
-                            ? { mode: summarizerMode, apiProfileId: summarizerApiProfileId, modelName: summarizerModelName }
-                            : definition.id === 'narrativeState'
-                              ? { mode: narrativeStateMode, apiProfileId: narrativeStateApiProfileId, modelName: narrativeStateModelName }
-                              : { mode: retrievalPlannerMode, apiProfileId: retrievalPlannerApiProfileId, modelName: retrievalPlannerModelName };
-                        return (
-                          <AiEngineRoleCard
-                            key={definition.id}
-                            definition={definition}
-                            {...roleState}
-                            apiProfiles={apiProfiles}
-                            systemReady={systemAiReady}
-                            onModeChange={(value) => updateSetting('advanced', `${definition.id}Mode`, value)}
-                            onConnectionChange={(value) => updateSetting('advanced', `${definition.id}ApiProfileId`, value)}
-                            onModelChange={(value) => updateSetting('advanced', `${definition.id}ModelName`, value)}
-                          >
-                            {definition.id === 'tagger' && (
-                              <div className={`flex items-center justify-between gap-4 rounded-lg bg-[#021015] px-3.5 py-3 ${taggerMode === 'disabled' ? 'opacity-50' : ''}`}>
-                                <div>
-                                  <span className="block text-xs font-bold text-gray-200">Propose unknown entities</span>
-                                  <p className="mt-1 text-[0.6875rem] leading-relaxed text-gray-500">Create reviewable Worldbuild suggestions for explicit names that cannot be matched.</p>
-                                </div>
-                                <label className={`relative inline-flex items-center shrink-0 ${taggerMode !== 'disabled' ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
-                                  <input type="checkbox" checked={allowAiEntityCreation} disabled={taggerMode === 'disabled'} onChange={(event) => updateSetting('advanced', 'allowAiEntityCreation', event.target.checked)} className="sr-only peer" />
-                                  <div className="w-7 h-4 bg-gray-700 rounded-full peer peer-focus-visible:ring-2 peer-focus-visible:ring-accent/60 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
-                                </label>
-                              </div>
-                            )}
-                            {definition.id === 'retrievalPlanner' && (
-                              <div className={`space-y-3 rounded-card border border-border-subtle bg-surface-input px-3.5 py-3 ${retrievalPlannerMode === 'off' ? 'opacity-50' : ''}`}>
-                                <Toggle
-                                  label="Plan every message"
-                                  description="By default a short continuation with no name and no question skips the planner and uses the free search alone. Turn this on to research every message."
-                                  checked={agenticGate === 'always'}
-                                  disabled={retrievalPlannerMode === 'off'}
-                                  onChange={(checked) => updateSetting('advanced', 'agenticGate', checked ? 'always' : 'auto')}
-                                />
-                                <Toggle
-                                  label="Native tool calling"
-                                  description="Uses the provider's own tool calling when the connection and model support it, and falls back to the text protocol by itself when they do not. Turn this off to always use the text protocol."
-                                  checked={agenticToolProtocol !== 'text'}
-                                  disabled={retrievalPlannerMode === 'off'}
-                                  onChange={(checked) => updateSetting('advanced', 'agenticToolProtocol', checked ? 'auto' : 'text')}
-                                />
-                              </div>
-                            )}
-                            {definition.id === 'summarizer' && (
-                              <div className="flex items-center justify-between gap-4 rounded-lg bg-[#021015] px-3.5 py-3">
-                                <div className="min-w-0">
-                                  <span className="block text-xs font-bold text-gray-200">Generate archive summaries</span>
-                                  <p className="mt-1 text-[0.6875rem] leading-relaxed text-gray-500">Add a title and concise summary while keeping the original searchable conversation.</p>
-                                </div>
-                                <label className="relative inline-flex items-center shrink-0 cursor-pointer">
-                                  <input type="checkbox" checked={archiveSummarization} onChange={(event) => updateSetting('advanced', 'archiveSummarization', event.target.checked)} className="sr-only peer" />
-                                  <div className="w-7 h-4 bg-gray-700 rounded-full peer peer-focus-visible:ring-2 peer-focus-visible:ring-accent/60 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
-                                </label>
-                              </div>
-                            )}
-                          </AiEngineRoleCard>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <details id="retrieval-config" className="group scroll-mt-6 space-y-3">
-                    <summary className="flex cursor-pointer list-none items-center gap-3 rounded-xl border border-border-default bg-surface-panel px-4 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                      <FileSearch className="h-4 w-4 shrink-0 text-accent" />
-                      <span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-text-secondary">Retrieval &amp; Chunking</span><span className="mt-0.5 block text-xs text-text-muted">Candidate limits, relevance strictness, chunk size, and Worldbuild breadth.</span></span>
-                      <ChevronDown className="h-4 w-4 shrink-0 text-text-subtle transition-transform group-open:rotate-180" />
-                    </summary>
-                    <div className="bg-surface-editor p-5 rounded-xl border border-border-default space-y-5">
-                      {/* Chunk Size */}
-                      <div>
-                        <div className="flex justify-between mb-1">
-                          <span className="text-sm text-gray-200 font-bold">Chunk Size (Characters)</span>
-                          <span className="text-xs text-accent font-mono font-bold">{chunkSize}</span>
-                        </div>
-                        <p className="caption mb-2">The character length limit used to slice imported knowledge documents into distinct vector blocks.</p>
-                        <input
-                          type="range"
-                          min="200"
-                          max="1000"
-                          step="50"
-                          value={chunkSize}
-                          onChange={(e) => updateSettingWithDebounce('chunkSize', e.target.value)}
-                          className="w-full accent-accent cursor-pointer"
-                        />
-                      </div>
-
-                      <div className="h-px bg-gray-800/50 w-full"></div>
-
-                      {/* Retrieval Strictness */}
-                      <div>
-                        <div className="flex justify-between mb-1">
-                          <span className="text-sm text-gray-200 font-bold">Retrieval Strictness</span>
-                          <span className="text-xs text-accent font-mono font-bold">{Math.round(similarity * 100)}%</span>
-                        </div>
-                        <p className="caption mb-2">Sets how closely semantic and lexical matches must fit your query. Explicit IDs, resolved entity mentions, linked Facts, and required dependencies are never blocked by this threshold.</p>
-                        <input
-                          type="range"
-                          min="0"
-                          max="1"
-                          step="0.05"
-                          value={similarity}
-                          onChange={(e) => updateSettingWithDebounce('similarity', parseFloat(e.target.value))}
-                          className="w-full accent-accent cursor-pointer"
-                        />
-                        {(() => {
-                          const pct = Math.round(similarity * 100);
-                          let label, recommended = false;
-                          if (pct === 0) label = 'Everything is retrieved. No filtering applied.';
-                          else if (pct < 30) label = 'Very broad — Maximum context, may include loosely related material.';
-                          else if (pct < 45) { label = 'Balanced — Recommended for wide, exploratory questions.'; recommended = true; }
-                          else if (pct < 65) label = 'Moderate — A solid general-purpose setting.';
-                          else if (pct < 85) { label = 'Focused — Recommended for specific, narrow lookups.'; recommended = true; }
-                          else if (pct < 100) label = 'Strict — Only strongly matching content gets through.';
-                          else label = 'Exact only — Keeps just the closest matches.';
-                          return (
-                            <p className={`mt-1.5 font-medium ${recommended ? 'caption-accent' : 'caption'}`}>
-                              {label}
-                            </p>
-                          );
-                        })()}
-                      </div>
-
-                      <div className="h-px bg-gray-800/50 w-full"></div>
-
-                      <div>
-                        <div className="flex justify-between mb-1">
-                          <span className="text-sm text-gray-200 font-bold">Profile Knowledge Top-K</span>
-                          <span className="text-xs text-accent font-mono font-bold">{profileKnowledgeTopK}</span>
-                        </div>
-                        <p className="caption mb-2">The minimum number of passages requested from the profile's knowledge base per search. Kallamo asks for more, up to 20, when the payload budget has room.</p>
-                        <input
-                          type="range"
-                          {...rangeProps(RETRIEVAL_SETTING_DEFINITIONS.profileKnowledgeTopK)}
-                          value={profileKnowledgeTopK}
-                          onChange={(e) => updateSettingWithDebounce('profileKnowledgeTopK', e.target.value)}
-                          className="w-full accent-accent cursor-pointer"
-                          aria-label="Profile Knowledge Top-K"
-                        />
-                      </div>
-
-                      <div className="h-px bg-gray-800/50 w-full"></div>
-
-                      <div>
-                        <div className="flex justify-between mb-1">
-                          <span className="text-sm text-gray-200 font-bold">Workspace Documents Top-K</span>
-                          <span className="text-xs text-accent font-mono font-bold">{workspaceDocumentsTopK}</span>
-                        </div>
-                        <p className="caption mb-2">The minimum number of passages requested from workspace files per search. Kallamo asks for more, up to 20, when the payload budget has room.</p>
-                        <input
-                          type="range"
-                          {...rangeProps(RETRIEVAL_SETTING_DEFINITIONS.workspaceDocumentsTopK)}
-                          value={workspaceDocumentsTopK}
-                          onChange={(e) => updateSettingWithDebounce('workspaceDocumentsTopK', e.target.value)}
-                          className="w-full accent-accent cursor-pointer"
-                          aria-label="Workspace Documents Top-K"
-                        />
-                      </div>
-
-                      <div className="h-px bg-gray-800/50 w-full"></div>
-
-                      <div>
-                        <div className="flex justify-between mb-1">
-                          <span className="text-sm text-gray-200 font-bold">Long-term Memory Top-K</span>
-                          <span className="text-xs text-accent font-mono font-bold">{longTermMemoryTopK}</span>
-                        </div>
-                        <p className="caption mb-2">The minimum number of passages requested from archived conversations per search. Kallamo asks for more, up to 20, when the payload budget has room.</p>
-                        <input
-                          type="range"
-                          {...rangeProps(RETRIEVAL_SETTING_DEFINITIONS.longTermMemoryTopK)}
-                          value={longTermMemoryTopK}
-                          onChange={(e) => updateSettingWithDebounce('longTermMemoryTopK', e.target.value)}
-                          className="w-full accent-accent cursor-pointer"
-                          aria-label="Long-term Memory Top-K"
-                        />
-                      </div>
-
-                      <div className="h-px bg-gray-800/50 w-full"></div>
-
-                      <div>
-                        <div className="flex justify-between mb-1">
-                          <span className="text-sm text-gray-200 font-bold">Worldbuild Entity Limit</span>
-                          <span className="text-xs text-accent font-mono font-bold">{worldbuildEntityLimit}</span>
-                        </div>
-                        <p className="caption mb-2">Maximum unique Worldbuild entities admitted as complete dossiers. Relationships do not count toward this limit.</p>
-                        <input
-                          type="range"
-                          {...rangeProps(RETRIEVAL_SETTING_DEFINITIONS.worldbuildEntityLimit)}
-                          value={worldbuildEntityLimit}
-                          onChange={(e) => updateSettingWithDebounce('worldbuildEntityLimit', e.target.value)}
-                          className="w-full accent-accent cursor-pointer"
-                          aria-label="Worldbuild Entity Limit"
-                        />
-                        {Number(worldbuildEntityLimit) > 30 && <p className="caption mt-1.5 text-amber-300">Higher limits can increase retrieval time and context pressure in connected worlds.</p>}
-                      </div>
-
-                      <div className="h-px bg-gray-800/50 w-full"></div>
-
-                      <div>
-                        <span className="block text-sm text-gray-200 font-bold mb-1">Worldbuild Breadth</span>
-                        <p className="caption mb-2">Controls how far entity relationships are explored to discover candidates. It does not change the final Entity Limit.</p>
-                        <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Worldbuild Breadth">
-                          {['focused', 'balanced', 'broad'].map(value => (
-                            <button
-                              key={value}
-                              type="button"
-                              role="radio"
-                              aria-checked={worldbuildBreadth === value}
-                              onClick={() => updateSettingWithDebounce('worldbuildBreadth', value)}
-                              className={`rounded-lg border px-3 py-2 text-xs font-bold capitalize transition-colors ${worldbuildBreadth === value ? 'border-accent bg-accent/10 text-accent' : 'border-gray-800 text-gray-400 hover:text-gray-200'}`}
-                            >
-                              {value}
-                            </button>
-                          ))}
-                        </div>
-                        <p className="mt-3 text-xs font-semibold leading-relaxed text-accent" aria-live="polite">
-                          {worldbuildBreadth === 'focused'
-                            ? 'Focused — Uses directly relevant entities without following relationship links.'
-                            : worldbuildBreadth === 'broad'
-                              ? 'Broad — Follows up to two relationship layers for wide, exploratory world context.'
-                              : 'Balanced — Follows one relationship layer for useful surrounding context. Recommended.'}
-                        </p>
-                      </div>
-
-                    </div>
-                  </details>
-
-                  <details id="embedding-config" defaultOpen={initialSection === 'embedding'} className="group scroll-mt-6 space-y-3">
-                    <summary className="flex cursor-pointer list-none items-center gap-3 rounded-xl border border-border-default bg-surface-panel px-4 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                      <Layers className="h-4 w-4 shrink-0 text-accent" />
-                      <span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-text-secondary">Embedding Engine</span><span className="mt-0.5 block text-xs text-text-muted">{embeddingEngine === 'local' ? 'Local, private embedding generation' : 'External embedding API'}</span></span>
-                      <ChevronDown className="h-4 w-4 shrink-0 text-text-subtle transition-transform group-open:rotate-180" />
-                    </summary>
-                    <div className="bg-surface-editor p-5 rounded-xl border border-border-default space-y-5">
-                      <div>
-                        <span className="block text-sm text-gray-200 font-bold mb-1">Vector Embedding Engine</span>
-                        <p className="caption mb-3">
-                          Generate vector embeddings locally on your hardware or offload calculations to an external API provider.
-                        </p>
-                        <div className="flex flex-col mb-4 space-y-3">
-                          <div className="flex flex-col sm:flex-row sm:space-x-6 space-y-2 sm:space-y-0">
-                            <label className={`flex items-center space-x-2 text-xs text-gray-300 ${isPlatformUnsupported ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
-                              <input
-                                type="radio"
-                                name="embeddingEngine"
-                                value="local"
-                                checked={embeddingEngine === 'local'}
-                                disabled={isPlatformUnsupported}
-                                onChange={async () => {
-                                  if (isPlatformUnsupported) return;
-                                  updateSetting('advanced', 'embeddingEngine', 'local');
-                                  if (!engineStatus.installed) {
-                                    await downloadEngine();
-                                  }
-                                }}
-                                className="accent-accent"
-                              />
-                              <span>Local Engine (Offline & Private multilingual-e5)</span>
-                            </label>
-                            <label className="flex items-center space-x-2 text-xs text-gray-300 cursor-pointer">
-                              <input
-                                type="radio"
-                                name="embeddingEngine"
-                                value="external"
-                                checked={embeddingEngine === 'external'}
-                                onChange={() => updateSetting('advanced', 'embeddingEngine', 'external')}
-                                className="accent-accent"
-                              />
-                              <span>External API (Requires configured connection below)</span>
-                            </label>
-                          </div>
-                          {isPlatformUnsupported && (
-                            <p className="text-status-danger/90 text-[0.625rem] leading-relaxed">
-                              ⚠️ Local AI is not supported on Intel Mac. Please configure an external embedding provider.
-                            </p>
-                          )}
-                        </div>
-
-                        {/* Local Engine Manage Row */}
-                        {!isPlatformUnsupported && (
-                          <div className="p-3 bg-[#0d1b22]/45 rounded-lg border border-gray-800 flex items-center justify-between text-xs mt-3 select-none">
-                            <div className="flex items-center space-x-2.5">
-                              <span className={`w-2 h-2 rounded-full ${engineStatus.installed ? 'bg-emerald-500' : 'bg-status-danger'}`} />
-                              <div className="flex flex-col">
-                                <span className="text-gray-200 font-bold">Local AI Engine Status</span>
-                                <span className="caption">
-                                  {engineStatus.installed
-                                    ? `Installed (${engineStatus.platform}-${engineStatus.arch})`
-                                    : 'Not Installed (Will download on demand)'}
-                                </span>
-                              </div>
-                            </div>
-                            {engineStatus.installed ? (
-                              <button
-                                type="button"
-                                onClick={() => setConfirmAction('deleteEngine')}
-                                className="px-3 py-1.5 bg-status-danger/10 hover:bg-status-danger/15 text-status-danger font-semibold rounded-md border border-status-danger/20 transition-all cursor-pointer select-none"
-                              >
-                                Delete Engine
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => downloadEngine()}
-                                className="px-3 py-1.5 bg-accent hover:brightness-110 text-[#011419] font-bold rounded-md transition-all cursor-pointer select-none"
-                              >
-                                Download Engine
-                              </button>
-                            )}
-                          </div>
-                        )}
-                      </div>
-
-                      {embeddingEngine === 'external' && (
-                        <div className="space-y-4 border-t border-gray-800/50 pt-4 animate-in fade-in duration-200">
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div>
-                              <label className="block text-xs font-bold text-gray-400 mb-1">API Connection</label>
-                              <p className="caption mb-1.5">Select the API connection profile to use for remote vector calculations.</p>
-                              <select
-                                value={embeddingApiProfileId}
-                                onChange={(e) => updateSetting('advanced', 'embeddingApiProfileId', e.target.value)}
-                                className="w-full bg-[#011419] border border-gray-700 text-gray-200 text-xs rounded-md px-3 py-2 focus:outline-none focus:border-accent cursor-pointer"
-                              >
-                                <option value="">Select connection...</option>
-                                {apiProfiles.map(apiProf => (
-                                  <option key={apiProf.id} value={apiProf.id}>{apiProf.name} ({apiProf.provider})</option>
-                                ))}
-                              </select>
-                            </div>
-
-                            <div>
-                              <label className="block text-xs font-bold text-gray-400 mb-1">Embedding Model Name</label>
-                              <p className="caption mb-1.5">Specify the exact model name from your provider to generate embedding vectors.</p>
-                              <input
-                                type="text"
-                                value={embeddingModelName}
-                                onChange={(e) => updateSettingWithDebounce('embeddingModelName', e.target.value)}
-                                placeholder="e.g. text-embedding-3-small"
-                                className="w-full bg-[#011419] border border-gray-700 text-gray-200 text-xs rounded-md px-3 py-2 focus:outline-none focus:border-accent"
-                              />
-                              <p className="caption mt-1">
-                                OpenAI: <code>text-embedding-3-small</code> | Google: <code>text-embedding-004</code>.
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </details>
-
-                  <details id="embedding-runtime-config" className="group scroll-mt-6 space-y-3">
-                    <summary className="flex cursor-pointer list-none items-center gap-3 rounded-xl border border-border-default bg-surface-panel px-4 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                      <Cpu className="h-4 w-4 shrink-0 text-accent" />
-                      <span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-text-secondary">Embedding Runtime &amp; Cache</span><span className="mt-0.5 block text-xs text-text-muted">Execution device and local model cache maintenance.</span></span>
-                      <ChevronDown className="h-4 w-4 shrink-0 text-text-subtle transition-transform group-open:rotate-180" />
-                    </summary>
-                    <div className="bg-surface-editor rounded-xl border border-border-default divide-y divide-border-subtle overflow-hidden">
-                      <div className="p-4 flex items-center justify-between">
-                        <div className="pr-4">
-                          <span className="block text-sm text-gray-200 font-bold mb-1">Embedding Execution Device</span>
-                          <span className="caption">Configure whether the local embedding model runs inside a WebAssembly container or directly on your CPU.</span>
-                        </div>
-                        <select
-                          value={executionDevice}
-                          onChange={(e) => updateSetting('advanced', 'executionDevice', e.target.value)}
-                          className="bg-[#011419] border border-gray-700 text-gray-200 text-xs rounded-md px-3 py-1.5 focus:outline-none focus:border-accent cursor-pointer shrink-0 w-48"
-                        >
-                          <option value="cpu">CPU (Native - Stable)</option>
-                          <option value="wasm">CPU (WebAssembly)</option>
-                        </select>
-                      </div>
-
-                      <div className="p-4 flex items-center justify-between">
-                        <div>
-                          <span className="block text-sm text-gray-200 font-bold">Clear Local Embeddings Cache</span>
-                          <span className="caption">Delete downloaded model cache files from disk (will force a fresh download upon next RAG indexing task).</span>
-                        </div>
-                        <button
-                          onClick={() => setConfirmAction('clearCache')}
-                          className="px-3 py-1.5 bg-[#1a2d32] hover:bg-[#243b52] text-white text-xs font-semibold rounded-lg transition-colors border border-gray-700/50 flex items-center space-x-1.5 cursor-pointer shrink-0 ml-4"
-                        >
-                          <RefreshCw className="w-3.5 h-3.5" />
-                          <span>Clear Cache</span>
-                        </button>
-                      </div>
-                    </div>
-                  </details>
-
-                </div>
-              </div>
-            )}
-
-            {activeTab === 'advanced' && (
-              <div className="space-y-6">
-                <div className="shrink-0 mb-4 border-b border-gray-800 pb-3">
-                  <h3 className="text-xl font-bold text-white flex items-center space-x-2">
-                    <Settings2 className="w-5 h-5 text-accent" />
-                    <span>Advanced Options</span>
-                  </h3>
-                  <p className="caption mt-1">Diagnostics, logging, and data storage management.</p>
-                </div>
-
-                <div className="space-y-6">
-
-                  <div className="space-y-3">
-                    <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
-                      <Settings2 className="w-3.5 h-3.5" />
-                      <span>Generation</span>
-                    </h4>
-                    <div className="bg-[#051116] rounded-xl border border-gray-800/80 divide-y divide-gray-800/80 overflow-hidden">
-                      <div className="p-4 flex items-center justify-between">
-                        <div className="pr-4">
-                          <span className="block text-sm text-gray-200 font-bold">Stream Responses</span>
-                          <span className="caption">Show the AI's reply as it is written, token by token, instead of waiting for the full message. Also avoids timeouts on slow local models. Falls back automatically for providers that do not support streaming.</span>
-                        </div>
-                        <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                          <input
-                            type="checkbox"
-                            checked={streamingEnabled}
-                            onChange={(e) => updateSetting('advanced', 'streaming', e.target.checked)}
-                            className="sr-only peer"
-                          />
-                          <div className="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
-                        </label>
-                      </div>
-
-                      <div className="p-4 flex items-center justify-between">
-                        <div className="pr-4">
-                          <span className="block text-sm text-gray-200 font-bold">Prompt Cache</span>
-                          <span className="caption">Keep the unchanging part of every request first so the provider can reuse it instead of charging full price for it again. Cached input is billed at a fraction of the normal rate. Turn this off to send requests exactly as older versions did.</span>
-                        </div>
-                        <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                          <input
-                            type="checkbox"
-                            checked={promptCache}
-                            onChange={(e) => updateSetting('advanced', 'promptCache', e.target.checked)}
-                            className="sr-only peer"
-                          />
-                          <div className="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
-                        </label>
-                      </div>
-
-                      {promptCache && (
-                        <div className="p-4 flex items-center justify-between">
-                          <div className="pr-4">
-                            <span className="block text-sm text-gray-200 font-bold">Retrieved Context Position</span>
-                            <span className="caption">System prompt keeps retrieval, the clock and attachments where they have always been. With the turn, they move to just before your message instead, which lets the conversation history be cached too. That is the larger saving on long chats, and it changes what the model reads, so try it on a workspace you can compare.</span>
-                          </div>
-                          <select
-                            value={promptCacheContextPlacement}
-                            onChange={(e) => updateSetting('advanced', 'promptCacheContextPlacement', e.target.value)}
-                            className="bg-[#0a1b22] border border-gray-800 rounded-lg px-2 py-1 text-xs text-gray-200 shrink-0"
-                          >
-                            <option value="system">System prompt</option>
-                            <option value="turn">With the turn</option>
-                          </select>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* SECTION 3: DIAGNOSTICS & DEBUGGING */}
-                  <div className="space-y-3">
-                    <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
-                      <Settings2 className="w-3.5 h-3.5" />
-                      <span>Diagnostics & Logging</span>
-                    </h4>
-                    <div className="bg-[#051116] rounded-xl border border-gray-800/80 divide-y divide-gray-800/80 overflow-hidden">
-                      {/* Live RAG Debug logs toggle */}
-                      <div className="p-4 flex items-center justify-between">
-                        <div className="pr-4">
-                          <span className="block text-sm text-gray-200 font-bold">Show Retrieval & Context Diagnostics</span>
-                          <span className="caption">Show retrieved sources, inclusion decisions, perspective scopes, and the exact narrative context sent with each response.</span>
-                        </div>
-                        <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                          <input
-                            type="checkbox"
-                            checked={ragDebug}
-                            onChange={(e) => updateSetting('advanced', 'ragDebug', e.target.checked)}
-                            className="sr-only peer"
-                          />
-                          <div className="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
-                        </label>
-                      </div>
-
-                      {/* Agentic RAG Debug toggle */}
-                      <div className="p-4 flex items-center justify-between">
-                        <div className="pr-4">
-                          <span className="block text-sm text-gray-200 font-bold">Show Agentic Retrieval Trace</span>
-                          <span className="caption">Show sanitized tool calls, result counts, stop reason, cost, and final gathered context without exposing private model reasoning.</span>
-                        </div>
-                        <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                          <input
-                            type="checkbox"
-                            checked={agenticDebug}
-                            onChange={(e) => updateSetting('advanced', 'agenticDebug', e.target.checked)}
-                            className="sr-only peer"
-                          />
-                          <div className="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
-                        </label>
-                      </div>
-
-                      <div className="p-4 flex items-center justify-between">
-                        <div className="pr-4">
-                          <span className="block text-sm text-gray-200 font-bold">Show Narrative State Diagnostics</span>
-                          <span className="caption">Show post-response triage, deep-analysis decisions, proposals, retries, timing, and token usage for Roleplay turns.</span>
-                        </div>
-                        <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                          <input
-                            type="checkbox"
-                            checked={narrativeStateDebug}
-                            onChange={(e) => updateSetting('advanced', 'narrativeStateDebug', e.target.checked)}
-                            className="sr-only peer"
-                          />
-                          <div className="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
-                        </label>
-                      </div>
-
-                      {/* Token Usage Debug toggle */}
-                      <div className="p-4 flex items-center justify-between">
-                        <div className="pr-4">
-                          <span className="block text-sm text-gray-200 font-bold">Show Token Usage Breakdown</span>
-                          <span className="caption">Show estimated model usage by main generation, Agentic retrieval, and Narrative State, with each lifecycle counted once.</span>
-                        </div>
-                        <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                          <input
-                            type="checkbox"
-                            checked={tokenDebug}
-                            onChange={(e) => updateSetting('advanced', 'tokenDebug', e.target.checked)}
-                            className="sr-only peer"
-                          />
-                          <div className="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent"></div>
-                        </label>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* SECTION 4: STORAGE & BACKUPS */}
-                  <div className="space-y-3">
-                    <h4 className="text-xs font-bold text-accent uppercase tracking-widest flex items-center space-x-1.5 select-none">
-                      <HardDrive className="w-3.5 h-3.5" />
-                      <span>Data Storage & Backups</span>
-                    </h4>
-                    <div className="bg-[#051116] rounded-xl border border-gray-800/80 divide-y divide-gray-800/80 overflow-hidden">
-                      <div className="p-4 flex items-center justify-between">
-                        <div className="pr-4">
-                          <span className="block text-sm text-gray-200 font-bold">Workspace Folder</span>
-                          <span className="caption">Open the underlying directory where local documents, memory files, and configurations are stored.</span>
-                        </div>
-                        <button
-                          onClick={handleOpenWorkspace}
-                          className="px-3 py-1.5 bg-[#1a2d32] hover:bg-[#243b52] text-white text-xs font-semibold rounded-lg transition-colors border border-gray-700/50 flex items-center space-x-1.5 cursor-pointer shrink-0 ml-4"
-                        >
-                          <FolderOpen className="w-3.5 h-3.5" />
-                          <span>Open Folder</span>
-                        </button>
-                      </div>
-
-                      <div className="p-4 flex items-center justify-between">
-                        <div className="pr-4">
-                          <span className="block text-sm text-gray-200 font-bold">Export / Backup Data</span>
-                          <span className="caption">Compress local databases, workspace settings, and cached models into a safe backup file.</span>
-                        </div>
-                        <button
-                          onClick={handleBackup}
-                          className="px-3 py-1.5 bg-[#1a2d32] hover:bg-[#243b52] text-white text-xs font-semibold rounded-lg transition-colors border border-gray-700/50 flex items-center space-x-1.5 cursor-pointer shrink-0 ml-4"
-                        >
-                          <Database className="w-3.5 h-3.5" />
-                          <span>Backup App</span>
-                        </button>
-                      </div>
-
-                      <div className="p-4 flex items-center justify-between">
-                        <div className="pr-4">
-                          <span className="block text-sm text-gray-200 font-bold">Import / Restore Data</span>
-                          <span className="caption">Wipe all current workspace data and configurations, and restore them from a previously exported backup file. Note: The app will restart to complete the process safely.</span>
-                        </div>
-                        <button
-                          onClick={handleRestore}
-                          className="px-3 py-1.5 bg-[#1a2d32] hover:bg-[#243b52] text-white text-xs font-semibold rounded-lg transition-colors border border-gray-700/50 flex items-center space-x-1.5 cursor-pointer shrink-0 ml-4"
-                        >
-                          <RefreshCw className="w-3.5 h-3.5" />
-                          <span>Restore Backup</span>
-                        </button>
-                      </div>
-
-                      <div className="p-4">
-                        <div className="flex items-center justify-between">
-                          <div className="pr-4">
-                            <span className="block text-sm text-gray-200 font-bold">Update Safety Copies</span>
-                            <span className="caption">Before an update changes your data, Kallamo saves a verified copy of it. Restore one with Restore Backup.</span>
-                          </div>
-                          <button
-                            onClick={handleOpenMigrationBackups}
-                            className="px-3 py-1.5 bg-[#1a2d32] hover:bg-[#243b52] text-white text-xs font-semibold rounded-lg transition-colors border border-gray-700/50 flex items-center space-x-1.5 cursor-pointer shrink-0 ml-4"
-                          >
-                            <FolderOpen className="w-3.5 h-3.5" />
-                            <span>Show Folder</span>
-                          </button>
-                        </div>
-                        {migrationBackups.length > 0 ? (
-                          <ul className="mt-3 space-y-1">
-                            {migrationBackups.map(backup => {
-                              const { date, versions, size } = describeMigrationBackup(backup);
-                              return (
-                                <li key={backup.file} className="flex items-center justify-between gap-4 text-xs text-gray-400">
-                                  <span className="truncate"><span className="text-gray-300">{date}</span> · {versions}</span>
-                                  <span className="shrink-0 tabular-nums">{size}</span>
-                                </li>
-                              );
-                            })}
-                          </ul>
-                        ) : (
-                          <p className="mt-3 text-xs text-gray-500">No copies yet. One is saved the first time an update changes your data.</p>
-                        )}
-                      </div>
-
-                      <div className="p-4 flex items-center justify-between">
-                        <div className="pr-4">
-                          <span className="block text-sm text-status-danger font-bold">Purge Vector DB Cache</span>
-                          <span className="caption">Delete all compiled vector indices. Cached knowledge files will require rebuilding to support search features.</span>
-                        </div>
-                        <button
-                          onClick={() => setConfirmAction('purge')}
-                          className="px-3 py-1.5 bg-status-danger/10 hover:bg-status-danger/15 text-status-danger text-xs font-semibold rounded-lg transition-colors border border-status-danger/30 flex items-center space-x-1.5 cursor-pointer shrink-0 ml-4"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          <span>Purge Indexes</span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* =========================================== */}
-            {/* 4. ABOUT TAB */}
-            {/* =========================================== */}
-            {activeTab === 'about' && (
-              <div className="space-y-6">
-                {/* Brand Header */}
-                <div className="shrink-0 mb-4 border-b border-gray-800 pb-4 flex items-center space-x-5">
-                  <div className="bg-[#051116] border border-gray-800 p-4 rounded-xl shadow-inner select-none pointer-events-none">
-                    <Logo size={72} />
-                  </div>
-                  <div className="flex flex-col justify-center">
-                    <div className="flex items-baseline space-x-3">
-                      <Logotype height={44} className="text-white font-bold select-none pointer-events-none" cutColor="#000D11" />
-                      <span className="text-[0.625rem] bg-accent/10 border border-accent/25 text-accent px-2 py-0.5 rounded-full font-bold uppercase tracking-wider select-none pointer-events-none">v{appVersion}</span>
-                    </div>
-                    <p className="caption mt-1 font-medium select-none pointer-events-none">A local-first studio for writing and living worlds.</p>
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  {/* Auto-update Section */}
-                  <div className="bg-[#051116] border border-gray-800/80 rounded-xl p-5 shadow-lg flex items-center justify-between">
-                    <div className="space-y-1 pr-4">
-                      <span className="text-[0.625rem] text-gray-500 font-bold uppercase tracking-widest block mb-1 select-none pointer-events-none">Auto-Update</span>
-                      {updateStatus === 'downloaded' ? (
-                        <>
-                          <h4 className="text-sm font-bold text-emerald-400 leading-tight">Update v{updateVersion} is ready to install!</h4>
-                          <p className="caption">The new version has been downloaded. Click install to restart and apply.</p>
-                        </>
-                      ) : updateStatus === 'available' ? (
-                        <>
-                          <h4 className="text-sm font-bold text-accent leading-tight">Downloading update v{updateVersion}...</h4>
-                          <p className="caption">Downloading files in the background.</p>
-                        </>
-                      ) : updateStatus === 'outdated' ? (
-                        <>
-                          <h4 className="text-sm font-bold text-amber-400 leading-tight">New version v{updateVersion} available!</h4>
-                          <p className="caption">Auto-update is not supported on this platform. Please download the update manually.</p>
-                        </>
-                      ) : (
-                        <>
-                          <h4 className="text-sm font-bold text-gray-200 leading-tight">Kallamo is up to date</h4>
-                          <p className="caption">You are running the latest version of the application.</p>
-                        </>
-                      )}
-                    </div>
-                    {updateStatus === 'downloaded' && (
-                      <button
-                        onClick={() => electronAPI.installUpdate()}
-                        className="shrink-0 text-xs font-bold text-[#011419] bg-emerald-400 hover:bg-emerald-300 px-4 py-2 rounded-lg transition-all active:scale-95 cursor-pointer flex items-center space-x-1.5"
-                      >
-                        <span>Restart & Install</span>
-                      </button>
-                    )}
-                    {updateStatus === 'outdated' && updateOutdatedUrl && (
-                      <a
-                        href={updateOutdatedUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="shrink-0 text-xs font-bold text-[#011419] bg-amber-400 hover:bg-amber-300 px-4 py-2 rounded-lg transition-all active:scale-95 cursor-pointer flex items-center space-x-1.5 no-underline"
-                      >
-                        <span>Download v{updateVersion}</span>
-                      </a>
-                    )}
-                  </div>
-
-                  {/* Creator Section */}
-                  <div className="bg-[#051116] border border-gray-800/80 rounded-xl p-5 shadow-lg flex items-center justify-between">
-                    <div className="space-y-1.5 pr-4">
-                      <span className="text-[0.625rem] text-accent font-bold uppercase tracking-widest block mb-1 select-none pointer-events-none">Creator</span>
-                      <h4 className="text-base font-bold text-white leading-tight">Jonathan Ferreira da Conceição</h4>
-
-                      <div className="flex flex-wrap gap-2 mt-2">
-                        {/* GitHub tag */}
-                        <div className="flex items-center space-x-1.5 bg-[#101c24]/85 border border-gray-800 text-gray-300 text-[0.625rem] font-semibold px-2 py-0.5 rounded-full select-none">
-                          <svg viewBox="0 0 24 24" className="w-3 h-3 text-gray-400" fill="currentColor">
-                            <path d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.87 8.17 6.84 9.5.5.08.66-.23.66-.5v-1.69c-2.77.6-3.36-1.34-3.36-1.34-.46-1.16-1.11-1.47-1.11-1.47-.9-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.07 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.92 0-1.11.38-2 1.03-2.71-.1-.25-.45-1.29.1-2.64 0 0 .84-.27 2.75 1.02.79-.22 1.65-.33 2.5-.33.85 0 1.71.11 2.5.33 1.91-1.29 2.75-1.02 2.75-1.02.55 1.35.2 2.39.1 2.64.65.71 1.03 1.6 1.03 2.71 0 3.82-2.34 4.66-4.57 4.91.36.31.69.92.69 1.85V21c0 .27.16.59.67.5C19.14 20.16 22 16.42 22 12A10 10 0 0012 2z" />
-                          </svg>
-                          <span>Jonathanfcon</span>
-                        </div>
-
-                        {/* Reddit & Discord tag */}
-                        <div className="flex items-center space-x-1.5 bg-[#101c24]/85 border border-gray-800 text-gray-300 text-[0.625rem] font-semibold px-2 py-0.5 rounded-full select-none">
-                          <div className="flex space-x-1.5 items-center mr-0.5">
-                            {/* Discord icon */}
-                            <svg viewBox="0 0 127.14 96.36" className="w-3 h-3 text-gray-400" fill="currentColor">
-                              <path d="M107.7,8.07A105.15,105.15,0,0,0,77.26,0a77.19,77.19,0,0,0-3.3,6.83A96.67,96.67,0,0,0,53.22,6.83,77.19,77.19,0,0,0,49.88,0,105.15,105.15,0,0,0,19.44,8.07C3.66,31.58-1.86,54.65,1,77.53A105.73,105.73,0,0,0,32,96.36a77.7,77.7,0,0,0,6.63-10.85,68.43,68.43,0,0,1-10.5-5c.9-.65,1.76-1.34,2.58-2.06a75.14,75.14,0,0,0,72.63,0c.82.72,1.68,1.4,2.58,2.06a68.43,68.43,0,0,1-10.5,5,77.7,77.7,0,0,0,6.63,10.85,105.73,105.73,0,0,0,31-18.83C129.87,49.86,123.75,26.9,107.7,8.07ZM42.45,65.69C36.18,65.69,31,60,31,53S36.18,40.36,42.45,40.36,53.83,46,53.83,53,48.72,65.69,42.45,65.69ZM84.69,65.69C78.41,65.69,73.24,60,73.24,53S78.41,40.36,84.69,40.36,96.07,46,96.07,53,91,65.69,84.69,65.69Z" />
-                            </svg>
-                            {/* Reddit icon */}
-                            <svg viewBox="0 0 24 24" className="w-3 h-3 text-gray-400" fill="currentColor">
-                              <path d="M24 11.5c0-1.65-1.35-3-3-3-.96 0-1.86.48-2.42 1.24-1.64-1-3.85-1.68-6.23-1.78l1.3-4.1 4.25.9c.02.99.84 1.79 1.85 1.79 1.02 0 1.85-.83 1.85-1.85s-.83-1.85-1.85-1.85c-.75 0-1.4.45-1.69 1.1l-4.71-1c-.26-.06-.52.1-.6.36l-1.63 5.12C8.25 7.15 6.04 7.82 4.4 8.84 3.84 8.08 2.94 7.6 2 7.6c-1.65 0-3 1.35-3 3 0 1.13.63 2.11 1.56 2.62-.06.39-.1.79-.1 1.2 0 4.14 4.8 7.5 10.75 7.5s10.75-3.36 10.75-7.5c0-.4-.04-.8-.1-1.2.93-.5 1.56-1.48 1.56-2.62zm-18 2c0-1.1.9-2 2-2s2 .9 2 2-.9 2-2 2-2-.9-2-2zm10.95 4c-1.01 1.01-2.92 1.1-3.45 1.1-.53 0-2.44-.09-3.45-1.1-.3-.3-.3-.78 0-1.08.3-.3.78-.3 1.08 0 .68.68 1.98.75 2.37.75.39 0 1.69-.07 2.37-.75.3-.3.78-.3 1.08 0 .3.3.3.78 0 1.08zm-.45-2c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z" />
-                            </svg>
-                          </div>
-                          <span>_JustAnotherJohn</span>
-                        </div>
-                      </div>
-                    </div>
-                    <a
-                      href="https://github.com/Jonathanfcon"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="shrink-0 text-xs font-bold text-accent hover:text-[#011419] bg-accent/5 hover:bg-accent border border-accent/20 hover:border-transparent px-4 py-2 rounded-lg transition-all active:scale-95 cursor-pointer flex items-center space-x-1.5"
-                    >
-                      <span>GitHub Profile</span>
-                    </a>
-                  </div>
-
-                  {/* Contributors & Open Source Community */}
-                  <div className="bg-[#051116] border border-gray-800/80 rounded-xl p-5 shadow-lg space-y-4">
-                    <div className="space-y-1">
-                      <span className="text-[0.625rem] text-gray-500 font-bold uppercase tracking-widest block mb-1 select-none pointer-events-none">Contributors</span>
-                      <h4 className="text-sm font-bold text-gray-200">Future Contributors & Community</h4>
-                      <p className="caption">Kallamo is built under the open-source <strong className="font-bold text-gray-300">AGPL-3.0 License</strong> and welcomes contributions. Join the development, submit pull requests, or file bug reports on our GitHub organization!</p>
-                    </div>
-
-                    <div className="flex flex-wrap gap-2.5 pt-3.5 border-t border-gray-800/60">
-                      <a
-                        href="https://github.com/Kallamo/Kallamo"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs font-bold text-gray-300 hover:text-white bg-[#0a161d] hover:bg-[#1a2d32] border border-gray-800 rounded-lg px-4.5 py-2.5 transition-all active:scale-95 cursor-pointer flex items-center space-x-2"
-                      >
-                        <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor">
-                          <path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.87 8.17 6.84 9.5.5.08.66-.23.66-.5v-1.69c-2.77.6-3.36-1.34-3.36-1.34-.46-1.16-1.11-1.47-1.11-1.47-.9-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.07 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.92 0-1.11.38-2 1.03-2.71-.1-.25-.45-1.29.1-2.64 0 0 .84-.27 2.75 1.02.79-.22 1.65-.33 2.5-.33.85 0 1.71.11 2.5.33 1.91-1.29 2.75-1.02 2.75-1.02.55 1.35.2 2.39.1 2.64.65.71 1.03 1.6 1.03 2.71 0 3.82-2.34 4.66-4.57 4.91.36.31.69.92.69 1.85V21c0 .27.16.59.67.5C19.14 20.16 22 16.42 22 12A10 10 0 0012 2z" />
-                        </svg>
-                        <span>GitHub Repository</span>
-                      </a>
-                    </div>
-                  </div>
-                </div>
-
-              </div>
-            )}
-
-
-
-          </div>
-
+      </aside>
+
+      <div className="min-w-0 flex-1 overflow-y-auto custom-scrollbar [mask-image:linear-gradient(to_bottom,transparent_0,transparent_2.25rem,black_4.25rem)]">
+        <div className={`mx-auto w-full px-8 pb-16 pt-[4.5rem] ${activeTab === 'appearance' ? 'max-w-[72rem]' : 'max-w-[52rem]'}`}>
+          {renderPage()}
         </div>
-
       </div>
 
-      {/* CUSTOM CONFIRMATION OVERLAYS */}
+      {connectionToDelete && (
+        <ConfirmDialog
+          title={`Delete ${connectionToDelete.name}?`}
+          message={deleteUsers.profiles.length || deleteUsers.engine.length
+            ? `${describeUsers(deleteUsers)} will stop replying until ${deleteUsers.profiles.length + deleteUsers.engine.length === 1 ? 'it gets' : 'they get'} another connection.`
+            : 'Nothing uses it right now.'}
+          actions={[
+            { label: 'Cancel', variant: 'ghost', onClick: () => setConnectionToDelete(null) },
+            { label: 'Delete connection', variant: 'danger', autoFocus: true, onClick: async () => { const id = connectionToDelete.id; setConnectionToDelete(null); await handleDeleteApiProfile(id); } },
+          ]}
+          onClose={() => setConnectionToDelete(null)}
+        />
+      )}
+
       {confirmAction && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 select-none p-4 animate-in fade-in duration-150">
-          <div className="w-[400px] bg-[#011419] border border-gray-800 rounded-xl shadow-2xl p-6 flex flex-col space-y-4 animate-in zoom-in-95 duration-200">
-            <h3 className="text-base font-bold text-white uppercase tracking-wider">
-              {confirmAction === 'purge'
-                ? 'Purge Vector DB Cache'
-                : confirmAction === 'clearCache'
-                  ? 'Clear Embeddings Cache'
-                  : 'Delete Local AI Engine'}
-            </h3>
-            <p className="text-xs text-gray-300 leading-relaxed">
-              {confirmAction === 'purge'
-                ? 'Are you sure you want to purge all cached vector databases? This will require re-uploading Knowledge Base files to re-index them.'
-                : confirmAction === 'clearCache'
-                  ? 'Are you sure you want to clear HuggingFace download cache? This forces model downloads on next index.'
-                  : 'Are you sure you want to uninstall and delete the Local AI Engine runtime files? You can re-download them at any time.'}
-            </p>
-            <div className="flex justify-end space-x-3 pt-2">
-              <button
-                onClick={() => setConfirmAction(null)}
-                className="px-4 py-2 text-xs font-semibold text-gray-400 hover:text-white transition-colors cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={async () => {
-                  const action = confirmAction;
-                  if (action === 'purge') {
-                    await handlePurgeVectors();
-                  } else if (action === 'clearCache') {
-                    await handleClearCache();
-                  } else if (action === 'deleteEngine') {
-                    setConfirmAction(null);
-                    await deleteEngine();
-                    if (embeddingEngine === 'local') {
-                      updateSetting('advanced', 'embeddingEngine', 'external');
-                    }
-                  }
-                }}
-                className="px-4 py-2 text-xs font-bold bg-danger-solid hover:bg-danger-solid-hover text-white rounded transition-colors cursor-pointer"
-              >
-                Confirm
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          title={confirmAction === 'purge' ? 'Delete search indexes?' : confirmAction === 'clearCache' ? 'Clear downloaded model files?' : 'Remove the local engine?'}
+          message={confirmAction === 'purge'
+            ? 'Every file in your knowledge bases will need indexing again before search works.'
+            : confirmAction === 'clearCache'
+              ? 'The embedding model downloads again the next time something is indexed.'
+              : 'Its files are deleted from this computer. You can download it again any time.'}
+          actions={[
+            { label: 'Cancel', variant: 'ghost', onClick: () => setConfirmAction(null) },
+            {
+              label: confirmAction === 'purge' ? 'Delete indexes' : confirmAction === 'clearCache' ? 'Clear files' : 'Remove engine',
+              variant: 'danger',
+              autoFocus: true,
+              onClick: async () => {
+                const action = confirmAction;
+                if (action === 'purge') await handlePurgeVectors();
+                else if (action === 'clearCache') await handleClearCache();
+                else if (action === 'deleteEngine') {
+                  setConfirmAction(null);
+                  await deleteEngine();
+                  if (embeddingEngine === 'local') updateSetting('advanced', 'embeddingEngine', 'external');
+                }
+              },
+            },
+          ]}
+          onClose={() => setConfirmAction(null)}
+        />
       )}
 
-      {/* BACKUP EXPORT STATUS MODAL */}
       {backupStatus && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 select-none p-4 animate-in fade-in duration-150">
-          <div className="w-[400px] bg-[#011419] border border-gray-800 rounded-xl shadow-2xl p-6 flex flex-col space-y-4 animate-in zoom-in-95 duration-200">
-            <h3 className="text-base font-bold text-white uppercase tracking-wider">
-              {backupStatus.success ? 'Backup Exported' : 'Backup Failed'}
-            </h3>
-            <p className="text-xs text-gray-300 leading-relaxed whitespace-pre-wrap">
-              {backupStatus.success
-                ? `Your database backup was successfully exported to:\n\n${backupStatus.path}`
-                : `Failed to export workspace backup:\n\n${backupStatus.error}`}
-            </p>
-            <div className="flex justify-end pt-2">
-              <button
-                onClick={() => setBackupStatus(null)}
-                className="px-4 py-2 text-xs font-bold bg-accent hover:brightness-110 text-[#011419] rounded transition-colors cursor-pointer"
-              >
-                OK
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          tone={backupStatus.success ? 'info' : 'warning'}
+          title={backupStatus.success ? 'Backup saved' : 'Backup failed'}
+          message={backupStatus.success ? `Saved to:\n${backupStatus.path}` : backupStatus.error}
+          actions={[{ label: 'OK', variant: 'primary', autoFocus: true, onClick: () => setBackupStatus(null) }]}
+          onClose={() => setBackupStatus(null)}
+        />
       )}
 
-      {/* GENERAL UTILITY STATUS MODAL */}
       {utilityStatus && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 select-none p-4 animate-in fade-in duration-150">
-          <div className="w-[400px] bg-[#011419] border border-gray-800 rounded-xl shadow-2xl p-6 flex flex-col space-y-4 animate-in zoom-in-95 duration-200">
-            <h3 className="text-base font-bold text-white uppercase tracking-wider text-accent">
-              {utilityStatus.title}
-            </h3>
-            <p className="text-xs text-gray-300 leading-relaxed">
-              {utilityStatus.message}
-            </p>
-            <div className="flex justify-end pt-2">
-              <button
-                onClick={() => setUtilityStatus(null)}
-                className="px-4 py-2 text-xs font-bold bg-accent hover:brightness-110 text-[#011419] rounded transition-colors cursor-pointer"
-              >
-                OK
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          tone="info"
+          title={utilityStatus.title}
+          message={utilityStatus.message}
+          actions={[{ label: 'OK', variant: 'primary', autoFocus: true, onClick: () => setUtilityStatus(null) }]}
+          onClose={() => setUtilityStatus(null)}
+        />
       )}
 
-      {/* RESTORING FULL-SCREEN OVERLAY */}
       {restoring && (
-        <div className="fixed inset-0 z-[70] flex flex-col items-center justify-center bg-black/90 select-none p-4 animate-in fade-in duration-150">
-          <div className="flex flex-col items-center space-y-4 text-center">
-            <div className="w-12 h-12 rounded-full border-4 border-accent/20 border-t-accent animate-spin" />
-            <h3 className="text-lg font-bold text-white uppercase tracking-wider text-accent">
-              Restoring Workspace
-            </h3>
-            <p className="caption max-w-xs">
-              Replacing active database files with backup. The application will restart automatically in a moment...
-            </p>
+        <div className="fixed inset-0 z-[70] flex flex-col items-center justify-center bg-shade/90 p-4">
+          <div className="flex flex-col items-center gap-4 text-center">
+            <div className="h-12 w-12 animate-spin rounded-full border-4 border-accent/20 border-t-accent" />
+            <h3 className="text-lg font-bold text-text-primary">Restoring your data</h3>
+            <p className="caption max-w-xs">Replacing the database with the backup. Kallamo restarts in a moment.</p>
           </div>
         </div>
       )}
+    </div>
+  );
+}
 
+const linkButtonClass = 'inline-flex min-h-8 items-center rounded-control border border-border-default bg-surface-panel/70 px-3 text-xs font-semibold text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary';
+
+const NAV_GROUPS = [
+  { label: 'AI', items: [{ id: 'connections', label: 'Connections', icon: Plug }, { id: 'roles', label: 'AI roles', icon: Cpu }, { id: 'generation', label: 'Generation', icon: Zap }] },
+  { label: 'Memory', items: [{ id: 'retrieval', label: 'Retrieval', icon: FileSearch }, { id: 'embeddings', label: 'Embeddings', icon: Layers }] },
+  { label: 'App', items: [{ id: 'appearance', label: 'Appearance', icon: Palette }, { id: 'data', label: 'Data and backups', icon: HardDrive }, { id: 'diagnostics', label: 'Diagnostics', icon: Activity }] },
+];
+const NAV_LABELS = Object.fromEntries([...NAV_GROUPS.flatMap(g => g.items.map(i => [i.id, i.label])), ['about', 'About Kallamo']]);
+
+// What the settings search can find, beyond page names.
+const SEARCH_INDEX = [
+  { page: 'connections', label: 'Connections', keywords: 'api key provider endpoint openrouter anthropic openai google gemini vertex bedrock aws local lm studio ollama nanogpt base url' },
+  { page: 'connections', label: 'Add connection', keywords: 'new api provider model' },
+  { page: 'roles', label: 'System AI', keywords: 'default model internal engine' },
+  { page: 'roles', label: 'Language for AI notes', keywords: 'internal output language summaries analysis translate' },
+  { page: 'roles', label: 'Narrative State', keywords: 'roleplay state campaign scenes relationships' },
+  { page: 'roles', label: 'Tagger', keywords: 'tags entities world index propose unknown' },
+  { page: 'roles', label: 'Retrieval planner', keywords: 'agentic planning search tools plan every message native tool calling' },
+  { page: 'roles', label: 'Summarizer', keywords: 'archive summaries titles' },
+  { page: 'generation', label: 'Stream replies', keywords: 'streaming timeout token by token' },
+  { page: 'generation', label: 'Prompt cache', keywords: 'cost price cached context position system prompt turn' },
+  { page: 'retrieval', label: 'Profile knowledge', keywords: 'top-k passages knowledge base' },
+  { page: 'retrieval', label: 'Workspace files', keywords: 'top-k documents passages' },
+  { page: 'retrieval', label: 'Long-term memory', keywords: 'top-k archived conversations memory' },
+  { page: 'retrieval', label: 'Worldbuild entities', keywords: 'entity limit dossiers' },
+  { page: 'retrieval', label: 'Strictness', keywords: 'similarity threshold relevance' },
+  { page: 'retrieval', label: 'Worldbuild breadth', keywords: 'relationships hops focused balanced broad' },
+  { page: 'retrieval', label: 'Passage length', keywords: 'chunk size characters' },
+  { page: 'embeddings', label: 'Embedding engine', keywords: 'local external vector multilingual e5 download remove' },
+  { page: 'embeddings', label: 'Runs on', keywords: 'execution device cpu webassembly wasm' },
+  { page: 'embeddings', label: 'Clear cache', keywords: 'downloaded model files' },
+  { page: 'appearance', label: 'Accent', keywords: 'color colour theme' },
+  { page: 'appearance', label: 'Font', keywords: 'typography inter merriweather jetbrains mono' },
+  { page: 'appearance', label: 'Text size', keywords: 'scale small medium large' },
+  { page: 'appearance', label: 'Background blur', keywords: 'glass performance' },
+  { page: 'appearance', label: 'Chat layout', keywords: 'bubbles document' },
+  { page: 'appearance', label: 'Code theme', keywords: 'syntax highlight line numbers' },
+  { page: 'appearance', label: 'Formatting toolbar', keywords: 'writing desk fixed bubble' },
+  { page: 'appearance', label: 'Smart typography', keywords: 'quotes dashes ellipsis' },
+  { page: 'data', label: 'Back up', keywords: 'backup export' },
+  { page: 'data', label: 'Restore', keywords: 'import backup' },
+  { page: 'data', label: 'Safety copies', keywords: 'update migration backups' },
+  { page: 'data', label: 'Data folder', keywords: 'workspace folder open' },
+  { page: 'data', label: 'Search indexes', keywords: 'purge vector delete' },
+  { page: 'diagnostics', label: 'Diagnostics', keywords: 'debug retrieval context agentic trace narrative state token usage' },
+  { page: 'about', label: 'Updates', keywords: 'version about license' },
+];
+
+// Example values written for each provider, so every empty field shows what belongs in it.
+const PROVIDERS = [
+  { value: 'OpenRouter', label: 'OpenRouter', sub: 'Many models, one key', mark: 'OR', namePlaceholder: 'OpenRouter', keyPlaceholder: 'sk-or-v1-…', urlPlaceholder: 'https://openrouter.ai/api/v1', modelPlaceholder: 'anthropic/claude-sonnet-4.5' },
+  { value: 'Anthropic', label: 'Anthropic', sub: 'Claude', mark: 'A', namePlaceholder: 'Anthropic', keyPlaceholder: 'sk-ant-…', urlPlaceholder: 'https://api.anthropic.com/v1/messages', modelPlaceholder: 'claude-sonnet-4-5' },
+  { value: 'OpenAI', label: 'OpenAI', sub: 'GPT', mark: 'AI', namePlaceholder: 'OpenAI', keyPlaceholder: 'sk-…', urlPlaceholder: 'https://api.openai.com/v1', modelPlaceholder: 'gpt-5' },
+  { value: 'Google AI', label: 'Google AI', sub: 'Gemini', mark: 'G', namePlaceholder: 'Google', keyPlaceholder: 'AIza…', urlPlaceholder: 'Leave empty for Google’s own endpoint', modelPlaceholder: 'gemini-2.5-flash' },
+  { value: 'Vertex AI', label: 'Vertex AI', sub: 'Google Cloud project', mark: 'V', namePlaceholder: 'Vertex', keyPlaceholder: '', urlPlaceholder: '', modelPlaceholder: 'gemini-2.5-pro' },
+  { value: 'AWS Bedrock', label: 'AWS Bedrock', sub: 'Your AWS account', mark: 'AWS', namePlaceholder: 'Bedrock', keyPlaceholder: '', urlPlaceholder: '', modelPlaceholder: 'anthropic.claude-sonnet-4-5-20250929-v1:0' },
+  { value: 'Local', label: 'Local or compatible', sub: 'LM Studio, Ollama', mark: null, namePlaceholder: 'LM Studio', keyPlaceholder: 'Not needed for most local servers', urlPlaceholder: 'http://127.0.0.1:1234/v1', modelPlaceholder: 'qwen3-30b-a3b' },
+];
+
+const MODE_LABELS = { 'inherit-system': 'System AI', dedicated: 'Own model', disabled: 'Off', profile: 'Profile', off: 'Hybrid RAG' };
+
+const ROLE_COPY = {
+  narrativeState: 'Keeps the roleplay straight: scenes, what each character knows, and their relationships. It never writes the story.',
+  tagger: 'Marks which Worldbuild entities each passage mentions. It never decides what is canon.',
+  retrievalPlanner: 'Chooses what to look up before a profile replies, and stops when it has enough.',
+  summarizer: 'Titles and summarizes archived conversations. The original messages stay searchable.',
+};
+
+const ROLE_LOOK = {
+  narrativeState: { icon: Drama, color: 'var(--theme-roleplay)', where: 'Roleplay' },
+  tagger: { icon: Tags, color: 'var(--theme-entity-location)', where: 'Worldbuild' },
+  retrievalPlanner: { icon: Route, color: 'var(--theme-mode-searchable)', where: 'Every reply' },
+  summarizer: { icon: Archive, color: 'var(--theme-mode-history)', where: 'Memory' },
+};
+
+const ROLE_OFF_COPY = {
+  narrativeState: 'Not running. Roleplay state stays as it is.',
+  tagger: 'Not running. New passages are not tagged.',
+  summarizer: 'Not running. Archived conversations get no summary.',
+};
+
+// Options that belong to one role, lined up under its text.
+function RoleOptions({ disabled, children }) {
+  return <div className={`ml-[4.75rem] mr-5 border-t border-tint/[0.06] pb-1 [&>*]:px-0 ${disabled ? 'opacity-50' : ''}`}>{children}</div>;
+}
+
+const BREADTH_COPY = {
+  focused: 'Focused uses the entities that match, without following relationships.',
+  balanced: 'Balanced follows one step of relationships around each match.',
+  broad: 'Broad follows up to two steps, for wide world questions.',
+};
+
+function describeUsers({ profiles, engine }) {
+  const names = profiles.map(profile => profile.name);
+  if (engine.length) names.push(engine.length > 2 ? `${engine[0]} and ${engine.length - 1} roles` : engine.join(' and '));
+  if (names.length <= 2) return names.join(' and ');
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+function ProviderMark({ provider, size = 'md' }) {
+  const meta = PROVIDERS.find(p => p.value === provider);
+  const mark = meta ? meta.mark : provider?.slice(0, 2);
+  const box = size === 'sm' ? 'h-[1.875rem] w-[1.875rem] rounded-lg' : 'h-[2.375rem] w-[2.375rem] rounded-[0.625rem]';
+  return (
+    <span aria-hidden="true" className={`inline-flex shrink-0 items-center justify-center border border-tint/10 bg-tint/[0.035] font-extrabold tracking-[-0.02em] text-text-secondary ${box} ${mark && mark.length > 2 ? 'text-[0.6875rem]' : 'text-[0.8125rem]'}`}>
+      {mark || <Server className="h-4 w-4" />}
+    </span>
+  );
+}
+
+function SecretInput({ value, onChange, placeholder, shown, onToggle }) {
+  return (
+    <div className="relative w-80">
+      <input type={shown ? 'text' : 'password'} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} className={`${fieldClass} w-full pr-10 font-mono text-[0.8125rem]`} />
+      <button type="button" onClick={onToggle} aria-label={shown ? 'Hide' : 'Show'} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-text-subtle hover:text-text-primary">
+        {shown ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+      </button>
+    </div>
+  );
+}
+
+function ConnectionRow({ connection, models, users, onEdit, onDuplicate, onAddModel, onDelete }) {
+  const moreRef = useRef(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const usedBy = describeUsers(users);
+  return (
+    <div className="flex items-start gap-4 border-t border-tint/[0.055] px-[1.125rem] py-4 first:border-t-0">
+      <ProviderMark provider={connection.provider} />
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-baseline gap-2.5">
+          <span className="truncate text-[0.9375rem] font-semibold text-text-primary">{connection.name}</span>
+          <span className="caption shrink-0 truncate">{connection.provider}{connection.baseUrl ? <> · <span className="font-mono">{connection.baseUrl.replace(/^https?:\/\//, '')}</span></> : null}</span>
+        </div>
+        <div className="mt-2 flex min-w-0 items-center gap-1.5">
+          {models.length === 0 ? (
+            <span className="text-[0.8125rem] text-status-warning">No models yet</span>
+          ) : (
+            <>
+              <span className="max-w-[16rem] truncate rounded-md bg-tint/[0.05] px-2 py-0.5 font-mono text-[0.6875rem] text-text-secondary">{models[0]}</span>
+              {models.length > 1 && <span className="caption">+{models.length - 1}</span>}
+            </>
+          )}
+        </div>
+      </div>
+      <div className="w-60 min-w-0 pt-0.5">
+        <div className="caption mb-1">Used by</div>
+        {usedBy ? (
+          <div className="flex min-w-0 items-center gap-1.5 text-[0.8125rem] text-text-secondary">
+            {users.profiles.slice(0, 3).map(profile => <ReedPen key={profile.id} size={15} color={profile.color || '#FBCB2D'} className="shrink-0" />)}
+            <span className="truncate">{usedBy}</span>
+          </div>
+        ) : <span className="text-[0.8125rem] text-text-subtle">Nothing yet</span>}
+      </div>
+      <div className="flex shrink-0 items-center gap-1 pt-0.5">
+        <Button variant="subtle" size="sm" onClick={onEdit}>Edit</Button>
+        <span ref={moreRef}><IconButton icon={MoreHorizontal} label="More" size="sm" onClick={() => setMenuOpen(open => !open)} /></span>
+        <Menu anchorRef={moreRef} open={menuOpen} onClose={() => setMenuOpen(false)} label={`${connection.name} actions`} className="w-52">
+          <MenuItem icon={Pencil} label="Edit" onSelect={() => { setMenuOpen(false); onEdit(); }} />
+          <MenuItem icon={Copy} label="Duplicate" onSelect={() => { setMenuOpen(false); onDuplicate(); }} />
+          <MenuItem icon={Plus} label="Add a model" onSelect={() => { setMenuOpen(false); onAddModel(); }} />
+          <MenuSeparator />
+          <MenuItem icon={Trash2} label="Delete…" danger onSelect={() => { setMenuOpen(false); onDelete(); }} />
+        </Menu>
+      </div>
     </div>
   );
 }

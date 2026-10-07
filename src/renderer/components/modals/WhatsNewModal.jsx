@@ -27,12 +27,12 @@ export default function WhatsNewModal({ onClose, type = 'global', version }) {
     <Modal onClose={onClose} size="xl" className="max-h-[86vh]">
       <div className="relative shrink-0 h-40 overflow-hidden">
         <img src={heroBg} alt="" className="absolute inset-0 w-full h-full object-cover" />
-        <div className="absolute inset-0 bg-gradient-to-t from-[#011419] via-[#011419]/55 to-[#011419]/10" />
-        <div className="absolute inset-0 bg-gradient-to-r from-[#011419]/70 to-transparent" />
+        <div className="absolute inset-0 bg-gradient-to-t from-surface-canvas via-surface-canvas/55 to-surface-canvas/10" />
+        <div className="absolute inset-0 bg-gradient-to-r from-surface-canvas/70 to-transparent" />
 
         <button
           onClick={onClose}
-          className="absolute top-3.5 right-3.5 z-10 text-gray-300 hover:text-white bg-black/30 hover:bg-black/50 backdrop-blur-sm rounded-full p-1.5 cursor-pointer transition-colors"
+          className="absolute top-3.5 right-3.5 z-10 text-gray-300 hover:text-text-primary bg-shade/30 hover:bg-shade/50 backdrop-blur-sm rounded-full p-1.5 cursor-pointer transition-colors"
         >
           <X className="w-4 h-4" />
         </button>
@@ -44,7 +44,7 @@ export default function WhatsNewModal({ onClose, type = 'global', version }) {
               {isPatch ? 'Update notes' : 'What\'s New'} &middot; v{displayVersion}
             </span>
           </div>
-          <h2 className="text-2xl font-bold text-white leading-tight drop-shadow-[0_2px_8px_rgba(0,0,0,0.6)]">
+          <h2 className="text-2xl font-bold text-text-primary leading-tight drop-shadow-[0_2px_8px_color-mix(in_srgb,var(--theme-shade)_60%,transparent)]">
             {content.title}
           </h2>
         </div>
@@ -62,14 +62,14 @@ export default function WhatsNewModal({ onClose, type = 'global', version }) {
               return (
                 <div
                   key={highlight.title}
-                  className="group flex items-start gap-3.5 bg-gradient-to-br from-[#0a1c24] to-[#08161d] border border-gray-800/70 rounded-xl p-4 transition-colors hover:border-accent/40"
+                  className="group flex items-start gap-3.5 bg-gradient-to-br from-surface-raised to-surface-panel border border-gray-800/70 rounded-xl p-4 transition-colors hover:border-accent/40"
                 >
-                  <div className="relative flex items-center justify-center w-11 h-11 rounded-xl bg-accent/10 border border-accent/25 shrink-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+                  <div className="relative flex items-center justify-center w-11 h-11 rounded-xl bg-accent/10 border border-accent/25 shrink-0 shadow-[inset_0_1px_0_color-mix(in_srgb,var(--theme-tint)_6%,transparent)]">
                     <div className="absolute inset-0 rounded-xl bg-accent/10 blur-md opacity-0 group-hover:opacity-100 transition-opacity" />
                     <Icon className="relative w-5 h-5 text-accent" />
                   </div>
                   <div className="flex flex-col gap-0.5 pt-0.5">
-                    <span className="text-sm font-bold text-white">{highlight.title}</span>
+                    <span className="text-sm font-bold text-text-primary">{highlight.title}</span>
                     <p className="text-[0.8125rem] leading-relaxed text-gray-400">{highlight.text}</p>
                   </div>
                 </div>
@@ -78,7 +78,7 @@ export default function WhatsNewModal({ onClose, type = 'global', version }) {
           </div>
         )}
 
-        <div className="px-6 py-5 border-t border-gray-800/60 bg-[#020c11]/60">
+        <div className="px-6 py-5 border-t border-gray-800/60 bg-surface-abyss/60">
           <div className="flex items-center gap-2 mb-4">
             <span className="h-px flex-1 bg-gradient-to-r from-transparent to-gray-800" />
             <span className="text-[0.6875rem] font-bold uppercase tracking-[0.2em] text-gray-500">
@@ -88,10 +88,10 @@ export default function WhatsNewModal({ onClose, type = 'global', version }) {
           </div>
           <div className="flex flex-col gap-3">
             {releases.map((release) => (
-              <div key={release.version} className="rounded-xl border border-gray-800/60 bg-[#061219]/40 p-4">
+              <div key={release.version} className="rounded-xl border border-gray-800/60 bg-surface-raised-low/40 p-4">
                 {!isPatch && (
                   <div className="flex items-baseline justify-between gap-3 mb-4">
-                    <span className="text-sm font-bold text-white">{release.title}</span>
+                    <span className="text-sm font-bold text-text-primary">{release.title}</span>
                     <span className="text-[0.6875rem] font-bold tracking-wider text-accent shrink-0">v{release.version}</span>
                   </div>
                 )}
@@ -124,12 +124,12 @@ export default function WhatsNewModal({ onClose, type = 'global', version }) {
         </div>
       </div>
 
-      <div className="shrink-0 flex items-center justify-between gap-2 px-6 py-4 border-t border-gray-800/60 bg-[#0a161d]/40">
+      <div className="shrink-0 flex items-center justify-between gap-2 px-6 py-4 border-t border-gray-800/60 bg-surface-panel/40">
         <span className="text-[0.6875rem] text-gray-500 italic">Thanks for creating with Kallamo.</span>
         <button
           type="button"
           onClick={onClose}
-          className="flex items-center gap-1.5 bg-accent text-[#0a1520] text-sm font-bold rounded-lg px-5 py-2 shadow-lg shadow-accent/20 hover:brightness-110 cursor-pointer"
+          className="flex items-center gap-1.5 bg-accent text-on-accent text-sm font-bold rounded-lg px-5 py-2 shadow-lg shadow-accent/20 hover:brightness-110 cursor-pointer"
         >
           <Sparkles className="w-4 h-4" /> Let's go
         </button>

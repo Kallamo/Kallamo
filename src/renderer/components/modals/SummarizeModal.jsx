@@ -153,21 +153,21 @@ export default function SummarizeModal({
   const nothingToDo = totals.archiveCount === 0 && totals.dropCount === 0;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm select-none p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-shade/75 backdrop-blur-sm select-none p-4">
       <div
         ref={modalRef}
-        className="w-full max-w-5xl max-h-[85vh] min-h-[28rem] bg-[#0a161d]/95 border border-gray-800/80 rounded-2xl flex flex-col shadow-2xl relative animate-in zoom-in-95 duration-200"
+        className="w-full max-w-5xl max-h-[85vh] min-h-[28rem] bg-surface-panel/95 border border-gray-800/80 rounded-2xl flex flex-col shadow-2xl relative animate-in zoom-in-95 duration-200"
       >
         {/* Modal Header */}
         <div className="flex items-center justify-between p-5 border-b border-gray-800/80">
           <div className="flex flex-col">
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider">Archive Chat Memory</h3>
+            <h3 className="text-sm font-bold text-text-primary uppercase tracking-wider">Archive Chat Memory</h3>
             <span className="caption mt-0.5">Choose what moves into long-term memory and what stays in the conversation</span>
           </div>
           <button
             disabled={isVectorizing}
             onClick={onClose}
-            className="text-gray-500 hover:text-white hover:bg-white/5 p-1 rounded-md transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+            className="text-gray-500 hover:text-text-primary hover:bg-tint/5 p-1 rounded-md transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
           >
             <X className="w-4.5 h-4.5" />
           </button>
@@ -185,12 +185,12 @@ export default function SummarizeModal({
               onChange={(e) => setCustomTitle(e.target.value)}
               disabled={isVectorizing}
               placeholder={`e.g. Summarization ${nextSummaryNumber}`}
-              className="bg-[#011419] border border-gray-800/80 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-accent transition-colors"
+              className="bg-surface-canvas border border-gray-800/80 rounded-xl px-3 py-2 text-xs text-text-primary placeholder-gray-600 focus:outline-none focus:border-accent transition-colors"
             />
           </div>
 
           {/* Premium Info Tooltip Block */}
-          <div className="flex items-start space-x-2.5 bg-[#1a2d32]/20 border border-[#FBCB2D]/15 rounded-xl p-3 select-text shrink-0">
+          <div className="flex items-start space-x-2.5 bg-surface-hover/20 border border-accent/15 rounded-xl p-3 select-text shrink-0">
             <Info className="w-4 h-4 text-accent shrink-0 mt-0.5" />
             <div className="flex flex-col space-y-1 text-[0.625rem] text-gray-300 leading-relaxed">
               <span className="font-bold text-gray-200">How Memory Archiving Works:</span>
@@ -209,13 +209,13 @@ export default function SummarizeModal({
           </div>
 
           {reservedList.length > 0 && (
-            <label className={`flex items-start gap-2.5 rounded-xl border p-3 cursor-pointer transition-colors ${includeRecent ? 'bg-accent/5 border-accent/30' : 'bg-[#011419] border-gray-800/80 hover:border-gray-700'}`}>
+            <label className={`flex items-start gap-2.5 rounded-xl border p-3 cursor-pointer transition-colors ${includeRecent ? 'bg-accent/5 border-accent/30' : 'bg-surface-canvas border-gray-800/80 hover:border-gray-700'}`}>
               <input
                 type="checkbox"
                 checked={includeRecent}
                 disabled={isVectorizing}
                 onChange={(e) => setIncludeRecent(e.target.checked)}
-                className="mt-0.5 accent-[#FBCB2D] cursor-pointer"
+                className="mt-0.5 accent-accent cursor-pointer"
               />
               <span className="flex flex-col">
                 <span className="text-[0.625rem] font-bold text-gray-200 uppercase tracking-wider">Include the last {reservedList.length}</span>
@@ -241,7 +241,7 @@ export default function SummarizeModal({
               <button
                 disabled={isVectorizing}
                 onClick={() => setAll(ARCHIVE)}
-                className="flex items-center space-x-1 text-gray-400 hover:text-white cursor-pointer transition-colors"
+                className="flex items-center space-x-1 text-gray-400 hover:text-text-primary cursor-pointer transition-colors"
               >
                 <SquareCheck className="w-3.5 h-3.5" />
                 <span>Archive All</span>
@@ -250,7 +250,7 @@ export default function SummarizeModal({
               <button
                 disabled={isVectorizing}
                 onClick={() => setAll(KEEP)}
-                className="flex items-center space-x-1 text-gray-400 hover:text-white cursor-pointer transition-colors"
+                className="flex items-center space-x-1 text-gray-400 hover:text-text-primary cursor-pointer transition-colors"
               >
                 <Square className="w-3.5 h-3.5" />
                 <span>Clear All</span>
@@ -284,10 +284,10 @@ export default function SummarizeModal({
                   key={msgObj.id}
                   onClick={() => cycleState(msgObj.id)}
                   className={`flex items-start p-3 rounded-xl border transition-colors cursor-pointer ${isArchive
-                    ? 'bg-[#1a2d32]/50 border-accent/35 shadow-md shadow-black/10'
+                    ? 'bg-surface-hover/50 border-accent/35 shadow-md shadow-shade/10'
                     : isDrop
                       ? 'bg-status-danger/10 border-status-danger/25 opacity-70'
-                      : 'bg-[#011419]/45 border-gray-800/40 opacity-70'
+                      : 'bg-surface-canvas/45 border-gray-800/40 opacity-70'
                     }`}
                 >
                   <div className="flex-1 pr-4">
@@ -305,7 +305,7 @@ export default function SummarizeModal({
                       active={isArchive}
                       onClick={() => setState(msgObj.id, ARCHIVE)}
                       title="Archive into this summary"
-                      activeClass="bg-accent border-accent text-[#011419]"
+                      activeClass="bg-accent border-accent text-on-accent"
                       disabled={isVectorizing}
                     >
                       <Archive className="w-3 h-3" />
@@ -314,7 +314,7 @@ export default function SummarizeModal({
                       active={msgObj.state === KEEP}
                       onClick={() => setState(msgObj.id, KEEP)}
                       title="Keep in the active conversation"
-                      activeClass="bg-gray-300 border-gray-300 text-[#011419]"
+                      activeClass="bg-gray-300 border-gray-300 text-on-accent"
                       disabled={isVectorizing}
                     >
                       <MessageSquare className="w-3 h-3" />
@@ -323,7 +323,7 @@ export default function SummarizeModal({
                       active={isDrop}
                       onClick={() => setState(msgObj.id, DROP)}
                       title="Drop from context entirely"
-                      activeClass="bg-danger-solid border-danger-solid text-white"
+                      activeClass="bg-danger-solid border-danger-solid text-on-danger"
                       disabled={isVectorizing}
                     >
                       <EyeOff className="w-3 h-3" />
@@ -347,14 +347,14 @@ export default function SummarizeModal({
             <button
               disabled={isVectorizing}
               onClick={onClose}
-              className="px-4 py-2 text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-white hover:bg-white/5 rounded-xl cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="px-4 py-2 text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-text-primary hover:bg-tint/5 rounded-xl cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Cancel
             </button>
             <button
               disabled={isVectorizing || loading || nothingToDo}
               onClick={handleConfirmSubmit}
-              className="px-4 py-2 text-xs font-bold uppercase tracking-wider bg-accent text-[#011419] rounded-xl hover:brightness-110 cursor-pointer transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center space-x-2"
+              className="px-4 py-2 text-xs font-bold uppercase tracking-wider bg-accent text-on-accent rounded-xl hover:brightness-110 cursor-pointer transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center space-x-2"
             >
               {isVectorizing ? (
                 <span>{progressLabel(progress)}</span>

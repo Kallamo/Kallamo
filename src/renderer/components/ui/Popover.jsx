@@ -23,6 +23,8 @@ export default function Popover({
   open,
   onClose,
   matchAnchorWidth = true,
+  // At least as wide as the anchor, growing to fit its content up to this many pixels.
+  fitWidth = 0,
   gap = 6,
   maxHeight = 240,
   align = 'left',
@@ -57,14 +59,19 @@ export default function Popover({
       maxWidth: 'calc(100vw - 16px)',
     };
     if (scroll) next.maxHeight = Math.max(120, Math.min(maxHeight, (flipUp ? spaceAbove : spaceBelow) - gap));
+    const panelWidth = fitWidth ? (panelRef.current?.offsetWidth || rect.width) : matchAnchorWidth ? rect.width : 240;
     if (align === 'right') next.right = Math.max(8, window.innerWidth - rect.right);
-    else next.left = Math.max(8, Math.min(rect.left, window.innerWidth - (matchAnchorWidth ? rect.width : 240) - 8));
-    if (matchAnchorWidth) next.width = Math.min(rect.width, window.innerWidth - 16);
+    else next.left = Math.max(8, Math.min(rect.left, window.innerWidth - panelWidth - 8));
+    if (fitWidth) {
+      next.width = 'max-content';
+      next.minWidth = Math.min(rect.width, window.innerWidth - 16);
+      next.maxWidth = Math.max(Math.min(rect.width, window.innerWidth - 16), Math.min(fitWidth, window.innerWidth - 16));
+    } else if (matchAnchorWidth) next.width = Math.min(rect.width, window.innerWidth - 16);
     if (flipUp) next.bottom = window.innerHeight - rect.top + gap;
     else next.top = rect.bottom + gap;
 
     setStyle(next);
-  }, [anchorRef, gap, maxHeight, matchAnchorWidth, align, scroll]);
+  }, [anchorRef, gap, maxHeight, matchAnchorWidth, fitWidth, align, scroll]);
 
   useLayoutEffect(() => {
     if (!open) return;
