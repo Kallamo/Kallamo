@@ -90,7 +90,7 @@ export function RoleplayRail({ statusLabel, processing, pendingCount, calendar, 
     </span>
   );
   return (
-    <aside aria-label="Roleplay" className="glass-rail glass-dense relative z-20 flex h-full w-16 shrink-0 flex-col items-center gap-1 border-l border-border-subtle py-3">
+    <aside aria-label="Roleplay" className="glass-rail glass-dense relative z-20 flex h-full w-16 shrink-0 flex-col items-center gap-1 border-l border-border-subtle pb-3 pt-[3.25rem]">
       <Tooltip side="left" content="Open roleplay panel">
         <button type="button" onClick={() => onOpen()} aria-label="Open roleplay panel" className={`${railButton} h-10 w-10 text-text-muted hover:text-text-primary`}>
           <PanelRightOpen aria-hidden="true" className="h-[1.125rem] w-[1.125rem]" />
@@ -215,7 +215,7 @@ export function PanelTabs({ tab, onChange, inventoryCount }) {
   ];
   return (
     <div className="px-3 pb-1 pt-3">
-      <div role="tablist" aria-label="Roleplay panel" className="flex gap-0.5 rounded-card border border-tint/[0.06] bg-shade/25 p-[3px]">
+      <div role="tablist" aria-label="Roleplay panel" className="ws-well flex gap-0.5 rounded-card border border-tint/[0.06] bg-shade/25 p-[3px]">
         {tabs.map(([id, label, Icon]) => (
           <button
             key={id}

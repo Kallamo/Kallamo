@@ -285,7 +285,7 @@ export default function WorldbuildEventOccurrences({
 
   return (
     <div className="space-y-4">
-      <section className="overflow-hidden rounded-card border border-border-default bg-surface-panel-muted/60 backdrop-blur-md">
+      <section className="ws-card overflow-hidden rounded-card border border-border-default bg-surface-panel-muted/60 backdrop-blur-md">
         <header className="flex min-h-11 items-center gap-2.5 border-b border-border-subtle pl-4 pr-2">
           <StopwatchIcon className="h-4 w-4 shrink-0 text-text-muted" />
           <h2 className="text-sm font-semibold text-text-primary">Occurrences</h2>
@@ -646,7 +646,7 @@ function DetailSection({ icon: Icon, title, action, children }: { icon: typeof B
 }
 
 function ConsequenceRow({ onRemove, children }: { onRemove(): void; children: React.ReactNode }) {
-  return <div className="mb-2 grid gap-3 rounded-card border border-border-subtle bg-surface-panel-muted/60 p-3 lg:grid-cols-[repeat(auto-fit,minmax(9rem,1fr))_auto] lg:items-end">{children}<button type="button" onClick={onRemove} aria-label="Remove consequence" data-tooltip="Remove" className="inline-flex h-10 w-10 items-center justify-center rounded-control text-text-subtle hover:bg-status-danger/10 hover:text-status-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><X className="h-4 w-4" /></button></div>;
+  return <div className="ws-card mb-2 grid gap-3 rounded-card border border-border-subtle bg-surface-panel-muted/60 p-3 lg:grid-cols-[repeat(auto-fit,minmax(9rem,1fr))_auto] lg:items-end">{children}<button type="button" onClick={onRemove} aria-label="Remove consequence" data-tooltip="Remove" className="inline-flex h-10 w-10 items-center justify-center rounded-control text-text-subtle hover:bg-status-danger/10 hover:text-status-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><X className="h-4 w-4" /></button></div>;
 }
 
 function ConsequenceField({ label, children }: { label: string; children: React.ReactNode }) {

@@ -1181,7 +1181,7 @@ export default function WritingEditor({
       )}
 
       {/* Chapter header, always visible (incl. bubble mode) so Export and Page setup never disappear. */}
-      <div className="@container glass-panel flex h-[3.25rem] shrink-0 items-center gap-1 border-b border-border-subtle pl-3 pr-3">
+      <div className="@container ws-clear glass-panel flex h-[3.25rem] shrink-0 items-center gap-1 border-b border-border-subtle pl-3 pr-3">
         <IconButton icon={chaptersHidden ? PanelLeftOpen : PanelLeftClose} label={chaptersHidden ? 'Show chapters' : 'Hide chapters'} size="sm" tooltipSide="bottom" onClick={onToggleChapters} />
         {folderName && (
           <>
@@ -1244,7 +1244,7 @@ export default function WritingEditor({
       </div>
 
       {toolbarMode === 'fixed' && (
-        <div className="glass-panel flex min-h-[2.875rem] shrink-0 items-center border-b border-border-subtle px-3.5 py-1.5">
+        <div className="ws-clear glass-panel flex min-h-[2.875rem] shrink-0 items-center border-b border-border-subtle px-3.5 py-1.5">
           <Toolbar editor={editor} pageConfig={pageConfig} />
         </div>
       )}
@@ -1392,7 +1392,7 @@ export default function WritingEditor({
 
       <div data-writing-scroll-container className={`custom-scrollbar relative flex-1 px-4 py-7 ${inFlight ? 'overflow-hidden' : 'overflow-y-auto'}`}>
         <div
-          className={`relative mx-auto rounded-xl shadow-xl ring-1 ring-shade/10 ${locked ? 'wd-sheet-locked' : ''}`}
+          className={`relative mx-auto rounded-xl shadow-[0_2rem_4rem_-1.5rem_color-mix(in_srgb,var(--theme-shade)_75%,transparent)] ring-1 ring-shade/30 ${locked ? 'wd-sheet-locked' : ''}`}
           style={sheetStyle}
         >
           <EditorContent editor={editor} />
@@ -1454,7 +1454,7 @@ export default function WritingEditor({
       )}
 
       {/* Status bar: counts, then the chapter's word goal. */}
-      <div className="glass-panel flex h-[2.125rem] shrink-0 items-center gap-4 border-t border-border-subtle px-4 text-xs text-text-subtle">
+      <div className="ws-status glass-panel flex h-[2.125rem] shrink-0 items-center gap-4 border-t border-border-subtle px-4 text-xs text-text-subtle">
         <span className="tabular-nums"><b className="font-semibold text-text-secondary">{counts.words.toLocaleString()}</b> words</span>
         <span className="tabular-nums">{counts.chars.toLocaleString()} characters</span>
         {counts.words > 0 && <span className="tabular-nums">About {estimatePagesFromWords(counts.words, pageConfig)} {estimatePagesFromWords(counts.words, pageConfig) === 1 ? 'page' : 'pages'}</span>}

@@ -80,8 +80,8 @@ export default function ConfigurationView({ onTriggerSummarize }) {
   const shared = { activeChat, handleSaveChat, electronAPI, refreshChats, showToast };
 
   return (
-    <div className="flex h-full w-full overflow-hidden bg-surface-canvas">
-      <nav aria-label="Configuration sections" className="flex w-62 shrink-0 select-none flex-col gap-0.5 border-r border-border-subtle bg-surface-sidebar/70 px-3 py-5">
+    <div className="ws-clear flex h-full w-full overflow-hidden bg-surface-canvas">
+      <nav aria-label="Configuration sections" className="ws-rail flex w-62 shrink-0 select-none flex-col gap-0.5 border-r border-border-subtle bg-surface-sidebar/70 px-3 py-5">
         <span className="px-2.5 pb-3 text-[0.9375rem] font-bold text-text-primary">Configuration</span>
         {SECTIONS.map(section => {
           const Icon = section.icon;
@@ -140,7 +140,7 @@ function NavButton({ active, child = false, onClick, children }) {
       type="button"
       onClick={onClick}
       aria-current={active ? 'true' : undefined}
-      className={`flex w-full items-center gap-2.5 rounded-control px-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${child ? 'h-7.5 text-[0.8125rem]' : 'h-8.5 text-[0.8125rem]'} ${active ? 'bg-accent/13 font-semibold text-accent' : 'font-medium text-text-muted hover:bg-surface-hover/60 hover:text-text-primary'}`}
+      className={`flex w-full items-center gap-2.5 rounded-control px-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${child ? 'h-7.5 text-[0.8125rem]' : 'h-8.5 text-[0.8125rem]'} ${active ? 'bg-accent/13 font-semibold text-text-primary shadow-[inset_3px_0_0_var(--app-accent)] [&>svg]:text-accent' : 'font-medium text-text-muted hover:bg-surface-hover/60 hover:text-text-primary'}`}
     >
       {children}
     </button>

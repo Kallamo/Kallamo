@@ -47,7 +47,7 @@ export default function WorldOverview({ workspaceName, entities, typeMeta, calen
           const total = confirmed.filter(entity => entity.type === type).length;
           return (
             <button key={type} type="button" onClick={() => onFilter(type)}
-              className="flex items-center gap-3 rounded-card border border-border-subtle bg-surface-panel-muted/60 p-3.5 text-left backdrop-blur-md transition-colors hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              className="ws-card flex items-center gap-3 rounded-card border border-border-subtle bg-surface-panel-muted/60 p-3.5 text-left backdrop-blur-md transition-colors hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
               <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-control border ${t.medallion}`}><Icon className="h-4 w-4" aria-hidden="true" /></span>
               <span className="min-w-0">
                 <span className="block text-xl font-bold tabular-nums text-text-primary">{total}</span>
@@ -58,7 +58,7 @@ export default function WorldOverview({ workspaceName, entities, typeMeta, calen
         })}
       </div>
       <div className="grid items-start gap-4 md:grid-cols-2">
-        <section className="rounded-card border border-border-default bg-surface-panel-muted/60 backdrop-blur-md">
+        <section className="ws-card rounded-card border border-border-default bg-surface-panel-muted/60 backdrop-blur-md">
           <header className="flex min-h-11 items-center gap-2.5 border-b border-border-subtle px-4"><AiGlyph className="h-4 w-4 text-text-muted" /><h2 className="text-sm font-semibold text-text-primary">Waiting for review</h2></header>
           <div className="space-y-2 p-4 text-sm">
             {waiting === 0 && <p className="text-text-disabled">Nothing waiting. Suggestions from the AI land here.</p>}
@@ -67,7 +67,7 @@ export default function WorldOverview({ workspaceName, entities, typeMeta, calen
             {counts.names > 0 && <Row icon={AlertTriangle} tone="text-status-warning" label="Names to check" value={counts.names} onClick={() => onReview('names')} />}
           </div>
         </section>
-        <section className="rounded-card border border-border-default bg-surface-panel-muted/60 backdrop-blur-md">
+        <section className="ws-card rounded-card border border-border-default bg-surface-panel-muted/60 backdrop-blur-md">
           <header className="flex min-h-11 items-center gap-2.5 border-b border-border-subtle px-4"><History className="h-4 w-4 text-text-muted" /><h2 className="text-sm font-semibold text-text-primary">Recently changed</h2></header>
           <div className="divide-y divide-border-subtle px-4 py-1">
             {recent.map(entity => {

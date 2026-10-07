@@ -151,7 +151,7 @@ export default function ProgressionSection({ sectionRef, workspaceId, api, showT
                 onStart={(trait, initialValue) => saveTrait({ ...trait, initialValue })}
               />
               <Button variant="ghost" size="sm" icon={Plus} className="self-start" onClick={() => setTraitDraft({ name: '', description: '', initialValue: 10, minimum: 1, maximum: 20 })}>Add attribute</Button>
-              <div className="flex flex-col gap-2.5 rounded-card border border-border-subtle bg-surface-canvas/45 p-3.5">
+              <div className="flex flex-col gap-2.5 rounded-card border border-border-subtle bg-surface-inset p-3.5">
                 <span className="text-[0.8125rem] font-semibold text-text-secondary">How attributes change</span>
                 <CheckRow checked={config.attributes.aiRaises} onChange={aiRaises => saveConfig({ attributes: { ...config.attributes, aiRaises } })} label="The AI raises them when the story earns it" help="Training, a hard-won fight, a new level. One point at a time, and it says why." />
                 {config.attributes.aiRaises && (
@@ -168,7 +168,7 @@ export default function ProgressionSection({ sectionRef, workspaceId, api, showT
 
             <Block title="On each new level" aside="Optional">
               {rewards.length > 0 && (
-                <div className="divide-y divide-border-subtle overflow-hidden rounded-card border border-border-subtle bg-surface-canvas/45">
+                <div className="divide-y divide-border-subtle overflow-hidden rounded-card border border-border-subtle bg-surface-inset">
                   {rewards.map(reward => {
                     const definition = definitionById.get(reward.definitionId);
                     return (
@@ -390,7 +390,7 @@ function TraitTable({ traits, onEdit, onDelete, onStart }) {
     return <p className="rounded-card border border-dashed border-border-subtle px-4 py-5 text-center text-[0.8125rem] text-text-muted">No attributes yet.</p>;
   }
   return (
-    <div className="overflow-hidden rounded-card border border-border-subtle bg-surface-canvas/45">
+    <div className="overflow-hidden rounded-card border border-border-subtle bg-surface-inset">
       <div className={`grid ${TRAIT_COLUMNS} items-center gap-3 bg-tint/[0.025] py-2 pl-3.5 pr-2 text-xs font-semibold text-text-subtle`}>
         <span>Attribute</span>
         <span>Starts at</span>

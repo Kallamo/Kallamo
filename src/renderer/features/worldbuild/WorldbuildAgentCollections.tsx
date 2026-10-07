@@ -359,7 +359,7 @@ function CollectionShell({ icon: Icon, title, count, empty = false, emptyVerb = 
       {onAdd && <button type="button" onClick={onAdd} className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-xs font-semibold text-text-muted transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Plus className="h-3.5 w-3.5" aria-hidden="true" />{emptyVerb}</button>}
     </section>;
   }
-  return <section className="overflow-hidden rounded-card border border-border-default bg-surface-panel-muted/60 backdrop-blur-md">
+  return <section className="ws-card overflow-hidden rounded-card border border-border-default bg-surface-panel-muted/60 backdrop-blur-md">
     <header className="flex min-h-11 items-center gap-2.5 border-b border-border-subtle pl-4 pr-2">
       <Icon className="h-4 w-4 shrink-0 text-text-muted" aria-hidden="true" />
       <h3 className="min-w-0 truncate text-sm font-semibold text-text-primary">{title}</h3>

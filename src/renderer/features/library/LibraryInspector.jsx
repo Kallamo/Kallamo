@@ -122,11 +122,10 @@ function Excerpt({ html, text, info, actions = null }) {
   }, [html, text, expanded]);
   return (
     <Card>
-      <div ref={bodyRef} className={`relative px-5 pt-4 ${expanded ? 'pb-4' : 'max-h-52 overflow-hidden'}`}>
+      <div ref={bodyRef} className={`relative px-5 pt-4 ${expanded ? 'pb-4' : 'max-h-52 overflow-hidden'} ${!expanded && overflows ? '[mask-image:linear-gradient(to_bottom,black_calc(100%-3rem),transparent)]' : ''}`}>
         {html
           ? <div className="markdown-body select-text text-[0.8125rem] leading-relaxed text-text-muted [&_h1]:mb-1 [&_h1]:mt-3 [&_h1]:border-0 [&_h1]:pb-0 [&_h1]:text-[0.9375rem] [&_h2]:mb-1 [&_h2]:mt-3 [&_h2]:text-sm [&_h3]:mb-1 [&_h3]:mt-3 [&_h3]:text-[0.8125rem] [&_h3]:normal-case [&_h3]:tracking-normal [&_h3]:text-text-primary [&_li]:text-[0.8125rem] [&_p]:my-1.5 [&_p]:text-[0.8125rem]" dangerouslySetInnerHTML={{ __html: html }} />
           : <p className="whitespace-pre-line text-[0.8125rem] leading-relaxed text-text-muted select-text">{text}</p>}
-        {!expanded && overflows && <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-b from-transparent to-surface-raised-low" />}
       </div>
       <div className="flex items-center gap-2 border-t border-tint/[0.055] px-5 py-3">
         <span className="caption flex-1">{info}</span>

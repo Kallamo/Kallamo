@@ -15,8 +15,8 @@
   --theme-surface-input: #07171d;
   --theme-surface-hover: #14282e;
   --theme-surface-overlay: rgb(0 8 11 / 78%);
-  /* Depth: pages run from a lifted top to a deep bottom; rails sit a step below the page;
-     cards are a step above it, lighter at their top edge. */
+  /* Depth: pages run from a lifted top to a deep bottom; rails sit a step below the page.
+     Cards on a page sink below it (sunken), and what sits inside a card rises out of it (well). */
   --theme-surface-canvas-lift: #04212b;
   --theme-surface-canvas-mid: #021a22;
   --theme-surface-canvas-deep: #01111a;
@@ -26,6 +26,10 @@
   --theme-surface-raised: #0a222c;
   --theme-surface-raised-low: #061920;
   --theme-surface-inset: rgb(1 13 18 / 72%);
+  --theme-surface-sunken: var(--theme-surface-rail-top);
+  --theme-surface-sunken-low: var(--theme-surface-rail);
+  --theme-surface-well: color-mix(in srgb, var(--theme-tint) 3%, transparent);
+  --theme-border-well: color-mix(in srgb, var(--theme-tint) 9%, transparent);
   --theme-highlight: color-mix(in srgb, var(--theme-tint) 5%, transparent);
   --theme-glow-cool: rgb(46 140 170 / 10%);
   --theme-titlebar-shade: rgb(0 8 11 / 55%);
@@ -156,6 +160,8 @@
   --color-surface-raised: var(--theme-surface-raised);
   --color-surface-raised-low: var(--theme-surface-raised-low);
   --color-surface-inset: var(--theme-surface-inset);
+  --color-surface-sunken: var(--theme-surface-sunken);
+  --color-surface-well: var(--theme-surface-well);
   --color-titlebar-shade: var(--theme-titlebar-shade);
   --color-surface-abyss: var(--theme-surface-abyss);
   --color-surface-danger: var(--theme-surface-danger);
@@ -357,9 +363,16 @@ textarea, input, [contenteditable], .ProseMirror {
   background: linear-gradient(180deg, var(--theme-surface-rail-top) 0%, var(--theme-surface-rail) 55%, var(--theme-surface-rail-bottom) 100%);
 }
 
+/* A card on a page sits below it. Fields, selects and wells inside it rise out of it
+   instead of going darker still, so they never read as holes in a hole. */
 @utility surface-card {
-  background: linear-gradient(180deg, var(--theme-surface-raised) 0%, var(--theme-surface-raised-low) 100%);
-  box-shadow: inset 0 1px 0 var(--theme-highlight), 0 0.75rem 1.75rem -1.125rem color-mix(in srgb, var(--theme-shade) 60%, transparent);
+  background: linear-gradient(180deg, var(--theme-surface-sunken) 0%, var(--theme-surface-sunken-low) 100%);
+  box-shadow: inset 0 1px 0 var(--theme-highlight);
+  --theme-surface-input: var(--theme-surface-well);
+  --color-surface-input: var(--theme-surface-well);
+  --color-surface-inset: var(--theme-surface-well);
+  --theme-border-default: var(--theme-border-well);
+  --color-border-default: var(--theme-border-well);
 }
 
 @utility reveal {
@@ -740,10 +753,31 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   -webkit-backdrop-filter: none !important;
 }
 
-/* Over a chat background every surface shares one transparency and one blur, so no panel
+/* Without background art a workspace sits on the page gradient: rails take the rail gradient,
+   panels sink like cards, bars stay clear and the header shares the rails' top. Over art every
+   surface shares one transparency and one blur instead (.has-backdrop below), so no panel
    decides its own. The chat's backdrop opacity still sets how dark the art sits. */
-.glass-panel { background-color: var(--theme-surface-panel); }
-.glass-rail { background-color: var(--theme-surface-sidebar); }
+.glass-panel:not(.has-backdrop *) { @apply surface-card; }
+.glass-rail:not(.has-backdrop *) { @apply surface-rail; }
+.ws-page:not(.has-backdrop) { @apply surface-page; }
+.ws-card:not(.has-backdrop *) { @apply surface-card; backdrop-filter: none; }
+.ws-rail:not(.has-backdrop *) { @apply surface-rail; backdrop-filter: none; }
+.ws-clear:not(.has-backdrop *) { background: transparent; box-shadow: none; backdrop-filter: none; }
+.ws-head:not(.has-backdrop *) {
+  background-color: var(--theme-surface-rail-top);
+  border-color: color-mix(in srgb, var(--theme-tint) 6%, transparent);
+  backdrop-filter: none;
+}
+.ws-well:not(.has-backdrop *) {
+  background-color: color-mix(in srgb, var(--theme-surface-abyss) 55%, transparent);
+  border-color: color-mix(in srgb, var(--theme-tint) 8%, transparent);
+}
+.ws-status:not(.has-backdrop *) { background: color-mix(in srgb, var(--theme-surface-canvas-deep) 70%, transparent); box-shadow: none; }
+/* The composer is the one surface that rises: it is where the next turn is written. */
+.ws-composer:not(.has-backdrop *) {
+  background: linear-gradient(180deg, var(--theme-surface-raised) 0%, var(--theme-surface-raised-low) 100%);
+  box-shadow: inset 0 1px 0 var(--theme-highlight), var(--theme-shadow-overlay);
+}
 .has-backdrop .glass-panel,
 .has-backdrop .glass-rail {
   backdrop-filter: blur(20px) saturate(1.15);

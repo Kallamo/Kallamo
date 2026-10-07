@@ -175,10 +175,10 @@ export default function ChatFilesView({
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-surface-abyss/40 overflow-hidden relative">
+    <div className="ws-clear flex-1 flex flex-col h-full bg-surface-abyss/40 overflow-hidden relative">
 
       {/* Top Filter and Search Bar */}
-      <div className="shrink-0 p-5 border-b border-gray-800/80 bg-surface-canvas/35 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="ws-clear shrink-0 p-5 border-b border-gray-800/80 bg-surface-canvas/35 flex flex-col md:flex-row md:items-center justify-between gap-4">
 
         {/* Category Pills */}
         <div className="flex flex-wrap gap-1.5 select-none">
@@ -204,7 +204,7 @@ export default function ChatFilesView({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search workspace files..."
-            className="w-full bg-surface-canvas border border-gray-800/80 rounded-xl pl-8 pr-3 py-1.5 text-xs text-text-primary placeholder-gray-600 focus:outline-none focus:border-accent transition-colors"
+            className="ws-well w-full bg-surface-canvas border border-gray-800/80 rounded-xl pl-8 pr-3 py-1.5 text-xs text-text-primary placeholder-gray-600 focus:outline-none focus:border-accent transition-colors"
           />
         </div>
 

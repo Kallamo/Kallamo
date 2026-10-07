@@ -114,7 +114,7 @@ export default function ResourceModal({ initial, onCancel, onSave }) {
               <SegmentedControl className="mt-1.5" label="How the AI changes it" value={draft.updatePolicy} onChange={updatePolicy => set({ updatePolicy })} options={POLICY_OPTIONS} />
               <Help className="mt-1.5">{editing ? 'Manual keeps it out of what the AI is told it can change.' : 'Starts with the rule set in Configuration, Narrative State.'}</Help>
             </div>
-            <div className="flex flex-col gap-2.5 rounded-card border border-border-subtle bg-surface-canvas/45 p-3">
+            <div className="flex flex-col gap-2.5 rounded-card border border-border-subtle bg-surface-inset p-3">
               <div className="flex items-center gap-3">
                 <span className="min-w-0 flex-1">
                   <span className="block text-[0.8125rem] font-semibold text-text-secondary">Changes with time</span>

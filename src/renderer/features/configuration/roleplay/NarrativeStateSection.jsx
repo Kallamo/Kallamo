@@ -96,7 +96,7 @@ export default function NarrativeStateSection({
             )}
           </div>
           {pendingCount ? (
-            <div className="overflow-hidden rounded-card border border-border-subtle bg-surface-canvas/45">
+            <div className="overflow-hidden rounded-card border border-border-subtle bg-surface-inset">
               {groups.map((group, groupIndex) => (
                 <div key={group.kind}>
                   <div className={`flex items-center gap-2 bg-tint/[0.025] px-3.5 py-2 text-xs font-semibold text-text-muted ${groupIndex ? 'border-t border-border-subtle' : ''}`}>
@@ -122,7 +122,7 @@ export default function NarrativeStateSection({
               <h3 className="text-sm font-semibold text-text-primary">Recent changes</h3>
               <Help>Already in the record. The Roleplay panel in the chat shows them turn by turn.</Help>
             </div>
-            <div className="divide-y divide-border-subtle overflow-hidden rounded-card border border-border-subtle bg-surface-canvas/45">
+            <div className="divide-y divide-border-subtle overflow-hidden rounded-card border border-border-subtle bg-surface-inset">
               {recent.slice(0, recentLimit).map(item => {
                 const view = describeChange(item, names);
                 return (

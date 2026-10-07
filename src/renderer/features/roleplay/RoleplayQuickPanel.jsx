@@ -394,7 +394,7 @@ function RoleplayQuickPanel({
   const visibleTurns = showAllTurns ? recentTurns : recentTurns.slice(0, RECENT_TURN_LIMIT);
 
   return (
-    <aside aria-label="Roleplay" className="glass-rail glass-dense relative z-20 flex h-full w-[clamp(18rem,30vw,22.5rem)] shrink-0 flex-col border-l border-border-subtle shadow-2xl 2xl:w-[23.5rem]">
+    <aside aria-label="Roleplay" className="glass-rail glass-dense relative z-20 flex h-full pt-10 w-[clamp(18rem,30vw,22.5rem)] shrink-0 flex-col border-l border-border-subtle shadow-2xl 2xl:w-[23.5rem]">
       <header className="flex h-14 shrink-0 items-center justify-between border-b border-border-subtle pl-4 pr-3">
         <div className="flex min-w-0 items-center gap-2.5 text-accent">
           <RoleplayStatus processing={narrativeStateProcessing} pendingCount={pendingCount} />

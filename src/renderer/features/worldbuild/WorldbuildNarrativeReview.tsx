@@ -107,7 +107,7 @@ export default function WorldbuildNarrativeReview({
         const reviewed = proposal.operations.filter(operation => decisions[operation.id]).length;
         const busy = saving === proposal.eventId;
         return (
-          <section key={proposal.eventId} className="rounded-card border border-border-default bg-surface-panel-muted/60 px-4 pb-2 pt-3.5 backdrop-blur-md">
+          <section key={proposal.eventId} className="ws-card rounded-card border border-border-default bg-surface-panel-muted/60 px-4 pb-2 pt-3.5 backdrop-blur-md">
             <div className="flex flex-wrap items-center gap-2">
               {index === 0 && switcher ? switcher : <><AiGlyph className="h-4 w-4 shrink-0 text-entity-event" /><h2 className="text-sm font-semibold text-text-primary">Narrative state</h2></>}
               <span className="text-xs tabular-nums text-text-subtle">{reviewed} of {proposal.operations.length} reviewed</span>

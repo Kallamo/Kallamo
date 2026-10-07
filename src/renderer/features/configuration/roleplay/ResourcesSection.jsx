@@ -153,7 +153,7 @@ function ResourceRow({ definition, holders, open, onToggle, onEdit, onDelete, gr
   };
 
   return (
-    <article className="rounded-card border border-border-subtle bg-surface-canvas/45">
+    <article className="rounded-card border border-border-subtle bg-surface-inset">
       <div className="flex flex-wrap items-center gap-3 py-3 pl-4 pr-2.5">
         <span aria-hidden="true" className="h-3.5 w-3.5 shrink-0 rounded-[0.25rem]" style={{ backgroundColor: definition.color }} />
         <div className="min-w-0 flex-1">

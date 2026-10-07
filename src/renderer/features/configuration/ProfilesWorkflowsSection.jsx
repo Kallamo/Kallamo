@@ -76,7 +76,7 @@ export default function ProfilesWorkflowsSection({ sectionRef, activeChat, writi
               />
             </label>
           )}
-          <div className="max-h-[22rem] divide-y divide-border-subtle overflow-y-auto rounded-card border border-border-subtle bg-surface-canvas/45 custom-scrollbar">
+          <div className="max-h-[22rem] divide-y divide-border-subtle overflow-y-auto rounded-card border border-border-subtle bg-surface-inset custom-scrollbar">
             {profiles.length === 0 && <p className="px-4 py-5 text-center text-xs text-text-subtle">{writingProfiles.length ? 'No profile matches.' : 'No profiles yet.'}</p>}
             {profiles.map(profile => {
               const on = activeProfiles.includes(profile.id);
@@ -115,7 +115,7 @@ export default function ProfilesWorkflowsSection({ sectionRef, activeChat, writi
             <span className="flex-1 text-xs tabular-nums text-text-subtle">{workflowsOn} of {workflows.length} on</span>
             <Button variant="subtle" size="sm" icon={Plus} onClick={() => setEditing({ kind: 'workflow', item: null })}>New</Button>
           </div>
-          <div className="max-h-[22rem] divide-y divide-border-subtle overflow-y-auto rounded-card border border-border-subtle bg-surface-canvas/45 custom-scrollbar">
+          <div className="max-h-[22rem] divide-y divide-border-subtle overflow-y-auto rounded-card border border-border-subtle bg-surface-inset custom-scrollbar">
             {workflows.length === 0 && (
               <div className="flex flex-col items-center gap-1.5 px-4 py-6 text-center">
                 <Workflow aria-hidden="true" className="h-5 w-5 text-text-disabled" />

@@ -309,7 +309,7 @@ function Section({ icon, title, count, editing, onEdit, showPencil, right, empty
     );
   }
   return (
-    <section className="rounded-card border border-border-default bg-surface-panel-muted/60 backdrop-blur-md overflow-hidden">
+    <section className="ws-card rounded-card border border-border-default bg-surface-panel-muted/60 backdrop-blur-md overflow-hidden">
       <header className={`flex min-h-11 items-center gap-2.5 pl-4 pr-2 ${quiet ? 'pt-1.5' : 'border-b border-border-subtle'}`}>
         {!quiet && <Icon className="h-4 w-4 shrink-0 text-text-muted" aria-hidden="true" />}
         <h2 className={`min-w-0 truncate ${quiet ? 'text-xs font-medium text-text-subtle' : 'text-sm font-semibold text-text-primary'}`}>{title}</h2>
@@ -2235,7 +2235,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   })();
 
   return (
-    <div className="flex-1 flex flex-col lg:flex-row h-full overflow-hidden bg-surface-canvas/40 select-none relative">
+    <div className="ws-clear flex-1 flex flex-col lg:flex-row h-full overflow-hidden bg-surface-canvas/40 select-none relative">
       <input ref={coverFileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden" onChange={pickCover} />
       {imageDialog && selectedId && createPortal(
         <WorldbuildImageDialog
@@ -2303,7 +2303,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           onClose={() => setConfirmDelete(false)}
         />
       )}
-      <div style={{ '--worldbuild-sidebar-width': `${sidebarWidth}px` }} className="relative w-full lg:w-[var(--worldbuild-sidebar-width)] shrink-0 flex flex-col h-full overflow-visible border-r border-border-subtle/40 bg-surface-canvas/35 backdrop-blur-md">
+      <div style={{ '--worldbuild-sidebar-width': `${sidebarWidth}px` }} className="ws-rail relative w-full lg:w-[var(--worldbuild-sidebar-width)] shrink-0 flex flex-col h-full overflow-visible border-r border-border-subtle/40 bg-surface-canvas/35 backdrop-blur-md">
         {/* The whole right edge resizes; no floating handle over the content. */}
         <div role="separator" aria-orientation="vertical" aria-label="Resize Worldbuild sidebar" tabIndex={0} onPointerDown={startSidebarResize} onKeyDown={handleSidebarResizeKey}
           className="absolute -right-1 top-0 bottom-0 z-20 hidden w-2 cursor-col-resize transition-colors hover:bg-accent/25 focus-visible:bg-accent/40 focus-visible:outline-none lg:block" />
@@ -2351,11 +2351,6 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               })}
             </Menu>
           </div>
-          {entities.length > 0 && (
-            <div role="img" aria-label="What this world is made of" className="mx-0.5 flex h-1 gap-0.5">
-              {TYPE_ORDER.filter(key => typeCounts[key]).map(key => <span key={key} className={`rounded-full ${typeMeta(key).dot}`} style={{ flexGrow: typeCounts[key] }} />)}
-            </div>
-          )}
           <div role="radiogroup" aria-label="Filter by type" className="flex items-stretch justify-between gap-0.5">
             <button type="button" role="radio" aria-checked={!filterType} onClick={() => setFilterType(null)}
               className={`flex h-11 min-w-[2.125rem] shrink-0 flex-col items-center justify-center rounded-md px-1.5 text-xs font-semibold leading-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${!filterType ? 'bg-surface-hover text-text-primary ring-1 ring-inset ring-border-strong' : 'text-text-muted hover:text-text-primary'}`}>
@@ -2387,20 +2382,22 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                 <span className="text-xs font-semibold uppercase tracking-[0.08em] text-text-subtle">World</span>
                 <span aria-hidden="true" className="h-px flex-1 bg-border-subtle" />
               </div>
-              <div className="grid grid-cols-2 gap-1.5">
+              {/* Four across, title only; what each holds is in its tooltip. */}
+              <div className="grid grid-cols-4 gap-1.5">
                 {[
                   { key: 'calendar', icon: CalendarDays, label: 'Calendar', meta: (worldClock && worldCalendar && formatWorldDate(worldCalendar, worldClock)) || worldCalendar?.name || 'Not set up' },
                   { key: 'facts', icon: BookCheck, label: 'Facts', meta: String(factCount || 0) },
-                  { key: 'rules', icon: Scale, label: 'Rules', meta: rulesMeta || 'Not set up' },
+                  { key: 'rules', icon: Scale, label: 'Rules', meta: rulesMeta || 'None yet' },
                   { key: 'types', icon: LayoutTemplate, label: 'Entity types', meta: `${TYPE_ORDER.length} types`, open: () => setShowTemplateManager(true) },
                 ].map(link => {
                   const on = surface === link.key;
                   return (
                     <button key={link.key} type="button" aria-current={on ? 'page' : undefined} onClick={link.open || (() => { setSurface(link.key); setSelected(null); setEditingSection(null); })}
-                      className={`flex h-[4.5rem] min-w-0 flex-col items-center justify-center gap-0.5 rounded-control border px-1.5 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${on ? 'border-accent/35 bg-accent/[0.13] text-accent' : 'border-border-subtle bg-surface-hover/25 text-text-secondary hover:bg-surface-hover/60 hover:text-text-primary'}`}>
-                      <link.icon className={`mb-0.5 h-4 w-4 shrink-0 ${on ? '' : 'text-text-muted'}`} aria-hidden="true" />
-                      <span className="whitespace-nowrap text-sm font-semibold">{link.label}</span>
-                      <span data-tooltip={link.meta} className={`max-w-full truncate text-xs tabular-nums ${on ? 'text-accent/80' : 'text-text-subtle'}`}>{link.meta}</span>
+                      data-tooltip={`${link.label}: ${link.meta}`}
+                      className={`flex h-[5.25rem] min-w-0 flex-col items-center justify-center gap-2 rounded-control border px-1.5 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${on ? 'border-accent/35 bg-accent/[0.13] text-accent' : 'border-border-subtle bg-surface-hover/25 text-text-secondary hover:bg-surface-hover/60 hover:text-text-primary'}`}>
+                      <link.icon className={`h-[1.125rem] w-[1.125rem] shrink-0 ${on ? '' : 'text-text-muted'}`} aria-hidden="true" />
+                      <span className="whitespace-nowrap text-[0.8125rem] font-semibold">{link.label}</span>
+                      <span className="sr-only">{link.meta}</span>
                     </button>
                   );
                 })}
@@ -2552,7 +2549,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                 <Button size="sm" variant="subtle" icon={Trash2} className="!text-status-danger" onClick={() => setConfirmDelete(true)}>Delete</Button>
               </SheetNotice>
             )}
-            <div className={`relative overflow-hidden rounded-surface border ${m.ring} bg-surface-panel-muted/60 backdrop-blur-md`}>
+            <div className={`ws-card relative overflow-hidden rounded-surface border ${m.ring} bg-surface-panel-muted/60 backdrop-blur-md`}>
               <div aria-hidden="true" className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${m.wash} via-transparent to-transparent`} />
               <div className="relative p-5">
               {coverStyle && <>
@@ -2656,7 +2653,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               const allLinks = links.map(linkKey);
               const allChapters = chapters.map(c => c.id);
               return (
-                <section className="rounded-card border border-border-default bg-surface-panel-muted/60 px-4 pb-2 pt-3.5 backdrop-blur-md">
+                <section className="ws-card rounded-card border border-border-default bg-surface-panel-muted/60 px-4 pb-2 pt-3.5 backdrop-blur-md">
                   <div className="flex flex-wrap items-center gap-2">
                     {reviewSwitcher || <><ScanEye className="h-4 w-4 shrink-0 text-status-info" aria-hidden="true" /><h2 className="text-sm font-semibold text-text-primary">Suggested updates</h2></>}
                     <span className="flex-1" />

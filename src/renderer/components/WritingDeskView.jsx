@@ -572,11 +572,11 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
         aria-current={active ? 'page' : undefined}
         onClick={() => editingId !== doc.id && selectDocument(doc.id)}
         onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); selectDocument(doc.id); } }}
-        className={`group relative flex min-h-[1.875rem] cursor-pointer items-center gap-2 rounded-md py-0.5 pl-2 pr-1 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${active ? 'bg-accent/[0.13] text-accent' : 'text-text-secondary hover:bg-tint/5 hover:text-text-primary'} ${dragItem?.id === doc.id ? 'opacity-40' : ''}`}
+        className={`group relative flex min-h-[1.875rem] cursor-pointer items-center gap-2 rounded-md py-0.5 pl-2 pr-1 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${active ? 'bg-accent/[0.13] text-text-primary shadow-[inset_3px_0_0_var(--app-accent)]' : 'text-text-secondary hover:bg-tint/5 hover:text-text-primary'} ${dragItem?.id === doc.id ? 'opacity-40' : ''}`}
       >
         {dropLine(item, 'before')}
         {dropLine(item, 'after')}
-        <FileText className={`h-4 w-4 shrink-0 ${active ? '' : 'text-text-subtle'}`} aria-hidden="true" />
+        <FileText className={`h-4 w-4 shrink-0 ${active ? 'text-accent' : 'text-text-subtle'}`} aria-hidden="true" />
         {editingId === doc.id ? renderEditable(item) : (
           <>
             <span className={`min-w-0 flex-1 truncate ${active ? 'font-semibold' : ''}`}>{doc.title || 'Untitled'}</span>

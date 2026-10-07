@@ -265,7 +265,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, regis
       >
         {enabled && config && (
           <div className="flex flex-col gap-5">
-            <div className="grid overflow-hidden rounded-card border border-border-subtle bg-surface-canvas/45 sm:grid-cols-3">
+            <div className="grid overflow-hidden rounded-card border border-border-subtle bg-surface-inset sm:grid-cols-3">
               <StatusCell label="Playing as" value={player?.canonicalName || 'No one yet'} dot={player ? meta(player.type).dot : null} />
               <StatusCell label="Location" value={location?.canonicalName || 'Not set'} dot={location ? meta('Locations').dot : null} divided />
               <div className="flex min-w-0 items-center gap-2.5 border-t border-border-subtle px-4 py-3 sm:border-l sm:border-t-0">
@@ -276,7 +276,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, regis
                 {pending.length > 0 && <Button variant="ghost" size="sm" onClick={() => onScrollTo?.('narrative-state')}>Review</Button>}
               </div>
             </div>
-            <div className="flex flex-wrap items-center gap-3.5 rounded-card border border-border-subtle bg-surface-canvas/45 px-4 py-3.5">
+            <div className="flex flex-wrap items-center gap-3.5 rounded-card border border-border-subtle bg-surface-inset px-4 py-3.5">
               <Scale aria-hidden="true" className="h-4.5 w-4.5 shrink-0 text-text-muted" />
               <span className="min-w-0 flex-1">
                 <span className="block text-[0.8125rem] font-semibold text-text-secondary">World rules</span>

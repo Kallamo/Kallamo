@@ -1224,7 +1224,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
 
   const aboutPage = () => (
     <>
-      <section className="overflow-hidden rounded-[1.25rem] border border-tint/[0.08] bg-[radial-gradient(34rem_18rem_at_14%_50%,var(--theme-glow-cool),transparent_70%),radial-gradient(30rem_16rem_at_100%_0%,color-mix(in_srgb,var(--app-accent)_9%,transparent),transparent_70%),linear-gradient(180deg,var(--theme-surface-raised),var(--theme-surface-raised-low))] shadow-[inset_0_1px_0_var(--theme-highlight),0_1.125rem_2.5rem_-1.5rem_color-mix(in_srgb,var(--theme-shade)_70%,transparent)]">
+      <section className="overflow-hidden rounded-[1.25rem] border border-tint/[0.08] bg-[radial-gradient(34rem_18rem_at_14%_50%,var(--theme-glow-cool),transparent_70%),radial-gradient(30rem_16rem_at_100%_0%,color-mix(in_srgb,var(--app-accent)_9%,transparent),transparent_70%),linear-gradient(180deg,var(--theme-surface-sunken),var(--theme-surface-sunken-low))] shadow-[inset_0_1px_0_var(--theme-highlight)]">
         <div className="flex items-center gap-7 px-8 pb-6 pt-7">
           <Logo size={76} className="shrink-0 drop-shadow-[0_0.625rem_1.5rem_color-mix(in_srgb,var(--theme-shade)_45%,transparent)]" />
           <div className="min-w-0 flex-1">
@@ -1266,7 +1266,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
           <p className="text-[0.8125rem] leading-relaxed text-text-muted">Kallamo is open source under <span className="font-semibold text-text-primary">AGPL-3.0</span>. Pull requests, bug reports and ideas are welcome on GitHub.</p>
           <div className="flex items-center gap-4 rounded-xl border border-dashed border-tint/[0.12] bg-surface-inset/60 px-[1.125rem] py-4">
             <span className="flex shrink-0 pl-2" aria-hidden="true">
-              {[0, 1, 2, 3].map(slot => <span key={slot} className="-ml-2 h-[2.125rem] w-[2.125rem] rounded-full border-[1.5px] border-dashed border-tint/15 bg-surface-raised-low" />)}
+              {[0, 1, 2, 3].map(slot => <span key={slot} className="-ml-2 h-[2.125rem] w-[2.125rem] rounded-full border-[1.5px] border-dashed border-tint/15 bg-surface-well" />)}
             </span>
             <span className="flex-1 text-[0.8125rem] text-text-muted">This space is reserved for future contributors.</span>
             <a href="https://github.com/Kallamo/Kallamo" target="_blank" rel="noopener noreferrer" className={`${linkButtonClass} gap-2`}><GitPullRequest className="h-3.5 w-3.5" aria-hidden="true" />Contribute</a>

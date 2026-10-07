@@ -59,14 +59,14 @@ export default function TimeCostsSection({ sectionRef, matrix, calendar, onSave,
       description="How much the clock moves when the story doesn't say. Time written in the story always wins."
     >
       {onOpenCalendar && (
-        <div className="mb-5 flex flex-wrap items-center gap-3 rounded-card border border-border-subtle bg-surface-canvas/45 px-3.5 py-2.5 text-[0.8125rem] text-text-secondary">
+        <div className="mb-5 flex flex-wrap items-center gap-3 rounded-card border border-border-subtle bg-surface-inset px-3.5 py-2.5 text-[0.8125rem] text-text-secondary">
           <span className="min-w-0 flex-1">A day here has <b className="font-semibold text-text-primary">{Math.round(minutesPerDay / 60)} hours</b>, set by {calendar?.name || 'the calendar'}. Days in a timeskip follow it.</span>
           <Button variant="ghost" size="sm" onClick={onOpenCalendar}>Open Calendar</Button>
         </div>
       )}
       {categories.length ? (
         <div className="flex flex-col gap-5">
-          <div className="rounded-card border border-border-subtle bg-surface-canvas/45 px-5 pb-3.5 pt-4" aria-hidden="true">
+          <div className="rounded-card border border-border-subtle bg-surface-inset px-5 pb-3.5 pt-4" aria-hidden="true">
             <div className="flex flex-col gap-1.5">
               {categories.map(category => {
                 const left = scale(category.minimumMinutes);
@@ -93,7 +93,7 @@ export default function TimeCostsSection({ sectionRef, matrix, calendar, onSave,
             </div>
           </div>
 
-          <div className="overflow-hidden rounded-card border border-border-subtle bg-surface-canvas/45">
+          <div className="overflow-hidden rounded-card border border-border-subtle bg-surface-inset">
             {categories.map((category, index) => {
               const open = openId === category.id;
               const days = category.id === 'timeskip';

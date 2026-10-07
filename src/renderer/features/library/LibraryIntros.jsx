@@ -19,7 +19,7 @@ const Swapped = ({ children }) => (
 
 export function VariablesIntro({ onNew, onStart }) {
   return (
-    <article className="rounded-2xl border border-border-subtle bg-surface-raised-low px-8 py-7">
+    <article className="rounded-2xl border border-border-subtle surface-card px-8 py-7">
       <div className="grid grid-cols-[1fr_4rem_1fr] items-stretch">
         <div className="rounded-[0.875rem] border border-border-subtle bg-tint/[0.02] px-5 py-[1.125rem]">
           <span className="caption mb-2.5 block">What you write in a profile&apos;s rules</span>
@@ -119,7 +119,7 @@ export const PROFILE_STARTERS = [
 
 export function ProfilesIntro({ onNew, onImport, onStart }) {
   return (
-    <article className="rounded-2xl border border-border-subtle bg-surface-raised-low px-8 py-7">
+    <article className="rounded-2xl border border-border-subtle surface-card px-8 py-7">
       <div className="grid grid-cols-[1fr_4rem_1fr] items-stretch">
         <Panel caption="What you give it" className="pb-1.5">
           <IntroRow label="Model">
@@ -136,7 +136,7 @@ export function ProfilesIntro({ onNew, onImport, onStart }) {
         </Panel>
         <div className="flex items-center justify-center text-text-disabled"><ArrowRight className="h-5 w-5" aria-hidden="true" /></div>
         <Panel caption="What you get">
-          <div className="mt-1 flex flex-col gap-2.5 rounded-[0.875rem] border border-border-subtle p-4" style={{ background: 'radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, #3b82f6 10%, var(--theme-surface-raised-low)), var(--theme-surface-raised-low) 60%)' }}>
+          <div className="mt-1 flex flex-col gap-2.5 rounded-[0.875rem] border border-border-subtle p-4" style={{ background: 'radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, #3b82f6 10%, transparent), var(--theme-surface-well) 60%)' }}>
             <div className="flex items-center gap-3">
               <ProfileAvatar color="#3b82f6" size={40} />
               <div className="min-w-0">
@@ -185,7 +185,7 @@ const ExampleLink = ({ from, to, short }) => (
 
 export function WorkflowsIntro({ onNew, onImport }) {
   return (
-    <article className="rounded-2xl border border-border-subtle bg-surface-raised-low px-8 py-7">
+    <article className="rounded-2xl border border-border-subtle surface-card px-8 py-7">
       <Panel caption="An example" className="pb-5">
         <div className="mt-2 flex items-start">
           <ExampleEnd label="Your message" sub="Starts the run" />

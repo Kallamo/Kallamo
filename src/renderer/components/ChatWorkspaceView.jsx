@@ -666,6 +666,12 @@ export default function ChatWorkspaceView() {
       : {});
     const userAlpha = bubbleAlpha(userBubbleOpacity);
     const aiAlpha = bubbleAlpha(aiBubbleOpacity);
+    // Without art the bubbles sit on the page gradient, so they carry a gradient and a lit top edge too.
+    const lit = (top, bottom, alpha) => (hasBg ? {} : {
+      backgroundImage: `linear-gradient(180deg, color-mix(in srgb, ${top} ${alpha * 100}%, transparent), color-mix(in srgb, ${bottom} ${alpha * 100}%, transparent))`,
+      backgroundColor: 'transparent',
+      boxShadow: alpha > 0.5 ? 'inset 0 1px 0 var(--theme-highlight)' : undefined
+    });
     return {
       sizeClass: fontSize === 'small' ? 'text-xs' : fontSize === 'large' ? 'text-base' : 'text-sm',
       isDocumentMode,
@@ -674,11 +680,13 @@ export default function ChatWorkspaceView() {
         backgroundColor: `color-mix(in srgb, var(--theme-bubble-user) ${userAlpha * 100}%, transparent)`,
         borderColor: 'color-mix(in srgb, var(--theme-tint) 10%, transparent)',
         ...blurStyle(userAlpha),
+        ...lit('var(--theme-bubble-user)', 'color-mix(in srgb, var(--theme-bubble-user) 80%, var(--theme-surface-raised-low))', userAlpha),
         ...(isDocumentMode ? { padding: '1.25rem', borderRadius: '0.75rem' } : {})
       },
       aiBubbleStyle: {
         backgroundColor: `color-mix(in srgb, var(--theme-surface-panel) ${aiAlpha * 100}%, transparent)`,
         borderColor: 'var(--theme-border-subtle)',
+        ...lit('var(--theme-surface-raised)', 'var(--theme-surface-raised-low)', aiAlpha),
         ...(isDocumentMode ? { padding: '1.25rem', borderRadius: '0.75rem' } : blurStyle(aiAlpha))
       },
       entityNames,
@@ -689,7 +697,7 @@ export default function ChatWorkspaceView() {
         narrativeStateDebug: Boolean(advanced.narrativeStateDebug)
       }
     };
-  }, [entityNames, fontSize, isDocumentMode, softBlur, userBubbleOpacity, aiBubbleOpacity, advanced.tokenDebug, advanced.ragDebug, advanced.agenticDebug, advanced.narrativeStateDebug]);
+  }, [entityNames, fontSize, isDocumentMode, softBlur, hasBg, userBubbleOpacity, aiBubbleOpacity, advanced.tokenDebug, advanced.ragDebug, advanced.agenticDebug, advanced.narrativeStateDebug]);
 
   const lastUserMessageId = useMemo(() => activeMessages.findLast(m => m.role === 'user')?.id, [activeMessages]);
   const lastAiMessage = useMemo(() => activeMessages.findLast(m => m.role === 'ai'), [activeMessages]);
@@ -947,11 +955,11 @@ export default function ChatWorkspaceView() {
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className={`flex w-full h-full relative overflow-hidden bg-surface-canvas pt-10 ${hasBg ? 'has-backdrop' : ''}`}
+      className={`ws-page flex w-full h-full relative overflow-hidden bg-surface-canvas ${hasBg ? 'has-backdrop' : ''}`}
     >
       {/* Visual Background Layers */}
       {hasBg && <div style={bgStyle} className="absolute inset-0 z-0" />}
-      <div style={backdropStyle} className="absolute inset-0 z-0" />
+      {hasBg && <div style={backdropStyle} className="absolute inset-0 z-0" />}
 
       {/* Chat Space Column */}
       <div className="flex-1 flex flex-col h-full relative z-10 overflow-hidden">
@@ -965,8 +973,8 @@ export default function ChatWorkspaceView() {
           </div>
         )}
 
-        {/* Workspace Chat Header */}
-        <div className={`flex items-center justify-between h-14 border-b border-gray-800/80 px-6 shrink-0 bg-surface-canvas/80 z-10 relative ${(settings?.interface?.blur ?? true) ? 'backdrop-blur-md' : ''}`}>
+        {/* The header band runs up under the window bar, so no raw background shows above it. */}
+        <div className={`ws-head flex items-center justify-between h-24 pt-10 border-b border-gray-800/80 px-6 shrink-0 bg-surface-canvas/80 z-10 relative ${(settings?.interface?.blur ?? true) ? 'backdrop-blur-md' : ''}`}>
           <div className="flex items-center space-x-3 min-w-0 mr-4 flex-1">
             <button
               onClick={() => setCurrentView('dashboard')}
@@ -979,7 +987,7 @@ export default function ChatWorkspaceView() {
             </h2>
           </div>
 
-          <nav aria-label="Workspace areas" className="flex min-w-0 items-center gap-0.5 rounded-lg border border-border-subtle bg-surface-input/80 p-1 select-none z-10">
+          <nav aria-label="Workspace areas" className="ws-well flex min-w-0 items-center gap-0.5 rounded-lg border border-border-subtle bg-surface-input/80 p-1 select-none z-10">
             {[
               ['chat', 'Workspace', WorkspaceGlyph],
               ['writing', 'Writing', WritingGlyph],
@@ -1092,7 +1100,7 @@ export default function ChatWorkspaceView() {
           )}
 
           {/* The veil lets the thread fade under the composer without hiding the background. */}
-          <div aria-hidden="true" className={`pointer-events-none absolute inset-x-0 bottom-0 h-32 bg-gradient-to-b from-transparent ${hasBg ? 'to-surface-canvas/80' : 'to-surface-canvas'} to-70%`} />
+          <div aria-hidden="true" className={`pointer-events-none absolute inset-x-0 bottom-0 h-32 bg-gradient-to-b from-transparent ${hasBg ? 'to-surface-canvas/80' : 'to-[var(--theme-surface-canvas-deep)]'} to-70%`} />
 
           <div className="absolute inset-x-0 bottom-0 z-20 px-6 pb-5">
             <div className="mx-auto w-full max-w-[55rem]">
@@ -1128,7 +1136,7 @@ export default function ChatWorkspaceView() {
                 </div>
               )}
 
-              <div className="glass-panel glass-dense rounded-[1.125rem] border border-border-default py-2.5 pl-4 pr-2.5 shadow-overlay transition-colors focus-within:border-accent/50">
+              <div className="ws-composer glass-panel glass-dense rounded-[1.125rem] border border-border-default py-2.5 pl-4 pr-2.5 shadow-overlay transition-colors focus-within:border-accent/50">
                 <input
                   type="file"
                   multiple

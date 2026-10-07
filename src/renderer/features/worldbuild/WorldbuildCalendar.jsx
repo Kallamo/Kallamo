@@ -552,7 +552,7 @@ function SettingsPanel({ id, title, summary, action, open, onToggle, children })
   const triggerId = `${id}-trigger`;
   const panelId = `${id}-content`;
   return (
-    <section className={`overflow-hidden rounded-card border transition-colors duration-200 ease-standard ${open ? 'border-border-default bg-surface-panel-muted/60' : 'border-border-subtle bg-surface-panel-muted/25'}`}>
+    <section className={`ws-card overflow-hidden rounded-card border transition-colors duration-200 ease-standard ${open ? 'border-border-default bg-surface-panel-muted/60' : 'border-border-subtle bg-surface-panel-muted/25'}`}>
       <div className="flex items-center gap-1 pr-2">
         <button
           id={triggerId}

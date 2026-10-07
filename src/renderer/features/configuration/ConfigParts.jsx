@@ -21,7 +21,7 @@ export function ConfigSection({ id, sectionRef, icon: Icon, title, description, 
     );
   }
   return (
-    <section ref={sectionRef} data-section={id} aria-labelledby={headingId} className={`scroll-mt-6 rounded-surface border border-border-subtle bg-surface-panel/50 p-6 ${className}`}>
+    <section ref={sectionRef} data-section={id} aria-labelledby={headingId} className={`ws-card scroll-mt-6 rounded-surface border border-border-subtle bg-surface-panel/50 p-6 ${className}`}>
       <header className={`flex items-start gap-3 ${hasBody ? 'mb-5' : ''}`}>
         {Icon && <Icon aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0 text-text-muted" />}
         <div className="min-w-0 flex-1">
@@ -72,7 +72,7 @@ export function UnitNumberField({ label, unit, help, value, onChange, onCommit, 
 
 // Rows that share one bordered surface, separated by hairlines.
 export function SettingsList({ children, className = '' }) {
-  return <div className={`divide-y divide-border-subtle overflow-hidden rounded-card border border-border-subtle bg-surface-canvas/45 ${className}`}>{children}</div>;
+  return <div className={`divide-y divide-border-subtle overflow-hidden rounded-card border border-border-subtle bg-surface-inset ${className}`}>{children}</div>;
 }
 
 export function SwitchRow({ label, description, checked, onChange, disabled = false }) {
@@ -90,7 +90,7 @@ export function SwitchRow({ label, description, checked, onChange, disabled = fa
 // A choice drawn as a card with its effect written on it: one radio of a group.
 export function ChoiceCard({ selected, onSelect, title, description, icon: Icon, name }) {
   return (
-    <label className={`relative flex cursor-pointer flex-col gap-1 rounded-card border p-3.5 transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-accent/40 ${selected ? 'border-accent/45 bg-accent/[0.06]' : 'border-border-subtle bg-surface-canvas/45 hover:border-border-default'}`}>
+    <label className={`relative flex cursor-pointer flex-col gap-1 rounded-card border p-3.5 transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-accent/40 ${selected ? 'border-accent/45 bg-accent/[0.06]' : 'border-border-subtle bg-surface-inset hover:border-border-default'}`}>
       <input type="radio" name={name} checked={selected} onChange={onSelect} className="sr-only" />
       <span className="flex items-center gap-2">
         <span aria-hidden="true" className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${selected ? 'border-accent' : 'border-border-strong'}`}>

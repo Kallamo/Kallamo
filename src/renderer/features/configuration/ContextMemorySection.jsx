@@ -193,7 +193,7 @@ export default function ContextMemorySection({ sectionRef, activeChat, handleSav
         />
       </div>
 
-      <div className="mt-5 rounded-card border border-border-subtle bg-surface-canvas/45 p-4">
+      <div className="mt-5 rounded-card border border-border-subtle bg-surface-inset p-4">
         <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
           <span className="text-[0.8125rem] font-semibold text-text-secondary">Active conversation</span>
           <span className="flex-1 text-xs tabular-nums text-text-subtle">{active.length} {active.length === 1 ? 'message' : 'messages'}</span>
@@ -318,7 +318,7 @@ function SummaryCard({ block, progress, finishing, renaming, renameDraft, onRena
   const anchorRef = useRef(null);
   const messageCount = Array.isArray(block.messages) ? block.messages.length : 0;
   return (
-    <article className="flex flex-col gap-1.5 rounded-card border border-border-subtle bg-surface-canvas/45 py-3 pl-3.5 pr-2.5">
+    <article className="flex flex-col gap-1.5 rounded-card border border-border-subtle bg-surface-inset py-3 pl-3.5 pr-2.5">
       <div className="flex items-center gap-2">
         {renaming ? (
           <input

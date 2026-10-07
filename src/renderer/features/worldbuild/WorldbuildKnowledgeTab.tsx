@@ -258,7 +258,7 @@ export default function WorldbuildKnowledgeTab({ workspaceId, entity, entities, 
   };
 
   return (
-    <section className="space-y-3 rounded-card border border-border-default bg-surface-panel-muted/60 p-4 backdrop-blur-md">
+    <section className="ws-card space-y-3 rounded-card border border-border-default bg-surface-panel-muted/60 p-4 backdrop-blur-md">
       <div className="flex flex-wrap items-center gap-2">
       <div role="tablist" aria-label="Knowledge views" aria-orientation="horizontal" className="inline-flex gap-1 rounded-control border border-border-default bg-surface-input p-1">
         <SurfaceButton id="knowledge-surface-tab" controls="knowledge-surface-panel" active={surface === 'knowledge'} onClick={() => setSurface('knowledge')} onKeyDown={event => handleSurfaceKeyDown(event, 'knowledge')} icon={KnowledgeGlyph} label="Subjects" count={currentProjection?.cards.length ?? 0} />

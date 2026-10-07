@@ -24,7 +24,7 @@ function sourceLabel(entry) {
 export default function HistoryList({ entries, colors, emptyText = 'Nothing has changed yet.' }) {
   if (!entries.length) return <p className="rounded-card border border-dashed border-border-subtle px-4 py-4 text-center text-xs text-text-subtle">{emptyText}</p>;
   return (
-    <div className="divide-y divide-border-subtle overflow-hidden rounded-card border border-border-subtle bg-surface-canvas/45">
+    <div className="divide-y divide-border-subtle overflow-hidden rounded-card border border-border-subtle bg-surface-inset">
       {entries.map(entry => {
         const color = entry.area === 'resource' ? colors.get(entry.refId) || 'var(--color-text-subtle)' : PROGRESS_COLOR;
         const manualSet = entry.source === 'manual' && entry.kind !== 'level';
