@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, FileText, Download } from 'lucide-react';
+import { FileCode, FileText, Film, Image as ImageIcon, Loader2, Music } from 'lucide-react';
+import Modal from '../ui/Modal';
+import { ToneTile, megabytes } from './ModalParts';
 import hljs from '../../utils/highlight';
 import 'highlight.js/styles/github-dark.css'; // dark code theme
 
@@ -44,20 +46,17 @@ export default function FilePreviewModal({ file, onClose }) {
   const renderContent = () => {
     if (loading) {
       return (
-        <div className="flex flex-col items-center justify-center py-12 space-y-3">
-          <svg className="animate-spin h-6 w-6 text-accent" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-          </svg>
-          <span className="text-[0.625rem] text-gray-500 uppercase tracking-widest font-bold">Reading file...</span>
+        <div className="flex flex-col items-center justify-center gap-3 py-12">
+          <Loader2 className="h-6 w-6 animate-spin text-accent" aria-hidden="true" />
+          <span className="caption">Reading the file…</span>
         </div>
       );
     }
 
     if (error) {
       return (
-        <div className="text-center p-6 bg-status-danger/10 border border-status-danger/25 rounded-xl max-w-sm">
-          <p className="text-xs text-status-danger font-semibold">{error}</p>
+        <div className="max-w-sm rounded-control border px-5 py-4 text-center" style={{ background: 'color-mix(in srgb, var(--theme-status-danger) 8%, transparent)', borderColor: 'color-mix(in srgb, var(--theme-status-danger) 24%, transparent)' }}>
+          <p className="text-sm text-status-danger">{error}</p>
         </div>
       );
     }
@@ -90,11 +89,7 @@ export default function FilePreviewModal({ file, onClose }) {
     if (isAud) {
       return (
         <div className="flex flex-col items-center justify-center py-10 w-full max-w-md select-none">
-          <div className="w-16 h-16 rounded-full bg-surface-hover/50 border border-accent/15 flex items-center justify-center mb-6">
-            <svg className="w-6 h-6 text-accent animate-pulse" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-            </svg>
-          </div>
+          <span className="mb-6"><ToneTile icon={Music} color="var(--app-accent)" /></span>
           <audio
             src={fileUrl}
             controls
@@ -110,7 +105,7 @@ export default function FilePreviewModal({ file, onClose }) {
         <embed
           src={fileUrl}
           type="application/pdf"
-          className="w-full h-[70vh] border border-gray-800 rounded-lg"
+          className="h-[70vh] w-full rounded-control border border-border-subtle"
         />
       );
     }
@@ -118,9 +113,9 @@ export default function FilePreviewModal({ file, onClose }) {
     if (isTxt) {
       const highlighted = hljs.highlightAuto(textContent).value;
       return (
-        <pre className="w-full max-h-[65vh] overflow-auto text-left rounded-xl p-4 bg-surface-abyss border border-gray-900 custom-scrollbar text-xs font-mono leading-relaxed whitespace-pre-wrap select-text">
+        <pre className="custom-scrollbar max-h-[65vh] w-full select-text overflow-auto whitespace-pre-wrap rounded-control border p-5 text-left font-mono text-xs leading-relaxed" style={{ background: 'var(--theme-surface-well)', borderColor: 'var(--theme-border-well)' }}>
           <code
-            className="hljs"
+            className="hljs !bg-transparent !p-0"
             dangerouslySetInnerHTML={{ __html: highlighted || textContent }}
           />
         </pre>
@@ -129,38 +124,20 @@ export default function FilePreviewModal({ file, onClose }) {
 
     // Default fallback
     return (
-      <div className="text-center py-10 max-w-sm flex flex-col items-center">
-        <FileText className="w-12 h-12 text-gray-700 mb-3" />
-        <p className="text-xs text-gray-400 font-bold mb-2">No preview available for this format.</p>
-        <span className="text-[0.625rem] text-gray-500 font-mono">.{ext} File</span>
+      <div className="flex max-w-sm flex-col items-center gap-3 py-10 text-center">
+        <ToneTile icon={FileText} color="var(--theme-text-muted)" />
+        <p className="text-sm text-text-secondary">There is no preview for .{ext} files.</p>
       </div>
     );
   };
 
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-shade/85 backdrop-blur-sm select-none p-4 animate-in fade-in duration-200">
-      <div
-        className="w-full max-w-4xl max-h-[85vh] bg-surface-abyss border border-gray-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col animate-in zoom-in-95 duration-200"
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-gray-800/80 bg-surface-canvas/50 shrink-0">
-          <div className="flex flex-col min-w-0 mr-4 select-text">
-            <span className="text-xs font-bold text-text-primary truncate font-sans">{file.name}</span>
-            <span className="text-[0.5625rem] text-gray-500 font-mono mt-0.5">{Math.round(file.size / 1024)} KB</span>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-1 rounded-md text-gray-400 hover:text-text-primary hover:bg-tint/5 cursor-pointer transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
+  const kind = isImg ? ['Image', ImageIcon, 'var(--theme-mode-history)'] : isVid ? ['Video', Film, 'var(--theme-mode-always)'] : isAud ? ['Audio', Music, 'var(--theme-mode-always)'] : isPdf ? ['PDF', FileText, 'var(--theme-status-danger)'] : isTxt ? [ext === 'md' ? 'Markdown' : ext === 'txt' ? 'Text' : 'Code', ext === 'md' || ext === 'txt' ? FileText : FileCode, 'var(--theme-mode-searchable)'] : [`.${ext} file`, FileText, 'var(--theme-text-muted)'];
 
-        {/* Body content */}
-        <div className="flex-1 overflow-auto p-5 flex items-center justify-center bg-surface-abyss/40">
-          {renderContent()}
-        </div>
+  return (
+    <Modal onClose={onClose} size="2xl" title={file.name} subtitle={[kind[0], file.size ? megabytes(file.size) : null].filter(Boolean).join(' · ')} leading={<ToneTile icon={kind[1]} color={kind[2]} />} className="max-h-[85vh]">
+      <div className="custom-scrollbar flex min-h-0 flex-1 items-center justify-center overflow-auto p-5">
+        {renderContent()}
       </div>
-    </div>
+    </Modal>
   );
 }

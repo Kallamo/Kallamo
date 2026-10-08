@@ -1312,6 +1312,7 @@ export default function ChatWorkspaceView() {
           setSummarizeModalOpen(false);
         }}
         chatId={activeChat.id}
+        workspaceName={activeChat.title}
         electronAPI={electronAPI}
         nextSummaryNumber={nextSummaryNumber}
         onConfirm={handleExecuteSummarization}

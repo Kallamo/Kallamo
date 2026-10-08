@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { X, Search, Database, FileText, Trash2, Save, Plus, Download, FileSearch, Loader2, Pencil, Upload } from 'lucide-react';
-import ImportProgressModal from './ImportProgressModal';
+import ImportProgressModal, { PROGRESS_STAGES } from './ImportProgressModal';
 import ConfirmDialog from '../ui/ConfirmDialog';
 import TextInput from '../ui/TextInput';
 import Textarea from '../ui/Textarea';
@@ -1210,7 +1210,8 @@ export default function KbManagerModal({ profile, onClose, onOpenSmartSearch }) 
         <ImportProgressModal
           progress={kbProgress}
           statusText={kbProgressStatus}
-          title={kbOpType === 'export' ? "Exporting Knowledge Base" : "Importing Knowledge Base"}
+          title={kbOpType === 'export' ? 'Exporting the knowledge base' : 'Importing a knowledge base'}
+          stages={kbOpType === 'export' ? PROGRESS_STAGES.export : PROGRESS_STAGES.kbImport}
         />
       )}
 

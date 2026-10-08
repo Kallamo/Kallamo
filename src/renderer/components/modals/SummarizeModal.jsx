@@ -1,5 +1,11 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { X, Check, Square, Info, Archive, MessageSquare, EyeOff, AlertTriangle, SquareCheck } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Archive, MessageSquare, EyeOff, AlertTriangle, User } from 'lucide-react';
+import Modal from '../ui/Modal';
+import Button from '../ui/Button';
+import Checkbox from '../ui/Checkbox';
+import Tooltip from '../ui/Tooltip';
+import { ProfileAvatar } from './ProfileModal';
+import { ToneTile } from './ModalParts';
 
 // Each message is exactly one of archive, keep or drop, so the token bar and summary card agree.
 const ARCHIVE = 'archive';
@@ -31,7 +37,8 @@ export default function SummarizeModal({
   nextSummaryNumber = 1,
   onConfirm,
   isVectorizing,
-  progress
+  progress,
+  workspaceName = null
 }) {
   const [customTitle, setCustomTitle] = useState('');
   const [pendingList, setPendingList] = useState([]);
@@ -39,7 +46,6 @@ export default function SummarizeModal({
   const [includeRecent, setIncludeRecent] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
-  const modalRef = useRef(null);
 
   // The window always reads the stored history, never a renderer copy: what it
   // offers is exactly what the archive will accept.
@@ -63,6 +69,8 @@ export default function SummarizeModal({
           id: msg.id,
           role: msg.role,
           content: msg.content,
+          aiName: msg.aiName,
+          aiColor: msg.aiColor,
           reserved: !!msg.reserved,
           state
         });
@@ -83,19 +91,6 @@ export default function SummarizeModal({
     return () => { cancelled = true; };
   }, [isOpen, chatId, electronAPI]);
 
-  useEffect(() => {
-    function handleClickOutside(event) {
-      if (modalRef.current && !modalRef.current.contains(event.target) && !isVectorizing) {
-        onClose();
-      }
-    }
-    if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [isOpen, onClose, isVectorizing]);
 
   const visibleList = useMemo(
     () => (includeRecent ? [...pendingList, ...reservedList] : pendingList),
@@ -129,11 +124,6 @@ export default function SummarizeModal({
 
   const setState = (id, state) => updateEntry(id, () => state);
 
-  const cycleState = (id) => updateEntry(
-    id,
-    current => (current === ARCHIVE ? KEEP : current === KEEP ? DROP : ARCHIVE)
-  );
-
   const setAll = (state) => {
     if (isVectorizing) return;
     const apply = prev => prev.map(m => ({ ...m, state }));
@@ -151,238 +141,143 @@ export default function SummarizeModal({
   };
 
   const nothingToDo = totals.archiveCount === 0 && totals.dropCount === 0;
+  const leaving = totals.archiveTokens + totals.dropTokens;
+  const carried = Math.max(1, leaving + totals.keepTokens);
+  const share = value => `${(value / carried) * 100}%`;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-shade/75 backdrop-blur-sm select-none p-4">
-      <div
-        ref={modalRef}
-        className="w-full max-w-5xl max-h-[85vh] min-h-[28rem] bg-surface-panel/95 border border-gray-800/80 rounded-2xl flex flex-col shadow-2xl relative animate-in zoom-in-95 duration-200"
-      >
-        {/* Modal Header */}
-        <div className="flex items-center justify-between p-5 border-b border-gray-800/80">
-          <div className="flex flex-col">
-            <h3 className="text-sm font-bold text-text-primary uppercase tracking-wider">Archive Chat Memory</h3>
-            <span className="caption mt-0.5">Choose what moves into long-term memory and what stays in the conversation</span>
-          </div>
-          <button
-            disabled={isVectorizing}
-            onClick={onClose}
-            className="text-gray-500 hover:text-text-primary hover:bg-tint/5 p-1 rounded-md transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
-          >
-            <X className="w-4.5 h-4.5" />
-          </button>
-        </div>
-
-        {/* Modal Body: settings rail on the left, the messages themselves on the right */}
-        <div className="flex-1 min-h-0 flex flex-col md:flex-row">
-          <aside className="md:w-72 md:shrink-0 md:border-r border-b md:border-b-0 border-gray-800/80 p-5 space-y-4 overflow-y-auto custom-scrollbar">
-          {/* Custom title block */}
-          <div className="flex flex-col space-y-1.5 shrink-0">
-            <label className="text-[0.625rem] font-bold text-gray-400 uppercase tracking-wider">Memory Chapter Title (Optional)</label>
+    <Modal
+      onClose={isVectorizing ? () => {} : onClose}
+      closeOnOverlay={!isVectorizing}
+      closeOnEsc={!isVectorizing}
+      showClose={!isVectorizing}
+      size="editor"
+      title="Archive to memory"
+      subtitle={`${workspaceName ? `${workspaceName} · ` : ''}${pendingList.length} ${pendingList.length === 1 ? 'message can' : 'messages can'} be archived`}
+      leading={<ToneTile icon={Archive} color="var(--app-accent)" />}
+      className="!max-w-[64rem] max-h-[85vh] min-h-[28rem]"
+    >
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+        <aside className="custom-scrollbar space-y-5 overflow-y-auto border-b border-border-subtle p-5 md:w-72 md:shrink-0 md:border-b-0 md:border-r">
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-semibold text-text-secondary">Title</span>
             <input
               type="text"
               value={customTitle}
               onChange={(e) => setCustomTitle(e.target.value)}
               disabled={isVectorizing}
-              placeholder={`e.g. Summarization ${nextSummaryNumber}`}
-              className="bg-surface-canvas border border-gray-800/80 rounded-xl px-3 py-2 text-xs text-text-primary placeholder-gray-600 focus:outline-none focus:border-accent transition-colors"
+              placeholder={`Summarization ${nextSummaryNumber}`}
+              className="field-input h-10 px-3 text-sm"
             />
+          </label>
+
+          <div className="rounded-control border px-3.5 py-3" style={{ background: 'var(--theme-surface-well)', borderColor: 'var(--theme-border-well)' }}>
+            <p className="text-xs font-semibold text-text-secondary">What the prompt carries</p>
+            <div className="mt-2 flex h-2 overflow-hidden rounded-full" style={{ background: 'var(--theme-surface-well)' }}>
+              <span style={{ width: share(totals.keepTokens), background: 'var(--theme-text-muted)' }} />
+              <span style={{ width: share(totals.archiveTokens), background: 'var(--app-accent)' }} />
+              <span style={{ width: share(totals.dropTokens), background: 'var(--theme-status-danger)' }} />
+            </div>
+            <p className="mt-2 text-xs leading-relaxed text-text-subtle">
+              {leaving ? `About ${leaving.toLocaleString()} tokens leave it, ${totals.keepTokens.toLocaleString()} stay.` : `Nothing leaves it yet. ${totals.keepTokens.toLocaleString()} tokens stay.`}
+            </p>
           </div>
 
-          {/* Premium Info Tooltip Block */}
-          <div className="flex items-start space-x-2.5 bg-surface-hover/20 border border-accent/15 rounded-xl p-3 select-text shrink-0">
-            <Info className="w-4 h-4 text-accent shrink-0 mt-0.5" />
-            <div className="flex flex-col space-y-1 text-[0.625rem] text-gray-300 leading-relaxed">
-              <span className="font-bold text-gray-200">How Memory Archiving Works:</span>
-              <p>
-                <strong className="text-gray-200">Archive</strong> stores the message word for word in your local vector database (RAG) and takes it out of the active context.
-                The AI searches that database each turn and pulls back only what is relevant, so a long history costs a fraction of its size.
-                If Chat Archive Summaries is enabled and a System AI is configured, Kallamo also writes a short recap and World Index tags.
-                <br />
-                <strong className="text-gray-200">Keep active</strong> leaves the message whole in every prompt. <strong className="text-gray-200">Drop</strong> removes it from context for good, without deleting it from the log.
-                Archived and dropped messages stay visible in the chat either way.
-                {reservedList.length > 0 && (
-                  <> The most recent <strong className="text-gray-200">{reservedList.length}</strong> {reservedList.length === 1 ? 'message is' : 'messages are'} held back so the next reply keeps its continuity. Include them if they belong to the chapter you are closing.</>
-                )}
-              </p>
-            </div>
-          </div>
+          <ul className="space-y-2.5">
+            {[
+              [Archive, 'text-accent', 'Archive', 'leaves the prompt and goes into memory, found again when it matters.'],
+              [MessageSquare, 'text-text-secondary', 'Keep', 'stays in every prompt, word for word.'],
+              [EyeOff, 'text-status-danger', 'Drop', 'leaves the prompt for good. The message stays in the chat.'],
+            ].map(([Icon, tone, label, text]) => (
+              <li key={label} className="flex gap-2.5">
+                <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${tone}`} aria-hidden="true" />
+                <span className="text-[0.8125rem] leading-relaxed text-text-muted"><b className="font-semibold text-text-primary">{label}</b> {text}</span>
+              </li>
+            ))}
+          </ul>
 
           {reservedList.length > 0 && (
-            <label className={`flex items-start gap-2.5 rounded-xl border p-3 cursor-pointer transition-colors ${includeRecent ? 'bg-accent/5 border-accent/30' : 'bg-surface-canvas border-gray-800/80 hover:border-gray-700'}`}>
-              <input
-                type="checkbox"
-                checked={includeRecent}
-                disabled={isVectorizing}
-                onChange={(e) => setIncludeRecent(e.target.checked)}
-                className="mt-0.5 accent-accent cursor-pointer"
-              />
-              <span className="flex flex-col">
-                <span className="text-[0.625rem] font-bold text-gray-200 uppercase tracking-wider">Include the last {reservedList.length}</span>
-                <span className="text-[0.625rem] text-gray-400 leading-relaxed">
-                  Archiving a recent message takes it out of the conversation right away, and the AI will only see it again if it matches what you write next. Best when you are closing a scene, not continuing one.
-                </span>
-              </span>
-            </label>
+            <div className="flex items-start gap-3 border-t border-border-subtle pt-4">
+              <span className="mt-0.5"><Checkbox checked={includeRecent} disabled={isVectorizing} onChange={setIncludeRecent} ariaLabel={`Include the last ${reservedList.length} messages`} /></span>
+              <button type="button" disabled={isVectorizing} onClick={() => setIncludeRecent(value => !value)} className="min-w-0 text-left focus-visible:outline-none">
+                <span className="block text-sm text-text-secondary">Include the last {reservedList.length} {reservedList.length === 1 ? 'message' : 'messages'}</span>
+                <span className="block text-xs leading-relaxed text-text-subtle">They are held back so the next reply keeps its thread. Include them when this closes a scene.</span>
+              </button>
+            </div>
           )}
-          </aside>
+        </aside>
 
-          <section className="flex-1 min-h-0 flex flex-col p-5 space-y-3">
-          {/* Selection Controls */}
-          <div className="flex items-center justify-between shrink-0 flex-wrap gap-y-2">
-            <span className="text-[0.625rem] font-bold text-gray-400 uppercase tracking-wide">
-              <span className="text-accent font-mono">{totals.archiveCount}</span> archiving
-              <span className="text-gray-700 mx-1.5">|</span>
-              <span className="text-gray-300 font-mono">{totals.keepCount}</span> staying
-              <span className="text-gray-700 mx-1.5">|</span>
-              <span className="text-status-danger/90 font-mono">{totals.dropCount}</span> dropped
-            </span>
-            <div className="flex items-center space-x-2 text-[0.625rem] uppercase font-bold tracking-wider">
-              <button
-                disabled={isVectorizing}
-                onClick={() => setAll(ARCHIVE)}
-                className="flex items-center space-x-1 text-gray-400 hover:text-text-primary cursor-pointer transition-colors"
-              >
-                <SquareCheck className="w-3.5 h-3.5" />
-                <span>Archive All</span>
-              </button>
-              <span className="text-gray-800">|</span>
-              <button
-                disabled={isVectorizing}
-                onClick={() => setAll(KEEP)}
-                className="flex items-center space-x-1 text-gray-400 hover:text-text-primary cursor-pointer transition-colors"
-              >
-                <Square className="w-3.5 h-3.5" />
-                <span>Clear All</span>
-              </button>
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 px-5 pb-3 pt-4">
+            <p className="text-[0.8125rem] text-text-muted">
+              <b className="font-semibold tabular-nums text-accent">{totals.archiveCount}</b> to archive · <b className="font-semibold tabular-nums text-text-primary">{totals.keepCount}</b> kept · <b className="font-semibold tabular-nums text-status-danger">{totals.dropCount}</b> dropped
+            </p>
+            <div className="flex gap-1">
+              <Button variant="subtle" size="sm" disabled={isVectorizing} onClick={() => setAll(ARCHIVE)}>Archive all</Button>
+              <Button variant="subtle" size="sm" disabled={isVectorizing} onClick={() => setAll(KEEP)}>Keep all</Button>
             </div>
           </div>
 
-          {/* Messages list */}
-          <div className="flex-1 min-h-0 space-y-2 overflow-y-auto custom-scrollbar pr-1 select-text">
-            {loading && (
-              <p className="text-xs text-gray-500 py-6 text-center">Reading history...</p>
-            )}
+          <div className="custom-scrollbar mx-5 mb-5 min-h-0 flex-1 select-text overflow-y-auto rounded-xl border border-tint/[0.08] surface-card">
+            {loading && <p className="caption px-4 py-6 text-center">Reading the history…</p>}
             {!loading && loadError && (
-              <div className="flex items-start space-x-2 bg-status-danger/5 border border-status-danger/25 rounded-xl p-3">
-                <AlertTriangle className="w-4 h-4 text-status-danger shrink-0 mt-0.5" />
-                <p className="text-xs text-status-danger leading-relaxed">{loadError}</p>
-              </div>
+              <p className="flex items-start gap-2 px-4 py-4 text-sm text-status-danger"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />{loadError}</p>
             )}
             {!loading && !loadError && visibleList.length === 0 && (
-              <p className="text-xs text-gray-500 py-6 text-center leading-relaxed">
-                Nothing left to archive. Everything older is already in long-term memory,
-                {reservedList.length > 0 ? ' and the rest is inside the recent window kept for continuity.' : ' and there is no older history yet.'}
+              <p className="caption px-4 py-6 text-center leading-relaxed">
+                Nothing left to archive. Everything older is already in memory{reservedList.length > 0 ? ', and the rest is the recent part kept for the next reply.' : ', and there is no older history yet.'}
               </p>
             )}
-            {!loading && visibleList.map(msgObj => {
+            {!loading && visibleList.map((msgObj, index) => {
               const isUser = msgObj.role === 'user';
-              const isArchive = msgObj.state === ARCHIVE;
-              const isDrop = msgObj.state === DROP;
+              const edge = msgObj.state === ARCHIVE ? 'var(--app-accent)' : msgObj.state === DROP ? 'var(--theme-status-danger)' : 'transparent';
+              const tone = msgObj.state === DROP ? 'text-text-subtle line-through' : msgObj.state === ARCHIVE ? 'text-text-secondary' : 'text-text-muted';
               return (
-                <div
-                  key={msgObj.id}
-                  onClick={() => cycleState(msgObj.id)}
-                  className={`flex items-start p-3 rounded-xl border transition-colors cursor-pointer ${isArchive
-                    ? 'bg-surface-hover/50 border-accent/35 shadow-md shadow-shade/10'
-                    : isDrop
-                      ? 'bg-status-danger/10 border-status-danger/25 opacity-70'
-                      : 'bg-surface-canvas/45 border-gray-800/40 opacity-70'
-                    }`}
-                >
-                  <div className="flex-1 pr-4">
-                    <span className={`text-[0.5625rem] font-bold uppercase mb-1 block ${isUser ? 'text-accent' : 'text-gray-400'
-                      }`}>
-                      {isUser ? 'User Prompt' : 'AI Response'}
-                      {msgObj.reserved && <span className="ml-1.5 text-gray-500 normal-case font-semibold">recent</span>}
+                <div key={msgObj.id} className={`flex items-start gap-3 px-4 py-3 ${index ? 'border-t border-border-subtle' : ''}`} style={{ boxShadow: `inset 2px 0 0 ${edge}` }}>
+                  {isUser
+                    ? <span aria-hidden="true" className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-accent" style={{ background: 'color-mix(in srgb, var(--app-accent) 14%, transparent)', boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--app-accent) 30%, transparent)' }}><User className="h-3.5 w-3.5" /></span>
+                    : <ProfileAvatar color={msgObj.aiColor || '#94a3b8'} size={24} />}
+                  <div className="min-w-0 flex-1">
+                    <span className={`text-xs font-semibold ${isUser ? 'text-accent' : 'text-text-secondary'}`}>
+                      {isUser ? 'User' : msgObj.aiName || 'AI'}
+                      {msgObj.reserved && <span className="ml-1.5 font-normal text-text-subtle">recent</span>}
                     </span>
-                    <p className={`text-xs leading-relaxed line-clamp-3 whitespace-pre-wrap ${isDrop ? 'text-gray-500 line-through decoration-status-danger/40' : 'text-gray-300'}`}>
-                      {msgObj.content}
-                    </p>
+                    <p className={`mt-0.5 line-clamp-2 whitespace-pre-wrap text-[0.8125rem] leading-relaxed ${tone}`}>{msgObj.content}</p>
                   </div>
-                  <div className="shrink-0 flex items-center space-x-1 pt-0.5 select-none" onClick={(e) => e.stopPropagation()}>
-                    <StateButton
-                      active={isArchive}
-                      onClick={() => setState(msgObj.id, ARCHIVE)}
-                      title="Archive into this summary"
-                      activeClass="bg-accent border-accent text-on-accent"
-                      disabled={isVectorizing}
-                    >
-                      <Archive className="w-3 h-3" />
-                    </StateButton>
-                    <StateButton
-                      active={msgObj.state === KEEP}
-                      onClick={() => setState(msgObj.id, KEEP)}
-                      title="Keep in the active conversation"
-                      activeClass="bg-gray-300 border-gray-300 text-on-accent"
-                      disabled={isVectorizing}
-                    >
-                      <MessageSquare className="w-3 h-3" />
-                    </StateButton>
-                    <StateButton
-                      active={isDrop}
-                      onClick={() => setState(msgObj.id, DROP)}
-                      title="Drop from context entirely"
-                      activeClass="bg-danger-solid border-danger-solid text-on-danger"
-                      disabled={isVectorizing}
-                    >
-                      <EyeOff className="w-3 h-3" />
-                    </StateButton>
+                  <div role="radiogroup" aria-label="What happens to this message" className="inline-flex shrink-0 gap-0.5 rounded-control border border-border-default bg-surface-input p-0.5">
+                    {[
+                      [ARCHIVE, Archive, 'Archive', 'bg-accent/[0.13] text-accent ring-1 ring-inset ring-accent/45'],
+                      [KEEP, MessageSquare, 'Keep', 'bg-surface-hover text-text-primary ring-1 ring-inset ring-border-strong'],
+                      [DROP, EyeOff, 'Drop', 'bg-status-danger/10 text-status-danger ring-1 ring-inset ring-status-danger/40'],
+                    ].map(([state, Icon, label, on]) => (
+                      <Tooltip key={state} content={label}>
+                        <button
+                          type="button"
+                          role="radio"
+                          aria-checked={msgObj.state === state}
+                          aria-label={label}
+                          disabled={isVectorizing}
+                          onClick={() => setState(msgObj.id, state)}
+                          className={`inline-flex h-7 w-8 items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed ${msgObj.state === state ? on : 'text-text-muted hover:text-text-primary'}`}
+                        >
+                          <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                        </button>
+                      </Tooltip>
+                    ))}
                   </div>
                 </div>
               );
             })}
           </div>
-          </section>
-        </div>
-
-        {/* Modal Footer */}
-        <div className="p-5 border-t border-gray-800/80 flex items-center justify-between gap-3 shrink-0 flex-wrap">
-          <span className="text-[0.625rem] text-gray-500 uppercase tracking-wide font-bold">
-            {totals.archiveTokens > 0 || totals.dropTokens > 0
-              ? <>~{(totals.archiveTokens + totals.dropTokens).toLocaleString()} tokens leaving active context</>
-              : <>Nothing selected yet</>}
-          </span>
-          <div className="flex items-center space-x-3">
-            <button
-              disabled={isVectorizing}
-              onClick={onClose}
-              className="px-4 py-2 text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-text-primary hover:bg-tint/5 rounded-xl cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              Cancel
-            </button>
-            <button
-              disabled={isVectorizing || loading || nothingToDo}
-              onClick={handleConfirmSubmit}
-              className="px-4 py-2 text-xs font-bold uppercase tracking-wider bg-accent text-on-accent rounded-xl hover:brightness-110 cursor-pointer transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center space-x-2"
-            >
-              {isVectorizing ? (
-                <span>{progressLabel(progress)}</span>
-              ) : (
-                <>
-                  <Check className="w-3.5 h-3.5" />
-                  <span>Archive</span>
-                </>
-              )}
-            </button>
-          </div>
-        </div>
+        </section>
       </div>
-    </div>
-  );
-}
 
-function StateButton({ active, onClick, title, activeClass, disabled, children }) {
-  return (
-    <button
-      type="button"
-      title={title}
-      disabled={disabled}
-      onClick={onClick}
-      className={`w-6 h-6 rounded-md border flex items-center justify-center transition-colors cursor-pointer disabled:cursor-not-allowed ${active ? activeClass : 'border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-500'
-        }`}
-    >
-      {children}
-    </button>
+      <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border-subtle px-5 py-3.5">
+        <Button variant="subtle" disabled={isVectorizing} onClick={onClose}>Cancel</Button>
+        <Button icon={isVectorizing ? null : Archive} loading={isVectorizing} disabled={loading || nothingToDo} onClick={handleConfirmSubmit}>
+          {isVectorizing ? progressLabel(progress) : 'Archive'}
+        </Button>
+      </div>
+    </Modal>
   );
 }

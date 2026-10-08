@@ -26,6 +26,11 @@ export interface RulesDifference {
   progression: 'same' | 'different' | 'added' | 'none';
   timeCosts: 'same' | 'different' | 'none';
   packageProgressionMode: ProgressionMode;
+  localProgressionMode: ProgressionMode;
+  localResources: string[];
+  packageResources: string[];
+  localAttributes: number;
+  packageAttributes: number;
 }
 
 const LEVEL = '__level';
@@ -139,7 +144,12 @@ export class RoleplayRulesPackager {
       resources,
       progression,
       timeCosts,
-      packageProgressionMode: incomingMode
+      packageProgressionMode: incomingMode,
+      localProgressionMode: settings.mode,
+      localResources: [...local.values()].map(definition => definition.name),
+      packageResources: (rules.resources || []).map(resource => resource.name),
+      localAttributes: this.progression.listTraits(workspaceId).length,
+      packageAttributes: (rules.traits || []).length
     };
   }
 

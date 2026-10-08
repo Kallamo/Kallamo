@@ -1,9 +1,22 @@
 import React, { useState } from 'react';
-import { X, Check, AlertTriangle, Download, ArrowRight, Loader2 } from 'lucide-react';
+import { Download } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import Modal from '../ui/Modal';
+import Button from '../ui/Button';
+import ImportProgressModal, { PROGRESS_STAGES } from './ImportProgressModal';
+import { ProfileAvatar } from './ProfileModal';
+import { FileName, OptionRow, PackageColumns } from './ModalParts';
+
+const listOf = value => {
+  if (Array.isArray(value)) return value;
+  try { const parsed = JSON.parse(value || '[]'); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+};
+
+// The name the save dialog suggests, so the footer shows the file that will be written.
+export const profileFileName = name => `${String(name || '').replace(/[^a-z0-9]/gi, '_').toLowerCase()}_profile.klp`;
 
 export default function ExportProfileModal({ profile, onClose, onExport }) {
-  const { settings } = useApp();
+  const { apiProfiles } = useApp();
   const [exportKb, setExportKb] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -13,147 +26,78 @@ export default function ExportProfileModal({ profile, onClose, onExport }) {
     setExporting(true);
     setProgress(0);
     setStatusText('Starting export...');
-
-    let unsub = null;
-    if (window.electronAPI?.onExportProgress) {
-      unsub = window.electronAPI.onExportProgress((data) => {
-        setProgress(data.progress);
-        setStatusText(data.status);
-      });
-    }
-
+    const unsub = window.electronAPI?.onExportProgress?.((data) => {
+      setProgress(data.progress);
+      setStatusText(data.status);
+    });
     try {
       await onExport(exportKb);
-      // Wait briefly so the user sees 100% complete
+      // A short pause so 100% is seen before the window closes.
       await new Promise(resolve => setTimeout(resolve, 600));
       onClose();
     } catch (e) {
-      console.error("Export failed:", e);
+      console.error('Export failed:', e);
     } finally {
-      if (unsub) unsub();
+      unsub?.();
       setExporting(false);
     }
   };
 
-  const isBlurEnabled = settings?.interface?.blur ?? true;
+  const files = listOf(profile?.knowledgeFiles).length;
+  const connection = apiProfiles?.find(ap => ap.id === profile?.apiProfileId)?.name;
+  const avatar = <ProfileAvatar color={profile?.color} size={48} />;
 
   if (exporting) {
     return (
-      <div className={`fixed inset-0 z-50 flex items-center justify-center titlebar-nodrag select-none p-4 ${isBlurEnabled ? 'bg-shade/60 backdrop-blur-sm' : 'bg-surface-canvas'}`}>
-        <div className="w-full max-w-md bg-surface-abyss rounded-xl shadow-2xl border border-gray-800/60 flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
-          
-          {/* Header */}
-          <div className="shrink-0 flex items-center h-14 w-full px-6 bg-surface-canvas border-b border-gray-800/50">
-            <Loader2 className="w-4 h-4 text-accent animate-spin mr-2.5" />
-            <h2 className="text-sm font-bold text-text-primary uppercase tracking-wider">Exporting Profile</h2>
-          </div>
-
-          {/* Content Body */}
-          <div className="p-6 space-y-6">
-            <div className="space-y-2 text-center">
-              <span className="text-3xl font-extrabold text-text-primary tracking-tight">{progress}%</span>
-              <p className="text-xs text-gray-400 font-semibold leading-relaxed truncate px-4" title={statusText}>
-                {statusText || "Packaging profile configuration..."}
-              </p>
-            </div>
-
-            {/* Progress Bar Container */}
-            <div className="w-full h-2 bg-surface-editor border border-gray-800/60 rounded-full overflow-hidden p-0.5 relative">
-              <div 
-                className="h-full bg-accent rounded-full shadow-[0_0_8px_color-mix(in_srgb,var(--app-accent)_50%,transparent)] transition-all duration-300 ease-out"
-                style={{ width: `${progress}%` }}
-              />
-            </div>
-          </div>
-
-        </div>
-      </div>
+      <ImportProgressModal
+        title="Exporting an AI profile"
+        subtitle={profileFileName(profile?.name)}
+        progress={progress}
+        statusText={statusText}
+        stages={PROGRESS_STAGES.export}
+        subject={{ leading: avatar, name: profile?.name, detail: exportKb && files ? `With ${files} knowledge ${files === 1 ? 'file' : 'files'}` : 'Rules and settings' }}
+      />
     );
   }
 
+  const knowledge = { key: 'kb', label: files ? `Knowledge base, ${files} ${files === 1 ? 'file' : 'files'}` : 'Knowledge base' };
+  const inside = [
+    { key: 'rules', label: 'Rules, description and colour' },
+    { key: 'params', label: 'Temperature and reply length' },
+    { key: 'vars', label: 'Variables, written out with their current text' },
+    ...(exportKb ? [knowledge] : []),
+  ];
+  const stays = [
+    { key: 'connection', label: connection ? `The connection, ${connection}` : 'The connection' },
+    { key: 'model', label: profile?.model ? <>The model, <span className="font-mono text-xs">{profile.model}</span></> : 'The model' },
+    { key: 'where', label: 'Where it is turned on' },
+    ...(exportKb ? [] : [knowledge]),
+  ];
+
   return (
-    <div className={`fixed inset-0 z-50 flex items-center justify-center titlebar-nodrag select-none p-4 ${isBlurEnabled ? 'bg-shade/60 backdrop-blur-sm' : 'bg-surface-canvas'}`}>
-      <div className="w-full max-w-lg bg-surface-abyss rounded-xl shadow-2xl border border-gray-800/60 flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
-        
-        {/* Header */}
-        <div className="shrink-0 flex justify-between items-center h-14 w-full px-6 bg-surface-canvas border-b border-gray-800/50">
-          <div className="flex items-center space-x-2.5">
-            <Download className="w-4 h-4 text-accent" />
-            <h2 className="text-sm font-bold text-text-primary uppercase tracking-wider">Export AI Profile</h2>
-          </div>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-status-danger transition-colors cursor-pointer p-1 rounded-md hover:bg-tint/5"
-          >
-            <X className="w-4 h-4" />
-          </button>
+    <Modal onClose={onClose} size="lg" title="Export AI profile" icon={Download} iconClassName="text-text-muted" className="!max-w-[38rem]">
+      <div className="flex items-center gap-3.5 px-5 pt-5">
+        {avatar}
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[0.9375rem] font-semibold text-text-primary">{profile?.name}</p>
+          {profile?.description && <p className="truncate text-xs text-text-subtle">{profile.description}</p>}
         </div>
-
-        {/* Content Body */}
-        <div className="flex-1 p-6 space-y-6">
-          <div className="space-y-4">
-            <h3 className="text-xs font-bold text-accent uppercase tracking-wider">Export Process & Details</h3>
-            
-            {/* Info Cards */}
-            <div className="space-y-3">
-              <div className="flex items-start space-x-3 p-3 bg-surface-editor border border-gray-800/80 rounded-lg">
-                <Check className="w-4 h-4 text-green-400 shrink-0 mt-0.5" />
-                <div className="text-xs text-gray-300 leading-relaxed">
-                  <strong className="text-text-primary block mb-0.5">Dynamic Variables Resolution</strong>
-                  Any dynamic variable placeholders (like <code className="font-mono text-accent">{"{{"}variable_name{"}}"}</code>) inside the profile prompts will be automatically replaced with their current text values.
-                </div>
-              </div>
-
-              <div className="flex items-start space-x-3 p-3 bg-surface-editor border border-gray-800/80 rounded-lg">
-                <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-                <div className="text-xs text-gray-300 leading-relaxed">
-                  <strong className="text-text-primary block mb-0.5">Credentials Protection</strong>
-                  The linked API Profile and model configuration will <strong className="text-amber-400">NOT</strong> be exported. The imported profile will be empty of connections and ready for new linking.
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Option Checkbox */}
-          <div className="pt-4 border-t border-gray-800/60">
-            <div className="flex items-center justify-between bg-surface-editor border border-gray-800/60 rounded-xl p-4">
-              <div className="pr-4 flex-1">
-                <span className="text-xs font-bold text-gray-200 block mb-1">Export Knowledge Base</span>
-                <p className="caption">Include all documents, constant files, and custom memory blocks.</p>
-              </div>
-              <div className="shrink-0 select-none">
-                <div
-                  onClick={() => setExportKb(!exportKb)}
-                  className={`w-5 h-5 rounded-sm border flex items-center justify-center cursor-pointer transition-all duration-200 hover:scale-105 active:scale-95 ${exportKb
-                    ? 'bg-accent border-accent text-on-accent shadow-[0_0_8px_color-mix(in_srgb,var(--app-accent)_40%,transparent)]'
-                    : 'border-gray-700 bg-surface-canvas/90 hover:border-accent/50'
-                    }`}
-                >
-                  {exportKb && <Check className="w-3.5 h-3.5 stroke-[3.5]" />}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="shrink-0 flex justify-end space-x-3 h-16 px-6 bg-surface-canvas border-t border-gray-800/50 items-center">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-xs font-bold text-gray-400 hover:text-text-primary transition-colors cursor-pointer"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleConfirmExport}
-            className="px-5 py-2 bg-accent text-on-accent font-bold text-xs uppercase tracking-wider rounded transition-all hover:brightness-110 shadow-md flex items-center space-x-2 cursor-pointer"
-          >
-            <span>Export Profile</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
       </div>
-    </div>
+      <div className="space-y-3.5 p-5 pt-4">
+        <PackageColumns inside={inside} stays={stays} />
+        <OptionRow
+          checked={exportKb}
+          onChange={setExportKb}
+          disabled={!files}
+          title="Include the knowledge base"
+          description={files ? 'Whoever imports it can search these files right away.' : 'This profile has no knowledge files yet.'}
+        />
+      </div>
+      <div className="flex items-center gap-2 border-t border-border-subtle px-5 py-3.5">
+        <FileName name={profileFileName(profile?.name)} />
+        <Button variant="subtle" onClick={onClose}>Cancel</Button>
+        <Button icon={Download} onClick={handleConfirmExport}>Export</Button>
+      </div>
+    </Modal>
   );
 }

@@ -8,7 +8,9 @@ import KbManagerModal from './modals/KbManagerModal';
 import VariableModal from './modals/VariableModal';
 import ExportProfileModal from './modals/ExportProfileModal';
 import ExportWorkflowModal from './modals/ExportWorkflowModal';
-import ImportProgressModal from './modals/ImportProgressModal';
+import ImportProgressModal, { PROGRESS_STAGES } from './modals/ImportProgressModal';
+import { ToneTile } from './modals/ModalParts';
+import { Braces, Workflow as WorkflowIcon } from 'lucide-react';
 import { ProfileAvatar } from './modals/ProfileModal';
 import { ReedPen } from '../logo';
 import { PROFILE_STARTERS, ProfilesIntro, VariablesIntro, WorkflowsIntro } from '../features/library/LibraryIntros';
@@ -60,8 +62,19 @@ export default function LibraryView() {
   const [searches, setSearches] = useState({});
   const [selected, setSelected] = useState({});
 
+  const deleteSubject = target => {
+    if (!target) return null;
+    const { type, item = {} } = target;
+    if (type === 'profile') return { leading: <ProfileAvatar color={item.color} size={36} />, name: item.name, detail: item.model || item.description || null };
+    if (type === 'workflow') {
+      const steps = stepsOf(item);
+      return { leading: <ToneTile icon={WorkflowIcon} color="var(--app-accent)" size="sm" />, name: item.name, detail: `${steps.length} ${steps.length === 1 ? 'step' : 'steps'} · ${steps.map(step => profileOf(step.profileId)?.name).filter(Boolean).join(', ')}` };
+    }
+    return { leading: <ToneTile icon={Braces} color="var(--theme-mode-always)" size="sm" />, name: item.name, detail: item.key ? `{{${item.key}}}` : null };
+  };
+
   const askDelete = (type, item) => {
-    setDeleteTarget({ type, id: item.id, name: item.name });
+    setDeleteTarget({ type, id: item.id, name: item.name, item });
     setShowDeleteModal(true);
   };
 
@@ -523,8 +536,14 @@ export default function LibraryView() {
 
       {showDeleteModal && (
         <DeleteModal
-          title={deleteTarget?.type === 'profile' ? 'Delete profile' : deleteTarget?.type === 'workflow' ? 'Delete workflow' : 'Delete variable'}
-          message={`Are you sure you want to permanently delete "${deleteTarget?.name}"?`}
+          title={deleteTarget?.type === 'profile' ? 'Delete this AI profile?' : deleteTarget?.type === 'workflow' ? 'Delete this workflow?' : 'Delete this variable?'}
+          message={deleteTarget?.type === 'profile'
+            ? 'Workspaces that use it lose this voice, and workflows lose the steps it runs. This cannot be undone.'
+            : deleteTarget?.type === 'workflow'
+              ? 'Its AI profiles stay in the Library. This cannot be undone.'
+              : 'Rules that mention it keep the tag as plain text. This cannot be undone.'}
+          confirmText={deleteTarget?.type === 'profile' ? 'Delete profile' : deleteTarget?.type === 'workflow' ? 'Delete workflow' : 'Delete variable'}
+          subject={deleteSubject(deleteTarget)}
           onConfirm={confirmDelete}
           onClose={() => {
             setShowDeleteModal(false);
@@ -574,7 +593,9 @@ export default function LibraryView() {
         <ImportProgressModal
           progress={importProgress}
           statusText={importStatus}
-          title={importType === 'profile' ? 'Importing AI Profile' : 'Importing Workflow'}
+          title={importType === 'profile' ? 'Importing an AI profile' : 'Importing a workflow'}
+          stages={importType === 'profile' ? PROGRESS_STAGES.profileImport : PROGRESS_STAGES.workflowImport}
+          footnote={importType === 'profile' ? 'Keep Kallamo open until it finishes. The profile appears in the Library when it is done.' : 'Keep Kallamo open until it finishes. The workflow and its profiles appear in the Library when it is done.'}
         />
       )}
     </div>

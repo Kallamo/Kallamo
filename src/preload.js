@@ -206,7 +206,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   exportWorldbuild: (workspaceId, includeImages = true, includeCurrentValues = false) => ipcRenderer.invoke('export-worldbuild', { workspaceId, includeImages, includeCurrentValues }),
   worldbuildExportSummary: (workspaceId) => ipcRenderer.invoke('worldbuild-export-summary', { workspaceId }),
   inspectWorldbuildPackage: (workspaceId) => ipcRenderer.invoke('inspect-worldbuild-package', { workspaceId }),
-  importWorldbuild: (workspaceId, filePath, rulesMode = 'merge') => ipcRenderer.invoke('import-worldbuild', { workspaceId, filePath, rulesMode }),
+  importWorldbuild: (workspaceId, filePath, rulesMode = 'merge', calendarMode = null) => ipcRenderer.invoke('import-worldbuild', { workspaceId, filePath, rulesMode, calendarMode }),
   enrichEntities: (workspaceId, { entityIds } = {}) => ipcRenderer.invoke('enrich-entities', { workspaceId, entityIds }),
   cancelEnrichEntities: (workspaceId) => ipcRenderer.invoke('cancel-enrich-entities', { workspaceId }),
   getEnrichStatus: () => ipcRenderer.invoke('get-enrich-status'),

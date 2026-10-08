@@ -1,15 +1,17 @@
 import React from 'react';
 import { X, Sparkles, PenLine, Globe2, Brain, Plus, RefreshCw, Wrench } from 'lucide-react';
 import Modal from '../ui/Modal';
+import Button from '../ui/Button';
+import { ToneTile } from './ModalParts';
 import { FALLBACK_PATCH_WHATS_NEW, GLOBAL_WHATS_NEW, PATCH_WHATS_NEW } from './whatsNew';
 import heroBg from '../../../assets/onboarding-bg.svg';
 
 const ICONS = { PenLine, Globe2, Brain, Sparkles };
 
 const SECTION_META = {
-  Added: { icon: Plus, color: 'text-emerald-400' },
-  Changed: { icon: RefreshCw, color: 'text-sky-400' },
-  Fixed: { icon: Wrench, color: 'text-amber-400' },
+  Added: { icon: Plus, color: 'var(--theme-status-success)' },
+  Changed: { icon: RefreshCw, color: 'var(--theme-status-info)' },
+  Fixed: { icon: Wrench, color: 'var(--theme-status-warning)' },
 };
 
 export default function WhatsNewModal({ onClose, type = 'global', version }) {
@@ -24,53 +26,41 @@ export default function WhatsNewModal({ onClose, type = 'global', version }) {
   const changelogLabel = isPatch ? 'Everything in this update' : 'Everything in 1.1 so far';
 
   return (
-    <Modal onClose={onClose} size="xl" className="max-h-[86vh]">
-      <div className="relative shrink-0 h-40 overflow-hidden">
-        <img src={heroBg} alt="" className="absolute inset-0 w-full h-full object-cover" />
-        <div className="absolute inset-0 bg-gradient-to-t from-surface-canvas via-surface-canvas/55 to-surface-canvas/10" />
-        <div className="absolute inset-0 bg-gradient-to-r from-surface-canvas/70 to-transparent" />
-
+    <Modal onClose={onClose} size="xl" className="max-h-[86vh] !max-w-[42rem]">
+      <div className="relative h-44 shrink-0 overflow-hidden">
+        <img src={heroBg} alt="" className="absolute inset-0 h-full w-full object-cover" />
+        <div aria-hidden="true" className="absolute inset-0" style={{ background: 'linear-gradient(to top, var(--theme-surface-canvas) 0%, color-mix(in srgb, var(--theme-surface-canvas) 55%, transparent) 55%, color-mix(in srgb, var(--theme-surface-canvas) 10%, transparent) 100%)' }} />
         <button
+          type="button"
           onClick={onClose}
-          className="absolute top-3.5 right-3.5 z-10 text-gray-300 hover:text-text-primary bg-shade/30 hover:bg-shade/50 backdrop-blur-sm rounded-full p-1.5 cursor-pointer transition-colors"
+          aria-label="Close"
+          className="absolute right-3.5 top-3.5 z-10 inline-flex min-h-8 min-w-8 items-center justify-center rounded-md text-text-secondary backdrop-blur-sm transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          style={{ background: 'color-mix(in srgb, var(--theme-shade) 30%, transparent)' }}
         >
-          <X className="w-4 h-4" />
+          <X className="h-4 w-4" />
         </button>
-
-        <div className="absolute bottom-0 left-0 right-0 px-6 pb-4">
-          <div className="flex items-center gap-2 mb-1.5">
-            <Sparkles className="w-3.5 h-3.5 text-accent" />
-            <span className="text-[0.6875rem] font-bold uppercase tracking-[0.2em] text-accent">
-              {isPatch ? 'Update notes' : 'What\'s New'} &middot; v{displayVersion}
-            </span>
-          </div>
-          <h2 className="text-2xl font-bold text-text-primary leading-tight drop-shadow-[0_2px_8px_color-mix(in_srgb,var(--theme-shade)_60%,transparent)]">
-            {content.title}
-          </h2>
+        <div className="absolute inset-x-0 bottom-0 px-6 pb-4">
+          <span className="inline-flex h-6 items-center gap-1.5 rounded-full bg-accent/[0.13] px-2.5 text-xs font-semibold text-accent ring-1 ring-inset ring-accent/35">
+            <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+            {isPatch ? 'Update notes' : "What's new"} · v{displayVersion}
+          </span>
+          <h2 className="mt-2 text-2xl font-bold leading-tight text-text-primary">{content.title}</h2>
         </div>
       </div>
 
-      <div className="flex flex-col flex-1 min-h-0 overflow-y-auto custom-scrollbar">
-        <div className="px-6 pt-4 pb-5">
-          <p className="text-sm leading-relaxed text-gray-300">{content.intro}</p>
-        </div>
+      <div className="custom-scrollbar min-h-0 flex-1 space-y-5 overflow-y-auto px-6 pb-6 pt-1">
+        <p className="text-sm leading-relaxed text-text-secondary">{content.intro}</p>
 
         {content.highlights.length > 0 && (
-          <div className="px-6 pb-5 grid grid-cols-1 gap-2.5">
-            {content.highlights.map((highlight) => {
+          <div className="overflow-hidden rounded-xl border border-tint/[0.08] surface-card">
+            {content.highlights.map((highlight, index) => {
               const Icon = ICONS[highlight.icon] || Sparkles;
               return (
-                <div
-                  key={highlight.title}
-                  className="group flex items-start gap-3.5 bg-gradient-to-br from-surface-raised to-surface-panel border border-gray-800/70 rounded-xl p-4 transition-colors hover:border-accent/40"
-                >
-                  <div className="relative flex items-center justify-center w-11 h-11 rounded-xl bg-accent/10 border border-accent/25 shrink-0 shadow-[inset_0_1px_0_color-mix(in_srgb,var(--theme-tint)_6%,transparent)]">
-                    <div className="absolute inset-0 rounded-xl bg-accent/10 blur-md opacity-0 group-hover:opacity-100 transition-opacity" />
-                    <Icon className="relative w-5 h-5 text-accent" />
-                  </div>
-                  <div className="flex flex-col gap-0.5 pt-0.5">
-                    <span className="text-sm font-bold text-text-primary">{highlight.title}</span>
-                    <p className="text-[0.8125rem] leading-relaxed text-gray-400">{highlight.text}</p>
+                <div key={highlight.title} className={`flex items-start gap-3.5 px-4 py-3.5 ${index ? 'border-t border-border-subtle' : ''}`}>
+                  <ToneTile icon={Icon} color="var(--app-accent)" />
+                  <div className="min-w-0">
+                    <span className="text-sm font-semibold text-text-primary">{highlight.title}</span>
+                    <p className="mt-0.5 text-[0.8125rem] leading-relaxed text-text-muted">{highlight.text}</p>
                   </div>
                 </div>
               );
@@ -78,41 +68,30 @@ export default function WhatsNewModal({ onClose, type = 'global', version }) {
           </div>
         )}
 
-        <div className="px-6 py-5 border-t border-gray-800/60 bg-surface-abyss/60">
-          <div className="flex items-center gap-2 mb-4">
-            <span className="h-px flex-1 bg-gradient-to-r from-transparent to-gray-800" />
-            <span className="text-[0.6875rem] font-bold uppercase tracking-[0.2em] text-gray-500">
-              {changelogLabel}
-            </span>
-            <span className="h-px flex-1 bg-gradient-to-l from-transparent to-gray-800" />
-          </div>
-          <div className="flex flex-col gap-3">
+        <div>
+          <p className="mb-3 text-xs font-semibold text-text-muted">{changelogLabel}</p>
+          <div className="flex flex-col gap-5">
             {releases.map((release) => (
-              <div key={release.version} className="rounded-xl border border-gray-800/60 bg-surface-raised-low/40 p-4">
+              <div key={release.version}>
                 {!isPatch && (
-                  <div className="flex items-baseline justify-between gap-3 mb-4">
-                    <span className="text-sm font-bold text-text-primary">{release.title}</span>
-                    <span className="text-[0.6875rem] font-bold tracking-wider text-accent shrink-0">v{release.version}</span>
+                  <div className="mb-3 flex items-baseline justify-between gap-3">
+                    <span className="text-sm font-semibold text-text-primary">{release.title}</span>
+                    <span className="shrink-0 text-xs font-semibold tabular-nums text-accent">v{release.version}</span>
                   </div>
                 )}
-                <div className="flex flex-col gap-5">
+                <div className="flex flex-col gap-4">
                   {Object.entries(release.sections).map(([section, items]) => {
-                    const meta = SECTION_META[section] || { icon: Sparkles, color: 'text-accent' };
+                    const meta = SECTION_META[section] || { icon: Sparkles, color: 'var(--app-accent)' };
                     const SectionIcon = meta.icon;
                     return (
                       <div key={section}>
-                        <div className="flex items-center gap-2 mb-2">
-                          <SectionIcon className={`w-3.5 h-3.5 ${meta.color}`} />
-                          <span className="text-xs font-bold text-gray-200 uppercase tracking-wider">{section}</span>
-                          <span className="text-[0.625rem] text-gray-600 font-semibold">{items.length}</span>
+                        <div className="mb-1.5 flex items-center gap-2">
+                          <SectionIcon className="h-3.5 w-3.5" style={{ color: meta.color }} aria-hidden="true" />
+                          <span className="text-xs font-semibold text-text-secondary">{section}</span>
+                          <span className="text-xs tabular-nums text-text-subtle">{items.length}</span>
                         </div>
-                        <ul className="flex flex-col gap-1.5 pl-1 border-l border-gray-800/70 ml-1">
-                          {items.map((item) => (
-                            <li key={item} className="flex gap-2.5 text-[0.8125rem] leading-relaxed text-gray-400 pl-3.5">
-                              <span className={`${meta.color} opacity-50 mt-1.5 shrink-0 text-[0.5rem]`}>&#9679;</span>
-                              <span>{item}</span>
-                            </li>
-                          ))}
+                        <ul className="space-y-1.5 pl-[1.375rem]">
+                          {items.map((item) => <li key={item} className="text-[0.8125rem] leading-relaxed text-text-muted">{item}</li>)}
                         </ul>
                       </div>
                     );
@@ -124,15 +103,9 @@ export default function WhatsNewModal({ onClose, type = 'global', version }) {
         </div>
       </div>
 
-      <div className="shrink-0 flex items-center justify-between gap-2 px-6 py-4 border-t border-gray-800/60 bg-surface-panel/40">
-        <span className="text-[0.6875rem] text-gray-500 italic">Thanks for creating with Kallamo.</span>
-        <button
-          type="button"
-          onClick={onClose}
-          className="flex items-center gap-1.5 bg-accent text-on-accent text-sm font-bold rounded-lg px-5 py-2 shadow-lg shadow-accent/20 hover:brightness-110 cursor-pointer"
-        >
-          <Sparkles className="w-4 h-4" /> Let's go
-        </button>
+      <div className="flex shrink-0 items-center gap-2 border-t border-border-subtle px-5 py-3.5">
+        <span className="caption mr-auto">Thanks for creating with Kallamo.</span>
+        <Button icon={Sparkles} onClick={onClose}>Let's go</Button>
       </div>
     </Modal>
   );

@@ -1,64 +1,48 @@
 import React from 'react';
-import { AlertTriangle, Check } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { Trash2 } from 'lucide-react';
+import Modal from '../ui/Modal';
 import Button from '../ui/Button';
+import Checkbox from '../ui/Checkbox';
+import { ToneTile } from './ModalParts';
 
-export default function DeleteModal({ 
-  title, 
-  message, 
-  onConfirm, 
-  onClose, 
+// `subject` shows what is being deleted (its avatar or icon, name and where it is used) before the choice.
+export default function DeleteModal({
+  title,
+  message,
+  onConfirm,
+  onClose,
   confirmText,
+  subject = null,
   showCheckbox,
   checkboxLabel,
   checkboxValue,
   onCheckboxChange
 }) {
-  const { settings } = useApp();
   return (
-    <div className={`fixed inset-0 z-[80] flex items-center justify-center titlebar-nodrag select-none ${(settings?.interface?.blur ?? true) ? 'bg-surface-overlay backdrop-blur-sm' : 'bg-surface-canvas'}`}>
-      <div className="w-[380px] bg-surface-canvas border border-border-default rounded-xl shadow-2xl p-6 flex flex-col space-y-4 animate-in fade-in zoom-in duration-200">
-        
-        {/* Warning Icon and Title */}
-        <div className="flex items-center space-x-3">
-          <div className="rounded-lg bg-status-danger/10 p-2 text-status-danger">
-            <AlertTriangle className="w-5 h-5" />
-          </div>
-          <h3 className="text-text-primary font-bold text-lg">{title || 'Confirm Deletion'}</h3>
+    <Modal onClose={onClose} size="md">
+      <div className="flex gap-4 px-5 pt-5">
+        <ToneTile icon={Trash2} color="var(--theme-status-danger)" />
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold text-text-primary">{title || 'Delete this?'}</h2>
+          <p className="mt-1 text-sm leading-relaxed text-text-muted">{message || 'This cannot be undone.'}</p>
         </div>
-
-        {/* Message */}
-        <p className="text-sm text-gray-400 leading-relaxed">
-          {message || 'Are you sure you want to delete this item? This action is permanent and cannot be undone.'}
-        </p>
-
-        {showCheckbox && (
-          <div className="flex items-center space-x-3 bg-surface-panel border border-gray-800/80 p-3 rounded-lg select-none">
-            <div className="flex-1">
-              <span className="text-xs text-gray-200 block font-medium">{checkboxLabel}</span>
-            </div>
-            <div className="shrink-0">
-              <div
-                onClick={() => onCheckboxChange && onCheckboxChange(!checkboxValue)}
-                className={`w-5 h-5 rounded-sm border flex items-center justify-center cursor-pointer transition-all duration-200 hover:scale-105 active:scale-95 ${checkboxValue
-                  ? 'bg-accent border-accent text-on-accent shadow-[0_0_8px_color-mix(in_srgb,var(--app-accent)_40%,transparent)]'
-                  : 'border-gray-700 bg-surface-canvas/90 hover:border-accent/50'
-                  }`}
-              >
-                {checkboxValue && <Check className="w-3.5 h-3.5 stroke-[3.5]" />}
-              </div>
+      </div>
+      <div className="space-y-3.5 px-5 pb-5 pt-4">
+        {subject && (
+          <div className="flex items-center gap-3 rounded-control border px-3.5 py-3" style={{ background: 'var(--theme-surface-well)', borderColor: 'var(--theme-border-well)' }}>
+            {subject.leading}
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-text-primary">{subject.name}</p>
+              {subject.detail && <p className="truncate text-xs text-text-subtle">{subject.detail}</p>}
             </div>
           </div>
         )}
-
-        {/* Buttons */}
-        <div className="flex items-center justify-end space-x-3 pt-2">
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button variant="danger" onClick={() => onConfirm(checkboxValue)}>{confirmText || 'Delete'}</Button>
-        </div>
-
+        {showCheckbox && <Checkbox checked={Boolean(checkboxValue)} onChange={value => onCheckboxChange?.(value)} label={checkboxLabel} />}
       </div>
-    </div>
+      <div className="flex items-center justify-end gap-2 border-t border-border-subtle px-5 py-3.5">
+        <Button variant="subtle" onClick={onClose}>Cancel</Button>
+        <Button variant="danger" icon={Trash2} onClick={() => onConfirm(checkboxValue)}>{confirmText || 'Delete'}</Button>
+      </div>
+    </Modal>
   );
 }
-

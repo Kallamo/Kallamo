@@ -1194,6 +1194,12 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     sendRunEvent(webContents, 'workflow-error', currentRun, {
                         step: i + 1,
                         profileName: profile.name,
+                        // Who failed and where, so the error can show the profile, its model and the chain.
+                        profileId: profile.id,
+                        model: profile.model || null,
+                        apiProfileId: profile.apiProfileId || null,
+                        workflowName: isWorkflow ? resolvedTarget.target.name : null,
+                        stepProfileIds: steps.map(step => step.profileId),
                         errorMessage: apiError.message || 'API request failed.',
                         retryable: apiError.retryable !== false && apiError.code !== 'MAX_API_PAYLOAD_EXCEEDED',
                         isWorkflow: isWorkflow

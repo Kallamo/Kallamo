@@ -25,7 +25,7 @@ import { framedImageStyle, loadPortraits, usePortraits } from '../features/world
 import SearchableSelect from './ui/SearchableSelect';
 import ConfirmDialog from './ui/ConfirmDialog';
 import ExportWorldbuildModal from './modals/ExportWorldbuildModal';
-import RulesImportDialog from '../features/worldbuild/RulesImportDialog';
+import ImportWorldbuildModal, { ImportWorldbuildDone } from '../features/worldbuild/ImportWorldbuildModal';
 import { buildLocationTree } from '../features/worldbuild/locationTree';
 import EntityPickerButton from '../features/worldbuild/EntityPickerButton';
 import { useSidebarWidth } from '../features/worldbuild/useSidebarWidth';
@@ -736,7 +736,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   }, [workspaceId, selected?.id, selected?.type, charTab, electronAPI]); // eslint-disable-line react-hooks/exhaustive-deps
   const [locationCover, setLocationCover] = useState(null);
   const [playerEntityId, setPlayerEntityId] = useState(null);
-  const [rulesImport, setRulesImport] = useState(null);
+  const [worldImport, setWorldImport] = useState(null);
+  const [importDone, setImportDone] = useState(null);
   const [rulesMeta, setRulesMeta] = useState('');
   // The played character's sheet says so while the workspace is in Roleplay; the Rules tile
   // summarizes the world's rules.
@@ -1348,8 +1349,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     if (previous && previous !== readingEntityId && previous === selected?.id) refreshSelected(previous);
   }, [readingEntityId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Export this workspace's Worldbuild to a portable file; import merges one back in
-  // (de-duped by name+type, non-destructive).
+  // Export this workspace's Worldbuild to a portable file; import brings one in as proposals
+  // to review, never merging by name.
   const exportWorld = async (includeImages = true, includeCurrentValues = false) => {
     const r = await electronAPI.exportWorldbuild(workspaceId, includeImages, includeCurrentValues);
     if (r?.cancelled) return;
@@ -1363,20 +1364,16 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     const inspected = await electronAPI.inspectWorldbuildPackage(workspaceId);
     if (inspected?.cancelled) return;
     if (!inspected?.success) { showToast(`Import failed: ${inspected?.error || 'unknown error'}`, 'error'); return; }
-    if (inspected.rules?.differs) { setRulesImport(inspected); return; }
-    await finishImport(inspected.filePath, 'merge');
+    setWorldImport(inspected);
   };
-  const finishImport = async (filePath, rulesMode) => {
-    setRulesImport(null);
-    const r = await electronAPI.importWorldbuild(workspaceId, filePath, rulesMode);
-    if (r?.cancelled) return;
+  const finishImport = async ({ rulesMode, calendarMode }) => {
+    const inspected = worldImport;
+    const r = await electronAPI.importWorldbuild(workspaceId, inspected.filePath, rulesMode, calendarMode);
+    if (r?.cancelled) { setWorldImport(null); return; }
     if (!r?.success) { showToast(`Import failed: ${r?.error || 'unknown error'}`, 'error'); return; }
+    setWorldImport(null);
     await load();
-    const linkBit = r.linksAdded ? ` and ${r.linksAdded} link${r.linksAdded === 1 ? '' : 's'}` : '';
-    const imageBit = r.imagesAdded ? `, with ${r.imagesAdded} image${r.imagesAdded === 1 ? '' : 's'},` : '';
-    const calendarBit = r.calendarConflict ? ' The package uses a different calendar, so your current calendar was preserved.' : r.calendarImported ? ' Its calendar was imported too.' : '';
-    const rulesBit = r.rulesImported ? ' Its roleplay rules came in as you chose.' : '';
-    showToast(`Imported ${r.entitiesAdded} entit${r.entitiesAdded === 1 ? 'y' : 'ies'}${linkBit}${imageBit} for review. Accept, merge, or dismiss each in the sidebar.${calendarBit}${rulesBit}`, r.calendarConflict ? 'info' : 'success');
+    setImportDone({ inspected, result: r, rulesMode });
     window.dispatchEvent(new CustomEvent('roleplay-state-change', { detail: { workspaceId } }));
   };
 
@@ -2251,13 +2248,26 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       {showExportModal && createPortal(
         <ExportWorldbuildModal
           workspaceId={workspaceId}
+          workspaceName={chat?.title}
           api={electronAPI}
           entityCount={exportableCount}
           onClose={() => setShowExportModal(false)}
           onConfirm={({ includeImages, includeCurrentValues }) => { setShowExportModal(false); exportWorld(includeImages, includeCurrentValues); }}
         />, document.body)}
-      {rulesImport && createPortal(
-        <RulesImportDialog inspected={rulesImport} onCancel={() => setRulesImport(null)} onImport={mode => finishImport(rulesImport.filePath, mode)} />, document.body)}
+      {worldImport && createPortal(
+        <ImportWorldbuildModal
+          inspected={worldImport}
+          workspaceName={chat?.title}
+          currentDate={worldClock && worldCalendar ? formatWorldDate(worldCalendar, worldClock) : null}
+          onCancel={() => setWorldImport(null)}
+          onImport={finishImport}
+        />, document.body)}
+      {importDone && createPortal(
+        <ImportWorldbuildDone
+          {...importDone}
+          onClose={() => setImportDone(null)}
+          onReview={() => { setImportDone(null); setReviewFilter('proposed'); }}
+        />, document.body)}
       {bulkDialog && (
         <ConfirmDialog
           tone={bulkDialog.tone}
@@ -2321,7 +2331,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               className={manageMode ? '!bg-accent/15 !text-accent' : ''} onClick={() => manageMode ? leaveManageMode() : setManageMode(true)} />
             <IconButton ref={moreMenuRef} icon={MoreHorizontal} size="sm" label="More Worldbuild actions" aria-haspopup="menu" aria-expanded={showMoreMenu} onClick={() => setShowMoreMenu(v => !v)} />
             <Menu anchorRef={moreMenuRef} open={showMoreMenu} onClose={() => setShowMoreMenu(false)} label="Worldbuild actions" className="w-64">
-              <MenuItem icon={Upload} label="Import" description="Merge a .klwb file into this world." onSelect={() => { setShowMoreMenu(false); importWorld(); }} />
+              <MenuItem icon={Upload} label="Import" description="Bring in a .klwb file to review." onSelect={() => { setShowMoreMenu(false); importWorld(); }} />
               <MenuItem icon={Download} label="Export" description={exportableCount ? 'Save this world as a .klwb file.' : 'Nothing to export yet.'} disabled={!exportableCount} onSelect={() => { setShowMoreMenu(false); setShowExportModal(true); }} />
             </Menu>
           </div>

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Search, Plus, LibraryBig } from 'lucide-react';
+import { Search, Plus, LibraryBig, MessageSquare } from 'lucide-react';
+import { ToneTile } from './modals/ModalParts';
 import { useApp } from '../context/AppContext';
 import ChatModal from './modals/ChatModal';
 import DeleteModal from './modals/DeleteModal';
@@ -156,8 +157,16 @@ export default function DashboardView() {
       {chatModal && <ChatModal chat={chatModal.chat} onClose={() => setChatModal(null)} />}
       {chatToDelete && (
         <DeleteModal
-          title="Delete Workspace"
-          message={`Are you sure you want to permanently delete "${chatToDelete.title}"?`}
+          title="Delete this workspace?"
+          message="Its chat, Worldbuild, Writing Desk, memory and files go with it. This cannot be undone."
+          confirmText="Delete workspace"
+          subject={{
+            leading: <ToneTile icon={MessageSquare} color="var(--app-accent)" size="sm" />,
+            name: chatToDelete.title,
+            detail: [chatToDelete.messageCount ? `${chatToDelete.messageCount} ${chatToDelete.messageCount === 1 ? 'message' : 'messages'}` : 'No messages yet',
+              chatToDelete.entityCount ? `${chatToDelete.entityCount} ${chatToDelete.entityCount === 1 ? 'entity' : 'entities'}` : null,
+              chatToDelete.documentCount ? `${chatToDelete.documentCount} ${chatToDelete.documentCount === 1 ? 'document' : 'documents'}` : null].filter(Boolean).join(' · ')
+          }}
           onConfirm={confirmDelete}
           onClose={() => setChatToDelete(null)}
         />

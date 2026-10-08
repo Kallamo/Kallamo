@@ -9,7 +9,7 @@ const ENTITY_TYPE_ICON = {
 };
 const entityTypeIcon = (t) => ENTITY_TYPE_ICON[t] || CircleHelp;
 import { useApp } from '../context/AppContext';
-import ImportProgressModal from './modals/ImportProgressModal';
+import ImportProgressModal, { PROGRESS_STAGES } from './modals/ImportProgressModal';
 import { parseMarkdown } from '../utils/markdown';
 import ConfirmDialog from './ui/ConfirmDialog';
 import TextInput from './ui/TextInput';
@@ -2143,7 +2143,8 @@ export default function ChatMemoryView({
         <ImportProgressModal
           progress={kbProgress}
           statusText={kbProgressStatus}
-          title={kbOpType === 'export' ? "Exporting Workspace KB" : "Importing Workspace KB"}
+          title={kbOpType === 'export' ? 'Exporting the workspace memory' : 'Importing workspace memory'}
+          stages={kbOpType === 'export' ? PROGRESS_STAGES.export : PROGRESS_STAGES.kbImport}
         />
       )}
 
