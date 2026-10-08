@@ -3042,7 +3042,20 @@ ipcMain.handle('worldbuild-export-summary', async (event, { workspaceId } = {}) 
     const rules = packager.hasRules(workspaceId)
       ? { ...packager.summary(workspaceId), timeRanges: getCalendarService().getTimeMatrix(db, workspaceId).categories.length }
       : null;
-    return { success: true, entities: data.entities.length, images: images.length, imageBytes: images.reduce((total, image) => total + image.bytes, 0), rules };
+    const typeCounts = {};
+    for (const entity of data.entities) typeCounts[entity.type] = (typeCounts[entity.type] || 0) + 1;
+    const pendingReview = db.prepare("SELECT COUNT(*) AS count FROM entities WHERE workspaceId = ? AND status = 'proposed'").get(workspaceId)?.count || 0;
+    return {
+      success: true,
+      entities: data.entities.length,
+      typeCounts,
+      links: data.links.length,
+      calendarName: getCalendarService().getCalendar(db, workspaceId)?.name || null,
+      pendingReview,
+      images: images.length,
+      imageBytes: images.reduce((total, image) => total + image.bytes, 0),
+      rules
+    };
   } catch (e) { return { success: false, error: e.message }; }
 });
 
@@ -3102,17 +3115,49 @@ ipcMain.handle('inspect-worldbuild-package', async (event, { workspaceId } = {})
     try { payload = readWorldbuildPackage(filePaths[0]); }
     catch (e) { return { success: false, error: 'Could not read the package. It is not a valid Worldbuild file.' }; }
     const entities = Array.isArray(payload?.entities) ? payload.entities.length : 0;
+    const typeCounts = {};
+    for (const entity of payload?.entities || []) if (entity?.type) typeCounts[entity.type] = (typeCounts[entity.type] || 0) + 1;
     const rules = payload?.roleplayRules
       ? getRulesPackager().difference(workspaceId, payload.roleplayRules, getCalendarService().getTimeMatrix(db, workspaceId))
       : null;
-    return { success: true, filePath: filePaths[0], entities, rules, currentValues: Boolean(payload?.roleplayRules?.currentValues) };
+    // The package's calendar is offered only when this world's dates still fit it.
+    const calendarService = getCalendarService();
+    const currentCalendar = calendarService.getCalendar(db, workspaceId);
+    let calendar = null;
+    if (payload?.calendar) {
+      const incoming = calendarService.normalizeCalendar(payload.calendar);
+      const same = JSON.stringify(calendarService.normalizeCalendar(currentCalendar)) === JSON.stringify(incoming);
+      calendar = {
+        same,
+        packageName: incoming.name || 'Unnamed calendar',
+        currentName: currentCalendar?.name || 'Unnamed calendar',
+        currentClock: calendarService.getRoleplayClock(db, workspaceId) || null,
+        datesThatDoNotFit: same ? 0 : calendarService.collectInvalidDates(db, workspaceId, incoming).length
+      };
+    }
+    let fileBytes = 0;
+    try { fileBytes = fs.statSync(filePaths[0]).size; } catch { fileBytes = 0; }
+    return {
+      success: true,
+      filePath: filePaths[0],
+      fileName: path.basename(filePaths[0]),
+      fileBytes,
+      entities,
+      typeCounts,
+      links: Array.isArray(payload?.links) ? payload.links.length : 0,
+      images: Array.isArray(payload?.images) ? payload.images.length : 0,
+      calendar,
+      rules,
+      worldHasEntities: (db.prepare("SELECT COUNT(*) AS count FROM entities WHERE workspaceId = ? AND status != 'proposed'").get(workspaceId)?.count || 0) > 0,
+      currentValues: Boolean(payload?.roleplayRules?.currentValues)
+    };
   } catch (e) {
     return { success: false, error: e.message };
   }
 });
 
 // Import a .klwb package: read worldbuild.json and merge it into the workspace.
-ipcMain.handle('import-worldbuild', async (event, { workspaceId, filePath, rulesMode = 'merge' } = {}) => {
+ipcMain.handle('import-worldbuild', async (event, { workspaceId, filePath, rulesMode = 'merge', calendarMode = null } = {}) => {
   try {
     if (!filePath || !fs.existsSync(filePath)) return { success: false, error: 'Choose a Worldbuild package to import.' };
     const filePaths = [filePath];
@@ -3124,7 +3169,13 @@ ipcMain.handle('import-worldbuild', async (event, { workspaceId, filePath, rules
     ).get(workspaceId)?.count || 0;
     let calendarImported = false;
     let calendarConflict = false;
-    if (payload.calendar) {
+    if (payload.calendar && calendarMode) {
+      if (calendarMode === 'replace') {
+        const calendarResult = getCalendarService().saveCalendar(db, workspaceId, payload.calendar, []);
+        calendarImported = calendarResult.saved;
+        calendarConflict = !calendarResult.saved;
+      }
+    } else if (payload.calendar) {
       const currentCalendar = getCalendarService().getCalendar(db, workspaceId);
       if (existingEntityCount === 0) {
         const calendarResult = getCalendarService().saveCalendar(db, workspaceId, payload.calendar, []);
@@ -4019,6 +4070,18 @@ ipcMain.handle('reprocess-narrative-state-turn', async (event, { workspaceId, or
   }
 });
 
+// Background images no saved workspace points to: a replaced one, or one picked and then cancelled.
+function removeUnusedBackgrounds(chatId, keep) {
+  const chatDir = path.join(chatsDir, chatId);
+  if (!fs.existsSync(chatDir)) return;
+  const kept = keep ? path.basename(keep) : null;
+  for (const file of fs.readdirSync(chatDir)) {
+    if (file.startsWith('bg_image_') && file !== kept) {
+      try { fs.unlinkSync(path.join(chatDir, file)); } catch { /* still in use or already gone */ }
+    }
+  }
+}
+
 ipcMain.handle('save-chat', async (event, chat) => {
   try {
     const exists = db.prepare('SELECT id, knowledgeFiles, syncToCloud FROM chats WHERE id = ?').get(chat.id);
@@ -4134,6 +4197,8 @@ ipcMain.handle('save-chat', async (event, chat) => {
       );
     }
 
+    removeUnusedBackgrounds(chat.id, chat.backgroundImage || '');
+
     if (ragIndexChanged) {
       indexChatKnowledgeBase(event.sender, chat.id, incomingKb).catch(e => {
         console.error("Background chat indexing error:", e);
@@ -4181,17 +4246,10 @@ ipcMain.handle('delete-chat', async (event, id) => {
 
 ipcMain.handle('upload-chat-bg-image', async (event, { chatId, filePath, fileName }) => {
   try {
+    // The previous image stays until the workspace is saved with the new one, so a
+    // cancelled edit never leaves the workspace pointing at a deleted file.
     const chatDir = path.join(chatsDir, chatId);
-    if (!fs.existsSync(chatDir)) {
-      fs.mkdirSync(chatDir, { recursive: true });
-    } else {
-      const files = fs.readdirSync(chatDir);
-      for (const f of files) {
-        if (f.startsWith('bg_image_')) {
-          try { fs.unlinkSync(path.join(chatDir, f)); } catch (err) { }
-        }
-      }
-    }
+    if (!fs.existsSync(chatDir)) fs.mkdirSync(chatDir, { recursive: true });
     const ext = fileName.includes('.') ? fileName.substring(fileName.lastIndexOf('.')) : '';
     const destBgName = `bg_image_${Date.now()}${ext}`;
     const destBgPath = path.join(chatDir, destBgName);
@@ -4624,7 +4682,7 @@ ipcMain.handle('get-archive-overview', async (event, { chatId }) => {
     if (!chat) throw new Error("Chat not found");
 
     const messages = db
-      .prepare('SELECT id, role, content, excluded, createdAt FROM messages WHERE chatId = ? ORDER BY createdAt ASC')
+      .prepare('SELECT id, role, content, aiName, aiColor, excluded, createdAt FROM messages WHERE chatId = ? ORDER BY createdAt ASC')
       .all(chatId);
     const archivable = new Set(selectArchivableMessages(messages, chat.memoryBlocks).map(m => m.id));
     const active = new Set(selectActiveMessages(messages, chat.memoryBlocks).map(m => m.id));
@@ -4637,6 +4695,8 @@ ipcMain.handle('get-archive-overview', async (event, { chatId }) => {
         id: message.id,
         role: message.role,
         content: message.content,
+        aiName: message.aiName || null,
+        aiColor: message.aiColor || null,
         excluded: message.excluded === 1,
         // archived: a summary already holds it. reserved: still active but kept
         // out of this pass so the next reply keeps its immediate continuity.
