@@ -33,7 +33,9 @@ export default function WorldbuildImageDialog({ title, image, shape = 'square', 
     const { width, height } = frameRef.current.getBoundingClientRect();
     const dx = ((event.clientX - drag.current.x) / width) * 100 / Math.max(1, focus.zoom);
     const dy = ((event.clientY - drag.current.y) / height) * 100 / Math.max(1, focus.zoom);
-    setFocus(current => ({ ...current, x: clamp(drag.current.start.x - dx), y: clamp(drag.current.start.y - dy) }));
+    // Read now: the update runs later, after a release may already have cleared the drag.
+    const { start } = drag.current;
+    setFocus(current => ({ ...current, x: clamp(start.x - dx), y: clamp(start.y - dy) }));
   };
   const onPointerUp = () => { drag.current = null; };
   const onKeyDown = (event) => {
