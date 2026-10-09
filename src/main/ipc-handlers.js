@@ -3671,6 +3671,11 @@ function getRoleplayProgression() {
   return new RoleplayProgression(db);
 }
 
+function getRoleplaySkills() {
+  const { RoleplaySkills } = require('../../dist-main/main/features/narrative/roleplay-skills');
+  return new RoleplaySkills(db);
+}
+
 function getRulesPackager() {
   const { RoleplayRulesPackager } = require('../../dist-main/main/features/narrative/roleplay-rules-package');
   return new RoleplayRulesPackager(db);
@@ -3694,6 +3699,7 @@ ipcMain.handle('get-roleplay-configuration', async (event, { workspaceId } = {})
   try {
     const roleplay = getRoleplaySystem();
     const progression = getRoleplayProgression();
+    const skills = getRoleplaySkills();
     const calendarService = getCalendarService();
     return {
       success: true,
@@ -3701,6 +3707,8 @@ ipcMain.handle('get-roleplay-configuration', async (event, { workspaceId } = {})
       progression: { ...progression.getSettings(workspaceId), progressingIds: progression.progressingIds(workspaceId) },
       traits: progression.listTraits(workspaceId),
       progressChanges: progression.listChanges(workspaceId),
+      skills: { ...skills.getSettings(workspaceId), learningIds: skills.learningIds(workspaceId), catalog: skills.listSkills(workspaceId) },
+      skillChanges: skills.listChanges(workspaceId),
       calendar: calendarService.getCalendar(db, workspaceId),
       clock: calendarService.getRoleplayClock(db, workspaceId),
       timeMatrix: calendarService.getTimeMatrix(db, workspaceId),
@@ -3995,6 +4003,44 @@ ipcMain.handle('set-roleplay-race-progress', async (event, { workspaceId, raceId
 
 ipcMain.handle('resolve-roleplay-progress-change', async (event, { workspaceId, changeId, decision } = {}) => {
   try { return { success: true, change: getRoleplayProgression().resolveChange(workspaceId, changeId, decision) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('save-roleplay-skill-settings', async (event, { workspaceId, enabled, config } = {}) => {
+  try { return { success: true, skills: getRoleplaySkills().saveSettings(workspaceId, { enabled, config }) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('set-roleplay-skill-members', async (event, { workspaceId, members } = {}) => {
+  try { return { success: true, skills: getRoleplaySkills().setMembers(workspaceId, Array.isArray(members) ? members : []) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('save-roleplay-skill', async (event, { workspaceId, skill } = {}) => {
+  try { return { success: true, skill: getRoleplaySkills().saveSkill(workspaceId, skill || {}) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('delete-roleplay-skill', async (event, { workspaceId, skillId } = {}) => {
+  try { getRoleplaySkills().deleteSkill(workspaceId, skillId); return { success: true }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('get-roleplay-entity-skills', async (event, { workspaceId, entityId } = {}) => {
+  try { return { success: true, skills: getRoleplaySkills().getEntitySkills(workspaceId, entityId) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('set-roleplay-entity-skill', async (event, { workspaceId, entityId, skillId, rank } = {}) => {
+  try {
+    const skills = getRoleplaySkills().setEntitySkill(workspaceId, entityId, skillId, rank === null || rank === undefined ? null : Number(rank));
+    event.sender.send('roleplay-resource-changes', { workspaceId, changes: [{ kind: 'skill', entityId }] });
+    return { success: true, skills };
+  } catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('resolve-roleplay-skill-change', async (event, { workspaceId, changeId, decision } = {}) => {
+  try { return { success: true, change: getRoleplaySkills().resolveChange(workspaceId, changeId, decision) }; }
   catch (error) { return { success: false, error: error.message }; }
 });
 

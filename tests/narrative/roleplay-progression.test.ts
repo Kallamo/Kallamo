@@ -118,6 +118,24 @@ describe('Roleplay progression', () => {
     ]));
   });
 
+  test('a level typed on the sheet gives each new level its rewards, and a lower one takes them back', () => {
+    const health = roleplay.saveDefinition(WS, {
+      name: 'Health', key: 'health', color: '#dc2626', minimum: 0, maximum: 100,
+      initialValue: 100, appliesTo: ['Characters'], updatePolicy: 'automatic'
+    });
+    roleplay.setTargetValue(WS, health.id, 'entity', 'hero', { current: 100, maximum: 100 });
+    progression.saveSettings(WS, { mode: 'levels', config: { rewards: [{ definitionId: health.id, maximumIncrease: 20, refill: false }] } });
+
+    progression.setEntityValue(WS, 'hero', { kind: 'level', value: 4 });
+    expect(roleplay.listEntityResources(WS, 'hero')[0]).toMatchObject({ current: 100, maximum: 160 });
+    expect(progression.listHistory(WS, 'hero').find(entry => entry.kind === 'level')?.reason).toBe('Health full at +60');
+
+    roleplay.setTargetValue(WS, health.id, 'entity', 'hero', { current: 150, maximum: 160 });
+    progression.setEntityValue(WS, 'hero', { kind: 'level', value: 2 });
+    expect(roleplay.listEntityResources(WS, 'hero')[0]).toMatchObject({ current: 120, maximum: 120 });
+    expect(progression.listHistory(WS, 'hero').find(entry => entry.kind === 'level')?.reason).toBe('Health full at −40');
+  });
+
   test('the AI never takes XP away and raises an attribute one point at a time, in review', () => {
     progression.saveSettings(WS, { mode: 'levels', config: { policy: 'review' } });
     const dexterity = progression.listTraits(WS).find(trait => trait.key === 'dexterity')!;

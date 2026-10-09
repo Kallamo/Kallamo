@@ -26,7 +26,7 @@ const percentOf = (value, minimum, maximum) => ((value - minimum) / Math.max(1, 
 
 export function describeRange(definition) {
   const unit = definition.unit ? ` ${definition.unit}` : '';
-  const parts = [`${formatNumber(definition.minimum)} to ${formatNumber(definition.maximum)}${unit}, starts at ${formatNumber(definition.initialValue)}`];
+  const parts = [`Starts at ${formatNumber(definition.initialValue)} of ${formatNumber(definition.maximum)}${unit}, lowest ${formatNumber(definition.minimum)}`];
   if (definition.timeRate > 0) parts.push(`${definition.timeDirection === 'drains' ? 'drains' : 'recovers'} ${formatNumber(definition.timeRate)} per ${definition.timePeriod === 'day' ? 'day' : 'hour'}`);
   return parts.join(' · ');
 }
@@ -220,7 +220,7 @@ function ResourceRow({ definition, holders, open, onToggle, onEdit, onDelete, gr
               <SearchableSelect className="min-w-[12rem] flex-1" multiple values={give.targetIds} onChange={targetIds => setGive(current => ({ ...current, targetIds }))} options={targets.map(option)} placeholder={`Choose ${give.targetType === 'entity' ? 'characters' : give.targetType === 'race' ? 'races' : 'species'}`} ariaLabel="Who gets it" />
               <span className="flex shrink-0 items-center gap-2">
               <label className="flex items-center gap-1.5 text-xs text-text-muted">Current<NumberInput className="field-input h-10 w-16 px-2.5 text-sm tabular-nums" value={give.current} integer={false} onChange={current => setGive(value => ({ ...value, current }))} /></label>
-              <label className="flex items-center gap-1.5 text-xs text-text-muted">Highest<NumberInput className="field-input h-10 w-16 px-2.5 text-sm tabular-nums" value={give.maximum} integer={false} onChange={maximum => setGive(value => ({ ...value, maximum }))} /></label>
+              <label className="flex items-center gap-1.5 text-xs text-text-muted">Full at<NumberInput className="field-input h-10 w-16 px-2.5 text-sm tabular-nums" value={give.maximum} integer={false} onChange={maximum => setGive(value => ({ ...value, maximum }))} /></label>
               <Button variant="primary" size="sm" loading={adding} disabled={!give.targetIds.length} onClick={addHolders}>{updating ? 'Save' : 'Add'}</Button>
               </span>
             </div>

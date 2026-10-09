@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { RoleplaySystem, type RoleplayUpdatePolicy } from './roleplay-system';
+import { requireUniqueName, ruleKey } from './rule-keys';
 
 export type ProgressionMode = 'off' | 'levels';
 export type GoalGrowth = 'same' | 'add' | 'multiply';
@@ -12,6 +13,8 @@ export type MemberTarget = 'everyone' | 'entity' | 'race' | 'species' | 'type';
 export interface ProgressionMember { targetType: MemberTarget; targetId: string }
 
 export interface LevelReward { definitionId: string; maximumIncrease: number; refill: boolean }
+
+interface RewardGiven { name: string; maximumDelta: number; refilled: boolean }
 
 export interface ProgressionConfig {
   policy: RoleplayUpdatePolicy;
@@ -80,9 +83,11 @@ export interface ProgressChangeInput {
 
 export interface HistoryEntry {
   id: string;
-  area: 'resource' | 'progress';
+  area: 'resource' | 'progress' | 'skill';
   kind: string;
   label: string;
+  /** A finished sentence for entries that are not an amount, such as a skill's rank. */
+  summary?: string;
   /** The resource or trait the entry is about, for its colour. */
   refId: string | null;
   delta: number | null;
@@ -179,33 +184,7 @@ export class RoleplayProgression {
 
   /** Each progressing actor with the first line that includes them. */
   private resolveMembers(workspaceId: string, settings: ProgressionSettings): Map<string, EntityProgress['progressesThrough']> {
-    const result = new Map<string, EntityProgress['progressesThrough']>();
-    if (settings.playerEntityId) result.set(settings.playerEntityId, { targetType: 'player', targetId: settings.playerEntityId });
-    if (!settings.members.length) return result;
-    const actors = this.listActors(workspaceId);
-    const groupMembers = (sql: string, groupId: string) => new Set((this.db.prepare(sql).all(workspaceId, groupId) as Array<{ id: string }>).map(row => row.id));
-    for (const member of settings.members) {
-      let ids: Iterable<string>;
-      if (member.targetType === 'everyone') ids = actors.keys();
-      else if (member.targetType === 'entity') ids = actors.has(member.targetId) ? [member.targetId] : [];
-      else if (member.targetType === 'type') ids = [...actors].filter(([, type]) => type === member.targetId).map(([id]) => id);
-      else {
-        // Race and species membership are both the race link.
-        ids = [...groupMembers("SELECT fromId AS id FROM entity_links WHERE workspaceId = ? AND toId = ? AND relType = 'is_race'", member.targetId)]
-          .filter(id => actors.has(id));
-      }
-      for (const id of ids) if (!result.has(id)) result.set(id, member);
-    }
-    return result;
-  }
-
-  /** Confirmed characters and specific beings, with their type. A species is never an actor. */
-  private listActors(workspaceId: string): Map<string, string> {
-    const rows = this.db.prepare(`
-      SELECT id, type, data FROM entities
-      WHERE workspaceId = ? AND status != 'proposed' AND type IN ('Characters', 'Creatures')
-    `).all(workspaceId) as Array<{ id: string; type: string; data: string | null }>;
-    return new Map(rows.filter(row => row.type === 'Characters' || parseObject(row.data).scope !== 'group').map(row => [row.id, row.type]));
+    return resolveMemberLines(this.db, workspaceId, settings.members, settings.playerEntityId);
   }
 
   listTraits(workspaceId: string): TraitDefinition[] {
@@ -218,7 +197,10 @@ export class RoleplayProgression {
   saveTrait(workspaceId: string, input: Partial<TraitDefinition> & { name: string }): TraitDefinition {
     const name = String(input.name || '').trim();
     if (!name) throw new Error('Give it a name.');
-    const key = String(input.key || name).normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || `trait-${Date.now()}`;
+    const others = this.listTraits(workspaceId);
+    requireUniqueName(name, others, input.id, 'an attribute');
+    const previous = input.id ? others.find(trait => trait.id === input.id) : undefined;
+    const key = ruleKey({ name, givenKey: input.key, previous, taken: others.map(trait => trait.key), prefix: 'trait' });
     const minimum = Number(input.minimum ?? 1);
     const maximum = Number(input.maximum ?? 20);
     const initialValue = Number(input.initialValue ?? 10);
@@ -305,7 +287,8 @@ export class RoleplayProgression {
 
   /**
    * An edit made by the user. The number typed is the number kept: an attribute stores the base
-   * that gives it, and XP never levels up on its own.
+   * that gives it, and XP never levels up on its own. A level typed in hands out the rewards of
+   * each level gained, and a lower one takes back those of each level lost.
    */
   setEntityValue(workspaceId: string, entityId: string, input: { kind: 'level' | 'xp' | 'attribute'; traitId?: string; value: number }): EntityProgress {
     this.requireActor(workspaceId, entityId);
@@ -316,7 +299,11 @@ export class RoleplayProgression {
       if (input.kind === 'level') {
         const next = Math.max(1, Math.round(value));
         this.writeValue(workspaceId, 'entity', entityId, LEVEL, next);
-        this.recordChange({ workspaceId, entityId, kind: 'level', traitId: null, delta: next - before.level, previousValue: before.level, nextValue: next, reason: '', status: 'applied', source: 'manual' });
+        const rewards = this.getSettings(workspaceId).config.rewards;
+        const given: RewardGiven[] = [];
+        for (let level = before.level + 1; level <= next; level += 1) given.push(...this.giveRewards(workspaceId, entityId, null, level, rewards));
+        for (let level = before.level; level > next; level -= 1) given.push(...this.giveRewards(workspaceId, entityId, null, level, rewards, true));
+        this.recordChange({ workspaceId, entityId, kind: 'level', traitId: null, delta: next - before.level, previousValue: before.level, nextValue: next, reason: summarizeRewards(given), status: 'applied', source: 'manual' });
       } else if (input.kind === 'xp') {
         const next = Math.max(0, Math.round(value));
         this.writeValue(workspaceId, 'entity', entityId, XP, next);
@@ -330,6 +317,30 @@ export class RoleplayProgression {
       }
     })();
     return this.getEntityProgress(workspaceId, entityId);
+  }
+
+  /**
+   * Where a newly introduced character starts, from what the story says about them. Unlike a
+   * change it sets a value, and it is recorded so History shows where the numbers came from.
+   */
+  setStartingValues(workspaceId: string, entityId: string, input: { level?: number; attributes?: Record<string, number> }, provenanceId: string): void {
+    this.requireActor(workspaceId, entityId);
+    const before = this.getEntityProgress(workspaceId, entityId);
+    const reason = 'Where they start';
+    this.db.transaction(() => {
+      if (input.level && input.level > before.level) {
+        this.writeValue(workspaceId, 'entity', entityId, LEVEL, input.level);
+        this.recordChange({ workspaceId, entityId, kind: 'level', traitId: null, delta: input.level - before.level, previousValue: before.level, nextValue: input.level, reason, status: 'applied', source: 'ai', provenanceId });
+      }
+      for (const [key, value] of Object.entries(input.attributes || {})) {
+        const attribute = before.attributes.find(item => item.key === key);
+        if (!attribute) continue;
+        const next = clampValue(Math.round(value), attribute.minimum, attribute.maximum);
+        if (next === attribute.value) continue;
+        this.writeValue(workspaceId, 'entity', entityId, attribute.traitId, next - attribute.bonus);
+        this.recordChange({ workspaceId, entityId, kind: 'attribute', traitId: attribute.traitId, delta: next - attribute.value, previousValue: attribute.value, nextValue: next, reason, status: 'applied', source: 'ai', provenanceId });
+      }
+    })();
   }
 
   /** An AI change. It follows the progression rule and its limits, and is stored as an amount. */
@@ -422,19 +433,50 @@ export class RoleplayProgression {
       turnNumber: change.provenanceId ? turns.get(change.provenanceId) ?? null : null,
       createdAt: change.createdAt
     }));
+    const skills = this.skillHistory(workspaceId, entityId, turns);
     // A replaced or deleted reply was undone, so what it changed is no longer part of the story.
     const undone = new Set((this.db.prepare(`
       SELECT origin_id FROM narrative_origin_lifecycle WHERE workspace_id = ? AND status != 'active'
     `).all(workspaceId) as Array<{ origin_id: string }>).map(row => row.origin_id));
     const provenance = new Map([
       ...this.roleplay.listChanges(workspaceId, entityId).map(change => [change.id, change.provenanceId] as const),
-      ...this.listChanges(workspaceId, entityId).map(change => [change.id, change.provenanceId] as const)
+      ...this.listChanges(workspaceId, entityId).map(change => [change.id, change.provenanceId] as const),
+      ...skills.map(entry => [entry.id, entry.provenanceId] as const)
     ]);
-    return [...resources, ...progress]
+    return [...resources, ...progress, ...skills.map(({ provenanceId: _provenance, ...entry }) => entry)]
       .filter(entry => !undone.has(provenance.get(entry.id) || ''))
-      .filter(entry => entry.delta !== 0 || entry.maximumDelta !== 0 || entry.kind === 'level')
+      .filter(entry => entry.area === 'skill' || entry.delta !== 0 || entry.maximumDelta !== 0 || entry.kind === 'level')
       .sort((left, right) => right.createdAt - left.createdAt)
       .slice(0, limit);
+  }
+
+  // Read straight from the skill tables: skills build on progression, not the other way round.
+  private skillHistory(workspaceId: string, entityId: string, turns: Map<string, number>): Array<HistoryEntry & { provenanceId: string | null }> {
+    const settings = this.db.prepare('SELECT config_json FROM roleplay_skill_settings WHERE workspace_id = ?').get(workspaceId) as { config_json: string } | undefined;
+    const configured = parseObject(settings?.config_json).ranks;
+    const ranks: string[] = Array.isArray(configured) && configured.length >= 2 ? configured.map(String) : ['Novice', 'Apprentice', 'Competent', 'Master'];
+    const rankName = (rank: unknown) => rank === null || rank === undefined ? '' : ranks[Math.max(0, Math.min(ranks.length - 1, Number(rank)))];
+    const rows = this.db.prepare(`
+      SELECT changes.*, skills.name AS skill_name FROM roleplay_skill_changes AS changes
+      LEFT JOIN roleplay_skills AS skills ON skills.workspace_id = changes.workspace_id AND skills.skill_id = changes.skill_id
+      WHERE changes.workspace_id = ? AND changes.entity_id = ?
+    `).all(workspaceId, entityId) as Array<Record<string, any>>;
+    return rows.map(row => {
+      const name = String(row.skill_name || 'Skill');
+      const previous = row.previous_rank === null ? null : Number(row.previous_rank);
+      const next = row.next_rank === null ? null : Number(row.next_rank);
+      const summary = row.kind === 'remove' ? `${name} removed`
+        : row.kind === 'create' ? `New skill: ${name} (${rankName(next)})`
+          : row.kind === 'assign' ? `${name} learned (${rankName(next)})`
+            : `${name}: ${rankName(previous)} → ${rankName(next)}`;
+      return {
+        id: String(row.change_id), area: 'skill', kind: String(row.kind), label: name, summary, refId: String(row.skill_id),
+        delta: null, previousValue: previous ?? 0, nextValue: next ?? 0, maximumDelta: 0,
+        reason: String(row.reason || ''), status: row.status, source: String(row.source),
+        turnNumber: row.provenance_id ? turns.get(String(row.provenance_id)) ?? null : null,
+        createdAt: Number(row.created_at), provenanceId: row.provenance_id ? String(row.provenance_id) : null
+      };
+    });
   }
 
   private applyChange(workspaceId: string, changeId: string): void {
@@ -471,7 +513,7 @@ export class RoleplayProgression {
       goal = xpGoal(level, config.xp);
       this.writeValue(workspaceId, 'entity', entityId, LEVEL, level);
       this.writeValue(workspaceId, 'entity', entityId, XP, xp);
-      const rewards = this.giveRewards(workspaceId, entityId, provenanceId, level, config.rewards);
+      const rewards = summarizeRewards(this.giveRewards(workspaceId, entityId, provenanceId, level, config.rewards));
       this.recordChange({
         workspaceId, entityId, kind: 'level', traitId: null, delta: 1, previousValue: level - 1, nextValue: level,
         reason: rewards, status: 'applied', source: 'level', provenanceId
@@ -479,29 +521,28 @@ export class RoleplayProgression {
     }
   }
 
-  private giveRewards(workspaceId: string, entityId: string, provenanceId: string | null, level: number, rewards: LevelReward[]): string {
-    const resources = this.roleplay.listEntityResources(workspaceId, entityId);
-    const given: string[] = [];
+  // Taking a level back removes its increase and leaves the refill alone: what was spent is spent.
+  private giveRewards(workspaceId: string, entityId: string, provenanceId: string | null, level: number, rewards: LevelReward[], takeBack = false): RewardGiven[] {
+    const given: RewardGiven[] = [];
     rewards.forEach((reward, index) => {
-      const state = resources.find(item => item.definitionId === reward.definitionId);
+      const state = this.roleplay.listEntityResources(workspaceId, entityId).find(item => item.definitionId === reward.definitionId);
       if (!state) return;
       const increase = Math.max(0, Number(reward.maximumIncrease) || 0);
-      if (!increase && !reward.refill) return;
-      const maximum = state.maximum + increase;
+      if (takeBack ? !increase : !increase && !reward.refill) return;
+      const maximumDelta = takeBack ? -Math.min(increase, state.maximum - state.minimum - 1) : increase;
+      if (takeBack && maximumDelta >= 0) return;
+      const maximum = state.maximum + maximumDelta;
       this.roleplay.proposeChange({
-        id: `${provenanceId || randomUUID()}:level:${level}:${index}:${entityId}`,
+        id: `${provenanceId || randomUUID()}:level:${takeBack ? 'lost:' : ''}${level}:${index}:${entityId}`,
         workspaceId, definitionId: state.definitionId, entityId,
-        ...(reward.refill ? { value: maximum } : { delta: 0 }),
-        maximumDelta: increase,
-        reason: `Level ${level}`,
+        ...(reward.refill && !takeBack ? { value: maximum } : { delta: 0 }),
+        maximumDelta,
+        reason: takeBack ? `Level ${level} taken back` : `Level ${level}`,
         source: 'level', provenanceId: provenanceId ?? undefined
       });
-      given.push([
-        increase ? `${state.name} highest +${increase}` : '',
-        reward.refill ? `${state.name} refilled` : ''
-      ].filter(Boolean).join(', '));
+      given.push({ name: state.name, maximumDelta, refilled: reward.refill && !takeBack });
     });
-    return given.join(', ');
+    return given;
   }
 
   private currentValue(workspaceId: string, entityId: string, kind: ProgressKind, traitId: string | null): number {
@@ -581,7 +622,7 @@ export class RoleplayProgression {
     return hydrateTrait(row);
   }
 
-  private requireMemberTarget(workspaceId: string, member: ProgressionMember): void {
+  requireMemberTarget(workspaceId: string, member: ProgressionMember): void {
     if (member.targetType === 'everyone' || member.targetType === 'type') return;
     if (member.targetType === 'entity') return this.requireActor(workspaceId, member.targetId);
     if (member.targetType === 'race') return this.requireEntityOfType(workspaceId, member.targetId, ['Races']);
@@ -600,6 +641,55 @@ export class RoleplayProgression {
   }
 }
 
+/**
+ * Who a member list covers, each with the first line that includes them. The player always
+ * counts. Progression and skills share this so "who progresses" and "who learns" agree.
+ */
+export function resolveMemberLines(
+  db: Database.Database,
+  workspaceId: string,
+  members: ProgressionMember[],
+  playerEntityId: string | null
+): Map<string, EntityProgress['progressesThrough']> {
+  const result = new Map<string, EntityProgress['progressesThrough']>();
+  if (playerEntityId) result.set(playerEntityId, { targetType: 'player', targetId: playerEntityId });
+  if (!members.length) return result;
+  const actors = listActors(db, workspaceId);
+  const groupMembers = (groupId: string) => new Set((db.prepare(
+    "SELECT fromId AS id FROM entity_links WHERE workspaceId = ? AND toId = ? AND relType = 'is_race'"
+  ).all(workspaceId, groupId) as Array<{ id: string }>).map(row => row.id));
+  for (const member of members) {
+    let ids: Iterable<string>;
+    if (member.targetType === 'everyone') ids = actors.keys();
+    else if (member.targetType === 'entity') ids = actors.has(member.targetId) ? [member.targetId] : [];
+    else if (member.targetType === 'type') ids = [...actors].filter(([, type]) => type === member.targetId).map(([id]) => id);
+    // Race and species membership are both the race link.
+    else ids = [...groupMembers(member.targetId)].filter(id => actors.has(id));
+    for (const id of ids) if (!result.has(id)) result.set(id, member);
+  }
+  return result;
+}
+
+/** Confirmed characters and specific beings, with their type. A species is never an actor. */
+export function listActors(db: Database.Database, workspaceId: string): Map<string, string> {
+  const rows = db.prepare(`
+    SELECT id, type, data FROM entities
+    WHERE workspaceId = ? AND status != 'proposed' AND type IN ('Characters', 'Creatures')
+  `).all(workspaceId) as Array<{ id: string; type: string; data: string | null }>;
+  return new Map(rows.filter(row => row.type === 'Characters' || parseObject(row.data).scope !== 'group').map(row => [row.id, row.type]));
+}
+
+/** Rewards as one line: each resource's total change to where it is full, then what was refilled. */
+function summarizeRewards(given: RewardGiven[]): string {
+  const totals = new Map<string, number>();
+  for (const item of given) totals.set(item.name, (totals.get(item.name) ?? 0) + item.maximumDelta);
+  const refilled = [...new Set(given.filter(item => item.refilled).map(item => item.name))];
+  return [
+    ...[...totals].filter(([, total]) => total).map(([name, total]) => `${name} full at ${total > 0 ? '+' : '−'}${Math.abs(total)}`),
+    ...refilled.map(name => `${name} refilled`)
+  ].join(', ');
+}
+
 /** XP needed to go from `level` to the next one. */
 export function xpGoal(level: number, rule: ProgressionConfig['xp']): number {
   return growGoal(rule.firstGoal, rule.growth, rule.growthAmount, Math.max(0, level - 1));
@@ -615,7 +705,7 @@ function growGoal(first: number, growth: GoalGrowth, amount: number, steps: numb
 const MEMBER_TARGETS: MemberTarget[] = ['everyone', 'entity', 'race', 'species', 'type'];
 
 // Everyone covers every other line, but they are kept so turning it off brings the list back.
-function normalizeMembers(input: unknown): ProgressionMember[] {
+export function normalizeMembers(input: unknown): ProgressionMember[] {
   const seen = new Set<string>();
   return (Array.isArray(input) ? input : []).flatMap(item => {
     const targetType = MEMBER_TARGETS.includes(item?.targetType) ? item.targetType as MemberTarget : null;

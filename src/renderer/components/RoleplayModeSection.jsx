@@ -7,6 +7,7 @@ import { ConfigSection } from '../features/configuration/ConfigParts';
 import SceneBlock from '../features/configuration/roleplay/SceneBlock';
 import NarrativeStateSection from '../features/configuration/roleplay/NarrativeStateSection';
 import CleanupDialog from '../features/configuration/roleplay/CleanupDialog';
+import { skillChangeItems } from '../features/roleplay/changeKinds';
 
 const EMPTY_SETTINGS = { playerEntityId: null, locationEntityId: null, activeSceneId: null, scenarioName: '', scenarioSummary: '', defaultUpdatePolicy: 'review' };
 const EMPTY_SCENE = { locationId: null, participantIds: [], possibleObserverIds: [], nearbyIds: [], objectIds: [] };
@@ -19,7 +20,8 @@ const RESOLVERS = {
   scene: 'resolveRoleplaySceneChange',
   inventory: 'resolveRoleplayInventoryChange',
   resource: 'resolveRoleplayResourceChange',
-  progress: 'resolveRoleplayProgressChange'
+  progress: 'resolveRoleplayProgressChange',
+  skill: 'resolveRoleplaySkillChange'
 };
 
 const isPending = change => change.status === 'pending' || change.status === 'proposed' || change.status === 'conflicting';
@@ -38,6 +40,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, regis
   const [now, setNow] = useState(() => Date.now());
   const [compaction, setCompaction] = useState(null);
   const [compactionBusy, setCompactionBusy] = useState(false);
+  const [rereading, setRereading] = useState(() => new Set());
   const loadRef = useRef(0);
   const workspaceRef = useRef(workspaceId);
   workspaceRef.current = workspaceId;
@@ -111,7 +114,8 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, regis
       ...(config.sceneChanges || []).map(change => ({ ...change, kind: 'scene' })),
       ...(config.inventoryChanges || []).map(change => ({ ...change, kind: 'inventory' })),
       ...(config.changes || []).map(change => ({ ...change, kind: 'resource', definitionName: definitionNames.get(change.definitionId) })),
-      ...(config.progressChanges || []).map(change => ({ ...change, kind: 'progress', progressKind: change.kind, traitName: traitNames.get(change.traitId) }))
+      ...(config.progressChanges || []).map(change => ({ ...change, kind: 'progress', progressKind: change.kind, traitName: traitNames.get(change.traitId) })),
+      ...skillChangeItems(config)
     ];
     const done = all.filter(change => {
       if (change.kind === 'narrative') return change.status === 'approved';
@@ -119,6 +123,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, regis
       if (change.kind === 'scene') return change.source === 'ai' && Object.hasOwn(change.patch || {}, 'locationId');
       if (change.kind === 'resource') return change.source === 'ai';
       if (change.kind === 'progress') return change.source === 'ai' || change.source === 'level';
+      if (change.kind === 'skill') return change.source === 'ai';
       if (change.kind === 'inventory') return change.source === 'ai';
       return true;
     });
@@ -128,8 +133,8 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, regis
     };
   }, [config, definitions, traits]);
 
-  const updating = jobs.some(job => job.status === 'processing' && now - job.updatedAt <= JOB_STALE_AFTER);
-  const delayedJobs = jobs.filter(job => job.status === 'failed' || (job.status === 'processing' && now - job.updatedAt > JOB_STALE_AFTER));
+  const updating = rereading.size > 0 || jobs.some(job => job.status === 'processing' && now - job.updatedAt <= JOB_STALE_AFTER);
+  const delayedJobs = jobs.filter(job => !rereading.has(job.originId) && (job.status === 'failed' || (job.status === 'processing' && now - job.updatedAt > JOB_STALE_AFTER)));
 
   useEffect(() => { onStatusChange?.({ enabled, pendingCount: pending.length }); }, [enabled, onStatusChange, pending.length]);
 
@@ -191,10 +196,20 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, regis
     announce();
   };
   const reprocess = async originId => {
-    const result = await api.reprocessNarrativeStateTurn(workspaceId, originId);
-    if (!result?.success) return showToast(result?.error || 'Could not read the turn again.', 'error');
-    showToast('The turn was read again.', 'success');
-    await load();
+    if (rereading.has(originId)) return;
+    setRereading(current => new Set(current).add(originId));
+    try {
+      const result = await api.reprocessNarrativeStateTurn(workspaceId, originId);
+      if (!result?.success) return showToast(result?.error || 'Could not read the turn again.', 'error');
+      showToast('The turn was read again.', 'success');
+      await load();
+    } finally {
+      setRereading(current => {
+        const next = new Set(current);
+        next.delete(originId);
+        return next;
+      });
+    }
   };
 
   const previewCompaction = async () => {
@@ -233,7 +248,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, regis
       action: 'Try again',
       onFix: () => reprocess(job.originId)
     })),
-    ...(config?.pendingNarrativeTurn ? [{
+    ...(config?.pendingNarrativeTurn && !rereading.has(config.pendingNarrativeTurn.originId) ? [{
       key: 'kept-reply',
       tone: 'info',
       title: "The reply you kept isn't in the record yet",
@@ -280,7 +295,7 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, regis
               <Scale aria-hidden="true" className="h-4.5 w-4.5 shrink-0 text-text-muted" />
               <span className="min-w-0 flex-1">
                 <span className="block text-[0.8125rem] font-semibold text-text-secondary">World rules</span>
-                <span className="block text-xs leading-relaxed text-text-subtle">{describeRules(definitions, progression, config.timeMatrix)} They belong to the world, in Worldbuild.</span>
+                <span className="block text-xs leading-relaxed text-text-subtle">{describeRules(definitions, progression, config.timeMatrix, config.skills)} They belong to the world, in Worldbuild.</span>
               </span>
               <Button variant="ghost" size="sm" onClick={() => window.dispatchEvent(new CustomEvent('open-worldbuild-surface', { detail: { surface: 'rules' } }))}>Open in Worldbuild</Button>
             </div>
@@ -324,12 +339,14 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, regis
   );
 }
 
-function describeRules(definitions, progression, timeMatrix) {
+function describeRules(definitions, progression, timeMatrix, skills) {
   const style = progression?.mode === 'levels' ? 'Levels and attributes' : null;
   const ranges = timeMatrix?.categories?.length || 0;
+  const skillCount = (skills?.catalog || []).filter(skill => skill.status === 'confirmed').length;
   const parts = [
     `${definitions.length} ${definitions.length === 1 ? 'resource' : 'resources'}`,
     style || 'no progression',
+    skills?.enabled ? `${skillCount} ${skillCount === 1 ? 'skill' : 'skills'}` : 'no skills',
     `${ranges} time ${ranges === 1 ? 'range' : 'ranges'}`
   ];
   return `${parts.join(' · ')}.`;

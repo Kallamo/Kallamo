@@ -1201,6 +1201,118 @@ const MIGRATIONS = [
           ON roleplay_progress_values (workspace_id, target_type, target_id);
       `);
     }
+  },
+  {
+    // Skills are held by characters at a rank from the world's ladder, apart from progression.
+    // A sub-skill names its parent; a skill the AI proposed waits as 'proposed' until confirmed.
+    id: 'kallamo_roleplay_skills_v1',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS roleplay_skill_settings (
+          workspace_id TEXT PRIMARY KEY,
+          enabled INTEGER NOT NULL DEFAULT 0,
+          config_json TEXT NOT NULL DEFAULT '{}',
+          updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS roleplay_skill_members (
+          workspace_id TEXT NOT NULL,
+          target_type TEXT NOT NULL CHECK (target_type IN ('everyone', 'entity', 'race', 'species', 'type')),
+          target_id TEXT NOT NULL DEFAULT '',
+          added_at INTEGER NOT NULL,
+          PRIMARY KEY (workspace_id, target_type, target_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS roleplay_skills (
+          workspace_id TEXT NOT NULL,
+          skill_id TEXT NOT NULL,
+          skill_key TEXT NOT NULL,
+          name TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          parent_id TEXT,
+          status TEXT NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed', 'proposed')),
+          position INTEGER NOT NULL DEFAULT 0,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (workspace_id, skill_id),
+          UNIQUE (workspace_id, skill_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS roleplay_skill_values (
+          workspace_id TEXT NOT NULL,
+          entity_id TEXT NOT NULL,
+          skill_id TEXT NOT NULL,
+          rank INTEGER NOT NULL DEFAULT 0,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (workspace_id, entity_id, skill_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS roleplay_skill_changes (
+          workspace_id TEXT NOT NULL,
+          change_id TEXT NOT NULL,
+          entity_id TEXT NOT NULL,
+          skill_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('assign', 'rank', 'remove', 'create')),
+          previous_rank INTEGER,
+          next_rank INTEGER,
+          reason TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL CHECK (status IN ('pending', 'applied', 'rejected')),
+          source TEXT NOT NULL CHECK (source IN ('manual', 'ai')),
+          provenance_id TEXT,
+          created_at INTEGER NOT NULL,
+          resolved_at INTEGER,
+          PRIMARY KEY (workspace_id, change_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_roleplay_skill_changes_entity
+          ON roleplay_skill_changes (workspace_id, entity_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_roleplay_skill_values_entity
+          ON roleplay_skill_values (workspace_id, entity_id);
+      `);
+    }
+  },
+  {
+    // Keys follow names now. A rule renamed before that kept its old key (Stamina stored as
+    // "dexterity"), which matched the wrong rule on import; each key is rebuilt from its name.
+    id: 'kallamo_roleplay_rule_keys_v1',
+    up: (db) => {
+      const slug = name => String(name || '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim()
+        .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+      const tables = [
+        { table: 'roleplay_trait_definitions', id: 'trait_id', key: 'trait_key', prefix: 'trait' },
+        { table: 'roleplay_skills', id: 'skill_id', key: 'skill_key', prefix: 'skill' },
+        { table: 'roleplay_resource_definitions', id: 'definition_id', key: 'resource_key', prefix: 'resource' }
+      ];
+      for (const spec of tables) {
+        if (!hasTable(db, spec.table)) continue;
+        const rows = db.prepare(`SELECT workspace_id, ${spec.id} AS id, ${spec.key} AS key, name FROM ${spec.table} ORDER BY workspace_id, rowid`).all();
+        const byWorkspace = new Map();
+        for (const row of rows) {
+          if (!byWorkspace.has(row.workspace_id)) byWorkspace.set(row.workspace_id, []);
+          byWorkspace.get(row.workspace_id).push(row);
+        }
+        const update = db.prepare(`UPDATE ${spec.table} SET ${spec.key} = ? WHERE workspace_id = ? AND ${spec.id} = ?`);
+        for (const [workspaceId, list] of byWorkspace) {
+          const wanted = list.map(row => {
+            let base = slug(row.name) || row.key;
+            if (!/^[a-z][a-z0-9_-]*$/.test(base)) base = `${spec.prefix}-${base}`;
+            return { row, base };
+          });
+          // Rows already right keep their key; the rest take theirs in order, numbered on a clash.
+          const taken = new Set(wanted.filter(item => item.base === item.row.key).map(item => item.row.key));
+          const moves = [];
+          for (const item of wanted) {
+            if (item.base === item.row.key) continue;
+            let key = item.base;
+            for (let suffix = 2; taken.has(key); suffix += 1) key = `${item.base}-${suffix}`;
+            if (key === item.row.key) { taken.add(key); continue; }
+            taken.add(key);
+            moves.push({ id: item.row.id, key });
+          }
+          // A free placeholder first, so two rows can trade keys without breaking uniqueness.
+          moves.forEach(move => update.run(`__moving-${move.id}`, workspaceId, move.id));
+          moves.forEach(move => update.run(move.key, workspaceId, move.id));
+        }
+      }
+    }
   }
 ];
 

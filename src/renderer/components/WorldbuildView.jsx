@@ -42,6 +42,7 @@ import WorldDateInput, { formatWorldDate } from '../features/worldbuild/WorldDat
 import { WorldbuildInventory, WorldbuildRelationships } from '../features/worldbuild/WorldbuildAgentCollections';
 import WorldbuildTemplateManager from '../features/worldbuild/WorldbuildTemplateManager';
 import WorldbuildRoleplayResources, { RaceRoleplayDefaults } from '../features/worldbuild/WorldbuildRoleplayResources';
+import WorldbuildEntitySkills from '../features/worldbuild/WorldbuildEntitySkills';
 import { displayNativeValue, displayProposalValue } from '../features/worldbuild/reviewDisplay';
 import {
   ABUNDANCE_HELP, CREATURE_NATURES, DISPOSITION, entityMeta, fieldLabel, ITEM_TYPES, itemMeta, meta, TYPES,
@@ -2640,7 +2641,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             </div>
 
             {!isNew && selected.status !== 'proposed' && charTab === 'data' && (selected.type === 'Characters' || (selected.type === 'Creatures' && (selected.data?.scope || 'individual') !== 'group')) && (
-              <WorldbuildRoleplayResources workspaceId={workspaceId} entity={selected} entities={entities} api={electronAPI} showToast={showToast} onOpen={openEntityById} />
+              <>
+                <WorldbuildRoleplayResources workspaceId={workspaceId} entity={selected} entities={entities} api={electronAPI} showToast={showToast} onOpen={openEntityById} />
+                <WorldbuildEntitySkills workspaceId={workspaceId} entity={selected} api={electronAPI} showToast={showToast} />
+              </>
             )}
 
 

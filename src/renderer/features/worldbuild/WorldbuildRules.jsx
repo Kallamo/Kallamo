@@ -3,11 +3,13 @@ import SegmentedControl from '../../components/ui/SegmentedControl';
 import ResourcesSection from '../configuration/roleplay/ResourcesSection';
 import ProgressionSection from '../configuration/roleplay/ProgressionSection';
 import TimeCostsSection from '../configuration/roleplay/TimeCostsSection';
+import SkillsSection from '../configuration/roleplay/SkillsSection';
 
+const EMPTY_SKILLS = { enabled: false, members: [], learningIds: [], playerEntityId: null, catalog: [], config: { policy: 'review', ranks: ['Novice', 'Apprentice', 'Competent', 'Master'], aiAssigns: true, aiRaises: true, aiLowers: false, aiCreates: false, guidance: '' } };
 const EMPTY_PROGRESSION = { mode: 'off', members: [], progressingIds: [], playerEntityId: null, config: { policy: 'review', xp: { firstGoal: 1000, growth: 'add', growthAmount: 500, maxLevel: null, guidance: '', aiOnlyAdds: true }, attributes: { aiRaises: true, aiLowers: false, guidance: '' }, rewards: [] } };
 
 /**
- * How this world works in roleplay: its resources, how characters grow, and what time costs.
+ * How this world works in roleplay: its resources, how characters grow, their skills, and what time costs.
  * The rules belong to the world, so they live here and travel with its export.
  */
 export default function WorldbuildRules({ workspaceId, api, showToast, entities, worldName, onOpenCalendar }) {
@@ -48,6 +50,7 @@ export default function WorldbuildRules({ workspaceId, api, showToast, entities,
 
   const definitions = config?.definitions || [];
   const progression = config?.progression || EMPTY_PROGRESSION;
+  const skills = config?.skills || EMPTY_SKILLS;
 
   return (
     <div className="flex flex-col gap-5 px-5 py-6 sm:px-8">
@@ -64,6 +67,7 @@ export default function WorldbuildRules({ workspaceId, api, showToast, entities,
           options={[
             { value: 'resources', label: 'Resources', count: definitions.length },
             { value: 'progression', label: 'Progression' },
+            { value: 'skills', label: 'Skills', count: skills.enabled ? skills.catalog.filter(skill => skill.status === 'confirmed').length : undefined },
             { value: 'time', label: 'Time costs' }
           ]}
         />
@@ -94,6 +98,18 @@ export default function WorldbuildRules({ workspaceId, api, showToast, entities,
             progression={progression}
             traits={config.traits || []}
             definitions={definitions}
+            groups={groups}
+            names={names}
+            onChanged={changed}
+          />
+        ) : tab === 'skills' ? (
+          <SkillsSection
+            embedded
+            workspaceId={workspaceId}
+            api={api}
+            showToast={showToast}
+            skills={skills}
+            changes={config.skillChanges || []}
             groups={groups}
             names={names}
             onChanged={changed}

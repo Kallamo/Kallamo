@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Activity, Check, History, Pencil, Plus } from 'lucide-react';
+import { Activity, Check, History, Pencil, Plus, RotateCcw } from 'lucide-react';
 import Button from '../../components/ui/Button';
 import Modal from '../../components/ui/Modal';
 import NumberInput from '../../components/ui/NumberInput';
@@ -83,7 +83,8 @@ export default function WorldbuildRoleplayResources({ workspaceId, entity, entit
     level: progress?.level ?? 1,
     xp: progress?.xp ?? 0,
     attributes: Object.fromEntries((progress?.attributes || []).map(item => [item.traitId, item.value])),
-    resources: Object.fromEntries(resources.map(item => [item.definitionId, item.current]))
+    resources: Object.fromEntries(resources.map(item => [item.definitionId, item.current])),
+    maximums: Object.fromEntries(resources.map(item => [item.definitionId, item.maximum]))
   });
   const setPart = (part, key, value) => setDraft(current => ({ ...current, [part]: { ...current[part], [key]: value } }));
 
@@ -98,9 +99,10 @@ export default function WorldbuildRoleplayResources({ workspaceId, entity, entit
         if (draft.attributes[item.traitId] !== item.value) calls.push(() => api.setRoleplayEntityProgress(workspaceId, entity.id, { kind: 'attribute', traitId: item.traitId, value: draft.attributes[item.traitId] }));
       });
       resources.forEach(item => {
-        if (draft.resources[item.definitionId] !== item.current) calls.push(() => api.changeRoleplayResource({
+        const maximumDelta = Number(draft.maximums[item.definitionId]) - item.maximum;
+        if (draft.resources[item.definitionId] !== item.current || maximumDelta) calls.push(() => api.changeRoleplayResource({
           id: crypto.randomUUID(), workspaceId, definitionId: item.definitionId, entityId: entity.id,
-          value: Number(draft.resources[item.definitionId]), source: 'manual', provenanceId: 'worldbuild-entity-sheet'
+          value: Number(draft.resources[item.definitionId]), maximumDelta, source: 'manual', provenanceId: 'worldbuild-entity-sheet'
         }));
       });
       for (const call of calls) {
@@ -204,20 +206,30 @@ export default function WorldbuildRoleplayResources({ workspaceId, entity, entit
           <div className="grid gap-2.5 sm:grid-cols-2">
             {resources.map(resource => {
               const source = resource.inheritedFrom ? entities.find(item => item.id === resource.inheritedFrom) : null;
+              const current = editing ? Number(draft.resources[resource.definitionId]) : resource.current;
+              const maximum = editing ? Number(draft.maximums[resource.definitionId]) : resource.maximum;
               return (
                 <div key={resource.definitionId} className="flex flex-col gap-2 rounded-control border border-border-subtle bg-surface-canvas/40 p-3">
                   <div className="flex items-center gap-2">
                     <span className="min-w-0 flex-1 truncate text-[0.8125rem] font-semibold text-text-primary">{resource.name}</span>
                     {editing
-                      ? <SheetNumber ariaLabel={`${resource.name} current value`} value={draft.resources[resource.definitionId]} min={resource.minimum} max={resource.maximum} integer={false} className="h-8 w-16 text-[0.8125rem]" onChange={value => setPart('resources', resource.definitionId, value)} />
+                      ? <SheetNumber ariaLabel={`${resource.name} current value`} value={draft.resources[resource.definitionId]} min={resource.minimum} max={draft.maximums[resource.definitionId]} integer={false} className="h-8 w-16 text-[0.8125rem]" onChange={value => setPart('resources', resource.definitionId, value)} />
                       : <span className="text-[0.8125rem] tabular-nums text-text-primary">{format(resource.current)}</span>}
-                    <span className="shrink-0 text-xs tabular-nums text-text-subtle">/ {format(resource.maximum)}</span>
+                    <span className="shrink-0 text-xs tabular-nums text-text-subtle">/</span>
+                    {editing
+                      ? <SheetNumber ariaLabel={`${resource.name} full at`} value={draft.maximums[resource.definitionId]} min={resource.minimum + 1} integer={false} className="h-8 w-16 text-[0.8125rem]" onChange={value => {
+                        setPart('maximums', resource.definitionId, value);
+                        if (Number(draft.resources[resource.definitionId]) > value) setPart('resources', resource.definitionId, value);
+                      }} />
+                      : <span className="shrink-0 text-xs tabular-nums text-text-subtle">{format(resource.maximum)}</span>}
                   </div>
-                  <div className="h-1.5 overflow-hidden rounded-full bg-surface-hover/70" role="progressbar" aria-label={resource.name} aria-valuemin={resource.minimum} aria-valuemax={resource.maximum} aria-valuenow={resource.current}>
-                    <div className="h-full rounded-full transition-[width]" style={{ width: `${percent(resource.current, resource.minimum, resource.maximum)}%`, backgroundColor: resource.color }} />
+                  <div className="h-1.5 overflow-hidden rounded-full bg-surface-hover/70" role="progressbar" aria-label={resource.name} aria-valuemin={resource.minimum} aria-valuemax={maximum} aria-valuenow={current}>
+                    <div className="h-full rounded-full transition-[width]" style={{ width: `${percent(current, resource.minimum, maximum)}%`, backgroundColor: resource.color }} />
                   </div>
                   <p className="flex min-h-5 items-center gap-1.5 text-xs text-text-subtle">
-                    {source
+                    {editing
+                      ? <button type="button" disabled={current >= maximum} onClick={() => setPart('resources', resource.definitionId, maximum)} className="inline-flex min-h-5 items-center gap-1 rounded-md px-1.5 -ml-1.5 text-xs font-semibold text-text-muted transition-colors hover:bg-surface-hover/60 hover:text-text-primary disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><RotateCcw className="h-3 w-3" aria-hidden="true" />Refill</button>
+                      : source
                       ? <>From <button type="button" onClick={() => onOpen?.(source.id)} className="inline-flex min-h-5 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-hover/35 px-2 text-xs font-medium text-text-secondary hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${meta(source.type).dot || 'bg-text-subtle'}`} />{source.canonicalName}</button></>
                       : resource.inheritedFromType === 'entity' ? 'Set on this sheet' : 'Starting value'}
                   </p>
@@ -229,7 +241,7 @@ export default function WorldbuildRoleplayResources({ workspaceId, entity, entit
 
         {editing && (
           <div className="flex items-center justify-end gap-2">
-            <span className="mr-auto text-xs text-text-subtle">The number you type is the number kept.</span>
+            <span className="mr-auto text-xs text-text-subtle">The number you type is the number kept.{levels ? ' A new level gives its rewards; a lower one takes them back.' : ''}</span>
             <Button variant="ghost" size="sm" disabled={saving} onClick={() => setDraft(null)}>Cancel</Button>
             <Button size="sm" icon={Check} loading={saving} onClick={save}>Save</Button>
           </div>

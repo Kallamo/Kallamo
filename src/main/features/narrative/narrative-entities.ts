@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { normalizeLocationSize, type LocationSize } from '../../../shared/location-sizes';
 import { loadLocationChain, proposeLocationParent } from '../worldbuild/location-graph';
+import { applyStartingProfile, resolveStartingProfile, type StartingProfile } from './starting-profile';
 
 export type NarrativeEntityType = 'Characters' | 'Creatures' | 'Locations' | 'Items';
 export type NarrativeEntityDecision = 'new' | 'ambiguous' | 'conflicting';
@@ -22,6 +23,8 @@ export interface NarrativeEntityProposal {
   size?: LocationSize;
   /** Suggested container for a new Location; the link is written only when the proposal is approved. */
   insideId?: string;
+  /** Where a new character starts, already checked against the world's rules. */
+  startingProfile?: StartingProfile;
 }
 
 export interface NarrativeEntityContext {
@@ -65,7 +68,7 @@ interface EntityRow {
 }
 
 const AUTO_TYPES = new Set<NarrativeEntityType>(['Characters', 'Creatures']);
-const OPEN_CHANGE_TABLES = ['roleplay_resource_changes', 'roleplay_progress_changes', 'roleplay_scene_changes', 'roleplay_inventory_changes', 'roleplay_entity_changes'];
+const OPEN_CHANGE_TABLES = ['roleplay_resource_changes', 'roleplay_progress_changes', 'roleplay_skill_changes', 'roleplay_scene_changes', 'roleplay_inventory_changes', 'roleplay_entity_changes'];
 
 type TurnSnapshot = Record<string, Array<Record<string, unknown>> | undefined>;
 
@@ -84,6 +87,7 @@ export const SNAPSHOT_ENTITY_COLUMNS: Record<string, { table: string; required?:
   locationInventory: { table: 'roleplay_location_inventory', required: ['location_id', 'item_id'] },
   resources: { table: 'roleplay_resource_values', required: ['target_id'] },
   progress: { table: 'roleplay_progress_values', required: ['target_id'] },
+  skills: { table: 'roleplay_skill_values', required: ['entity_id'] },
   links: { table: 'entity_links', required: ['fromId', 'toId'] }
 };
 
@@ -109,7 +113,8 @@ export class NarrativeEntitySystem {
     const changeId = `${provenanceId}:entity:${normalized.referenceId}`;
     const previous = this.getChange(workspaceId, changeId);
     if (previous) return previous;
-    const proposal = this.withSuggestedContainer(workspaceId, normalized, context.sceneLocationId);
+    const startingProfile = AUTO_TYPES.has(normalized.type) ? resolveStartingProfile(this.db, workspaceId, input.startingProfile) : undefined;
+    const proposal = this.withSuggestedContainer(workspaceId, startingProfile ? { ...normalized, startingProfile } : normalized, context.sceneLocationId);
 
     const match = proposal.identityEstablished
       ? this.findExactMatch(workspaceId, proposal)
@@ -127,6 +132,7 @@ export class NarrativeEntitySystem {
 
     const entityId = randomUUID();
     this.insertEntity(workspaceId, entityId, proposal, provenanceId);
+    applyStartingProfile(this.db, workspaceId, entityId, proposal.startingProfile, provenanceId);
     return this.saveChange(workspaceId, changeId, entityId, true, proposal, 'applied', provenanceId);
   }
 
@@ -215,6 +221,7 @@ export class NarrativeEntitySystem {
     if (!match) {
       this.insertEntity(workspaceId, entityId, change.proposal, change.provenanceId);
       this.fileInsideContainer(workspaceId, entityId, change.proposal);
+      applyStartingProfile(this.db, workspaceId, entityId, change.proposal.startingProfile, change.provenanceId);
     }
     this.updateStatus(workspaceId, changeId, 'applied', entityId, !match);
     return this.getChange(workspaceId, changeId)!;
@@ -238,8 +245,10 @@ export class NarrativeEntitySystem {
         WHERE workspace_id = ? AND provenance_id = ? AND entity_id IS NOT NULL AND created_entity = 1
       )
     `).run(entityStatus, Date.now(), workspaceId, workspaceId, originId);
+    this.syncCreatedSkills(workspaceId, originId, status === 'active');
     if (status !== 'active') {
-      for (const table of ['roleplay_resource_changes', 'roleplay_progress_changes', 'roleplay_scene_changes', 'roleplay_inventory_changes']) {
+      for (const table of ['roleplay_resource_changes', 'roleplay_progress_changes', 'roleplay_skill_changes', 'roleplay_scene_changes', 'roleplay_inventory_changes']) {
+        if (!this.hasTable(table)) continue;
         this.db.prepare(`UPDATE ${table} SET status = 'rejected', resolved_at = ? WHERE workspace_id = ? AND provenance_id = ? AND status = 'pending'`)
           .run(Date.now(), workspaceId, originId);
       }
@@ -359,6 +368,7 @@ export class NarrativeEntitySystem {
             status = excluded.status, replacement_origin_id = excluded.replacement_origin_id, updated_at = excluded.updated_at
         `).run(workspaceId, originId, lifecycle.status, lifecycle.replacement_origin_id, lifecycle.updated_at);
       }
+      for (const { originId, row: lifecycle } of restore.lifecycle) this.syncCreatedSkills(workspaceId, originId, !lifecycle || lifecycle.status === 'active');
       for (const change of restore.changes) {
         if (!OPEN_CHANGE_TABLES.includes(change.table)) continue;
         this.db.prepare(`UPDATE ${change.table} SET status = ?, resolved_at = ? WHERE workspace_id = ? AND change_id = ?`)
@@ -429,6 +439,7 @@ export class NarrativeEntitySystem {
       locationInventory: this.hasTable('roleplay_location_inventory') ? this.rows('roleplay_location_inventory', workspaceId) : [],
       resources: this.rows('roleplay_resource_values', workspaceId),
       progress: this.hasTable('roleplay_progress_values') ? this.rows('roleplay_progress_values', workspaceId) : [],
+      skills: this.hasTable('roleplay_skill_values') ? this.rows('roleplay_skill_values', workspaceId) : [],
       timeState: this.hasTable('roleplay_time_state') ? this.rows('roleplay_time_state', workspaceId) : [],
       timeAdvances: this.hasTable('roleplay_time_advances') ? this.rows('roleplay_time_advances', workspaceId) : [],
       links: (this.db.prepare(`
@@ -509,6 +520,7 @@ export class NarrativeEntitySystem {
       }
       this.replaceRows('roleplay_resource_values', workspaceId, snapshot.resources ?? []);
       if (snapshot.progress && this.hasTable('roleplay_progress_values')) this.replaceRows('roleplay_progress_values', workspaceId, snapshot.progress);
+      if (snapshot.skills && this.hasTable('roleplay_skill_values')) this.replaceRows('roleplay_skill_values', workspaceId, snapshot.skills);
       if (this.hasTable('roleplay_time_state')) {
         this.replaceRows('roleplay_time_state', workspaceId, snapshot.timeState ?? []);
       }
@@ -528,6 +540,18 @@ export class NarrativeEntitySystem {
 
   private rows(table: string, workspaceId: string): Array<Record<string, unknown>> {
     return this.db.prepare(`SELECT * FROM ${table} WHERE workspace_id = ?`).all(workspaceId) as Array<Record<string, unknown>>;
+  }
+
+  // A skill a turn created, like an entity it created, leaves the catalog while the turn is undone.
+  private syncCreatedSkills(workspaceId: string, originId: string, active: boolean): void {
+    if (!this.hasTable('roleplay_skill_changes')) return;
+    this.db.prepare(`
+      UPDATE roleplay_skills SET status = ?, updated_at = ?
+      WHERE workspace_id = ? AND skill_id IN (
+        SELECT skill_id FROM roleplay_skill_changes
+        WHERE workspace_id = ? AND provenance_id = ? AND kind = 'create' AND status = 'applied'
+      )
+    `).run(active ? 'confirmed' : 'proposed', Date.now(), workspaceId, workspaceId, originId);
   }
 
   private hasTable(table: string): boolean {

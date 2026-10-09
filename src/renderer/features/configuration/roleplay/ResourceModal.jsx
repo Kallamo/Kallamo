@@ -92,14 +92,15 @@ export default function ResourceModal({ initial, onCancel, onSave }) {
             <span className="text-[0.8125rem] font-semibold text-text-muted">Values</span>
             <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
               <NumberLabel label="Lowest" value={draft.minimum} onChange={minimum => set({ minimum })} />
-              <NumberLabel label="Highest" value={draft.maximum} onChange={maximum => set({ maximum })} />
+              <NumberLabel label="Full at" value={draft.maximum} onChange={maximum => set({ maximum })} />
               <NumberLabel label="Starts at" value={draft.initialValue} onChange={initialValue => set({ initialValue })} />
               <label className="flex flex-col gap-1">
                 <span className={subLabel}>Unit</span>
                 <input className="field-input h-10 px-3 text-sm" value={draft.unit || ''} onChange={event => set({ unit: event.target.value })} placeholder="optional" />
               </label>
             </div>
-            {!rangeValid && <p className="text-xs text-status-danger">The highest value must be above the lowest, and it must start between them.</p>}
+            <Help>Full at is where a new holder's bar is full. It is not a ceiling: level rewards and edits on a sheet can raise one character's bar past it.</Help>
+            {!rangeValid && <p className="text-xs text-status-danger">Full at must be above the lowest, and Starts at must be between them.</p>}
             <div className="flex flex-col gap-1.5">
               <FieldLabel htmlFor={`${formId}-lowest`}>At the lowest</FieldLabel>
               <input id={`${formId}-lowest`} className="field-input h-10 px-3 text-sm" value={draft.lowestEffect || ''} onChange={event => set({ lowestEffect: event.target.value })} placeholder="Unconscious. Cannot act until someone helps." />

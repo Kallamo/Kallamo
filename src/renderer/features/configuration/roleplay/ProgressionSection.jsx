@@ -226,17 +226,26 @@ const GROUP_KINDS = {
 };
 const lineKey = member => `${member.targetType}:${member.targetId}`;
 
+const PROGRESS_WORDING = {
+  label: 'Who progresses',
+  included: 'Progresses',
+  everyone: count => `Every character and specific being grows: ${count} now, and anyone created later. The AI only hears about those in the scene or named in the turn.`,
+  chosen: count => `${count > 1 ? `${count} characters progress. ` : ''}Add one character, or every member of a race or species. Everyone else is a fixed NPC: no level, no XP, nothing sent to the AI about it.`,
+  noPlayer: 'Choose a player character in Configuration, Scene. They always progress.'
+};
+
 /**
  * The player always grows. Everyone else grows through a line: one character, every member of a
- * race or species, every character or specific being, or everyone at once.
+ * race or species, every character or specific being, or everyone at once. Skills reuse it for
+ * who learns, with their own wording.
  */
-function WhoProgresses({ progression, groups, names, onChange }) {
+export function WhoProgresses({ progression, groups, names, onChange, wording = PROGRESS_WORDING }) {
   const [adding, setAdding] = useState(false);
   const members = progression.members || [];
   const everyone = members.some(member => member.targetType === 'everyone');
   const player = progression.playerEntityId;
   const lines = members.filter(member => member.targetType !== 'everyone' && !(member.targetType === 'entity' && member.targetId === player));
-  const progressing = new Set(progression.progressingIds || []);
+  const progressing = new Set(progression.progressingIds || progression.learningIds || []);
   const count = progressing.size;
   const actorType = new Map(groups.actors.map(entity => [entity.id, entity.type]));
   const taken = new Set(lines.map(lineKey));
@@ -256,7 +265,7 @@ function WhoProgresses({ progression, groups, names, onChange }) {
   ].map(option => {
     if (taken.has(option.id)) return { ...option, disabled: true, disabledLabel: 'Added' };
     const [type, id] = option.id.split(':');
-    return type === 'entity' && progressing.has(id) ? { ...option, disabled: true, disabledLabel: 'Progresses' } : option;
+    return type === 'entity' && progressing.has(id) ? { ...option, disabled: true, disabledLabel: wording.included } : option;
   });
   const add = key => {
     setAdding(false);
@@ -270,13 +279,13 @@ function WhoProgresses({ progression, groups, names, onChange }) {
     <>
       <SegmentedControl
         className="self-start"
-        label="Who progresses"
+        label={wording.label}
         value={everyone ? 'everyone' : 'chosen'}
         onChange={value => onChange(value === 'everyone' ? [...members, { targetType: 'everyone', targetId: '' }] : members.filter(member => member.targetType !== 'everyone'))}
         options={[{ value: 'chosen', label: 'Only who I choose' }, { value: 'everyone', label: 'Everyone' }]}
       />
       {everyone ? (
-        <Help>Every character and specific being grows: {count} now, and anyone created later. The AI only hears about those in the scene or named in the turn.</Help>
+        <Help>{wording.everyone(count)}</Help>
       ) : (
         <>
           <div className="flex flex-wrap items-center gap-1.5">
@@ -305,9 +314,9 @@ function WhoProgresses({ progression, groups, names, onChange }) {
                 onChange={add}
                 onClose={() => setAdding(false)}
                 options={options}
-                placeholder="Add who progresses"
+                placeholder={`Add ${wording.label.toLowerCase()}`}
                 searchPlaceholder="Search characters, races, species"
-                ariaLabel="Add who progresses"
+                ariaLabel={`Add ${wording.label.toLowerCase()}`}
                 searchInTrigger
                 autoOpen
               />
@@ -317,12 +326,10 @@ function WhoProgresses({ progression, groups, names, onChange }) {
               </button>
             )}
           </div>
-          <Help>
-            {count > 1 ? `${count} characters progress. ` : ''}Add one character, or every member of a race or species. Everyone else is a fixed NPC: no level, no XP, nothing sent to the AI about it.
-          </Help>
+          <Help>{wording.chosen(count)}</Help>
         </>
       )}
-      {!player && <p className="text-xs text-status-warning">Choose a player character in Configuration, Scene. They always progress.</p>}
+      {!player && <p className="text-xs text-status-warning">{wording.noPlayer}</p>}
     </>
   );
 }
@@ -350,7 +357,7 @@ function MaxLevelInput({ value, onCommit }) {
   );
 }
 
-function Block({ title, aside, children }) {
+export function Block({ title, aside, children }) {
   return (
     <div className="flex flex-col gap-3 border-t border-border-subtle pt-5">
       <div className="flex flex-wrap items-baseline gap-x-2.5">
@@ -362,7 +369,7 @@ function Block({ title, aside, children }) {
   );
 }
 
-function CheckRow({ checked, onChange, label, help }) {
+export function CheckRow({ checked, onChange, label, help }) {
   return (
     <div>
       <Checkbox checked={checked} onChange={onChange} label={label} />
@@ -371,7 +378,7 @@ function CheckRow({ checked, onChange, label, help }) {
   );
 }
 
-function PolicyBlock({ label, help, value, onChange }) {
+export function PolicyBlock({ label, help, value, onChange }) {
   return (
     <div className="flex flex-wrap items-center gap-3 border-t border-border-subtle pt-5">
       <span className="min-w-[14rem] flex-1">

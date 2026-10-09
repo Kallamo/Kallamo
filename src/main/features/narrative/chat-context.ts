@@ -17,6 +17,7 @@ import {
 } from './mode-orchestration';
 import { RoleplaySystem } from './roleplay-system';
 import { RoleplayProgression } from './roleplay-progression';
+import { RoleplaySkills } from './roleplay-skills';
 import { createWorldbuildKnowledgeService, type WorldbuildKnowledgeService } from '../worldbuild/knowledge-service';
 import { normalizeRetrievalSettings } from '../../../shared/retrieval-settings-runtime';
 import { EpistemicResolver } from './epistemic-resolver';
@@ -376,7 +377,7 @@ export class NarrativeChatContext {
         provenanceIds: [resource.definitionId]
       })] : [];
     });
-    return [...values, ...rules, ...this.loadProgressionCandidates(workspaceId, ids)];
+    return [...values, ...rules, ...this.loadProgressionCandidates(workspaceId, ids), ...this.loadSkillCandidates(workspaceId, ids)];
   }
 
   // Only who progresses carries a level and attributes; everyone else is a fixed NPC.
@@ -416,6 +417,32 @@ export class NarrativeChatContext {
       relevance: 1,
       epistemic: { kind: 'canon', access: 'public' },
       provenanceIds: meanings.map(trait => trait.id)
+    })];
+  }
+
+  // Anyone present with skills shows them, learner or not: a master smith NPC is still a master.
+  private loadSkillCandidates(workspaceId: string, ids: Set<string>): ContextCandidate[] {
+    const skills = new RoleplaySkills(this.db);
+    const settings = skills.getSettings(workspaceId);
+    if (!settings.enabled || !ids.size) return [];
+    const held = [...ids].map(entityId => ({ entityId, skills: skills.getEntitySkills(workspaceId, entityId).skills })).filter(item => item.skills.length);
+    if (!held.length) return [];
+    const names = this.getEntityNames(workspaceId, held.map(item => item.entityId));
+    const states = held.map(({ entityId, skills: list }) => this.candidate({
+      id: `roleplay-skills:${entityId}`,
+      workspaceId, sourceType: 'state', sourceId: entityId,
+      content: `${names.get(entityId) ?? entityId} skills: ${list.map(skill => `${skill.name} (${skill.rankName})`).join(', ')}.`,
+      relevance: 1,
+      epistemic: { kind: 'knowledge', subjectId: entityId, accessibility: 'available' },
+      provenanceIds: [entityId]
+    }));
+    return [...states, this.candidate({
+      id: `roleplay-skill-ranks:${workspaceId}`,
+      workspaceId, sourceType: 'state', sourceId: 'skills:ranks',
+      content: `Skill ranks, lowest first: ${settings.config.ranks.join(', ')}.`,
+      relevance: 1,
+      epistemic: { kind: 'canon', access: 'public' },
+      provenanceIds: ['skills:ranks']
     })];
   }
 

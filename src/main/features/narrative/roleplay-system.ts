@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import type { Scene } from '../../../narrative/contracts';
 import { NarrativeSceneRepository } from '../../../narrative/scenes';
+import { requireUniqueName, ruleKey } from './rule-keys';
 
 export type RoleplayUpdatePolicy = 'manual' | 'review' | 'automatic';
 export type RoleplayTargetType = 'entity' | 'race' | 'species';
@@ -316,7 +317,11 @@ export class RoleplaySystem {
     const scope: RoleplayResourceScope = input.scope === 'chosen' ? 'chosen' : 'everyone';
     // Only who I choose needs no kinds: the list of holders is the whole rule.
     const appliesTo = scope === 'chosen' && !input.appliesTo?.length ? ['Characters', 'Creatures'] : input.appliesTo;
-    validateDefinition({ ...input, appliesTo });
+    const others = this.listDefinitions(workspaceId);
+    requireUniqueName(input.name, others, input.id, 'a resource');
+    const previous = input.id ? others.find(definition => definition.id === input.id) : undefined;
+    const key = ruleKey({ name: input.name, givenKey: input.key, previous, taken: others.map(definition => definition.key), prefix: 'resource' });
+    validateDefinition({ ...input, key, appliesTo });
     const id = input.id || randomUUID();
     this.db.prepare(`
       INSERT INTO roleplay_resource_definitions (
@@ -334,7 +339,7 @@ export class RoleplaySystem {
         lowest_effect = excluded.lowest_effect, time_rate = excluded.time_rate,
         time_direction = excluded.time_direction, time_period = excluded.time_period,
         updated_at = excluded.updated_at
-    `).run(workspaceId, id, input.key.trim(), input.name.trim(), input.description?.trim() || '', input.color,
+    `).run(workspaceId, id, key, input.name.trim(), input.description?.trim() || '', input.color,
       input.minimum, input.maximum, input.initialValue, input.unit?.trim() || '', JSON.stringify(appliesTo),
       input.updatePolicy, input.position ?? 0, input.enabled === false ? 0 : 1, scope,
       input.lowestEffect?.trim() || '', Math.max(0, Number(input.timeRate) || 0),

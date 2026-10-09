@@ -27,12 +27,12 @@ export default function HistoryList({ entries, colors, emptyText = 'Nothing has 
     <div className="divide-y divide-border-subtle overflow-hidden rounded-card border border-border-subtle bg-surface-inset">
       {entries.map(entry => {
         const color = entry.area === 'resource' ? colors.get(entry.refId) || 'var(--color-text-subtle)' : PROGRESS_COLOR;
-        const manualSet = entry.source === 'manual' && entry.kind !== 'level';
-        const what = entry.kind === 'level'
+        const manualSet = entry.source === 'manual' && entry.kind !== 'level' && !entry.summary;
+        const what = entry.summary || (entry.kind === 'level'
           ? `Level ${entry.nextValue}`
-          : manualSet ? `${entry.label} set to ${entry.nextValue}` : null;
+          : manualSet ? `${entry.label} set to ${entry.nextValue}` : null);
         const delta = entry.delta ?? entry.nextValue - entry.previousValue;
-        const reason = entry.status === 'rejected' && entry.reason ? `Rejected: ${entry.reason}` : entry.reason || (manualSet ? 'Changed by hand' : '');
+        const reason = entry.status === 'rejected' && entry.reason ? `Rejected: ${entry.reason}` : entry.reason || (manualSet || (entry.summary && entry.source === 'manual') ? 'Changed by hand' : '');
         const maximum = entry.maximumDelta ? `highest ${formatSigned(entry.maximumDelta)}` : '';
         return (
           <div key={`${entry.area}:${entry.id}`} className={`grid grid-cols-[4.5rem_minmax(0,9rem)_minmax(0,1fr)_auto] items-center gap-3 px-3.5 py-2.5 text-[0.8125rem] ${entry.status === 'rejected' ? 'opacity-70' : ''}`}>

@@ -11,7 +11,7 @@ import { PortraitContext, usePortraits } from '../worldbuild/portraits';
 import {
   CastGroup, CastRow, InventoryTab, LocationHero, PanelClock, PanelTabs, PlayerCard, RoleplayRail, RoleplayStatus, SectionHead
 } from './RoleplayPanelParts';
-import { kindOf } from './changeKinds';
+import { describeSkillChange, kindOf, skillChangeItems, startingProfileText } from './changeKinds';
 
 const EMPTY_SCENE = {
   locationId: null,
@@ -115,6 +115,7 @@ function RoleplayQuickPanel({
       ...(configuration.inventoryChanges || []),
       ...(configuration.changes || []),
       ...(configuration.progressChanges || []),
+      ...(configuration.skillChanges || []),
       ...(configuration.entityChanges || []),
       ...(configuration.narrativeEvents || [])
     ].filter(change => change.status === 'pending' || change.status === 'proposed' || change.status === 'conflicting').length);
@@ -328,6 +329,7 @@ function RoleplayQuickPanel({
     const methods = {
       resource: api.resolveRoleplayResourceChange,
       progress: api.resolveRoleplayProgressChange,
+      skill: api.resolveRoleplaySkillChange,
       scene: api.resolveRoleplaySceneChange,
       inventory: api.resolveRoleplayInventoryChange,
       entity: api.resolveRoleplayEntityChange,
@@ -648,6 +650,7 @@ function manualTarget(change) {
   if (change.kind === 'scene') return 'scene';
   if (change.kind === 'inventory') return `inventory:${change.patch?.itemId}`;
   if (change.kind === 'resource') return `resource:${change.definitionId}:${change.entityId}`;
+  if (change.kind === 'skill') return `skill:${change.skillId}:${change.entityId}`;
   return `${change.kind}:${change.id}`;
 }
 
@@ -675,6 +678,7 @@ function groupRecentTurns(configuration) {
   (configuration.changes || []).forEach(change => add(change.provenanceId, { ...change, kind: 'resource' }));
   const traitNames = new Map((configuration.traits || []).map(trait => [trait.id, trait.name]));
   (configuration.progressChanges || []).forEach(change => add(change.provenanceId, { ...change, kind: 'progress', progressKind: change.kind, traitName: traitNames.get(change.traitId) }));
+  skillChangeItems(configuration).forEach(change => add(change.provenanceId, change));
   (configuration.entityChanges || []).forEach(change => add(change.provenanceId, { ...change, kind: 'entity' }));
   (configuration.narrativeEvents || []).forEach(record => {
     const originId = record.proposal?.evidence?.[0]?.originId;
@@ -730,6 +734,7 @@ function describeRecentChange(change, names, definitions) {
         : `${who}: ${change.traitName || 'Attribute'} ${change.previousValue} → ${change.nextValue}`;
     return [lead, ...(change.reason ? [change.reason] : [])];
   }
+  if (change.kind === 'skill') return [describeSkillChange(change, names.get(change.entityId) || 'Someone'), ...(change.reason ? [change.reason] : [])];
   if (change.kind === 'entity') {
     if (change.identityUpdate) {
       const identity = change.identityUpdate;
@@ -747,6 +752,8 @@ function describeRecentChange(change, names, definitions) {
       const parent = change.proposal.insideId ? names.get(change.proposal.insideId) : null;
       lines.push(parent ? `${size} inside ${parent}.` : `${size}.`);
     }
+    const profile = startingProfileText(change.proposal?.startingProfile);
+    if (profile) lines.push(profile);
     return lines;
   }
   if (change.kind === 'narrative') {

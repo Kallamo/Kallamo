@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { AlertTriangle, BookMarked, Check, CheckCircle2, Info, Loader2, RefreshCw, Sparkles } from 'lucide-react';
 import Button from '../../../components/ui/Button';
 import { ConfigSection, ChoiceCard, Help, formatSigned } from '../ConfigParts';
-import { entityChangeLabel, kindOf, narrativeEventLabel } from '../../roleplay/changeKinds';
+import { describeSkillChange, entityChangeLabel, kindOf, narrativeEventLabel, startingProfileText } from '../../roleplay/changeKinds';
 import { locationSizeLabel } from '../../../../shared/location-sizes';
 
 const POLICIES = [
@@ -10,7 +10,7 @@ const POLICIES = [
   { value: 'review', title: 'Review everything', description: 'Every AI change waits here for your approval.' },
   { value: 'automatic', title: 'Automatic', description: 'Clear changes apply right away. Unclear ones wait here.' }
 ];
-const GROUP_ORDER = ['entity', 'narrative', 'scene', 'inventory', 'resource', 'progress'];
+const GROUP_ORDER = ['entity', 'narrative', 'scene', 'inventory', 'resource', 'progress', 'skill'];
 const RECENT_STEP = 5;
 
 /**
@@ -209,7 +209,7 @@ export function describeChange(item, names) {
     return {
       label: entityChangeLabel(item),
       title: proposal.name || 'Unnamed',
-      detail: [placement ? `${placement}.` : '', item.status === 'conflicting' ? `Unclear: ${proposal.reason || proposal.description || ''}` : proposal.description || proposal.reason].filter(Boolean).join(' ')
+      detail: [placement ? `${placement}.` : '', item.status === 'conflicting' ? `Unclear: ${proposal.reason || proposal.description || ''}` : proposal.description || proposal.reason, startingProfileText(proposal.startingProfile)].filter(Boolean).join(' ')
     };
   }
   if (item.kind === 'narrative') {
@@ -258,6 +258,9 @@ export function describeChange(item, names) {
       title,
       detail: item.reason || ''
     };
+  }
+  if (item.kind === 'skill') {
+    return { label: item.skillName, title: describeSkillChange(item, name(item.entityId)), detail: item.reason || '' };
   }
   return { label: 'Change', title: 'The record changed.' };
 }

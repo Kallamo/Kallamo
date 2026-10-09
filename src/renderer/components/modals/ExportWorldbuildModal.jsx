@@ -9,7 +9,7 @@ function describeRules(rules) {
   const progression = rules.progressionMode === 'levels'
     ? `levels with ${plural(rules.attributes, 'attribute', 'attributes')}`
     : null;
-  return [plural(rules.resources, 'resource', 'resources'), progression, plural(rules.timeRanges, 'time range', 'time ranges')].filter(Boolean).join(', ');
+  return [plural(rules.resources, 'resource', 'resources'), progression, rules.skills ? plural(rules.skills, 'skill', 'skills') : null, plural(rules.timeRanges, 'time range', 'time ranges')].filter(Boolean).join(', ');
 }
 
 // Informs only; onConfirm opens the save dialog with the chosen options.

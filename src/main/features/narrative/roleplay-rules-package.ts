@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { RoleplaySystem, type RoleplayResourceDefinition } from './roleplay-system';
 import { RoleplayProgression, type MemberTarget, type ProgressionConfig, type ProgressionMember, type ProgressionMode, type TraitDefinition } from './roleplay-progression';
+import { RoleplaySkills, normalizeSkillConfig, type SkillConfig } from './roleplay-skills';
 
 /**
  * A world's roleplay rules as they travel in a Worldbuild package. Resources and traits are
@@ -13,6 +14,14 @@ export interface RoleplayRulesPackage {
   progression: { mode: ProgressionMode; config: Omit<ProgressionConfig, 'rewards'> & { rewards: Array<{ resourceKey: string; maximumIncrease: number; refill: boolean }> }; members: Array<{ targetType: MemberTarget; targetRef: string }> };
   traits: Array<Omit<TraitDefinition, 'id' | 'workspaceId'>>;
   progressValues: Array<{ targetType: 'entity' | 'race' | 'species'; targetRef: string; traitKey: string; value: number }>;
+  /** Absent in packages made before skills existed. */
+  skills?: {
+    enabled: boolean;
+    config: SkillConfig;
+    members: Array<{ targetType: MemberTarget; targetRef: string }>;
+    catalog: Array<{ key: string; name: string; description: string; parentKey: string | null; position: number }>;
+    values: Array<{ targetRef: string; skillKey: string; rank: number }>;
+  };
   timeMatrix?: unknown;
   currentValues: boolean;
 }
@@ -24,6 +33,9 @@ export interface RulesDifference {
   differs: boolean;
   resources: { same: string[]; changed: string[]; added: string[] };
   progression: 'same' | 'different' | 'added' | 'none';
+  skills: 'same' | 'different' | 'added' | 'none';
+  localSkills: number;
+  packageSkills: number;
   timeCosts: 'same' | 'different' | 'none';
   packageProgressionMode: ProgressionMode;
   localProgressionMode: ProgressionMode;
@@ -42,16 +54,19 @@ const MEMBER_TARGETS: MemberTarget[] = ['everyone', 'entity', 'race', 'species',
 export class RoleplayRulesPackager {
   private readonly roleplay: RoleplaySystem;
   private readonly progression: RoleplayProgression;
+  private readonly skills: RoleplaySkills;
 
   constructor(private readonly db: Database.Database) {
     this.roleplay = new RoleplaySystem(db);
     this.progression = new RoleplayProgression(db);
+    this.skills = new RoleplaySkills(db);
   }
 
   hasRules(workspaceId: string): boolean {
     return this.roleplay.listDefinitions(workspaceId).length > 0
       || this.progression.getSettings(workspaceId).mode !== 'off'
-      || this.progression.listTraits(workspaceId).length > 0;
+      || this.progression.listTraits(workspaceId).length > 0
+      || this.hasSkills(workspaceId);
   }
 
   summary(workspaceId: string) {
@@ -59,8 +74,17 @@ export class RoleplayRulesPackager {
     return {
       resources: this.roleplay.listDefinitions(workspaceId).length,
       progressionMode: settings.mode,
-      attributes: this.progression.listTraits(workspaceId).length
+      attributes: this.progression.listTraits(workspaceId).length,
+      skills: this.skills.getSettings(workspaceId).enabled ? this.confirmedSkills(workspaceId).length : 0
     };
+  }
+
+  private hasSkills(workspaceId: string): boolean {
+    return this.skills.getSettings(workspaceId).enabled || this.confirmedSkills(workspaceId).length > 0;
+  }
+
+  private confirmedSkills(workspaceId: string) {
+    return this.skills.listSkills(workspaceId).filter(skill => skill.status === 'confirmed');
   }
 
   /**
@@ -111,8 +135,33 @@ export class RoleplayRulesPackager {
       },
       traits: traits.map(({ id: _id, workspaceId: _workspace, ...trait }) => trait),
       progressValues,
+      skills: this.exportSkills(workspaceId, entityIds),
       timeMatrix,
       currentValues
+    };
+  }
+
+  // A character's skills are part of who they are, so they travel with the character, like race values.
+  private exportSkills(workspaceId: string, entityIds: Set<string>): NonNullable<RoleplayRulesPackage['skills']> {
+    const settings = this.skills.getSettings(workspaceId);
+    const catalog = this.confirmedSkills(workspaceId);
+    const keyById = new Map(catalog.map(skill => [skill.id, skill.key]));
+    const rows = this.db.prepare('SELECT entity_id, skill_id, rank FROM roleplay_skill_values WHERE workspace_id = ?')
+      .all(workspaceId) as Array<{ entity_id: string; skill_id: string; rank: number }>;
+    return {
+      enabled: settings.enabled,
+      config: settings.config,
+      members: settings.members
+        .filter(member => member.targetType === 'everyone' || member.targetType === 'type' || entityIds.has(member.targetId))
+        .map(member => ({ targetType: member.targetType, targetRef: member.targetId })),
+      catalog: catalog.map(skill => ({
+        key: skill.key, name: skill.name, description: skill.description,
+        parentKey: skill.parentId ? keyById.get(skill.parentId) ?? null : null, position: skill.position
+      })),
+      values: rows.flatMap(row => {
+        const skillKey = keyById.get(row.skill_id);
+        return skillKey && entityIds.has(row.entity_id) ? [{ targetRef: row.entity_id, skillKey, rank: Number(row.rank) }] : [];
+      })
     };
   }
 
@@ -137,12 +186,24 @@ export class RoleplayRulesPackager {
     const timeCosts = rules.timeMatrix === undefined
       ? 'none'
       : JSON.stringify(localTimeMatrix) === JSON.stringify(rules.timeMatrix) ? 'same' : 'different';
+    const localSkillSettings = this.skills.getSettings(workspaceId);
+    const localSkillKeys = this.confirmedSkills(workspaceId).map(skill => skill.key).sort().join('|');
+    const incomingSkillKeys = (rules.skills?.catalog || []).map(skill => skill.key).sort().join('|');
+    const incomingSkillsOn = Boolean(rules.skills?.enabled);
+    const skills = !incomingSkillsOn && !incomingSkillKeys
+      ? 'none'
+      : !this.hasSkills(workspaceId)
+        ? 'added'
+        : localSkillSettings.enabled === incomingSkillsOn && localSkillKeys === incomingSkillKeys ? 'same' : 'different';
     const localRules = this.hasRules(workspaceId);
     return {
       localRules,
-      differs: localRules && (resources.changed.length > 0 || resources.added.length > 0 || progression === 'different' || timeCosts === 'different'),
+      differs: localRules && (resources.changed.length > 0 || resources.added.length > 0 || progression === 'different' || skills === 'different' || timeCosts === 'different'),
       resources,
       progression,
+      skills,
+      localSkills: localSkillSettings.enabled ? this.confirmedSkills(workspaceId).length : 0,
+      packageSkills: incomingSkillsOn ? (rules.skills?.catalog || []).length : 0,
       timeCosts,
       packageProgressionMode: incomingMode,
       localProgressionMode: settings.mode,
@@ -229,8 +290,54 @@ export class RoleplayRulesPackager {
         if (!targetId || !traitId || !Number.isFinite(Number(value.value)) || !['entity', 'race', 'species'].includes(value.targetType)) continue;
         insertProgress.run(workspaceId, value.targetType, targetId, traitId, Number(value.value), Date.now());
       }
+      if (rules.skills) this.importSkills(workspaceId, rules.skills, replace, idMap);
     })();
     return { timeMatrix: replace && rules.timeMatrix !== undefined };
+  }
+
+  // Skills follow progression: a world without skills of its own takes the package's even on merge.
+  private importSkills(workspaceId: string, incoming: NonNullable<RoleplayRulesPackage['skills']>, replace: boolean, idMap: Map<string, string>): void {
+    const adopt = replace || !this.hasSkills(workspaceId);
+    if (adopt) {
+      const local = this.skills.listSkills(workspaceId);
+      const incomingKeys = new Set((incoming.catalog || []).map(skill => skill.key));
+      // Parents first, so every sub-skill finds the parent it names.
+      const ordered = [...(incoming.catalog || [])].sort((left, right) => Number(Boolean(left.parentKey)) - Number(Boolean(right.parentKey)));
+      for (const skill of ordered) {
+        if (!skill?.key || !skill.name) continue;
+        const mine = local.find(item => item.key === skill.key);
+        const parent = skill.parentKey ? this.skills.listSkills(workspaceId).find(item => item.key === skill.parentKey && !item.parentId) : undefined;
+        this.skills.saveSkill(workspaceId, {
+          id: mine?.id, key: skill.key, name: skill.name, description: skill.description || '',
+          parentId: parent?.id ?? null, position: Number(skill.position) || 0
+        });
+      }
+      if (replace) for (const skill of local) if (!incomingKeys.has(skill.key)) this.skills.deleteSkill(workspaceId, skill.id);
+      this.db.prepare(`
+        INSERT INTO roleplay_skill_settings (workspace_id, enabled, config_json, updated_at) VALUES (?, ?, ?, ?)
+        ON CONFLICT(workspace_id) DO UPDATE SET enabled = excluded.enabled, config_json = excluded.config_json, updated_at = excluded.updated_at
+      `).run(workspaceId, incoming.enabled ? 1 : 0, JSON.stringify(normalizeSkillConfig(incoming.config || {})), Date.now());
+      const insertMember = this.db.prepare('INSERT OR IGNORE INTO roleplay_skill_members (workspace_id, target_type, target_id, added_at) VALUES (?, ?, ?, ?)');
+      (incoming.members || []).forEach((member, index) => {
+        if (!MEMBER_TARGETS.includes(member?.targetType)) return;
+        if (member.targetType === 'type' && !['Characters', 'Creatures'].includes(member.targetRef)) return;
+        const targetId = member.targetType === 'everyone' ? '' : member.targetType === 'type' ? member.targetRef : idMap.get(member.targetRef);
+        if (targetId === undefined) return;
+        insertMember.run(workspaceId, member.targetType, targetId, Date.now() + index);
+      });
+    }
+    const skillByKey = new Map(this.confirmedSkills(workspaceId).map(skill => [skill.key, skill.id]));
+    const ranks = this.skills.getSettings(workspaceId).config.ranks;
+    const insertValue = this.db.prepare(`
+      INSERT OR IGNORE INTO roleplay_skill_values (workspace_id, entity_id, skill_id, rank, updated_at) VALUES (?, ?, ?, ?, ?)
+    `);
+    for (const value of incoming.values || []) {
+      const entityId = idMap.get(value.targetRef);
+      const skillId = skillByKey.get(value.skillKey);
+      if (!entityId || !skillId) continue;
+      const rank = Math.max(0, Math.min(ranks.length - 1, Math.round(Number(value.rank) || 0)));
+      insertValue.run(workspaceId, entityId, skillId, rank, Date.now());
+    }
   }
 }
 

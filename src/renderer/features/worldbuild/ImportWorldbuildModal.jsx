@@ -61,11 +61,13 @@ function RulesCompare({ rules }) {
   });
   const mine = describe(rules.localResources || [], rules.localProgressionMode, rules.localAttributes);
   const theirs = describe(rules.packageResources || [], rules.packageProgressionMode, rules.packageAttributes);
-  const differs = { resources: rules.resources.changed.length + rules.resources.added.length > 0, progression: rules.progression === 'different' || rules.progression === 'added' };
+  const differs = { resources: rules.resources.changed.length + rules.resources.added.length > 0, progression: rules.progression === 'different' || rules.progression === 'added', skills: rules.skills === 'different' || rules.skills === 'added' };
+  const skills = count => (count ? plural(count, 'skill', 'skills') : 'None');
   const time = rules.timeCosts === 'same' ? 'The same' : rules.timeCosts === 'different' ? 'Different ranges' : 'None';
   const rows = [
     ['Resources', mine.resources, theirs.resources, differs.resources],
     ['Progression', mine.progression, theirs.progression, differs.progression],
+    ['Skills', skills(rules.localSkills || 0), skills(rules.packageSkills || 0), differs.skills],
     ['Time costs', 'Yours', time, rules.timeCosts === 'different'],
   ];
   return (
