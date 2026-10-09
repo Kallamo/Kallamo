@@ -51,7 +51,9 @@ const {
     extractNarrativeSignals,
     groupKnowledgeCardRows,
     hasEpistemicDomain,
-    resolveNarrativeRouting
+    resolveAnalysisHolders,
+    resolveNarrativeRouting,
+    selectPerspectiveRecords
 } = require('./features/narrative/narrative-state-routing');
 const { proposalDataForMention } = require('./features/world-index/tagger-response');
 const { runModelTagger } = require('./features/world-index/tagger');
@@ -2494,6 +2496,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     const actorIds = new Set(allEntities
         .filter(entity => entity.type === 'Characters' || entity.type === 'Creatures')
         .map(entity => entity.id));
+    const factionIds = new Set(allEntities.filter(entity => entity.type === 'Factions').map(entity => entity.id));
     const locationIds = new Set(allEntities.filter(entity => entity.type === 'Locations').map(entity => entity.id));
     const locationLinks = db.prepare(`
         SELECT fromId, toId, relType FROM entity_links
@@ -2540,11 +2543,13 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     let deepRepairCount = 0;
     let repairInputTokens = 0;
     let repairOutputTokens = 0;
+    // Only what the model writes is billed, so the cap only has to be safely above a full answer:
+    // a cut one loses timeAdvance, the last field, and costs a repair.
     let triageResponse = await sendNarrativeJson({
         apiProfileId: role.executor.apiProfileId,
         model: role.executor.model,
         systemPrompt: triageSystemPrompt,
-        chatHistory: [], newPrompt: triagePayload, temperature: 0, maxTokens: 512, maxPayloadTokens: narrativePayloadTokens, manualMode: false, manualJson: null
+        chatHistory: [], newPrompt: triagePayload, temperature: 0, maxTokens: 1536, maxPayloadTokens: narrativePayloadTokens, manualMode: false, manualJson: null
     }, NARRATIVE_TRIAGE_SCHEMA, 'Narrative State triage', narrativeTelemetry);
     const triagePrimaryOutputTokens = estimateTokens(triageResponse);
     let triage = safeParseObject(triageResponse);
@@ -2612,12 +2617,16 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     const shouldAnalyzeEpistemicState = hasEpistemicDomain(selectedDomains);
     const triageEntityIds = (Array.isArray(triage?.entityIds) ? triage.entityIds : [])
         .filter(id => allowedEntityIds.has(id));
+    const triagePresentIds = Array.isArray(triage?.presentIds)
+        ? triage.presentIds.filter(id => actorIds.has(id))
+        : null;
     const witnessIds = new Set([
         roleplaySettings.playerEntityId,
         ...(scene?.participantIds || []),
         ...(scene?.possibleObserverIds || []),
         ...narrativeSignals.mentionedActorIds,
-        ...triageEntityIds
+        ...triageEntityIds,
+        ...(triagePresentIds || [])
     ].filter(id => actorIds.has(id)));
     const targetIds = new Set([
         scene?.locationId,
@@ -2627,6 +2636,8 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     if (shouldAnalyzeEpistemicState) {
         for (const id of witnessIds) targetIds.add(id);
     }
+    // Taken before a full analysis widens the witnesses to everyone nearby, who did not perceive the turn.
+    const perceiverIds = new Set(witnessIds);
     if (routing.requiresFullAnalysis) {
         for (const id of preTurnManifest?.subjectIds || []) witnessIds.add(id);
         for (const id of preTurnManifest?.targetIds || []) targetIds.add(id);
@@ -2635,7 +2646,26 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     const scopedManifest = shouldAnalyzeEpistemicState
         ? compactNarrativeManifest(preTurnManifest, [...witnessIds], [...targetIds])
         : null;
-    const currentPerspectiveState = shouldAnalyzeEpistemicState && affectedIds.size ? db.prepare(`
+    // Who could perceive the turn and what it is about. Holders bound the perspective records:
+    // those present in full, those only mentioned around the focus. The focus also decides which
+    // records come first when there are more than fit.
+    const holders = resolveAnalysisHolders({
+        candidateIds: [
+            ...perceiverIds,
+            ...[...narrativeSignals.mentionedEntityIds, ...triageEntityIds].filter(id => factionIds.has(id))
+        ],
+        sceneIds: [roleplaySettings.playerEntityId, ...(scene?.participantIds || []), ...(scene?.possibleObserverIds || [])],
+        presentIds: triagePresentIds
+    });
+    const holderIds = new Set([...holders.present, ...holders.mentioned]);
+    const focusIds = new Set([
+        roleplaySettings.playerEntityId,
+        ...(scene?.participantIds || []),
+        ...(triagePresentIds || []),
+        ...narrativeSignals.mentionedEntityIds,
+        ...triageEntityIds
+    ].filter(Boolean));
+    const perspectiveSelection = shouldAnalyzeEpistemicState && holderIds.size + targetIds.size ? selectPerspectiveRecords(db.prepare(`
         SELECT records.record_type AS type, records.subject_id AS subjectId, records.payload_json AS payload
         FROM narrative_records records
         JOIN narrative_events events
@@ -2645,17 +2675,20 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         LEFT JOIN narrative_origin_lifecycle lifecycle
           ON lifecycle.workspace_id = events.workspace_id AND lifecycle.origin_id = evidence.origin_id
         WHERE records.workspace_id = ? AND (
-          subject_id IN (${[...affectedIds].map(() => '?').join(',')})
-          OR json_extract(payload_json, '$.proposition.subjectId') IN (${[...affectedIds].map(() => '?').join(',')})
-          OR json_extract(payload_json, '$.entityId') IN (${[...affectedIds].map(() => '?').join(',')})
+          (records.record_type IN ('knowledge', 'belief', 'memory') AND records.subject_id IN (${[...holderIds].map(() => '?').join(',') || 'NULL'}))
+          OR records.record_type IN ('fact', 'state')
         )
-          AND records.record_type IN ('fact', 'state', 'knowledge', 'belief', 'memory', 'relationship')
           AND COALESCE(lifecycle.status, 'active') = 'active'
-        ORDER BY records.applied_at DESC LIMIT 120
-    `).all(workspaceId, ...affectedIds, ...affectedIds, ...affectedIds)
-        .filter(row => row.type !== 'relationship' || row.subjectId !== roleplaySettings.playerEntityId)
-        .map(row => ({ type: row.type, subjectId: row.subjectId, value: JSON.parse(row.payload) })) : [];
-    const knowledgeCardRows = shouldAnalyzeEpistemicState && witnessIds.size && targetIds.size ? db.prepare(`
+        ORDER BY records.applied_at DESC
+    `).all(workspaceId, ...holderIds)
+        .map(row => ({ type: row.type, subjectId: row.subjectId, value: safeParseObject(row.payload) || {} })), {
+        holderIds: holders.present,
+        mentionedHolderIds: holders.mentioned,
+        targetIds,
+        focusIds
+    }) : { records: [], candidates: 0 };
+    const currentPerspectiveState = perspectiveSelection.records;
+    const knowledgeCardRows = shouldAnalyzeEpistemicState && perceiverIds.size && targetIds.size ? db.prepare(`
         SELECT cards.owner_id AS ownerId, cards.target_id AS targetId,
           cards.card_id AS cardId, cards.known_as AS knownAs,
           fields.field_key AS fieldKey
@@ -2663,14 +2696,15 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         LEFT JOIN worldbuild_known_fields fields
           ON fields.workspace_id = cards.workspace_id AND fields.card_id = cards.card_id
         WHERE cards.workspace_id = ? AND cards.status = 'active'
-          AND cards.owner_id IN (${[...witnessIds].map(() => '?').join(',')})
+          AND cards.owner_id IN (${[...perceiverIds].map(() => '?').join(',')})
           AND cards.target_id IN (${[...targetIds].map(() => '?').join(',')})
         ORDER BY cards.owner_id, cards.target_id, fields.field_key
-    `).all(workspaceId, ...witnessIds, ...targetIds) : [];
+    `).all(workspaceId, ...perceiverIds, ...targetIds)
+        .filter(row => holders.present.has(row.ownerId) || focusIds.has(row.targetId)) : [];
     const currentKnowledgeCards = groupKnowledgeCardRows(knowledgeCardRows);
     const currentRelationshipState = shouldAnalyzeEpistemicState
-        ? loadNarrativeRelationshipState(workspaceId, affectedIds, new Set([roleplaySettings.playerEntityId].filter(Boolean)))
-        : [];
+        ? loadNarrativeRelationshipState(workspaceId, holders, focusIds, roleplaySettings.playerEntityId)
+        : { rows: [], candidates: 0 };
     const shouldAnalyzeInventory = selectedDomains.includes('inventory');
     const shouldAnalyzeResources = selectedDomains.includes('resource');
     const shouldAnalyzeScene = selectedDomains.includes('scene');
@@ -2737,10 +2771,13 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         currentInventoryState: shouldAnalyzeInventory ? currentInventoryState : undefined,
         currentLocationInventoryState: shouldAnalyzeInventory ? currentLocationInventoryState : undefined,
         reachableLocationIds: shouldAnalyzeScene ? [...reachableLocationIds] : undefined,
-        locationLinks: shouldAnalyzeScene ? locationLinks : undefined,
+        // A move outside the reachable set is rejected anyway, so links beyond it only cost tokens.
+        locationLinks: shouldAnalyzeScene
+            ? locationLinks.filter(link => reachableLocationIds.has(link.fromId) && reachableLocationIds.has(link.toId))
+            : undefined,
         currentPerspectiveState: shouldAnalyzeEpistemicState ? currentPerspectiveState : undefined,
         currentKnowledgeCards: shouldAnalyzeEpistemicState ? currentKnowledgeCards : undefined,
-        currentRelationshipState: shouldAnalyzeEpistemicState ? currentRelationshipState : undefined,
+        currentRelationshipState: shouldAnalyzeEpistemicState ? currentRelationshipState.rows : undefined,
         userMessage,
         narrativeResponse
     };
@@ -3073,7 +3110,12 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             routing,
             contextUsage: {
                 triage: measureNarrativeContextSections(triagePayloadValue, triageSystemPrompt),
-                analysis: measureNarrativeContextSections(payloadValue, narrativeStateSystemPrompt)
+                analysis: measureNarrativeContextSections(payloadValue, narrativeStateSystemPrompt),
+                analysisScope: shouldAnalyzeEpistemicState ? {
+                    holders: { present: holders.present.size, mentioned: holders.mentioned.size },
+                    perspectiveRecords: { sent: currentPerspectiveState.length, candidates: perspectiveSelection.candidates },
+                    relationships: { sent: currentRelationshipState.rows.length, candidates: currentRelationshipState.candidates }
+                } : undefined
             },
             repairs: {
                 triage: triageRepairCount,
@@ -3262,30 +3304,36 @@ function normalizeNarrativeEvent(event) {
     return { ...event, type };
 }
 
-function loadNarrativeRelationshipState(workspaceId, entityIds, excludedSourceIds = new Set()) {
-    const ids = [...entityIds];
-    if (!ids.length) return [];
-    const placeholders = ids.map(() => '?').join(',');
-    const excludedIds = [...excludedSourceIds];
-    const excludedClause = excludedIds.length ? `AND links.fromId NOT IN (${excludedIds.map(() => '?').join(',')})` : '';
-    return db.prepare(`
+// A regard can only move for someone who perceived the turn, so edges are read from their side:
+// all of them for those present, only toward the focus for those merely mentioned. The player's
+// own regard is the player's to set and is never analyzed.
+function loadNarrativeRelationshipState(workspaceId, holders, focusIds, playerEntityId, limit = 120) {
+    const ids = [...holders.present, ...holders.mentioned].filter(id => id && id !== playerEntityId);
+    if (!ids.length) return { rows: [], candidates: 0 };
+    const rows = db.prepare(`
         SELECT links.fromId AS sourceEntityId, links.toId AS targetEntityId,
           links.metadata_json AS metadataJson
         FROM entity_links links
         WHERE links.workspaceId = ? AND links.relType = 'related_to'
-          AND (links.fromId IN (${placeholders}) OR links.toId IN (${placeholders}))
-          ${excludedClause}
-        ORDER BY links.createdAt DESC LIMIT 120
-    `).all(workspaceId, ...ids, ...ids, ...excludedIds).map(row => {
-        const metadata = safeParseObject(row.metadataJson) || {};
-        const value = Number(metadata.value);
-        return {
-            sourceEntityId: row.sourceEntityId,
-            targetEntityId: row.targetEntityId,
-            dimension: 'overall',
-            value: Number.isFinite(value) ? Math.max(-100, Math.min(100, value)) : 0
-        };
-    });
+          AND links.fromId IN (${ids.map(() => '?').join(',')})
+        ORDER BY links.createdAt DESC
+    `).all(workspaceId, ...ids)
+        .filter(row => holders.present.has(row.sourceEntityId) || focusIds.has(row.targetEntityId));
+    // Stable sort: edges toward the turn's focus first, newest first inside each group.
+    rows.sort((a, b) => Number(focusIds.has(b.targetEntityId)) - Number(focusIds.has(a.targetEntityId)));
+    return {
+        candidates: rows.length,
+        rows: rows.slice(0, limit).map(row => {
+            const metadata = safeParseObject(row.metadataJson) || {};
+            const value = Number(metadata.value);
+            return {
+                sourceEntityId: row.sourceEntityId,
+                targetEntityId: row.targetEntityId,
+                dimension: 'overall',
+                value: Number.isFinite(value) ? Math.max(-100, Math.min(100, value)) : 0
+            };
+        })
+    };
 }
 
 function loadNarrativeInventoryState(workspaceId, holderIds, itemIds) {
@@ -3387,7 +3435,7 @@ function loadNarrativeLocationInventoryState(workspaceId, locationId, itemIds) {
 }
 
 const NARRATIVE_TRIAGE_SYSTEM_PROMPT = `You route Roleplay turns to durable-state analyzers and estimate elapsed narrative time. Inspect the user action, final narrative, current time, calendar, time matrix, compact scene, named entities, and locally extracted candidate signals. Candidate signals are hints, not conclusions.
-Return JSON only with {"consequential":boolean,"types":["entity","scene","resource","inventory","awareness","knowledge","belief","memory","relationship","fact"],"entityIds":["existing-id"],"confidence":0.0,"evidence":["short verbatim excerpt"],"requiresFullAnalysis":boolean,"reason":"brief","timeAdvance":null}.
+Return JSON only with {"consequential":boolean,"types":["entity","scene","resource","inventory","awareness","knowledge","belief","memory","relationship","fact"],"entityIds":["existing-id"],"presentIds":["existing-id"],"confidence":0.0,"evidence":["short verbatim excerpt"],"requiresFullAnalysis":boolean,"reason":"brief","timeAdvance":null}. entityIds lists every supplied entity the turn involves or is about, including one that is discussed or implied without being present. presentIds lists the supplied Characters and Creatures physically in the scene when the turn ends, including anyone who arrived during it and excluding anyone only mentioned, remembered or written to.
 Always evaluate elapsed time, even when no other durable domain is consequential. For an in-world action, timeAdvance is {"actionType":"short_snake_case","basis":"explicit|matrix","duration":{"years":0,"months":0,"days":0,"hours":0,"minutes":0},"targetPosition":null,"confidence":0.0,"evidence":"short verbatim excerpt"}. When the final narrative establishes an absolute ending date or time, set basis to "explicit", copy the complete resulting calendar position into targetPosition, and also return the calculated duration. Use null for out-of-character instructions, corrections, hypothetical actions, or when no in-world time passed. A skip of days, months or years is returned in the same duration object and is accepted only when the turn says so in words, so return the span the text states and never one it merely recounts as history: an estimate on its own is held to a week. Travel always costs time: when the turn completes a journey between places, timeAdvance is never null, and its duration must match the distance actually crossed rather than the length of the passage describing it. Walking somewhere is usually described in two lines and still takes as long as the walk takes, so read the duration off the timeMatrix category the journey belongs to and never below that category's minimumMinutes.
 An explicit final position or duration in the narrative wins over the matrix. Reconcile every clock reference with currentTime; do not describe a turn as reaching a later time while returning null or a conflicting duration. Otherwise choose a reasonable value within the supplied matrix: Micro for dialogue lines, combat rounds, lockpicking, and quick scans; Local for same-district walking, wound care, and careful room inspection; Transit for cross-district travel, crowds, minor repairs, and setting camp; Macro for crafting, deep study, rest, and inter-city travel; Timeskip for supported downtime, recovery, waiting, long-distance travel, or another transition spanning one or more calendar days. Do not advance hours during line-by-line dialogue. Do not use a tiny advance for substantial travel. A jump of one day or more must be explicitly supported by the final narrative or by a completed action whose duration is covered by the configured Timeskip range. Return calendar units directly instead of assuming a 24-hour day.
 Mark inventory for explicit pickup, drop, transfer, gift, theft, loss, consumption, equip, unequip, drawing, sheathing, or quantity change. Mark scene for explicit arrival, departure, movement, participation, observer, nearby, object, or location change. Mark epistemic domains only for information actually communicated, perceived, discovered, remembered, believed, or relationally consequential. Mark relationship for a first demonstrated encounter or interaction that must initialize a directional relationship, even when its initial value is 0, and for an event that materially and durably changes an existing value. Direct conversation is mutual interaction. Listening or overhearing is interaction only from the aware listener toward the speaker unless the speaker also perceives the listener. Mere co-presence is not interaction. Ordinary politeness, irritation, banter, compliance, disagreement, or passing mood does not change an existing value. Mark resource for an actual value change, not a price mention or hypothetical. When progression is supplied, also mark resource for an outcome that earns experience, or training that changes an attribute, for one of progression.characterIds. When skills is supplied, also mark resource when one of skills.characterIds clearly learns a skill or reaches a milestone in one. A concrete edition of a supplied recurring Event is consequential when it actually takes place, even if the tradition itself is already known.
@@ -3423,7 +3471,7 @@ For an item type transfer return {"itemId":"id","fromHolderId":"id-or-null","fro
 For equipment only return {"itemId":"id","holderId":"id","equipped":boolean}. Apply these same rules to every Character and individual Creature in currentInventoryState, including currentScene.playerEntityId. Inventory is possession without active use. Equipped is reserved for active use, such as wielding, holding in use, or wearing. A belt, sheath, scabbard, holster, bag, pocket, or ordinary inventory is not equipped. Determine the final state after the entire turn. Drawing, wielding, wearing, or putting on a carried item normally equips it. Sheathing, stowing, taking off, putting away, or placing it on a belt normally unequips it without changing holder. If an item is used first and then put away later in the same message, return equipped:false. A transfer from an equipped holder includes equipped:false; equipping by the recipient uses equipped:true.
 Do not mutate inventory from seeing, discussing, pricing, offering, requesting, touching, or temporary use unless possession, placement, quantity, or equipped state explicitly changes. Never invent an item ID.`;
 
-const NARRATIVE_EPISTEMIC_SCOPED_PROMPT = `EPISTEMIC DOMAINS: preTurnContext is the scoped epistemic manifest used for generation. "undetermined" is not ignorance. "derived" and "evidence-candidate" are not automatically canon. currentKnowledgeCards groups Awareness and known fields by card. currentPerspectiveState contains relevant current records.
+const NARRATIVE_EPISTEMIC_SCOPED_PROMPT = `EPISTEMIC DOMAINS: preTurnContext is the scoped epistemic manifest used for generation. "undetermined" is not ignorance. "derived" and "evidence-candidate" are not automatically canon. currentKnowledgeCards groups Awareness and known fields by card. currentPerspectiveState holds the current knowledge, beliefs and memories of whoever could perceive this turn (subjectId is the holder), about anyone, plus facts about the entities involved.
 Each event contains type, description, a short verbatim excerpt, participantIds, confidence from 0 to 1, and operations. Event type must be exactly one of movement, possession-transfer, revelation, deception, discovery, relationship-change, or custom. Use custom when no narrower allowed type fits. When a concrete edition of a supplied recurring Worldbuild Event actually happens, also return worldbuildEventId, occurrenceTitle, worldDate, and participants with roles plus Faction audience. Do not link plans, recollections, comparisons, or passing mentions as new occurrences. Allowed operations:
 {"type":"fact","proposition":{"subjectId":"id","predicate":"stable-key","object":any},"category":"knowledge-category","confidence":0.0}
 {"type":"awareness","subjectId":"id","targetId":"id","confidence":0.0}
@@ -3594,8 +3642,9 @@ async function sendNarrativeJson(params, schema, label, telemetry) {
             throw error;
         }
         console.warn(`[${label}] Structured output unavailable; retrying with prompt validation:`, error.message);
-        const isSchemaSizeFailure = /compiled grammar.*too large|tool schemas?.*too large/i.test(errorText);
-        narrativeStructuredOutputUnavailable.add(isSchemaSizeFailure ? schemaCapabilityKey : globalCapabilityKey);
+        // A refused schema says nothing about the others, so only a refused format disables them all.
+        const isSchemaFailure = /schema|compiled grammar/i.test(errorText);
+        narrativeStructuredOutputUnavailable.add(isSchemaFailure ? schemaCapabilityKey : globalCapabilityKey);
         if (telemetry) {
             telemetry.structuredFallbacks += 1;
             telemetry.structuredFallbackStages.push(label);
@@ -3654,58 +3703,6 @@ function resolveNarrativeEntityReferences(value, resolveReference) {
     return clone;
 }
 
-const PORTUGUESE_CLOCK_NUMBERS = new Map([
-    ['zero', 0], ['uma', 1], ['um', 1], ['duas', 2], ['dois', 2], ['tres', 3],
-    ['quatro', 4], ['cinco', 5], ['seis', 6], ['sete', 7], ['oito', 8], ['nove', 9],
-    ['dez', 10], ['onze', 11], ['doze', 12], ['treze', 13], ['catorze', 14],
-    ['quatorze', 14], ['quinze', 15], ['dezesseis', 16], ['dezessete', 17],
-    ['dezoito', 18], ['dezenove', 19], ['vinte', 20], ['trinta', 30],
-    ['quarenta', 40], ['cinquenta', 50]
-]);
-
-function parsePortugueseClockNumber(value) {
-    const normalized = normalizeInventoryText(value).trim();
-    if (PORTUGUESE_CLOCK_NUMBERS.has(normalized)) return PORTUGUESE_CLOCK_NUMBERS.get(normalized);
-    const parts = normalized.split(/\s+e\s+/);
-    if (parts.length !== 2) return null;
-    const tens = PORTUGUESE_CLOCK_NUMBERS.get(parts[0]);
-    const units = PORTUGUESE_CLOCK_NUMBERS.get(parts[1]);
-    return Number.isInteger(tens) && tens >= 20 && Number.isInteger(units) ? tens + units : null;
-}
-
-function extractExplicitClockTarget(text, startClock, calendar, futureOnly = false) {
-    const source = normalizeInventoryText(text);
-    const candidates = [];
-    const marker = futureOnly ? '(?:ate|until|by)' : '(?:as|ate|marca(?:va)?|at|until|by)';
-    const numeric = new RegExp(`\\b${marker}\\b\\s*(\\d{1,2})(?:\\s*(?::|h)\\s*(\\d{2}))?`, 'g');
-    for (const match of source.matchAll(numeric)) {
-        candidates.push({ index: match.index ?? 0, hour: Number(match[1]), minute: Number(match[2] || 0) });
-    }
-    if (!futureOnly) {
-        const words = /\b(?:as|marca(?:va)?)\b\s+((?:vinte\s+e\s+)?[a-z]+)(?:\s+e\s+([a-z]+))?(?:\s+horas?)?/g;
-        for (const match of source.matchAll(words)) {
-            const hour = parsePortugueseClockNumber(match[1]);
-            const minute = match[2] ? parsePortugueseClockNumber(match[2]) : 0;
-            if (hour !== null && minute !== null) candidates.push({ index: match.index ?? 0, hour, minute });
-        }
-        for (const match of source.matchAll(/\b(meio-dia|noon)\b/g)) {
-            candidates.push({ index: match.index ?? 0, hour: 12, minute: 0 });
-        }
-    }
-    const target = candidates
-        .filter(candidate => candidate.hour >= 0 && candidate.hour < calendar.hoursPerDay && candidate.minute >= 0 && candidate.minute < 60)
-        .sort((left, right) => left.index - right.index)
-        .at(-1);
-    return target ? {
-        eraId: startClock.eraId,
-        year: startClock.year,
-        month: startClock.month,
-        day: startClock.day,
-        hour: target.hour,
-        minute: target.minute
-    } : null;
-}
-
 /**
  * How long the shortest honest version of this journey takes, in the campaign's own terms.
  *
@@ -3735,10 +3732,10 @@ ${narrativeResponse || ''}`);
     // produces a position inside the current day, so honouring it here would quietly turn
     // "three months later, at two in the afternoon" into an afternoon.
     const spansDays = Boolean(statedSpan) && statedSpan.minutes >= calendar.hoursPerDay * 60;
-    const responseTarget = spansDays ? null : extractExplicitClockTarget(narrativeResponse, startClock, calendar);
+    const responseTarget = spansDays ? null : calendarService.extractClockTarget(narrativeResponse, startClock, calendar);
     const requestedTarget = spansDays
         ? null
-        : responseTarget || extractExplicitClockTarget(userMessage, startClock, calendar, true);
+        : responseTarget || calendarService.extractClockTarget(userMessage, startClock, calendar, true);
     if (!requestedTarget && !timeAdvance && !statedSpan) return null;
     const current = timeAdvance && typeof timeAdvance === 'object' && !Array.isArray(timeAdvance)
         ? { ...timeAdvance }

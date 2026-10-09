@@ -13,6 +13,7 @@ describe('Narrative State structured output schemas', () => {
       consequential: true,
       types: ['knowledge'],
       entityIds: ['kepler'],
+      presentIds: ['kepler'],
       confidence: 0.9,
       evidence: ['Kepler heard a new concept.'],
       requiresFullAnalysis: false,

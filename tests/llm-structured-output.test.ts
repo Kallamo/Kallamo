@@ -24,3 +24,39 @@ describe('provider structured output payloads', () => {
     expect(openAiResponseFormat()).toEqual({ type: 'json_object' });
   });
 });
+
+describe('Claude structured output schema', () => {
+  const { claudeCompatibleSchema } = require('../src/main/features/llm/structured-output');
+
+  test('drops the bounds Claude cannot enforce and keeps everything else', () => {
+    const input = {
+      type: 'object',
+      additionalProperties: false,
+      required: ['confidence', 'maximum'],
+      properties: {
+        confidence: { type: 'number', minimum: 0, maximum: 1 },
+        maximum: { type: 'integer', minimum: 1 },
+        name: { type: 'string', minLength: 1, maxLength: 40, enum: ['a', 'b'] },
+        ids: { type: 'array', minItems: 2, maxItems: 5, items: { type: 'string' } },
+        tags: { type: 'array', minItems: 1, items: { type: 'string' } }
+      }
+    };
+    expect(claudeCompatibleSchema(input)).toEqual({
+      type: 'object',
+      additionalProperties: false,
+      required: ['confidence', 'maximum'],
+      properties: {
+        confidence: { type: 'number' },
+        maximum: { type: 'integer' },
+        name: { type: 'string', enum: ['a', 'b'] },
+        ids: { type: 'array', items: { type: 'string' } },
+        tags: { type: 'array', minItems: 1, items: { type: 'string' } }
+      }
+    });
+  });
+
+  test('sends the compatible schema to Bedrock', () => {
+    const bounded = { type: 'object', additionalProperties: false, properties: { value: { type: 'number', minimum: 0 } } };
+    expect(applyBedrockStructuredOutput({}, bounded).output_config.format.schema.properties.value).toEqual({ type: 'number' });
+  });
+});

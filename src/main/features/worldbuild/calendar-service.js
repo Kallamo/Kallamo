@@ -656,6 +656,80 @@ function spanToMinutes(calendar, unit, amount) {
   return (perUnit[unit] || 0) * amount;
 }
 
+const CLOCK_NUMBERS = new Map([
+  ['zero', 0], ['uma', 1], ['um', 1], ['duas', 2], ['dois', 2], ['tres', 3],
+  ['quatro', 4], ['cinco', 5], ['seis', 6], ['sete', 7], ['oito', 8], ['nove', 9],
+  ['dez', 10], ['onze', 11], ['doze', 12], ['treze', 13], ['catorze', 14],
+  ['quatorze', 14], ['quinze', 15], ['dezesseis', 16], ['dezessete', 17],
+  ['dezoito', 18], ['dezenove', 19], ['vinte', 20], ['trinta', 30],
+  ['quarenta', 40], ['cinquenta', 50]
+]);
+
+function clockNumber(value, minutes = false) {
+  const words = String(value || '').trim();
+  if (minutes && words === 'meia') return 30;
+  if (CLOCK_NUMBERS.has(words)) return CLOCK_NUMBERS.get(words);
+  const parts = words.split(/\s+e\s+/);
+  if (parts.length !== 2) return null;
+  const tens = CLOCK_NUMBERS.get(parts[0]);
+  const units = CLOCK_NUMBERS.get(parts[1]);
+  return Number.isInteger(tens) && tens >= 20 && Number.isInteger(units) ? tens + units : null;
+}
+
+// Without accents "as" is both "às" and the article, so a bare number after it is a count
+// ("as duas maos") until something marks it as a time of day.
+const CLOCK_COMPLEMENT = String.raw`\s*(horas?\b|h\b|em ponto|da manha|da tarde|da noite|da madrugada|o\s*clock|am\b|pm\b)`;
+
+function clockHour(hour, complement) {
+  const afternoon = /tarde|noite|pm/.test(complement || '');
+  return afternoon && hour < 12 ? hour + 12 : hour;
+}
+
+/**
+ * The last time of day the text states that is still ahead of the clock, placed on the current
+ * day. A number counts only when it reads as a time: with minutes, a time-of-day complement,
+ * or after "marcava".
+ */
+function extractClockTarget(text, startClock, calendar, futureOnly = false) {
+  const source = normalizeSpanText(text);
+  const candidates = [];
+  const marker = futureOnly ? String.raw`ate(?:\s+as)?|until|by` : String.raw`as|ate|marca(?:va)?|at|until|by`;
+  const numeric = new RegExp(String.raw`\b(${marker})\b\s*(\d{1,2})(?:\s*(?::|h)\s*(\d{2}))?(?:${CLOCK_COMPLEMENT})?`, 'g');
+  for (const match of source.matchAll(numeric)) {
+    const [, word, hour, minute, complement] = match;
+    if (!minute && !complement && !word.startsWith('marca')) continue;
+    candidates.push({ index: match.index ?? 0, hour: clockHour(Number(hour), complement), minute: Number(minute || 0) });
+  }
+  if (!futureOnly) {
+    const words = new RegExp(String.raw`\b(as|marca(?:va)?)\b\s+((?:vinte\s+e\s+)?[a-z]+)(?:\s+e\s+((?:(?:vinte|trinta|quarenta|cinquenta)\s+e\s+)?[a-z]+))?(?:${CLOCK_COMPLEMENT})?`, 'g');
+    for (const match of source.matchAll(words)) {
+      const [, word, hourWords, minuteWords, complement] = match;
+      const hour = clockNumber(hourWords);
+      const minute = minuteWords ? clockNumber(minuteWords, true) : 0;
+      if (hour === null || minute === null) continue;
+      if (!minuteWords && !complement && !word.startsWith('marca')) continue;
+      candidates.push({ index: match.index ?? 0, hour: clockHour(hour, complement), minute });
+    }
+    for (const match of source.matchAll(/\b(meio-dia|noon)\b/g)) candidates.push({ index: match.index ?? 0, hour: 12, minute: 0 });
+  }
+  // A time already behind the clock is a recollection ("he was out there at half past six"),
+  // and one on a later day cannot be placed from the time alone.
+  const now = startClock.hour * 60 + startClock.minute;
+  const target = candidates
+    .filter(candidate => candidate.hour >= 0 && candidate.hour < calendar.hoursPerDay && candidate.minute >= 0 && candidate.minute < 60)
+    .filter(candidate => candidate.hour * 60 + candidate.minute > now)
+    .sort((left, right) => left.index - right.index)
+    .at(-1);
+  return target ? {
+    eraId: startClock.eraId,
+    year: startClock.year,
+    month: startClock.month,
+    day: startClock.day,
+    hour: target.hour,
+    minute: target.minute
+  } : null;
+}
+
 /**
  * The longest span the text actually asserts, in minutes, with how firmly it asserts it.
  * Returns null when the turn says nothing about elapsed time.
@@ -1141,6 +1215,7 @@ module.exports = {
   durationTotalMinutes,
   advanceCeilingMinutes,
   extractElapsedSpan,
+  extractClockTarget,
   matrixMinimumMinutes,
   minutesToDuration,
   collectInvalidDates,

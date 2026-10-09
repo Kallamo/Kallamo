@@ -225,7 +225,11 @@ function resolveNarrativeRouting({ triage, signals }) {
   }
 
   const domains = NARRATIVE_DOMAINS.filter(domain => selectedDomains.has(domain));
-  const requiresFullAnalysis = Boolean(triage?.requiresFullAnalysis) || domains.length >= 4;
+  // The epistemic domains share one prompt and one context, so naming several of them is one
+  // breadth, not several; otherwise the cost would follow how many labels the triage wrote.
+  const breadth = domains.filter(domain => !EPISTEMIC_DOMAINS.has(domain)).length + (hasEpistemicDomain(domains) ? 1 : 0);
+  const requiresFullAnalysis = Boolean(triage?.requiresFullAnalysis) || breadth >= 4;
+  if (requiresFullAnalysis && !triage?.requiresFullAnalysis) forceReasons.push('four-or-more-domains');
   // Overriding the triage costs a full analysis of the turn, so only mechanical evidence
   // earns it. Without this restriction the override fired on ordinary prose and the deep
   // pass ran on every single turn.
@@ -269,6 +273,70 @@ function compactNarrativeManifest(manifest, subjectIds, targetIds) {
   };
 }
 
+const HOLDER_RECORD_TYPES = new Set(['knowledge', 'belief', 'memory']);
+
+/**
+ * Whose perspective the analysis reads in full and whose only around the turn's focus. Being
+ * present decides the detail, never the inclusion: someone the triage leaves out of presentIds
+ * still keeps what they hold about the focus. Without presentIds everyone counts as present.
+ */
+function resolveAnalysisHolders({ candidateIds, sceneIds, presentIds }) {
+  const candidates = [...new Set(candidateIds)];
+  if (!Array.isArray(presentIds)) return { present: new Set(candidates), mentioned: new Set() };
+  const present = new Set([...sceneIds, ...presentIds].filter(id => candidates.includes(id)));
+  return { present, mentioned: new Set(candidates.filter(id => !present.has(id))) };
+}
+
+/**
+ * The perspective records the analysis compares a turn against. Knowledge, beliefs and memories
+ * can only change for someone who could perceive the turn, so they are kept by holder, about
+ * anyone; facts are kept by what they are about. Records about the turn's focus go first.
+ * Relationships are left out because currentRelationshipState is their baseline.
+ * @param {Array<{ type: string, subjectId: string | null, value: any }>} rows
+ * @param {{ holderIds: Iterable<string>, mentionedHolderIds?: Iterable<string>, targetIds: Iterable<string>, focusIds: Iterable<string>, limit?: number }} options
+ */
+function selectPerspectiveRecords(rows, { holderIds, mentionedHolderIds = [], targetIds, focusIds, limit = 120 }) {
+  const holders = new Set(holderIds);
+  const mentionedHolders = new Set(mentionedHolderIds);
+  const targets = new Set(targetIds);
+  const focus = new Set(focusIds);
+  const active = (rows || []).filter(row => row.type !== 'relationship'
+    && (row.value?.status === undefined || row.value.status === 'active'));
+  const superseded = new Set(active.map(row => row.value.supersedesMemoryId).filter(Boolean));
+  const scored = [];
+  for (const row of active) {
+    const value = row.value;
+    if (row.type === 'memory' && superseded.has(value.id)) continue;
+    const about = [value.proposition?.subjectId, value.entityId, ...(value.relatedEntityIds || [])].filter(Boolean);
+    const inFocus = about.some(id => focus.has(id));
+    if (HOLDER_RECORD_TYPES.has(row.type)) {
+      if (!holders.has(row.subjectId) && !(inFocus && mentionedHolders.has(row.subjectId))) continue;
+    } else if (!inFocus && !about.some(id => targets.has(id))) {
+      continue;
+    }
+    scored.push({ row, inFocus });
+  }
+  // Rows arrive newest first, and a stable sort keeps that order inside each group.
+  scored.sort((a, b) => Number(b.inFocus) - Number(a.inFocus));
+  return {
+    records: scored.slice(0, limit).map(({ row }) => compactPerspectiveRecord(row)),
+    candidates: scored.length,
+  };
+}
+
+// The analysis never refers to a stored record by id, so ids and provenance stay out of the payload.
+function compactPerspectiveRecord({ type, subjectId, value }) {
+  return {
+    type,
+    ...(HOLDER_RECORD_TYPES.has(type) ? { subjectId } : {}),
+    ...(value.proposition ? { proposition: value.proposition } : {}),
+    ...(value.summary ? { summary: value.summary } : {}),
+    ...(value.entityId ? { entityId: value.entityId } : {}),
+    ...(value.acquisition ? { acquisition: value.acquisition } : {}),
+    ...(value.accessibility && value.accessibility !== 'available' ? { accessibility: value.accessibility } : {}),
+  };
+}
+
 function groupKnowledgeCardRows(rows) {
   const cards = new Map();
   for (const row of rows || []) {
@@ -302,5 +370,7 @@ module.exports = {
   extractNarrativeSignals,
   groupKnowledgeCardRows,
   hasEpistemicDomain,
+  resolveAnalysisHolders,
   resolveNarrativeRouting,
+  selectPerspectiveRecords,
 };

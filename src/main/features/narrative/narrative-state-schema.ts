@@ -56,7 +56,7 @@ export const NARRATIVE_OPERATION_SCHEMA = {
 export const NARRATIVE_TRIAGE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['consequential', 'types', 'entityIds', 'confidence', 'evidence', 'requiresFullAnalysis', 'reason', 'timeAdvance'],
+  required: ['consequential', 'types', 'entityIds', 'presentIds', 'confidence', 'evidence', 'requiresFullAnalysis', 'reason', 'timeAdvance'],
   properties: {
     consequential: { type: 'boolean' },
     types: {
@@ -67,6 +67,7 @@ export const NARRATIVE_TRIAGE_SCHEMA = {
       },
     },
     entityIds: { type: 'array', items: { type: 'string' } },
+    presentIds: { type: 'array', items: { type: 'string' } },
     confidence: { type: 'number', minimum: 0, maximum: 1 },
     evidence: { type: 'array', items: { type: 'string' } },
     requiresFullAnalysis: { type: 'boolean' },
