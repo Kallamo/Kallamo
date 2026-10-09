@@ -340,6 +340,52 @@ describe('agent conversations', () => {
     expect(body.anthropic_version).toBe('bedrock-2023-05-31');
   });
 
+  test('a final planner turn reads the earlier transcript back without writing its own', async () => {
+    const bedrock = await buildRequest(
+      { apiProfileId: 'api-profile', model: 'us.anthropic.claude-sonnet-4-6', systemPrompt: 'Be precise.', conversation, tools, maxTokens: 500, promptCache: { policy: 'transcript', final: true } },
+      { database: createDatabase({ provider: 'AWS Bedrock', customConfig: { awsRegion: 'us-east-1', awsAccessKeyId: 'AKIDEXAMPLE', awsSecretAccessKey: 'secret' } }) }
+    );
+    const anthropic = await buildRequest(
+      { apiProfileId: 'api-profile', model: 'claude-sonnet-4-6', conversation, tools, maxTokens: 500, promptCache: { policy: 'transcript', final: true } },
+      { database: createDatabase({ provider: 'Anthropic' }) }
+    );
+    for (const request of [bedrock, anthropic]) {
+      const body = JSON.parse(request.requestBodyPayload);
+      const marked = body.messages.map((message: any) => (Array.isArray(message.content) ? message.content : [])
+        .some((block: any) => block.cache_control));
+      expect(body).not.toHaveProperty('cache_control');
+      expect(marked.lastIndexOf(true)).toBe(body.messages.length - 3);
+      expect(marked.filter(Boolean)).toHaveLength(1);
+    }
+  });
+
+  test('every provider that can enforce a response schema receives it in its own form', async () => {
+    const schema = {
+      type: 'object', additionalProperties: false, required: ['score'],
+      properties: { score: { type: 'number', minimum: 0, maximum: 1 } }
+    };
+    const anthropic = JSON.parse((await buildRequest(
+      { apiProfileId: 'api-profile', model: 'claude-sonnet-4-6', newPrompt: 'Rate it.', maxTokens: 500, jsonMode: true, jsonSchema: schema },
+      { database: createDatabase({ provider: 'Anthropic' }) }
+    )).requestBodyPayload);
+    expect(anthropic.output_config.format.schema.properties.score).toEqual({ type: 'number' });
+
+    const google = JSON.parse((await buildRequest(
+      { apiProfileId: 'api-profile', model: 'gemini-2.5-flash', newPrompt: 'Rate it.', maxTokens: 500, jsonMode: true, jsonSchema: schema },
+      { database: createDatabase({ provider: 'Google AI' }) }
+    )).requestBodyPayload);
+    expect(google.generationConfig.responseMimeType).toBe('application/json');
+    expect(google.generationConfig.responseSchema).toEqual({
+      type: 'OBJECT', required: ['score'], propertyOrdering: ['score'], properties: { score: { type: 'NUMBER' } }
+    });
+
+    const open = JSON.parse((await buildRequest(
+      { apiProfileId: 'api-profile', model: 'gemini-2.5-flash', newPrompt: 'Rate it.', maxTokens: 500, jsonMode: true, jsonSchema: { type: 'object', additionalProperties: true } },
+      { database: createDatabase({ provider: 'Google AI' }) }
+    )).requestBodyPayload);
+    expect(open.generationConfig).not.toHaveProperty('responseSchema');
+  });
+
   test('no request carries a cache marker unless it asks for one', async () => {
     const request = await buildRequest(
       { apiProfileId: 'api-profile', model: 'claude-sonnet-4-6', newPrompt: 'Hello', maxTokens: 500 },

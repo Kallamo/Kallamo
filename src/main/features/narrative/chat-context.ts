@@ -138,7 +138,7 @@ export class NarrativeChatContext {
       if (item.kind === 'worldbuild-canon' && item.entityIds?.length) return [];
       return [this.toRetrievedCandidate(input.workspaceId, item, linkedChunkIds, strategy.hasActiveScene)];
     });
-    const seedEntityIds = this.resolveRelevantEntityIds(
+    const { ids: seedEntityIds, focusIds } = this.resolveRelevantEntityIds(
       input.workspaceId,
       input.query,
       input.items,
@@ -189,7 +189,7 @@ export class NarrativeChatContext {
       policy: { allowInaccessible: false }
     }, candidates);
     if (strategy.mode === 'roleplay') {
-      return this.planRoleplay(input, strategy, entityIds, retrieved, plan);
+      return this.planRoleplay(input, strategy, entityIds, new Set(focusIds), retrieved, plan);
     }
     return { plan, context: composeContext(plan) };
   }
@@ -198,6 +198,7 @@ export class NarrativeChatContext {
     input: PlanChatContextInput,
     strategy: KallamoContextStrategy,
     entityIds: string[],
+    focusIds: Set<string>,
     retrieved: ContextCandidate[],
     fallbackPlan: ContextPlanResult
   ): PlannedChatContext {
@@ -222,9 +223,12 @@ export class NarrativeChatContext {
       through: strategy.through
     }).assessments;
     const authorityPerspective: Perspective = { access: 'omniscient' };
+    // A full sheet for whoever the turn is about; a one-line mention for an entity that only came
+    // along because a retrieved passage or a relation named it.
     const authorityCandidates = deduplicateCandidates([
       ...this.loadSceneCandidates(input.workspaceId),
-      ...this.loadEntityCandidates(input.workspaceId, entityIds, authorityPerspective),
+      ...this.loadEntityCandidates(input.workspaceId, entityIds.filter(id => focusIds.has(id)), authorityPerspective),
+      ...this.loadEntityMentions(input.workspaceId, entityIds.filter(id => !focusIds.has(id))),
       ...this.loadEpistemicCandidates(
         input.workspaceId,
         entityIds,
@@ -243,7 +247,8 @@ export class NarrativeChatContext {
         candidates: createRoleplayStrategy(perspective, strategy.through, strategy.hasActiveScene)
           .prepareCandidates(deduplicateCandidates([
             ...this.loadEntityCandidates(input.workspaceId, entityIds, perspective),
-            ...this.loadKnownRelationshipCandidates(input.workspaceId, entityIds, perspective),
+            // Only bonds that touch the turn's focus: two absent entities' ties rarely shape a scene.
+            ...this.loadKnownRelationshipCandidates(input.workspaceId, entityIds.filter(id => focusIds.has(id)), perspective),
             ...this.loadRelationCandidates(input.workspaceId, entityIds, perspective),
             ...this.loadEpistemicCandidates(
               input.workspaceId,
@@ -497,13 +502,19 @@ export class NarrativeChatContext {
     return { sequence: row.sequence };
   }
 
+  /**
+   * Every entity the context may draw on, and the focus among them: those named by a record the
+   * request brought, the scene, the perspective or the request itself. The rest only appear in a
+   * retrieved passage's tags.
+   */
   private resolveRelevantEntityIds(
     workspaceId: string,
     query: string,
     items: RetrievedContextItem[],
     perspective: Perspective
-  ): string[] {
+  ): { ids: string[]; focusIds: string[] } {
     const ids = new Set(items.flatMap(item => item.entityIds ?? []));
+    const focus = new Set(ids);
     const chunkIds = items
       .filter(item => item.entityExpansion !== 'none')
       .map(item => item.id)
@@ -518,16 +529,42 @@ export class NarrativeChatContext {
       `).all(workspaceId, ...chunkIds) as Array<{ id: string }>;
       rows.forEach(row => ids.add(row.id));
     }
-    if (perspective.focalSubjectId) ids.add(perspective.focalSubjectId);
-    perspective.allowedSubjectIds?.forEach(id => ids.add(id));
     const scene = this.roleplay.getScene(workspaceId);
-    scene?.participantIds.forEach(id => ids.add(id));
-    scene?.possibleObserverIds.forEach(id => ids.add(id));
-    scene?.nearbyIds.forEach(id => ids.add(id));
-    scene?.objectIds.forEach(id => ids.add(id));
-    if (scene?.locationId) ids.add(scene.locationId);
-    this.resolveMentionedEntityIds(workspaceId, query).forEach(id => ids.add(id));
-    return [...ids];
+    [
+      perspective.focalSubjectId,
+      ...(perspective.allowedSubjectIds ?? []),
+      ...(scene?.participantIds ?? []),
+      ...(scene?.possibleObserverIds ?? []),
+      ...(scene?.nearbyIds ?? []),
+      ...(scene?.objectIds ?? []),
+      scene?.locationId,
+      ...this.resolveMentionedEntityIds(workspaceId, query)
+    ].forEach(id => {
+      if (!id) return;
+      ids.add(id);
+      focus.add(id);
+    });
+    return { ids: [...ids], focusIds: [...focus] };
+  }
+
+  private loadEntityMentions(workspaceId: string, entityIds: string[]): ContextCandidate[] {
+    if (!entityIds.length) return [];
+    const placeholders = entityIds.map(() => '?').join(', ');
+    const entities = this.db.prepare(`
+      SELECT id, type, canonicalName, lore, data, status
+      FROM entities
+      WHERE workspaceId = ? AND id IN (${placeholders}) AND status != 'proposed'
+    `).all(workspaceId, ...entityIds) as EntityRow[];
+    return entities.map(entity => this.candidate({
+      id: `entity:${entity.id}`,
+      workspaceId,
+      sourceType: 'canon',
+      sourceId: entity.id,
+      content: composeEntityMention(entity),
+      relevance: 0.5,
+      epistemic: { kind: 'canon', access: 'public' },
+      provenanceIds: [entity.id]
+    }));
   }
 
   private resolveMentionedEntityIds(workspaceId: string, query: string): string[] {
@@ -976,21 +1013,27 @@ export class NarrativeChatContext {
       toId: string; toName: string; metadataJson: string | null;
       cardId: string; sourceOwnerId: string; effectiveOwnerId: string;
     }>;
-    return rows.filter(row => Boolean(row.effectiveOwnerId)).map(row => {
-      return this.candidate({
-        id: `known-relationship:${row.effectiveOwnerId}:${row.cardId}:${row.relationshipId}`,
-        workspaceId,
-        sourceType: 'knowledge',
-        sourceId: row.relationshipId,
-        content: [
-          `Known relationship: ${row.fromName} / ${row.relationType.replace(/_/g, ' ')} / ${row.toName}`,
-          `Relationship type: ${row.relationType}`,
-        ].join('\n'),
-        relevance: 1,
-        epistemic: { kind: 'knowledge', subjectId: row.effectiveOwnerId, accessibility: 'available' },
-        provenanceIds: [row.cardId, row.relationshipId, row.fromId, row.toId, row.sourceOwnerId]
-      });
-    });
+    // A bond known through several cards (one's own, a faction's) is still one bond to the reader.
+    const known = new Map<string, { row: typeof rows[number]; provenance: string[] }>();
+    for (const row of rows) {
+      if (!row.effectiveOwnerId) continue;
+      const key = `${row.effectiveOwnerId}:${row.relationshipId}`;
+      const entry = known.get(key) ?? { row, provenance: [row.relationshipId, row.fromId, row.toId] };
+      entry.provenance.push(row.cardId, row.sourceOwnerId);
+      known.set(key, entry);
+    }
+    // A subjective scope has one owner, so the id can leave it out: the same bond known by several
+    // people in the scene is then rendered once, under a header that names them all.
+    return [...known.entries()].map(([key, { row, provenance }]) => this.candidate({
+      id: `known-relationship:${perspective.access === 'subjective' ? row.relationshipId : key}`,
+      workspaceId,
+      sourceType: 'knowledge',
+      sourceId: row.relationshipId,
+      content: `Known relationship: ${row.fromName} / ${row.relationType.replace(/_/g, ' ')} / ${row.toName}`,
+      relevance: 1,
+      epistemic: { kind: 'knowledge', subjectId: row.effectiveOwnerId, accessibility: 'available' },
+      provenanceIds: uniqueIds(provenance)
+    }));
   }
 
   private isFactionKnowledgeShared(workspaceId: string, factionId: string, targetId: string, memberId: string): boolean {
@@ -1152,6 +1195,14 @@ function composeKnownEntity(entity: EntityRow, fields: FieldRow[], knownFieldKey
     lines.push(`${field?.label || nativeFieldLabel(key)}: ${formatNarrativeValue(value)}`);
   }
   return lines.join('\n');
+}
+
+// The name, type and first sentence of the description: enough to place a name a passage uses.
+function composeEntityMention(entity: EntityRow): string {
+  const data = parseObject(entity.data);
+  const description = String(data.description ?? data.content ?? entity.lore ?? '').replace(/\s+/g, ' ').trim();
+  const sentence = description.match(/^.{1,200}?[.!?](?=\s|$)/)?.[0] ?? description.slice(0, 200);
+  return sentence ? `${entity.canonicalName} (${entity.type}): ${sentence}` : `${entity.canonicalName} (${entity.type})`;
 }
 
 function composeEntitySummary(entity: EntityRow): string {

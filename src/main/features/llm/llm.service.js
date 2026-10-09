@@ -3,11 +3,11 @@ const fs = require('fs');
 const path = require('path');
 const { fetch: undiciFetch, Agent } = require('undici');
 const { getResponseMetadata } = require('./response-metadata');
-const { openAiResponseFormat, applyBedrockStructuredOutput } = require('./structured-output');
+const { openAiResponseFormat, applyBedrockStructuredOutput, claudeCompatibleSchema, geminiResponseSchema } = require('./structured-output');
 const { assertPayloadWithinLimit, estimatePayloadTokens, normalizeMaxApiPayload, safetyMarginFor } = require('./payload-budget');
 const { tokenRatio, recordTokenCount, correctedLimit, useTokenCalibrationStore } = require('./token-calibration');
 const { supportsNativeTools, applyConversation, applyCacheBreakpoint, readToolReply, readUsage, flattenConversation } = require('./tool-conversation');
-const { planPromptCache, recordCacheOutcome } = require('./prompt-cache');
+const { isLongTtlRefused, markLongTtlRefused, planPromptCache, recordCacheOutcome } = require('./prompt-cache');
 
 function getDatabase() {
     return require('../../database');
@@ -470,27 +470,28 @@ function parseStreamChunk(obj, provider) {
 // --- PROMPT CACHE MARKERS ---
 
 const CACHE_CONTROL = Object.freeze({ type: 'ephemeral' });
+const LONG_CACHE_CONTROL = Object.freeze({ type: 'ephemeral', ttl: '1h' });
 
 // Anthropic takes `system` as a string or as an array of text blocks, and only
 // the array form can carry a breakpoint. The stable head becomes its own block
 // so the volatile tail that follows it never invalidates the cached prefix.
-function buildCacheableSystem(stableText, volatileText) {
-    const blocks = [{ type: 'text', text: stableText, cache_control: CACHE_CONTROL }];
+function buildCacheableSystem(stableText, volatileText, control = CACHE_CONTROL) {
+    const blocks = [{ type: 'text', text: stableText, cache_control: control }];
     if (volatileText) blocks.push({ type: 'text', text: volatileText });
     return blocks;
 }
 
 // Marking the last history entry turns everything up to it into a reusable
 // prefix: the next turn appends to that prefix instead of rewriting it.
-function markLastHistoryMessage(messages) {
+function markLastHistoryMessage(messages, control = CACHE_CONTROL) {
     if (!messages.length) return messages;
     const last = messages[messages.length - 1];
     let content;
     if (typeof last.content === 'string') {
-        content = [{ type: 'text', text: last.content, cache_control: CACHE_CONTROL }];
+        content = [{ type: 'text', text: last.content, cache_control: control }];
     } else if (Array.isArray(last.content) && last.content.length) {
         content = last.content.map((part, index) => index === last.content.length - 1
-            ? { ...part, cache_control: CACHE_CONTROL }
+            ? { ...part, cache_control: control }
             : part);
     } else {
         return messages;
@@ -572,10 +573,13 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
         scopeId: promptCache?.scopeId,
         stableText: stableSystem ?? '',
         historyChars: cleanHistory.reduce((total, msg) => total + String(msg.content || '').length, 0),
-        historyLength: cleanHistory.length
+        historyLength: cleanHistory.length,
+        ttl: promptCache?.ttl === '1h' && isLongTtlRefused(apiProfileId, model) ? '5m' : promptCache?.ttl
     });
+    // One lifetime for every marker: an hour-long entry may not follow a five-minute one.
+    const cacheControl = cachePlan.ttl === '1h' ? LONG_CACHE_CONTROL : CACHE_CONTROL;
     const markedSystem = cachePlan.systemBreakpoint && stableSystem !== null;
-    const historyForRequest = cachePlan.historyBreakpoint ? markLastHistoryMessage(cleanHistory) : cleanHistory;
+    const historyForRequest = cachePlan.historyBreakpoint ? markLastHistoryMessage(cleanHistory, cacheControl) : cleanHistory;
 
     // Cache markers add no text, so the plain history is what gets measured.
     const measured = {
@@ -648,7 +652,7 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
                         // OpenRouter forwards these parts to Anthropic-backed models;
                         // every other OpenAI-compatible endpoint reads a plain string.
                         content: markedSystem && cachePlan.style === 'openai-parts'
-                            ? buildCacheableSystem(stableSystem, contextPlacement === 'system' ? volatileSystem : '')
+                            ? buildCacheableSystem(stableSystem, contextPlacement === 'system' ? volatileSystem : '', cacheControl)
                             : systemPrompt
                     },
                     ...historyForRequest,
@@ -700,13 +704,16 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
             requestBody = {
                 model: model,
                 system: markedSystem
-                    ? buildCacheableSystem(stableSystem, contextPlacement === 'system' ? volatileSystem : '')
+                    ? buildCacheableSystem(stableSystem, contextPlacement === 'system' ? volatileSystem : '', cacheControl)
                     : systemPrompt,
                 messages: [...historyForRequest, { role: "user", content: userContent }],
                 max_tokens: outputTokens,
                 stream: false
             };
             if (!claudeRejectsSampling(model)) requestBody.temperature = temperature ?? 0.7;
+            if (jsonMode && jsonSchema) {
+                requestBody.output_config = { format: { type: 'json_schema', schema: claudeCompatibleSchema(jsonSchema) } };
+            }
             break;
         }
 
@@ -752,7 +759,7 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
                 generationConfig: {
                     temperature: temperature ?? 0.7,
                     maxOutputTokens: outputTokens,
-                    ...(jsonMode ? { responseMimeType: 'application/json' } : {})
+                    ...(jsonMode ? geminiJsonConfig(jsonSchema) : {})
                 }
             };
             break;
@@ -805,7 +812,7 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
                 generationConfig: {
                     temperature: temperature ?? 0.7,
                     maxOutputTokens: outputTokens,
-                    ...(jsonMode ? { responseMimeType: 'application/json' } : {})
+                    ...(jsonMode ? geminiJsonConfig(jsonSchema) : {})
                 }
             };
             break;
@@ -849,7 +856,7 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
                     anthropic_version: "bedrock-2023-05-31",
                     max_tokens: outputTokens,
                     system: markedSystem
-                        ? buildCacheableSystem(stableSystem, contextPlacement === 'system' ? volatileSystem : '')
+                        ? buildCacheableSystem(stableSystem, contextPlacement === 'system' ? volatileSystem : '', cacheControl)
                         : systemPrompt,
                     messages: bedrockMessages
                 };
@@ -903,9 +910,11 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
         requestBody = applyConversation(requestBody, provider, model, { systemPrompt, conversation, tools });
     }
     // Marking the end of the request lets a growing transcript be read back from cache each turn.
+    // A final turn marks where the previous turn ended instead: it reads that prefix and writes none.
     if (cachePlan.transcriptBreakpoint) {
-        requestBody = cachePlan.style === 'bedrock'
-            ? applyCacheBreakpoint(requestBody, provider, model)
+        const fromEnd = promptCache?.final ? 3 : 1;
+        requestBody = cachePlan.style === 'bedrock' || fromEnd > 1
+            ? applyCacheBreakpoint(requestBody, provider, model, fromEnd)
             : { ...requestBody, cache_control: CACHE_CONTROL };
     }
 
@@ -957,6 +966,18 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
     return { endpoint, requestHeaders, requestBodyPayload, provider, tokenSample, payloadLimit: limit, cachePlan };
 }
 
+function geminiJsonConfig(jsonSchema) {
+    const responseSchema = jsonSchema ? geminiResponseSchema(jsonSchema) : null;
+    return { responseMimeType: 'application/json', ...(responseSchema ? { responseSchema } : {}) };
+}
+
+// Response schemas a provider refused during this session, so they are not offered to it again.
+const refusedSchemas = new Set();
+
+function schemaRefusalKey(params) {
+    return `${params.apiProfileId}\u0000${params.model}\u0000${JSON.stringify(params.jsonSchema)}`;
+}
+
 function isOfficialOpenAiEndpoint(endpoint) {
     try {
         return new URL(endpoint).hostname === 'api.openai.com';
@@ -966,6 +987,10 @@ function isOfficialOpenAiEndpoint(endpoint) {
 }
 
 async function sendApiRequest(params, dependencies = {}) {
+    if (params.jsonSchema && refusedSchemas.has(schemaRefusalKey(params))) {
+        params.onStructuredFallback?.({ remembered: true });
+        params = { ...params, jsonSchema: null };
+    }
     const { endpoint, requestHeaders, requestBodyPayload, provider, tokenSample, cachePlan } = await buildRequest(params, dependencies);
     const { abortSignal } = params;
 
@@ -979,7 +1004,9 @@ async function sendApiRequest(params, dependencies = {}) {
         });
 
         if (!response.ok) {
-            throw new Error(await readHttpErrorMessage(response));
+            const error = new Error(await readHttpErrorMessage(response));
+            error.status = response.status;
+            throw error;
         }
 
         const data = await response.json();
@@ -999,6 +1026,21 @@ async function sendApiRequest(params, dependencies = {}) {
         return { content, ...metadata, learnedTokenRatio };
 
     } catch (error) {
+        // A provider or model that does not take the hour-long lifetime gets five minutes from now on.
+        if (error.status === 400 && cachePlan?.ttl === '1h') {
+            console.warn('[LLM] The provider refused the hour-long cache; retrying with five minutes:', error.message);
+            markLongTtlRefused(params.apiProfileId, params.model);
+            return sendApiRequest(params, dependencies);
+        }
+        // Providers word a refused schema differently, so any 400 on a request that carried one is
+        // retried without it. The refusal is remembered only once that retry succeeds.
+        if (error.status === 400 && params.jsonSchema) {
+            console.warn('[LLM] The provider refused the response schema; retrying without it:', error.message);
+            const result = await sendApiRequest({ ...params, jsonSchema: null }, dependencies);
+            refusedSchemas.add(schemaRefusalKey(params));
+            params.onStructuredFallback?.({ remembered: false, reason: error.message });
+            return result;
+        }
         console.error("API Request Failed:", error);
         throw error;
     }

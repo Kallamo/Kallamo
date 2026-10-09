@@ -13,6 +13,7 @@ const {
 } = require('./features/chat/workspace-context-scope');
 const { ROLE_IDS, readAdvancedSettings, resolveAiEngineRole } = require('./features/ai-engine/role-resolver');
 const { formatActiveHistory, planActiveHistory, selectActiveHistory } = require('./features/chat/history-window');
+const { cacheTtlForPace } = require('./features/llm/prompt-cache');
 const { deferredNarrativeState, findPendingNarrativeTurn, replacedReplyIds } = require('./features/chat/narrative-turns');
 const { parseEntityUpdateObject } = require('./features/worldbuild/entity-update-json');
 const {
@@ -268,8 +269,11 @@ const EPISTEMIC_TOOLS = {
     inspect_subject_memories: ['inspectSubjectMemories', 'Subject memory inspection is unavailable outside Roleplay Mode.']
 };
 
-// Passages lookup_entity hands the agent (and the final context) per call.
+// Passages lookup_entity hands the agent per call.
 const LOOKUP_ENTITY_CHUNK_LIMIT = 12;
+// Of those, the most relevant ones reach the writer on their own; the rest only when the agent
+// cites them or a search also found them.
+const LOOKUP_CONTEXT_PASSAGES = 3;
 
 // Profile knowledge, workspace files and archived memory each ask for their own passages.
 const RETRIEVAL_TIERS = 3;
@@ -374,6 +378,16 @@ function isPromptCacheEnabled() {
     } catch (e) {
         return true;
     }
+}
+
+// Start-to-start spacing of the chat's recent turns, oldest first. Read from the stored
+// messages so the pace survives a restart.
+function recentTurnGaps(chatId) {
+    const times = db.prepare(`
+        SELECT createdAt FROM messages WHERE chatId = ? AND role = 'user'
+        ORDER BY createdAt DESC LIMIT 12
+    `).all(chatId).map(row => Number(row.createdAt)).reverse();
+    return times.slice(1).map((time, index) => time - times[index]);
 }
 
 // Where the volatile context rides. 'system' keeps it at the end of the system
@@ -640,6 +654,8 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
 
         const promptCacheEnabled = isPromptCacheEnabled();
         const contextPlacement = getContextPlacement();
+        // Measured once per run: every step of a workflow is sent at the same pace.
+        const cacheTtl = promptCacheEnabled ? cacheTtlForPace(recentTurnGaps(chatId)) : '5m';
         // The anchor belongs to the conversation, so every profile in a workflow
         // shares one window. Cooldown state is per profile, since each profile
         // carries a different stable prefix.
@@ -928,6 +944,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                         protocolFallback: agenticResult.trajectory.protocolFallback,
                         stopped: agenticResult.trajectory.stopped,
                         plannerWindow: agenticResult.trajectory.plannerWindow,
+                        withheldLookupPassages: agenticResult.trajectory.withheldLookupPassages || 0,
                         gate: { path: 'agentic', reason: plannerGate.reason },
                         seed: agenticResult.trajectory.seed
                             ? { calls: agenticResult.trajectory.seed.calls, items: agenticResult.trajectory.seed.items }
@@ -1147,7 +1164,8 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                             placement: contextPlacement,
                             scopeId: `${chatId}::${profile.id}`,
                             stable: stableSystemSegment,
-                            volatile: volatileSystemSegment
+                            volatile: volatileSystemSegment,
+                            ttl: cacheTtl
                         } : null,
                         onUsage: (metadata) => {
                             if (!metadata) return;
@@ -3634,8 +3652,18 @@ async function sendNarrativeJson(params, schema, label, telemetry) {
         if (telemetry) telemetry.structuredOutputMode = 'prompt-cached';
         return sendApiRequest({ ...params, jsonMode: false, jsonSchema: null });
     }
+    const onStructuredFallback = ({ remembered }) => {
+        if (!telemetry) return;
+        if (remembered) {
+            telemetry.structuredOutputMode = 'prompt-cached';
+            return;
+        }
+        telemetry.structuredFallbacks += 1;
+        telemetry.structuredFallbackStages.push(label);
+        telemetry.structuredOutputMode = 'prompt-fallback';
+    };
     try {
-        return await sendApiRequest({ ...params, jsonMode: true, jsonSchema: schema });
+        return await sendApiRequest({ ...params, jsonMode: true, jsonSchema: schema, onStructuredFallback });
     } catch (error) {
         const errorText = String(error.message || '');
         if (!/response.?format|json.?mode|structured output|output_config.*(unsupported|not supported)|compiled grammar.*too large|tool schemas?.*too large/i.test(errorText)) {
@@ -5498,6 +5526,10 @@ async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory 
         ...retrievedLore.keys(), ...retrievedWorldFacts.keys(), ...retrievedNarrativeOptions.keys(), ...readFiles.keys()
     ];
 
+    // The best rank each passage reached inside a lookup, and whether the agent's sources were applied.
+    const lookupRanks = new Map();
+    let citationsApplied = false;
+
     // Keeps the best score a chunk reached across tool calls, and whether a search
     // (not only an entity lookup) found it; both rank it in the final context.
     const rememberRetrieved = (map, result, origin) => {
@@ -5781,11 +5813,13 @@ ${isRoleplay ? `- PERSPECTIVE: lookup_entity returns what the narrator knows. Us
             } catch (e) { }
 
             if (includeChatContext) {
-                for (const r of entityChunks) {
+                entityChunks.forEach((r, rank) => {
+                    lookupRanks.set(r.id, Math.min(lookupRanks.get(r.id) ?? Infinity, rank));
                     if (r.ownerType === 'chat_kb') rememberRetrieved(retrievedChatChunks, r, 'lookup');
-                    else if (r.ownerType === 'document') retrievedLore.set(r.id, { text: r.text, source: r.source, score: Number(r.score) || 0 });
-                    else rememberRetrieved(retrievedMemories, r, 'lookup');
-                }
+                    else if (r.ownerType === 'document') {
+                        if (!retrievedLore.get(r.id)?.read) retrievedLore.set(r.id, { text: r.text, source: r.source, score: Number(r.score) || 0 });
+                    } else rememberRetrieved(retrievedMemories, r, 'lookup');
+                });
             }
             const relLines = [];
             const edgesByEntity = new Map();
@@ -5884,7 +5918,7 @@ ${isRoleplay ? `- PERSPECTIVE: lookup_entity returns what the narrator knows. Us
                 pushNote(`Tool [read_lore] for "${call.arg}": ${loreResults.length} passage(s) from linked lore of ${docTitle}.`);
                 loreResults.forEach((r, index) => {
                     const text = r.text || '';
-                    retrievedLore.set(r.id, { text, source: r.source || docTitle, score: Number(r.fusionScore ?? r.score) || 0 });
+                    retrievedLore.set(r.id, { text, source: r.source || docTitle, score: Number(r.fusionScore ?? r.score) || 0, read: true });
                     const agentText = text.length > MAX_AGENT_FILE_CHARS
                         ? text.slice(0, MAX_AGENT_FILE_CHARS) + '\n[...truncated for agent reasoning; the full passage is preserved for the final context...]'
                         : text;
@@ -6154,7 +6188,8 @@ ${isRoleplay ? `- PERSPECTIVE: lookup_entity returns what the narrator knows. Us
             manualMode: false,
             manualJson: '',
             abortSignal: run?.controller?.signal,
-            promptCache: { policy: 'transcript' }
+            // The last turn reads the transcript back but writes nothing: no later turn would read it.
+            promptCache: { policy: 'transcript', ...(currentTurn >= maxTurns ? { final: true } : {}) }
         };
         if (protocol === 'native') {
             return sendAgentRequest({ ...request, conversation: renderNativeConversation(), tools: toolDefinitions });
@@ -6271,6 +6306,7 @@ ${isRoleplay ? `- PERSPECTIVE: lookup_entity returns what the narrator knows. Us
                 turnRecord.finished = true;
 
                 if (sourcesAttr) {
+                    citationsApplied = true;
                     const citations = parseCitations(sourcesAttr);
                     const allowedSources = citations.names;
                     const cited = {
@@ -6394,6 +6430,21 @@ ${isRoleplay ? `- PERSPECTIVE: lookup_entity returns what the narrator knows. Us
     const UNCITED_TIER = 4;
     const SEEDED_UNCITED_TIER = 3;
     const uncitedTier = (ids) => (ids.some(id => seededIds.has(id)) ? SEEDED_UNCITED_TIER : UNCITED_TIER);
+
+    // A lookup's lower-ranked passages helped the agent reason; the writer gets them only when
+    // the agent cited them, a search or the pre-search also found them, or the agent read them.
+    let withheldLookupPassages = 0;
+    for (const map of [retrievedChatChunks, retrievedMemories, retrievedLore]) {
+        for (const [id, entry] of map.entries()) {
+            const rank = lookupRanks.get(id);
+            if (rank === undefined || rank < LOOKUP_CONTEXT_PASSAGES) continue;
+            if (seededIds.has(id) || entry.origin === 'search' || entry.read) continue;
+            if (citationsApplied && !entry.uncited) continue;
+            map.delete(id);
+            withheldLookupPassages += 1;
+        }
+    }
+    trajectory.withheldLookupPassages = withheldLookupPassages;
 
     // The same passage reached by two tools is sent once.
     const selection = selectRetrievedEntries(anchorQuery, [

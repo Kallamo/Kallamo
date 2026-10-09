@@ -148,6 +148,9 @@ const formatTrajectory = trajectory => {
     const pack = trajectory.packing;
     lines.push(`Packed ${pack.kept}/${pack.total} items into ${pack.budget} tokens (${pack.dropped} dropped, ${pack.truncated} cut)`);
   }
+  if (trajectory.withheldLookupPassages) {
+    lines.push(`Lookup passages kept from the writer: ${trajectory.withheldLookupPassages} (uncited, below the top 3 of their lookup)`);
+  }
   return lines.join('\n');
 };
 

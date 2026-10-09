@@ -179,16 +179,20 @@ function readToolReply(provider, data) {
 
 // Bedrock's InvokeModel takes explicit cache breakpoints only, moved to the last block each turn.
 // Every message is sent as blocks, so a turn serializes the same with or without the mark.
-function applyCacheBreakpoint(body, provider, model) {
-  if (!isBedrockClaude(provider, model) || !Array.isArray(body?.messages) || !body.messages.length) return body;
+// Marks the message `fromEnd` places from the end (1 is the last one), so a request can read a
+// prefix an earlier request wrote without writing its own.
+function applyCacheBreakpoint(body, provider, model, fromEnd = 1) {
+  if (!usesAnthropicFormat(provider, model) || !Array.isArray(body?.messages)) return body;
+  const index = body.messages.length - fromEnd;
+  if (index < 0) return body;
   const messages = body.messages.map(message => (typeof message.content === 'string'
     ? { ...message, content: [{ type: 'text', text: message.content || '.' }] }
     : message));
-  const last = messages[messages.length - 1];
-  const content = [...(Array.isArray(last.content) ? last.content : [])];
+  const target = messages[index];
+  const content = [...(Array.isArray(target.content) ? target.content : [])];
   if (!content.length) return body;
   content[content.length - 1] = { ...content[content.length - 1], cache_control: { type: 'ephemeral' } };
-  messages[messages.length - 1] = { ...last, content };
+  messages[index] = { ...target, content };
   return { ...body, messages };
 }
 

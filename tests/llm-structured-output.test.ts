@@ -60,3 +60,36 @@ describe('Claude structured output schema', () => {
     expect(applyBedrockStructuredOutput({}, bounded).output_config.format.schema.properties.value).toEqual({ type: 'number' });
   });
 });
+
+describe('Gemini response schema', () => {
+  const { geminiResponseSchema } = require('../src/main/features/llm/structured-output');
+
+  test('converts a closed schema, keeping property order and turning a null branch into nullable', () => {
+    const converted = geminiResponseSchema({
+      type: 'object',
+      additionalProperties: false,
+      required: ['name', 'when'],
+      properties: {
+        name: { type: 'string', enum: ['a', 'b'] },
+        score: { type: 'number', minimum: 0, maximum: 1 },
+        when: { anyOf: [{ type: 'null' }, { type: 'object', additionalProperties: false, properties: { hour: { type: 'integer' } } }] }
+      }
+    });
+    expect(converted).toEqual({
+      type: 'OBJECT',
+      required: ['name', 'when'],
+      propertyOrdering: ['name', 'score', 'when'],
+      properties: {
+        name: { type: 'STRING', enum: ['a', 'b'] },
+        score: { type: 'NUMBER' },
+        when: { type: 'OBJECT', nullable: true, propertyOrdering: ['hour'], properties: { hour: { type: 'INTEGER' } } }
+      }
+    });
+  });
+
+  test('gives up on what it cannot express, so the request keeps plain JSON mode', () => {
+    expect(geminiResponseSchema({ type: 'object', additionalProperties: true, properties: { a: { type: 'string' } } })).toBeNull();
+    expect(geminiResponseSchema({ type: 'object', properties: { free: { type: 'object' } } })).toBeNull();
+    expect(geminiResponseSchema({ anyOf: [{ type: 'string' }, { type: 'number' }] })).toBeNull();
+  });
+});

@@ -1,7 +1,7 @@
 const { fetch: undiciFetch } = require('undici');
 const { buildRequest, parseStreamChunk, sendApiRequest, generationDispatcher, readHttpErrorMessage, learnFromReportedTokens } = require('./llm.service');
 const { getResponseMetadata } = require('./response-metadata');
-const { recordCacheOutcome } = require('./prompt-cache');
+const { recordCacheOutcome, markLongTtlRefused } = require('./prompt-cache');
 
 // Providers with no text-SSE stream fall back to the non-streaming path.
 const STREAM_UNSUPPORTED = new Set(['aws bedrock']);
@@ -76,7 +76,13 @@ async function sendApiRequestStream(params, onDelta, onStreamStart, dependencies
         });
 
         if (!response.ok) {
-            throw new Error(await readHttpErrorMessage(response));
+            const message = await readHttpErrorMessage(response);
+            if (response.status === 400 && cachePlan?.ttl === '1h') {
+                console.warn('[LLM] The provider refused the hour-long cache; retrying with five minutes:', message);
+                markLongTtlRefused(params.apiProfileId, params.model);
+                return sendApiRequestStream(params, onDelta, onStreamStart, dependencies);
+            }
+            throw new Error(message);
         }
 
         const reader = response.body.getReader();

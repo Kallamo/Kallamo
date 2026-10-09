@@ -5,6 +5,8 @@ const require = createRequire(import.meta.url);
 const { buildRequest } = require('../src/main/features/llm/llm.service');
 const {
   PROMPT_CACHE_CONTRACT,
+  cacheTtlForPace,
+  markLongTtlRefused,
   planPromptCache,
   readHistoryAnchor,
   recordCacheOutcome,
@@ -299,5 +301,49 @@ describe('prompt cache request composition', () => {
     expect(system[0]).toEqual({ type: 'text', text: STABLE, cache_control: { type: 'ephemeral' } });
     expect(system[1]).toEqual({ type: 'text', text: VOLATILE });
     expect(JSON.parse(request.requestBodyPayload)).not.toHaveProperty('cache_control');
+  });
+});
+
+const minutes = (...values: number[]) => values.map(value => value * 60 * 1000);
+
+describe('cache lifetime from the pace of play', () => {
+  test('keeps five minutes when turns come quickly or the pace is still unknown', () => {
+    expect(cacheTtlForPace(minutes(1, 2, 3, 2, 1))).toBe('5m');
+    expect(cacheTtlForPace(minutes(30))).toBe('5m');
+    expect(cacheTtlForPace([])).toBe('5m');
+  });
+
+  test('takes the hour when turns are minutes apart, ignoring breaks between sessions', () => {
+    expect(cacheTtlForPace(minutes(12, 30, 8, 40, 15))).toBe('1h');
+    expect(cacheTtlForPace(minutes(12, 15, 3000, 10, 52000, 20))).toBe('1h');
+  });
+
+  test('marks nothing when even the hour expires between turns', () => {
+    expect(cacheTtlForPace(minutes(70, 90, 80))).toBeNull();
+  });
+
+  test('a slow pace leaves the request unmarked and OpenRouter keeps five minutes', () => {
+    const base = { model: 'claude-opus-5', policy: 'conversation', scopeId: 'pace', stableText: STABLE };
+    expect(planPromptCache({ ...base, provider: 'Anthropic', ttl: null })).toMatchObject({ systemBreakpoint: false, reason: 'pace-too-slow' });
+    expect(planPromptCache({ ...base, provider: 'Anthropic', ttl: '1h' }).ttl).toBe('1h');
+    expect(planPromptCache({ ...base, provider: 'OpenRouter', model: 'anthropic/claude-opus-5', ttl: '1h' }).ttl).toBe('5m');
+  });
+
+  test('every marker of a request carries the same lifetime, and a refusal falls back to five minutes', async () => {
+    const request = (model: string) => buildRequest({
+      apiProfileId: 'api-profile', model,
+      systemPrompt: `${STABLE}${VOLATILE}`,
+      chatHistory: [{ role: 'user', content: 'Earlier turn' }],
+      newPrompt: 'Continue.',
+      promptCache: { policy: 'conversation', placement: 'turn', scopeId: `ttl::${model}`, stable: STABLE, volatile: VOLATILE, ttl: '1h' }
+    }, { database: createDatabase('Anthropic') });
+    const markers = (body: any) => JSON.stringify(body).match(/"cache_control":\{[^}]*\}/g);
+
+    const long = JSON.parse((await request('claude-ttl-accepted')).requestBodyPayload);
+    expect(markers(long)).toEqual(['"cache_control":{"type":"ephemeral","ttl":"1h"}', '"cache_control":{"type":"ephemeral","ttl":"1h"}']);
+
+    markLongTtlRefused('api-profile', 'claude-ttl-refused');
+    const fallback = JSON.parse((await request('claude-ttl-refused')).requestBodyPayload);
+    expect(markers(fallback)).toEqual(['"cache_control":{"type":"ephemeral"}', '"cache_control":{"type":"ephemeral"}']);
   });
 });
