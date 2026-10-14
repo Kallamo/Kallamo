@@ -12,6 +12,7 @@ import {
 } from '../../src/main/features/narrative/mode-orchestration';
 import { RoleplaySystem } from '../../src/main/features/narrative/roleplay-system';
 import { NarrativeStateSystem } from '../../src/main/features/narrative/narrative-state';
+import { CharacterSceneMemory } from '../../src/main/features/narrative/character-scene-memory';
 import { createWorldbuildDataService } from '../../src/main/features/worldbuild/worldbuild-data.js';
 import { openTestDatabase } from '../sqlite-test-database';
 
@@ -78,6 +79,37 @@ describe('Narrative chat context integration', () => {
       expect.objectContaining({ scopeId: 'subject:mara' })
     ]));
     expect(result.manifest?.subjectIds).toEqual(expect.arrayContaining(['elias', 'mara']));
+  });
+
+  test('sends what each scene actor perceived and heard, never the player', () => {
+    setWorkspaceExperienceMode(db, 'workspace-one', 'roleplay');
+    for (const [id, name] of [['elias', 'Elias'], ['mara', 'Mara']]) {
+      db.prepare(`
+        INSERT INTO entities (id, workspaceId, type, canonicalName, aliases, lore, data, status, createdAt, last_modified)
+        VALUES (?, 'workspace-one', 'Characters', ?, '[]', '', '{}', 'confirmed', 1, 1)
+      `).run(id, name);
+    }
+    new NarrativeSceneRepository(db).save({
+      id: 'scene-one', projectId: 'workspace-one', status: 'active',
+      participantIds: ['elias', 'mara'], possibleObserverIds: [],
+      perspective: { access: 'subjective', focalSubjectId: 'elias' },
+      position: { sequence: 50 }
+    });
+    new CharacterSceneMemory(db).recordTurn({
+      workspaceId: 'workspace-one', originId: 'reply-1', presentIds: ['elias', 'mara'], locationId: null, createdAt: 10,
+      updates: [
+        { entityId: 'mara', perceived: [], heard: [{ fromId: 'elias', text: 'he says the gate held eight guards' }], stance: 'doubts Elias' },
+        { entityId: 'elias', perceived: ['the player is never remembered'], heard: [], stance: '' }
+      ]
+    });
+
+    const result = plan();
+    const memory = result.context.split('--- CHARACTER SCENE MEMORY ---')[1];
+
+    expect(memory).toContain('Mara');
+    expect(memory).toContain('heard from Elias: he says the gate held eight guards');
+    expect(memory).toContain('stance: doubts Elias');
+    expect(memory).not.toContain('the player is never remembered');
   });
 
   test('gives the turn focus a full sheet and an entity only a passage names a one-line mention', () => {
@@ -557,10 +589,10 @@ describe('Narrative chat context integration', () => {
     const roleplay = new RoleplaySystem(db);
     const health = roleplay.saveDefinition('workspace-one', {
       name: 'Health', key: 'health', color: '#dc2626', minimum: 0, maximum: 100,
-      initialValue: 100, appliesTo: ['Characters'], updatePolicy: 'review'
+      appliesTo: ['Characters'], updatePolicy: 'review'
     });
-    roleplay.setTargetValue('workspace-one', health.id, 'entity', 'elias', { current: 80, maximum: 100 });
-    roleplay.setTargetValue('workspace-one', health.id, 'entity', 'mara', { current: 35, maximum: 100 });
+    roleplay.setTargetValue('workspace-one', health.id, 'entity', 'elias', { current: 80 });
+    roleplay.setTargetValue('workspace-one', health.id, 'entity', 'mara', { current: 35 });
     roleplay.saveSettings('workspace-one', { playerEntityId: 'elias' });
     setWorkspaceExperienceMode(db, 'workspace-one', 'roleplay');
 

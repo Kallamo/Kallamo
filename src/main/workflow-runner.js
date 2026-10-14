@@ -79,6 +79,7 @@ const {
     truncateToTokens
 } = require('./features/llm/context-budget');
 const { stripReasoning } = require('./features/chat/message-text');
+const { createScenePlanStreamFilter, extractScenePlan } = require('./features/chat/scene-plan');
 const { reconstructKnowledgeFile } = require('./features/knowledge/kb-reconstruct');
 const { parseCitations, isCitedChunk } = require('./features/knowledge/cited-sources');
 const { parseAgentTurn } = require('./features/knowledge/agent-output');
@@ -161,8 +162,6 @@ function sendRunEvent(webContents, channel, run, payload) {
     });
 }
 
-// Formats a retrieved result set for the RAG debug panel: source + fusion/similarity
-// score + the full chunk text.
 function formatRagDebugSection(label, resultObjs) {
     if (!Array.isArray(resultObjs) || resultObjs.length === 0) return '';
     const lines = resultObjs.map((r, idx) => {
@@ -390,10 +389,7 @@ function recentTurnGaps(chatId) {
     return times.slice(1).map((time, index) => time - times[index]);
 }
 
-// Where the volatile context rides. 'system' keeps it at the end of the system
-// prompt, which is what every existing workspace was tuned against. 'turn' moves
-// it behind the history, in front of the user's message, which is the only
-// arrangement that lets the history itself be cached.
+// 'turn' puts the volatile context behind the history, the only layout where the history can be cached.
 function getContextPlacement() {
     try {
         return readAdvancedSettings().promptCacheContextPlacement === 'turn' ? 'turn' : 'system';
@@ -402,7 +398,6 @@ function getContextPlacement() {
     }
 }
 
-// Live token streaming is on unless the user turned it off in Advanced settings.
 function isStreamingEnabled() {
     try {
         const row = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
@@ -411,6 +406,28 @@ function isStreamingEnabled() {
     } catch (e) {
         return true;
     }
+}
+
+// One background analysis per chat; the next turn awaits it so it never reads a stale story state.
+const narrativeStateRuns = new Map();
+
+function sendNarrativeStateStatus(webContents, workspaceId, processing) {
+    if (webContents && !webContents.isDestroyed()) webContents.send('narrative-state-status', { workspaceId, processing });
+}
+
+function runNarrativeStateInBackground(chatId, webContents, task) {
+    const previous = narrativeStateRuns.get(chatId) || Promise.resolve();
+    sendNarrativeStateStatus(webContents, chatId, true);
+    const run = previous
+        .then(task)
+        .catch(error => console.error('[Narrative State] Background update failed:', error))
+        .finally(() => {
+            if (narrativeStateRuns.get(chatId) !== run) return;
+            narrativeStateRuns.delete(chatId);
+            sendNarrativeStateStatus(webContents, chatId, false);
+        });
+    narrativeStateRuns.set(chatId, run);
+    return run;
 }
 
 async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, historyEdit, regenerateMessageId, webContents }) {
@@ -607,6 +624,16 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
         // In a roleplay, the replaced replies are reverted before anything reads the story
         // state, and the turn before them catches up if it was never analyzed.
         const roleplayTurns = isRoleplayWorkspace(chatId);
+        if (narrativeStateRuns.has(chatId)) {
+            sendRunEvent(webContents, 'workflow-progress', currentRun, {
+                step: 1,
+                totalSteps,
+                profileName: 'Narrative State',
+                status: 'Updating Narrative State…',
+                phase: 'narrative-state'
+            });
+            await narrativeStateRuns.get(chatId);
+        }
         if (roleplayTurns) narrativeEntitySystem().cancelOpenTurnReplacements(chatId);
         const replacedIds = roleplayTurns ? replacedReplyIds(persistedMessages, { historyEdit, regenerateMessageId }) : [];
         if (replacedIds.length) {
@@ -631,6 +658,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
         let lastAgenticTrace = null;
         let lastRetrievalFunnel = null;
         let lastGenerationPolicyId = null;
+        let lastScenePlan = '';
         let totalProfileKbTokens = 0;
         let totalChatKbTokens = 0;
         let totalChatHistoryTokens = 0;
@@ -701,13 +729,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             });
 
             // --- BUILD CONTEXT ---
-            // The system prompt is assembled in two halves so a provider's prompt
-            // cache can reuse the first one. Everything that holds still across
-            // turns (profile voice, narration policy, workflow instruction,
-            // constant knowledge) belongs to the stable head; anything that moves
-            // with the turn (the clock, retrieval, attachments) belongs to the
-            // volatile tail. Cache matching is a byte prefix, so a single moving
-            // block placed early would invalidate every stable byte after it.
+            // Stable head first, volatile tail after: cache matching is a byte prefix (docs/prompt-cache.md).
             let stableSystemPrompt = profile.systemPrompt || '';
             let volatileSystemPrompt = '';
             let isRoleplayWorkspace = false;
@@ -816,9 +838,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                 }
             }
 
-            // Constant knowledge is reference material the user pinned, not a
-            // per-turn lookup, so it joins the stable head instead of the
-            // retrieved context that follows it.
+            // Constant knowledge is pinned reference, not a per-turn lookup, so it joins the stable head.
             let stableContextBlock = '';
             let contextBlock = '';
             if (constantKnowledge) {
@@ -837,12 +857,18 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             const stepLimit = resolvePayloadLimit({ apiProfileId: profile.apiProfileId, model: profile.model, maxPayloadTokens: maxContextTokens });
             const fixedPrompt = resolveVariables(composeSystemPrompt() + attachmentsPayloadContext);
             const fixedTokens = estimateTokens(fixedPrompt);
+            // The user message carries the same note now as it will in later history, so the cached prefix holds.
+            // Read across archived messages too, so archiving never moves a note inside the window.
+            const presenceNotes = isRoleplayWorkspace ? loadPresenceNotes(chatId, messages) : new Map();
+            const lastActiveMessage = activeMessages[activeMessages.length - 1];
+            const inputPresenceNote = i === 0 && lastActiveMessage?.role === 'user' ? presenceNotes.get(lastActiveMessage.id) : null;
+            const modelInput = inputPresenceNote ? `${inputPresenceNote}\n${currentInput}` : currentInput;
             const budgetInput = {
                 maxPayloadTokens: stepLimit.limit,
                 configuredPayloadTokens: stepLimit.configured,
                 tokenRatio: stepLimit.ratio,
                 limitSource: stepLimit.source,
-                newPrompt: resolveVariables(currentInput),
+                newPrompt: resolveVariables(modelInput),
                 attachedImageCount: i === 0 ? attachedImages.length : 0,
                 outputTokens: getReservedOutputTokens({ maxTokens: profile.maxTokens })
             };
@@ -865,6 +891,11 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     if (last && last.role === 'user') {
                         historySource = activeMessages.slice(0, -1);
                     }
+                }
+                if (presenceNotes.size) {
+                    historySource = historySource.map(message => presenceNotes.has(message.id)
+                        ? { ...message, presenceNote: presenceNotes.get(message.id) }
+                        : message);
                 }
             }
             const historyNeed = planActiveHistory(historySource, availableForContext, historyCacheScopeId).tokens;
@@ -1091,7 +1122,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             const volatileSystemSegment = volatileSystemPrompt + contextBlock;
             const compiledSystemPrompt = stableSystemSegment + volatileSystemSegment;
 
-            const inputTokens = estimateTokens(currentInput);
+            const inputTokens = estimateTokens(modelInput);
             const systemTokens = estimateTokens(compiledSystemPrompt);
             const narrativeContextTokens = Math.max(0, systemTokens - systemInstructionsTokens);
             const measuredSystemPrompt = resolveVariables(compiledSystemPrompt);
@@ -1120,6 +1151,8 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
 
             let success = false;
             let stepOutput = '';
+            let stepScenePlan = '';
+            let stepRawOutputTokens = null;
             let stepTruncated = false;
             let stepFinishReason = null;
             let stepLearnedRatio = null;
@@ -1142,7 +1175,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                         model: profile.model,
                         systemPrompt: compiledSystemPrompt,
                         chatHistory,
-                        newPrompt: currentInput,
+                        newPrompt: modelInput,
                         temperature: profile.temperature,
                         maxTokens: profile.maxTokens,
                         maxPayloadTokens: maxContextTokens,
@@ -1155,10 +1188,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                         manualJson: profile.manualJson,
                         abortSignal: currentRun.controller.signal,
                         attachedImages: (i === 0 ? attachedImages : []),
-                        // systemPrompt above stays the authority for the payload
-                        // budget and for providers with no explicit cache
-                        // control; these segments only tell the request layer
-                        // where the reusable half ends.
+                        // systemPrompt stays the authority for the budget; the segments only mark the reusable half.
                         promptCache: promptCacheEnabled ? {
                             policy: 'conversation',
                             placement: contextPlacement,
@@ -1179,17 +1209,22 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     // workflow steps are plumbing and stay non-streaming.
                     let result;
                     if ((i === steps.length - 1) && isStreamingEnabled()) {
+                        const planFilter = isRoleplayWorkspace ? createScenePlanStreamFilter() : null;
                         result = await sendApiRequestStream(
                             genParams,
                             (delta) => {
+                                const contentDelta = planFilter ? planFilter.push(delta.contentDelta || '') : (delta.contentDelta || '');
+                                if (!contentDelta && !delta.reasoningDelta) return;
                                 sendRunEvent(webContents, 'stream:token', currentRun, {
-                                    contentDelta: delta.contentDelta || '',
+                                    contentDelta,
                                     reasoningDelta: delta.reasoningDelta || ''
                                 });
                             },
                             () => {
                                 didStreamFinalResponse = true;
                             });
+                        const heldBack = planFilter?.flush();
+                        if (heldBack) sendRunEvent(webContents, 'stream:token', currentRun, { contentDelta: heldBack, reasoningDelta: '' });
                         if (currentRun.isCancelled) {
                             return { success: false, cancelled: true };
                         }
@@ -1197,6 +1232,12 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                         result = await sendApiRequest(genParams);
                     }
                     stepOutput = typeof result === 'string' ? result : String(result?.content || '');
+                    stepRawOutputTokens = estimateTokens(stepOutput);
+                    if (isRoleplayWorkspace) {
+                        const planned = extractScenePlan(stepOutput);
+                        stepOutput = planned.text;
+                        stepScenePlan = planned.plan;
+                    }
                     if (!stripReasoning(stepOutput).trim()) {
                         throw emptyResponseError(result?.finishReason, stepOutput);
                     }
@@ -1302,6 +1343,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             lastAgenticTrace = agenticTrace;
             lastRetrievalFunnel = retrievalFunnel;
             lastGenerationPolicyId = generationPolicyId;
+            lastScenePlan = stepScenePlan;
 
             totalProfileKbTokens += profileKbTokens;
             totalChatKbTokens += chatKbTokens;
@@ -1312,7 +1354,8 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             totalMainInputTokens += totalInputTokens;
             totalAgenticInputTokens += agenticInputTokens;
             totalAgenticOutputTokens += agenticOutputTokens;
-            totalOutputTokens += estimateTokens(stepOutput);
+            // The plan was written and billed even though the reply no longer shows it.
+            totalOutputTokens += stepRawOutputTokens ?? estimateTokens(stepOutput);
         }
 
         if (finalOutput && lastProfileUsed) {
@@ -1355,6 +1398,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                         manifestRequestId: lastNarrativeContextRequestId
                     },
                     policyId: lastGenerationPolicyId,
+                    ...(debugSettings.narrativeStateDebug && lastScenePlan ? { scenePlan: capDebugText(lastScenePlan) } : {}),
                     steps: steps.length
                 },
                 retrieval: {
@@ -1422,74 +1466,66 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                 }
             }
 
-            try {
-                const { getWorkspaceExperienceMode } = require('../../dist-main/main/features/narrative/mode-orchestration');
-                if (!replacedIds.length && getWorkspaceExperienceMode(db, chatId) === 'roleplay') {
-                    sendRunEvent(webContents, 'workflow-progress', currentRun, {
-                        step: totalSteps,
-                        totalSteps,
-                        profileName: 'Narrative State',
-                        status: 'Updating Narrative State…',
-                        phase: 'narrative-state'
-                    });
-                }
-            } catch (error) {
-                console.warn('[Narrative State] Could not report processing status:', error.message);
-            }
-
-            try {
-                // A reply that replaced another waits for the story to continue, so trying alternatives
-                // never bills an analysis per reply.
-                const narrativeResult = replacedIds.length
-                    ? { changes: [], diagnostics: deferredNarrativeState() }
-                    : await updateRoleplayStateWithSystemAi({
-                        workspaceId: chatId,
-                        provenanceId: aiMsgId,
-                        userMessage: messageContent,
-                        narrativeResponse: finalOutput
-                    });
-                roleplayChanges = narrativeResult.changes;
-                if (narrativeResult.diagnostics) {
-                    debugObj = mergeNarrativeStateDiagnostics(debugObj, narrativeResult.diagnostics);
-                }
-            } catch (error) {
-                console.error('[Roleplay State] System AI update failed:', error);
+            const profileId = lastProfileUsed.id;
+            // The reply is already saved; the story state catches up without holding the chat.
+            runNarrativeStateInBackground(chatId, webContents, async () => {
                 try {
-                    const { getRoleplayClock, applyRoleplayTurnFrame } = require('./features/worldbuild/calendar-service');
-                    const { RoleplaySystem } = require('../../dist-main/main/features/narrative/roleplay-system');
-                    const failedScene = new RoleplaySystem(db).getScene(chatId);
-                    const failedClock = getRoleplayClock(db, chatId);
-                    applyRoleplayTurnFrame(db, {
-                        workspaceId: chatId,
-                        originId: aiMsgId,
-                        startClock: failedClock,
-                        startLocationId: failedScene?.locationId,
-                        endLocationId: failedScene?.locationId,
-                        timeAdvance: null
-                    });
-                } catch (frameError) {
-                    console.error('[Roleplay Time] Could not preserve the failed turn frame:', frameError);
+                    // A reply that replaced another waits for the story to continue, so trying alternatives
+                    // never bills an analysis per reply.
+                    const narrativeResult = replacedIds.length
+                        ? { changes: [], diagnostics: deferredNarrativeState() }
+                        : await updateRoleplayStateWithSystemAi({
+                            workspaceId: chatId,
+                            provenanceId: aiMsgId,
+                            userMessage: messageContent,
+                            narrativeResponse: finalOutput
+                        });
+                    roleplayChanges = narrativeResult.changes;
+                    if (narrativeResult.diagnostics) {
+                        debugObj = mergeNarrativeStateDiagnostics(debugObj, narrativeResult.diagnostics);
+                    }
+                } catch (error) {
+                    console.error('[Roleplay State] System AI update failed:', error);
+                    try {
+                        const { getRoleplayClock, applyRoleplayTurnFrame } = require('./features/worldbuild/calendar-service');
+                        const { RoleplaySystem } = require('../../dist-main/main/features/narrative/roleplay-system');
+                        const failedScene = new RoleplaySystem(db).getScene(chatId);
+                        const failedClock = getRoleplayClock(db, chatId);
+                        applyRoleplayTurnFrame(db, {
+                            workspaceId: chatId,
+                            originId: aiMsgId,
+                            startClock: failedClock,
+                            startLocationId: failedScene?.locationId,
+                            endLocationId: failedScene?.locationId,
+                            timeAdvance: null
+                        });
+                    } catch (frameError) {
+                        console.error('[Roleplay Time] Could not preserve the failed turn frame:', frameError);
+                    }
+                    const failedNarrativeDiagnostic = {
+                        status: 'failed',
+                        error: error.message || 'Narrative State update failed.',
+                        usage: {}
+                    };
+                    debugObj = mergeNarrativeStateDiagnostics(debugObj, failedNarrativeDiagnostic);
+                    try {
+                        const { NarrativeStateSystem } = require('../../dist-main/main/features/narrative/narrative-state');
+                        new NarrativeStateSystem(db).finishJob(chatId, aiMsgId, 'failed', { error: error.message || 'Narrative State update failed.' });
+                    } catch (jobError) {
+                        console.error('[Narrative State] Could not persist failed job:', jobError);
+                    }
                 }
-                const failedNarrativeDiagnostic = {
-                    status: 'failed',
-                    error: error.message || 'Narrative State update failed.',
-                    usage: {}
-                };
-                debugObj = mergeNarrativeStateDiagnostics(debugObj, failedNarrativeDiagnostic);
-                try {
-                    const { NarrativeStateSystem } = require('../../dist-main/main/features/narrative/narrative-state');
-                    new NarrativeStateSystem(db).finishJob(chatId, aiMsgId, 'failed', { error: error.message || 'Narrative State update failed.' });
-                } catch (jobError) {
-                    console.error('[Narrative State] Could not persist failed job:', jobError);
-                }
-            }
-            db.prepare('UPDATE messages SET debugNotice = ? WHERE id = ? AND chatId = ?')
-                .run(JSON.stringify(debugObj), aiMsgId, chatId);
+                const debugNotice = JSON.stringify(debugObj);
+                db.prepare('UPDATE messages SET debugNotice = ? WHERE id = ? AND chatId = ?')
+                    .run(debugNotice, aiMsgId, chatId);
+                // Patches only this message's diagnostics in the open chat, without reloading it.
+                if (!webContents.isDestroyed()) webContents.send('message-debug-notice', { workspaceId: chatId, messageId: aiMsgId, debugNotice });
 
-            webContents.send('roleplay-resource-changes', { workspaceId: chatId, changes: roleplayChanges });
+                if (!webContents.isDestroyed()) webContents.send('roleplay-resource-changes', { workspaceId: chatId, changes: roleplayChanges });
 
-            checkAndAutoSummarize(chatId, lastProfileUsed.id).catch(e => {
-                console.error("[Auto-Summarize] error:", e);
+                checkAndAutoSummarize(chatId, profileId).catch(e => {
+                    console.error("[Auto-Summarize] error:", e);
+                });
             });
 
             return { success: true, aiMsgId, streamed: didStreamFinalResponse };
@@ -1551,7 +1587,7 @@ function resolveOverflowDeferred(decision, editedText, runId = null) {
     }
 }
 
-// --- HYBRID SEARCH Fallback / Helpers ---
+// --- SYSTEM AI, TAGGING AND ARCHIVE SUMMARIES ---
 
 // The designated System AI (api profile + model) for background tasks, read from
 // global settings. Both fields are required so a provider never picks a default model.
@@ -1628,8 +1664,8 @@ function getSystemLanguageInstruction() {
     return `Write all generated natural-language content in ${language}. Never translate or transliterate proper nouns, canonical names, titles used as names, identifiers, JSON keys, enum values, control markers, or verbatim evidence. Keep each of them exactly as supplied.`;
 }
 
-// Lets the classifier reuse canonical names instead of coining variants.
 const { edgeDetail } = require('./features/worldbuild/relation-dossier');
+// Lets the classifier reuse canonical names instead of coining variants.
 function buildEntityVocab(workspaceId, sourceText = '') {
     if (!workspaceId) return '';
     let rows = [];
@@ -2222,7 +2258,6 @@ async function retagDocumentChunks(documentId, progressCallback = null) {
     return { tagged: result.nameRows + result.modelRows, chunks: rows.length };
 }
 
-// Tolerant object parse: grab the first {...} block and JSON.parse it. null on failure.
 // A per-call random fence, so a reply cannot close the structured block by accident.
 function buildItemsFence() {
     const s = crypto.randomBytes(3).toString('hex');
@@ -2528,6 +2563,12 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     const narrativeLanguageInstruction = getSystemLanguageInstruction();
     const triageSystemPrompt = `${narrativeLanguageInstruction}\n${NARRATIVE_TRIAGE_SYSTEM_PROMPT}`;
     const repairSystemPrompt = `${narrativeLanguageInstruction}\n${NARRATIVE_REPAIR_SYSTEM_PROMPT}`;
+    const { CharacterSceneMemory, normalizeSceneMemoryUpdates } = require('../../dist-main/main/features/narrative/character-scene-memory');
+    const sceneMemory = new CharacterSceneMemory(db);
+    const characterStances = sceneMemory.latestStances(workspaceId, [
+        ...(scene?.participantIds || []),
+        ...(scene?.possibleObserverIds || [])
+    ].filter(id => id !== roleplaySettings.playerEntityId));
     const triagePayloadValue = {
         currentScene: compactNarrativeScene(scene, roleplaySettings.playerEntityId),
         currentTime: startClock,
@@ -2547,6 +2588,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             characterIds: skillsContext.ids
         } : undefined,
         candidateSignals: narrativeSignals,
+        characterStances: characterStances.length ? characterStances : undefined,
         userMessage,
         narrativeResponse
     };
@@ -2562,12 +2604,12 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     let repairInputTokens = 0;
     let repairOutputTokens = 0;
     // Only what the model writes is billed, so the cap only has to be safely above a full answer:
-    // a cut one loses timeAdvance, the last field, and costs a repair.
+    // a cut one loses sceneMemory, the last field, and costs a repair.
     let triageResponse = await sendNarrativeJson({
         apiProfileId: role.executor.apiProfileId,
         model: role.executor.model,
         systemPrompt: triageSystemPrompt,
-        chatHistory: [], newPrompt: triagePayload, temperature: 0, maxTokens: 1536, maxPayloadTokens: narrativePayloadTokens, manualMode: false, manualJson: null
+        chatHistory: [], newPrompt: triagePayload, temperature: 0, maxTokens: 2560, maxPayloadTokens: narrativePayloadTokens, manualMode: false, manualJson: null
     }, NARRATIVE_TRIAGE_SCHEMA, 'Narrative State triage', narrativeTelemetry);
     const triagePrimaryOutputTokens = estimateTokens(triageResponse);
     let triage = safeParseObject(triageResponse);
@@ -2595,11 +2637,35 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             userMessage,
             narrativeResponse
         });
+        triage.sceneMemory = recordCharacterSceneMemory({
+            sceneMemory,
+            normalizeSceneMemoryUpdates,
+            workspaceId,
+            provenanceId,
+            triage,
+            actorIds,
+            playerEntityId: roleplaySettings.playerEntityId,
+            locationId: scene?.locationId || null
+        });
     }
+    // Where and when the turn ended, for the "last time" a character comes back to.
+    const settleSceneMemory = () => {
+        try {
+            const clock = calendarService.getRoleplayClock(db, workspaceId);
+            const formatted = calendarService.formatClock(calendarService.getCalendar(db, workspaceId), clock);
+            sceneMemory.settleTurn(workspaceId, provenanceId, {
+                locationId: roleplay.getScene(workspaceId)?.locationId || null,
+                timeLabel: [formatted.date, formatted.time].filter(Boolean).join(', ') || null
+            });
+        } catch (error) {
+            console.warn('[Scene Memory] Could not record where the turn ended:', error.message);
+        }
+    };
     const routing = resolveNarrativeRouting({ triage, signals: narrativeSignals });
     const forceDeepAnalysis = routing.forceDeepAnalysis;
     if (!triage?.consequential && !forceDeepAnalysis) {
         const timeFrame = recordTimeFrame(triage?.timeAdvance);
+        settleSceneMemory();
         const triageInputTokens = estimateTokens(triageSystemPrompt) + estimateTokens(triagePayload);
         const triageOutputTokens = triagePrimaryOutputTokens;
         const elapsedMs = Date.now() - startedAt;
@@ -2768,13 +2834,14 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             ? relevantEntities
             : relevantEntities.map(entity => compactEntities.find(candidate => candidate.id === entity.id)),
         availableResources: shouldAnalyzeResources
-            ? definitions.map(({ name, description, minimum, maximum, unit, lowestEffect, updatePolicy }) => ({
+            ? definitions.map(({ name, description, minimum, maximum, unit, lowestEffect, updatePolicy, aiChangesMaximum, maximumRule }) => ({
                 name,
                 description,
                 minimum,
                 maximum,
                 ...(unit ? { unit } : {}),
                 ...(lowestEffect ? { lowestEffect } : {}),
+                ...(aiChangesMaximum ? { maximumRule: maximumRule || 'Only a lasting change the story clearly shows.' } : {}),
                 updatePolicy
             }))
             : undefined,
@@ -2804,7 +2871,8 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         narrativeLanguageInstruction,
         Boolean(shouldAnalyzeResources && progressionContext),
         Boolean(shouldAnalyzeResources && skillsContext),
-        Boolean(newCharacterProfile)
+        Boolean(newCharacterProfile),
+        Boolean(shouldAnalyzeResources && definitions.some(definition => definition.aiChangesMaximum))
     );
     const stateOutputBudget = Math.min(
         8192,
@@ -2973,6 +3041,25 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             continue;
         }
         const definition = findByReference(definitions, proposal?.resource ?? proposal?.resourceKey);
+        // A lasting change to the maximum is its own change, and always waits for review.
+        if (definition?.aiChangesMaximum && Number.isFinite(proposal?.maximum) && Number(proposal.maximum) !== 0) {
+            try {
+                const change = roleplay.proposeChange({
+                    id: `${provenanceId}:resource-maximum:${index}`,
+                    workspaceId,
+                    definitionId: definition.id,
+                    entityId: proposal.entityId,
+                    delta: 0,
+                    maximumDelta: Number(proposal.maximum),
+                    reason: typeof proposal.reason === 'string' ? proposal.reason : '',
+                    source: 'ai',
+                    provenanceId
+                });
+                changes.push({ kind: 'resource', changeId: change.id, ...change });
+            } catch (error) {
+                console.warn('[Roleplay State] Ignored invalid maximum change:', error.message);
+            }
+        }
         // The amount is what the story shows; an older absolute value is turned into one.
         const delta = Number.isFinite(proposal?.change)
             ? Number(proposal.change)
@@ -2998,10 +3085,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     }
     if (Object.keys(scenePatch).length) {
         try {
-            // A patch describes one moment: who is present, where, and with what. Dropping the
-            // destination while keeping the cast wrote the arriving characters into the room the
-            // player had just left, and nothing said so. Either the whole moment applies or none
-            // of it does, and the reason is reported instead of vanishing.
+            // A patch is one moment: cast and destination apply together or not at all, with the reason reported.
             if (scene?.locationId && scenePatch.locationId && !reachableLocationIds.has(scenePatch.locationId)) {
                 rejectedSceneChange = {
                     reason: 'unreachable-location',
@@ -3047,10 +3131,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             console.warn('[Roleplay State] Ignored invalid inventory change:', error.message);
         }
     }
-    // A single turn cannot legitimately produce dozens of durable events. A response that
-    // does is either repeating itself or has lost the plot, and letting it write everything
-    // floods the campaign with records nobody asked for. The overflow is reported rather
-    // than silently dropped.
+    // Dozens of durable events from one turn means a runaway response; the cut is reported.
     if (resolvedEvents.length > EVENT_BUDGET_PER_TURN) {
         overflowEventCount = resolvedEvents.length - EVENT_BUDGET_PER_TURN;
         resolvedEvents.length = EVENT_BUDGET_PER_TURN;
@@ -3095,9 +3176,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     })();
     const appliedLocationId = roleplay.getScene(workspaceId)?.locationId;
     const endLocationId = (rejectedSceneChange ? null : routedResult.scenePatch?.locationId) || appliedLocationId;
-    // The floor is charged for a move that actually happened. A relocation still waiting for
-    // approval is shown in the frame, as it always was, but must not move the campaign clock
-    // for a journey the reviewer may reject.
+    // Only a move that happened charges the clock; one awaiting approval may still be rejected.
     const travelFloorMinutes = resolveTravelFloorMinutes({
         startLocationId: scene?.locationId,
         endLocationId: appliedLocationId,
@@ -3106,6 +3185,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         timeMatrix
     });
     const timeFrame = recordTimeFrame(triage?.timeAdvance, endLocationId, travelFloorMinutes);
+    settleSceneMemory();
     if (timeFrame.advance) changes.push({ kind: 'time', frame: timeFrame });
     const triageInputTokens = estimateTokens(triageSystemPrompt) + estimateTokens(triagePayload);
     const triageOutputTokens = triagePrimaryOutputTokens;
@@ -3250,6 +3330,39 @@ async function reprocessNarrativeStateTurn(workspaceId, originId) {
             .run(JSON.stringify(updated), originId, workspaceId);
     }
     return result.changes;
+}
+
+function loadPresenceNotes(workspaceId, messages) {
+    try {
+        const { CharacterSceneMemory } = require('../../dist-main/main/features/narrative/character-scene-memory');
+        return new CharacterSceneMemory(db).presenceNotes(workspaceId, messages);
+    } catch (error) {
+        console.warn('[Scene Memory] Could not load the presence notes:', error.message);
+        return new Map();
+    }
+}
+
+// Only present non-player characters remember; the reply's own time keeps a reprocessed turn in story order.
+function recordCharacterSceneMemory({ sceneMemory, normalizeSceneMemoryUpdates, workspaceId, provenanceId, triage, actorIds, playerEntityId, locationId }) {
+    const presentIds = Array.isArray(triage.presentIds) ? triage.presentIds.filter(id => actorIds.has(id)) : [];
+    const updates = normalizeSceneMemoryUpdates(triage.sceneMemory, {
+        eligibleIds: presentIds.filter(id => id !== playerEntityId),
+        speakerIds: actorIds
+    });
+    try {
+        const reply = db.prepare('SELECT createdAt FROM messages WHERE id = ? AND chatId = ?').get(provenanceId, workspaceId);
+        sceneMemory.recordTurn({
+            workspaceId,
+            originId: provenanceId,
+            presentIds,
+            locationId,
+            createdAt: Number(reply?.createdAt) || Date.now(),
+            updates
+        });
+    } catch (error) {
+        console.warn('[Scene Memory] Could not record the turn:', error.message);
+    }
+    return updates;
 }
 
 function compactNarrativeScene(scene, playerEntityId = null) {
@@ -3453,11 +3566,12 @@ function loadNarrativeLocationInventoryState(workspaceId, locationId, itemIds) {
 }
 
 const NARRATIVE_TRIAGE_SYSTEM_PROMPT = `You route Roleplay turns to durable-state analyzers and estimate elapsed narrative time. Inspect the user action, final narrative, current time, calendar, time matrix, compact scene, named entities, and locally extracted candidate signals. Candidate signals are hints, not conclusions.
-Return JSON only with {"consequential":boolean,"types":["entity","scene","resource","inventory","awareness","knowledge","belief","memory","relationship","fact"],"entityIds":["existing-id"],"presentIds":["existing-id"],"confidence":0.0,"evidence":["short verbatim excerpt"],"requiresFullAnalysis":boolean,"reason":"brief","timeAdvance":null}. entityIds lists every supplied entity the turn involves or is about, including one that is discussed or implied without being present. presentIds lists the supplied Characters and Creatures physically in the scene when the turn ends, including anyone who arrived during it and excluding anyone only mentioned, remembered or written to.
+Return JSON only with {"consequential":boolean,"types":["entity","scene","resource","inventory","awareness","knowledge","belief","memory","relationship","fact"],"entityIds":["existing-id"],"presentIds":["existing-id"],"confidence":0.0,"evidence":["short verbatim excerpt"],"requiresFullAnalysis":boolean,"reason":"brief","timeAdvance":null,"sceneMemory":[]}. entityIds lists every supplied entity the turn involves or is about, including one that is discussed or implied without being present. presentIds lists the supplied Characters and Creatures physically in the scene when the turn ends, including anyone who arrived during it and excluding anyone only mentioned, remembered or written to.
 Always evaluate elapsed time, even when no other durable domain is consequential. For an in-world action, timeAdvance is {"actionType":"short_snake_case","basis":"explicit|matrix","duration":{"years":0,"months":0,"days":0,"hours":0,"minutes":0},"targetPosition":null,"confidence":0.0,"evidence":"short verbatim excerpt"}. When the final narrative establishes an absolute ending date or time, set basis to "explicit", copy the complete resulting calendar position into targetPosition, and also return the calculated duration. Use null for out-of-character instructions, corrections, hypothetical actions, or when no in-world time passed. A skip of days, months or years is returned in the same duration object and is accepted only when the turn says so in words, so return the span the text states and never one it merely recounts as history: an estimate on its own is held to a week. Travel always costs time: when the turn completes a journey between places, timeAdvance is never null, and its duration must match the distance actually crossed rather than the length of the passage describing it. Walking somewhere is usually described in two lines and still takes as long as the walk takes, so read the duration off the timeMatrix category the journey belongs to and never below that category's minimumMinutes.
 An explicit final position or duration in the narrative wins over the matrix. Reconcile every clock reference with currentTime; do not describe a turn as reaching a later time while returning null or a conflicting duration. Otherwise choose a reasonable value within the supplied matrix: Micro for dialogue lines, combat rounds, lockpicking, and quick scans; Local for same-district walking, wound care, and careful room inspection; Transit for cross-district travel, crowds, minor repairs, and setting camp; Macro for crafting, deep study, rest, and inter-city travel; Timeskip for supported downtime, recovery, waiting, long-distance travel, or another transition spanning one or more calendar days. Do not advance hours during line-by-line dialogue. Do not use a tiny advance for substantial travel. A jump of one day or more must be explicitly supported by the final narrative or by a completed action whose duration is covered by the configured Timeskip range. Return calendar units directly instead of assuming a 24-hour day.
 Mark inventory for explicit pickup, drop, transfer, gift, theft, loss, consumption, equip, unequip, drawing, sheathing, or quantity change. Mark scene for explicit arrival, departure, movement, participation, observer, nearby, object, or location change. Mark epistemic domains only for information actually communicated, perceived, discovered, remembered, believed, or relationally consequential. Mark relationship for a first demonstrated encounter or interaction that must initialize a directional relationship, even when its initial value is 0, and for an event that materially and durably changes an existing value. Direct conversation is mutual interaction. Listening or overhearing is interaction only from the aware listener toward the speaker unless the speaker also perceives the listener. Mere co-presence is not interaction. Ordinary politeness, irritation, banter, compliance, disagreement, or passing mood does not change an existing value. Mark resource for an actual value change, not a price mention or hypothetical. When progression is supplied, also mark resource for an outcome that earns experience, or training that changes an attribute, for one of progression.characterIds. When skills is supplied, also mark resource when one of skills.characterIds clearly learns a skill or reaches a milestone in one. A concrete edition of a supplied recurring Event is consequential when it actually takes place, even if the tradition itself is already known.
-A newly introduced persistent named character, stably identifiable individual creature, named location, or narratively important unique item is consequential even without an existing ID. An unnamed person distinguished only by appearance, ancestry, clothing, age, expression, or scene position may be routed as a sparse entity candidate, but is not yet a Worldbuild identity. Mark false for crowds, atmosphere, repetition, casual dialogue, hypotheticals, offers not completed, item mentions without possession changes, and events without durable consequences. Presence alone never grants awareness or knowledge. Set requiresFullAnalysis only when four or more domains interact or the consequence cannot be safely isolated.`;
+A newly introduced persistent named character, stably identifiable individual creature, named location, or narratively important unique item is consequential even without an existing ID. An unnamed person distinguished only by appearance, ancestry, clothing, age, expression, or scene position may be routed as a sparse entity candidate, but is not yet a Worldbuild identity. Mark false for crowds, atmosphere, repetition, casual dialogue, hypotheticals, offers not completed, item mentions without possession changes, and events without durable consequences. Presence alone never grants awareness or knowledge. Set requiresFullAnalysis only when four or more domains interact or the consequence cannot be safely isolated.
+sceneMemory is short-lived working memory, separate from every durable domain above, and is filled even when consequential is false. For each Character or Creature in presentIds other than currentScene.playerEntityId who took in something new this turn, return {"entityId":"id","perceived":["..."],"heard":[{"fromId":"speaker id or empty string","text":"..."}],"stance":"..."}. perceived lists what that character directly saw or heard happen in front of them, a few words each, with names, numbers and objects exactly as they appeared to that character. heard lists what was said to them or within their hearing, as the speaker's claim and never as the truth, keeping the speaker's own figures and wording; fromId is the speaker's supplied id, or an empty string when the speaker has none. A character who arrived during the turn records only what happened after arriving. Never record another character's thoughts, narration they could not perceive, or anything only the narrator knows: if the narration counts ten crates but the character was only told eight, they heard eight. stance is one short line on what they want right now and how they regard the player character, written only when it is new or differs from characterStances, otherwise an empty string. Skip characters with nothing new, and return [] when nobody qualifies.`;
 const NARRATIVE_REPAIR_SYSTEM_PROMPT = 'Repair the supplied response into one valid JSON object that follows the required schema. Preserve supported values. Return JSON only.';
 
 const NARRATIVE_FULL_STATE_SYSTEM_PROMPT = `You are Kallamo's Narrative State interpreter. Never write narrative prose. Extract only explicit, durable consequences from the supplied user message and narrative response. Use only supplied entity IDs and resource keys.
@@ -3478,6 +3592,8 @@ When an existing Character or individual Creature is explicitly identified by a 
 const NARRATIVE_SCENE_SCOPED_PROMPT = `SCENE DOMAIN: scenePatch may contain locationId, participantIds, possibleObserverIds, nearbyIds, and objectIds. Return complete replacement arrays only for fields that changed. Participants are directly involved, possible observers can witness, nearby entities are in the broader location, and objects are physically present. Explicit completed arrivals, departures, joining a conversation, sitting with the group, leaving, and deliberate movement can change scene membership independently from locationId. Include newly introduced entity referenceIds in the appropriate array. When inventory is also selected, dropping a unique item may add it to objectIds, while picking up, consuming, destroying, or removing it may remove it. Keep unrelated existing objectIds. Change location only after movement is completed and use reachableLocationIds. Intention, preparation, a destination plan, an open door, or a visible route is not a completed location change. reachableLocationIds already spans the whole surrounding region, so a completed journey across a city, district, or road belongs here. A scene patch is applied whole or not at all: if the destination is not in reachableLocationIds, the participant and object arrays are discarded with it, so return the arrays that match the location you actually set. Presence is not ownership or knowledge.`;
 
 const NARRATIVE_RESOURCE_SCOPED_PROMPT = `RESOURCE DOMAIN: resourceChanges contain {"entityId":"id","resource":"resource name","change":signed-number,"reason":"short phrase from the story"}. change is the amount gained (+) or lost (-), never the resulting total; currentResourceStates shows where each value stands, and the value is kept within its range for you. Use only resources listed for that entity in currentResourceStates. Apply only explicit mechanical gains, losses, recovery, damage, or expenditure. Each resource description says what moves it, and lowestEffect says what happens at its lowest. Prices, wages, comparisons, plans, hypotheticals, and narration without an actual value change are not resource changes. Elapsed time is handled separately: never report recovery or drain that comes only from time passing.`;
+
+const NARRATIVE_RESOURCE_MAXIMUM_PROMPT = `RESOURCE MAXIMUM: a resource with maximumRule in availableResources can have its maximum changed for good. Report it as {"entityId":"id","resource":"resource name","maximum":signed-number,"reason":"short phrase from the story"}, only for a lasting change the story clearly shows and that maximumRule allows, such as long training, an implant, a lost limb or a permanent curse. maximum is the amount the maximum moves, never the new total. Potions, blessings, fatigue and anything that will wear off change the current value with change, never the maximum. Rarely, and never twice for the same resource in a turn.`;
 
 const NARRATIVE_PROGRESSION_PROMPT = `PROGRESSION: progression.characters are the only characters who grow. Report their growth as extra items in resourceChanges.
 - XP: {"entityId":"id","progress":"xp","change":positive-integer,"reason":"short phrase"} for an outcome that earns experience as progression.xpGuidance describes, such as a won fight, a finished quest or a clever solution. Never for routine actions. XP is only added, unless progression.xpCanDrop is true and the story takes experience away. Never report a level: levels follow from XP.
@@ -3614,7 +3730,7 @@ function describeNarrativeProgression(progression, workspaceId, context) {
     };
 }
 
-function buildNarrativeStateSystemPrompt(domains, languageInstruction = '', withProgression = false, withSkills = false, withStartingProfile = false) {
+function buildNarrativeStateSystemPrompt(domains, languageInstruction = '', withProgression = false, withSkills = false, withStartingProfile = false, withMaximum = false) {
     const sections = languageInstruction ? [languageInstruction] : [];
     const progressionPrompt = [
         domains.includes('resource') && withProgression ? NARRATIVE_PROGRESSION_PROMPT : null,
@@ -3623,6 +3739,7 @@ function buildNarrativeStateSystemPrompt(domains, languageInstruction = '', with
     if (domains.length >= 4) {
         sections.push(NARRATIVE_FULL_STATE_SYSTEM_PROMPT);
         if (domains.includes('resource')) sections.push(NARRATIVE_RESOURCE_SCOPED_PROMPT);
+        if (domains.includes('resource') && withMaximum) sections.push(NARRATIVE_RESOURCE_MAXIMUM_PROMPT);
         if (progressionPrompt) sections.push(progressionPrompt);
         if (withStartingProfile) sections.push(NARRATIVE_STARTING_PROFILE_PROMPT);
         // Events and the durability taxonomy are defined once, in the epistemic prompt.
@@ -3635,6 +3752,7 @@ function buildNarrativeStateSystemPrompt(domains, languageInstruction = '', with
     if (domains.includes('entity') && withStartingProfile) sections.push(NARRATIVE_STARTING_PROFILE_PROMPT);
     if (domains.includes('scene')) sections.push(NARRATIVE_SCENE_SCOPED_PROMPT);
     if (domains.includes('resource')) sections.push(NARRATIVE_RESOURCE_SCOPED_PROMPT);
+    if (domains.includes('resource') && withMaximum) sections.push(NARRATIVE_RESOURCE_MAXIMUM_PROMPT);
     if (progressionPrompt) sections.push(progressionPrompt);
     if (domains.includes('inventory')) sections.push(NARRATIVE_INVENTORY_SCOPED_PROMPT);
     if (hasEpistemicDomain(domains)) sections.push(NARRATIVE_EPISTEMIC_SCOPED_PROMPT);
@@ -3731,16 +3849,7 @@ function resolveNarrativeEntityReferences(value, resolveReference) {
     return clone;
 }
 
-/**
- * How long the shortest honest version of this journey takes, in the campaign's own terms.
- *
- * The interpreter reads elapsed time out of the prose, and a walk across the city is usually
- * two lines of prose, so it kept arriving as zero. The turn knows both ends of the move and
- * the author already wrote a Time Cost Matrix, so the floor is read from the graph rather
- * than guessed: a room inside its building is a step, a linked neighbour is a local walk, and
- * location sizes tell a stroll inside one area from a trip between areas of a region. Anything
- * the map cannot place is transit.
- */
+/** The journey's floor from the location graph and the Time Cost Matrix; what the map cannot place is transit. */
 function resolveTravelFloorMinutes({ startLocationId, endLocationId, locationLinks, locationSizes, timeMatrix }) {
     const categoryId = travelCategory(startLocationId, endLocationId, locationLinks || [], locationSizes);
     if (!categoryId) return 0;
@@ -3751,14 +3860,10 @@ function resolveTravelFloorMinutes({ startLocationId, endLocationId, locationLin
 
 function resolveNarrativeTimeAdvance({ timeAdvance, startClock, calendar, userMessage, narrativeResponse }) {
     const calendarService = require('./features/worldbuild/calendar-service');
-    // A span written in the turn is evidence, not a hint. It is what authorizes months and
-    // years, and a strongly stated one still moves the clock when the interpreter reported
-    // nothing at all, which is the ordinary case for "passam-se tres meses" typed by the player.
+    // A strongly stated span moves the clock even when the interpreter reported nothing.
     const statedSpan = calendarService.extractElapsedSpan(calendar, `${userMessage || ''}
 ${narrativeResponse || ''}`);
-    // A stated skip of a day or more outranks a clock reading. The clock parser only ever
-    // produces a position inside the current day, so honouring it here would quietly turn
-    // "three months later, at two in the afternoon" into an afternoon.
+    // The clock parser only reads the current day, so a stated skip of a day or more outranks it.
     const spansDays = Boolean(statedSpan) && statedSpan.minutes >= calendar.hoursPerDay * 60;
     const responseTarget = spansDays ? null : calendarService.extractClockTarget(narrativeResponse, startClock, calendar);
     const requestedTarget = spansDays
@@ -4853,10 +4958,8 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                 logEntityUpdateFailure(ent, 'first attempt', firstFailure, responseResult);
                 const retryTokens = entityUpdateRetryTokens(firstFailure.cause, maxTokens);
                 retryCount++;
-                // A budget overrun and a reply that never reached the object are the same
-                // problem: no room was left to write it. Less evidence to read plus a
-                // larger allowance is the only retry that helps. Anything else is a
-                // formatting fault, which is what the repair pass is for.
+                // Both mean no room was left to write: less evidence and a larger allowance is the only
+                // retry that helps. Anything else is a formatting fault for the repair pass.
                 if (firstFailure.cause === 'budget' || firstFailure.cause === 'empty') {
                     const reducedEvidence = selectEntityEvidence(evidenceEntries, 2500).map(entry => entry.prompt).join('\n\n');
                     responseResult = await requestUpdate(buildUserPrompt(reducedEvidence), retryTokens);
@@ -6520,8 +6623,6 @@ ${isRoleplay ? `- PERSPECTIVE: lookup_entity returns what the narrator knows. Us
         selection: selection.funnel
     };
 }
-
-// --- EXPORTS ---
 
 module.exports = {
     runWorkflow,

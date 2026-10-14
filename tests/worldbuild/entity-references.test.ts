@@ -80,8 +80,8 @@ function seedWorkspace() {
   run(`INSERT INTO narrative_scenes VALUES ('ws', 'scene-1', 'active', 'dock', 'subjective', 'nora-copy', '["nora-copy","orin"]', 1, NULL, NULL, NULL)`);
   run(`INSERT INTO narrative_scene_participants VALUES ('ws', 'scene-1', 0, 'nora-copy'), ('ws', 'scene-1', 1, 'nora')`);
   run(`INSERT INTO roleplay_workspace_settings (workspace_id, player_entity_id, location_entity_id, updated_at) VALUES ('ws', 'nora-copy', 'dock', 1)`);
-  run(`INSERT INTO roleplay_resource_definitions (workspace_id, definition_id, resource_key, name, description, color, minimum, maximum, initial_value, unit, applies_to_json, update_policy, position, enabled, updated_at) VALUES ('ws', 'health', 'health', 'Health', '', '#fff', 0, 100, 100, '', '["Characters"]', 'automatic', 0, 1, 1)`);
-  run(`INSERT INTO roleplay_resource_values VALUES ('ws', 'health', 'entity', 'nora-copy', 55, 100, 1, 1), ('ws', 'health', 'entity', 'nora', 90, 100, 1, 1)`);
+  run(`INSERT INTO roleplay_resource_definitions (workspace_id, definition_id, resource_key, name, description, color, minimum, maximum, starts_full, unit, applies_to_json, update_policy, position, enabled, updated_at) VALUES ('ws', 'health', 'health', 'Health', '', '#fff', 0, 100, 1, '', '["Characters"]', 'automatic', 0, 1, 1)`);
+  run(`INSERT INTO roleplay_resource_values VALUES ('ws', 'health', 'entity', 'nora-copy', 55, 0, NULL, NULL, 1, 1), ('ws', 'health', 'entity', 'nora', 90, 0, NULL, NULL, 1, 1)`);
   run(`INSERT INTO roleplay_equipment VALUES ('ws', 'nora-copy', 'lantern', 1)`);
   run(`INSERT INTO roleplay_location_inventory VALUES ('ws', 'dock', 'lantern', 2, 1)`);
   run(`INSERT INTO worldbuild_knowledge_cards VALUES ('ws', 'card-1', 'orin', 'nora-copy', NULL, 'active', 'all-members', 1, 1)`);
@@ -90,6 +90,9 @@ function seedWorkspace() {
   run(`INSERT INTO worldbuild_known_relationships VALUES ('ws', 'card-2', 'link-1', 'nora-copy', 'nora-copy', 'related_to', NULL, 'orin', 'Orin', NULL, 'manual', 'link-1', 'inherit', 1)`);
   run(`INSERT INTO worldbuild_event_occurrences VALUES ('ws', 'occurrence-1', 'nora-copy', 'event-1', 'The crossing', '', NULL, NULL, '["nora-copy","orin"]', '["dock"]', '["nora-copy"]', '{}', 'narrative-state', 'reply-1', 0, 1, 1)`);
   run(`INSERT INTO roleplay_scene_changes VALUES ('ws', 'scene-change-1', '{"participantIds":["nora-copy"]}', 'pending', 'ai', 'reply-1', 1, NULL)`);
+  run(`INSERT INTO roleplay_turn_presence VALUES ('ws', 'reply-1', 'dock', '["nora-copy","orin"]', NULL, 1)`);
+  run(`INSERT INTO roleplay_character_memory VALUES ('ws', 'memory-entry-1', 'nora-copy', 'reply-1', 'heard', 'the ferry is late', 'orin', 0, 1)`);
+  run(`INSERT INTO roleplay_character_memory VALUES ('ws', 'memory-entry-2', 'orin', 'reply-1', 'heard', 'the lantern is lost', 'nora-copy', 0, 1)`);
 }
 
 describe('merging an entity', () => {
@@ -157,6 +160,15 @@ describe('merging an entity', () => {
       .toEqual([{ from_id: 'nora', to_id: 'orin' }, { from_id: 'nora-copy', to_id: 'orin' }]);
   });
 
+  test('carries scene memory and turn presence onto the survivor', () => {
+    harness.store.mergeEntity('nora-copy', 'nora');
+    expect(rows('SELECT entry_id, entity_id, source_id FROM roleplay_character_memory ORDER BY entry_id')).toEqual([
+      { entry_id: 'memory-entry-1', entity_id: 'nora', source_id: 'orin' },
+      { entry_id: 'memory-entry-2', entity_id: 'orin', source_id: 'nora' }
+    ]);
+    expect(row('SELECT present_ids_json AS ids FROM roleplay_turn_presence').ids).toBe('["nora","orin"]');
+  });
+
   test('leaves no reference to the entity that was absorbed', () => {
     harness.store.mergeEntity('nora-copy', 'nora');
     expect(findReferences('nora-copy').filter(place => place !== 'entity_redirects.from_id')).toEqual([]);
@@ -185,6 +197,14 @@ describe('deleting an entity', () => {
     expect(row('SELECT player_entity_id AS player FROM roleplay_workspace_settings').player).toBeNull();
     expect(row('SELECT focal_subject_id AS focal, perspective_access AS access FROM narrative_scenes'))
       .toEqual({ focal: null, access: 'omniscient' });
+  });
+
+  test('forgets its scene memory and drops it from what others heard and who was present', () => {
+    harness.store.deleteEntity('nora-copy');
+    expect(rows('SELECT entry_id, entity_id, source_id FROM roleplay_character_memory')).toEqual([
+      { entry_id: 'memory-entry-2', entity_id: 'orin', source_id: null }
+    ]);
+    expect(row('SELECT present_ids_json AS ids FROM roleplay_turn_presence').ids).toBe('["orin"]');
   });
 
   test('withdraws pending changes and archives the occurrence it was the event of', () => {

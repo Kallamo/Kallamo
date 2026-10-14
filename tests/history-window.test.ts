@@ -24,6 +24,17 @@ beforeEach(() => {
 });
 
 describe('history window', () => {
+  test('a presence note leads the message it belongs to and counts toward its size', () => {
+    const plain = { id: 'u1', role: 'user', content: 'I open the gate.' };
+    const noted = { ...plain, presenceNote: '[In the scene at North Gate: Ilse, Warden Bram]' };
+
+    expect(formatActiveHistory([noted], 100000)).toEqual([
+      { role: 'user', content: '[In the scene at North Gate: Ilse, Warden Bram]\nI open the gate.' }
+    ]);
+    expect(formatActiveHistory([noted], 12)).toEqual([]);
+    expect(formatActiveHistory([plain], 12)).toHaveLength(1);
+  });
+
   test('without a cache scope it still takes the longest fitting suffix', () => {
     const messages = conversation(40);
     const wide = formatActiveHistory(messages, 100000);

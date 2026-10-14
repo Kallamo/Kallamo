@@ -8,11 +8,8 @@ import {
 const OPERATION_CATEGORIES = [...new Set<string>([...KNOWLEDGE_CATEGORIES, ...MEMORY_CATEGORIES])];
 
 /**
- * The operation shape the interpreter is allowed to return. Declaring the vocabularies here
- * rather than only in the prompt means a provider with structured output refuses an invented
- * category at generation time, instead of the runtime discarding the whole record later.
- * Transient values are part of the enum on purpose: the interpreter needs somewhere honest to
- * put momentary detail, and the runtime drops those by name.
+ * The vocabularies live in the schema, not only the prompt, so structured output refuses an
+ * invented category at generation time. Transient values are allowed here and dropped by name later.
  */
 export const NARRATIVE_OPERATION_SCHEMA = {
   type: 'object',
@@ -56,7 +53,7 @@ export const NARRATIVE_OPERATION_SCHEMA = {
 export const NARRATIVE_TRIAGE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['consequential', 'types', 'entityIds', 'presentIds', 'confidence', 'evidence', 'requiresFullAnalysis', 'reason', 'timeAdvance'],
+  required: ['consequential', 'types', 'entityIds', 'presentIds', 'confidence', 'evidence', 'requiresFullAnalysis', 'reason', 'timeAdvance', 'sceneMemory'],
   properties: {
     consequential: { type: 'boolean' },
     types: {
@@ -117,6 +114,31 @@ export const NARRATIVE_TRIAGE_SCHEMA = {
           },
         },
       ],
+    },
+    sceneMemory: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['entityId', 'perceived', 'heard', 'stance'],
+        properties: {
+          entityId: { type: 'string' },
+          perceived: { type: 'array', items: { type: 'string' } },
+          heard: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['fromId', 'text'],
+              properties: {
+                fromId: { type: 'string' },
+                text: { type: 'string' },
+              },
+            },
+          },
+          stance: { type: 'string' },
+        },
+      },
     },
   },
 };

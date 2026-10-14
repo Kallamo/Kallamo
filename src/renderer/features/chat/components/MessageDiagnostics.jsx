@@ -37,16 +37,14 @@ export function diagnosticsFor(debug, flags) {
       && { key: 'retrieval', label: 'Retrieval', copy: formatRetrievalDiagnostics(debug) },
     flags.ragDebug && (debug?.legacyText || debug?.workflowStatus)
       && { key: 'workflow', label: 'Workflow', copy: debug.legacyText || debug.workflowStatus },
+    flags.narrativeStateDebug && debug?.generation?.scenePlan
+      && { key: 'scene-plan', label: 'Scene plan', copy: debug.generation.scenePlan },
     flags.narrativeStateDebug && debug?.narrativeState
       && { key: 'narrative', label: 'Narrative state', copy: diagnosticText(debug.narrativeState) }
   ].filter(Boolean);
 }
 
-/**
- * Sits in the reply's header, opposite the speaker. The report is laid over the thread
- * inside the reply itself, so it scrolls with the button frame for frame and never
- * pushes the conversation down.
- */
+/** The report lies inside the reply, so it scrolls with its button and never pushes the thread down. */
 export function MessageDiagnostics({ debug, items, names, onCopy, copiedKey }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
@@ -443,6 +441,68 @@ function ContextSections({ usage }) {
   );
 }
 
+const PLAN_FIELDS = ['knows', 'wants', 'does'];
+
+// Each plan line is "Name | knows: … | wants: … | does: …"; anything else is shown as written.
+function parsePlanLine(line) {
+  const [name, ...parts] = line.split('|').map(part => part.trim());
+  const fields = Object.fromEntries(parts.flatMap(part => {
+    const match = /^(knows|wants|does)\s*:\s*(.*)$/i.exec(part);
+    return match ? [[match[1].toLowerCase(), match[2]]] : [];
+  }));
+  return name && Object.keys(fields).length ? { name, fields } : null;
+}
+
+function ScenePlanView({ plan }) {
+  const lines = String(plan || '').split(/\r?\n/).map(line => line.replace(/^[-*•]\s*/, '').trim()).filter(Boolean);
+  const parsed = lines.map(parsePlanLine);
+  if (!lines.length || /^none\.?$/i.test(lines.join(' '))) {
+    return <p className="text-xs text-text-muted">No non-player character acted this turn.</p>;
+  }
+  if (parsed.some(entry => !entry)) {
+    return <div className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-text-muted select-text">{plan}</div>;
+  }
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-text-muted">What each character could rely on before the narration was written. Hidden from the reply.</p>
+      <ul className="divide-y divide-border-subtle rounded-lg border border-border-subtle">
+        {parsed.map((entry, index) => (
+          <li key={index} className="px-3 py-2.5 select-text">
+            <p className="text-sm font-semibold text-text-primary">{entry.name}</p>
+            <dl className="mt-1.5 grid grid-cols-[3.5rem_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs leading-relaxed">
+              {PLAN_FIELDS.filter(field => entry.fields[field]).map(field => (
+                <div key={field} className="contents">
+                  <dt className="text-text-subtle">{field}</dt>
+                  <dd className="text-text-secondary">{entry.fields[field]}</dd>
+                </div>
+              ))}
+            </dl>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function SceneMemoryList({ updates, names }) {
+  return (
+    <ul className="divide-y divide-border-subtle rounded-lg border border-border-subtle">
+      {updates.map(update => (
+        <li key={update.entityId} className="px-3 py-2 text-xs select-text">
+          <p className="font-semibold text-text-primary">{names?.get(update.entityId) || 'Unknown character'}</p>
+          <ul className="mt-1 space-y-0.5 text-text-secondary">
+            {(update.perceived || []).map((text, index) => <li key={`p${index}`}><span className="text-text-subtle">perceived</span> {text}</li>)}
+            {(update.heard || []).map((line, index) => (
+              <li key={`h${index}`}><span className="text-text-subtle">heard{line.fromId && names?.get(line.fromId) ? ` from ${names.get(line.fromId)}` : ''}</span> {line.text}</li>
+            ))}
+            {update.stance && <li><span className="text-text-subtle">stance</span> {update.stance}</li>}
+          </ul>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function NarrativeView({ debug, names, copy }) {
   const state = debug.narrativeState;
   if (!state || typeof state !== 'object') return <Disclosure title="Report">{copy}</Disclosure>;
@@ -506,6 +566,13 @@ function NarrativeView({ debug, names, copy }) {
           {(routing.forceReasons || []).length > 0 && <p className="mt-1.5 text-[0.6875rem] text-status-warning">{routing.forceReasons.map(humanize).join(' · ')}</p>}
         </div>
       </div>
+
+      {Array.isArray(triage.sceneMemory) && triage.sceneMemory.length > 0 && (
+        <div>
+          <SectionTitle>Scene memory · {triage.sceneMemory.length}</SectionTitle>
+          <SceneMemoryList updates={triage.sceneMemory} names={names} />
+        </div>
+      )}
 
       {entityIds.length > 0 && (
         <div>
@@ -623,6 +690,7 @@ function DiagnosticsPanel({ debug, items, names, onCopy, copiedKey }) {
         {active.key === 'tokens' && <TokensView debug={debug} />}
         {active.key === 'agentic' && <AgenticView debug={debug} copy={active.copy} />}
         {active.key === 'retrieval' && <RetrievalView debug={debug} copy={active.copy} />}
+        {active.key === 'scene-plan' && <ScenePlanView plan={active.copy} />}
         {active.key === 'narrative' && <NarrativeView debug={debug} names={names} copy={active.copy} />}
         {active.key === 'workflow' && (
           <div className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-text-muted select-text">{active.copy}</div>

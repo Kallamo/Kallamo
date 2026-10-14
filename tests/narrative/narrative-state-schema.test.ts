@@ -25,9 +25,27 @@ describe('Narrative State structured output schemas', () => {
         targetPosition: { eraId: 'ce', year: 997, month: 5, day: 15, hour: 13, minute: 15 },
         confidence: 1,
         evidence: 'The clock reads 13:15.'
-      }
+      },
+      sceneMemory: [{
+        entityId: 'kepler',
+        perceived: ['Mara drew the weave in the dust'],
+        heard: [{ fromId: 'mara', text: 'the weave fails near iron' }],
+        stance: 'wants to test the claim'
+      }]
     })).toBe(true);
     expect(validate({ consequential: true, types: ['knowledge'] })).toBe(false);
+  });
+
+  test('scene memory lines name their speaker and nothing else', () => {
+    const validate = new Ajv().compile(NARRATIVE_TRIAGE_SCHEMA);
+    const turn = {
+      consequential: false, types: [], entityIds: [], presentIds: ['guard'], confidence: 1, evidence: [],
+      requiresFullAnalysis: false, reason: 'dialogue', timeAdvance: null
+    };
+
+    expect(validate({ ...turn, sceneMemory: [] })).toBe(true);
+    expect(validate({ ...turn, sceneMemory: [{ entityId: 'guard', perceived: [], heard: [{ text: 'five captured' }], stance: '' }] })).toBe(false);
+    expect(validate({ ...turn, sceneMemory: [{ entityId: 'guard', perceived: [], heard: [], stance: '', truth: 'six' }] })).toBe(false);
   });
 
   test('accepts an empty durable state result and a structured event', () => {

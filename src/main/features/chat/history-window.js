@@ -20,6 +20,7 @@ function prepareHistoryEntry(msg) {
             content = `${fileMarkers}\n${content}`;
         }
     }
+    if (msg.presenceNote) content = `${msg.presenceNote}\n${content}`;
 
     return {
         id: msg.id,
@@ -42,11 +43,7 @@ function findWindowStart(entries, limit) {
     return start;
 }
 
-// The window that would be sent, without moving the anchor. The budget measures history
-// with this before retrieval runs, so what it reserves is what the final window takes.
-//
-// With a cache scope the first message stays put across turns so a cached message prefix
-// is still a prefix of the next request; without one the longest fitting suffix is taken.
+// Plans without moving the anchor, so the room the budget reserves is what the final window takes.
 function planActiveHistory(messages, maxTokensAllowed, cacheScopeId = null) {
     const entries = (Array.isArray(messages) ? messages : []).map(prepareHistoryEntry);
     const limit = Math.max(0, Math.floor(Number(maxTokensAllowed) || 0));

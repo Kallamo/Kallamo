@@ -52,6 +52,10 @@ const ENTITY_REFERENCE_COLUMNS = [
   { table: 'roleplay_message_frames', column: 'end_json', merge: 'repoint', delete: 'keep history' },
   { table: 'roleplay_time_advances', column: 'start_json', merge: 'repoint', delete: 'keep history' },
   { table: 'roleplay_time_advances', column: 'end_json', merge: 'repoint', delete: 'keep history' },
+  { table: 'roleplay_turn_presence', column: 'location_id', merge: 'repoint', delete: 'clear' },
+  { table: 'roleplay_turn_presence', column: 'present_ids_json', merge: 'repoint', delete: 'unlist' },
+  { table: 'roleplay_character_memory', column: 'entity_id', merge: 'repoint', delete: 'remove' },
+  { table: 'roleplay_character_memory', column: 'source_id', merge: 'repoint', delete: 'clear' },
   { table: 'worldbuild_knowledge_cards', column: 'owner_id', merge: 'repoint, cards combine', delete: 'remove' },
   { table: 'worldbuild_knowledge_cards', column: 'target_id', merge: 'repoint, cards combine', delete: 'remove' },
   { table: 'worldbuild_knowledge_audience_members', column: 'member_id', merge: 'repoint', delete: 'remove' },
@@ -328,7 +332,16 @@ function repointEntityReferences(db, { workspaceId, sourceId, targetId, prefer =
   if (has('roleplay_entity_changes')) {
     db.prepare('UPDATE roleplay_entity_changes SET entity_id = ? WHERE workspace_id = ? AND entity_id = ?').run(targetId, workspaceId, sourceId);
   }
+  if (has('roleplay_character_memory')) {
+    for (const column of ['entity_id', 'source_id']) {
+      db.prepare(`UPDATE roleplay_character_memory SET ${column} = ? WHERE workspace_id = ? AND ${column} = ?`).run(targetId, workspaceId, sourceId);
+    }
+  }
+  if (has('roleplay_turn_presence')) {
+    db.prepare('UPDATE roleplay_turn_presence SET location_id = ? WHERE workspace_id = ? AND location_id = ?').run(targetId, workspaceId, sourceId);
+  }
   for (const [table, column] of [
+    ['roleplay_turn_presence', 'present_ids_json'],
     ['roleplay_entity_changes', 'payload_json'],
     ['roleplay_scene_changes', 'payload_json'],
     ['roleplay_inventory_changes', 'payload_json'],
@@ -516,6 +529,14 @@ function releaseEntityReferences(db, { workspaceId, entityId }) {
   if (has('roleplay_time_state')) {
     rewriteJsonColumn(db, { table: 'roleplay_time_state', column: 'position_json', where: "workspace_id = ? AND position_json LIKE ? ESCAPE '\\'", params: [workspaceId, like], transform: unlist });
   }
+  if (has('roleplay_character_memory')) {
+    db.prepare('DELETE FROM roleplay_character_memory WHERE workspace_id = ? AND entity_id = ?').run(workspaceId, entityId);
+    db.prepare('UPDATE roleplay_character_memory SET source_id = NULL WHERE workspace_id = ? AND source_id = ?').run(workspaceId, entityId);
+  }
+  if (has('roleplay_turn_presence')) {
+    db.prepare('UPDATE roleplay_turn_presence SET location_id = NULL WHERE workspace_id = ? AND location_id = ?').run(workspaceId, entityId);
+    rewriteJsonColumn(db, { table: 'roleplay_turn_presence', column: 'present_ids_json', where: "workspace_id = ? AND present_ids_json LIKE ? ESCAPE '\\'", params: [workspaceId, like], transform: unlist });
+  }
 
   if (has('worldbuild_knowledge_cards')) {
     db.prepare('DELETE FROM worldbuild_knowledge_cards WHERE workspace_id = ? AND (owner_id = ? OR target_id = ?)').run(workspaceId, entityId, entityId);
@@ -601,6 +622,7 @@ function releaseOrphanedEntityReferences(db) {
     ['roleplay_equipment', 'item_id'],
     ['roleplay_location_inventory', 'location_id'],
     ['roleplay_location_inventory', 'item_id'],
+    ['roleplay_character_memory', 'entity_id'],
     ['worldbuild_knowledge_cards', 'owner_id'],
     ['worldbuild_knowledge_cards', 'target_id'],
     ['worldbuild_knowledge_audience_members', 'member_id']

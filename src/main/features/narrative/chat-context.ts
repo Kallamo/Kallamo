@@ -32,6 +32,7 @@ import { canSubjectAccessOccurrence, isFactionOccurrenceMemoryShared } from '../
 import { describeLocationChain, loadLocationChain } from '../worldbuild/location-graph';
 import { NarrativeContextManifestRepository, type NarrativeContextManifest } from './context-manifest';
 import { RoleplayContextOrchestrator } from './roleplay-context-orchestrator';
+import { CharacterSceneMemory, formatCharacterMemorySection } from './character-scene-memory';
 import {
   loadCurrentNarrativeRecords,
   type NarrativeRecordRow
@@ -113,11 +114,13 @@ export class NarrativeChatContext {
   private readonly epistemicResolver: EpistemicResolver;
   private readonly manifests: NarrativeContextManifestRepository;
   private readonly roleplayOrchestrator: RoleplayContextOrchestrator;
+  private readonly characterMemory: CharacterSceneMemory;
 
   constructor(
     private readonly db: Database.Database,
     private readonly estimateTokens: (text: string) => number
   ) {
+    this.characterMemory = new CharacterSceneMemory(db);
     this.scenes = new NarrativeSceneRepository(db);
     this.roleplay = new RoleplaySystem(db);
     this.knowledgeCards = createWorldbuildKnowledgeService(db);
@@ -262,12 +265,17 @@ export class NarrativeChatContext {
           ]))
       };
     });
+    // Scene memory is bounded per character and always sent, so the planner gets what it leaves.
+    const memorySection = this.composeCharacterMemory(
+      input.workspaceId,
+      uniqueIds([...participantIds, ...(scene?.possibleObserverIds ?? [])]).filter(id => id !== playerId)
+    );
     const orchestrated = this.roleplayOrchestrator.plan({
       requestId: input.requestId,
       workspaceId: input.workspaceId,
       query: input.query,
       through: strategy.through,
-      tokenBudget: Math.max(0, Math.floor(input.tokenBudget)),
+      tokenBudget: Math.max(0, Math.floor(input.tokenBudget) - (memorySection ? this.estimateTokens(memorySection) : 0)),
       authorityCandidates,
       evidenceCandidates: strategy.hasActiveScene
         ? retrieved.filter(candidate => candidate.source.type !== 'canon')
@@ -291,8 +299,19 @@ export class NarrativeChatContext {
       plan: orchestrated.playerPlan ?? fallbackPlan,
       bundle: orchestrated.bundle,
       manifest,
-      context: orchestrated.context
+      context: [orchestrated.context, memorySection].filter(Boolean).join('\n\n')
     };
+  }
+
+  private composeCharacterMemory(workspaceId: string, entityIds: string[]): string {
+    const views = this.characterMemory.load(workspaceId, entityIds);
+    if (!views.length) return '';
+    const names = this.characterMemory.names(workspaceId, views.flatMap(view => [
+      view.entityId,
+      view.earlier?.locationId ?? '',
+      ...[...view.current.lines, ...(view.earlier?.lines ?? [])].map(line => line.sourceId ?? '')
+    ]));
+    return formatCharacterMemorySection(views, names);
   }
 
   private getRetrievalSettings(): {
@@ -502,11 +521,7 @@ export class NarrativeChatContext {
     return { sequence: row.sequence };
   }
 
-  /**
-   * Every entity the context may draw on, and the focus among them: those named by a record the
-   * request brought, the scene, the perspective or the request itself. The rest only appear in a
-   * retrieved passage's tags.
-   */
+  /** The focus is what a record, the scene, the perspective or the request names; tags alone never make it. */
   private resolveRelevantEntityIds(
     workspaceId: string,
     query: string,
@@ -778,10 +793,7 @@ export class NarrativeChatContext {
       workspaceId,
       recordTypes: ['fact', 'state', 'knowledge', 'belief', 'memory', 'relationship']
     });
-    // An id in a context line teaches the model nothing. Resolving every teller in one
-    // read keeps attribution readable without a query per record. A proposition object may
-    // itself be a reference to an entity, which is what keeps the record correct across a
-    // rename, so those are resolved in the same pass rather than reaching the model as a uuid.
+    // Tellers and entity-reference objects are named in one read, so no uuid reaches the model.
     const informantNames = this.getEntityNames(workspaceId, [...new Set(rows.flatMap(({ payload }) => [
       ...(Array.isArray(payload.informantIds) ? payload.informantIds.map(String) : []),
       ...entityReferencesIn(payload)
@@ -1145,9 +1157,7 @@ function normalizeRecord(
       }
     };
   }
-  // How the subject came by it is part of what they know. Hearsay that reads identically to
-  // first-hand perception is what makes a character state a rumour as fact, so the record
-  // says which it is and, when someone passed it on, who.
+  // Hearsay that reads like first-hand perception makes a character state a rumour as fact.
   const informants = Array.isArray(payload.informantIds) ? payload.informantIds.map(String).filter(Boolean) : [];
   const attribution = payload.acquisition === 'reported'
     ? `Learned: reported${informants.length ? ` by ${informants.map(id => nameById.get(id) ?? id).join(', ')}` : ''}`
@@ -1162,11 +1172,7 @@ function normalizeRecord(
   };
 }
 
-/**
- * What kind of record this is, said in the prompt. A secret and a piece of world lore read
- * identically as bare sentences, and the difference is exactly what decides whether a
- * character may repeat it out loud.
- */
+/** A secret and world lore read the same as bare sentences; the category says which may be repeated aloud. */
 function withCategory(payload: Record<string, unknown>, content: string): string {
   const label = categoryLabel(payload.category);
   return label ? `${content}
@@ -1304,12 +1310,7 @@ function deduplicateCandidates(candidates: ContextCandidate[]): ContextCandidate
   return [...unique.values()];
 }
 
-/**
- * One statement reaches the prompt once. The same observation is regularly stored several
- * times under different wordings of the predicate or different acquisitions, and each copy
- * spends budget saying what the previous copy already said. Collapsing here also keeps every
- * source id, so provenance survives the merge.
- */
+/** One statement reaches the prompt once; the merged copies keep every source id. */
 function deduplicateStandardEvidence(candidates: ContextCandidate[]): ContextCandidate[] {
   const selected: ContextCandidate[] = [];
   const memoryIndexes = new Map<string, number>();
@@ -1319,9 +1320,7 @@ function deduplicateStandardEvidence(candidates: ContextCandidate[]): ContextCan
       selected.push(candidate);
       continue;
     }
-    // Who holds a piece of knowledge is part of what it says, so two subjects knowing the same
-    // thing stay two records. A memory repeated word for word across subjects is collapsed
-    // instead: the sentence is identical and the budget it spends twice is not.
+    // Two subjects knowing the same thing stay two records; an identical memory collapses.
     const owner = kind === 'memory' || !('subjectId' in candidate.epistemic)
       ? ''
       : candidate.epistemic.subjectId;
