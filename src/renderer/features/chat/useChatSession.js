@@ -109,6 +109,12 @@ export function useChatSession({ api, setChats, setCurrentView }) {
 
   useEffect(() => () => clearStreamDisplay(), []);
 
+  // Narrative State finishes after the reply is shown; only that message's diagnostics change.
+  useEffect(() => api.onMessageDebugNotice?.(({ workspaceId, messageId, debugNotice }) => {
+    if (workspaceId !== activeChatId) return;
+    setActiveMessages(previous => previous.map(item => item.id === messageId ? { ...item, debugNotice } : item));
+  }), [api, activeChatId]);
+
   const loadLatestChatMessages = async (chatId) => {
     const page = await api.getChatMessagePage({ chatId });
     setActiveMessages(previous => reconcileMessages(previous, page.messages));

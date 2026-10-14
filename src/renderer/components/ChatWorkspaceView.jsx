@@ -162,6 +162,15 @@ export default function ChatWorkspaceView() {
     };
   }, [activeChat.id, electronAPI]);
 
+  const [backgroundNarrativeIds, setBackgroundNarrativeIds] = useState(() => new Set());
+  useEffect(() => electronAPI.onNarrativeStateStatus?.(({ workspaceId: id, processing }) => {
+    setBackgroundNarrativeIds(current => {
+      const next = new Set(current);
+      if (processing) next.add(id); else next.delete(id);
+      return next;
+    });
+  }), [electronAPI]);
+
   const roleplayFrameRequestRef = useRef(null);
   if (!roleplayFrameRequestRef.current) {
     roleplayFrameRequestRef.current = initialFrames
@@ -341,7 +350,6 @@ export default function ChatWorkspaceView() {
   // an observation; declared before the prepend restore so it still sees that flag.
   useLayoutEffect(pinToLatestIfFollowing, [activeMessages, isGenerating, pinToLatestIfFollowing]);
 
-  // Keep the reading position stable when older messages are prepended.
   useLayoutEffect(() => {
     const container = messageContainerRef.current;
     if (!preserveScrollPositionRef.current || !container) return;
@@ -480,7 +488,6 @@ export default function ChatWorkspaceView() {
     };
   }, []);
 
-  // Auto-summarize trigger listener from backend
   useEffect(() => {
     if (!electronAPI.onTriggerAutoSummarize) return;
     const unsubscribe = electronAPI.onTriggerAutoSummarize(({ chatId }) => {
@@ -644,7 +651,6 @@ export default function ChatWorkspaceView() {
     requestRevert: messageId => setConfirmDeleteData({ type: 'revert_chat', messageId })
   }), [copyText, saveUserEdit, saveAiEdit, regenerate, switchAlternative, toggleExcluded, finishTyping]);
 
-  // Custom visual background image resolution
   const isCurrentRoleplayMode = roleplayWorkspaceId === workspaceId && roleplayMode;
   const effectiveBackground = isCurrentRoleplayMode && isChatVisible && roleplayBackground?.imagePath
     ? roleplayBackground.imagePath
@@ -957,13 +963,10 @@ export default function ChatWorkspaceView() {
       onDrop={handleDrop}
       className={`ws-page flex w-full h-full relative overflow-hidden bg-surface-canvas ${hasBg ? 'has-backdrop' : ''}`}
     >
-      {/* Visual Background Layers */}
       {hasBg && <div style={bgStyle} className="absolute inset-0 z-0" />}
       {hasBg && <div style={backdropStyle} className="absolute inset-0 z-0" />}
 
-      {/* Chat Space Column */}
       <div className="flex-1 flex flex-col h-full relative z-10 overflow-hidden">
-        {/* Drag and drop overlay */}
         {isDragging && (
           <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-shade/70 border-2 border-dashed border-accent/40 m-4 rounded-xl pointer-events-none animate-in fade-in duration-200">
             <div className="flex flex-col items-center space-y-4">
@@ -1250,7 +1253,7 @@ export default function ChatWorkspaceView() {
             showToast={showToast}
             initialCollapsed={roleplayPanelCollapsed}
             visible={isChatVisible}
-            narrativeStateProcessing={isGenerating && generationProgress?.chatId === activeChat.id && generationProgress?.phase === 'narrative-state'}
+            narrativeStateProcessing={backgroundNarrativeIds.has(activeChat.id) || (isGenerating && generationProgress?.chatId === activeChat.id && generationProgress?.phase === 'narrative-state')}
             onBackgroundChange={handleRoleplayBackgroundChange}
             onCollapsedChange={handleRoleplayPanelCollapsedChange}
             onPlayerChange={setRoleplayPlayerName}
