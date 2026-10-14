@@ -6,7 +6,7 @@ import TimeCostsSection from '../configuration/roleplay/TimeCostsSection';
 import SkillsSection from '../configuration/roleplay/SkillsSection';
 
 const EMPTY_SKILLS = { enabled: false, members: [], learningIds: [], playerEntityId: null, catalog: [], config: { policy: 'review', ranks: ['Novice', 'Apprentice', 'Competent', 'Master'], aiAssigns: true, aiRaises: true, aiLowers: false, aiCreates: false, guidance: '' } };
-const EMPTY_PROGRESSION = { mode: 'off', members: [], progressingIds: [], playerEntityId: null, config: { policy: 'review', xp: { firstGoal: 1000, growth: 'add', growthAmount: 500, maxLevel: null, guidance: '', aiOnlyAdds: true }, attributes: { aiRaises: true, aiLowers: false, guidance: '' }, rewards: [] } };
+const EMPTY_PROGRESSION = { mode: 'off', members: [], progressingIds: [], playerEntityId: null, config: { policy: 'review', xp: { firstGoal: 1000, growth: 'add', growthAmount: 500, maxLevel: null, guidance: '', aiOnlyAdds: true }, attributes: { aiRaises: true, aiLowers: false, guidance: '' } } };
 
 /**
  * How this world works in roleplay: its resources, how characters grow, their skills, and what time costs.
@@ -86,6 +86,7 @@ export default function WorldbuildRules({ workspaceId, api, showToast, entities,
             assignments={config.assignments || []}
             groups={groups}
             names={names}
+            levels={progression.mode === 'levels'}
             defaultPolicy={config.settings?.defaultUpdatePolicy || 'review'}
             onChanged={changed}
           />

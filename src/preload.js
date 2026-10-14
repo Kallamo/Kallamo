@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // --- CHATS ---
   getChats: () => ipcRenderer.invoke('get-chats'),
   saveChat: (chat) => ipcRenderer.invoke('save-chat', chat),
+  restoreExampleWorkspace: () => ipcRenderer.invoke('restore-example-workspace'),
   deleteChat: (id) => ipcRenderer.invoke('delete-chat', id),
   getWorkspaceExperienceMode: (workspaceId) => ipcRenderer.invoke('get-workspace-experience-mode', { workspaceId }),
   setWorkspaceExperienceMode: (workspaceId, mode) => ipcRenderer.invoke('set-workspace-experience-mode', { workspaceId, mode }),
@@ -45,6 +46,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setRoleplayResourceValue: (payload) => ipcRenderer.invoke('set-roleplay-resource-value', payload),
   setRoleplayResourceValues: (payload) => ipcRenderer.invoke('set-roleplay-resource-values', payload),
   removeRoleplayResourceValue: (payload) => ipcRenderer.invoke('remove-roleplay-resource-value', payload),
+  listRoleplayResourceHolders: (workspaceId, definitionId) => ipcRenderer.invoke('list-roleplay-resource-holders', { workspaceId, definitionId }),
   saveRoleplayScene: (workspaceId, patch) => ipcRenderer.invoke('save-roleplay-scene', { workspaceId, patch }),
   applyRoleplaySceneChange: (workspaceId, patch) => ipcRenderer.invoke('apply-roleplay-scene-change', { workspaceId, patch }),
   getRoleplayInventory: (workspaceId, entityId) => ipcRenderer.invoke('get-roleplay-inventory', { workspaceId, entityId }),
@@ -90,6 +92,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (event, data) => callback(data);
     ipcRenderer.on('roleplay-resource-changes', listener);
     return () => ipcRenderer.off('roleplay-resource-changes', listener);
+  },
+  onMessageDebugNotice: (callback) => {
+    const listener = (event, data) => callback(data);
+    ipcRenderer.on('message-debug-notice', listener);
+    return () => ipcRenderer.off('message-debug-notice', listener);
+  },
+  onNarrativeStateStatus: (callback) => {
+    const listener = (event, data) => callback(data);
+    ipcRenderer.on('narrative-state-status', listener);
+    return () => ipcRenderer.off('narrative-state-status', listener);
   },
 
   // --- WRITING DESK (documents & folders) ---

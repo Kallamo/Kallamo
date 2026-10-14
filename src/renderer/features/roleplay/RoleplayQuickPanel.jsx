@@ -373,6 +373,7 @@ function RoleplayQuickPanel({
         locationType={locationOptions.find(option => option.id === scene.locationId)?.group}
         presenceOf={entityId => presenceOf(entityId, scene)}
         typeLabels={typeLabels}
+        resourcesOf={entityId => vitals.resources.get(entityId) || []}
         inventoryCount={inventory.length}
         onOpen={openPanel}
       />
@@ -387,7 +388,7 @@ function RoleplayQuickPanel({
       entity={entity}
       typeLabel={typeLabels.get(entity.type)}
       presence={presenceOf(entity.id, scene)}
-      mark={vitals.resources.get(entity.id)?.[0] || null}
+      resources={vitals.resources.get(entity.id) || []}
       onPlay={() => setPlayer(entity.id)}
       onPresence={presence => changePresence(entity.id, presence)}
       onRemove={() => removeCharacter(entity.id)}

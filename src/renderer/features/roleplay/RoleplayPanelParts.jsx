@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import {
-  Backpack, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Clapperboard, Gamepad2, HandHelping, Image as ImageIcon, Loader2, MapPin,
+  Backpack, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clapperboard, Gamepad2, HandHelping, Image as ImageIcon, Loader2, MapPin,
   MoreHorizontal, PanelRightOpen, Pencil, Search, Swords, Trash2, X
 } from 'lucide-react';
 import { Menu, MenuItem, MenuLabel, MenuSeparator } from '../../components/ui/Menu';
@@ -52,8 +52,7 @@ export function RoleplayStatus({ processing, pendingCount }) {
   );
 }
 
-/* A span so it stays valid phrasing content inside buttons. */
-// A portrait when the sheet has one, the initial otherwise.
+// A span, so it stays valid phrasing content inside buttons.
 export function Avatar({ entity, player = false, size = 'md' }) {
   const portrait = usePortraitOf(entity?.id);
   const tone = player ? 'border-accent/55 bg-surface-canvas text-accent' : meta(entity?.type).medallion;
@@ -69,7 +68,7 @@ export function Avatar({ entity, player = false, size = 'md' }) {
 }
 
 /** The collapsed panel: a slim rail that keeps the scene in view beside the chat. */
-export function RoleplayRail({ statusLabel, processing, pendingCount, calendar, clock, player, others, presenceOf, typeLabels, locationName, locationType, inventoryCount, onOpen }) {
+export function RoleplayRail({ statusLabel, processing, pendingCount, calendar, clock, player, others, presenceOf, typeLabels, resourcesOf, locationName, locationType, inventoryCount, onOpen }) {
   const visible = others.slice(0, COLLAPSED_ACTOR_LIMIT);
   const hidden = others.slice(COLLAPSED_ACTOR_LIMIT);
   const railButton = 'inline-flex items-center justify-center rounded-control transition-colors hover:bg-surface-hover/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40';
@@ -77,6 +76,7 @@ export function RoleplayRail({ statusLabel, processing, pendingCount, calendar, 
   const phase = DAYLIGHT[daylightPhase(clock?.hour)];
   const PhaseIcon = phase.icon;
   const actorTip = (entity, state) => (
+    <span className="block">
     <span className="flex items-center gap-2.5">
       <Avatar entity={entity} player={state === 'playing'} size="sm" />
       <span className="min-w-0">
@@ -84,9 +84,11 @@ export function RoleplayRail({ statusLabel, processing, pendingCount, calendar, 
         <span className="flex items-center gap-1.5">
           <span className={meta(entity.type).soft}>{typeLabels?.get(entity.type) || meta(entity.type).label}</span>
           <span aria-hidden="true" className="text-text-disabled">·</span>
-          <span className={state === 'playing' ? 'text-accent' : 'text-text-muted'}>{state === 'playing' ? 'Playing' : PRESENCE[state]?.label}</span>
+          <span className={state === 'playing' ? 'text-accent' : 'text-text-muted'}>{state === 'playing' ? 'You play them' : PRESENCE[state]?.label}</span>
         </span>
       </span>
+    </span>
+      <ResourceTable resources={resourcesOf?.(entity.id) || []} />
     </span>
   );
   return (
@@ -383,13 +385,72 @@ export function LocationHero({ locationId, locationName, locationOptions, onChan
   );
 }
 
+// Large values shorten (1.3M) so a pair always fits on one line.
+const compact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
+const amount = value => (Math.abs(Number(value) || 0) >= 100000 ? compact.format(Number(value)) : Number(value || 0).toLocaleString('en-US'));
+const pair = resource => `${amount(resource.current)} / ${amount(resource.maximum)}`;
+
 const shareOf = (value, minimum, maximum) => Math.max(0, Math.min(100, ((value - minimum) / Math.max(1, maximum - minimum)) * 100));
 const shortName = name => (name.length <= 4 ? name : name.slice(0, 3));
 
 // The played character carries their resources, and their level and attributes when they progress.
+function ResourceTable({ resources }) {
+  if (!resources.length) return null;
+  return (
+    <span className="mt-2.5 grid min-w-[13rem] grid-cols-[minmax(0,auto)_minmax(2.5rem,1fr)_auto] items-center gap-x-2.5 gap-y-1.5 border-t border-border-subtle pt-2.5">
+      {resources.map(resource => (
+        <span key={resource.definitionId} className="contents">
+          <span className="max-w-[6rem] truncate text-text-secondary">{resource.name}</span>
+          <span aria-hidden="true" className="block h-[0.3125rem] overflow-hidden rounded-full bg-tint/[0.08]">
+            <span className="block h-full rounded-full" style={{ width: `${shareOf(resource.current, resource.minimum, resource.maximum)}%`, backgroundColor: resource.color }} />
+          </span>
+          <span className="whitespace-nowrap text-right tabular-nums text-text-muted">{pair(resource)}</span>
+        </span>
+      ))}
+    </span>
+  );
+}
+
+// One thin bar per resource; the numbers sit in each bar's tooltip.
+function SlimBars({ resources, className = '' }) {
+  if (!resources.length) return null;
+  return (
+    <div className={`grid gap-2 ${className}`} style={{ gridTemplateColumns: `repeat(${resources.length}, minmax(0, 1fr))` }}>
+      {resources.map(resource => (
+        <Tooltip key={resource.definitionId} content={<span><span className="text-text-secondary">{resource.name}</span> <span className="whitespace-nowrap tabular-nums text-text-primary">{pair(resource)}</span></span>}>
+          <span
+            tabIndex={0}
+            role="progressbar"
+            aria-label={`${resource.name} ${resource.current} of ${resource.maximum}`}
+            aria-valuemin={resource.minimum}
+            aria-valuemax={resource.maximum}
+            aria-valuenow={resource.current}
+            className="block py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded-full"
+          >
+            <span className="block h-1 overflow-hidden rounded-full bg-tint/[0.08]">
+              <span className="block h-full rounded-full" style={{ width: `${shareOf(resource.current, resource.minimum, resource.maximum)}%`, backgroundColor: resource.color }} />
+            </span>
+          </span>
+        </Tooltip>
+      ))}
+    </div>
+  );
+}
+
+const cardOpenKey = entityId => `kallamo.roleplay.playerCard.${entityId}`;
+function readCardOpen(entityId) {
+  try { return localStorage.getItem(cardOpenKey(entityId)) !== 'closed'; } catch { return true; }
+}
+
 export function PlayerCard({ entity, typeLabel, resources = [], progress = null }) {
   const levels = progress?.progresses && progress.mode === 'levels';
   const hasVitals = resources.length > 0 || levels;
+  const [open, setOpen] = useState(() => readCardOpen(entity.id));
+  useEffect(() => { setOpen(readCardOpen(entity.id)); }, [entity.id]);
+  const toggle = () => setOpen(value => {
+    try { localStorage.setItem(cardOpenKey(entity.id), value ? 'closed' : 'open'); } catch { /* the choice just is not remembered */ }
+    return !value;
+  });
   return (
     <div className="rounded-card border border-accent/30 bg-gradient-to-br from-accent/12 to-accent/[0.03] p-2.5">
       <div className="flex items-center gap-3">
@@ -402,14 +463,28 @@ export function PlayerCard({ entity, typeLabel, resources = [], progress = null 
             <span className="inline-flex items-center gap-1 text-accent/90"><Gamepad2 aria-hidden="true" className="h-3.5 w-3.5" />You play them</span>
           </span>
         </span>
+        {hasVitals && (
+          <Tooltip content={open ? 'Hide details' : 'Show details'}>
+            <button
+              type="button"
+              onClick={toggle}
+              aria-expanded={open}
+              aria-label={open ? 'Hide details' : 'Show details'}
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-tint/[0.04] text-text-muted transition-colors hover:bg-tint/[0.08] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            >
+              {open ? <ChevronUp aria-hidden="true" className="h-4 w-4" /> : <ChevronDown aria-hidden="true" className="h-4 w-4" />}
+            </button>
+          </Tooltip>
+        )}
       </div>
-      {hasVitals && (
+      {hasVitals && !open && <SlimBars resources={resources} className="mt-2 px-0.5" />}
+      {hasVitals && open && (
         <div className="mt-2.5 flex flex-col gap-2.5 border-t border-tint/[0.07] px-0.5 pt-2.5">
           {resources.map(resource => (
             <div key={resource.definitionId}>
               <div className="flex items-baseline gap-2 text-[0.8125rem]">
-                <span className="flex-1 font-semibold text-text-secondary">{resource.name}</span>
-                <span className="tabular-nums text-text-muted">{resource.current} / {resource.maximum}</span>
+                <span className="min-w-0 flex-1 truncate font-semibold text-text-secondary">{resource.name}</span>
+                <span className="shrink-0 whitespace-nowrap tabular-nums text-text-muted">{pair(resource)}</span>
               </div>
               <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-tint/[0.08]" role="progressbar" aria-label={resource.name} aria-valuemin={resource.minimum} aria-valuemax={resource.maximum} aria-valuenow={resource.current}>
                 <div className="h-full rounded-full" style={{ width: `${shareOf(resource.current, resource.minimum, resource.maximum)}%`, backgroundColor: resource.color }} />
@@ -421,7 +496,7 @@ export function PlayerCard({ entity, typeLabel, resources = [], progress = null 
               <div className="flex items-baseline gap-2 text-[0.8125rem]">
                 <span className="font-semibold text-text-secondary">XP</span>
                 <span className="flex-1 text-xs font-semibold text-entity-event">Level {progress.level}</span>
-                <span className="tabular-nums text-text-muted">{progress.xp} / {progress.goal ?? '—'}</span>
+                <span className="shrink-0 whitespace-nowrap tabular-nums text-text-muted">{amount(progress.xp)} / {progress.goal == null ? '—' : amount(progress.goal)}</span>
               </div>
               <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-tint/[0.08]">
                 <div className="h-full rounded-full bg-entity-event" style={{ width: `${progress.goal ? shareOf(progress.xp, 0, progress.goal) : 100}%` }} />
@@ -446,7 +521,7 @@ export function PlayerCard({ entity, typeLabel, resources = [], progress = null 
   );
 }
 
-export function CastRow({ entity, typeLabel, presence, mark = null, onPlay, onPresence, onRemove }) {
+export function CastRow({ entity, typeLabel, presence, resources = [], onPlay, onPresence, onRemove }) {
   const [open, setOpen] = useState(false);
   const anchorRef = useRef(null);
   const typeMeta = meta(entity.type);
@@ -457,7 +532,8 @@ export function CastRow({ entity, typeLabel, presence, mark = null, onPlay, onPr
     action();
   };
   return (
-    <div className={`group/cast flex items-center gap-2.5 rounded-card px-2 py-1.5 transition-colors ${open ? 'bg-tint/[0.05]' : 'hover:bg-tint/[0.03]'}`}>
+    <div className={`group/cast rounded-card px-2 py-1.5 transition-colors ${open ? 'bg-tint/[0.05]' : 'hover:bg-tint/[0.03]'}`}>
+    <div className="flex items-center gap-2.5">
       <Avatar entity={entity} />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-semibold text-text-primary">{entity.canonicalName}</span>
@@ -467,16 +543,6 @@ export function CastRow({ entity, typeLabel, presence, mark = null, onPlay, onPr
           <span className="inline-flex items-center gap-1 text-text-muted"><PresenceIcon aria-hidden="true" className="h-3 w-3" />{presenceMeta.label}</span>
         </span>
       </span>
-      {mark && (
-        <Tooltip content={`${mark.name} ${mark.current} / ${mark.maximum}`}>
-          <span className="flex shrink-0 items-center gap-1.5 text-xs text-text-muted">
-            <span aria-hidden="true" className="h-1 w-9 overflow-hidden rounded-full bg-tint/[0.08]">
-              <span className="block h-full rounded-full" style={{ width: `${shareOf(mark.current, mark.minimum, mark.maximum)}%`, backgroundColor: mark.color }} />
-            </span>
-            {mark.name}
-          </span>
-        </Tooltip>
-      )}
       <button
         ref={anchorRef}
         type="button"
@@ -498,6 +564,8 @@ export function CastRow({ entity, typeLabel, presence, mark = null, onPlay, onPr
         <MenuSeparator />
         <MenuItem icon={X} label="Remove from scene" danger onSelect={choose(onRemove)} />
       </Menu>
+    </div>
+    <SlimBars resources={resources} className="mt-1 pl-[2.875rem] pr-9" />
     </div>
   );
 }

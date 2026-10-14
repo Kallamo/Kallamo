@@ -10,7 +10,8 @@ import SearchableSelect from '../../../components/ui/SearchableSelect';
 import SegmentedControl from '../../../components/ui/SegmentedControl';
 import { Menu, MenuItem, MenuSeparator } from '../../../components/ui/Menu';
 import { meta } from '../../worldbuild/worldbuildConfig';
-import { ChoiceCard, ConfigSection, FieldLabel, Help, formatNumber } from '../ConfigParts';
+import { ChoiceCard, ConfigSection, FieldLabel, Help, formatNumber, formatSigned } from '../ConfigParts';
+import ResizableTextarea from '../../../components/ui/ResizableTextarea';
 
 const MODES = [
   { value: 'off', title: 'Off', description: 'No growth. Only resources like HP change.' },
@@ -49,7 +50,6 @@ export default function ProgressionSection({ sectionRef, workspaceId, api, showT
   };
   const [traitDraft, setTraitDraft] = useState(null);
   const [deletingTrait, setDeletingTrait] = useState(null);
-  const [rewardDraft, setRewardDraft] = useState(null);
   useEffect(() => setConfig(progression.config), [progression.config]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const mode = progression.mode;
@@ -91,8 +91,7 @@ export default function ProgressionSection({ sectionRef, workspaceId, api, showT
     await onChanged();
   };
 
-  const definitionById = new Map(definitions.map(definition => [definition.id, definition]));
-  const rewards = config.rewards.filter(reward => definitionById.has(reward.definitionId));
+  const growing = definitions.filter(definition => definition.growthPerLevel);
 
   return (
     <ConfigSection
@@ -139,7 +138,7 @@ export default function ProgressionSection({ sectionRef, workspaceId, api, showT
               <Help className="-mt-2 pl-8">It can never take XP away. You still can, on the sheet.</Help>
               <div className="flex flex-col gap-1.5">
                 <FieldLabel>When to give XP</FieldLabel>
-                <textarea className="field-input min-h-16 resize-none px-3 py-2.5 text-sm leading-relaxed custom-scrollbar" value={config.xp.guidance} onChange={event => draftXp({ guidance: event.target.value })} onBlur={commit} placeholder="Winning fights, finishing quests and clever solutions. About 50 for a small win, 300 for a quest." />
+                <ResizableTextarea storageKey="rules-xp-guidance" value={config.xp.guidance} onChange={event => draftXp({ guidance: event.target.value })} onBlur={commit} placeholder="Winning fights, finishing quests and clever solutions. About 50 for a small win, 300 for a quest." />
               </div>
             </Block>
 
@@ -157,7 +156,7 @@ export default function ProgressionSection({ sectionRef, workspaceId, api, showT
                 {config.attributes.aiRaises && (
                   <div className="flex flex-col gap-1.5 pl-8">
                     <FieldLabel>When attributes go up</FieldLabel>
-                    <textarea className="field-input min-h-16 resize-none px-3 py-2.5 text-sm leading-relaxed custom-scrollbar" value={config.attributes.guidance} onChange={event => draftAttributes({ guidance: event.target.value })} onBlur={commit} placeholder="Only after weeks of focused training or a fight that pushed them to the limit. An ordinary fight does not count. Above 15, only rare milestones." />
+                    <ResizableTextarea storageKey="rules-attribute-guidance" value={config.attributes.guidance} onChange={event => draftAttributes({ guidance: event.target.value })} onBlur={commit} placeholder="Only after weeks of focused training or a fight that pushed them to the limit. An ordinary fight does not count. Above 15, only rare milestones." />
                     <Help>Leave it empty and the AI uses a general rule: lasting training, a hard-won lesson or a breakthrough.</Help>
                   </div>
                 )}
@@ -166,35 +165,19 @@ export default function ProgressionSection({ sectionRef, workspaceId, api, showT
               </div>
             </Block>
 
-            <Block title="On each new level" aside="Optional">
-              {rewards.length > 0 && (
-                <div className="divide-y divide-border-subtle overflow-hidden rounded-card border border-border-subtle bg-surface-inset">
-                  {rewards.map(reward => {
-                    const definition = definitionById.get(reward.definitionId);
-                    return (
-                      <div key={reward.definitionId} className="flex items-center gap-2 py-2 pl-3.5 pr-2">
-                        <span aria-hidden="true" className="h-2.5 w-2.5 shrink-0 rounded-[0.1875rem]" style={{ backgroundColor: definition.color }} />
-                        <span className="min-w-0 flex-1 text-[0.8125rem] text-text-secondary">
-                          {definition.name}: {reward.maximumIncrease ? <>highest value <b className="font-semibold text-text-primary">+{formatNumber(reward.maximumIncrease)}</b></> : null}{reward.maximumIncrease && reward.refill ? ' and ' : ''}{reward.refill ? 'refill' : ''}
-                        </span>
-                        <IconButton icon={Trash2} size="sm" tone="danger" label={`Remove the ${definition.name} reward`} onClick={() => saveConfig({ rewards: config.rewards.filter(item => item.definitionId !== reward.definitionId) })} />
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-              {rewardDraft ? (
-                <div className="flex flex-wrap items-center gap-2 rounded-card border border-border-subtle bg-tint/[0.02] p-3">
-                  <SearchableSelect className="min-w-[11rem] flex-1" value={rewardDraft.definitionId} onChange={definitionId => setRewardDraft(current => ({ ...current, definitionId }))} options={definitions.filter(definition => !rewards.some(reward => reward.definitionId === definition.id)).map(definition => ({ id: definition.id, label: definition.name, color: definition.color }))} placeholder="Resource" ariaLabel="Resource to reward" />
-                  <label className="flex items-center gap-1.5 text-xs text-text-muted">Highest +<NumberInput className="field-input h-10 w-18 px-2.5 text-sm tabular-nums" min={0} value={rewardDraft.maximumIncrease} onChange={maximumIncrease => setRewardDraft(current => ({ ...current, maximumIncrease }))} /></label>
-                  <Checkbox checked={rewardDraft.refill} onChange={refill => setRewardDraft(current => ({ ...current, refill }))} label="Refill" />
-                  <Button variant="subtle" size="sm" onClick={() => setRewardDraft(null)}>Cancel</Button>
-                  <Button variant="primary" size="sm" disabled={!rewardDraft.definitionId || (!rewardDraft.maximumIncrease && !rewardDraft.refill)} onClick={async () => { await saveConfig({ rewards: [...config.rewards, rewardDraft] }); setRewardDraft(null); }}>Add</Button>
-                </div>
-              ) : (
-                <Button variant="ghost" size="sm" icon={Plus} className="self-start" disabled={!definitions.length} onClick={() => setRewardDraft({ definitionId: '', maximumIncrease: 10, refill: true })}>Add a resource reward</Button>
-              )}
-              {!definitions.length && <Help>Create a resource first, such as HP, to reward it on each level.</Help>}
+            <Block title="On each new level">
+              {growing.length > 0 ? (
+                <p className="text-[0.8125rem] leading-relaxed text-text-secondary">
+                  {growing.map((definition, index) => (
+                    <span key={definition.id}>
+                      {index ? ', ' : ''}
+                      <span aria-hidden="true" className="mr-1.5 inline-block h-2.5 w-2.5 rounded-[0.1875rem] align-[-0.0625rem]" style={{ backgroundColor: definition.color }} />
+                      {definition.name} <b className="font-semibold tabular-nums text-text-primary">{formatSigned(definition.growthPerLevel)}</b>{definition.refillOnLevelUp ? ' and refills' : ''}
+                    </span>
+                  ))}
+                </p>
+              ) : null}
+              <Help>How much each resource grows per level is set on the resource, in Resources. A race or species can grow differently.</Help>
             </Block>
 
             <PolicyBlock label="How AI changes are applied" help="Covers XP and attribute changes. Review shows each one in Narrative State first." value={config.policy} onChange={policy => saveConfig({ policy })} />
@@ -234,11 +217,7 @@ const PROGRESS_WORDING = {
   noPlayer: 'Choose a player character in Configuration, Scene. They always progress.'
 };
 
-/**
- * The player always grows. Everyone else grows through a line: one character, every member of a
- * race or species, every character or specific being, or everyone at once. Skills reuse it for
- * who learns, with their own wording.
- */
+/** The player always grows; everyone else through a line. Skills reuse it for who learns. */
 export function WhoProgresses({ progression, groups, names, onChange, wording = PROGRESS_WORDING }) {
   const [adding, setAdding] = useState(false);
   const members = progression.members || [];
@@ -460,7 +439,7 @@ function TraitModal({ initial, onCancel, onSave }) {
         </div>
         <label className="flex flex-col gap-1.5">
           <span className="text-[0.8125rem] font-semibold text-text-secondary">What it means to the AI</span>
-          <textarea className="field-input min-h-20 resize-none px-3 py-2.5 text-sm leading-relaxed custom-scrollbar" value={draft.description || ''} onChange={event => set({ description: event.target.value })} placeholder="Lifting, forcing doors, melee damage." />
+          <ResizableTextarea storageKey="rules-attribute-meaning" value={draft.description || ''} onChange={event => set({ description: event.target.value })} placeholder="Lifting, forcing doors, melee damage." />
         </label>
         <div className="flex justify-end gap-2 pt-1">
           <Button type="button" variant="ghost" disabled={saving} onClick={onCancel}>Cancel</Button>

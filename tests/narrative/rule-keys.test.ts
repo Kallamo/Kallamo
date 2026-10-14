@@ -65,7 +65,7 @@ describe('saving rules', () => {
     expect(skills.saveSkill(WS, { ...skill, name: 'Blacksmithing' }).key).toBe('blacksmithing');
 
     const roleplay = new RoleplaySystem(db);
-    const base = { key: 'hp', color: '#ff0000', minimum: 0, maximum: 10, initialValue: 10, appliesTo: ['Characters'], updatePolicy: 'review' as const };
+    const base = { key: 'hp', color: '#ff0000', minimum: 0, maximum: 10, appliesTo: ['Characters'], updatePolicy: 'review' as const };
     const resource = roleplay.saveDefinition(WS, { ...base, name: 'HP' });
     expect(resource.key).toBe('hp');
     expect(roleplay.saveDefinition(WS, { ...resource, name: 'Vigour' }).key).toBe('vigour');

@@ -34,7 +34,6 @@ const { normalizeMaxApiPayload } = require('./features/llm/payload-budget');
 registerWorkspaceStateIpc(ipcMain);
 const worldbuildData = createWorldbuildDataService(db);
 
-// Resolve the APPDATA data path
 const appDataPath = process.env.APPDATA || (process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support') : path.join(os.homedir(), '.local', 'share'));
 const dataDir = path.join(appDataPath, 'Kallamo');
 const profilesDir = path.join(dataDir, 'AI Profiles');
@@ -113,7 +112,6 @@ function getWorldIndexErrors(chatId) {
   return runs.map(run => ({ ...run, sources: failedSources.all(run.id) }));
 }
 
-// Helper to index new knowledge base files in writing profile
 async function indexProfileKnowledgeBase(sender, profileId, knowledgeFilesInput) {
   const knowledgeFiles = typeof knowledgeFilesInput === 'string'
     ? JSON.parse(knowledgeFilesInput)
@@ -583,7 +581,6 @@ ipcMain.handle('delete-writing-profile', async (event, id) => {
   try {
     db.prepare('DELETE FROM writing_profiles WHERE id = ?').run(id);
 
-    // Cascade: remove this profile's KB chunks and any now-orphaned FTS rows
     db.prepare('DELETE FROM knowledge_chunks WHERE ownerId = ?').run(id);
     db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId NOT IN (SELECT id FROM knowledge_chunks)').run();
 
@@ -633,7 +630,6 @@ function downloadFileWithProgress(url, destPath, progressCallback, abortSignal) 
 
     function get(currentUrl, redirectsLeft = 5) {
       const req = https.get(currentUrl, (res) => {
-        // Follow 301/302/303/307/308
         if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
           res.resume(); // drain
           if (redirectsLeft <= 0) return cleanupAndReject(new Error('Too many redirects'));
@@ -796,7 +792,6 @@ async function executeEngineDownload(sender, isBackground = false) {
 
     safeSend(sender, 'download-engine-progress', { status: 'completed', percent: 100, isBackground });
 
-    // Trigger startup reindexing now that the engine is installed successfully
     if (isBackground) {
       console.log('[Auto-Download] Download completed successfully. Initiating background re-indexing...');
       performReindexIfNeeded();
@@ -951,7 +946,6 @@ async function restoreSearchableChunks(ownerId, ownerType, sidecarChunks, rename
   }
 }
 
-// Export AI Profile Config (.klp custom zip packaging, stripped of API links, variables resolved, optional KB)
 ipcMain.handle('export-ai-profile', async (event, { profile, exportKb }) => {
   try {
     const win = BrowserWindow.fromWebContents(event.sender);
@@ -1036,7 +1030,6 @@ ipcMain.handle('export-ai-profile', async (event, { profile, exportKb }) => {
   }
 });
 
-// Import AI Profile Config (Extracts .klp package, handles collisions, re-indexes)
 ipcMain.handle('import-ai-profile', async (event) => {
   try {
     const win = BrowserWindow.fromWebContents(event.sender);
@@ -1214,7 +1207,6 @@ ipcMain.handle('import-ai-profile', async (event) => {
   }
 });
 
-// Export Knowledge Base standalone
 ipcMain.handle('export-knowledge-base', async (event, { profileId, profileName }) => {
   try {
     const win = BrowserWindow.fromWebContents(event.sender);
@@ -1287,7 +1279,6 @@ ipcMain.handle('export-knowledge-base', async (event, { profileId, profileName }
   }
 });
 
-// Import Knowledge Base standalone
 ipcMain.handle('import-knowledge-base', async (event, { profileId }) => {
   try {
     const win = BrowserWindow.fromWebContents(event.sender);
@@ -1827,7 +1818,6 @@ ipcMain.handle('get-profile-kb-blocks', async (event, { profileId }) => {
       }
     }
 
-    // Ensure every block carries an approximate token count for the UI
     for (const b of loadedKbData) {
       if (b.tokenCount == null) {
         b.tokenCount = countTokens(b.text || '');
@@ -2175,10 +2165,8 @@ ipcMain.handle('add-profile-searchable-file', async (event, { profileId, name, p
   }
 });
 
-// --- WORKSPACE CHATS IPC HANDLERS ---
 // --- WRITING DESK: DOCUMENTS & FOLDERS ---
 
-// Remove a document's searchable chunks (owner = document) and their FTS rows.
 function deleteDocumentChunks(documentId) {
   try {
     const ids = db.prepare("SELECT id FROM knowledge_chunks WHERE ownerId = ? AND ownerType = 'document'").all(documentId);
@@ -2212,7 +2200,6 @@ ipcMain.handle('get-document', async (event, { id }) => {
   }
 });
 
-// Next position (append to end) within a sibling group of a given type.
 function nextPosition(workspaceId, type, parentId) {
   const col = type === 'folder' ? 'parentId' : 'folderId';
   const table = type === 'folder' ? 'folders' : 'documents';
@@ -2229,7 +2216,6 @@ ipcMain.handle('create-folder', async (event, { workspaceId, name, parentId }) =
   return { id, workspaceId, name: name || 'New folder', parentId: parentId || null, position, createdAt: now };
 });
 
-// Bulk reorder/move: each update sets an item's parent + position. Used by drag-and-drop.
 ipcMain.handle('reorder-writing-items', async (event, { updates }) => {
   try {
     const upDoc = db.prepare('UPDATE documents SET folderId = ?, position = ?, last_modified = ? WHERE id = ?');
@@ -2263,7 +2249,6 @@ ipcMain.handle('move-folder', async (event, { id, parentId }) => {
 
 ipcMain.handle('delete-folder', async (event, { id }) => {
   try {
-    // Cascade: gather the folder subtree, delete their documents (and chunks), then the folders.
     const allFolders = db.prepare('SELECT id, parentId FROM folders WHERE workspaceId = (SELECT workspaceId FROM folders WHERE id = ?)').all(id);
     const toDelete = new Set([id]);
     let grew = true;
@@ -2382,10 +2367,9 @@ ipcMain.handle('save-document-page', async (event, { id, page }) => {
   return { success: true };
 });
 
-// --- WRITING DESK: AI select->invoke ---
+// --- WRITING DESK: INVOCATIONS ---
 
-// A single invocation may be in flight at a time (one-at-a-time lock). Main owns the
-// authoritative flag so the renderer can't double-dispatch across sub-tab switches.
+// One invocation at a time. Main owns the flag so the renderer can't double-dispatch across tab switches.
 let wdInFlight = null;
 
 function broadcast(channel, payload) {
@@ -2473,8 +2457,6 @@ ipcMain.handle('set-chat-last-target', async (event, { chatId, targetId }) => {
   return { success: true };
 });
 
-// Document ids in this workspace that currently hold an unresolved suggestion,
-// used to mark the sidebar chapter rows.
 ipcMain.handle('get-pending-suggestion-ids', async (event, { workspaceId }) => {
   const rows = db.prepare(
     "SELECT DISTINCT documentId FROM pending_suggestions WHERE workspaceId = ? AND status != 'resolved'"
@@ -2575,8 +2557,7 @@ ipcMain.handle('vectorize-document', async (event, { documentId }) => {
   }
 });
 
-// Truth-based index status for the editor's indicator: compares current chapter text
-// against its stored chunk hashes (not the mutable vectorized flag).
+// Compares the chapter's text with its stored chunk hashes, not the vectorized flag that any save resets.
 ipcMain.handle('get-document-vector-status', (event, { documentId }) => {
   try {
     const { computeDocumentVectorStatus } = require('./workflow-runner');
@@ -2641,8 +2622,7 @@ ipcMain.handle('get-chat-memory-tags', async (event, { chatId }) => {
   }
 });
 
-// Per-chunk tags for a chat's uploaded RAG files (ownerType chat_kb). Keeping this
-// query shared lets the regular chunk loader include the same data the viewer uses.
+// One query for the chunk loader and the viewer, so both show the same tags.
 function getChatKbTags(chatId) {
     const rows = db.prepare(
       `SELECT ct.chunkId AS chunkId, ct.tag AS tag, ct.entity AS entity, ct.manual AS manual,
@@ -2863,8 +2843,6 @@ ipcMain.handle('create-entity', async (event, payload) => {
   }
 });
 
-// Resolve a free-text selection to an existing entity (canonical name or alias match).
-// Used by the Writing Desk's in-text Worldbuild bridge.
 ipcMain.handle('resolve-entity-by-name', (event, { workspaceId, name }) => {
   try {
     const id = entitiesStore.resolveMention(name, null, workspaceId);
@@ -3031,8 +3009,6 @@ ipcMain.handle('cancel-enrich-entities', async (event, { workspaceId } = {}) => 
   return { success: true };
 });
 
-// Export Worldbuild (.klwb, Kallamo Worldbuild Package: a zip holding worldbuild.json,
-// the self-contained entities + edges for this workspace).
 // What an export would carry, for the dialog to describe before anything is written.
 ipcMain.handle('worldbuild-export-summary', async (event, { workspaceId } = {}) => {
   try {
@@ -3156,7 +3132,6 @@ ipcMain.handle('inspect-worldbuild-package', async (event, { workspaceId } = {})
   }
 });
 
-// Import a .klwb package: read worldbuild.json and merge it into the workspace.
 ipcMain.handle('import-worldbuild', async (event, { workspaceId, filePath, rulesMode = 'merge', calendarMode = null } = {}) => {
   try {
     if (!filePath || !fs.existsSync(filePath)) return { success: false, error: 'Choose a Worldbuild package to import.' };
@@ -3361,7 +3336,6 @@ ipcMain.handle('export-document-docx', async (event, { docJson, title, page, mar
   }
 });
 
-// Export an entire folder ("book") as one combined .docx, with an optional TOC.
 ipcMain.handle('export-book-docx', async (event, { chapters, title, page, margins, pageNumbers, pageNumberStart, toc, tocTitle, tocAlign, chapterTitles }) => {
   try {
     const parent = BrowserWindow.getFocusedWindow();
@@ -3424,6 +3398,15 @@ function replyExcerpt(content, max = 240) {
   const prose = paragraphs.find(p => p.length >= 60 && !/^[-=]{3,}$/.test(p) && (p.match(/\|/g) || []).length < 2) || paragraphs[0] || '';
   return prose.length > max ? `${prose.slice(0, max).replace(/\s+\S*$/, '')}…` : prose;
 }
+
+ipcMain.handle('restore-example-workspace', async () => {
+  try {
+    return { success: true, id: db.restoreExampleWorkspace() };
+  } catch (error) {
+    log.error('[Workspaces] Restoring the sample story failed:', error);
+    return { success: false, error: error.message };
+  }
+});
 
 ipcMain.handle('get-chats', async () => {
   try {
@@ -3820,6 +3803,11 @@ ipcMain.handle('set-roleplay-resource-values', async (event, payload = {}) => {
     getRoleplaySystem().setTargetValues(payload.workspaceId, payload.definitionId, payload.targetType, payload.targetIds, payload.value);
     return { success: true };
   } catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('list-roleplay-resource-holders', async (event, { workspaceId, definitionId } = {}) => {
+  try { return { success: true, ...getRoleplaySystem().listHolders(workspaceId, definitionId) }; }
+  catch (error) { return { success: false, error: error.message }; }
 });
 
 ipcMain.handle('remove-roleplay-resource-value', async (event, payload = {}) => {
@@ -4268,6 +4256,8 @@ ipcMain.handle('delete-chat', async (event, id) => {
       'roleplay_time_state',
       'worldbuild_calendars',
       'roleplay_location_backgrounds',
+      'roleplay_turn_presence',
+      'roleplay_character_memory',
       'worldbuild_entity_images'
     ]) {
       db.prepare(`DELETE FROM ${table} WHERE workspace_id = ?`).run(id);
@@ -5419,7 +5409,6 @@ ipcMain.handle('restore-workspace', async (event) => {
     const safetyBackupPath = path.join(dataDir, `pre-restore-backup-${timestamp}.db`);
     await db.backup(safetyBackupPath);
 
-    // Prune pre-restore-backup-* to keep last 5
     try {
       const files = fs.readdirSync(dataDir);
       const backups = files
@@ -5683,7 +5672,6 @@ ipcMain.handle('get-chat-kb-blocks', async (event, { chatId }) => {
       }
     }
 
-    // Ensure every block carries an approximate token count for the UI
     for (const b of loadedKbData) {
       if (b.tokenCount == null) {
         b.tokenCount = countTokens(b.text || '');
@@ -6026,7 +6014,7 @@ ipcMain.handle('test-chat-rag-search', async (event, { chatId, queryText, profil
   }
 });
 
-// Variables CRUD IPC Handlers
+// --- VARIABLES IPC HANDLERS ---
 ipcMain.handle('variables:get', async () => {
   try {
     return db.prepare('SELECT * FROM variables ORDER BY name ASC').all();
@@ -6119,12 +6107,10 @@ async function performReindexIfNeeded() {
         needsReindex = true;
       }
     } else {
-      // No stamp exists, check if there are existing chunks that need re-vectorizing
       const chunkCount = db.prepare('SELECT COUNT(*) as cnt FROM knowledge_chunks').get();
       if (chunkCount && chunkCount.cnt > 0) {
         needsReindex = true;
       } else {
-        // Fresh install, no data, just stamp it
         db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run(
           'rag_model_metadata',
           JSON.stringify({ model: RAG_MODEL_ID, dimension: RAG_MODEL_DIM })
@@ -6160,7 +6146,6 @@ async function performReindexIfNeeded() {
     let successCount = 0;
     let failureCount = 0;
 
-    // Re-index chat memories
     const memoryChunks = db.prepare("SELECT * FROM knowledge_chunks WHERE ownerType = 'chat_memory'").all();
     let processed = 0;
     const totalMemories = memoryChunks.length;
@@ -6186,7 +6171,6 @@ async function performReindexIfNeeded() {
       });
     }
 
-    // Re-index file-based knowledge bases
     let chunkSize = 500;
     try {
       const rowAdvanced = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
@@ -6224,7 +6208,6 @@ async function performReindexIfNeeded() {
           message: `Re-indexing: ${sourceName}...`
         });
 
-        // Try to find the original file to re-extract text
         let baseDir;
         if (owner.ownerType === 'profile_kb') {
           baseDir = path.join(profilesDir, owner.ownerId, 'KnowledgeBase');
@@ -6278,7 +6261,6 @@ async function performReindexIfNeeded() {
       }
     }
 
-    // Re-index manual snippets
     const manualChunks = db.prepare(
       "SELECT * FROM knowledge_chunks WHERE id LIKE 'manual_%'"
     ).all();

@@ -37,10 +37,13 @@ describe('Roleplay rules in a Worldbuild package', () => {
     progression = new RoleplayProgression(db);
     packager = new RoleplayRulesPackager(db);
 
-    const mana = roleplay.saveDefinition(FROM, { name: 'Mana', key: 'mana', color: '#3b82f6', minimum: 0, maximum: 50, initialValue: 50, appliesTo: [], scope: 'chosen', updatePolicy: 'review' });
-    roleplay.setTargetValue(FROM, mana.id, 'entity', 'hero', { current: 12, maximum: 60 });
-    roleplay.setTargetValue(FROM, mana.id, 'race', 'elf', { current: 40, maximum: 50 });
-    progression.saveSettings(FROM, { mode: 'levels', config: { rewards: [{ definitionId: mana.id, maximumIncrease: 5, refill: false }] } });
+    const mana = roleplay.saveDefinition(FROM, {
+      name: 'Mana', key: 'mana', color: '#3b82f6', minimum: 0, maximum: 50, growthPerLevel: 5, refillOnLevelUp: true,
+      aiChangesMaximum: true, maximumRule: 'Only lasting training', appliesTo: [], scope: 'chosen', updatePolicy: 'review'
+    });
+    roleplay.setTargetValue(FROM, mana.id, 'entity', 'hero', { current: 12, adjustment: 10 });
+    roleplay.setTargetValue(FROM, mana.id, 'race', 'elf', { base: 40, growth: 8 });
+    progression.saveSettings(FROM, { mode: 'levels' });
     const strength = progression.listTraits(FROM)[0];
     progression.setRaceValue(FROM, 'elf', strength.id, -1);
   });
@@ -52,18 +55,17 @@ describe('Roleplay rules in a Worldbuild package', () => {
 
   const idMap = new Map([['hero', 'hero-copy'], ['elf', 'elf-copy']]);
 
-  test('a fresh world carries rules and race values, and who holds a chosen resource, full', () => {
+  test('a fresh world carries rules, race values and adjustments, and who holds a chosen resource, full', () => {
     const rules = packager.export(FROM, new Set(['hero', 'elf']), false);
     packager.import(TO, rules, 'merge', idMap);
 
     const mana = roleplay.listDefinitions(TO).find(item => item.key === 'mana')!;
     expect(roleplay.listAssignments(TO)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ definitionId: mana.id, targetType: 'entity', targetId: 'hero-copy', current: 60, maximum: 60 }),
-      expect.objectContaining({ definitionId: mana.id, targetType: 'race', targetId: 'elf-copy', current: 40 })
+      expect.objectContaining({ definitionId: mana.id, targetType: 'entity', targetId: 'hero-copy', current: null, adjustment: 10 }),
+      expect.objectContaining({ definitionId: mana.id, targetType: 'race', targetId: 'elf-copy', base: 40, growth: 8 })
     ]));
-    const settings = progression.getSettings(TO);
-    expect(settings.mode).toBe('levels');
-    expect(settings.config.rewards).toEqual([{ definitionId: mana.id, maximumIncrease: 5, refill: false }]);
+    expect(mana).toMatchObject({ growthPerLevel: 5, refillOnLevelUp: true, aiChangesMaximum: true, maximumRule: 'Only lasting training', startsFull: true });
+    expect(progression.getSettings(TO).mode).toBe('levels');
     expect(progression.listRaceValues(TO, 'elf-copy')).toEqual({ [progression.listTraits(TO)[0].id]: -1 });
   });
 
@@ -77,16 +79,17 @@ describe('Roleplay rules in a Worldbuild package', () => {
   });
 
   test('current values travel only when asked', () => {
+    // Level 4 refills Mana to its new maximum: 50 + 5 for each of 3 levels + 10 adjustment.
     progression.setEntityValue(FROM, 'hero', { kind: 'level', value: 4 });
     expect(packager.export(FROM, new Set(['hero', 'elf']), false).progressValues.some(value => value.targetType === 'entity')).toBe(false);
     const rules = packager.export(FROM, new Set(['hero', 'elf']), true);
-    expect(rules.resourceValues).toEqual(expect.arrayContaining([expect.objectContaining({ targetRef: 'hero', current: 12 })]));
+    expect(rules.resourceValues).toEqual(expect.arrayContaining([expect.objectContaining({ targetRef: 'hero', current: 75, adjustment: 10 })]));
     expect(rules.progressValues).toEqual(expect.arrayContaining([expect.objectContaining({ targetRef: 'hero', traitKey: '__level', value: 4 })]));
   });
 
   test('merge keeps this world rules and adds the new ones; replace takes the package', () => {
-    roleplay.saveDefinition(TO, { name: 'Mana', key: 'mana', color: '#111111', minimum: 0, maximum: 10, initialValue: 10, appliesTo: ['Characters'], updatePolicy: 'manual' });
-    roleplay.saveDefinition(TO, { name: 'Sanity', key: 'sanity', color: '#222222', minimum: 0, maximum: 10, initialValue: 10, appliesTo: ['Characters'], updatePolicy: 'manual' });
+    roleplay.saveDefinition(TO, { name: 'Mana', key: 'mana', color: '#111111', minimum: 0, maximum: 10, appliesTo: ['Characters'], updatePolicy: 'manual' });
+    roleplay.saveDefinition(TO, { name: 'Sanity', key: 'sanity', color: '#222222', minimum: 0, maximum: 10, appliesTo: ['Characters'], updatePolicy: 'manual' });
     const rules = packager.export(FROM, new Set(['hero', 'elf']), false);
 
     const difference = packager.difference(TO, rules);

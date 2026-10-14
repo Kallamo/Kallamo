@@ -11,10 +11,8 @@ const parse = (text, integer) => {
 const clamp = (value, min, max) => Math.min(max ?? Infinity, Math.max(min ?? -Infinity, value));
 
 /**
- * The app's number field. The text is the writer's while they type, so a field can be
- * cleared and retyped; `onChange` only hears valid numbers inside the range. Leaving the
- * field clamps it to the range, or puts the last value back when it was left empty.
- * Arrow up and down step by `step`.
+ * The text is the writer's while typing; `onChange` only hears valid numbers in range. Leaving
+ * the field clamps it, or restores the last value when empty unless `nullable`.
  */
 export default function NumberInput({
   value,
@@ -23,6 +21,7 @@ export default function NumberInput({
   max: maxProp,
   step: stepProp = 1,
   integer = true,
+  nullable = false,
   onBlur,
   onKeyDown,
   onFocus,
@@ -46,6 +45,10 @@ export default function NumberInput({
     if (!/^-?\d*([.,]\d*)?$/.test(text) || (integer && /[.,]/.test(text))) return;
     if (min != null && min >= 0 && text.startsWith('-')) return;
     setDraft(text);
+    if (nullable && text.trim() === '') {
+      if (value != null) onChange?.(null);
+      return;
+    }
     const parsed = parse(text, integer);
     if (parsed != null && inRange(parsed) && parsed !== value) onChange?.(parsed);
   };
@@ -53,7 +56,7 @@ export default function NumberInput({
   const settle = () => {
     const parsed = parse(draft, integer);
     if (parsed == null) {
-      setDraft(value == null ? '' : String(value));
+      setDraft(nullable && draft.trim() === '' ? '' : value == null ? '' : String(value));
       return;
     }
     const next = clamp(parsed, min, max);

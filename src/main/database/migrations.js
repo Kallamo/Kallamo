@@ -422,7 +422,7 @@ const MIGRATIONS = [
         color TEXT NOT NULL,
         minimum REAL NOT NULL,
         maximum REAL NOT NULL,
-        initial_value REAL NOT NULL,
+        starts_full INTEGER NOT NULL DEFAULT 1 CHECK (starts_full IN (0, 1)),
         unit TEXT NOT NULL DEFAULT '',
         applies_to_json TEXT NOT NULL,
         update_policy TEXT NOT NULL CHECK (update_policy IN ('manual', 'review', 'automatic')),
@@ -431,8 +431,7 @@ const MIGRATIONS = [
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (workspace_id, definition_id),
         UNIQUE (workspace_id, resource_key),
-        CHECK (maximum > minimum),
-        CHECK (initial_value >= minimum AND initial_value <= maximum)
+        CHECK (maximum > minimum)
       );
 
       CREATE TABLE IF NOT EXISTS roleplay_resource_values (
@@ -440,8 +439,10 @@ const MIGRATIONS = [
         definition_id TEXT NOT NULL,
         target_type TEXT NOT NULL CHECK (target_type IN ('entity', 'race', 'species')),
         target_id TEXT NOT NULL,
-        current_value REAL NOT NULL,
-        maximum_value REAL NOT NULL,
+        current_value REAL,
+        adjustment REAL NOT NULL DEFAULT 0,
+        base_value REAL,
+        growth_value REAL,
         version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (workspace_id, definition_id, target_type, target_id),
@@ -964,11 +965,8 @@ const MIGRATIONS = [
   },
   {
     /**
-     * Scene state that older extraction wrote as durable canon. The interpreter is no longer
-     * allowed to emit these, but a campaign played before the rule still carries them, and
-     * each one reaches the prompt as a second, permanent answer to a question the live scene
-     * already answers. Only records the model wrote are touched, and only their status: the
-     * rows, their events and their evidence stay for audit.
+     * Retires model-written scene-state records filed as canon. Only their status changes: rows,
+     * events and evidence stay.
      */
     id: 'narrative_record_categories_v1',
     up: (db) => {
@@ -997,8 +995,7 @@ const MIGRATIONS = [
     }
   },
   {
-    // Migrations used to run before database.js created the base tables, so a fresh
-    // install recorded these steps without applying them.
+    // A fresh install could record these steps before the base tables existed, without applying them.
     id: 'worldbuild_base_schema_repair_v1',
     up: (db) => {
       ensureEntityLinkMetadata(db);
@@ -1035,7 +1032,7 @@ const MIGRATIONS = [
     `)
   },
   {
-    // Merges and deletes used to leave narrative and roleplay rows pointing at missing entities.
+    // Releases narrative and roleplay rows that still point at merged or deleted entities.
     id: 'entity_reference_orphans_v1',
     up: (db) => { releaseOrphanedEntityReferences(db); }
   },
@@ -1092,8 +1089,8 @@ const MIGRATIONS = [
     }
   },
   {
-    // A resource can belong to chosen characters only, say what happens at its lowest, and move
-    // with story time. Its changes carry the amount and a reason, and progression (levels, XP,
+    // A resource can belong to chosen characters only, say what happens at its lowest, move
+    // with story time and grow with level. Its changes carry the amount and a reason, and progression (levels, XP,
     // attributes) gets its own definitions, values and history.
     id: 'kallamo_roleplay_progression_v1',
     up: (db) => {
@@ -1105,6 +1102,10 @@ const MIGRATIONS = [
       add('time_rate', 'time_rate REAL NOT NULL DEFAULT 0 CHECK (time_rate >= 0)');
       add('time_direction', "time_direction TEXT NOT NULL DEFAULT 'recovers' CHECK (time_direction IN ('recovers', 'drains'))");
       add('time_period', "time_period TEXT NOT NULL DEFAULT 'hour' CHECK (time_period IN ('hour', 'day'))");
+      add('growth_per_level', 'growth_per_level REAL NOT NULL DEFAULT 0');
+      add('refill_on_level_up', 'refill_on_level_up INTEGER NOT NULL DEFAULT 0 CHECK (refill_on_level_up IN (0, 1))');
+      add('ai_changes_maximum', 'ai_changes_maximum INTEGER NOT NULL DEFAULT 0 CHECK (ai_changes_maximum IN (0, 1))');
+      add('maximum_rule', "maximum_rule TEXT NOT NULL DEFAULT ''");
 
       db.exec(`
         CREATE TABLE roleplay_resource_changes_next (
@@ -1270,8 +1271,7 @@ const MIGRATIONS = [
     }
   },
   {
-    // Keys follow names now. A rule renamed before that kept its old key (Stamina stored as
-    // "dexterity"), which matched the wrong rule on import; each key is rebuilt from its name.
+    // Rebuilds every key from its name: a renamed rule could keep a key that matched another rule on import.
     id: 'kallamo_roleplay_rule_keys_v1',
     up: (db) => {
       const slug = name => String(name || '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim()
@@ -1313,6 +1313,68 @@ const MIGRATIONS = [
         }
       }
     }
+  },
+  {
+    // A specific being takes its nature from its species. A nature the species already states
+    // is dropped; anything else is prepended to its abilities.
+    id: 'kallamo_creature_nature_on_species_v1',
+    up: (db) => {
+      if (!hasTable(db, 'entities')) return;
+      const parse = text => { try { const value = JSON.parse(text || '{}'); return value && typeof value === 'object' ? value : {}; } catch { return {}; } };
+      const speciesOf = hasTable(db, 'entity_links') ? db.prepare(`
+        SELECT species.data FROM entity_links AS links
+        JOIN entities AS species ON species.id = links.toId
+        WHERE links.fromId = ? AND links.relType = 'is_race' AND species.type = 'Creatures' LIMIT 1
+      `) : null;
+      const update = db.prepare('UPDATE entities SET data = ? WHERE id = ?');
+      for (const row of db.prepare("SELECT id, data FROM entities WHERE type = 'Creatures'").all()) {
+        const data = parse(row.data);
+        const nature = String(data.nature || '').trim();
+        if (data.scope === 'group' || !nature) continue;
+        const speciesNature = String(parse(speciesOf?.get(row.id)?.data).nature || '').trim();
+        const abilities = String(data.abilities || '').trim();
+        const { nature: _nature, ...rest } = data;
+        if (nature.toLowerCase() !== speciesNature.toLowerCase() && !abilities.toLowerCase().includes(nature.toLowerCase())) {
+          rest.abilities = abilities ? `${nature}. ${abilities}` : nature;
+        }
+        update.run(JSON.stringify(rest), row.id);
+      }
+    }
+  },
+  {
+    // Rows are keyed by the reply that produced them and read through narrative_origin_lifecycle,
+    // so a replaced or deleted reply drops out without a snapshot.
+    id: 'roleplay_character_scene_memory_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS roleplay_turn_presence (
+        workspace_id TEXT NOT NULL,
+        origin_id TEXT NOT NULL,
+        location_id TEXT,
+        present_ids_json TEXT NOT NULL,
+        time_label TEXT,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, origin_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_roleplay_turn_presence_order
+        ON roleplay_turn_presence (workspace_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS roleplay_character_memory (
+        workspace_id TEXT NOT NULL,
+        entry_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        origin_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('perceived', 'heard', 'stance')),
+        text TEXT NOT NULL,
+        source_id TEXT,
+        ordinal INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, entry_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_roleplay_character_memory_entity
+        ON roleplay_character_memory (workspace_id, entity_id, created_at, ordinal);
+      CREATE INDEX IF NOT EXISTS idx_roleplay_character_memory_origin
+        ON roleplay_character_memory (workspace_id, origin_id);
+    `)
   }
 ];
 

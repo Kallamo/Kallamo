@@ -27,9 +27,15 @@ export interface RoleplayResourceDefinition {
   description: string;
   color: string;
   minimum: number;
+  /** The maximum at level 1, before a race, a species or a character's own adjustment. */
   maximum: number;
-  initialValue: number;
+  startsFull: boolean;
+  growthPerLevel: number;
+  refillOnLevelUp: boolean;
+  aiChangesMaximum: boolean;
+  maximumRule: string;
   unit: string;
+  /** Always every actor kind; kept so packages and older rows keep their shape. */
   appliesTo: string[];
   updatePolicy: RoleplayUpdatePolicy;
   position: number;
@@ -41,12 +47,26 @@ export interface RoleplayResourceDefinition {
   timePeriod: 'hour' | 'day';
 }
 
+/** How one character's maximum is made: base, growth for each level past the first, adjustment. */
+export interface ResourceMaximumParts {
+  base: number;
+  growth: number;
+  level: number;
+  levelBonus: number;
+  adjustment: number;
+  /** The race or species whose base or growth replaces the resource's own. */
+  groupId: string | null;
+  groupType: 'race' | 'species' | null;
+  groupName: string | null;
+  baseFromGroup: boolean;
+  growthFromGroup: boolean;
+}
+
 export interface EntityResourceState extends RoleplayResourceDefinition {
   definitionId: string;
   current: number;
   maximum: number;
-  inheritedFrom: string | null;
-  inheritedFromType: RoleplayTargetType | 'default';
+  parts: ResourceMaximumParts;
 }
 
 export interface RoleplaySceneState {
@@ -117,15 +137,28 @@ export interface RoleplayInventoryChange {
   resolvedAt: number | null;
 }
 
+/**
+ * A stored row. A character's holds the current value (empty until something moves it) and their
+ * adjustment; a race's or species' holds its own base and growth, empty where the resource's apply.
+ */
 export interface RoleplayResourceAssignment {
   definitionId: string;
   targetType: RoleplayTargetType;
   targetId: string;
-  current: number;
-  maximum: number;
+  current: number | null;
+  adjustment: number;
+  base: number | null;
+  growth: number | null;
 }
 
-/** A change names either the value to set or the amount to move it by. */
+export interface ResourceValuePatch {
+  current?: number | null;
+  adjustment?: number;
+  base?: number | null;
+  growth?: number | null;
+}
+
+/** A change names either the value to set or the amount to move it by; `maximumDelta` moves the adjustment. */
 export interface ResourceChangeInput {
   id: string;
   workspaceId: string;
@@ -149,12 +182,18 @@ export interface RoleplayResourceChange {
 interface DefinitionRow {
   workspace_id: string; definition_id: string; resource_key: string; name: string;
   description: string; color: string; minimum: number; maximum: number;
-  initial_value: number; unit: string; applies_to_json: string; update_policy: RoleplayUpdatePolicy;
+  starts_full: number; unit: string; applies_to_json: string; update_policy: RoleplayUpdatePolicy;
   position: number; enabled: number; scope?: string; lowest_effect?: string; time_rate?: number;
-  time_direction?: string; time_period?: string;
+  time_direction?: string; time_period?: string; growth_per_level?: number; refill_on_level_up?: number;
+  ai_changes_maximum?: number; maximum_rule?: string;
 }
 
-interface ValueRow { target_id: string; current_value: number; maximum_value: number }
+interface ValueRow { target_id: string; current_value: number | null; adjustment: number; base_value: number | null; growth_value: number | null }
+
+interface Group { id: string; type: 'race' | 'species'; name: string }
+
+const LEVEL = '__level';
+const ACTOR_TYPES = ['Characters', 'Creatures'];
 
 export class RoleplaySystem {
   constructor(private readonly db: Database.Database) {}
@@ -298,52 +337,63 @@ export class RoleplaySystem {
 
   listAssignments(workspaceId: string): RoleplayResourceAssignment[] {
     return (this.db.prepare(`
-      SELECT definition_id, target_type, target_id, current_value, maximum_value
+      SELECT definition_id, target_type, target_id, current_value, adjustment, base_value, growth_value
       FROM roleplay_resource_values WHERE workspace_id = ?
       ORDER BY target_type, target_id, definition_id
     `).all(workspaceId) as Array<Record<string, unknown>>).map(row => ({
       definitionId: String(row.definition_id),
       targetType: String(row.target_type) as RoleplayTargetType,
       targetId: String(row.target_id),
-      current: Number(row.current_value),
-      maximum: Number(row.maximum_value)
+      current: nullableNumber(row.current_value),
+      adjustment: Number(row.adjustment ?? 0),
+      base: nullableNumber(row.base_value),
+      growth: nullableNumber(row.growth_value)
     }));
   }
 
   saveDefinition(
     workspaceId: string,
-    input: Partial<RoleplayResourceDefinition> & Pick<RoleplayResourceDefinition, 'name' | 'key' | 'color' | 'minimum' | 'maximum' | 'initialValue' | 'appliesTo' | 'updatePolicy'>
+    input: Partial<RoleplayResourceDefinition> & Pick<RoleplayResourceDefinition, 'name' | 'key' | 'color' | 'minimum' | 'maximum' | 'updatePolicy'>
   ): RoleplayResourceDefinition {
     const scope: RoleplayResourceScope = input.scope === 'chosen' ? 'chosen' : 'everyone';
-    // Only who I choose needs no kinds: the list of holders is the whole rule.
-    const appliesTo = scope === 'chosen' && !input.appliesTo?.length ? ['Characters', 'Creatures'] : input.appliesTo;
+    // Characters and specific beings are both actors, so a resource never tells them apart.
+    const appliesTo = ACTOR_TYPES;
     const others = this.listDefinitions(workspaceId);
     requireUniqueName(input.name, others, input.id, 'a resource');
     const previous = input.id ? others.find(definition => definition.id === input.id) : undefined;
     const key = ruleKey({ name: input.name, givenKey: input.key, previous, taken: others.map(definition => definition.key), prefix: 'resource' });
-    validateDefinition({ ...input, key, appliesTo });
+    validateDefinition({ ...input, key });
     const id = input.id || randomUUID();
-    this.db.prepare(`
-      INSERT INTO roleplay_resource_definitions (
-        workspace_id, definition_id, resource_key, name, description, color,
-        minimum, maximum, initial_value, unit, applies_to_json, update_policy,
-        position, enabled, scope, lowest_effect, time_rate, time_direction, time_period, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(workspace_id, definition_id) DO UPDATE SET
-        resource_key = excluded.resource_key, name = excluded.name,
-        description = excluded.description, color = excluded.color,
-        minimum = excluded.minimum, maximum = excluded.maximum,
-        initial_value = excluded.initial_value, unit = excluded.unit,
-        applies_to_json = excluded.applies_to_json, update_policy = excluded.update_policy,
-        position = excluded.position, enabled = excluded.enabled, scope = excluded.scope,
-        lowest_effect = excluded.lowest_effect, time_rate = excluded.time_rate,
-        time_direction = excluded.time_direction, time_period = excluded.time_period,
-        updated_at = excluded.updated_at
-    `).run(workspaceId, id, key, input.name.trim(), input.description?.trim() || '', input.color,
-      input.minimum, input.maximum, input.initialValue, input.unit?.trim() || '', JSON.stringify(appliesTo),
-      input.updatePolicy, input.position ?? 0, input.enabled === false ? 0 : 1, scope,
-      input.lowestEffect?.trim() || '', Math.max(0, Number(input.timeRate) || 0),
-      input.timeDirection === 'drains' ? 'drains' : 'recovers', input.timePeriod === 'day' ? 'day' : 'hour', Date.now());
+    this.db.transaction(() => {
+      this.db.prepare(`
+        INSERT INTO roleplay_resource_definitions (
+          workspace_id, definition_id, resource_key, name, description, color,
+          minimum, maximum, starts_full, unit, applies_to_json, update_policy,
+          position, enabled, scope, lowest_effect, time_rate, time_direction, time_period,
+          growth_per_level, refill_on_level_up, ai_changes_maximum, maximum_rule, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(workspace_id, definition_id) DO UPDATE SET
+          resource_key = excluded.resource_key, name = excluded.name,
+          description = excluded.description, color = excluded.color,
+          minimum = excluded.minimum, maximum = excluded.maximum,
+          starts_full = excluded.starts_full, unit = excluded.unit,
+          applies_to_json = excluded.applies_to_json, update_policy = excluded.update_policy,
+          position = excluded.position, enabled = excluded.enabled, scope = excluded.scope,
+          lowest_effect = excluded.lowest_effect, time_rate = excluded.time_rate,
+          time_direction = excluded.time_direction, time_period = excluded.time_period,
+          growth_per_level = excluded.growth_per_level, refill_on_level_up = excluded.refill_on_level_up,
+          ai_changes_maximum = excluded.ai_changes_maximum, maximum_rule = excluded.maximum_rule,
+          updated_at = excluded.updated_at
+      `).run(workspaceId, id, key, input.name.trim(), input.description?.trim() || '', input.color,
+        input.minimum, input.maximum, input.startsFull === false ? 0 : 1, input.unit?.trim() || '', JSON.stringify(appliesTo),
+        input.updatePolicy, input.position ?? 0, input.enabled === false ? 0 : 1, scope,
+        input.lowestEffect?.trim() || '', Math.max(0, Number(input.timeRate) || 0),
+        input.timeDirection === 'drains' ? 'drains' : 'recovers', input.timePeriod === 'day' ? 'day' : 'hour',
+        Number(input.growthPerLevel) || 0, input.refillOnLevelUp ? 1 : 0,
+        input.aiChangesMaximum ? 1 : 0, input.maximumRule?.trim() || '', Date.now());
+      // A lower base or growth leaves no one above their new maximum.
+      this.clampStoredCurrents(workspaceId, id);
+    })();
     return this.requireDefinition(workspaceId, id);
   }
 
@@ -356,26 +406,54 @@ export class RoleplaySystem {
     })();
   }
 
+  /**
+   * Writes the given parts of one row and keeps the rest. A character takes `current` and
+   * `adjustment`; a race or species takes `base` and `growth`, where null means the resource's own.
+   */
   setTargetValue(
     workspaceId: string,
     definitionId: string,
     targetType: RoleplayTargetType,
     targetId: string,
-    value: { current: number; maximum: number }
+    patch: ResourceValuePatch
   ): void {
     const definition = this.requireDefinition(workspaceId, definitionId);
     this.validateTarget(workspaceId, targetType, targetId);
-    const maximum = Math.max(definition.minimum, value.maximum);
-    const current = clamp(value.current, definition.minimum, maximum);
-    this.db.prepare(`
-      INSERT INTO roleplay_resource_values (
-        workspace_id, definition_id, target_type, target_id,
-        current_value, maximum_value, version, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 1, ?)
-      ON CONFLICT(workspace_id, definition_id, target_type, target_id) DO UPDATE SET
-        current_value = excluded.current_value, maximum_value = excluded.maximum_value,
-        version = roleplay_resource_values.version + 1, updated_at = excluded.updated_at
-    `).run(workspaceId, definitionId, targetType, targetId, current, maximum, Date.now());
+    const stored = this.getValue(workspaceId, definitionId, targetType, targetId);
+    const next = {
+      current: patch.current === undefined ? stored?.current_value ?? null : finiteOrNull(patch.current),
+      adjustment: patch.adjustment === undefined ? Number(stored?.adjustment ?? 0) : Number(patch.adjustment) || 0,
+      base: patch.base === undefined ? stored?.base_value ?? null : finiteOrNull(patch.base),
+      growth: patch.growth === undefined ? stored?.growth_value ?? null : finiteOrNull(patch.growth)
+    };
+    if (targetType === 'entity') {
+      next.base = null;
+      next.growth = null;
+      next.adjustment = Math.round(next.adjustment * 100) / 100;
+    } else {
+      next.current = null;
+      next.adjustment = 0;
+      if (next.base !== null && next.base <= definition.minimum) throw new Error(`${definition.name} needs a base above its lowest.`);
+    }
+    this.db.transaction(() => {
+      // Under "everyone" an empty row says nothing; under "chosen" the row itself gives the resource.
+      const empty = next.current === null && next.adjustment === 0 && next.base === null && next.growth === null;
+      if (empty && definition.scope !== 'chosen') {
+        this.removeTargetValue(workspaceId, definitionId, targetType, targetId);
+      } else {
+        this.db.prepare(`
+          INSERT INTO roleplay_resource_values (
+            workspace_id, definition_id, target_type, target_id,
+            current_value, adjustment, base_value, growth_value, version, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+          ON CONFLICT(workspace_id, definition_id, target_type, target_id) DO UPDATE SET
+            current_value = excluded.current_value, adjustment = excluded.adjustment,
+            base_value = excluded.base_value, growth_value = excluded.growth_value,
+            version = roleplay_resource_values.version + 1, updated_at = excluded.updated_at
+        `).run(workspaceId, definitionId, targetType, targetId, next.current, next.adjustment, next.base, next.growth, Date.now());
+      }
+      this.clampStoredCurrents(workspaceId, definitionId);
+    })();
   }
 
   setTargetValues(
@@ -383,11 +461,11 @@ export class RoleplaySystem {
     definitionId: string,
     targetType: RoleplayTargetType,
     targetIds: string[],
-    value: { current: number; maximum: number }
+    patch: ResourceValuePatch
   ): void {
     if (!targetIds.length) throw new Error('Select at least one roleplay target.');
     this.db.transaction(() => {
-      unique(targetIds).forEach(targetId => this.setTargetValue(workspaceId, definitionId, targetType, targetId, value));
+      unique(targetIds).forEach(targetId => this.setTargetValue(workspaceId, definitionId, targetType, targetId, patch));
     })();
   }
 
@@ -400,22 +478,73 @@ export class RoleplaySystem {
 
   listEntityResources(workspaceId: string, entityId: string): EntityResourceState[] {
     const entity = this.requireEntity(workspaceId, entityId);
+    const group = this.groupOf(workspaceId, entityId);
+    const level = this.levelOf(workspaceId, entityId);
     return this.listDefinitions(workspaceId).flatMap(definition => {
-      if (!definition.enabled || !definition.appliesTo.includes(entity.type)) return [];
-      const direct = this.getValue(workspaceId, definition.id, 'entity', entityId);
-      const inherited = direct ? null : this.getInheritedValue(workspaceId, definition.id, entityId);
+      if (!definition.enabled || !ACTOR_TYPES.includes(entity.type)) return [];
+      const own = this.getValue(workspaceId, definition.id, 'entity', entityId);
+      const fromGroup = group ? this.getValue(workspaceId, definition.id, group.type, group.id) : undefined;
       // A chosen resource exists only where someone gave it: the character, their race or species.
-      if (definition.scope === 'chosen' && !direct && !inherited) return [];
-      const value = direct ?? inherited?.value;
-      return [{
-        ...definition,
-        definitionId: definition.id,
-        current: value?.current_value ?? definition.initialValue,
-        maximum: value?.maximum_value ?? definition.maximum,
-        inheritedFrom: direct ? null : inherited?.targetId ?? null,
-        inheritedFromType: direct ? 'entity' : inherited?.targetType ?? 'default'
-      }];
+      if (definition.scope === 'chosen' && !own && !fromGroup) return [];
+      const parts = maximumParts(definition, own, fromGroup, group, level);
+      const maximum = maximumOf(definition, parts);
+      const current = clamp(own?.current_value ?? (definition.startsFull ? maximum : definition.minimum), definition.minimum, maximum);
+      return [{ ...definition, definitionId: definition.id, current, maximum, parts }];
     });
+  }
+
+  /**
+   * Who has one resource through their own row: races and species with their base and growth,
+   * characters with their adjustment and where they stand now.
+   */
+  listHolders(workspaceId: string, definitionId: string) {
+    this.requireDefinition(workspaceId, definitionId);
+    const rows = this.listAssignments(workspaceId).filter(row => row.definitionId === definitionId);
+    const names = new Map((this.db.prepare(`
+      SELECT id, canonicalName AS name FROM entities WHERE workspaceId = ? AND status != 'proposed'
+    `).all(workspaceId) as Array<{ id: string; name: string }>).map(row => [row.id, row.name]));
+    const members = this.db.prepare(`
+      SELECT COUNT(*) AS count FROM entity_links AS links
+      JOIN entities AS member ON member.id = links.fromId AND member.workspaceId = links.workspaceId
+      WHERE links.workspaceId = ? AND links.toId = ? AND links.relType = 'is_race' AND member.status != 'proposed'
+    `);
+    const groups = rows.filter(row => row.targetType !== 'entity' && names.has(row.targetId)).map(row => ({
+      targetType: row.targetType as 'race' | 'species', targetId: row.targetId, name: names.get(row.targetId)!,
+      base: row.base, growth: row.growth, members: Number((members.get(workspaceId, row.targetId) as { count: number }).count)
+    }));
+    const characters = rows.filter(row => row.targetType === 'entity' && names.has(row.targetId)).flatMap(row => {
+      let state: EntityResourceState | undefined;
+      try {
+        state = this.listEntityResources(workspaceId, row.targetId).find(item => item.definitionId === definitionId);
+      } catch {
+        return [];
+      }
+      return state ? [{
+        entityId: row.targetId, name: names.get(row.targetId)!, current: state.current, maximum: state.maximum,
+        adjustment: row.adjustment, level: state.parts.level, groupName: state.parts.groupName
+      }] : [];
+    });
+    return { groups, characters };
+  }
+
+  /**
+   * After a level change: a higher maximum refills where the resource says so, and a lower one
+   * brings down a stored value above it. Returns each resource whose maximum moved, for History.
+   */
+  settleLevelChange(workspaceId: string, entityId: string, before: EntityResourceState[]): string[] {
+    const previous = new Map(before.map(state => [state.definitionId, state]));
+    const moved: string[] = [];
+    for (const state of this.listEntityResources(workspaceId, entityId)) {
+      const was = previous.get(state.definitionId);
+      if (!was || was.maximum === state.maximum) continue;
+      const stored = this.getValue(workspaceId, state.definitionId, 'entity', entityId)?.current_value ?? null;
+      const refill = state.maximum > was.maximum && state.refillOnLevelUp && state.current < state.maximum;
+      if (refill || (stored !== null && stored > state.maximum)) {
+        this.writeEntityValue(workspaceId, state.definitionId, entityId, { current: state.maximum });
+      }
+      moved.push(`${state.name} ${formatAmount(was.maximum)} → ${formatAmount(state.maximum)}${refill ? ', refilled' : ''}`);
+    }
+    return moved;
   }
 
   proposeChange(input: ResourceChangeInput): RoleplayResourceChange {
@@ -426,12 +555,14 @@ export class RoleplaySystem {
     const state = this.listEntityResources(input.workspaceId, input.entityId)
       .find(item => item.definitionId === input.definitionId);
     if (!state) throw new Error('Resource does not apply to this entity.');
+    const maximumDelta = Number.isFinite(input.maximumDelta) ? Number(input.maximumDelta) : 0;
+    if (input.source === 'ai' && maximumDelta && !definition.aiChangesMaximum) throw new Error('The AI cannot change this maximum.');
     const hasDelta = Number.isFinite(input.delta);
     if (!hasDelta && !Number.isFinite(input.value)) throw new Error('Resource value must be finite.');
-    const maximumDelta = Number.isFinite(input.maximumDelta) ? Number(input.maximumDelta) : 0;
     const maximum = Math.max(definition.minimum, state.maximum + maximumDelta);
     const nextValue = clamp(hasDelta ? state.current + Number(input.delta) : Number(input.value), definition.minimum, maximum);
-    const status = input.source === 'ai' && definition.updatePolicy !== 'automatic' ? 'pending' : 'applied';
+    // A lasting change to a maximum always waits for review, whatever the resource's policy.
+    const status = input.source === 'ai' && (maximumDelta || definition.updatePolicy !== 'automatic') ? 'pending' : 'applied';
     this.db.transaction(() => {
       this.db.prepare(`
         INSERT INTO roleplay_resource_changes (
@@ -442,9 +573,7 @@ export class RoleplaySystem {
         nextValue, hasDelta ? Number(input.delta) : nextValue - state.current, maximumDelta,
         String(input.reason || '').trim().slice(0, 240), status, input.source,
         input.provenanceId ?? null, Date.now(), status === 'applied' ? Date.now() : null);
-      if (status === 'applied') this.setTargetValue(input.workspaceId, input.definitionId, 'entity', input.entityId, {
-        current: nextValue, maximum
-      });
+      if (status === 'applied') this.applyToEntity(input.workspaceId, state, input.entityId, nextValue, maximumDelta);
     })();
     return this.getChange(input.workspaceId, input.id)!;
   }
@@ -464,7 +593,7 @@ export class RoleplaySystem {
         const maximum = Math.max(definition.minimum, state.maximum + change.maximumDelta);
         const delta = change.delta ?? change.nextValue - change.previousValue;
         const nextValue = clamp(state.current + delta, definition.minimum, maximum);
-        this.setTargetValue(workspaceId, change.definitionId, 'entity', change.entityId, { current: nextValue, maximum });
+        this.applyToEntity(workspaceId, state, change.entityId, nextValue, change.maximumDelta);
         this.db.prepare(`
           UPDATE roleplay_resource_changes SET previous_value = ?, next_value = ?
           WHERE workspace_id = ? AND change_id = ?
@@ -938,23 +1067,80 @@ export class RoleplaySystem {
 
   private getValue(workspaceId: string, definitionId: string, targetType: RoleplayTargetType, targetId: string) {
     return this.db.prepare(`
-      SELECT target_id, current_value, maximum_value FROM roleplay_resource_values
+      SELECT target_id, current_value, adjustment, base_value, growth_value FROM roleplay_resource_values
       WHERE workspace_id = ? AND definition_id = ? AND target_type = ? AND target_id = ?
     `).get(workspaceId, definitionId, targetType, targetId) as ValueRow | undefined;
   }
 
-  private getInheritedValue(workspaceId: string, definitionId: string, entityId: string) {
-    // A character's race and a specific being's species are the same link; the target's type tells them apart.
-    const group = this.db.prepare(`
-      SELECT groups.id, groups.type FROM entity_links AS links
+  // An untouched value stays empty, so a character no one has hurt stays full as their maximum grows.
+  private applyToEntity(workspaceId: string, state: EntityResourceState, entityId: string, nextValue: number, maximumDelta: number): void {
+    const stored = this.getValue(workspaceId, state.definitionId, 'entity', entityId);
+    const untouched = (stored?.current_value ?? null) === null && nextValue === state.current;
+    this.writeEntityValue(workspaceId, state.definitionId, entityId, {
+      current: untouched ? null : nextValue,
+      adjustment: state.parts.adjustment + maximumDelta
+    });
+  }
+
+  private writeEntityValue(workspaceId: string, definitionId: string, entityId: string, patch: { current?: number | null; adjustment?: number }): void {
+    const stored = this.getValue(workspaceId, definitionId, 'entity', entityId);
+    this.db.prepare(`
+      INSERT INTO roleplay_resource_values (
+        workspace_id, definition_id, target_type, target_id,
+        current_value, adjustment, base_value, growth_value, version, updated_at
+      ) VALUES (?, ?, 'entity', ?, ?, ?, NULL, NULL, 1, ?)
+      ON CONFLICT(workspace_id, definition_id, target_type, target_id) DO UPDATE SET
+        current_value = excluded.current_value, adjustment = excluded.adjustment,
+        version = roleplay_resource_values.version + 1, updated_at = excluded.updated_at
+    `).run(workspaceId, definitionId, entityId,
+      patch.current === undefined ? stored?.current_value ?? null : patch.current,
+      patch.adjustment === undefined ? Number(stored?.adjustment ?? 0) : Math.round(patch.adjustment * 100) / 100,
+      Date.now());
+  }
+
+  /** Stored values above a maximum that has since dropped are brought down to it. */
+  private clampStoredCurrents(workspaceId: string, definitionId: string): void {
+    const rows = this.db.prepare(`
+      SELECT target_id FROM roleplay_resource_values
+      WHERE workspace_id = ? AND definition_id = ? AND target_type = 'entity' AND current_value IS NOT NULL
+    `).all(workspaceId, definitionId) as Array<{ target_id: string }>;
+    for (const { target_id: entityId } of rows) {
+      let state: EntityResourceState | undefined;
+      try {
+        state = this.listEntityResources(workspaceId, entityId).find(item => item.definitionId === definitionId);
+      } catch {
+        continue;
+      }
+      const stored = this.getValue(workspaceId, definitionId, 'entity', entityId)?.current_value ?? null;
+      if (state && stored !== null && stored > state.maximum) this.writeEntityValue(workspaceId, definitionId, entityId, { current: state.maximum });
+    }
+  }
+
+  // A character's race and a specific being's species are the same link; the target's type tells them apart.
+  private groupOf(workspaceId: string, entityId: string): Group | null {
+    const row = this.db.prepare(`
+      SELECT groups.id, groups.type, groups.canonicalName AS name FROM entity_links AS links
       JOIN entities AS groups ON groups.id = links.toId AND groups.workspaceId = links.workspaceId
       WHERE links.workspaceId = ? AND links.fromId = ? AND links.relType = 'is_race' AND groups.status != 'proposed'
       LIMIT 1
-    `).get(workspaceId, entityId) as { id: string; type: string } | undefined;
-    if (!group) return undefined;
-    const targetType = group.type === 'Races' ? 'race' as const : 'species' as const;
-    const value = this.getValue(workspaceId, definitionId, targetType, group.id);
-    return value ? { value, targetId: group.id, targetType } : undefined;
+    `).get(workspaceId, entityId) as { id: string; type: string; name: string } | undefined;
+    return row ? { id: row.id, type: row.type === 'Races' ? 'race' : 'species', name: row.name } : null;
+  }
+
+  // Growth counts only while Progression uses levels; otherwise everyone is at level 1.
+  private levelOf(workspaceId: string, entityId: string): number {
+    if (!this.hasTable('roleplay_progression_settings') || !this.hasTable('roleplay_progress_values')) return 1;
+    const settings = this.db.prepare('SELECT mode FROM roleplay_progression_settings WHERE workspace_id = ?').get(workspaceId) as { mode: string } | undefined;
+    if (settings?.mode !== 'levels') return 1;
+    const row = this.db.prepare(`
+      SELECT value FROM roleplay_progress_values
+      WHERE workspace_id = ? AND target_type = 'entity' AND target_id = ? AND trait_id = ?
+    `).get(workspaceId, entityId, LEVEL) as { value: number } | undefined;
+    return Math.max(1, Math.round(Number(row?.value ?? 1)));
+  }
+
+  private hasTable(name: string): boolean {
+    return Boolean(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
   }
 
   private validateTarget(workspaceId: string, targetType: RoleplayTargetType, targetId: string): void {
@@ -989,7 +1175,11 @@ function hydrateDefinition(row: DefinitionRow): RoleplayResourceDefinition {
   return {
     id: row.definition_id, workspaceId: row.workspace_id, key: row.resource_key,
     name: row.name, description: row.description, color: row.color,
-    minimum: row.minimum, maximum: row.maximum, initialValue: row.initial_value,
+    minimum: row.minimum, maximum: row.maximum, startsFull: row.starts_full !== 0,
+    growthPerLevel: Number(row.growth_per_level ?? 0),
+    refillOnLevelUp: Number(row.refill_on_level_up ?? 0) === 1,
+    aiChangesMaximum: Number(row.ai_changes_maximum ?? 0) === 1,
+    maximumRule: String(row.maximum_rule ?? ''),
     unit: row.unit, appliesTo: JSON.parse(row.applies_to_json) as string[],
     updatePolicy: row.update_policy, position: row.position, enabled: row.enabled === 1,
     scope: row.scope === 'chosen' ? 'chosen' : 'everyone',
@@ -1042,14 +1232,50 @@ function hydrateInventoryChange(row: Record<string, unknown>): RoleplayInventory
   };
 }
 
-function validateDefinition(input: Pick<RoleplayResourceDefinition, 'name' | 'key' | 'color' | 'minimum' | 'maximum' | 'initialValue' | 'appliesTo'>): void {
+function validateDefinition(input: Pick<RoleplayResourceDefinition, 'name' | 'key' | 'color' | 'minimum' | 'maximum'> & { growthPerLevel?: number }): void {
   if (!input.name.trim() || !/^[a-z][a-z0-9_-]*$/.test(input.key)) throw new Error('Resource name and key are required.');
   if (!/^#[0-9a-f]{6}$/i.test(input.color)) throw new Error('Resource color must be a hex color.');
   if (!Number.isFinite(input.minimum) || !Number.isFinite(input.maximum) || input.maximum <= input.minimum) {
     throw new Error('Resource maximum must be greater than its minimum.');
   }
-  if (input.initialValue < input.minimum || input.initialValue > input.maximum) throw new Error('Initial value is outside the resource range.');
-  if (!input.appliesTo.length) throw new Error('Resource must apply to at least one entity type.');
+  if (input.growthPerLevel !== undefined && !Number.isFinite(Number(input.growthPerLevel))) throw new Error('Growth per level must be a number.');
+}
+
+function maximumParts(definition: RoleplayResourceDefinition, own: ValueRow | undefined, fromGroup: ValueRow | undefined, group: Group | null, level: number): ResourceMaximumParts {
+  const groupBase = fromGroup?.base_value ?? null;
+  const groupGrowth = fromGroup?.growth_value ?? null;
+  const base = groupBase ?? definition.maximum;
+  const growth = groupGrowth ?? definition.growthPerLevel;
+  return {
+    base,
+    growth,
+    level,
+    levelBonus: growth * (level - 1),
+    adjustment: Number(own?.adjustment ?? 0),
+    groupId: group?.id ?? null,
+    groupType: group?.type ?? null,
+    groupName: group?.name ?? null,
+    baseFromGroup: groupBase !== null,
+    growthFromGroup: groupGrowth !== null
+  };
+}
+
+function maximumOf(definition: RoleplayResourceDefinition, parts: ResourceMaximumParts): number {
+  return Math.max(definition.minimum, parts.base + parts.levelBonus + parts.adjustment);
+}
+
+function nullableNumber(value: unknown): number | null {
+  return value === null || value === undefined ? null : Number(value);
+}
+
+function finiteOrNull(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function formatAmount(value: number): string {
+  return Number.isInteger(value) ? String(value) : String(Math.round(value * 10) / 10);
 }
 
 function normalizePolicy(value: unknown): RoleplayUpdatePolicy {

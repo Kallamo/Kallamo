@@ -101,39 +101,89 @@ describe('Roleplay progression', () => {
     expect(() => progression.setRaceValue(WS, 'wolf', dexterity.id, 1)).toThrow();
   });
 
-  test('XP past the goal raises the level, carries the rest and gives the level rewards', () => {
+  test('XP past the goal raises the level, carries the rest and refills a resource that grows', () => {
     const health = roleplay.saveDefinition(WS, {
-      name: 'Health', key: 'health', color: '#dc2626', minimum: 0, maximum: 100,
-      initialValue: 100, appliesTo: ['Characters'], updatePolicy: 'automatic'
+      name: 'Health', key: 'health', color: '#dc2626', minimum: 0, maximum: 100, growthPerLevel: 10, refillOnLevelUp: true,
+      appliesTo: ['Characters'], updatePolicy: 'automatic'
     });
-    roleplay.setTargetValue(WS, health.id, 'entity', 'hero', { current: 40, maximum: 100 });
-    progression.saveSettings(WS, { mode: 'levels', config: { policy: 'automatic', rewards: [{ definitionId: health.id, maximumIncrease: 10, refill: true }] } });
+    roleplay.setTargetValue(WS, health.id, 'entity', 'hero', { current: 40 });
+    progression.saveSettings(WS, { mode: 'levels', config: { policy: 'automatic' } });
 
     progression.proposeChange({ id: 'win', workspaceId: WS, entityId: 'hero', kind: 'xp', delta: 1200, reason: 'Beat the captain', source: 'ai', provenanceId: 'turn-42' });
 
     expect(progression.getEntityProgress(WS, 'hero')).toMatchObject({ level: 2, xp: 200, goal: 1500 });
     expect(roleplay.listEntityResources(WS, 'hero')[0]).toMatchObject({ current: 110, maximum: 110 });
-    expect(progression.listHistory(WS, 'hero').map(entry => [entry.label, entry.source])).toEqual(expect.arrayContaining([
-      ['XP', 'ai'], ['Level', 'level'], ['Health', 'level']
-    ]));
+    expect(progression.listHistory(WS, 'hero').find(entry => entry.kind === 'level')?.reason).toBe('Health 100 → 110, refilled');
   });
 
-  test('a level typed on the sheet gives each new level its rewards, and a lower one takes them back', () => {
+  test('a race with its own base and growth gives a high-level character the full maximum at once', () => {
     const health = roleplay.saveDefinition(WS, {
-      name: 'Health', key: 'health', color: '#dc2626', minimum: 0, maximum: 100,
-      initialValue: 100, appliesTo: ['Characters'], updatePolicy: 'automatic'
+      name: 'Health', key: 'health', color: '#dc2626', minimum: 0, maximum: 100, growthPerLevel: 10,
+      appliesTo: ['Characters'], updatePolicy: 'review'
     });
-    roleplay.setTargetValue(WS, health.id, 'entity', 'hero', { current: 100, maximum: 100 });
-    progression.saveSettings(WS, { mode: 'levels', config: { rewards: [{ definitionId: health.id, maximumIncrease: 20, refill: false }] } });
+    progression.saveSettings(WS, { mode: 'levels' });
+    progression.setEntityValue(WS, 'hero', { kind: 'level', value: 7 });
+    expect(roleplay.listEntityResources(WS, 'hero')[0]).toMatchObject({ current: 160, maximum: 160 });
 
-    progression.setEntityValue(WS, 'hero', { kind: 'level', value: 4 });
-    expect(roleplay.listEntityResources(WS, 'hero')[0]).toMatchObject({ current: 100, maximum: 160 });
-    expect(progression.listHistory(WS, 'hero').find(entry => entry.kind === 'level')?.reason).toBe('Health full at +60');
+    roleplay.setTargetValue(WS, health.id, 'race', 'elf', { base: 80, growth: 20 });
+    expect(roleplay.listEntityResources(WS, 'hero')[0]).toMatchObject({
+      current: 200, maximum: 200, parts: expect.objectContaining({ base: 80, growth: 20, level: 7, levelBonus: 120 })
+    });
+  });
 
-    roleplay.setTargetValue(WS, health.id, 'entity', 'hero', { current: 150, maximum: 160 });
+  test('going down levels and back gives the same maximum, never refills, and keeps the adjustment', () => {
+    const health = roleplay.saveDefinition(WS, {
+      name: 'Health', key: 'health', color: '#dc2626', minimum: 0, maximum: 100, growthPerLevel: 20, refillOnLevelUp: true,
+      appliesTo: ['Characters'], updatePolicy: 'automatic'
+    });
+    progression.saveSettings(WS, { mode: 'levels' });
+    progression.setEntityValue(WS, 'hero', { kind: 'level', value: 7 });
+    roleplay.setTargetValue(WS, health.id, 'entity', 'hero', { current: 150, adjustment: 20 });
+    expect(roleplay.listEntityResources(WS, 'hero')[0]).toMatchObject({ current: 150, maximum: 240 });
+
+    progression.setEntityValue(WS, 'hero', { kind: 'level', value: 3 });
+    expect(roleplay.listEntityResources(WS, 'hero')[0]).toMatchObject({ current: 150, maximum: 160 });
+    expect(progression.listHistory(WS, 'hero').find(entry => entry.kind === 'level')?.reason).toBe('Health 240 → 160');
+
     progression.setEntityValue(WS, 'hero', { kind: 'level', value: 2 });
-    expect(roleplay.listEntityResources(WS, 'hero')[0]).toMatchObject({ current: 120, maximum: 120 });
-    expect(progression.listHistory(WS, 'hero').find(entry => entry.kind === 'level')?.reason).toBe('Health full at −40');
+    expect(roleplay.listEntityResources(WS, 'hero')[0]).toMatchObject({ current: 140, maximum: 140 });
+
+    progression.setEntityValue(WS, 'hero', { kind: 'level', value: 7 });
+    expect(roleplay.listEntityResources(WS, 'hero')[0]).toMatchObject({ current: 240, maximum: 240, parts: expect.objectContaining({ adjustment: 20 }) });
+  });
+
+  test('a resource that does not refill keeps what was spent, and one that starts empty starts at its lowest', () => {
+    const stamina = roleplay.saveDefinition(WS, {
+      name: 'Stamina', key: 'stamina', color: '#ff8c1a', minimum: 0, maximum: 50, growthPerLevel: 5,
+      appliesTo: ['Characters'], updatePolicy: 'automatic'
+    });
+    const rage = roleplay.saveDefinition(WS, {
+      name: 'Rage', key: 'rage', color: '#991b1b', minimum: 0, maximum: 10, startsFull: false,
+      appliesTo: ['Characters'], updatePolicy: 'automatic'
+    });
+    progression.saveSettings(WS, { mode: 'levels' });
+    roleplay.setTargetValue(WS, stamina.id, 'entity', 'hero', { current: 20 });
+    progression.setEntityValue(WS, 'hero', { kind: 'level', value: 3 });
+
+    const states = roleplay.listEntityResources(WS, 'hero');
+    const staminaState = states.find(state => state.definitionId === stamina.id);
+    const rageState = states.find(state => state.definitionId === rage.id);
+    expect(staminaState).toMatchObject({ definitionId: stamina.id, current: 20, maximum: 60 });
+    expect(rageState).toMatchObject({ definitionId: rage.id, current: 0, maximum: 10 });
+  });
+
+  test('with Progression off growth is ignored, and an untouched character stays full as the maximum moves', () => {
+    const health = roleplay.saveDefinition(WS, {
+      name: 'Health', key: 'health', color: '#dc2626', minimum: 0, maximum: 100, growthPerLevel: 20,
+      appliesTo: ['Characters'], updatePolicy: 'automatic'
+    });
+    progression.saveSettings(WS, { mode: 'levels' });
+    progression.setEntityValue(WS, 'hero', { kind: 'level', value: 5 });
+    expect(roleplay.listEntityResources(WS, 'hero')[0]).toMatchObject({ current: 180, maximum: 180 });
+
+    progression.saveSettings(WS, { mode: 'off' });
+    roleplay.setTargetValue(WS, health.id, 'entity', 'hero', { adjustment: 15 });
+    expect(roleplay.listEntityResources(WS, 'hero')[0]).toMatchObject({ current: 115, maximum: 115 });
   });
 
   test('the AI never takes XP away and raises an attribute one point at a time, in review', () => {

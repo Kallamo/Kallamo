@@ -28,12 +28,14 @@ export default function HistoryList({ entries, colors, emptyText = 'Nothing has 
       {entries.map(entry => {
         const color = entry.area === 'resource' ? colors.get(entry.refId) || 'var(--color-text-subtle)' : PROGRESS_COLOR;
         const manualSet = entry.source === 'manual' && entry.kind !== 'level' && !entry.summary;
+        const delta = entry.delta ?? entry.nextValue - entry.previousValue;
+        const maximumOnly = entry.area === 'resource' && entry.maximumDelta && !delta;
         const what = entry.summary || (entry.kind === 'level'
           ? `Level ${entry.nextValue}`
-          : manualSet ? `${entry.label} set to ${entry.nextValue}` : null);
-        const delta = entry.delta ?? entry.nextValue - entry.previousValue;
+          : maximumOnly ? `${entry.label} maximum ${formatSigned(entry.maximumDelta)}`
+            : manualSet ? `${entry.label} set to ${entry.nextValue}` : null);
         const reason = entry.status === 'rejected' && entry.reason ? `Rejected: ${entry.reason}` : entry.reason || (manualSet || (entry.summary && entry.source === 'manual') ? 'Changed by hand' : '');
-        const maximum = entry.maximumDelta ? `highest ${formatSigned(entry.maximumDelta)}` : '';
+        const maximum = entry.maximumDelta && !maximumOnly ? `maximum ${formatSigned(entry.maximumDelta)}` : '';
         return (
           <div key={`${entry.area}:${entry.id}`} className={`grid grid-cols-[4.5rem_minmax(0,9rem)_minmax(0,1fr)_auto] items-center gap-3 px-3.5 py-2.5 text-[0.8125rem] ${entry.status === 'rejected' ? 'opacity-70' : ''}`}>
             <span className="text-xs tabular-nums text-text-subtle">{when(entry)}</span>

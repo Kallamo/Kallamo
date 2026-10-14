@@ -10,8 +10,8 @@ import { RoleplaySkills, normalizeSkillConfig, type SkillConfig } from './rolepl
 export interface RoleplayRulesPackage {
   version: 1;
   resources: Array<Omit<RoleplayResourceDefinition, 'id' | 'workspaceId'>>;
-  resourceValues: Array<{ resourceKey: string; targetType: 'entity' | 'race' | 'species'; targetRef: string; current: number; maximum: number }>;
-  progression: { mode: ProgressionMode; config: Omit<ProgressionConfig, 'rewards'> & { rewards: Array<{ resourceKey: string; maximumIncrease: number; refill: boolean }> }; members: Array<{ targetType: MemberTarget; targetRef: string }> };
+  resourceValues: Array<{ resourceKey: string; targetType: 'entity' | 'race' | 'species'; targetRef: string; current: number | null; adjustment: number; base: number | null; growth: number | null }>;
+  progression: { mode: ProgressionMode; config: ProgressionConfig; members: Array<{ targetType: MemberTarget; targetRef: string }> };
   traits: Array<Omit<TraitDefinition, 'id' | 'workspaceId'>>;
   progressValues: Array<{ targetType: 'entity' | 'race' | 'species'; targetRef: string; traitKey: string; value: number }>;
   /** Absent in packages made before skills existed. */
@@ -47,7 +47,10 @@ export interface RulesDifference {
 
 const LEVEL = '__level';
 const XP = '__xp';
-const RESOURCE_FIELDS = ['name', 'description', 'color', 'minimum', 'maximum', 'initialValue', 'unit', 'appliesTo', 'updatePolicy', 'scope', 'lowestEffect', 'timeRate', 'timeDirection', 'timePeriod'] as const;
+const RESOURCE_FIELDS = [
+  'name', 'description', 'color', 'minimum', 'maximum', 'startsFull', 'growthPerLevel', 'refillOnLevelUp', 'aiChangesMaximum',
+  'maximumRule', 'unit', 'appliesTo', 'updatePolicy', 'scope', 'lowestEffect', 'timeRate', 'timeDirection', 'timePeriod'
+] as const;
 
 const MEMBER_TARGETS: MemberTarget[] = ['everyone', 'entity', 'race', 'species', 'type'];
 
@@ -88,23 +91,24 @@ export class RoleplayRulesPackager {
   }
 
   /**
-   * Race and species values always go: they are part of the world. A character's own values are
-   * play state, so without `currentValues` only who holds a chosen resource travels, full.
+   * Race and species values always go: they are part of the world, and so is a character's
+   * adjustment. The current value is play state, so it travels only with `currentValues`.
    */
   export(workspaceId: string, entityIds: Set<string>, currentValues: boolean, timeMatrix?: unknown): RoleplayRulesPackage {
     const definitions = this.roleplay.listDefinitions(workspaceId);
-    const keyById = new Map(definitions.map(definition => [definition.id, definition.key]));
     const settings = this.progression.getSettings(workspaceId);
     const traits = this.progression.listTraits(workspaceId);
     const traitKeyById = new Map(traits.map(trait => [trait.id, trait.key]));
     const resourceValues = this.roleplay.listAssignments(workspaceId).flatMap(assignment => {
       const definition = definitions.find(item => item.id === assignment.definitionId);
       if (!definition || !entityIds.has(assignment.targetId)) return [];
-      if (assignment.targetType === 'entity' && !currentValues) {
-        if (definition.scope !== 'chosen') return [];
-        return [{ resourceKey: definition.key, targetType: 'entity' as const, targetRef: assignment.targetId, current: assignment.maximum, maximum: assignment.maximum }];
-      }
-      return [{ resourceKey: definition.key, targetType: assignment.targetType, targetRef: assignment.targetId, current: assignment.current, maximum: assignment.maximum }];
+      const current = assignment.targetType === 'entity' && currentValues ? assignment.current : null;
+      // Under "everyone" a row holding only a value left behind says nothing about the character.
+      if (assignment.targetType === 'entity' && definition.scope !== 'chosen' && current === null && !assignment.adjustment) return [];
+      return [{
+        resourceKey: definition.key, targetType: assignment.targetType, targetRef: assignment.targetId,
+        current, adjustment: assignment.adjustment, base: assignment.base, growth: assignment.growth
+      }];
     });
     const progressRows = this.db.prepare(`
       SELECT target_type, target_id, trait_id, value FROM roleplay_progress_values WHERE workspace_id = ?
@@ -121,13 +125,7 @@ export class RoleplayRulesPackager {
       resourceValues,
       progression: {
         mode: settings.mode,
-        config: {
-          ...settings.config,
-          rewards: settings.config.rewards.flatMap(reward => {
-            const resourceKey = keyById.get(reward.definitionId);
-            return resourceKey ? [{ resourceKey, maximumIncrease: reward.maximumIncrease, refill: reward.refill }] : [];
-          })
-        },
+        config: settings.config,
         // Lines about a character, race or species go only with that entity.
         members: settings.members
           .filter(member => member.targetType === 'everyone' || member.targetType === 'type' || entityIds.has(member.targetId))
@@ -215,9 +213,8 @@ export class RoleplayRulesPackager {
   }
 
   /**
-   * Merge keeps this world's rules and adds what it lacks; replace takes the package's. Values
-   * for imported entities are written straight away: those entities wait for review, and a
-   * dismissed one takes its values with it through the entity reference registry.
+   * Values for imported entities are written at once; a dismissed entity takes them with it
+   * through the entity reference registry.
    */
   import(workspaceId: string, rules: RoleplayRulesPackage, mode: RulesImportMode, idMap: Map<string, string>): { timeMatrix: boolean } {
     if (mode === 'skip' || !rules || rules.version !== 1) return { timeMatrix: false };
@@ -237,16 +234,20 @@ export class RoleplayRulesPackager {
       const definitionByKey = new Map(this.roleplay.listDefinitions(workspaceId).map(definition => [definition.key, definition]));
       const insertResource = this.db.prepare(`
         INSERT OR IGNORE INTO roleplay_resource_values (
-          workspace_id, definition_id, target_type, target_id, current_value, maximum_value, version, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+          workspace_id, definition_id, target_type, target_id, current_value, adjustment, base_value, growth_value, version, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
       `);
+      const numberOrNull = (value: unknown) => value === null || value === undefined || !Number.isFinite(Number(value)) ? null : Number(value);
       for (const value of rules.resourceValues || []) {
         const definition = definitionByKey.get(value.resourceKey);
         const targetId = idMap.get(value.targetRef);
         if (!definition || !targetId || !['entity', 'race', 'species'].includes(value.targetType)) continue;
-        const maximum = Math.max(definition.minimum, Number(value.maximum) || definition.maximum);
-        const current = Math.max(definition.minimum, Math.min(maximum, Number(value.current)));
-        insertResource.run(workspaceId, definition.id, value.targetType, targetId, Number.isFinite(current) ? current : maximum, maximum, Date.now());
+        const entity = value.targetType === 'entity';
+        const base = entity ? null : numberOrNull(value.base);
+        // Values are written straight away, so a stored current above the new maximum is corrected on read.
+        insertResource.run(workspaceId, definition.id, value.targetType, targetId,
+          entity ? numberOrNull(value.current) : null, entity ? Number(value.adjustment) || 0 : 0,
+          base !== null && base > definition.minimum ? base : null, entity ? null : numberOrNull(value.growth), Date.now());
       }
 
       const settings = this.progression.getSettings(workspaceId);
@@ -259,14 +260,10 @@ export class RoleplayRulesPackager {
           this.progression.saveTrait(workspaceId, { ...trait, id: mine?.id });
         }
         for (const trait of localTraits) if (!incomingTraits.has(trait.key)) this.progression.deleteTrait(workspaceId, trait.id);
-        const rewards = (rules.progression.config?.rewards || []).flatMap(reward => {
-          const definition = definitionByKey.get(reward.resourceKey);
-          return definition ? [{ definitionId: definition.id, maximumIncrease: reward.maximumIncrease, refill: reward.refill }] : [];
-        });
         this.db.prepare(`
           INSERT INTO roleplay_progression_settings (workspace_id, mode, config_json, updated_at) VALUES (?, ?, ?, ?)
           ON CONFLICT(workspace_id) DO UPDATE SET mode = excluded.mode, config_json = excluded.config_json, updated_at = excluded.updated_at
-        `).run(workspaceId, rules.progression.mode === 'levels' ? 'levels' : 'off', JSON.stringify({ ...rules.progression.config, rewards }), Date.now());
+        `).run(workspaceId, rules.progression.mode === 'levels' ? 'levels' : 'off', JSON.stringify(rules.progression.config || {}), Date.now());
       }
       if (adopt || settings.mode === rules.progression?.mode) {
         const incoming = (rules.progression?.members || []).flatMap((member): ProgressionMember[] => {

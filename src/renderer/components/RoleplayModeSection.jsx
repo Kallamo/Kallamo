@@ -11,7 +11,7 @@ import { skillChangeItems } from '../features/roleplay/changeKinds';
 
 const EMPTY_SETTINGS = { playerEntityId: null, locationEntityId: null, activeSceneId: null, scenarioName: '', scenarioSummary: '', defaultUpdatePolicy: 'review' };
 const EMPTY_SCENE = { locationId: null, participantIds: [], possibleObserverIds: [], nearbyIds: [], objectIds: [] };
-const EMPTY_PROGRESSION = { mode: 'off', members: [], progressingIds: [], playerEntityId: null, config: { policy: 'review', xp: { firstGoal: 1000, growth: 'add', growthAmount: 500, maxLevel: null, guidance: '', aiOnlyAdds: true }, attributes: { aiRaises: true, aiLowers: false, guidance: '' }, rewards: [] } };
+const EMPTY_PROGRESSION = { mode: 'off', members: [], progressingIds: [], playerEntityId: null, config: { policy: 'review', xp: { firstGoal: 1000, growth: 'add', growthAmount: 500, maxLevel: null, guidance: '', aiOnlyAdds: true }, attributes: { aiRaises: true, aiLowers: false, guidance: '' } } };
 const JOB_STALE_AFTER = 120000;
 
 const RESOLVERS = {

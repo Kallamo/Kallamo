@@ -36,6 +36,26 @@ export function ConfigSection({ id, sectionRef, icon: Icon, title, description, 
   );
 }
 
+export const REASON_LIMIT = 80;
+
+// Why a number was changed by hand: one short line, so it reads whole in History and tooltips.
+export function ReasonInput({ value, onChange, label, className = '' }) {
+  const left = REASON_LIMIT - String(value || '').length;
+  return (
+    <label className={`flex items-center gap-2 rounded-control border border-border-default bg-surface-input pl-3 pr-2.5 focus-within:border-accent/70 ${className}`}>
+      <input
+        aria-label={label}
+        className="h-8 min-w-0 flex-1 bg-transparent text-xs text-text-primary placeholder:text-text-subtle focus:outline-none"
+        maxLength={REASON_LIMIT}
+        value={value || ''}
+        onChange={event => onChange(event.target.value)}
+        placeholder="Why? Optional, shows in History"
+      />
+      <span className={`shrink-0 text-xs tabular-nums ${left <= 10 ? 'text-status-warning' : 'text-text-subtle'}`}>{left}</span>
+    </label>
+  );
+}
+
 export function FieldLabel({ children, htmlFor, className = '' }) {
   return <label htmlFor={htmlFor} className={`block text-[0.8125rem] font-semibold text-text-secondary ${className}`}>{children}</label>;
 }
