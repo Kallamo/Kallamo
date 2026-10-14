@@ -4,6 +4,7 @@ import Button from '../../../components/ui/Button';
 import IconButton from '../../../components/ui/IconButton';
 import NumberInput from '../../../components/ui/NumberInput';
 import { ConfigSection } from '../ConfigParts';
+import ResizableTextarea from '../../../components/ui/ResizableTextarea';
 
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 
@@ -118,7 +119,7 @@ export default function TimeCostsSection({ sectionRef, matrix, calendar, onSave,
                     <div className="pb-3.5 pl-4 pr-4 md:pl-[7.625rem]">
                       <label className="block">
                         <span className="mb-1.5 block text-xs text-text-muted">Which actions take this long</span>
-                        <textarea className="field-input min-h-16 resize-none px-3 py-2.5 text-[0.8125rem] leading-relaxed custom-scrollbar" value={category.guidance || ''} onChange={event => update(category.id, { guidance: event.target.value })} />
+                        <ResizableTextarea storageKey="rules-time-guidance" value={category.guidance || ''} onChange={event => update(category.id, { guidance: event.target.value })} />
                       </label>
                     </div>
                   )}

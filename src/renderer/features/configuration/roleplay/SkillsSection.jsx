@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, Award, Check, CornerDownRight, MoreHorizontal, Pencil, Plus, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Award, Check, ChevronDown, ChevronRight, CornerDownRight, MoreHorizontal, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
 import Button from '../../../components/ui/Button';
 import ConfirmDialog from '../../../components/ui/ConfirmDialog';
 import IconButton from '../../../components/ui/IconButton';
@@ -8,6 +8,7 @@ import SearchableSelect from '../../../components/ui/SearchableSelect';
 import { Menu, MenuItem, MenuSeparator } from '../../../components/ui/Menu';
 import { ConfigSection, FieldLabel, Help, SettingsList, SwitchRow } from '../ConfigParts';
 import { Block, CheckRow, PolicyBlock, WhoProgresses } from './ProgressionSection';
+import ResizableTextarea from '../../../components/ui/ResizableTextarea';
 
 const NO_PARENT = '__none';
 const MAX_RANKS = 12;
@@ -102,17 +103,17 @@ export default function SkillsSection({ sectionRef, workspaceId, api, showToast,
 
         {skills.enabled && (
           <>
-            <Block title="Skills" aside="A class, a trade or a fighting style: the name and description say what it is.">
+            <Block title={<>Skills{catalog.length > 0 && <span className="ml-1.5 font-normal tabular-nums text-text-subtle">{catalog.length}</span>}</>} aside="A class, a trade or a fighting style: the name and description say what it is.">
               <SkillList
                 skills={catalog}
                 proposals={proposals}
                 names={names}
+                onAdd={name => setSkillDraft({ name: name || '', description: '', parentId: null })}
                 onEdit={skill => setSkillDraft(skill)}
                 onAddSub={skill => setSkillDraft({ name: '', description: '', parentId: skill.id })}
                 onDelete={skill => setDeleting(skill)}
                 onResolve={resolve}
               />
-              <Button variant="ghost" size="sm" icon={Plus} className="self-start" onClick={() => setSkillDraft({ name: '', description: '', parentId: null })}>Add skill</Button>
             </Block>
 
             <Block title="Ranks" aside="Lowest first. Every skill uses the same ladder.">
@@ -131,7 +132,7 @@ export default function SkillsSection({ sectionRef, workspaceId, api, showToast,
                 <CheckRow checked={config.aiCreates} onChange={aiCreates => saveConfig({ aiCreates })} label="The AI can propose new skills" help="When the story shows a lasting competence nothing here covers. A new skill always waits for your review before it joins the list." />
                 <div className="flex flex-col gap-1.5">
                   <FieldLabel>When skills change</FieldLabel>
-                  <textarea className="field-input min-h-16 resize-none px-3 py-2.5 text-sm leading-relaxed custom-scrollbar" value={config.guidance} onChange={event => setConfig(current => ({ ...current, guidance: event.target.value }))} onBlur={commit} placeholder="A rank takes a real test: a commission beyond their skill, a duel they should have lost, a master's lesson finished. Master is rare." />
+                  <ResizableTextarea storageKey="rules-skill-guidance" value={config.guidance} onChange={event => setConfig(current => ({ ...current, guidance: event.target.value }))} onBlur={commit} placeholder="A rank takes a real test: a commission beyond their skill, a duel they should have lost, a master's lesson finished. Master is rare." />
                   <Help>Leave it empty and the AI uses the general rule above.</Help>
                 </div>
               </div>
@@ -159,42 +160,166 @@ export default function SkillsSection({ sectionRef, workspaceId, api, showToast,
   );
 }
 
-function SkillList({ skills, proposals, names, onEdit, onAddSub, onDelete, onResolve }) {
+// Marks every place the search term appears, so a match deep in a description is easy to spot.
+function Highlight({ text, query }) {
+  if (!query || !text) return text || null;
+  const lower = text.toLowerCase();
+  const parts = [];
+  let from = 0;
+  let at = lower.indexOf(query);
+  while (at !== -1) {
+    if (at > from) parts.push(text.slice(from, at));
+    parts.push(<mark key={at} className="rounded-sm bg-accent/30 px-0.5 text-text-primary">{text.slice(at, at + query.length)}</mark>);
+    from = at + query.length;
+    at = lower.indexOf(query, from);
+  }
+  if (from < text.length) parts.push(text.slice(from));
+  return parts;
+}
+
+// Skills arrive flat; a sub-skill whose parent is gone is shown as a skill of its own.
+function familiesOf(skills) {
+  const ids = new Set(skills.map(skill => skill.id));
+  const children = new Map();
+  const roots = [];
+  for (const skill of skills) {
+    if (skill.parentId && ids.has(skill.parentId)) children.set(skill.parentId, [...(children.get(skill.parentId) || []), skill]);
+    else roots.push(skill);
+  }
+  return roots.map(skill => ({ skill, children: children.get(skill.id) || [] }));
+}
+
+function SkillList({ skills, proposals, names, onAdd, onEdit, onAddSub, onDelete, onResolve }) {
+  const [search, setSearch] = useState('');
+  const [openIds, setOpenIds] = useState(() => new Set());
+  const query = search.trim().toLowerCase();
+  const families = familiesOf(skills);
+  const matches = skill => !query || `${skill.name} ${skill.description || ''}`.toLowerCase().includes(query);
+  const toggle = id => setOpenIds(current => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const withChildren = families.filter(family => family.children.length);
+  const allOpen = withChildren.length > 0 && withChildren.every(family => openIds.has(family.skill.id));
+
+  let found = 0;
+  const shown = families.flatMap(({ skill, children }) => {
+    const hit = matches(skill);
+    const hitChildren = children.filter(matches);
+    if (query && !hit && !hitChildren.length) return [];
+    found += (hit ? 1 : 0) + hitChildren.length;
+    // A family opens by itself when the search finds a sub-skill or one of them waits for review.
+    const pending = children.some(child => child.status === 'proposed');
+    const open = openIds.has(skill.id) || (query ? hitChildren.length > 0 : pending);
+    const visibleChildren = !open ? [] : query && !openIds.has(skill.id) ? hitChildren : children;
+    return [{ skill, children: visibleChildren, count: children.length, open, dim: Boolean(query) && !hit }];
+  });
+
+  const addButton = <Button variant="ghost" size="sm" icon={Plus} onClick={() => onAdd()}>Add skill</Button>;
   if (!skills.length) {
-    return <p className="rounded-card border border-dashed border-border-subtle px-4 py-5 text-center text-[0.8125rem] text-text-muted">No skills yet.</p>;
+    return (
+      <>
+        <p className="rounded-card border border-dashed border-border-subtle px-4 py-5 text-center text-[0.8125rem] text-text-muted">No skills yet.</p>
+        <div>{addButton}</div>
+      </>
+    );
   }
   return (
-    <div className="divide-y divide-border-subtle overflow-hidden rounded-card border border-border-subtle bg-surface-inset">
-      {skills.map(skill => (
-        <SkillRow
-          key={skill.id}
-          skill={skill}
-          proposal={proposals.get(skill.id)}
-          proposedFor={names.get(proposals.get(skill.id)?.entityId)}
-          onEdit={() => onEdit(skill)}
-          onAddSub={skill.parentId || skill.status !== 'confirmed' ? null : () => onAddSub(skill)}
-          onDelete={() => onDelete(skill)}
-          onResolve={onResolve}
-        />
-      ))}
-    </div>
+    <>
+      <div className="flex items-center gap-2.5">
+        <label className="field-input flex h-9 min-w-0 flex-1 items-center gap-2 px-3 focus-within:border-accent">
+          <Search aria-hidden="true" className="h-4 w-4 shrink-0 text-text-subtle" />
+          <input
+            type="search"
+            value={search}
+            onChange={event => setSearch(event.target.value)}
+            onKeyDown={event => { if (event.key === 'Escape' && search) { event.stopPropagation(); setSearch(''); } }}
+            placeholder="Search skills"
+            aria-label="Search skills"
+            className="min-w-0 flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-subtle focus:outline-none [&::-webkit-search-cancel-button]:hidden"
+          />
+          {search && <IconButton icon={X} size="sm" label="Clear search" onClick={() => setSearch('')} />}
+        </label>
+        {query
+          ? <span className="shrink-0 text-xs tabular-nums text-text-muted">{found} of {skills.length}</span>
+          : withChildren.length > 0 && (
+            <Button variant="subtle" size="sm" onClick={() => setOpenIds(allOpen ? new Set() : new Set(withChildren.map(family => family.skill.id)))}>
+              {allOpen ? 'Collapse all' : 'Expand all'}
+            </Button>
+          )}
+        {addButton}
+      </div>
+      {shown.length ? (
+        <div className="divide-y divide-border-subtle overflow-hidden rounded-card border border-border-subtle bg-surface-inset">
+          {shown.map(({ skill, children, count, open, dim }) => (
+            <div key={skill.id} className="divide-y divide-border-subtle">
+              <SkillRow
+                skill={skill}
+                query={query}
+                dim={dim}
+                childCount={count}
+                open={open}
+                onToggle={count ? () => toggle(skill.id) : null}
+                proposal={proposals.get(skill.id)}
+                proposedFor={names.get(proposals.get(skill.id)?.entityId)}
+                onEdit={() => onEdit(skill)}
+                onAddSub={skill.status !== 'confirmed' ? null : () => onAddSub(skill)}
+                onDelete={() => onDelete(skill)}
+                onResolve={onResolve}
+              />
+              {children.map(child => (
+                <SkillRow
+                  key={child.id}
+                  skill={child}
+                  child
+                  query={query}
+                  proposal={proposals.get(child.id)}
+                  proposedFor={names.get(proposals.get(child.id)?.entityId)}
+                  onEdit={() => onEdit(child)}
+                  onAddSub={null}
+                  onDelete={() => onDelete(child)}
+                  onResolve={onResolve}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-card border border-dashed border-border-subtle px-4 py-7 text-center">
+          <p className="text-sm text-text-secondary">No skill matches “{search.trim()}”.</p>
+          <p className="caption mt-1">Search looks in names and descriptions.</p>
+          <div className="mt-3 flex justify-center">
+            <Button variant="ghost" size="sm" icon={Plus} onClick={() => onAdd(search.trim())}>Add “{search.trim()}”</Button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
-function SkillRow({ skill, proposal, proposedFor, onEdit, onAddSub, onDelete, onResolve }) {
-  const [open, setOpen] = useState(false);
+function SkillRow({ skill, child = false, query = '', dim = false, childCount = 0, open = false, onToggle = null, proposal, proposedFor, onEdit, onAddSub, onDelete, onResolve }) {
+  const [menuOpen, setMenuOpen] = useState(false);
   const anchorRef = useRef(null);
   const proposed = skill.status === 'proposed';
+  const description = proposed && proposal
+    ? [proposedFor ? `For ${proposedFor}.` : '', proposal.reason].filter(Boolean).join(' ') || skill.description || '—'
+    : skill.description || '—';
   return (
-    <div className={`flex items-center gap-3 py-2 pr-2 ${skill.parentId ? 'pl-8' : 'pl-3.5'} ${proposed ? 'bg-status-warning/[0.04]' : ''}`}>
-      {skill.parentId && <CornerDownRight aria-hidden="true" className="-ml-4 h-3.5 w-3.5 shrink-0 text-text-subtle" />}
-      <div className="min-w-0 flex-1">
+    <div className={`flex items-center gap-2.5 py-2 pl-2 pr-2 ${proposed ? 'bg-status-warning/[0.04]' : ''}`}>
+      {child
+        ? <CornerDownRight aria-hidden="true" className="ml-9 mr-1.5 h-3.5 w-3.5 shrink-0 text-text-subtle" />
+        : onToggle
+          ? <IconButton icon={open ? ChevronDown : ChevronRight} size="sm" label={open ? `Hide the sub-skills of ${skill.name}` : `Show the sub-skills of ${skill.name}`} aria-expanded={open} onClick={onToggle} />
+          : <span aria-hidden="true" className="w-8 shrink-0" />}
+      <div className={`min-w-0 flex-1 ${dim ? 'opacity-55' : ''}`}>
         <span className="flex items-center gap-2">
-          <span className="truncate text-[0.8125rem] font-semibold text-text-secondary">{skill.name}</span>
+          <span className="truncate text-[0.8125rem] font-semibold text-text-secondary"><Highlight text={skill.name} query={query} /></span>
+          {childCount > 0 && <span className="shrink-0 rounded-full bg-tint/[0.06] px-2 py-0.5 text-xs font-medium tabular-nums text-text-muted">{childCount} {childCount === 1 ? 'sub-skill' : 'sub-skills'}</span>}
           {proposed && <span className="shrink-0 rounded-full bg-status-warning/12 px-2 py-0.5 text-xs font-semibold text-status-warning">Proposed by the AI</span>}
         </span>
-        <span className="block truncate text-xs text-text-muted" data-tooltip={skill.description?.length > 90 ? skill.description : undefined}>
-          {proposed && proposal ? [proposedFor ? `For ${proposedFor}.` : '', proposal.reason].filter(Boolean).join(' ') || skill.description || '—' : skill.description || '—'}
+        <span className="block truncate text-xs text-text-muted" data-tooltip={description.length > 90 ? description : undefined}>
+          <Highlight text={description} query={query} />
         </span>
       </div>
       {proposed && proposal ? (
@@ -204,12 +329,12 @@ function SkillRow({ skill, proposal, proposedFor, onEdit, onAddSub, onDelete, on
         </>
       ) : (
         <>
-          <IconButton ref={anchorRef} icon={MoreHorizontal} size="sm" label={`${skill.name} actions`} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(value => !value)} />
-          <Menu anchorRef={anchorRef} open={open} onClose={() => setOpen(false)} label={`${skill.name} actions`} className="w-48">
-            <MenuItem icon={Pencil} label="Edit" onSelect={() => { setOpen(false); onEdit(); }} />
-            {onAddSub && <MenuItem icon={Plus} label="Add sub-skill" onSelect={() => { setOpen(false); onAddSub(); }} />}
+          <IconButton ref={anchorRef} icon={MoreHorizontal} size="sm" label={`${skill.name} actions`} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen(value => !value)} />
+          <Menu anchorRef={anchorRef} open={menuOpen} onClose={() => setMenuOpen(false)} label={`${skill.name} actions`} className="w-48">
+            <MenuItem icon={Pencil} label="Edit" onSelect={() => { setMenuOpen(false); onEdit(); }} />
+            {onAddSub && <MenuItem icon={Plus} label="Add sub-skill" onSelect={() => { setMenuOpen(false); onAddSub(); }} />}
             <MenuSeparator />
-            <MenuItem icon={Trash2} label="Delete" danger onSelect={() => { setOpen(false); onDelete(); }} />
+            <MenuItem icon={Trash2} label="Delete" danger onSelect={() => { setMenuOpen(false); onDelete(); }} />
           </Menu>
         </>
       )}
@@ -286,7 +411,7 @@ function SkillModal({ initial, parents, hasChildren, onCancel, onSave }) {
         )}
         <label className="flex flex-col gap-1.5">
           <span className="text-[0.8125rem] font-semibold text-text-secondary">What it means to the AI</span>
-          <textarea className="field-input min-h-20 resize-none px-3 py-2.5 text-sm leading-relaxed custom-scrollbar" value={draft.description || ''} onChange={event => set({ description: event.target.value })} placeholder="Working metal at a forge: tools, blades, armour and repairs." />
+          <ResizableTextarea storageKey="rules-skill-meaning" value={draft.description || ''} onChange={event => set({ description: event.target.value })} placeholder="Working metal at a forge: tools, blades, armour and repairs." />
         </label>
         <div className="flex justify-end gap-2 pt-1">
           <Button type="button" variant="ghost" disabled={saving} onClick={onCancel}>Cancel</Button>

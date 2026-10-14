@@ -3,6 +3,7 @@ import { Plus, X } from 'lucide-react';
 import SearchableSelect from '../../../components/ui/SearchableSelect';
 import { meta } from '../../worldbuild/worldbuildConfig';
 import { FieldLabel, Help } from '../ConfigParts';
+import ResizableTextarea from '../../../components/ui/ResizableTextarea';
 
 const entityOption = entity => ({
   id: entity.id,
@@ -86,9 +87,9 @@ export default function SceneBlock({ sectionRef, settings, scene, groups, locati
               onBlur={() => onSaveSettings({ scenarioName: settings.scenarioName || '' })}
               placeholder="Name, e.g. Siege at dawn"
             />
-            <textarea
+            <ResizableTextarea
               aria-label="What is happening right now"
-              className="field-input min-h-20 resize-none px-3 py-2.5 text-sm leading-relaxed custom-scrollbar"
+              storageKey="rules-scene-summary"
               value={settings.scenarioSummary || ''}
               onChange={event => onDraftSettings({ scenarioSummary: event.target.value })}
               onBlur={() => onSaveSettings({ scenarioSummary: settings.scenarioSummary || '' })}
