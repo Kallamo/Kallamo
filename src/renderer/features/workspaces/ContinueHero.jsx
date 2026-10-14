@@ -5,7 +5,7 @@ import ContourCover from './ContourCover';
 import RoleplayChip from './RoleplayChip';
 import { displayDescription, isExampleWorkspace, leadImage, plural, timeAgo } from './workspaceFormat';
 
-// The most recent workspace, large: its cover, its latest reply, and a way straight back in.
+// The most recent workspace as a full-width banner: its cover, its latest reply, and a way straight back in.
 export default function ContinueHero({ chat, onOpen }) {
   // A picture that fails to load steps down: the scene's place, then the cover, then none.
   const [failed, setFailed] = useState(0);
@@ -24,42 +24,41 @@ export default function ContinueHero({ chat, onOpen }) {
   ];
 
   return (
-    <section className={`relative shrink-0 ${roleplay ? 'h-[18rem]' : 'h-[19.5rem]'} overflow-hidden rounded-[1.375rem] border border-tint/10 shadow-[0_30px_60px_color-mix(in_srgb,var(--theme-shade)_35%,transparent)]`}>
+    <section className="relative h-[30rem] shrink-0 overflow-hidden">
       {image ? (
         <img key={image.src} src={image.src} alt="" onError={stepDown} className="absolute inset-0 h-full w-full object-cover" style={{ objectPosition: image.position }} />
       ) : (
         <ContourCover title={chat.title} />
       )}
-      <div aria-hidden="true" className="absolute inset-0 bg-[linear-gradient(90deg,color-mix(in_srgb,var(--theme-scrim)_95%,transparent)_0%,color-mix(in_srgb,var(--theme-scrim)_82%,transparent)_40%,color-mix(in_srgb,var(--theme-scrim)_25%,transparent)_78%,color-mix(in_srgb,var(--theme-scrim)_10%,transparent)_100%)]" />
+      <div aria-hidden="true" className="absolute inset-0 bg-[linear-gradient(90deg,color-mix(in_srgb,var(--theme-scrim)_94%,transparent)_0%,color-mix(in_srgb,var(--theme-scrim)_80%,transparent)_34%,color-mix(in_srgb,var(--theme-scrim)_30%,transparent)_66%,color-mix(in_srgb,var(--theme-scrim)_8%,transparent)_100%)]" />
+      <div aria-hidden="true" className="absolute inset-x-0 top-0 h-[8.75rem] bg-gradient-to-b from-scrim/70 to-transparent" />
+      {/* The banner has no edge of its own: it fades into the page below. */}
+      <div aria-hidden="true" className="absolute inset-x-0 bottom-0 h-[11.25rem] bg-gradient-to-b from-transparent to-surface-canvas" />
 
-      {scene && (scene.locationName || scene.time) && (
-        <div className="absolute right-9 top-[2.375rem] z-[1] flex items-center gap-2">
-          {scene.locationName && (
-            <ScenePill>
-              <MapPin className="h-[0.9375rem] w-[0.9375rem] shrink-0 text-entity-location" aria-hidden="true" />
-              <span className="max-w-[16rem] truncate">{scene.locationName}</span>
-            </ScenePill>
-          )}
-          {scene.time && (
-            <ScenePill>
-              <Clock className="h-[0.9375rem] w-[0.9375rem] shrink-0 text-text-secondary" aria-hidden="true" />
-              {scene.time}
-              {scene.date && <span className="font-medium text-text-muted">· {scene.date}</span>}
-            </ScenePill>
-          )}
-        </div>
-      )}
-      <div className="relative flex h-full max-w-[60rem] flex-col gap-3 px-9 py-7">
-        {!roleplay && (
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-text-secondary">{example ? 'Start here' : `Active ${timeAgo(chat.updatedAt).toLowerCase()}`}</span>
-            {example && <HeroChip>Example</HeroChip>}
-          </div>
-        )}
-        <div className="flex min-w-0 items-center gap-3.5">
-          <h2 className="min-w-0 truncate pb-1 text-[2.875rem] font-extrabold leading-[1.15] tracking-[-0.025em] text-text-primary">{chat.title}</h2>
+      <div className="relative mx-auto flex h-full w-full max-w-[75rem] flex-col gap-4 px-8 pb-10 pt-24">
+        <div className="flex items-center gap-2.5">
+          <span className="text-xs font-semibold text-text-secondary">{example ? 'Start here' : `Last opened ${timeAgo(chat.updatedAt).toLowerCase()}`}</span>
+          {example && <HeroChip>Example</HeroChip>}
           {roleplay && <RoleplayChip />}
         </div>
+        <h2 className="min-w-0 truncate pb-1 text-[3.5rem] font-extrabold leading-[1.05] tracking-[-0.03em] text-text-primary">{chat.title}</h2>
+        {scene && (scene.locationName || scene.time) && (
+          <div className="flex flex-wrap items-center gap-2">
+            {scene.locationName && (
+              <ScenePill>
+                <MapPin className="h-[0.9375rem] w-[0.9375rem] shrink-0 text-entity-location" aria-hidden="true" />
+                <span className="max-w-[16rem] truncate">{scene.locationName}</span>
+              </ScenePill>
+            )}
+            {scene.time && (
+              <ScenePill>
+                <Clock className="h-[0.9375rem] w-[0.9375rem] shrink-0 text-text-secondary" aria-hidden="true" />
+                {scene.time}
+                {scene.date && <span className="font-medium text-text-muted">· {scene.date}</span>}
+              </ScenePill>
+            )}
+          </div>
+        )}
         {description && <p className="line-clamp-2 max-w-[36rem] text-sm leading-relaxed text-text-secondary">{description}</p>}
         {reply?.excerpt && (
           <div className="flex max-w-[36rem] flex-col gap-1.5">

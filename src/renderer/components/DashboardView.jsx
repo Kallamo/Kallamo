@@ -9,9 +9,8 @@ import EmptyState from './ui/EmptyState';
 import ContinueHero from '../features/workspaces/ContinueHero';
 import WorkspaceCard, { NewWorkspaceTile } from '../features/workspaces/WorkspaceCard';
 import SetupStrip from '../features/workspaces/SetupStrip';
-import EmptyWorkspaces, { EmptyBackdrop } from '../features/workspaces/EmptyWorkspaces';
+import EmptyWorkspaces from '../features/workspaces/EmptyWorkspaces';
 import DiscordButton from '../features/workspaces/DiscordButton';
-import { leadImage } from '../features/workspaces/workspaceFormat';
 
 const SORTS = [
   { value: 'recent', label: 'Recent' },
@@ -35,7 +34,7 @@ export default function DashboardView() {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [sort, setSort] = useState('recent');
-  const [chatModal, setChatModal] = useState(null); // { chat } while the create/edit dialog is open
+  const [chatModal, setChatModal] = useState(null); // { chat, draft } while the create/edit dialog is open
   const [chatToDelete, setChatToDelete] = useState(null);
 
   // Counts and the latest reply change while you work inside a workspace; refresh on return.
@@ -63,7 +62,7 @@ export default function DashboardView() {
 
   const noProfileReady = writingProfiles.length === 0 || writingProfiles.every(profile => profile.needsSetup);
   const isEmpty = chats.length === 0;
-  const ambient = !isEmpty && hero ? leadImage(hero)?.src : null;
+  const showHero = Boolean(!isEmpty && !query && hero);
 
   const openWorkspace = (chat, view = 'chat') => {
     setActiveWorkspaceView(view);
@@ -78,83 +77,70 @@ export default function DashboardView() {
   };
 
   return (
-    <div className="relative flex h-full w-full flex-col overflow-hidden surface-page select-none">
-      {isEmpty ? <EmptyBackdrop /> : ambient && (
-        <>
-          <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-[40rem] overflow-hidden">
-            <img src={ambient} alt="" className="absolute -left-16 -top-16 h-[44rem] w-[calc(100%+8rem)] max-w-none object-cover opacity-50 blur-[56px] saturate-[1.25]" />
-          </div>
-          <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-[40rem] bg-[linear-gradient(to_bottom,color-mix(in_srgb,var(--theme-surface-canvas)_35%,transparent)_0%,color-mix(in_srgb,var(--theme-surface-canvas)_75%,transparent)_55%,var(--theme-surface-canvas)_100%)]" />
-        </>
-      )}
+    <div className={`relative flex h-full w-full flex-col overflow-hidden select-none ${showHero ? 'bg-surface-canvas' : 'surface-page'}`}>
+      {/* The banner runs up under the title bar; without it, content fades out before reaching it. */}
+      <div className={`relative z-10 flex-1 overflow-y-auto custom-scrollbar ${showHero ? '' : '[mask-image:linear-gradient(to_bottom,transparent_0,transparent_2.25rem,black_4.25rem)]'}`}>
+        {showHero && <ContinueHero chat={hero} onOpen={openWorkspace} />}
+        <div className={`mx-auto flex w-full max-w-[75rem] flex-col gap-5 px-8 pb-28 ${showHero ? 'pt-10' : 'pt-[4.75rem]'}`}>
+          {!query && noProfileReady && (
+            <SetupStrip
+              hasApiProfile={apiProfiles.length > 0}
+              onOpenSettings={() => openSettings('api')}
+              onOpenLibrary={() => setCurrentView('library')}
+              workspaceLabel={hero?.title}
+            />
+          )}
 
-      <div className="relative z-10 flex-1 overflow-y-auto custom-scrollbar [mask-image:linear-gradient(to_bottom,transparent_0,transparent_2.25rem,black_4.25rem)]">
-        <div className={`mx-auto flex w-full max-w-[75rem] flex-col gap-[1.375rem] px-8 pb-20 pt-[4.25rem] ${isEmpty ? 'min-h-full' : ''}`}>
           <header className="flex flex-wrap items-center gap-3">
-            <h1 className="flex-1 text-[1.875rem] font-extrabold tracking-[-0.02em] text-text-primary">Workspaces</h1>
+            <h1 className="text-2xl font-extrabold tracking-[-0.02em] text-text-primary">Workspaces</h1>
+            <span className="caption text-[0.8125rem] tabular-nums">{isEmpty ? 0 : listed.length}</span>
+            <span className="flex-1" />
             {!isEmpty && (
-              <div className="relative w-64">
-                <Search className="pointer-events-none absolute left-3 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-text-subtle" aria-hidden="true" />
-                <input
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  placeholder="Search workspaces"
-                  aria-label="Search workspaces"
-                  className="h-[2.375rem] w-full rounded-[0.625rem] border border-border-default bg-surface-inset/55 pl-9 pr-3 text-sm text-text-secondary backdrop-blur-xl placeholder:text-text-subtle focus:border-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
-                />
-              </div>
+              <>
+                <div className="relative w-60">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-text-subtle" aria-hidden="true" />
+                  <input
+                    value={searchQuery}
+                    onChange={e => setSearchQuery(e.target.value)}
+                    placeholder="Search workspaces"
+                    aria-label="Search workspaces"
+                    className="h-9 w-full rounded-[0.625rem] border border-border-default bg-surface-inset/55 pl-9 pr-3 text-sm text-text-secondary placeholder:text-text-subtle focus:border-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+                  />
+                </div>
+                <SegmentedControl label="Sort workspaces" value={sort} onChange={setSort} options={SORTS} />
+                <span aria-hidden="true" className="mx-1 h-[1.375rem] w-px bg-tint/10" />
+              </>
             )}
-            <GlassButton icon={LibraryBig} onClick={() => setCurrentView('library')}>Library</GlassButton>
-            {!isEmpty && <GlassButton icon={Plus} onClick={openCreate} primary>New workspace</GlassButton>}
+            <HeaderButton icon={LibraryBig} onClick={() => setCurrentView('library')}>Library</HeaderButton>
+            {!isEmpty && <HeaderButton icon={Plus} onClick={openCreate} primary>New workspace</HeaderButton>}
           </header>
 
           {isEmpty ? (
-            <EmptyWorkspaces onCreate={openCreate} needsModel={noProfileReady} onOpenSettings={() => openSettings('api')} />
+            <EmptyWorkspaces onMoreOptions={draft => setChatModal({ chat: null, draft })} />
+          ) : listed.length === 0 ? (
+            <EmptyState title="No matching workspaces" subtitle="Try a different title or clear the search." />
           ) : (
-            <>
-              {!query && hero && <ContinueHero chat={hero} onOpen={openWorkspace} />}
-              {!query && noProfileReady && (
-                <SetupStrip
-                  hasApiProfile={apiProfiles.length > 0}
-                  onOpenSettings={() => openSettings('api')}
-                  onOpenLibrary={() => setCurrentView('library')}
-                  workspaceLabel={hero?.title}
+            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {listed.map(chat => (
+                <WorkspaceCard
+                  key={chat.id}
+                  chat={chat}
+                  profiles={profilesOf(chat)}
+                  onOpen={openWorkspace}
+                  onTogglePin={togglePin}
+                  onEdit={target => setChatModal({ chat: target })}
+                  onDelete={setChatToDelete}
                 />
-              )}
-
-              <div className="mt-2.5 flex items-center gap-3">
-                <h2 className="text-base font-bold text-text-primary">{query ? 'Results' : 'All workspaces'}</h2>
-                <span className="caption tabular-nums">{listed.length}</span>
-                <span className="flex-1" />
-                <SegmentedControl label="Sort workspaces" value={sort} onChange={setSort} options={SORTS} />
-              </div>
-
-              {listed.length === 0 ? (
-                <EmptyState title="No matching workspaces" subtitle="Try a different title or clear the search." />
-              ) : (
-                <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                  {listed.map(chat => (
-                    <WorkspaceCard
-                      key={chat.id}
-                      chat={chat}
-                      profiles={profilesOf(chat)}
-                      onOpen={openWorkspace}
-                      onTogglePin={togglePin}
-                      onEdit={target => setChatModal({ chat: target })}
-                      onDelete={setChatToDelete}
-                    />
-                  ))}
-                  {!query && <NewWorkspaceTile onClick={openCreate} />}
-                </div>
-              )}
-            </>
+              ))}
+              {!query && <NewWorkspaceTile onClick={openCreate} />}
+            </div>
           )}
         </div>
       </div>
 
       <DiscordButton />
 
-      {chatModal && <ChatModal chat={chatModal.chat} onClose={() => setChatModal(null)} />}
+      {chatModal && <ChatModal chat={chatModal.chat} draft={chatModal.draft} onClose={() => setChatModal(null)} />}
       {chatToDelete && (
         <DeleteModal
           title="Delete this workspace?"
@@ -175,14 +161,14 @@ export default function DashboardView() {
   );
 }
 
-function GlassButton({ icon: Icon, children, onClick, primary = false }) {
+function HeaderButton({ icon: Icon, children, onClick, primary = false }) {
   return (
     <button
       type="button"
       onClick={onClick}
       className={`inline-flex h-9 items-center gap-2 rounded-[0.625rem] px-3.5 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${primary
         ? 'bg-accent/90 text-on-accent shadow-[0_0.375rem_1.125rem_-0.5rem] shadow-accent/50 hover:bg-accent'
-        : 'border border-border-default bg-surface-inset/45 text-text-primary backdrop-blur-xl hover:bg-surface-hover'}`}
+        : 'border border-border-default bg-tint/[0.04] text-text-primary hover:bg-surface-hover'}`}
     >
       <Icon className="h-4 w-4" aria-hidden="true" />
       {children}

@@ -18,9 +18,6 @@ const {
   UNKNOWN_VERSION
 } = require('./database/migration-backup');
 
-// --- DATABASE INITIALIZATION & MIGRATIONS ---
-
-// Resolve the APPDATA data path
 const appDataPath = process.env.APPDATA || (process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support') : path.join(os.homedir(), '.local', 'share'));
 
 const oldDataDir1 = path.join(appDataPath, 'AI Writer Companion');
@@ -78,7 +75,6 @@ if (fs.existsSync(oldDbPath) && !fs.existsSync(dbPath)) {
   }
 }
 
-// --- WORKSPACE RESTORE BOOT SWAP FLOW ---
 const markerPath = path.join(dataDir, 'RESTORE_PENDING.json');
 if (fs.existsSync(markerPath)) {
   try {
@@ -149,7 +145,6 @@ db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 db.isFreshInstall = isFreshInstall;
 
-// --- PRE-MIGRATION SAFETY COPY ---
 const appVersion = app.getVersion();
 const migrationBackupDir = path.join(dataDir, 'backups');
 const migrationIds = MIGRATIONS.map(migration => migration.id);
@@ -226,8 +221,6 @@ if (backupNeeded) {
 }
 
 
-// --- ENCRYPTION HELPERS ---
-
 db.encryptApiKey = function(plainText) {
   if (!plainText) return '';
   if (plainText.startsWith('safe:')) return plainText;
@@ -258,8 +251,6 @@ db.decryptApiKey = function(encryptedText) {
   }
   return '';
 };
-
-// --- DATABASE SCHEMA SETUP ---
 
 runSchemaStep(() => db.exec(`
   CREATE TABLE IF NOT EXISTS api_profiles (
@@ -687,8 +678,6 @@ runSchemaStep(() => db.exec(`
   END;
 `));
 
-// --- DATABASE MIGRATIONS ---
-
 try {
   const tableInfo = db.pragma("table_info(chats)");
   const columns = tableInfo.map(col => col.name);
@@ -1051,8 +1040,7 @@ try {
     console.log("Database Migration: Added enabled column to constant_memory table.");
   }
 
-  // Writing Desk page geometry + typography. The documents table is recent,
-  // so existing installs may already have it without these columns.
+  // Writing Desk page geometry and typography, for documents tables created without them.
   const docTableInfo = db.pragma("table_info(documents)");
   const docColumns = docTableInfo.map(col => col.name);
   const docColumnDefs = [
@@ -1163,7 +1151,7 @@ try {
   console.error("Migration error adding columns to database tables:", e);
 }
 
-// Data migration: patch memoryBlocks entries missing the 'type' field (pre-fix data)
+// memoryBlocks entries saved without a 'type' field get one.
 try {
   const chatRows = db.prepare("SELECT id, memoryBlocks FROM chats WHERE memoryBlocks IS NOT NULL AND memoryBlocks != '' AND memoryBlocks != '[]'").all();
   for (const row of chatRows) {
@@ -1248,7 +1236,6 @@ try {
 try {
   const existingMeta = db.prepare("SELECT value FROM settings WHERE key = 'rag_model_metadata'").get();
   if (!existingMeta) {
-    // First run, stamp will be written after successful re-index
     console.log("Database: No rag_model_metadata found. Will be created after first indexing.");
   }
 } catch (e) {
@@ -1300,8 +1287,6 @@ function encryptExistingKeys() {
     console.error("[Database Migration] Error encrypting existing API profiles:", e);
   }
 }
-
-// --- CONSTANT MEMORY HELPERS (manual always-on snippets) ---
 
 db.loadTokenCalibrations = function() {
   return db.prepare('SELECT apiProfileId, model, protocol, ratio FROM token_calibration').all();
@@ -1416,8 +1401,6 @@ function migrateConstantMemoryToSQLite() {
   }
 }
 
-// --- ONBOARDING SEED ---
-
 // ProseMirror node size: text = char count, other nodes = content + 2.
 function pmNodeSize(node) {
   if (node.type === 'text') return (node.text || '').length;
@@ -1426,24 +1409,19 @@ function pmNodeSize(node) {
 
 const seedId = (prefix) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 
-// First-run onboarding. One-shot behind a settings flag, so deleting the example never resurrects it.
-function seedOnboarding() {
-  try {
-    const seeded = db.prepare("SELECT value FROM settings WHERE key = 'onboarding_seeded'").get();
-    if (seeded) return;
+// The sample story: three example profiles and a workspace that uses them. Profiles still in
+// the Library under the same name are reused as they are, so restoring never duplicates or resets them.
+function seedExampleWorkspace() {
+  const now = Date.now();
 
-    const now = Date.now();
-
-    // All three ship agentic-RAG ON (isAgentic=1) with the default agentic loop, no
-    // custom agenticPrompt, so the built-in behavior drives retrieval.
-    const profiles = [
-      {
-        id: seedId('wp'),
-        name: 'Editing',
-        description: '(Example) Line-editing for the Writing Desk. Select text and invoke to tighten and sharpen your prose.',
-        color: '#7CC4F2',
-        resultChannel: 'replacement',
-        systemPrompt: `Rewrite the selected passage so it earns every word. Work at the sentence level.
+  const profiles = [
+    {
+      id: seedId('wp'),
+      name: 'Editing',
+      description: '(Example) Line-editing for the Writing Desk. Select text and invoke to tighten and sharpen your prose.',
+      color: '#7CC4F2',
+      resultChannel: 'replacement',
+      systemPrompt: `Rewrite the selected passage so it earns every word. Work at the sentence level.
 
 ### Do
 - Cut filler and redundancy.
@@ -1459,14 +1437,14 @@ function seedOnboarding() {
 
 ### Output
 Return only the revised passage, written in the language of the original, with nothing before or after it: no notes, no quotation marks, no explanation.`,
-      },
-      {
-        id: seedId('wp'),
-        name: 'Brainstorming',
-        description: '(Example) A thinking partner for the Chat tab. Talk through plot, character, and ideas.',
-        color: '#F2C14E',
-        resultChannel: 'replacement',
-        systemPrompt: `Help the writer think; do not think for them. Treat each message as a problem to open up, not one to close in a single answer.
+    },
+    {
+      id: seedId('wp'),
+      name: 'Brainstorming',
+      description: '(Example) A thinking partner for the Chat tab. Talk through plot, character, and ideas.',
+      color: '#F2C14E',
+      resultChannel: 'replacement',
+      systemPrompt: `Help the writer think; do not think for them. Treat each message as a problem to open up, not one to close in a single answer.
 
 ### How to help
 - Ask the question that exposes the real decision under what they said, instead of guessing.
@@ -1480,14 +1458,14 @@ Return only the revised passage, written in the language of the original, with n
 ### Keep it tight
 - One sharp paragraph beats a long list.
 - Do not write finished prose for the manuscript unless the writer explicitly asks you to.`,
-      },
-      {
-        id: seedId('wp'),
-        name: 'Review & Coherence',
-        description: '(Example) Checks your text against your canon and flags contradictions. Try it from the Writing Desk.',
-        color: '#C792EA',
-        resultChannel: 'analysis',
-        systemPrompt: `Check the text under review against everything the project already establishes: its canon, memories, worldbuilding, and the entities and relations recorded for this world. Find where the text and the established world disagree. Do not judge the writing's style or quality.
+    },
+    {
+      id: seedId('wp'),
+      name: 'Review & Coherence',
+      description: '(Example) Checks your text against your canon and flags contradictions. Try it from the Writing Desk.',
+      color: '#C792EA',
+      resultChannel: 'analysis',
+      systemPrompt: `Check the text under review against everything the project already establishes: its canon, memories, worldbuilding, and the entities and relations recorded for this world. Find where the text and the established world disagree. Do not judge the writing's style or quality.
 
 ### Look for
 - Contradictions of stated fact.
@@ -1507,181 +1485,199 @@ Rank the problems by how much they break the story, most serious first.
 ### Rules
 - Verify before you flag. If the text is consistent, say so instead of inventing issues, and do not report matters of taste as errors.
 - Report findings only. Never rewrite, rephrase, or replace the author's text; you are reviewing it, not editing it.`,
-      },
-    ];
+    },
+  ];
 
-    const insertProfile = db.prepare(`
-      INSERT INTO writing_profiles (
-        id, name, description, color, apiProfileId, model, temperature, maxTokens,
-        systemPrompt, knowledgeFiles, manualMode, manualJson, isAgentic, agenticPrompt, agenticMaxTurns,
-        resultChannel, contextWindow, last_modified, syncToCloud
-      ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, '[]', 0, '', 1, '', 3, ?, ?, ?, 0)
-    `);
+  const insertProfile = db.prepare(`
+    INSERT INTO writing_profiles (
+      id, name, description, color, apiProfileId, model, temperature, maxTokens,
+      systemPrompt, knowledgeFiles, manualMode, manualJson, isAgentic, agenticPrompt, agenticMaxTurns,
+      resultChannel, contextWindow, last_modified, syncToCloud
+    ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, '[]', 0, '', 1, '', 3, ?, ?, ?, 0)
+  `);
 
-    // The example workspace, with the three profiles pre-activated.
-    const workspaceId = seedId('chat');
-    const memoryBlocks = [
-      {
-        id: seedId('manual'),
-        title: 'Canon — The Lighthouse',
-        summary: 'The lighthouse on Mourne Cliff has stood abandoned for forty years. Its last keeper, Aldous Finn, vanished without a trace in 1983. The villagers avoid the cliff path after dark.',
-        type: 'manual', strategy: 'constant', profiles: [], keywords: ['lighthouse', 'Aldous Finn', 'Mourne Cliff'], enabled: true,
-      },
-      {
-        id: seedId('manual'),
-        title: 'Canon — Protagonist',
-        summary: 'Mara Finn, 28, is Aldous’s granddaughter. She returns to the village to sell the family property, but the lighthouse and her grandfather’s disappearance pull her in.',
-        type: 'manual', strategy: 'constant', profiles: [], keywords: ['Mara Finn', 'protagonist'], enabled: true,
-      },
-    ];
+  const existingProfile = db.prepare('SELECT id, color FROM writing_profiles WHERE name = ? ORDER BY last_modified DESC LIMIT 1');
+  const newProfiles = [];
+  for (const profile of profiles) {
+    const existing = existingProfile.get(profile.name);
+    if (existing) Object.assign(profile, { id: existing.id, color: existing.color || profile.color });
+    else newProfiles.push(profile);
+  }
 
-    // Best-effort: a failed copy leaves the workspace without a background.
-    let backgroundImage = '';
-    try {
-      const srcBg = path.join(__dirname, '..', 'assets', 'onboarding-bg.svg');
-      if (fs.existsSync(srcBg)) {
-        const chatDir = path.join(dataDir, 'ChatHistory', workspaceId);
-        fs.mkdirSync(chatDir, { recursive: true });
-        const destBg = path.join(chatDir, `bg_image_${now}.svg`);
-        fs.copyFileSync(srcBg, destBg);
-        backgroundImage = destBg;
-      }
-    } catch (bgErr) {
-      console.error('[Onboarding] Background image copy failed:', bgErr);
+  // The example workspace, with the three profiles pre-activated.
+  const workspaceId = seedId('chat');
+  const memoryBlocks = [
+    {
+      id: seedId('manual'),
+      title: 'Canon — The Lighthouse',
+      summary: 'The lighthouse on Mourne Cliff has stood abandoned for forty years. Its last keeper, Aldous Finn, vanished without a trace in 1983. The villagers avoid the cliff path after dark.',
+      type: 'manual', strategy: 'constant', profiles: [], keywords: ['lighthouse', 'Aldous Finn', 'Mourne Cliff'], enabled: true,
+    },
+    {
+      id: seedId('manual'),
+      title: 'Canon — Protagonist',
+      summary: 'Mara Finn, 28, is Aldous’s granddaughter. She returns to the village to sell the family property, but the lighthouse and her grandfather’s disappearance pull her in.',
+      type: 'manual', strategy: 'constant', profiles: [], keywords: ['Mara Finn', 'protagonist'], enabled: true,
+    },
+  ];
+
+  // Best-effort: a failed copy leaves the workspace without a background.
+  let backgroundImage = '';
+  try {
+    const srcBg = path.join(__dirname, '..', 'assets', 'onboarding-bg.svg');
+    if (fs.existsSync(srcBg)) {
+      const chatDir = path.join(dataDir, 'ChatHistory', workspaceId);
+      fs.mkdirSync(chatDir, { recursive: true });
+      const destBg = path.join(chatDir, `bg_image_${now}.svg`);
+      fs.copyFileSync(srcBg, destBg);
+      backgroundImage = destBg;
+    }
+  } catch (bgErr) {
+    console.error('[Onboarding] Background image copy failed:', bgErr);
+  }
+
+  // The target paragraph must be one unmarked text node: the renderer checks textBetween()
+  // before showing the suggestion.
+  const originalText = 'The lighthouse was very old and it was on a cliff. It was very tall and the light at the top did not work anymore because no one had fixed it for a long time.';
+  const proposedText = 'The lighthouse had stood on the cliff for a century, gaunt and weatherbeaten, its lantern long since gone dark. No keeper had climbed those stairs in years.';
+
+  const docBlocks = [
+    { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Chapter One — The Lighthouse' }] },
+    { type: 'paragraph', content: [{ type: 'text', text: 'The road to Mourne Cliff ended where the tarmac gave out, and from there it was gravel, then grass, then nothing but the wind. Mara left the car by the rusted gate and walked the rest of the way up, her grandfather’s keys cold in her fist.' }] },
+    { type: 'paragraph', content: [{ type: 'text', text: originalText }] },
+    { type: 'paragraph', content: [{ type: 'text', text: 'She had not seen the place since she was a child. The years had not been kind to it. Gulls wheeled overhead but none of them landed on the rail, and the door at the base hung open a hand’s width, as though someone had left in a hurry and never come back.' }] },
+    { type: 'paragraph', content: [{ type: 'text', text: 'Forty years since anyone had kept the light. Forty years since Aldous Finn had walked up this same path and simply not walked down again. The village had its stories — they always did — but Mara had come for the deed and the sale, not the stories. That was what she told herself, anyway, as she pushed the door the rest of the way open.' }] },
+    { type: 'paragraph', content: [{ type: 'text', text: 'Inside, the stairs spiralled up into the dark, salt-rotted and soft underfoot. On the bottom step, where no rain could have reached it, lay a single page torn from a logbook — and the handwriting on it was her grandfather’s.' }] },
+    { type: 'paragraph', content: [{ type: 'text', text: 'Try it yourself: select any sentence, click "Invoke AI", and pick the Editing profile. Open the Chat tab to keep brainstorming with the AI, or check the Worldbuild tab to see the characters and places behind this scene. (You’ll need to add an API key in Settings before the AI can generate anything new.)' }] },
+  ];
+  const docContent = JSON.stringify({ type: 'doc', content: docBlocks });
+
+  // The weak paragraph (index 2) is the suggestion target. fromPos = total size of
+  // every block before it + 1 to enter its content; toPos spans the text exactly.
+  const targetIndex = 2;
+  let fromPos = 1;
+  for (let i = 0; i < targetIndex; i++) fromPos += pmNodeSize(docBlocks[i]);
+  const toPos = fromPos + originalText.length;
+
+  const docId = seedId('doc');
+
+  // Worldbuild entities that tie back to the chapter and the brainstorming chat.
+  const eMara = seedId('ent');
+  const eAldous = seedId('ent');
+  const eLighthouse = seedId('ent');
+  const eLogbook = seedId('ent');
+  const entities = [
+    { id: eMara, type: 'Characters', name: 'Mara Finn', aliases: ['Mara'], data: { status: 'alive', loreDocumentIds: [docId] },
+      lore: 'Aldous Finn’s granddaughter, 28. She returns to Mourne Cliff to settle the family estate and sell the lighthouse, but the open door and the torn logbook page pull her into her grandfather’s disappearance.' },
+    { id: eAldous, type: 'Characters', name: 'Aldous Finn', aliases: ['Aldous', 'the keeper', 'the old keeper'], data: { status: 'missing', loreDocumentIds: [docId] },
+      lore: 'The lighthouse’s last keeper. Vanished without a trace in 1983 and was never found. His handwriting survives on a logbook page Mara discovers on the bottom step.' },
+    { id: eLighthouse, type: 'Locations', name: 'Mourne Cliff Lighthouse', aliases: ['the lighthouse', 'Mourne Cliff'], data: { size: 'place', loreDocumentIds: [docId] },
+      lore: 'A tall, weatherbeaten lighthouse abandoned for forty years, its lantern long dark. The villagers avoid the cliff path after sundown. Setting of Chapter One.' },
+    { id: eLogbook, type: 'Items', name: 'The Keeper’s Logbook', aliases: ['the logbook', 'the journal', 'the torn page'], data: { loreDocumentIds: [docId] },
+      lore: 'Aldous’s keeper’s logbook. A single page, torn loose, is found at the foot of the stairs in his handwriting — dry, though no rain could have reached it.' },
+  ];
+
+  const insertEntity = db.prepare(`
+    INSERT INTO entities (id, workspaceId, type, canonicalName, aliases, lore, loreDocumentId, data, status, createdAt, last_modified)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?)
+  `);
+  const insertLink = db.prepare(`
+    INSERT INTO entity_links (id, workspaceId, fromId, relType, toId, createdAt)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+
+  const insertMessage = db.prepare(`
+    INSERT INTO messages (id, chatId, role, content, aiName, aiColor, debugNotice, attachedFiles, createdAt)
+    VALUES (?, ?, ?, ?, ?, ?, '', '[]', ?)
+  `);
+
+  // A four-message brainstorming exchange (user/AI/user/AI) about this very story, so
+  // the chat already shows real, on-topic output. Plain rows, no API call.
+  const brainstormColor = profiles[1].color;
+  const messages = [
+    { role: 'user', name: '', color: '',
+      content: "I'm starting a story about a woman who inherits an abandoned lighthouse where her grandfather vanished. How do I make the opening feel ominous without just saying it's scary?" },
+    { role: 'assistant', name: 'Brainstorming', color: brainstormColor,
+      content: "Lean on specifics instead of adjectives. \"Scary\" tells the reader what to feel; concrete detail makes them feel it. Three angles for Mara’s arrival:\n\n1. **Let the setting do the work** — gulls that wheel but won’t land on the rail, salt-rotted stairs that give underfoot, a door already hanging open.\n2. **Use her body, not her judgment** — the keys cold in her fist, a held breath, the urge to look back down the path. Fear lives in the nervous system before it becomes a thought.\n3. **Withhold** — ominous is mostly about what isn’t explained. Don’t name the threat; let the forty-year silence imply it.\n\nWant me to push on one of these, or sketch what she finds inside?" },
+    { role: 'user', name: '', color: '',
+      content: "I like the idea of her finding something inside. It should hook the mystery of Aldous immediately. What could it be?" },
+    { role: 'assistant', name: 'Brainstorming', color: brainstormColor,
+      content: "You want an object that’s small, undeniable, and impossible to explain away — proof he was here that raises more questions than it answers. A few options:\n\n- **A torn page from his keeper’s logbook**, in his handwriting, lying on the bottom step where no rain could have reached it. Intimate, and it implies an interrupted final entry.\n- **The lamp mechanism wound and oiled**, as if someone tended it last week — but the light still doesn’t work.\n- **Her own name**, written in the logbook in his hand, dated after he disappeared.\n\nThe torn page is the cleanest hook: it’s personal, it points forward (what did the entry say?), and it makes the empty lighthouse feel recently, wrongly, inhabited. You could end Chapter One on her picking it up." },
+  ];
+
+  const seedAll = db.transaction(() => {
+    for (const p of newProfiles) {
+      insertProfile.run(
+        p.id, p.name, p.description, p.color, 0.7, 2048, p.systemPrompt, p.resultChannel, 8192, now
+      );
     }
 
-    // The target paragraph must be one unmarked text node: the renderer checks textBetween()
-    // before showing the suggestion.
-    const originalText = 'The lighthouse was very old and it was on a cliff. It was very tall and the light at the top did not work anymore because no one had fixed it for a long time.';
-    const proposedText = 'The lighthouse had stood on the cliff for a century, gaunt and weatherbeaten, its lantern long since gone dark. No keeper had climbed those stairs in years.';
+    db.prepare(`
+      INSERT INTO chats (
+        id, title, description, updatedAt, isPinned, maxContext, archiveThreshold, summarizedIndex,
+        activeProfiles, activeWorkflows, backgroundImage, backdropOpacity, userBubbleOpacity, aiBubbleOpacity, memoryBlocks, knowledgeFiles, autoSummarize, syncToCloud
+      ) VALUES (?, ?, ?, ?, 0, 128000, 60000, 0, ?, '[]', ?, 25, 75, 75, ?, '[]', 0, 0)
+    `).run(
+      workspaceId,
+      'Example Project — The Lighthouse',
+      '(Example) A sample workspace to explore Kallamo. Edit the chapter, continue the chat, or review against canon.',
+      now,
+      JSON.stringify(profiles.map(p => p.id)),
+      backgroundImage,
+      JSON.stringify(memoryBlocks)
+    );
 
-    const docBlocks = [
-      { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Chapter One — The Lighthouse' }] },
-      { type: 'paragraph', content: [{ type: 'text', text: 'The road to Mourne Cliff ended where the tarmac gave out, and from there it was gravel, then grass, then nothing but the wind. Mara left the car by the rusted gate and walked the rest of the way up, her grandfather’s keys cold in her fist.' }] },
-      { type: 'paragraph', content: [{ type: 'text', text: originalText }] },
-      { type: 'paragraph', content: [{ type: 'text', text: 'She had not seen the place since she was a child. The years had not been kind to it. Gulls wheeled overhead but none of them landed on the rail, and the door at the base hung open a hand’s width, as though someone had left in a hurry and never come back.' }] },
-      { type: 'paragraph', content: [{ type: 'text', text: 'Forty years since anyone had kept the light. Forty years since Aldous Finn had walked up this same path and simply not walked down again. The village had its stories — they always did — but Mara had come for the deed and the sale, not the stories. That was what she told herself, anyway, as she pushed the door the rest of the way open.' }] },
-      { type: 'paragraph', content: [{ type: 'text', text: 'Inside, the stairs spiralled up into the dark, salt-rotted and soft underfoot. On the bottom step, where no rain could have reached it, lay a single page torn from a logbook — and the handwriting on it was her grandfather’s.' }] },
-      { type: 'paragraph', content: [{ type: 'text', text: 'Try it yourself: select any sentence, click "Invoke AI", and pick the Editing profile. Open the Chat tab to keep brainstorming with the AI, or check the Worldbuild tab to see the characters and places behind this scene. (You’ll need to add an API key in Settings before the AI can generate anything new.)' }] },
-    ];
-    const docContent = JSON.stringify({ type: 'doc', content: docBlocks });
+    db.prepare(`
+      INSERT INTO documents (id, workspaceId, folderId, title, content, position, createdAt, updatedAt, last_modified)
+      VALUES (?, ?, NULL, ?, ?, 0, ?, ?, ?)
+    `).run(docId, workspaceId, 'Chapter One', docContent, now, now, now);
 
-    // The weak paragraph (index 2) is the suggestion target. fromPos = total size of
-    // every block before it + 1 to enter its content; toPos spans the text exactly.
-    const targetIndex = 2;
-    let fromPos = 1;
-    for (let i = 0; i < targetIndex; i++) fromPos += pmNodeSize(docBlocks[i]);
-    const toPos = fromPos + originalText.length;
+    db.prepare(`
+      INSERT INTO pending_suggestions
+        (id, documentId, workspaceId, channel, fromPos, toPos, originalText, proposedText, profileId, intermediatePrompt, status, createdAt, last_modified)
+      VALUES (?, ?, ?, 'replacement', ?, ?, ?, ?, ?, ?, 'ok', ?, ?)
+    `).run(
+      seedId('psug'), docId, workspaceId, fromPos, toPos, originalText, proposedText,
+      profiles[0].id, 'Tighten this and make it more evocative.', now, now
+    );
 
-    const docId = seedId('doc');
-
-    // Worldbuild entities that tie back to the chapter and the brainstorming chat.
-    const eMara = seedId('ent');
-    const eAldous = seedId('ent');
-    const eLighthouse = seedId('ent');
-    const eLogbook = seedId('ent');
-    const entities = [
-      { id: eMara, type: 'Characters', name: 'Mara Finn', aliases: ['Mara'], data: { status: 'alive', loreDocumentIds: [docId] },
-        lore: 'Aldous Finn’s granddaughter, 28. She returns to Mourne Cliff to settle the family estate and sell the lighthouse, but the open door and the torn logbook page pull her into her grandfather’s disappearance.' },
-      { id: eAldous, type: 'Characters', name: 'Aldous Finn', aliases: ['Aldous', 'the keeper', 'the old keeper'], data: { status: 'missing', loreDocumentIds: [docId] },
-        lore: 'The lighthouse’s last keeper. Vanished without a trace in 1983 and was never found. His handwriting survives on a logbook page Mara discovers on the bottom step.' },
-      { id: eLighthouse, type: 'Locations', name: 'Mourne Cliff Lighthouse', aliases: ['the lighthouse', 'Mourne Cliff'], data: { size: 'place', loreDocumentIds: [docId] },
-        lore: 'A tall, weatherbeaten lighthouse abandoned for forty years, its lantern long dark. The villagers avoid the cliff path after sundown. Setting of Chapter One.' },
-      { id: eLogbook, type: 'Items', name: 'The Keeper’s Logbook', aliases: ['the logbook', 'the journal', 'the torn page'], data: { loreDocumentIds: [docId] },
-        lore: 'Aldous’s keeper’s logbook. A single page, torn loose, is found at the foot of the stairs in his handwriting — dry, though no rain could have reached it.' },
-    ];
-
-    const insertEntity = db.prepare(`
-      INSERT INTO entities (id, workspaceId, type, canonicalName, aliases, lore, loreDocumentId, data, status, createdAt, last_modified)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?)
-    `);
-    const insertLink = db.prepare(`
-      INSERT INTO entity_links (id, workspaceId, fromId, relType, toId, createdAt)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
-
-    const insertMessage = db.prepare(`
-      INSERT INTO messages (id, chatId, role, content, aiName, aiColor, debugNotice, attachedFiles, createdAt)
-      VALUES (?, ?, ?, ?, ?, ?, '', '[]', ?)
-    `);
-
-    // A four-message brainstorming exchange (user/AI/user/AI) about this very story, so
-    // the chat already shows real, on-topic output. Plain rows, no API call.
-    const brainstormColor = profiles[1].color;
-    const messages = [
-      { role: 'user', name: '', color: '',
-        content: "I'm starting a story about a woman who inherits an abandoned lighthouse where her grandfather vanished. How do I make the opening feel ominous without just saying it's scary?" },
-      { role: 'assistant', name: 'Brainstorming', color: brainstormColor,
-        content: "Lean on specifics instead of adjectives. \"Scary\" tells the reader what to feel; concrete detail makes them feel it. Three angles for Mara’s arrival:\n\n1. **Let the setting do the work** — gulls that wheel but won’t land on the rail, salt-rotted stairs that give underfoot, a door already hanging open.\n2. **Use her body, not her judgment** — the keys cold in her fist, a held breath, the urge to look back down the path. Fear lives in the nervous system before it becomes a thought.\n3. **Withhold** — ominous is mostly about what isn’t explained. Don’t name the threat; let the forty-year silence imply it.\n\nWant me to push on one of these, or sketch what she finds inside?" },
-      { role: 'user', name: '', color: '',
-        content: "I like the idea of her finding something inside. It should hook the mystery of Aldous immediately. What could it be?" },
-      { role: 'assistant', name: 'Brainstorming', color: brainstormColor,
-        content: "You want an object that’s small, undeniable, and impossible to explain away — proof he was here that raises more questions than it answers. A few options:\n\n- **A torn page from his keeper’s logbook**, in his handwriting, lying on the bottom step where no rain could have reached it. Intimate, and it implies an interrupted final entry.\n- **The lamp mechanism wound and oiled**, as if someone tended it last week — but the light still doesn’t work.\n- **Her own name**, written in the logbook in his hand, dated after he disappeared.\n\nThe torn page is the cleanest hook: it’s personal, it points forward (what did the entry say?), and it makes the empty lighthouse feel recently, wrongly, inhabited. You could end Chapter One on her picking it up." },
-    ];
-
-    const seedAll = db.transaction(() => {
-      for (const p of profiles) {
-        insertProfile.run(
-          p.id, p.name, p.description, p.color, 0.7, 2048, p.systemPrompt, p.resultChannel, 8192, now
-        );
-      }
-
-      db.prepare(`
-        INSERT INTO chats (
-          id, title, description, updatedAt, isPinned, maxContext, archiveThreshold, summarizedIndex,
-          activeProfiles, activeWorkflows, backgroundImage, backdropOpacity, userBubbleOpacity, aiBubbleOpacity, memoryBlocks, knowledgeFiles, autoSummarize, syncToCloud
-        ) VALUES (?, ?, ?, ?, 0, 128000, 60000, 0, ?, '[]', ?, 25, 75, 75, ?, '[]', 0, 0)
-      `).run(
-        workspaceId,
-        'Example Project — The Lighthouse',
-        '(Example) A sample workspace to explore Kallamo. Edit the chapter, continue the chat, or review against canon.',
-        now,
-        JSON.stringify(profiles.map(p => p.id)),
-        backgroundImage,
-        JSON.stringify(memoryBlocks)
-      );
-
-      db.prepare(`
-        INSERT INTO documents (id, workspaceId, folderId, title, content, position, createdAt, updatedAt, last_modified)
-        VALUES (?, ?, NULL, ?, ?, 0, ?, ?, ?)
-      `).run(docId, workspaceId, 'Chapter One', docContent, now, now, now);
-
-      db.prepare(`
-        INSERT INTO pending_suggestions
-          (id, documentId, workspaceId, channel, fromPos, toPos, originalText, proposedText, profileId, intermediatePrompt, status, createdAt, last_modified)
-        VALUES (?, ?, ?, 'replacement', ?, ?, ?, ?, ?, ?, 'ok', ?, ?)
-      `).run(
-        seedId('psug'), docId, workspaceId, fromPos, toPos, originalText, proposedText,
-        profiles[0].id, 'Tighten this and make it more evocative.', now, now
-      );
-
-      messages.forEach((m, i) => {
-        insertMessage.run(seedId('msg'), workspaceId, m.role, m.content, m.name, m.color, now + i * 1000);
-      });
-
-      for (const e of entities) {
-        insertEntity.run(
-          e.id, workspaceId, e.type, e.name,
-          JSON.stringify(e.aliases || []), e.lore || '', e.loreDocumentId || null,
-          JSON.stringify(e.data || {}), now, now
-        );
-      }
-      insertLink.run(seedId('lnk'), workspaceId, eMara, 'connected_to', eAldous, now);
-      insertLink.run(seedId('lnk'), workspaceId, eLogbook, 'created_by', eAldous, now);
-      insertLink.run(seedId('lnk'), workspaceId, eLogbook, 'found_in', eLighthouse, now);
-      insertLink.run(seedId('lnk'), workspaceId, eLighthouse, 'led_by', eAldous, now);
-
-      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('onboarding_seeded', '1')").run();
+    messages.forEach((m, i) => {
+      insertMessage.run(seedId('msg'), workspaceId, m.role, m.content, m.name, m.color, now + i * 1000);
     });
 
-    seedAll();
-    console.log('[Onboarding] Seeded 3 example profiles + example workspace.');
+    for (const e of entities) {
+      insertEntity.run(
+        e.id, workspaceId, e.type, e.name,
+        JSON.stringify(e.aliases || []), e.lore || '', e.loreDocumentId || null,
+        JSON.stringify(e.data || {}), now, now
+      );
+    }
+    insertLink.run(seedId('lnk'), workspaceId, eMara, 'connected_to', eAldous, now);
+    insertLink.run(seedId('lnk'), workspaceId, eLogbook, 'created_by', eAldous, now);
+    insertLink.run(seedId('lnk'), workspaceId, eLogbook, 'found_in', eLighthouse, now);
+    insertLink.run(seedId('lnk'), workspaceId, eLighthouse, 'led_by', eAldous, now);
+
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('onboarding_seeded', '1')").run();
+  });
+
+  seedAll();
+  return workspaceId;
+}
+
+// First-run onboarding. One-shot behind a settings flag, so deleting the example never resurrects it.
+function seedOnboarding() {
+  try {
+    const seeded = db.prepare("SELECT value FROM settings WHERE key = 'onboarding_seeded'").get();
+    if (seeded) return;
+    seedExampleWorkspace();
+    console.log('[Onboarding] Seeded the example profiles and workspace.');
   } catch (e) {
     console.error('[Onboarding] Seeding failed:', e);
   }
 }
 
-// --- CORE EXECUTION ---
+// Brings the sample story back on request, after its workspace was deleted.
+db.restoreExampleWorkspace = seedExampleWorkspace;
 
 // Perform migrations when the app is ready so safeStorage is available
 if (app.isReady()) {

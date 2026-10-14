@@ -2,6 +2,7 @@ import React, { Suspense, useState, useEffect } from 'react';
 import { AppProvider, useApp, useEngineDownloadProgress, useReindexingProgress, useToast } from './context/AppContext';
 import TitleBar from './components/TitleBar';
 import DashboardView from './components/DashboardView';
+import LaunchScreen from './features/workspaces/LaunchScreen';
 import {
   ChatWorkspaceView,
   ContextOverflowModal,
@@ -107,7 +108,6 @@ function EngineDownloadStatus() {
           {engineDownloadProgress.status === 'error' && `Error during setup: ${engineDownloadProgress.error}`}
         </p>
 
-        {/* Progress Bar */}
         {engineDownloadProgress.status === 'downloading' && (
           <div className="w-full bg-surface-panel rounded-full h-2 overflow-hidden">
             <div
@@ -328,6 +328,7 @@ function ToastNotification() {
 function MainLayout() {
   const {
     currentView,
+    dataReady,
     showOverflowModal,
     showErrorModal,
     errorData,
@@ -346,7 +347,6 @@ function MainLayout() {
     preloadWhenIdle(idlePreloadOrder);
   }, []);
 
-  // Sync Highlight.js code highlighting theme dynamically
   useEffect(() => {
     if (settings?.interface?.codeTheme) {
       const themeLink = document.getElementById('hljs-theme');
@@ -372,7 +372,6 @@ function MainLayout() {
     root.style.setProperty('--interface-font-scale', String(scale));
   }, [settings?.interface?.fontSize]);
 
-  // Global Tooltip Engine
   useEffect(() => {
     const globalTooltip = document.createElement('div');
     globalTooltip.className = 'fixed hidden max-w-[16rem] rounded-card border border-border-default bg-surface-panel-muted px-3 py-2 text-xs leading-snug text-text-secondary shadow-overlay z-[100000] pointer-events-none transition-opacity duration-150 opacity-0';
@@ -385,7 +384,6 @@ function MainLayout() {
       globalTooltip.textContent = target.getAttribute('data-tooltip');
       globalTooltip.classList.remove('hidden');
 
-      // Force browser reflow to get correct layout dimensions immediately
       const tooltipHeight = globalTooltip.offsetHeight;
       const tooltipWidth = globalTooltip.offsetWidth;
 
@@ -445,18 +443,18 @@ function MainLayout() {
 
   return (
     <div className={`flex-1 relative flex flex-col pt-10 overflow-hidden bg-surface-canvas w-full h-full select-none ${fontClass}`}>
-      <TitleBar onOpenSettings={() => setShowSettingsModal(true)} onPreloadSettings={() => SettingsModal.preload()} />
+      <TitleBar bare={!dataReady} onOpenSettings={() => setShowSettingsModal(true)} onPreloadSettings={() => SettingsModal.preload()} />
 
       {/* Local AI Engine download: full-screen overlay, or a discreet card when it runs in the background */}
       <EngineDownloadStatus />
 
-      {/* Full-screen Re-Index Upgrade Overlay */}
       <ReindexOverlay />
 
       {/* Every screen runs under the transparent title bar and keeps its own content below it. */}
       <main className="flex-1 relative flex flex-col overflow-hidden w-full h-full z-10 -mt-10">
         <Suspense fallback={null}>
-          {currentView === 'dashboard' && <DashboardView />}
+          {!dataReady && <LaunchScreen />}
+          {dataReady && currentView === 'dashboard' && <DashboardView />}
           {currentView === 'library' && <LibraryView />}
           {currentView === 'chat' && (
             <PerfProfiler id="workspace">
@@ -467,13 +465,10 @@ function MainLayout() {
       </main>
 
 
-      {/* Floating Background RAG Indexing Visualizer */}
       <VectorizationTasks />
 
-      {/* Global Toast Notification */}
       <ToastNotification />
 
-      {/* Global Modals */}
       <Suspense fallback={null}>
         {(showSettingsModal || settingsRequest) && (
           <SettingsModal

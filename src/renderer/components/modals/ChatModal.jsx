@@ -21,19 +21,44 @@ const parseList = (value) => {
 
 const stepsOf = (workflow) => parseList(workflow.steps);
 
-export default function ChatModal({ chat, onClose }) {
+export const newWorkspaceId = () => 'chat_' + Math.random().toString(36).substr(2, 9);
+
+// The stored row for a workspace; an edit keeps everything the form does not show.
+export function workspaceRecord(chat, { id, title, description = '', activeProfiles = [], activeWorkflows = [], backgroundImage = '', backdropOpacity = 75, userBubbleOpacity = 100, aiBubbleOpacity = 0, knowledgeFiles = [] }) {
+  return {
+    id,
+    title: title.trim(),
+    description: description.trim(),
+    updatedAt: Date.now(),
+    isPinned: chat?.isPinned ?? 0,
+    maxContext: Number(chat?.maxContext) > 0 ? chat.maxContext : 128000,
+    archiveThreshold: chat?.archiveThreshold ?? 60000,
+    summarizedIndex: chat?.summarizedIndex ?? 0,
+    activeProfiles: JSON.stringify(activeProfiles),
+    activeWorkflows: JSON.stringify(activeWorkflows),
+    backgroundImage,
+    backdropOpacity: Number(backdropOpacity),
+    userBubbleOpacity: Number(userBubbleOpacity),
+    aiBubbleOpacity: Number(aiBubbleOpacity),
+    showContextBar: chat?.showContextBar ?? 0,
+    memoryBlocks: JSON.stringify(chat?.memoryBlocks || []),
+    knowledgeFiles: JSON.stringify(knowledgeFiles),
+  };
+}
+
+// `draft` carries what was already filled in elsewhere (the empty home's quick form).
+export default function ChatModal({ chat, draft, onClose }) {
   const { handleCreateChat, handleSaveChat, writingProfiles, workflows, electronAPI } = useApp();
   const isEditing = !!chat;
 
-  // Keep a single unique ID for the chat being configured
-  const [chatId] = useState(() => chat?.id || 'chat_' + Math.random().toString(36).substr(2, 9));
-  const [title, setTitle] = useState('');
+  const [chatId] = useState(() => chat?.id || draft?.id || newWorkspaceId());
+  const [title, setTitle] = useState(draft?.title || '');
   const [description, setDescription] = useState('');
-  const [bgImage, setBgImage] = useState('');
+  const [bgImage, setBgImage] = useState(draft?.backgroundImage || '');
   const [backdropOpacity, setBackdropOpacity] = useState(75);
   const [userBubbleOpacity, setUserBubbleOpacity] = useState(100);
   const [aiBubbleOpacity, setAiBubbleOpacity] = useState(0);
-  const [activeProfiles, setActiveProfiles] = useState([]);
+  const [activeProfiles, setActiveProfiles] = useState(draft?.activeProfiles || []);
   const [activeWorkflows, setActiveWorkflows] = useState([]);
   const [searchProfiles, setSearchProfiles] = useState('');
   // Preserved so editing an older workspace doesn't wipe legacy knowledge files.
@@ -73,25 +98,10 @@ export default function ChatModal({ chat, onClose }) {
 
   const handleSave = async () => {
     if (!title.trim()) return;
-    const chatData = {
-      id: chatId,
-      title: title.trim(),
-      description: description.trim(),
-      updatedAt: Date.now(),
-      isPinned: chat?.isPinned ?? 0,
-      maxContext: Number(chat?.maxContext) > 0 ? chat.maxContext : 128000,
-      archiveThreshold: chat?.archiveThreshold ?? 60000,
-      summarizedIndex: chat?.summarizedIndex ?? 0,
-      activeProfiles: JSON.stringify(activeProfiles),
-      activeWorkflows: JSON.stringify(activeWorkflows),
-      backgroundImage: bgImage,
-      backdropOpacity: Number(backdropOpacity),
-      userBubbleOpacity: Number(userBubbleOpacity),
-      aiBubbleOpacity: Number(aiBubbleOpacity),
-      showContextBar: chat?.showContextBar ?? 0,
-      memoryBlocks: JSON.stringify(chat?.memoryBlocks || []),
-      knowledgeFiles: JSON.stringify(knowledgeFiles),
-    };
+    const chatData = workspaceRecord(chat, {
+      id: chatId, title, description, activeProfiles, activeWorkflows, backgroundImage: bgImage,
+      backdropOpacity, userBubbleOpacity, aiBubbleOpacity, knowledgeFiles,
+    });
     if (isEditing) await handleSaveChat(chatData);
     else await handleCreateChat(chatData);
     onClose();

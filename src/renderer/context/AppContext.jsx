@@ -12,7 +12,6 @@ export const useReindexingProgress = () => useStore(useContext(AppContext).reind
 export const useEngineDownloadProgress = () => useStore(useContext(AppContext).engineDownloadStore);
 export const useStreamingText = () => useStore(useContext(AppContext).streamDisplayStore);
 
-// Helper for safe electronAPI calls
 const api = window.electronAPI || {
   minimize: () => { }, maximize: () => { }, close: () => { },
   getApiProfiles: async () => [], saveApiProfile: async () => { }, deleteApiProfile: async () => { },
@@ -44,10 +43,11 @@ const api = window.electronAPI || {
 };
 
 export const AppProvider = ({ children }) => {
-  // --- STATE INITIALIZATION ---
   const [currentView, setCurrentView] = useState('dashboard'); // 'dashboard', 'library', 'chat'
   const [activeWorkspaceView, setActiveWorkspaceView] = useState('chat');
   const [chats, setChats] = useState([]);
+  // False until the first chats and profiles arrive, so the home never flashes as empty.
+  const [dataReady, setDataReady] = useState(false);
   const [writingProfiles, setWritingProfiles] = useState([]);
   const [workflows, setWorkflows] = useState([]);
   const [apiProfiles, setApiProfiles] = useState([]);
@@ -87,7 +87,6 @@ export const AppProvider = ({ children }) => {
     clearStreamDisplay();
   }, [activeChatId]);
 
-  // --- AUTO-UPDATER STATE ---
   const [updateStatus, setUpdateStatus] = useState('idle'); // 'idle' | 'available' | 'downloaded'
   const [updateVersion, setUpdateVersion] = useState('');
 
@@ -96,15 +95,12 @@ export const AppProvider = ({ children }) => {
   const [reindexStore] = useState(() => createStore(null)); // { status, message, ... }
   const setReindexingProgress = reindexStore.set;
 
-  // --- PLATFORM UPDATE OUTDATED STATE ---
   const [updateOutdatedUrl, setUpdateOutdatedUrl] = useState('');
 
-  // --- LOCAL ENGINE DOWNLOADER STATE ---
   const [engineStatus, setEngineStatus] = useState({ installed: false, platform: '', arch: '' });
   const [engineDownloadStore] = useState(() => createStore(null)); // { status: 'idle'|'downloading'|'verifying'|'extracting'|'completed'|'error', loaded, total, percent, error }
   const setEngineDownloadProgress = engineDownloadStore.set;
 
-  // --- TOAST NOTIFICATIONS ---
   const [toastStore] = useState(() => createStore(null)); // { message, type: 'success' | 'error' | 'info', show: boolean, action?: { label, onClick } }
   const setToast = toastStore.set;
   const toastTimeoutRef = useRef(null);
@@ -139,7 +135,6 @@ export const AppProvider = ({ children }) => {
     });
   }, []);
 
-  // --- INITIALIZATION ---
   const loadInitialData = async () => {
     try {
       const fetchedSettings = await api.getSettings();
@@ -161,6 +156,7 @@ export const AppProvider = ({ children }) => {
 
       const fetchedApis = await api.getApiProfiles();
       setApiProfiles(fetchedApis);
+      setDataReady(true);
 
       const fetchedVariables = await api.getVariables();
       setVariables(fetchedVariables || []);
@@ -178,6 +174,7 @@ export const AppProvider = ({ children }) => {
       await refreshEngineStatus();
     } catch (error) {
       console.error("Error loading initial data:", error);
+      setDataReady(true);
     }
   };
 
@@ -185,7 +182,6 @@ export const AppProvider = ({ children }) => {
     loadInitialData();
   }, []);
 
-  // --- REALTIME ELECTRON EVENTS ---
   useEffect(() => {
     const unsubProgress = api.onWorkflowProgress((progress) => {
       if (!isGenerationEventForWorkspace(progress, activeChatIdRef.current)) return;
@@ -297,7 +293,6 @@ export const AppProvider = ({ children }) => {
     };
   }, []);
 
-  // --- OPERATIONS & ACTIONS ---
   const refreshEngineStatus = async () => {
     if (api.getEngineStatus) {
       try {
@@ -454,7 +449,7 @@ export const AppProvider = ({ children }) => {
       currentView, setCurrentView,
       activeWorkspaceView, setActiveWorkspaceView,
       settingsRequest, openSettings, clearSettingsRequest,
-      chats, setChats,
+      chats, setChats, dataReady,
       writingProfiles, setWritingProfiles,
       workflows, setWorkflows,
       apiProfiles, setApiProfiles,
