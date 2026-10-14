@@ -92,8 +92,8 @@ describe('creature scope decides which fields the enrichment may set', () => {
   const forScope = (scope?: string) =>
     filterUpdateFields({ type: 'Creatures', data: scope ? { scope } : {} }, creatureFields);
 
-  test('a specific being has a life state and a temperament, not a prevalence', () => {
-    expect(forScope('individual')).toEqual(['status', 'disposition', 'nature', 'threat', 'abilities', 'appearance', 'personality']);
+  test('a specific being has a life state and a temperament, not a prevalence or a nature of its own', () => {
+    expect(forScope('individual')).toEqual(['status', 'disposition', 'threat', 'abilities', 'appearance', 'personality']);
   });
 
   test('a group has a prevalence and a shared look, but no status or personality', () => {

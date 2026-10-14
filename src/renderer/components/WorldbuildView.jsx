@@ -116,7 +116,6 @@ const EvidenceReferences = ({ excerpts, support = '', label }) => {
   );
 };
 
-// open writes directly, review stages for approval, locked is skipped. Default 'review'.
 // Systematic sheet tabs carry their own icon; template-driven sections do not.
 const SheetTabIcon = {
   data: NotebookText, inventory: Backpack, connections: ConnectionsGlyph,
@@ -151,12 +150,10 @@ const AiPolicyControl = ({ value, onChange, className = '' }) => {
   );
 };
 
-// A select whose options come from a keyed state map (STATUS/DISPOSITION).
 const StateSelect = ({ map, value, onChange, label }) => (
   <SelectMenu ariaLabel={label} value={value || 'unknown'} onChange={(next) => onChange({ target: { value: next } })}
     options={Object.entries(map).map(([k, v]) => ({ value: k, label: v.label }))} />
 );
-// A choice from a short fixed list, with an explicit empty option.
 const ChoiceSelect = ({ value, onChange, options, label, empty = 'Not set' }) => (
   <SelectMenu ariaLabel={label} value={value || ''} onChange={(next) => onChange({ target: { value: next } })}
     options={[{ value: '', label: empty }, ...options.map(option => ({ value: option, label: option }))]} />
@@ -246,7 +243,6 @@ const recurrenceText = (recurrence, calendar) => {
   return `${interval === 1 ? `Every ${unit}` : `Every ${interval} ${unit}s`} since ${formatWorldDate(calendar, recurrence.anchorDate)}`;
 };
 
-// A long field inside a section: full width under the grid, with its own label.
 const LongField = ({ label, text, empty = 'Not set' }) => (
   <div className="border-t border-border-subtle pt-4">
     <div className="mb-1.5 text-xs font-medium text-text-muted">{label}</div>
@@ -367,7 +363,6 @@ function SheetActionsMenu({ onPortrait, hasPortrait, onEditName, onMerge, onRepr
 // Portraits belong to someone who can stand in a scene: a character or a single creature.
 const canHavePortrait = (entity) => entity?.type === 'Characters' || (entity?.type === 'Creatures' && (entity.data?.scope || 'individual') !== 'group');
 
-// The sheet's medallion: the portrait when there is one, otherwise the type icon.
 function SheetMedallion({ meta, portrait, onPortrait }) {
   const style = framedImageStyle(portrait);
   const label = portrait ? 'Change portrait' : 'Add portrait';
@@ -851,9 +846,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const isIndividualCreature = selected?.type === 'Creatures' && (selected?.data?.scope || 'individual') !== 'group';
   const hasKnowledgeTab = selected?.type === 'Characters' || selected?.type === 'Factions' || isIndividualCreature;
   const hasOccurrencesTab = selected?.type === 'Events';
-  // Templates are read through the registry on this side too. Reading them raw is what
-  // left a Creature's "Details" ignoring the layout saved under its former id, which
-  // pushed the section to the end of the sheet and detached it from the editor.
+  // Read through the registry, as the editor does, so legacy section ids keep their place.
   const storedTemplate = templates.find(template => template.typeId === selected?.type);
   const activeTemplate = useMemo(() => storedTemplate && {
     ...storedTemplate,
@@ -904,10 +897,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     for (const e of entities) (m[e.type] = m[e.type] || []).push(e);
     return m;
   }, [entities]);
-  // A group creature is a species or a swarm, not someone a relation can point at.
-  // Only specific beings can own things, hold a relationship, or be regarded by a faction.
   // Where a single object can lie: places and spots before the regions that contain them.
   const presenceLocations = useMemo(() => sortLocationsForPresence(byType.Locations || []), [byType.Locations]);
+  // A species or swarm is not someone a relation can point at: only specific beings own things,
+  // hold a relationship, or are regarded by a faction.
   const individualCreatures = useMemo(
     () => (byType.Creatures || []).filter(entity => (entity.data?.scope || 'individual') !== 'group'),
     [byType.Creatures],
@@ -1046,8 +1039,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   useEffect(() => {
     if (selected && !visibleSheetTabs.includes(charTab)) setCharTab('data');
   }, [visibleSheetTabs.join(','), charTab, selected?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Every edge a sheet needs, fetched in one round of parallel reads. These used to run
-  // one after another, so opening a character waited on eight sequential IPC calls.
+  // Every edge a sheet needs, read in parallel.
   const loadRelations = useCallback(async (ent) => {
     if (!ent?.id) { setRel({}); return; }
     const request = (direction, relType) => electronAPI.getEntityLinks(ent.id, direction, relType).then(x => x?.links || []);
@@ -1182,7 +1174,6 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
 
   const remove = async () => { if (!selected?.id) { setSelected(null); return; } setSaving(true); try { await electronAPI.deleteEntity(selected.id); setSelected(null); await load(); } finally { setSaving(false); } };
 
-  // `prefer` decides conflicts; used for AI proposals and imported duplicates.
   const mergeInto = async (targetId, prefer = 'target') => {
     if (!selected?.id || !targetId) return;
     setSaving(true);
@@ -1238,7 +1229,6 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     return electronAPI.onEnrichEntitiesProgress((p) => setEnrichProgress(p));
   }, [electronAPI]);
 
-  // Restore the progress card if an update is already in flight when this view (re)mounts.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -1392,8 +1382,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   };
 
   const reloadRel = async () => { await loadRelations({ id: selected.id, type: selected.type }); await load(); };
-  // Every link op reports failure loudly, a silent SQL error once made every add
-  // look like a no-op. Any { success:false } surfaces as a toast instead of vanishing.
+  // Any { success:false } surfaces as a toast, so a failed link never looks like a no-op.
   const linkOp = async (fn) => {
     try { const r = await fn(); if (r && r.success === false) { showToast(`Link failed: ${r.error || 'unknown error'}`, 'error'); return false; } await reloadRel(); return true; }
     catch (e) { showToast(`Link failed: ${e.message}`, 'error'); return false; }
@@ -1407,12 +1396,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const setRole = async (linkId, role) => { await linkOp(() => electronAPI.updateEntityLinkLabel(linkId, role)); };
   const removeLink = async (linkId) => { await linkOp(() => electronAPI.removeEntityLink(linkId)); };
 
-  // Leaving and rejoining a faction swap one edge for the other. Membership is its own
-  // relation on purpose: everything that reads member_of (retrieval context, the
-  // epistemic resolver, occurrence audiences) means "member right now", so a former
-  // member stops receiving what the faction shares without any of them changing.
-  // The label carries the departure in plain words, since the retrieval dossier prints
-  // it verbatim; the old role is kept in metadata so rejoining can restore it.
+  // member_of always means "member right now", so leaving swaps it for former_member_of. The old
+  // role stays in metadata so rejoining can restore it; the label is what the dossier prints.
   const swapMembership = async (link, relType, label, metadata) => {
     if (!selected?.id) return;
     await linkOp(async () => {
@@ -1573,7 +1558,6 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     await setSingle('located_in', locationId || null);
   };
 
-  // Lore editor (prose + Writing Desk file link), reused by several types.
   const linkedDocs = loreDocIds();
   const remainingDocs = documents.filter(d => !linkedDocs.includes(d.id));
   const loreEdit = (
@@ -1612,7 +1596,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     </>
   );
 
-  // ---- Section model: each returns { key, title, icon, view, edit, scalar } ----
+  // Each section is { key, title, icon, view, edit, scalar }.
   const sectionsFor = (type) => {
     const S = [];
     if (type === 'System') {
@@ -1729,14 +1713,14 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, empty: loreEmpty, view: loreView, edit: loreEdit });
     }
     if (type === 'Creatures') {
-      const natureOpts = [...CREATURE_NATURES, ...byType.Creatures.map(c => c.data?.nature).filter(Boolean)];
+      const natureOpts = [...new Set([...CREATURE_NATURES, ...byType.Creatures.filter(c => c.data?.scope === 'group').map(c => c.data?.nature).filter(Boolean)])];
       const isIndividual = (selected.data.scope || 'individual') !== 'group';
       S.push({ key: 'details', title: 'Details', icon: ListTree, scalar: true,
         view: <>
           <FactGrid>
-            <ViewField label="Nature" value={selected.data.nature} />
+            {!isIndividual && <ViewField label="Nature" value={selected.data.nature} />}
+            {isIndividual && <ViewField label="Species" value={rel.isRace?.entity ? <button type="button" onClick={() => openEntityById(rel.isRace.entity.id)} className="rounded-sm text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{rel.isRace.entity.canonicalName}</button> : null} />}
             <ViewField label="Disposition" value={<StateTag map={DISPOSITION} value={selected.data.disposition || 'unknown'} />} />
-            {isIndividual && <ViewField label="Species" value={rel.isRace?.entity ? <EntityChip entity={rel.isRace.entity} onOpen={openEntityById} /> : null} />}
             {!isIndividual && <ViewField label="How common" value={selected.data.abundance} />}
             <ViewField label="Threat" value={selected.data.threat} />
             {isIndividual && <ViewField label="Born" value={formatWorldDate(worldCalendar, selected.data.birthDate)} />}
@@ -1754,9 +1738,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               <Hint>Turning this into a group hides its inventory, connections and knowledge. Nothing is deleted, and switching back brings them into view again.</Hint>
             )}
           </Edit>
-          {isIndividual && <SingleRelation label="Species" disabled={unsaved} current={rel.isRace?.entity?.id} options={byType.Creatures.filter(creature => creature.data?.scope === 'group' && creature.id !== selected.id)} onSet={(id) => setSingle('is_race', id)} />}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Edit label="Nature"><FreeDatalist value={selected.data.nature} onChange={(e) => patchData({ nature: e.target.value })} options={natureOpts} placeholder="e.g. Beast, Spirit, Deity" /></Edit>
+          <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-2">
+            {isIndividual
+              ? <SingleRelation label="Species" disabled={unsaved} current={rel.isRace?.entity?.id} options={byType.Creatures.filter(creature => creature.data?.scope === 'group' && creature.id !== selected.id)} onSet={(id) => setSingle('is_race', id)} />
+              : <Edit label="Nature"><FreeDatalist value={selected.data.nature} onChange={(e) => patchData({ nature: e.target.value })} options={natureOpts} placeholder="e.g. Beast, Spirit, Deity" /></Edit>}
             <Edit label="Threat"><ChoiceSelect label="Threat" value={selected.data.threat} onChange={(e) => patchData({ threat: e.target.value })} options={THREAT} /></Edit>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -1857,7 +1842,6 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       </> };
   };
 
-  // Character sheet is tabbed; build its sections per active tab.
   const characterSections = () => {
     if (charTab === 'data') return [
       { key: 'identity', title: 'Identity', icon: IdCard, scalar: true,
@@ -2801,8 +2785,6 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   );
 }
 
-// Chip row for derived/relation lists. Every name on a sheet is a way into that sheet:
-// reading a faction and wanting its captain was a trip back through the sidebar.
 const MEMBER_PAGE = 8;
 // A race can gather many characters, so its roster is searchable and shows a page at a time.
 function KnownMembers({ links, portraits, onOpen }) {
@@ -2888,7 +2870,6 @@ function createRelationHint(type) {
   }[type] || 'Connections can be added once this entity exists.';
 }
 
-// Invented (non-user) example names, English.
 function placeholderName(type) {
   return { System: 'e.g. The Three Laws of Aether', Locations: 'e.g. Thornhall', Items: 'e.g. Stormglass Lantern', Races: 'e.g. Tidewalkers', Factions: 'e.g. The Ember Concord', Characters: 'e.g. Captain Aldric Venn', Creatures: 'e.g. The Gloamwyrm', Events: 'e.g. The Siege of Thornhall' }[type] || 'Name';
 }

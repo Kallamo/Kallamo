@@ -2,8 +2,9 @@ const crypto = require('node:crypto');
 
 function filterUpdateFields(entity, fields) {
     // A group has no single life state and no single temperament; an individual has no
-    // world-level prevalence. Each side only ever receives what its sheet can show.
-    const GROUP_ONLY = ['abundance'];
+    // world-level prevalence, and takes its nature from its species. Each side only ever
+    // receives what its sheet can show.
+    const GROUP_ONLY = ['abundance', 'nature'];
     const INDIVIDUAL_ONLY = ['status', 'personality'];
     if (entity.type === 'Creatures') {
         const isGroup = entity.data?.scope === 'group';

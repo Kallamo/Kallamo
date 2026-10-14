@@ -46,7 +46,7 @@ const ENRICH_FIELD_GUIDANCE = {
     appearance: 'Stable physical appearance, clothing, presentation, and distinguishing features explicitly attributed to this individual. Exclude temporary pose, location, lighting, injuries that immediately resolve, and subjective comparisons.',
     personality: 'Stable temperament, habits, values, instincts, and contradictions explicitly established across narration or behavior. Do not turn a single reaction, mood, or unsupported interpretation into a lasting trait.',
     disposition: 'A stable default attitude toward relevant people, not a momentary emotional reaction in one scene.',
-    nature: 'The explicitly established creature category or nature, such as Beast, Spirit, or Deity. Do not infer it from appearance or abilities.',
+    nature: 'The explicitly established category of this creature group or species, such as Beast, Spirit, or Deity. Do not infer it from appearance or abilities.',
     abundance: 'World-level prevalence of a resource or creature group, not the quantity present in one scene.',
     threat: 'An explicitly established general danger level, not how frightening or powerful one scene makes the entity appear.',
     abilities: 'Concrete repeatable capabilities or traits explicitly demonstrated or stated. Exclude metaphors, one-time circumstances, equipment, and speculation.',
