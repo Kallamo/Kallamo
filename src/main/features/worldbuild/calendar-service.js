@@ -1,3 +1,5 @@
+const { chunkContainsEvidence, normalizeEvidence } = require('../world-index/evidence-match');
+
 const STANDARD_MONTHS = [
   ['January', 31], ['February', 28], ['March', 31], ['April', 30],
   ['May', 31], ['June', 30], ['July', 31], ['August', 31],
@@ -497,26 +499,13 @@ function durationToPosition(calendar, startInput, targetInput) {
 }
 
 /**
- * A single turn may not silently skip a season.
- *
- * An inferred advance is the interpreter's estimate of how long an action took. When that
- * estimate is wrong it is written straight into the campaign clock, and a hallucinated
- * "three years" is both catastrophic and almost invisible: no record says the clock moved for
- * a bad reason. So an inferred advance is bounded, and what was asked for is kept beside what
- * was applied instead of being thrown away. A date the narrative actually states arrives as an
- * explicit target and is never bounded, because there the author said it.
+ * An estimated advance is bounded, with the requested duration kept beside the applied one; a
+ * date the narrative states is never bounded. See docs/narrative-state.md.
  */
 const IMPLICIT_ADVANCE_LIMIT_DAYS = 7;
 const MAX_TIMESKIP_YEARS = 100;
 
-/**
- * How far a single turn is allowed to move the clock without the narrative saying so.
- *
- * A week is all an estimate earns. Beyond that the turn has to have stated the span in words,
- * and then the ceiling is the span itself: "passaram-se tres meses" authorizes three months
- * and nothing more. The cap on top is there so a parsed absurdity is still an absurdity that
- * ends somewhere.
- */
+/** A week, unless the turn states a longer span in words; that span is then the ceiling. */
 function advanceCeilingMinutes(calendar, statedSpan) {
   const implicit = IMPLICIT_ADVANCE_LIMIT_DAYS * calendar.hoursPerDay * 60;
   const stated = Math.max(0, integer(statedSpan?.minutes));
@@ -548,9 +537,7 @@ function normalizeTimeAdvance(input, calendar = null, currentClock = null) {
   let clamped = false;
   let requested = null;
   if (!explicitTarget && basis !== 'explicit') {
-    // Confidence is deliberately not a gate here. In practice the interpreter reports 0 for
-    // perfectly ordinary advances, so refusing those simply stopped the clock; the bound on
-    // magnitude is what actually protects the campaign.
+    // Not gated on confidence: the interpreter reports 0 for ordinary advances. The bound protects the clock.
     const scale = calendar || normalizeCalendar(DEFAULT_CALENDAR);
     const bounded = boundImplicitDuration(scale, duration, advanceCeilingMinutes(scale, input.statedSpan));
     if (bounded.clamped) {
@@ -572,59 +559,46 @@ function normalizeTimeAdvance(input, calendar = null, currentClock = null) {
 }
 
 /**
- * Reading a stated passage of time out of the turn's own words.
- *
- * A long jump must not rest on the interpreter's estimate. Estimates are how a hallucinated
- * "three years" reaches the campaign clock, and nothing afterwards says the clock moved for a
- * bad reason. So the text is the authority: a span the narrative or the player actually wrote
- * is what authorizes months and years, and everything else stays bounded to a week.
- *
- * Markers are split by how much they promise. A strong marker asserts that the time has gone
- * by ("passaram-se tres meses", "two years later"), so it can both raise the ceiling and set a
- * floor. A weak marker only frames a span ("apos tres meses"), which reads the same in a
- * flashback, so it lifts the ceiling without ever moving the clock on its own.
+ * Months and years need a span the text states. A strong marker ("two years later") also sets a
+ * floor; a weak one ("after three months") reads the same in a flashback, so it only lifts the ceiling.
  */
 const SPAN_NUMBER_WORDS = new Map([
-  ['um', 1], ['uma', 1], ['dois', 2], ['duas', 2], ['tres', 3], ['quatro', 4], ['cinco', 5],
-  ['seis', 6], ['sete', 7], ['oito', 8], ['nove', 9], ['dez', 10], ['onze', 11], ['doze', 12],
-  ['quinze', 15], ['vinte', 20], ['trinta', 30], ['quarenta', 40], ['cinquenta', 50], ['cem', 100],
   ['a', 1], ['an', 1], ['one', 1], ['two', 2], ['three', 3], ['four', 4], ['five', 5],
   ['six', 6], ['seven', 7], ['eight', 8], ['nine', 9], ['ten', 10], ['eleven', 11],
-  ['twelve', 12], ['fifteen', 15], ['twenty', 20], ['thirty', 30], ['fifty', 50], ['hundred', 100]
+  ['twelve', 12], ['fifteen', 15], ['twenty', 20], ['thirty', 30], ['forty', 40], ['fifty', 50],
+  ['hundred', 100]
 ]);
 
 const SPAN_UNITS = new Map([
-  ['minuto', 'minutes'], ['minutos', 'minutes'], ['minute', 'minutes'], ['minutes', 'minutes'],
-  ['hora', 'hours'], ['horas', 'hours'], ['hour', 'hours'], ['hours', 'hours'],
-  ['dia', 'days'], ['dias', 'days'], ['day', 'days'], ['days', 'days'],
-  ['semana', 'weeks'], ['semanas', 'weeks'], ['week', 'weeks'], ['weeks', 'weeks'],
-  ['mes', 'months'], ['meses', 'months'], ['month', 'months'], ['months', 'months'],
-  ['ano', 'years'], ['anos', 'years'], ['year', 'years'], ['years', 'years'],
-  ['decada', 'decades'], ['decadas', 'decades'], ['decade', 'decades'], ['decades', 'decades']
+  ['minute', 'minutes'], ['minutes', 'minutes'],
+  ['hour', 'hours'], ['hours', 'hours'],
+  ['day', 'days'], ['days', 'days'],
+  ['week', 'weeks'], ['weeks', 'weeks'],
+  ['month', 'months'], ['months', 'months'],
+  ['year', 'years'], ['years', 'years'],
+  ['decade', 'decades'], ['decades', 'decades']
 ]);
 
 const SPAN_UNIT_PATTERN = [...SPAN_UNITS.keys()].join('|');
 const SPAN_QUANTITY_PATTERN = '\\d{1,4}|' + [...SPAN_NUMBER_WORDS.keys()].join('|');
-const STRONG_TRAILING = 'depois|mais tarde|adiante|se passaram|se passou|passaram|passou|later|afterwards|afterward|passed|went by';
-const WEAK_LEADING = 'apos|depois de|depois da|depois do|over the next|for the next|across the next';
-const STRONG_LEADING = 'passaram-se|passou-se|se passaram|se passou|transcorreram|decorridos|decorreram';
+const STRONG_TRAILING = 'later|afterwards|afterward|passed|had passed|have passed|went by|had gone by';
+const WEAK_LEADING = 'after|over the next|for the next|across the next';
 
 function spanPattern(source) {
   return new RegExp(source, 'g');
 }
 
 const SPAN_PATTERNS = [
-  { strength: 'strong', pattern: spanPattern('\\b(?:' + STRONG_LEADING + ')\\s+(' + SPAN_QUANTITY_PATTERN + ')\\s+(' + SPAN_UNIT_PATTERN + ')\\b') },
   { strength: 'strong', pattern: spanPattern('\\b(' + SPAN_QUANTITY_PATTERN + ')\\s+(' + SPAN_UNIT_PATTERN + ')\\s+(?:' + STRONG_TRAILING + ')\\b') },
   { strength: 'weak', pattern: spanPattern('\\b(?:' + WEAK_LEADING + ')\\s+(' + SPAN_QUANTITY_PATTERN + ')\\s+(' + SPAN_UNIT_PATTERN + ')\\b') }
 ];
 
 /** Fixed phrases that name a span without a quantity. */
 const SPAN_PHRASES = [
-  { strength: 'strong', unit: 'days', amount: 1, pattern: /\b(?:no dia seguinte|na manha seguinte|na noite seguinte|next day|next morning|the following day|the following morning)\b/ },
-  { strength: 'strong', unit: 'weeks', amount: 1, pattern: /\b(?:na semana seguinte|next week|the following week)\b/ },
-  { strength: 'strong', unit: 'months', amount: 1, pattern: /\b(?:no mes seguinte|next month|the following month)\b/ },
-  { strength: 'strong', unit: 'years', amount: 1, pattern: /\b(?:no ano seguinte|next year|the following year)\b/ }
+  { strength: 'strong', unit: 'days', amount: 1, pattern: /\b(?:next day|next morning|the following day|the following morning)\b/ },
+  { strength: 'strong', unit: 'weeks', amount: 1, pattern: /\b(?:next week|the following week)\b/ },
+  { strength: 'strong', unit: 'months', amount: 1, pattern: /\b(?:next month|the following month)\b/ },
+  { strength: 'strong', unit: 'years', amount: 1, pattern: /\b(?:next year|the following year)\b/ }
 ];
 
 function normalizeSpanText(value) {
@@ -657,60 +631,51 @@ function spanToMinutes(calendar, unit, amount) {
 }
 
 const CLOCK_NUMBERS = new Map([
-  ['zero', 0], ['uma', 1], ['um', 1], ['duas', 2], ['dois', 2], ['tres', 3],
-  ['quatro', 4], ['cinco', 5], ['seis', 6], ['sete', 7], ['oito', 8], ['nove', 9],
-  ['dez', 10], ['onze', 11], ['doze', 12], ['treze', 13], ['catorze', 14],
-  ['quatorze', 14], ['quinze', 15], ['dezesseis', 16], ['dezessete', 17],
-  ['dezoito', 18], ['dezenove', 19], ['vinte', 20], ['trinta', 30],
-  ['quarenta', 40], ['cinquenta', 50]
+  ['one', 1], ['two', 2], ['three', 3], ['four', 4], ['five', 5], ['six', 6],
+  ['seven', 7], ['eight', 8], ['nine', 9], ['ten', 10], ['eleven', 11], ['twelve', 12]
 ]);
+const CLOCK_WORD_PATTERN = [...CLOCK_NUMBERS.keys()].join('|');
 
-function clockNumber(value, minutes = false) {
-  const words = String(value || '').trim();
-  if (minutes && words === 'meia') return 30;
-  if (CLOCK_NUMBERS.has(words)) return CLOCK_NUMBERS.get(words);
-  const parts = words.split(/\s+e\s+/);
-  if (parts.length !== 2) return null;
-  const tens = CLOCK_NUMBERS.get(parts[0]);
-  const units = CLOCK_NUMBERS.get(parts[1]);
-  return Number.isInteger(tens) && tens >= 20 && Number.isInteger(units) ? tens + units : null;
-}
-
-// Without accents "as" is both "às" and the article, so a bare number after it is a count
-// ("as duas maos") until something marks it as a time of day.
-const CLOCK_COMPLEMENT = String.raw`\s*(horas?\b|h\b|em ponto|da manha|da tarde|da noite|da madrugada|o\s*clock|am\b|pm\b)`;
+// A bare number after "at" is often a count ("at 2 doors"), so it needs minutes or a time-of-day word.
+const CLOCK_COMPLEMENT = String.raw`\s*(o['’]?\s*clock|a\.?m\b\.?|p\.?m\b\.?|in the morning|in the afternoon|in the evening|at night|sharp)`;
 
 function clockHour(hour, complement) {
-  const afternoon = /tarde|noite|pm/.test(complement || '');
+  const afternoon = /afternoon|evening|night|p\.?m/.test(complement || '');
   return afternoon && hour < 12 ? hour + 12 : hour;
 }
 
 /**
- * The last time of day the text states that is still ahead of the clock, placed on the current
- * day. A number counts only when it reads as a time: with minutes, a time-of-day complement,
- * or after "marcava".
+ * The last stated time of day still ahead of the clock. A number counts only with minutes, a
+ * time-of-day word, or after "struck".
  */
 function extractClockTarget(text, startClock, calendar, futureOnly = false) {
   const source = normalizeSpanText(text);
   const candidates = [];
-  const marker = futureOnly ? String.raw`ate(?:\s+as)?|until|by` : String.raw`as|ate|marca(?:va)?|at|until|by`;
-  const numeric = new RegExp(String.raw`\b(${marker})\b\s*(\d{1,2})(?:\s*(?::|h)\s*(\d{2}))?(?:${CLOCK_COMPLEMENT})?`, 'g');
+  const marker = futureOnly ? String.raw`until|by` : String.raw`at|until|by|struck`;
+  const numeric = new RegExp(String.raw`\b(${marker})\b\s*(\d{1,2})(?:\s*:\s*(\d{2}))?(?:${CLOCK_COMPLEMENT})?`, 'g');
   for (const match of source.matchAll(numeric)) {
     const [, word, hour, minute, complement] = match;
-    if (!minute && !complement && !word.startsWith('marca')) continue;
+    if (!minute && !complement && word !== 'struck') continue;
     candidates.push({ index: match.index ?? 0, hour: clockHour(Number(hour), complement), minute: Number(minute || 0) });
   }
   if (!futureOnly) {
-    const words = new RegExp(String.raw`\b(as|marca(?:va)?)\b\s+((?:vinte\s+e\s+)?[a-z]+)(?:\s+e\s+((?:(?:vinte|trinta|quarenta|cinquenta)\s+e\s+)?[a-z]+))?(?:${CLOCK_COMPLEMENT})?`, 'g');
+    const words = new RegExp(String.raw`\b(at|struck)\s+(?:(half|quarter)\s+(past|to)\s+)?(${CLOCK_WORD_PATTERN})\b(?:${CLOCK_COMPLEMENT})?`, 'g');
     for (const match of source.matchAll(words)) {
-      const [, word, hourWords, minuteWords, complement] = match;
-      const hour = clockNumber(hourWords);
-      const minute = minuteWords ? clockNumber(minuteWords, true) : 0;
-      if (hour === null || minute === null) continue;
-      if (!minuteWords && !complement && !word.startsWith('marca')) continue;
+      const [, word, fraction, direction, hourWord, complement] = match;
+      let hour = CLOCK_NUMBERS.get(hourWord);
+      let minute = 0;
+      if (fraction) {
+        minute = fraction === 'half' ? 30 : 15;
+        if (direction === 'to') {
+          if (fraction === 'half') continue;
+          minute = 45;
+          hour = hour === 1 ? 12 : hour - 1;
+        }
+      }
+      if (!fraction && !complement && word !== 'struck') continue;
       candidates.push({ index: match.index ?? 0, hour: clockHour(hour, complement), minute });
     }
-    for (const match of source.matchAll(/\b(meio-dia|noon)\b/g)) candidates.push({ index: match.index ?? 0, hour: 12, minute: 0 });
+    for (const match of source.matchAll(/\b(noon|midday)\b/g)) candidates.push({ index: match.index ?? 0, hour: 12, minute: 0 });
   }
   // A time already behind the clock is a recollection ("he was out there at half past six"),
   // and one on a later day cannot be placed from the time alone.
@@ -728,6 +693,78 @@ function extractClockTarget(text, startClock, calendar, futureOnly = false) {
     hour: target.hour,
     minute: target.minute
   } : null;
+}
+
+const SPAN_UNIT_NAMES = ['minutes', 'hours', 'days', 'weeks', 'months', 'years', 'decades'];
+const SPAN_ASSERTIONS = ['now', 'framing', 'history'];
+const MIN_SPAN_EXCERPT_CHARS = 4;
+
+// Decimal digits come in contiguous runs of ten in every script, so a digit's value is its offset.
+function digitValue(char) {
+  const point = char.codePointAt(0);
+  let first = point;
+  while (/\p{Nd}/u.test(String.fromCodePoint(first - 1))) first -= 1;
+  return (point - first) % 10;
+}
+
+function excerptNumbers(text) {
+  return (String(text || '').match(/\p{Nd}+/gu) || []).map(run => Number([...run].map(digitValue).join('')));
+}
+
+/**
+ * A span the interpreter cites holds only when its excerpt is literally in the turn and any
+ * number written in digits matches the amount. A cited number in words cannot be checked.
+ */
+function verifyStatedSpan(calendar, span, sourceText) {
+  if (!span || typeof span !== 'object' || Array.isArray(span)) return null;
+  const claim = {
+    excerpt: String(span.excerpt || '').trim().slice(0, 240),
+    amount: Math.max(0, integer(span.amount)),
+    unit: SPAN_UNIT_NAMES.includes(span.unit) ? span.unit : null,
+    asserts: SPAN_ASSERTIONS.includes(span.asserts) ? span.asserts : 'now'
+  };
+  if (!claim.excerpt || !claim.amount || !claim.unit) return { ...claim, verified: false, reason: 'incomplete' };
+  if (normalizeEvidence(claim.excerpt).length < MIN_SPAN_EXCERPT_CHARS || !chunkContainsEvidence(sourceText, claim.excerpt)) {
+    return { ...claim, verified: false, reason: 'excerpt-not-found' };
+  }
+  const numbers = excerptNumbers(claim.excerpt);
+  const minutes = spanToMinutes(calendar, claim.unit, claim.amount);
+  const read = extractElapsedSpan(calendar, claim.excerpt);
+  if ((numbers.length && !numbers.includes(claim.amount)) || (read && read.minutes !== minutes)) {
+    return { ...claim, verified: false, reason: 'amount-mismatch' };
+  }
+  return { ...claim, verified: true, minutes };
+}
+
+/**
+ * The span that may lift the week ceiling and, when it asserts time passing now, set a floor:
+ * the interpreter's verified one first, then one read from the text. History moves nothing.
+ */
+function resolveStatedSpan(calendar, { claimedSpan = null, sourceText = '' } = {}) {
+  const check = verifyStatedSpan(calendar, claimedSpan, sourceText);
+  if (check?.verified) {
+    const statedSpan = check.asserts === 'history' ? null : {
+      strength: check.asserts === 'now' ? 'strong' : 'weak',
+      minutes: check.minutes,
+      evidence: check.excerpt,
+      source: 'interpreter'
+    };
+    return { statedSpan, check };
+  }
+  const read = extractElapsedSpan(calendar, sourceText);
+  return { statedSpan: read ? { ...read, source: 'text' } : null, check };
+}
+
+// What the frame keeps about a cited span, so diagnostics and the change list can say why.
+function withSpanNotes(advance, timeAdvance) {
+  if (!advance || !timeAdvance || typeof timeAdvance !== 'object') return advance;
+  const check = timeAdvance.spanCheck;
+  const stated = timeAdvance.statedSpan;
+  return {
+    ...advance,
+    ...(stated ? { statedSpan: { strength: stated.strength, minutes: stated.minutes, evidence: stated.evidence, source: stated.source || 'text' } } : {}),
+    ...(check ? { spanCheck: { excerpt: check.excerpt, amount: check.amount, unit: check.unit, asserts: check.asserts, verified: Boolean(check.verified), ...(check.reason ? { reason: check.reason } : {}) } } : {})
+  };
 }
 
 /**
@@ -784,15 +821,7 @@ function matrixMinimumMinutes(matrix, categoryId) {
   return Math.max(0, integer(category?.minimumMinutes));
 }
 
-/**
- * A journey costs at least what the world says it costs.
- *
- * The interpreter estimates elapsed time from the prose, and prose about walking somewhere is
- * often two lines long, so a crossing of the city was arriving as zero minutes or as two. The
- * turn already knows where it started and where it ended, and the campaign already carries a
- * Time Cost Matrix, so the floor comes from the author's own configuration rather than from a
- * guess. An explicit clock in the narrative outranks it: there the author said the time.
- */
+/** A journey costs at least the Time Cost Matrix minimum; a clock the narrative states outranks it. */
 function enforceMinimumAdvance(advance, minimumMinutes, calendar, actionType) {
   if (!(minimumMinutes > 0)) return advance;
   if (advance?.basis === 'explicit' || advance?.targetPosition) return advance;
@@ -827,18 +856,16 @@ function applyRoleplayTurnFrame(db, {
   if (existing) return hydrateFrame(originId, existing);
   const calendar = getCalendar(db, workspaceId);
   const currentClock = startClock || getRoleplayClock(db, workspaceId);
-  // A span the turn stated outright is a floor of its own: the interpreter routinely prices
-  // "passaram-se tres meses" as a few minutes of dialogue, and only a strong marker is
-  // allowed to move the clock this way, because a weak one reads the same in a flashback.
+  // A strongly stated span is a floor of its own; a weak one reads the same in a flashback.
   const statedSpan = timeAdvance && typeof timeAdvance === 'object' ? timeAdvance.statedSpan : null;
   const statedFloor = statedSpan?.strength === 'strong' ? Math.max(0, integer(statedSpan.minutes)) : 0;
   const floorMinutes = Math.max(Math.max(0, integer(minimumMinutes)), statedFloor);
-  const normalizedAdvance = enforceMinimumAdvance(
+  const normalizedAdvance = withSpanNotes(enforceMinimumAdvance(
     normalizeTimeAdvance(timeAdvance, calendar, currentClock),
     floorMinutes,
     calendar,
     statedFloor >= Math.max(0, integer(minimumMinutes)) && statedFloor > 0 ? 'stated_time_skip' : minimumActionType
-  );
+  ), timeAdvance);
   let endClock = currentClock;
   if (normalizedAdvance) {
     const nextPosition = addDuration(calendar, currentClock, normalizedAdvance.duration);
@@ -1229,6 +1256,8 @@ module.exports = {
   getTimeMatrix,
   normalizeCalendar,
   normalizeTimeAdvance,
+  resolveStatedSpan,
+  verifyStatedSpan,
   saveCalendar,
   saveRoleplayClock,
   saveTimeMatrix,

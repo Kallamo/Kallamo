@@ -22,7 +22,7 @@ describe('Roleplay time advance', () => {
       id TEXT PRIMARY KEY, workspaceId TEXT, type TEXT NOT NULL,
       canonicalName TEXT NOT NULL, data TEXT, last_modified INTEGER DEFAULT 0
     )`);
-    for (const [id, name] of [['street', 'Artisan Street'], ['lookout', 'Dawn Lookout']]) {
+    for (const [id, name] of [['street', 'Tanner Street'], ['lookout', 'Dawn Lookout']]) {
       db.prepare("INSERT INTO entities (id, workspaceId, type, canonicalName, data) VALUES (?, ?, 'Locations', ?, '{}')")
         .run(id, WORKSPACE, name);
     }
@@ -48,8 +48,7 @@ describe('Roleplay time advance', () => {
     });
   }
 
-  /* Confidence is not a signal here. The interpreter reports 0 for perfectly ordinary
-     advances, so treating it as a gate simply stopped the campaign clock. */
+  /* The interpreter reports 0 confidence for ordinary advances, so confidence is not a gate. */
   test('keeps an advance the interpreter reported no confidence in', () => {
     const advance = calendarService.normalizeTimeAdvance(
       { actionType: 'brief_inspection', basis: 'matrix', duration: { years: 0, months: 0, days: 0, hours: 0, minutes: 10 }, confidence: 0 },
@@ -132,15 +131,15 @@ describe('Roleplay time advance', () => {
     const span = (text: string) => calendarService.extractElapsedSpan(calendar(), text);
 
     test('reads a span the turn asserts and ignores one it merely recounts', () => {
-      expect(span('Passaram-se três meses desde a queda do Poço 04.')).toMatchObject({ strength: 'strong' });
-      expect(span('Dois anos depois, Kepler voltou a Ocarina.')).toMatchObject({ strength: 'strong' });
+      expect(span('Three months had passed since Mine 07 fell.')).toMatchObject({ strength: 'strong' });
+      expect(span('Two years later, Corwin returned to Lowmere.')).toMatchObject({ strength: 'strong' });
       expect(span('Three years later the forge reopened.')).toMatchObject({ strength: 'strong' });
-      expect(span('No dia seguinte, Alistair chamou Nex.')).toMatchObject({ strength: 'strong' });
+      expect(span('The next day, Rosalind called for Pip.')).toMatchObject({ strength: 'strong' });
       // Framing, not a skip: it reads the same inside a flashback.
-      expect(span('Após seis semanas de viagem, chegaram a Zeth.')).toMatchObject({ strength: 'weak' });
+      expect(span('After six weeks on the road, they reached Kesh.')).toMatchObject({ strength: 'weak' });
       // History about the world, not time passing in this turn.
-      expect(span('A praga permaneceu ativa durante quatorze meses.')).toBeNull();
-      expect(span('Ele caminhou até a oficina de Hakan.')).toBeNull();
+      expect(span('The plague stayed active for fourteen months.')).toBeNull();
+      expect(span('He walked over to Oswin’s workshop.')).toBeNull();
     });
 
     test('refuses months and years the turn never mentioned', () => {
@@ -154,7 +153,7 @@ describe('Roleplay time advance', () => {
     });
 
     test('allows a skip the narrative actually states', () => {
-      const stated = span('Passaram-se três meses desde a queda do Poço 04.');
+      const stated = span('Three months had passed since Mine 07 fell.');
       const advance = calendarService.normalizeTimeAdvance(
         { actionType: 'skip', basis: 'matrix', duration: { years: 0, months: 0, days: 90, hours: 0, minutes: 0 }, confidence: 0.9, statedSpan: stated },
         calendar(),
@@ -166,7 +165,7 @@ describe('Roleplay time advance', () => {
     });
 
     test('holds a skip to the span that was stated, not the one that was asked for', () => {
-      const stated = span('Passaram-se três meses desde a queda do Poço 04.');
+      const stated = span('Three months had passed since Mine 07 fell.');
       const advance = calendarService.normalizeTimeAdvance(
         { actionType: 'skip', basis: 'matrix', duration: { years: 6, months: 0, days: 0, hours: 0, minutes: 0 }, confidence: 0.9, statedSpan: stated },
         calendar(),
@@ -181,7 +180,7 @@ describe('Roleplay time advance', () => {
     });
 
     test('skips the years the player declared even when the interpreter reported nothing', () => {
-      const stated = span('Passaram-se dois anos e Kepler voltou a Ocarina.');
+      const stated = span('Two years passed, and Corwin returned to Lowmere.');
       const before = calendarService.getRoleplayClock(db, WORKSPACE);
 
       const result = frame('turn-skip', { statedSpan: stated });
@@ -191,7 +190,7 @@ describe('Roleplay time advance', () => {
     });
 
     test('never lets a merely framed span move the clock on its own', () => {
-      const stated = span('Após seis semanas de viagem, chegaram a Zeth.');
+      const stated = span('After six weeks on the road, they reached Kesh.');
 
       const result = frame('turn-weak-span', { statedSpan: stated });
 
@@ -199,12 +198,75 @@ describe('Roleplay time advance', () => {
     });
 
     test('prefers the stated skip over the travel floor when it is longer', () => {
-      const stated = span('Um mês depois, a oficina reabriu.');
+      const stated = span('A month later, the workshop reopened.');
 
       const result = frame('turn-skip-over-travel', { statedSpan: stated }, 30);
 
       expect(result.advance).toMatchObject({ actionType: 'stated_time_skip' });
       expect(calendarService.durationTotalMinutes(calendar(), result.advance.duration)).toBe(stated.minutes);
+    });
+  });
+
+  describe('time skips the interpreter cites', () => {
+    const cite = (sourceText: string, claimedSpan: unknown) =>
+      calendarService.resolveStatedSpan(calendar(), { claimedSpan, sourceText });
+    const skip = (months: number) => ({ years: 0, months, days: 0, hours: 0, minutes: 0 });
+    const turn = (resolved: any, duration: object) => ({
+      actionType: 'skip', basis: 'matrix', duration, confidence: 0.9,
+      ...(resolved.statedSpan ? { statedSpan: resolved.statedSpan } : {}),
+      ...(resolved.check ? { spanCheck: resolved.check } : {})
+    });
+
+    test('moves the clock by a verified span and keeps what was cited', () => {
+      const resolved = cite('Three months later, the forge was cold.', { excerpt: 'Three months later', amount: 3, unit: 'months', asserts: 'now' });
+
+      expect(resolved.statedSpan).toMatchObject({ strength: 'strong', source: 'interpreter' });
+      const result = frame('turn-cited', turn(resolved, skip(3)));
+      expect(result.advance).not.toHaveProperty('clamped');
+      expect(calendarService.durationTotalMinutes(calendar(), result.advance.duration)).toBe(resolved.statedSpan.minutes);
+      expect(result.advance.spanCheck).toMatchObject({ excerpt: 'Three months later', verified: true });
+    });
+
+    test('verifies a span in any script without a vocabulary for it', () => {
+      expect(cite('3か月後、鍛冶場は冷えていた。', { excerpt: '3か月後', amount: 3, unit: 'months', asserts: 'now' }).check)
+        .toMatchObject({ verified: true });
+      expect(cite('بعد ٣ أشهر عاد إلى المدينة.', { excerpt: 'بعد ٣ أشهر', amount: 3, unit: 'months', asserts: 'now' }).check)
+        .toMatchObject({ verified: true });
+    });
+
+    test('holds an invented excerpt to a week', () => {
+      const resolved = cite('They rested by the fire.', { excerpt: 'Three months later', amount: 3, unit: 'months', asserts: 'now' });
+
+      expect(resolved.statedSpan).toBeNull();
+      expect(resolved.check).toMatchObject({ verified: false, reason: 'excerpt-not-found' });
+      const result = frame('turn-invented', turn(resolved, skip(3)));
+      expect(result.advance).toMatchObject({ clamped: true, duration: { days: 7 }, spanCheck: { verified: false } });
+    });
+
+    test('refuses an amount the digits in the excerpt contradict', () => {
+      expect(cite('3か月後、鍛冶場は冷えていた。', { excerpt: '3か月後', amount: 5, unit: 'months', asserts: 'now' }).check)
+        .toMatchObject({ verified: false, reason: 'amount-mismatch' });
+      expect(cite('Three months later, the forge was cold.', { excerpt: 'Three months later', amount: 3, unit: 'years', asserts: 'now' }).check)
+        .toMatchObject({ verified: false, reason: 'amount-mismatch' });
+    });
+
+    test('lets a framing span lift the ceiling without moving the clock', () => {
+      const resolved = cite('After six weeks on the road, they reached Kesh.', { excerpt: 'After six weeks', amount: 6, unit: 'weeks', asserts: 'framing' });
+
+      expect(resolved.statedSpan).toMatchObject({ strength: 'weak' });
+      expect(frame('turn-framing', { statedSpan: resolved.statedSpan, spanCheck: resolved.check }).advance).toBeNull();
+    });
+
+    test('moves nothing for recounted history, even where the text reads like a skip', () => {
+      const resolved = cite('Two years later the plague ended, the old songs say.', { excerpt: 'Two years later the plague ended', amount: 2, unit: 'years', asserts: 'history' });
+
+      expect(resolved.check).toMatchObject({ verified: true, asserts: 'history' });
+      expect(resolved.statedSpan).toBeNull();
+    });
+
+    test('falls back to the span read from the text when nothing is cited', () => {
+      expect(cite('Two years later, Corwin returned to Lowmere.', null).statedSpan)
+        .toMatchObject({ strength: 'strong', source: 'text' });
     });
   });
 

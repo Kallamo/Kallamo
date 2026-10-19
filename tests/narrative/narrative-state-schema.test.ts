@@ -12,24 +12,25 @@ describe('Narrative State structured output schemas', () => {
     expect(validate({
       consequential: true,
       types: ['knowledge'],
-      entityIds: ['kepler'],
-      presentIds: ['kepler'],
+      entityIds: ['corwin'],
+      presentIds: ['corwin'],
       confidence: 0.9,
-      evidence: ['Kepler heard a new concept.'],
+      evidence: ['Corwin heard a new concept.'],
       requiresFullAnalysis: false,
-      reason: 'Kepler heard a new concept.',
+      reason: 'Corwin heard a new concept.',
       timeAdvance: {
         actionType: 'reported_discovery',
         basis: 'explicit',
         duration: { years: 0, months: 0, days: 0, hours: 5, minutes: 5 },
         targetPosition: { eraId: 'ce', year: 997, month: 5, day: 15, hour: 13, minute: 15 },
         confidence: 1,
-        evidence: 'The clock reads 13:15.'
+        evidence: 'The clock reads 13:15.',
+        statedSpan: null
       },
       sceneMemory: [{
-        entityId: 'kepler',
-        perceived: ['Mara drew the weave in the dust'],
-        heard: [{ fromId: 'mara', text: 'the weave fails near iron' }],
+        entityId: 'corwin',
+        perceived: ['Tess drew the weave in the dust'],
+        heard: [{ fromId: 'tess', text: 'the weave fails near iron' }],
         stance: 'wants to test the claim'
       }]
     })).toBe(true);
@@ -67,9 +68,9 @@ describe('Narrative State structured output schemas', () => {
       inventoryChanges: [],
       events: [{
         type: 'revelation',
-        description: 'Mara explains the Aether Weave.',
+        description: 'Tess explains the Aether Weave.',
         excerpt: 'The weave fails near iron.',
-        participantIds: ['mara', 'kepler'],
+        participantIds: ['tess', 'corwin'],
         confidence: 0.95,
         operations: []
       }]
@@ -84,7 +85,7 @@ describe('Narrative State structured output schemas', () => {
         type: 'conversation',
         description: 'Unsupported event type.',
         excerpt: 'They talk.',
-        participantIds: ['mara', 'kepler'],
+        participantIds: ['tess', 'corwin'],
         confidence: 0.95,
         operations: []
       }]

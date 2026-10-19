@@ -75,7 +75,7 @@ export const NARRATIVE_TRIAGE_SCHEMA = {
         {
           type: 'object',
           additionalProperties: false,
-          required: ['actionType', 'basis', 'duration', 'targetPosition', 'confidence', 'evidence'],
+          required: ['actionType', 'basis', 'duration', 'targetPosition', 'confidence', 'evidence', 'statedSpan'],
           properties: {
             actionType: { type: 'string' },
             basis: { type: 'string', enum: ['explicit', 'matrix'] },
@@ -111,6 +111,22 @@ export const NARRATIVE_TRIAGE_SCHEMA = {
             },
             confidence: { type: 'number', minimum: 0, maximum: 1 },
             evidence: { type: 'string' },
+            statedSpan: {
+              anyOf: [
+                { type: 'null' },
+                {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['excerpt', 'amount', 'unit', 'asserts'],
+                  properties: {
+                    excerpt: { type: 'string' },
+                    amount: { type: 'integer', minimum: 1 },
+                    unit: { type: 'string', enum: ['minutes', 'hours', 'days', 'weeks', 'months', 'years', 'decades'] },
+                    asserts: { type: 'string', enum: ['now', 'framing', 'history'] },
+                  },
+                },
+              ],
+            },
           },
         },
       ],

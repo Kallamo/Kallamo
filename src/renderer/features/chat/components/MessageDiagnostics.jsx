@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Activity, ChevronDown, ChevronRight, ChevronUp, Copy } from 'lucide-react';
-import { formatFrameTime } from '../frame-format';
+import { describeSpanCheck, formatFrameTime } from '../frame-format';
 import {
   diagnosticText,
   formatAgenticTrace,
@@ -515,11 +515,13 @@ function NarrativeView({ debug, names, copy }) {
   const named = entityIds.map(id => names?.get(id)).filter(Boolean);
   const unnamed = entityIds.length - named.length;
   const frame = state.timeFrame;
+  const spanNote = describeSpanCheck(frame?.advance?.spanCheck || triage.timeAdvance?.spanCheck);
   const contextUsage = state.contextUsage?.analysis || state.contextUsage?.triage || (state.contextUsage?.sections ? state.contextUsage : null);
   const warnings = [
     ...(analysis?.skippedEventReasons || []).map(reason => `Event skipped: ${humanize(reason)}`),
     ...(analysis?.filteredOperationReasons || []).map(item => `${humanize(item.key.replace(':', ' · '))}${item.count > 1 ? ` ×${item.count}` : ''}`),
     analysis?.rejectedScenePatch && `Scene change rejected: ${humanize(analysis.rejectedScenePatch)}`,
+    spanNote?.warning && spanNote.text,
     analysis?.invalidInventoryChanges > 0 && `${analysis.invalidInventoryChanges} inventory ${analysis.invalidInventoryChanges === 1 ? 'change' : 'changes'} could not apply`
   ].filter(Boolean);
   const outcome = analysis ? [
@@ -591,6 +593,7 @@ function NarrativeView({ debug, names, copy }) {
             {formatFrameTime(frame.start)} → <b className="font-semibold text-text-primary">{formatFrameTime(frame.end)}</b>
             {frame.end.locationName && <> · {frame.start?.locationName && frame.start.locationName !== frame.end.locationName ? `${frame.start.locationName} → ` : ''}{frame.end.locationName}</>}
           </p>
+          {spanNote && !spanNote.warning && <p className="mt-1 text-xs text-text-muted">{spanNote.text}</p>}
         </div>
       )}
 

@@ -12,6 +12,7 @@ import {
   CastGroup, CastRow, InventoryTab, LocationHero, PanelClock, PanelTabs, PlayerCard, RoleplayRail, RoleplayStatus, SectionHead
 } from './RoleplayPanelParts';
 import { describeSkillChange, kindOf, skillChangeItems, startingProfileText } from './changeKinds';
+import { describeSpanCheck } from '../chat/frame-format';
 
 const EMPTY_SCENE = {
   locationId: null,
@@ -773,6 +774,8 @@ function describeRecentChange(change, names, definitions) {
     if (skipped) details.push(`Elapsed: ${skipped}.`);
     if (advance?.clamped) details.push(`Limited from a requested ${describeElapsed(advance.requestedDuration) || 'longer span'}.`);
     if (advance?.raisedToMinimum) details.push('Raised to the minimum this move costs.');
+    const spanNote = describeSpanCheck(advance?.spanCheck);
+    if (spanNote) details.push(spanNote.text.endsWith('.') ? spanNote.text : `${spanNote.text}.`);
     return details;
   }
   return ['Narrative State updated.'];

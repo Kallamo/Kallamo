@@ -65,11 +65,8 @@ function containerChain(originId: string, parents: Map<string, string[]>): strin
   return chain;
 }
 
-// Containment is directional, so treating it as an undirected graph and counting hops measures
-// the wrong thing: a walk across town reads as far because it climbs to the shared district and
-// back down, while a jump to another continent under the same root reads as near. Reachability
-// is therefore anchored on the containers the origin sits in. Everything under those containers
-// is walkable, everything outside them is a different branch of the world.
+// Containment is directional: counting hops makes a walk across town look far and another
+// continent under the same root look near, so reach is anchored on the origin's containers.
 export function findReachableLocations(
   originId: string | null | undefined,
   links: LocationLink[],
@@ -135,11 +132,7 @@ function regionClimbDepth(originId: string, parents: Map<string, string[]>, size
   return index > 0 ? index : null;
 }
 
-/**
- * Which Time Cost Matrix band the shortest honest version of a move falls in. A direct link
- * decides first; otherwise the smallest container both ends share says how far apart they are.
- * Returns null when there is no move.
- */
+/** A direct link decides first; otherwise the smallest container both ends share. null without a move. */
 export function travelCategory(
   startId: string | null | undefined,
   endId: string | null | undefined,
@@ -171,9 +164,8 @@ export function travelCategory(
 }
 
 /**
- * Where a place the story just introduced most likely sits, given the scene's location chain.
- * The first container strictly larger than the new place wins, so a back room lands in the
- * tavern while a new city lands in the region rather than inside the tavern.
+ * The first container strictly larger than the new place: a back room lands in the tavern, a new
+ * city in the region.
  */
 export function proposeLocationParent(size: unknown, chain: Array<Pick<LocationChainNode, 'id' | 'size'>>): string | null {
   if (!chain.length) return null;
@@ -228,7 +220,7 @@ export function locationSizesOf(entities: Array<{ id: string; type: string; data
   return sizes;
 }
 
-/** "Taverna (place), within Porto Velho (area)": the scene's place said with its surroundings. */
+/** "Tavern (place), within Old Harbor (area)": the scene's place said with its surroundings. */
 export function describeLocationChain(chain: LocationChainNode[]): string {
   return chain
     .map((node, index) => `${index ? 'within ' : ''}${node.name}${node.size ? ` (${node.size})` : ''}`)

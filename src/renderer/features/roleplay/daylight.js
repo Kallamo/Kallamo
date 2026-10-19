@@ -8,7 +8,6 @@ export const DAYLIGHT = {
   night: { label: 'Night', icon: Moon, band: 'from-daylight-night/16 via-daylight-night/5', tile: 'bg-daylight-night/14 border-daylight-night/30 text-daylight-night', text: 'text-daylight-night' }
 };
 
-/** Fixed bands for now; a calendar with longer days can move them later. */
 export function daylightPhase(hour = 12) {
   if (hour >= 5 && hour < 8) return 'dawn';
   if (hour >= 8 && hour < 17) return 'day';

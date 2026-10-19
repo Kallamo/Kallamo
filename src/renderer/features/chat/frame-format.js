@@ -31,3 +31,24 @@ export const shouldShowTimeTransition = frame => {
 };
 
 export const framePlaceKey = point => point?.locationId || point?.locationName || null;
+
+const spanAmount = (amount, unit) => `${amount} ${amount === 1 ? String(unit).replace(/s$/, '') : unit}`;
+
+const SPAN_CHECK_FAILURES = {
+  'excerpt-not-found': () => 'the cited excerpt is not in this turn',
+  'amount-mismatch': check => `${spanAmount(check.amount, check.unit)} does not match "${check.excerpt}"`,
+  incomplete: () => 'the cited span has no amount or unit'
+};
+
+// One line on a time skip the turn cited: what it did to the clock, or why it was not trusted.
+export const describeSpanCheck = check => {
+  if (!check) return null;
+  if (!check.verified) {
+    const reason = (SPAN_CHECK_FAILURES[check.reason] || SPAN_CHECK_FAILURES.incomplete)(check);
+    return { warning: true, text: `Time skip not verified: ${reason}. Held to a week.` };
+  }
+  const cited = `cited "${check.excerpt}"`;
+  if (check.asserts === 'framing') return { warning: false, text: `Framing only · ${cited} · clock not forced` };
+  if (check.asserts === 'history') return { warning: false, text: `Recounted history · ${cited} · clock not moved` };
+  return { warning: false, text: `Skip of ${spanAmount(check.amount, check.unit)} · ${cited} · verified` };
+};

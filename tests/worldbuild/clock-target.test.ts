@@ -10,38 +10,39 @@ const time = (text: string, futureOnly = false, start = clock(0)) => {
 
 describe('explicit clock in the text', () => {
   test('ignores a count that only looks like a time', () => {
-    expect(time('O veterano crava a vara no chão e apoia as duas mãos no topo.')).toBeNull();
-    expect(time('Quebrou as 3 varas de treino.')).toBeNull();
+    expect(time('The veteran plants the staff and rests both hands at two points on top.')).toBeNull();
+    expect(time('He broke the 3 training staffs.')).toBeNull();
     expect(time('He looked at 2 doors.')).toBeNull();
   });
 
   test('reads a time of day once something marks it as one', () => {
-    expect(time('Chegaram às três horas.')).toBe('3:00');
-    expect(time('Saíram às 16h.')).toBe('16:00');
-    expect(time('Às 14:30 o sino tocou.')).toBe('14:30');
-    expect(time('Às duas e meia ele voltou.')).toBe('2:30');
-    expect(time('O relógio marcava cinco.')).toBe('5:00');
+    expect(time('They arrived at three o’clock.')).toBe('3:00');
+    expect(time('They left at 16:00.')).toBe('16:00');
+    expect(time('At 14:30 the bell rang.')).toBe('14:30');
+    expect(time('At half past two he came back.')).toBe('2:30');
+    expect(time('At quarter to six the gates closed.')).toBe('5:45');
+    expect(time('The clock struck five.')).toBe('5:00');
     expect(time('They met at 9 pm.')).toBe('21:00');
   });
 
   test('places the afternoon and the night after noon', () => {
-    expect(time('Partiram às duas da tarde.')).toBe('14:00');
-    expect(time('Voltaram às 9 da noite.')).toBe('21:00');
-    expect(time('Acordou às quatro da madrugada.')).toBe('4:00');
+    expect(time('They set out at two in the afternoon.')).toBe('14:00');
+    expect(time('They came back at 9 at night.')).toBe('21:00');
+    expect(time('She woke at four in the morning.')).toBe('4:00');
   });
 
   test('reads noon', () => {
-    expect(time('Ao meio-dia a praça encheu.')).toBe('12:00');
+    expect(time('At noon the square filled up.')).toBe('12:00');
   });
 
   test('treats a time already behind the clock as a recollection', () => {
-    const text = 'Ele estava vagando pela colina às seis e meia da manhã. Voltaram às 15h.';
+    const text = 'He was wandering the hill at half past six in the morning. They came back at 15:00.';
     expect(time(text, false, clock(14, 5))).toBe('15:00');
-    expect(time('Ele estava vagando pela colina às seis e meia da manhã.', false, clock(14, 5))).toBeNull();
+    expect(time('He was wandering the hill at half past six in the morning.', false, clock(14, 5))).toBeNull();
   });
 
   test('takes only a deadline from the player', () => {
-    expect(time('Espero até as 18h.', true)).toBe('18:00');
-    expect(time('Chego às 18h.', true)).toBeNull();
+    expect(time('I will wait until 18:00.', true)).toBe('18:00');
+    expect(time('I will arrive at 18:00.', true)).toBeNull();
   });
 });
