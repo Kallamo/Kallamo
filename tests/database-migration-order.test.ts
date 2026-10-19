@@ -41,19 +41,20 @@ describe('migrations and the base schema', () => {
 
   test('database.js runs the versioned migrations after it creates the base tables', () => {
     const source = readFileSync(require.resolve('../src/main/database.js'), 'utf8');
-    const createsEntities = source.indexOf('CREATE TABLE IF NOT EXISTS entities');
-    const createsLinks = source.indexOf('CREATE TABLE IF NOT EXISTS entity_links');
+    const schema = readFileSync(require.resolve('../src/main/database/base-schema.js'), 'utf8');
+    const createsBase = source.indexOf('runSchemaStep(() => db.exec(BASE_SCHEMA))');
     const migrates = source.indexOf('runDatabaseMigrations(db)');
-    expect(createsEntities).toBeGreaterThan(0);
-    expect(migrates).toBeGreaterThan(createsEntities);
-    expect(migrates).toBeGreaterThan(createsLinks);
+    expect(schema).toContain('CREATE TABLE IF NOT EXISTS entities');
+    expect(schema).toContain('CREATE TABLE IF NOT EXISTS entity_links');
+    expect(createsBase).toBeGreaterThan(0);
+    expect(migrates).toBeGreaterThan(createsBase);
   });
 
   test('database.js copies the database before any schema change and records the version after every one', () => {
     const source = readFileSync(require.resolve('../src/main/database.js'), 'utf8');
     const opens = source.indexOf('new Database(dbPath)');
     const backs = source.indexOf('createPreMigrationBackup(db,');
-    const firstSchema = source.indexOf('CREATE TABLE IF NOT EXISTS');
+    const firstSchema = source.indexOf('db.exec(BASE_SCHEMA)');
     const firstAlter = source.indexOf('ALTER TABLE');
     const migrates = source.indexOf('runSchemaStep(() => runDatabaseMigrations(db))');
     const records = source.indexOf('writeSchemaAppVersion(db, appVersion)');
@@ -61,7 +62,7 @@ describe('migrations and the base schema', () => {
     expect(backs).toBeGreaterThan(opens);
     expect(firstSchema).toBeGreaterThan(backs);
     expect(firstAlter).toBeGreaterThan(backs);
-    expect(source).toContain('runSchemaStep(() => db.exec(`');
+    expect(source).toContain('runSchemaStep(() => db.exec(BASE_SCHEMA))');
     expect(migrates).toBeGreaterThan(firstAlter);
     expect(records).toBeGreaterThan(migrates);
   });

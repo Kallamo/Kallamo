@@ -146,14 +146,8 @@ export default function ContextMemorySection({ sectionRef, activeChat, handleSav
     setRenamingId(null);
     if (!title || title === block.title) return;
     try {
-      await save({ memoryBlocks: JSON.stringify(blocks.map(item => item.id === block.id ? { ...item, title } : item)) });
-      await electronAPI.saveChatKbBlock?.(activeChat.id, {
-        id: block.id,
-        type: block.type === 'snippet' ? 'manual' : block.type,
-        source: title,
-        text: block.summary || block.text || '',
-        profiles: block.profiles || []
-      });
+      const result = await electronAPI.renameChatKbBlock(activeChat.id, block.id, title);
+      if (!result?.success) throw new Error('rename failed');
       await refreshChats?.(activeChat.id);
     } catch (error) {
       console.error(error);

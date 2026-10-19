@@ -63,7 +63,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
         const result = await electronAPI.getWritingDeskState(workspaceId);
         if (result?.success) return result;
       } catch {
-        // Fall through to the established generic state IPC during process reloads.
+        // The generic state IPC stays available while the main process reloads.
       }
     }
 
@@ -82,7 +82,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
         const result = await electronAPI.setWritingDeskState(workspaceId, state);
         if (result?.success) return result;
       } catch {
-        // Fall through to the established generic state IPC during process reloads.
+        // The generic state IPC stays available while the main process reloads.
       }
     }
 
@@ -221,8 +221,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
     });
   }, []);
 
-  // AI select->invoke state lives HERE (above the editor, which remounts per chapter)
-  // so the loading notice, lock, and sidebar markers survive switching chapters.
+  // Invocation state lives above the editor, which remounts per chapter, so it survives a switch.
   const [inFlight, setInFlight] = useState({});       // { [docId]: { profileId } } while running
   const [pendingIds, setPendingIds] = useState(new Set()); // docs with a ready suggestion
   const [currentPending, setCurrentPending] = useState(null); // full suggestion for open doc
@@ -236,7 +235,6 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
     return () => { active = false; };
   }, [electronAPI, workspaceId]);
 
-  // Load the full pending suggestion for the chapter currently open.
   useEffect(() => {
     if (!selectedDocId) { setCurrentPending(null); return; }
     let active = true;
@@ -339,11 +337,12 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
 
   const doDelete = async (item) => {
     setDeleteTarget(null);
-    if (item.type === 'folder') await electronAPI.deleteFolder(item.id);
-    else {
-      await electronAPI.deleteDocument(item.id);
-      if (selectedDocId === item.id) { selectDocument(null); setCurrentDoc(null); }
-    }
+    const result = item.type === 'folder'
+      ? await electronAPI.deleteFolder(item.id)
+      : await electronAPI.deleteDocument(item.id);
+    if (!result?.success) showToast(`Could not delete ${item.type === 'folder' ? 'the folder' : 'the chapter'}: ${result?.error || 'unknown error'}`, 'error');
+    // A deleted folder can take the open chapter with it.
+    else if (selectedDocId && !(await electronAPI.getDocument(selectedDocId))) { selectDocument(null); setCurrentDoc(null); }
     await loadTree();
   };
 
@@ -358,7 +357,6 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
     await loadTree();
   };
 
-  // Persist any per-document setting (page geometry, paper color, word goal).
   const onDocPatch = async (patch) => {
     if (!currentDoc) return;
     setCurrentDoc({ ...currentDoc, ...patch });
@@ -381,7 +379,6 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
     return counts;
   }, [tree]);
 
-  // --- Drag & drop: reorder within a sibling group and move between folders ---
   const siblings = (type, parentId) => (type === 'folder' ? childFolders(parentId) : childDocs(parentId));
 
   // Is `candidateId` inside the subtree rooted at `rootId`? Blocks dropping a folder into itself/a descendant.
@@ -413,7 +410,6 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
     setDropInfo({ id: target.id, zone: dropZone(e, e.currentTarget, target.type === 'folder') });
   };
 
-  // Reassign positions for `item`'s type group under `newParent`, with `item` inserted at `insertIndex`.
   const commitOrder = async (item, newParent, insertIndex) => {
     if (item.type === 'folder' && (newParent === item.id || isWithinSubtree(newParent, item.id))) return;
     const group = siblings(item.type, newParent).filter(s => s.id !== item.id);

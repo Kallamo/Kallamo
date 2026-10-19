@@ -130,9 +130,13 @@ export class NarrativeEntitySystem {
       return this.saveChange(workspaceId, changeId, null, false, proposal, status, provenanceId);
     }
 
-    const entityId = randomUUID();
-    this.insertEntity(workspaceId, entityId, proposal, provenanceId);
-    applyStartingProfile(this.db, workspaceId, entityId, proposal.startingProfile, provenanceId);
+    const revived = this.findRevivable(workspaceId, proposal);
+    const entityId = revived?.id ?? randomUUID();
+    if (revived) this.revive(workspaceId, revived.id);
+    else {
+      this.insertEntity(workspaceId, entityId, proposal, provenanceId);
+      applyStartingProfile(this.db, workspaceId, entityId, proposal.startingProfile, provenanceId);
+    }
     return this.saveChange(workspaceId, changeId, entityId, true, proposal, 'applied', provenanceId);
   }
 
@@ -217,8 +221,10 @@ export class NarrativeEntitySystem {
     }
 
     const match = this.findExactMatch(workspaceId, change.proposal);
-    const entityId = match?.id ?? randomUUID();
-    if (!match) {
+    const revived = match ? undefined : this.findRevivable(workspaceId, change.proposal);
+    const entityId = match?.id ?? revived?.id ?? randomUUID();
+    if (revived) this.revive(workspaceId, revived.id);
+    else if (!match) {
       this.insertEntity(workspaceId, entityId, change.proposal, change.provenanceId);
       this.fileInsideContainer(workspaceId, entityId, change.proposal);
       applyStartingProfile(this.db, workspaceId, entityId, change.proposal.startingProfile, change.provenanceId);
@@ -238,13 +244,20 @@ export class NarrativeEntitySystem {
         updated_at = excluded.updated_at
     `).run(workspaceId, originId, status, replacementOriginId ?? null, Date.now());
     const entityStatus = status === 'active' ? 'confirmed' : 'proposed';
+    // An entity a later turn brought back stays while that turn is active.
     this.db.prepare(`
       UPDATE entities SET status = ?, last_modified = ?
       WHERE workspaceId = ? AND id IN (
         SELECT entity_id FROM roleplay_entity_changes
         WHERE workspace_id = ? AND provenance_id = ? AND entity_id IS NOT NULL AND created_entity = 1
-      )
-    `).run(entityStatus, Date.now(), workspaceId, workspaceId, originId);
+      ) AND (? = 'confirmed' OR id NOT IN (
+        SELECT changes.entity_id FROM roleplay_entity_changes changes
+        LEFT JOIN narrative_origin_lifecycle lifecycle
+          ON lifecycle.workspace_id = changes.workspace_id AND lifecycle.origin_id = changes.provenance_id
+        WHERE changes.workspace_id = ? AND changes.provenance_id != ? AND changes.created_entity = 1
+          AND changes.entity_id IS NOT NULL AND COALESCE(lifecycle.status, 'active') = 'active'
+      ))
+    `).run(entityStatus, Date.now(), workspaceId, workspaceId, originId, entityStatus, workspaceId, originId);
     this.syncCreatedSkills(workspaceId, originId, status === 'active');
     if (status !== 'active') {
       for (const table of ['roleplay_resource_changes', 'roleplay_progress_changes', 'roleplay_skill_changes', 'roleplay_scene_changes', 'roleplay_inventory_changes']) {
@@ -305,11 +318,7 @@ export class NarrativeEntitySystem {
     return { restored };
   }
 
-  /**
-   * Supersedes the turns a regeneration or an edit replaces, newest first, so the new reply
-   * is written against the state before them. The restore point undoes this when the
-   * replacement is never saved.
-   */
+  /** The new reply is written against the state before the replaced turns; the restore point undoes this if it is never saved. */
   beginTurnReplacement(workspaceId: string, originIds: string[]): string | null {
     const origins = [...new Set(originIds.filter(Boolean))];
     if (!origins.length) return null;
@@ -584,6 +593,25 @@ export class NarrativeEntitySystem {
       const names = [row.canonicalName, ...parseAliases(row.aliases)].map(normalizeIdentity);
       return names.some(name => wanted.has(name));
     });
+  }
+
+  // An entity a reverted turn created waits as proposed; the same character arriving again takes it back.
+  private findRevivable(workspaceId: string, proposal: NarrativeEntityProposal): EntityRow | undefined {
+    const wanted = new Set([proposal.name, ...(proposal.aliases ?? [])].map(normalizeIdentity).filter(Boolean));
+    const rows = this.db.prepare(`
+      SELECT DISTINCT entities.id, entities.type, entities.canonicalName, entities.aliases FROM entities
+      JOIN roleplay_entity_changes changes
+        ON changes.workspace_id = entities.workspaceId AND changes.entity_id = entities.id AND changes.created_entity = 1
+      JOIN narrative_origin_lifecycle lifecycle
+        ON lifecycle.workspace_id = changes.workspace_id AND lifecycle.origin_id = changes.provenance_id
+      WHERE entities.workspaceId = ? AND entities.status = 'proposed' AND entities.type = ? AND lifecycle.status != 'active'
+    `).all(workspaceId, proposal.type) as EntityRow[];
+    return rows.find(row => [row.canonicalName, ...parseAliases(row.aliases)].map(normalizeIdentity).some(name => wanted.has(name)));
+  }
+
+  private revive(workspaceId: string, entityId: string): void {
+    this.db.prepare("UPDATE entities SET status = 'confirmed', last_modified = ? WHERE workspaceId = ? AND id = ?")
+      .run(Date.now(), workspaceId, entityId);
   }
 
   private getIdentityTarget(workspaceId: string, entityId: string): EntityRow | undefined {

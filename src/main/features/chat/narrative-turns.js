@@ -20,9 +20,8 @@ function hasTable(db, name) {
 }
 
 /**
- * The latest reply that Narrative State never started on: an alternative chosen by switching
- * or regenerating. A failed or interrupted run has a job and is only reprocessed on request,
- * so this can never retry, and bill, the same turn on its own.
+ * The latest reply Narrative State never started on. A failed run has a job, so it is never
+ * retried and billed again from here.
  */
 function findPendingNarrativeTurn(db, chatId, excludedIds = []) {
   if (!chatId || !hasTable(db, 'narrative_state_jobs')) return null;

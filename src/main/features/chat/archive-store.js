@@ -39,12 +39,10 @@ function deleteBlockChunks(database, blockIds) {
   if (chunks.length === 0) return 0;
 
   const deleteChunk = database.prepare('DELETE FROM knowledge_chunks WHERE id = ?');
-  const deleteFts = database.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId = ?');
   const deleteTags = database.prepare('DELETE FROM chunk_tags WHERE chunkId = ?');
   database.transaction(() => {
     for (const chunk of chunks) {
       deleteChunk.run(chunk.id);
-      deleteFts.run(chunk.id);
       deleteTags.run(chunk.id);
     }
   })();
@@ -59,8 +57,7 @@ function blockMessageIds(block) {
     .filter(Boolean);
 }
 
-// Takes one summary out of the chat and returns the ids it covered. Shared by
-// rebuild and delete, which differ only in what happens to those messages next.
+// Takes one summary out of the chat and returns the ids it covered.
 function removeSummaryBlock(database, chatId, blockId) {
   const blocks = readMemoryBlocks(database, chatId);
   const target = blocks.find(block => block && block.id === blockId);

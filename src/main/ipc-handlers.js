@@ -33,6 +33,7 @@ const { normalizeMaxApiPayload } = require('./features/llm/payload-budget');
 
 registerWorkspaceStateIpc(ipcMain);
 const worldbuildData = createWorldbuildDataService(db);
+entitiesStore.onRelationshipChanged(change => worldbuildData.recordRelationship(change));
 
 const appDataPath = process.env.APPDATA || (process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support') : path.join(os.homedir(), '.local', 'share'));
 const dataDir = path.join(appDataPath, 'Kallamo');
@@ -40,6 +41,9 @@ const profilesDir = path.join(dataDir, 'AI Profiles');
 const chatsDir = path.join(dataDir, 'ChatHistory');
 const worldIndexJobs = new Map();
 const { createEntityImages } = require('./features/worldbuild/entity-images');
+const { purgeWorkspace } = require('./features/workspace/workspace-ownership');
+const { purgeDocuments, purgeFolder } = require('./features/workspace/document-ownership');
+const { applyKnowledgeFileChanges, carryIndexState, parseFiles, ragIndexSignature } = require('./features/chat/knowledge-files');
 const entityImages = createEntityImages({ db, dataDir, nativeImage });
 // Rows written before paths became relative, and files nothing points at any more.
 try {
@@ -373,8 +377,13 @@ async function indexChatKnowledgeBase(sender, chatId, knowledgeFilesInput) {
     }
   }
 
+  // Indexing takes a while, so only the index state is written onto the list as it is now.
   if (modified) {
-    db.prepare('UPDATE chats SET knowledgeFiles = ? WHERE id = ?').run(JSON.stringify(knowledgeFiles), chatId);
+    const indexed = ragFiles
+      .filter(file => file.lastIndexedMtime != null)
+      .map(file => ({ name: file.name, changes: { lastIndexedMtime: file.lastIndexedMtime } }));
+    const row = db.prepare('SELECT knowledgeFiles FROM chats WHERE id = ?').get(chatId);
+    if (row) db.prepare('UPDATE chats SET knowledgeFiles = ? WHERE id = ?').run(JSON.stringify(applyKnowledgeFileChanges(row.knowledgeFiles, { patch: indexed })), chatId);
   }
 
   if (sender && indexedAny) {
@@ -579,10 +588,11 @@ ipcMain.handle('save-writing-profile', async (event, profile) => {
 
 ipcMain.handle('delete-writing-profile', async (event, id) => {
   try {
-    db.prepare('DELETE FROM writing_profiles WHERE id = ?').run(id);
-
-    db.prepare('DELETE FROM knowledge_chunks WHERE ownerId = ?').run(id);
-    db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId NOT IN (SELECT id FROM knowledge_chunks)').run();
+    db.transaction(() => {
+      db.prepare('DELETE FROM writing_profiles WHERE id = ?').run(id);
+      db.prepare("DELETE FROM constant_memory WHERE ownerId = ? AND ownerType = 'profile'").run(id);
+      db.prepare("DELETE FROM knowledge_chunks WHERE ownerId = ? AND ownerType = 'profile_kb'").run(id);
+    })();
 
     const profileFolder = path.join(profilesDir, id);
     if (fs.existsSync(profileFolder)) {
@@ -905,10 +915,6 @@ async function restoreSearchableChunks(ownerId, ownerType, sidecarChunks, rename
     INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, tokenCount, enabled, manuallyEdited)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const insertFts = db.prepare(`
-    INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text)
-    VALUES (?, ?)
-  `);
 
   for (const [importedName, chunks] of bySource.entries()) {
     // Drop anything previously indexed for this source to avoid duplicate chunks.
@@ -930,7 +936,6 @@ async function restoreSearchableChunks(ownerId, ownerType, sidecarChunks, rename
           JSON.stringify(chunk.vector), Date.now(), countTokens(textToStore), 1,
           c.manuallyEdited ? 1 : 0
         );
-        insertFts.run(chunkId, textToStore);
       })();
     }
 
@@ -1747,10 +1752,8 @@ ipcMain.handle('get-profile-kb-blocks', async (event, { profileId }) => {
             if (dbRows.length > 0) {
               db.transaction(() => {
                 const deleteChunk = db.prepare('DELETE FROM knowledge_chunks WHERE id = ?');
-                const deleteFts = db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId = ?');
                 for (const r of dbRows) {
                   deleteChunk.run(r.id);
-                  deleteFts.run(r.id);
                 }
               })();
             }
@@ -1787,10 +1790,8 @@ ipcMain.handle('get-profile-kb-blocks', async (event, { profileId }) => {
           if (dbRows.length > 0) {
             db.transaction(() => {
               const deleteChunk = db.prepare('DELETE FROM knowledge_chunks WHERE id = ?');
-              const deleteFts = db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId = ?');
               for (const r of dbRows) {
                 deleteChunk.run(r.id);
-                deleteFts.run(r.id);
               }
             })();
           }
@@ -1854,21 +1855,15 @@ ipcMain.handle('save-profile-kb-blocks', async (event, { profileId, blocks }) =>
 
     db.transaction(() => {
       const deleteChunk = db.prepare('DELETE FROM knowledge_chunks WHERE id = ?');
-      const deleteFts = db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId = ?');
       for (const row of existingDbChunks) {
         if (!activeBlockIds.has(row.id)) {
           deleteChunk.run(row.id);
-          deleteFts.run(row.id);
         }
       }
 
       const insertChunk = db.prepare(`
         INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, tokenCount, enabled, manuallyEdited)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-      const insertFts = db.prepare(`
-        INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text)
-        VALUES (?, ?)
       `);
 
       for (const b of blocks) {
@@ -1889,7 +1884,6 @@ ipcMain.handle('save-profile-kb-blocks', async (event, { profileId, blocks }) =>
               b.enabled === false ? 0 : 1,
               manuallyEdited
             );
-            insertFts.run(b.id, textToStore);
           }
         }
       }
@@ -2167,17 +2161,6 @@ ipcMain.handle('add-profile-searchable-file', async (event, { profileId, name, p
 
 // --- WRITING DESK: DOCUMENTS & FOLDERS ---
 
-function deleteDocumentChunks(documentId) {
-  try {
-    const ids = db.prepare("SELECT id FROM knowledge_chunks WHERE ownerId = ? AND ownerType = 'document'").all(documentId);
-    const delFts = db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId = ?');
-    for (const row of ids) delFts.run(row.id);
-    db.prepare("DELETE FROM knowledge_chunks WHERE ownerId = ? AND ownerType = 'document'").run(documentId);
-  } catch (e) {
-    console.error('[Writing Desk] Failed to delete document chunks:', e);
-  }
-}
-
 ipcMain.handle('get-writing-tree', async (event, { workspaceId }) => {
   try {
     const folders = db.prepare('SELECT * FROM folders WHERE workspaceId = ? ORDER BY position ASC, name COLLATE NOCASE').all(workspaceId);
@@ -2249,29 +2232,7 @@ ipcMain.handle('move-folder', async (event, { id, parentId }) => {
 
 ipcMain.handle('delete-folder', async (event, { id }) => {
   try {
-    const allFolders = db.prepare('SELECT id, parentId FROM folders WHERE workspaceId = (SELECT workspaceId FROM folders WHERE id = ?)').all(id);
-    const toDelete = new Set([id]);
-    let grew = true;
-    while (grew) {
-      grew = false;
-      for (const f of allFolders) {
-        if (f.parentId && toDelete.has(f.parentId) && !toDelete.has(f.id)) {
-          toDelete.add(f.id);
-          grew = true;
-        }
-      }
-    }
-    const delDoc = db.prepare('DELETE FROM documents WHERE folderId = ?');
-    const delFolder = db.prepare('DELETE FROM folders WHERE id = ?');
-    for (const folderId of toDelete) {
-      const docs = db.prepare('SELECT id FROM documents WHERE folderId = ?').all(folderId);
-      for (const d of docs) {
-        deleteDocumentChunks(d.id);
-        db.prepare('DELETE FROM document_analyses WHERE documentId = ?').run(d.id);
-      }
-      delDoc.run(folderId);
-      delFolder.run(folderId);
-    }
+    purgeFolder(db, id);
     return { success: true };
   } catch (e) {
     console.error('[Writing Desk] Error deleting folder:', e);
@@ -2324,9 +2285,7 @@ ipcMain.handle('move-document', async (event, { id, folderId }) => {
 
 ipcMain.handle('delete-document', async (event, { id }) => {
   try {
-    deleteDocumentChunks(id);
-    db.prepare('DELETE FROM document_analyses WHERE documentId = ?').run(id);
-    db.prepare('DELETE FROM documents WHERE id = ?').run(id);
+    purgeDocuments(db, [id]);
     return { success: true };
   } catch (e) {
     console.error('[Writing Desk] Error deleting document:', e);
@@ -2887,7 +2846,7 @@ ipcMain.handle('add-entity-alias', (event, { id, alias }) => {
 ipcMain.handle('update-entity', async (event, { id, fields }) => {
   try {
     const before = entitiesStore.getEntity(id);
-    const entity = entitiesStore.updateEntity(id, fields || {});
+    const entity = entitiesStore.updateEntityFromEditor(id, fields || {});
     const namesChanged = entity && before && NAME_FIELDS.some(field => JSON.stringify(before[field]) !== JSON.stringify(entity[field]));
     if (namesChanged) refreshNameTagsFor(entity.workspaceId, [id]);
     return { success: true, entity };
@@ -2931,21 +2890,43 @@ ipcMain.handle('resolve-enrich-review', async (event, { id, accept, reject } = {
 
 ipcMain.handle('summarize-bulk-entities', async (event, { workspaceId, ids } = {}) => {
   try {
-    return { success: true, ...entitiesStore.summarizeBulkEntities(workspaceId, ids) };
+    const pending = worldbuildData.listPendingReviewIds(workspaceId, ids);
+    return {
+      success: true,
+      ...entitiesStore.summarizeBulkEntities(workspaceId, ids),
+      pendingSkills: pending.skillChangeIds.length,
+      pendingNarrative: pending.narrativeEventIds.length,
+    };
   } catch (e) {
     console.error('[summarize-bulk-entities] failed:', e);
     return { success: false, error: e.message };
   }
 });
 
+// A sheet's suggested updates include the skills the AI wants to give it, which live in the Rules.
+function resolveBulkSkillChanges(workspaceId, ids, decision, result, countKey) {
+  const { skillChangeIds } = worldbuildData.listPendingReviewIds(workspaceId, ids);
+  if (!skillChangeIds.length) return result;
+  const skills = getRoleplaySkills();
+  const entityIds = new Set();
+  for (const changeId of skillChangeIds) entityIds.add(skills.resolveChange(workspaceId, changeId, decision).entityId);
+  return { ...result, skills: skillChangeIds.length, [countKey]: Math.max(result[countKey] || 0, entityIds.size) };
+}
+
 ipcMain.handle('bulk-manage-entities', async (event, { workspaceId, ids, action, policy } = {}) => {
   try {
     let result;
     if (action === 'policy') result = entitiesStore.bulkSetAiPolicy(workspaceId, ids, policy);
     else if (action === 'accept-proposed') result = entitiesStore.bulkAcceptProposed(workspaceId, ids);
-    else if (action === 'accept-updates') result = entitiesStore.bulkAcceptEnrichUpdates(workspaceId, ids);
+    else if (action === 'accept-updates') result = resolveBulkSkillChanges(workspaceId, ids, 'approved', entitiesStore.bulkAcceptEnrichUpdates(workspaceId, ids), 'accepted');
     else if (action === 'reject-proposed') result = entitiesStore.bulkRejectProposed(workspaceId, ids);
-    else if (action === 'reject-updates') result = entitiesStore.bulkRejectEnrichUpdates(workspaceId, ids);
+    else if (action === 'reject-updates') result = resolveBulkSkillChanges(workspaceId, ids, 'rejected', entitiesStore.bulkRejectEnrichUpdates(workspaceId, ids), 'rejected');
+    else if (action === 'reject-narrative') {
+      const { narrativeEventIds } = worldbuildData.listPendingReviewIds(workspaceId, ids);
+      const narrativeState = getNarrativeStateSystem();
+      for (const eventId of narrativeEventIds) narrativeState.resolveEvent(workspaceId, eventId, 'rejected');
+      result = { rejected: narrativeEventIds.length };
+    }
     else if (action === 'reprocess') result = entitiesStore.resetEntityEnrichmentProgress(workspaceId, ids);
     else if (action === 'delete') { result = entitiesStore.bulkDeleteEntities(workspaceId, ids); entityImages.sweep(); }
     else throw new Error('unknown bulk entity action');
@@ -4116,35 +4097,14 @@ function removeUnusedBackgrounds(chatId, keep) {
   }
 }
 
+// Memory blocks, knowledge files and the summary marker belong to the main process once a
+// workspace exists: they change through their own handlers, never through this snapshot.
 ipcMain.handle('save-chat', async (event, chat) => {
   try {
-    const exists = db.prepare('SELECT id, knowledgeFiles, syncToCloud FROM chats WHERE id = ?').get(chat.id);
+    const exists = db.prepare('SELECT id, maxContext, syncToCloud FROM chats WHERE id = ?').get(chat.id);
     const backdropOpacityDefault = chat.backdropOpacity ?? 75;
-
-    // The renderer doesn't track lastIndexedMtime; dropping it forces a full re-index of every KB file.
-    let incomingKb = typeof chat.knowledgeFiles === 'string'
-      ? JSON.parse(chat.knowledgeFiles || '[]')
-      : (chat.knowledgeFiles || []);
-    let previousKb = [];
-    if (exists && exists.knowledgeFiles) {
-      try {
-        previousKb = JSON.parse(exists.knowledgeFiles);
-        const oldByKey = new Map(previousKb.map(f => [f.internalPath || f.name, f]));
-        incomingKb = incomingKb.map(f => {
-          const old = oldByKey.get(f.internalPath || f.name);
-          if (old && old.lastIndexedMtime != null && f.lastIndexedMtime == null) {
-            return { ...f, lastIndexedMtime: old.lastIndexedMtime };
-          }
-          return f;
-        });
-      } catch (e) { }
-    }
+    const incomingKb = exists ? [] : parseFiles(chat.knowledgeFiles);
     const newKbStr = JSON.stringify(incomingKb);
-    const ragIndexSignature = files => JSON.stringify(files
-      .filter(file => file.strategy === 'rag_search')
-      .map(file => ({ name: file.name, internalPath: file.internalPath, lastIndexedMtime: file.lastIndexedMtime ?? null }))
-      .sort((left, right) => `${left.internalPath || ''}:${left.name}`.localeCompare(`${right.internalPath || ''}:${right.name}`)));
-    const ragIndexChanged = !exists || ragIndexSignature(previousKb) !== ragIndexSignature(incomingKb);
 
     if (exists) {
       const oldSyncToCloud = exists.syncToCloud ?? 0;
@@ -4153,9 +4113,9 @@ ipcMain.handle('save-chat', async (event, chat) => {
       const update = db.prepare(`
         UPDATE chats SET
           title = ?, description = ?, updatedAt = ?, isPinned = ?, maxContext = ?,
-          archiveThreshold = ?, summarizedIndex = ?, activeProfiles = ?, activeWorkflows = ?,
+          archiveThreshold = ?, activeProfiles = ?, activeWorkflows = ?,
           backgroundImage = ?, backdropOpacity = ?, userBubbleOpacity = ?, aiBubbleOpacity = ?,
-          memoryBlocks = ?, knowledgeFiles = ?, pinnedFiles = ?, autoSummarize = ?, showContextBar = ?,
+          pinnedFiles = ?, autoSummarize = ?, showContextBar = ?,
           wdContextWindow = ?, wdLastChannel = ?, wdUseChatHistory = ?, syncToCloud = ?
         WHERE id = ?
       `);
@@ -4169,15 +4129,12 @@ ipcMain.handle('save-chat', async (event, chat) => {
           ? normalizeMaxApiPayload(exists.maxContext)
           : normalizeMaxApiPayload(chat.maxContext),
         chat.archiveThreshold ?? 60000,
-        chat.summarizedIndex ?? 0,
         typeof chat.activeProfiles === 'string' ? chat.activeProfiles : JSON.stringify(chat.activeProfiles || []),
         typeof chat.activeWorkflows === 'string' ? chat.activeWorkflows : JSON.stringify(chat.activeWorkflows || []),
         chat.backgroundImage || '',
         backdropOpacityDefault,
         chat.userBubbleOpacity ?? 100,
         chat.aiBubbleOpacity ?? 0,
-        typeof chat.memoryBlocks === 'string' ? chat.memoryBlocks : JSON.stringify(chat.memoryBlocks || []),
-        newKbStr,
         typeof chat.pinnedFiles === 'string' ? chat.pinnedFiles : JSON.stringify(chat.pinnedFiles || []),
         chat.autoSummarize ?? 0,
         chat.showContextBar ?? 0,
@@ -4187,10 +4144,6 @@ ipcMain.handle('save-chat', async (event, chat) => {
         newSyncToCloud,
         chat.id
       );
-
-      // summarizedIndex is derived from the summary blocks that were just saved,
-      // so a renderer holding an older copy cannot write a stale marker back.
-      syncSummarizedIndex(db, chat.id);
 
       if (oldSyncToCloud === 0 && newSyncToCloud === 1) {
         db.prepare('UPDATE messages SET last_modified = ? WHERE chatId = ?').run(Date.now(), chat.id);
@@ -4233,7 +4186,7 @@ ipcMain.handle('save-chat', async (event, chat) => {
 
     removeUnusedBackgrounds(chat.id, chat.backgroundImage || '');
 
-    if (ragIndexChanged) {
+    if (!exists && ragIndexSignature(incomingKb) !== ragIndexSignature([])) {
       indexChatKnowledgeBase(event.sender, chat.id, incomingKb).catch(e => {
         console.error("Background chat indexing error:", e);
       });
@@ -4247,26 +4200,30 @@ ipcMain.handle('save-chat', async (event, chat) => {
   }
 });
 
+// changes = { remove, upsert, patch }; see applyKnowledgeFileChanges.
+ipcMain.handle('update-chat-knowledge-files', async (event, { chatId, changes }) => {
+  try {
+    const row = db.prepare('SELECT knowledgeFiles FROM chats WHERE id = ?').get(chatId);
+    if (!row) return { success: false, error: 'Workspace not found.' };
+    const previous = parseFiles(row.knowledgeFiles);
+    const next = carryIndexState(previous, applyKnowledgeFileChanges(previous, changes));
+    db.prepare('UPDATE chats SET knowledgeFiles = ? WHERE id = ?').run(JSON.stringify(next), chatId);
+    if (ragIndexSignature(previous) !== ragIndexSignature(next)) {
+      indexChatKnowledgeBase(event.sender, chatId, next).catch(e => {
+        console.error("Background chat indexing error:", e);
+      });
+    }
+    return { success: true, knowledgeFiles: next };
+  } catch (e) {
+    console.error('Error updating chat knowledge files:', e);
+    return { success: false, error: e.message };
+  }
+});
+
 ipcMain.handle('delete-chat', async (event, id) => {
   try {
-    for (const table of [
-      'roleplay_message_frames',
-      'roleplay_time_advances',
-      'roleplay_time_matrices',
-      'roleplay_time_state',
-      'worldbuild_calendars',
-      'roleplay_location_backgrounds',
-      'roleplay_turn_presence',
-      'roleplay_character_memory',
-      'worldbuild_entity_images'
-    ]) {
-      db.prepare(`DELETE FROM ${table} WHERE workspace_id = ?`).run(id);
-    }
+    purgeWorkspace(db, id);
     entityImages.sweep();
-    db.prepare('DELETE FROM chats WHERE id = ?').run(id);
-
-    db.prepare('DELETE FROM knowledge_chunks WHERE ownerId = ?').run(id);
-    db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId NOT IN (SELECT id FROM knowledge_chunks)').run();
 
     const chatFolder = path.join(chatsDir, id);
     if (fs.existsSync(chatFolder)) {
@@ -5490,15 +5447,10 @@ ipcMain.handle('save-chat-manual-snippet', async (event, { chatId, snippetId, ti
         INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, content_hash, memoryBlockId)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
-      const insertFts = db.prepare(`
-        INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text)
-        VALUES (?, ?)
-      `);
       db.transaction(() => {
         db.prepare('DELETE FROM entity_enrichment_chunks WHERE chunkId = ?').run(snippetId);
         db.prepare('UPDATE entity_update_evidence SET state = ?, reason = ? WHERE chunk_id = ?').run('invalidated', 'source-deleted', snippetId);
         insertChunk.run(snippetId, chatId, 'chat_memory', title, content, JSON.stringify(chunk.vector), Date.now(), hashText(content), snippetId);
-        insertFts.run(snippetId, content);
       })();
     }
 
@@ -5513,7 +5465,6 @@ ipcMain.handle('delete-chat-manual-snippet', async (event, { chatId, snippetId }
   try {
     db.transaction(() => {
       db.prepare('DELETE FROM knowledge_chunks WHERE ownerId = ? AND id = ?').run(chatId, snippetId);
-      db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId = ?').run(snippetId);
     })();
 
     return { success: true };
@@ -5558,7 +5509,6 @@ ipcMain.handle('get-chat-kb-blocks', async (event, { chatId }) => {
           if (v.strategy === 'constant') {
             db.transaction(() => {
               db.prepare('DELETE FROM knowledge_chunks WHERE ownerId = ? AND id = ?').run(chatId, v.id);
-              db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId = ?').run(v.id);
             })();
             continue;
           }
@@ -5576,13 +5526,8 @@ ipcMain.handle('get-chat-kb-blocks', async (event, { chatId }) => {
                   INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, content_hash, memoryBlockId)
                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `);
-                const insertFts = db.prepare(`
-                  INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text)
-                  VALUES (?, ?)
-                `);
                 db.transaction(() => {
                   insertChunk.run(v.id, chatId, 'chat_memory', title, content, JSON.stringify(chunk.vector), Date.now(), hashText(content), v.id);
-                  insertFts.run(v.id, content);
                 })();
               }
             } catch (err) {
@@ -5636,10 +5581,8 @@ ipcMain.handle('get-chat-kb-blocks', async (event, { chatId }) => {
             if (dbRows.length > 0) {
               db.transaction(() => {
                 const deleteChunk = db.prepare('DELETE FROM knowledge_chunks WHERE id = ?');
-                const deleteFts = db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId = ?');
                 for (const r of dbRows) {
                   deleteChunk.run(r.id);
-                  deleteFts.run(r.id);
                 }
               })();
             }
@@ -5710,7 +5653,6 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
       if (block.strategy === 'constant') {
         db.transaction(() => {
           db.prepare('DELETE FROM knowledge_chunks WHERE ownerId = ? AND id = ?').run(chatId, snippetId);
-          db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId = ?').run(snippetId);
         })();
       } else {
         const vectorData = await vectorizeChunks([block.text], block.source || 'Custom Memory', null, cleanKeywords);
@@ -5723,10 +5665,6 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
           const insertChunk = db.prepare(`
             INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, enabled, content_hash, memoryBlockId)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `);
-          const insertFts = db.prepare(`
-            INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text)
-            VALUES (?, ?)
           `);
           db.transaction(() => {
             db.prepare('DELETE FROM entity_enrichment_chunks WHERE chunkId = ?').run(snippetId);
@@ -5743,7 +5681,6 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
               hashText(chunk.text),
               snippetId
             );
-            insertFts.run(snippetId, chunk.text);
           })();
           try {
             require('./features/world-index/name-tags').applyNameTags(db, chatId, [{ id: snippetId, text: chunk.text }]);
@@ -5825,7 +5762,6 @@ ipcMain.handle('save-chat-kb-block', async (event, { chatId, block }) => {
             hashText(chunk.text),
             block.id
           );
-          db.prepare('UPDATE knowledge_chunks_fts SET text = ? WHERE chunkId = ?').run(chunk.text, block.id);
         })();
       }
     }
@@ -5896,7 +5832,6 @@ ipcMain.handle('delete-chat-kb-block', async (event, { chatId, block }) => {
 
       db.transaction(() => {
         db.prepare('DELETE FROM knowledge_chunks WHERE ownerId = ? AND id = ?').run(chatId, block.id);
-        db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId = ?').run(block.id);
       })();
     }
     else if (block.type === 'constant') {
@@ -5920,7 +5855,6 @@ ipcMain.handle('delete-chat-kb-block', async (event, { chatId, block }) => {
     }
     else if (block.type === 'rag') {
       db.prepare('DELETE FROM knowledge_chunks WHERE id = ?').run(block.id);
-      db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId = ?').run(block.id);
 
       const remainingRow = db.prepare('SELECT COUNT(*) as cnt FROM knowledge_chunks WHERE ownerId = ? AND ownerType = ? AND source = ?').get(chatId, 'chat_kb', block.source);
       const remainingCount = remainingRow ? remainingRow.cnt : 0;

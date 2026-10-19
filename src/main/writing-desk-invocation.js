@@ -180,8 +180,7 @@ async function gatherRag({ profileId, workspaceId, currentDocId, retrievalQuery,
             'SELECT id FROM documents WHERE workspaceId = ? AND id != ?'
         ).all(workspaceId, currentDocId).map(r => r.id);
         if (siblingIds.length) {
-            // Sibling chapters are world-indexed (WD chapter indexing tags their chunks),
-            // so ride the tag boost here too, this is the cross-chapter coherence lever.
+            // Chapter indexing tags sibling chapters too, so they take the same tag boost.
             add(SECTIONS.chapters, await executeMultiOwnerSearch(retrievalQuery, siblingIds, 'document', threshold, 5, true));
         }
     } catch (e) { }
@@ -202,8 +201,7 @@ function loadActiveChatWindow(workspaceId) {
     }
 }
 
-// The bridge: assemble the envelope, call the API, and return ONLY the proposed text
-// + channel. No message insert, no chat side effects (unlike runWorkflow).
+// Returns only the proposed text and channel: no message is saved and the chat is untouched.
 async function runWritingDeskInvocation({
     documentId,
     workspaceId,
@@ -222,8 +220,6 @@ async function runWritingDeskInvocation({
     const profile = db.prepare('SELECT * FROM writing_profiles WHERE id = ?').get(profileId);
     if (!profile) throw new Error(`Writing profile not found: ${profileId}`);
 
-    // Channel is chosen per-invocation (Invoke modal). The reading size is a workspace
-    // setting living on the chat row, alongside maxContext. Both fall back sanely.
     const channel = resultChannel || 'replacement';
     const chatRow = db.prepare('SELECT wdContextWindow, wdUseChatHistory, maxContext FROM chats WHERE id = ?').get(workspaceId);
     const readingSize = (chatRow && chatRow.wdContextWindow) || DEFAULT_CONTEXT_WINDOW;

@@ -98,8 +98,7 @@ export const CellBackground = Extension.create({
   },
 });
 
-// --- AI SELECT->INVOKE: inline suggestion overlay ---
-// Decorations only: the original text stays in the doc until Accept/Reject.
+// The suggestion overlay is decorations only: the original text stays in the doc until Accept/Reject.
 export const suggestionKey = new PluginKey('wdSuggestion');
 export const SuggestionDecorations = Extension.create({
   name: 'wdSuggestion',
@@ -119,8 +118,7 @@ export const SuggestionDecorations = Extension.create({
   },
 });
 
-// --- FIND & REPLACE: match highlighting ---
-// Text accumulates per textblock so a match can span mark boundaries.
+// Find & Replace: text accumulates per textblock so a match can span mark boundaries.
 export function collectSearchMatches(doc, query, caseSensitive) {
   const matches = [];
   if (!query) return matches;
@@ -223,7 +221,6 @@ function htmlToPlain(html) {
   return tmp.textContent || '';
 }
 
-// Character +added / -removed counts for the floating counter (metric in chars).
 const wordCount = (text) => (String(text || '').match(/\S+/g) || []).length;
 
 // Counted in words, the unit a writer judges an edit by.

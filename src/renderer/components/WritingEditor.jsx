@@ -144,7 +144,6 @@ function pageConfigFromDoc(doc) {
   return cfg;
 }
 
-// Relative luminance check so prose text contrasts the paper color.
 export function isLightColor(hex) {
   const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || '');
   if (!m) return true;
@@ -254,7 +253,6 @@ function TextStyleControl({ editor, baseFont }) {
   );
 }
 
-// Searchable font picker: type to filter, or scroll the full list.
 function FontPicker({ editor, baseFont }) {
   const fontOptions = useFontOptions();
   const [open, setOpen] = useState(false);
@@ -308,7 +306,6 @@ function FontPicker({ editor, baseFont }) {
   );
 }
 
-// Font size: a preset list plus a type-to-set field.
 function FontSizeControl({ editor, baseSize }) {
   const ref = useRef(null);
   const [open, setOpen] = useState(false);
@@ -356,7 +353,6 @@ function FontSizeControl({ editor, baseSize }) {
   );
 }
 
-// Reads a block-level (paragraph/heading) attribute from whichever block holds the cursor.
 function blockAttr(editor, key) {
   return editor.getAttributes('paragraph')[key] || editor.getAttributes('heading')[key] || null;
 }
@@ -586,7 +582,6 @@ function CellColorControl({ editor }) {
 
 const GroupLabel = ({ children }) => <span className="px-1 text-xs font-semibold text-text-subtle">{children}</span>;
 
-// Floating panel shown when the cursor is inside a table, structure ops + cell fill.
 function TableBubble({ editor }) {
   useToolbarTick(editor);
   if (!editor) return null;
@@ -678,13 +673,11 @@ export default function WritingEditor({
   const [showPageSetup, setShowPageSetup] = useState(false);
   const [showFind, setShowFind] = useState(false);
   const [title, setTitle] = useState(doc.title);
-  // AI select->invoke. inFlight + pending are owned by the parent view (they must
-  // survive this editor remounting on chapter switch); the editor only renders them.
+  // inFlight and pending live in the parent view, since this editor remounts on chapter switch.
   const [profiles, setProfiles] = useState([]);
   const [lastChannel, setLastChannel] = useState('replacement'); // sticky default for the Invoke modal
   const [invokeData, setInvokeData] = useState(null); // captured selection for the modal
   const [stale, setStale] = useState(false);
-  // In-text Worldbuild bridge (selection → entity actions).
   const [wbOpen, setWbOpen] = useState(false);
   const [wbData, setWbData] = useState(null); // { from, to, text, entity, marked }
   const [wbEntities, setWbEntities] = useState([]);
@@ -724,7 +717,6 @@ export default function WritingEditor({
     return () => { active = false; };
   }, [doc.id, electronAPI]);
 
-  // Live progress from the main-process vectorization pass (embedding → tagging).
   useEffect(() => {
     if (!electronAPI.onVectorizeDocumentProgress) return;
     const off = electronAPI.onVectorizeDocumentProgress((d) => {
@@ -1016,7 +1008,6 @@ export default function WritingEditor({
     setInvokeData({ from, to, selection, spanContent, format, before, after });
   };
 
-  // --- In-text Worldbuild bridge ---
   // Never guess identity from the name: the menu reads only the real mark on the selection.
   const openWorldbuildMenu = async () => {
     if (!editor || locked) return;
@@ -1106,8 +1097,7 @@ export default function WritingEditor({
 
   const acceptSuggestion = async () => {
     if (!editor || !pending || stale) return;
-    // setEditable is NOT a chain command, so it must run before the chain (calling it
-    // inside .chain() silently aborts the whole chain, the accept-does-nothing bug).
+    // setEditable is not a chain command: inside .chain() it silently aborts the whole chain.
     editor.setEditable(true);
     editor.view.dispatch(editor.state.tr.setMeta(suggestionKey, DecorationSet.empty));
     // proposedText is Markdown (or HTML for the table fallback); insertContentAt parses

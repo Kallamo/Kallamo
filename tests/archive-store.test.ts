@@ -15,6 +15,9 @@ function createDatabase() {
     CREATE TABLE knowledge_chunks (id TEXT PRIMARY KEY, ownerId TEXT, ownerType TEXT, source TEXT, text TEXT, tokenCount INTEGER, memoryBlockId TEXT);
     CREATE TABLE knowledge_chunks_fts (chunkId TEXT, text TEXT);
     CREATE TABLE chunk_tags (chunkId TEXT, tag TEXT, entity TEXT);
+    -- The app keeps the keyword index in step through this trigger (knowledge_chunk_sync_v1).
+    CREATE TRIGGER trg_knowledge_chunks_fts_delete AFTER DELETE ON knowledge_chunks
+    BEGIN DELETE FROM knowledge_chunks_fts WHERE chunkId = OLD.id; END;
   `);
   return database;
 }

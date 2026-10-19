@@ -35,7 +35,6 @@ const dataDir = path.join(appDataPath, 'Kallamo');
 const profilesDir = path.join(dataDir, 'AI Profiles');
 const chatsDir = path.join(dataDir, 'ChatHistory');
 
-// Configure Hugging Face Transformers cache directory to be writable
 const modelCacheDir = path.join(dataDir, 'ModelCache');
 if (!fs.existsSync(modelCacheDir)) {
     fs.mkdirSync(modelCacheDir, { recursive: true });
@@ -94,13 +93,9 @@ function resetLocalEngine() {
     embeddingPipeline = null;
 }
 
-// --- CORE RAG UTILITIES ---
-
 // Current local embedding model identifier (used for version-stamp checks)
 const RAG_MODEL_ID = 'Xenova/multilingual-e5-small';
 const RAG_MODEL_DIM = 384;
-
-// --- FILE EXTRACTION ---
 
 async function extractTextFromFile(filePath) {
     const ext = path.extname(filePath).toLowerCase();
@@ -111,7 +106,6 @@ async function extractTextFromFile(filePath) {
         return '';
     }
 
-    // PDFs are extracted directly via the unpdf library
     if (ext === '.pdf') {
         const { extractText } = require('unpdf');
         const nodeBuffer = fs.readFileSync(filePath);
@@ -140,8 +134,6 @@ async function extractDocxHtml(filePath) {
     const result = await mammoth.convertToHtml({ buffer: dataBuffer });
     return result.value;
 }
-
-// --- VECTORIZATION ENGINE ---
 
 async function getEmbeddingPipeline() {
     ensureLocalEngine();
@@ -239,7 +231,6 @@ async function embedQueryWindows(pipe, text) {
 // Kept modest so a large archive cannot spike memory.
 const EMBEDDING_BATCH_SIZE = 16;
 
-// Read the embedding configuration once instead of per chunk.
 function readEmbeddingConfig() {
     try {
         const rowAdvanced = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
@@ -318,19 +309,10 @@ ${tagsString}Content: ${originalChunk}`;
     return vectors;
 }
 
-// --- DATABASE OPERATIONS ---
-
 function insertChunksToDb(ownerId, ownerType, vectors) {
     const insertChunk = db.prepare(`
         INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, tokenCount, content_hash, ordinal, memoryBlockId)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    const deleteFts = db.prepare(`
-        DELETE FROM knowledge_chunks_fts WHERE chunkId = ?
-    `);
-    const insertFts = db.prepare(`
-        INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text)
-        VALUES (?, ?)
     `);
 
     db.transaction(() => {
@@ -339,8 +321,6 @@ function insertChunksToDb(ownerId, ownerType, vectors) {
                 ? (v.memoryBlockId || v.blockId || (/^(?:block|manual|mem)_/.test(v.id) ? v.id : null))
                 : null;
             insertChunk.run(v.id, ownerId, ownerType, v.source, v.text, JSON.stringify(v.vector), Date.now(), v.tokenCount || countTokens(v.text), v.content_hash ?? null, v.ordinal ?? null, memoryBlockId);
-            deleteFts.run(v.id);
-            insertFts.run(v.id, v.text);
         }
     })();
     invalidateVectorCache(vectors.map(v => v.id));
@@ -383,16 +363,12 @@ function deleteChunksFromDb(ownerId, ownerType, sourceFileName) {
 
     db.transaction(() => {
         const deleteChunk = db.prepare('DELETE FROM knowledge_chunks WHERE id = ?');
-        const deleteFts = db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId = ?');
         for (const id of chunkIds) {
             deleteChunk.run(id);
-            deleteFts.run(id);
         }
     })();
     forgetRetrievalLedger(ownerId, ownerType);
 }
-
-// --- HYBRID SEARCH ENGINE ---
 
 // Enough keyword hits to rank the owner's chunks; normalization only needs the top.
 const SPARSE_RESULT_LIMIT = 500;
@@ -435,8 +411,6 @@ function computeTagBoostMap(queryText, ownerId, ownerType, totalChunks = 0) {
     return computeTagBoostMapForOwners(queryText, [ownerId], ownerType, totalChunks);
 }
 
-// Same as computeTagBoostMap but across several owners (e.g. the sibling chapters of a
-// Writing Desk document), so cross-chapter retrieval also rides the world-index tags.
 function computeTagBoostMapForOwners(queryText, ownerIds, ownerType, totalChunks = 0) {
     if (!ownerIds || !ownerIds.length) return new Map();
     const placeholders = ownerIds.map(() => '?').join(',');
@@ -630,7 +604,7 @@ async function executeHybridSearch(queryText, ownerId, ownerType, threshold = 0.
     }
 }
 
-// Embeds the query once and fuses over several owners' chunks (e.g. neighbor chapters).
+// Embeds the query once for every owner.
 async function executeMultiOwnerSearch(queryText, ownerIds, ownerType, threshold = 0.3, k = 5, applyTagBoost = false) {
     try {
         const candidates = loadOwnerCandidates(ownerIds, ownerType);
@@ -688,7 +662,6 @@ async function searchChatMemories(queryText, chatId, { k: topK = null } = {}) {
 
     // Chat memory is the world-indexed tier: enable the dynamic-tag boost.
     const results = await executeHybridSearch(queryText, chatId, 'chat_memory', threshold, resolveTopK(k, topK), true);
-    // Attach each surviving chunk's tags for debug visibility (which tags it carries).
     try {
         const tagStmt = db.prepare(
             `SELECT ct.tag AS tag, COALESCE(e.canonicalName, ct.entity) AS entity
@@ -709,20 +682,11 @@ async function saveChatMemory(title, summary, chatId) {
         INSERT OR REPLACE INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, tokenCount)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    const deleteFts = db.prepare(`
-        DELETE FROM knowledge_chunks_fts WHERE chunkId = ?
-    `);
-    const insertFts = db.prepare(`
-        INSERT OR REPLACE INTO knowledge_chunks_fts (chunkId, text)
-        VALUES (?, ?)
-    `);
 
     const memoryTokens = countTokens(summary);
 
     db.transaction(() => {
         insertChunk.run(chunkId, chatId, 'chat_memory', title, summary, JSON.stringify(vector), Date.now(), memoryTokens);
-        deleteFts.run(chunkId);
-        insertFts.run(chunkId, summary);
     })();
 
     return {
@@ -761,8 +725,6 @@ function loadMemoryBlockChunks(ownerId, blockIds) {
     }
     return blocks;
 }
-
-// --- EXPORTS ---
 
 module.exports = {
     loadMemoryBlockChunks,

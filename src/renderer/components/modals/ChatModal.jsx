@@ -24,7 +24,8 @@ const stepsOf = (workflow) => parseList(workflow.steps);
 export const newWorkspaceId = () => 'chat_' + Math.random().toString(36).substr(2, 9);
 
 // The stored row for a workspace; an edit keeps everything the form does not show.
-export function workspaceRecord(chat, { id, title, description = '', activeProfiles = [], activeWorkflows = [], backgroundImage = '', backdropOpacity = 75, userBubbleOpacity = 100, aiBubbleOpacity = 0, knowledgeFiles = [] }) {
+// Memory, knowledge files and the summary marker are kept by the main process and never sent from here.
+export function workspaceRecord(chat, { id, title, description = '', activeProfiles = [], activeWorkflows = [], backgroundImage = '', backdropOpacity = 75, userBubbleOpacity = 100, aiBubbleOpacity = 0 }) {
   return {
     id,
     title: title.trim(),
@@ -33,7 +34,6 @@ export function workspaceRecord(chat, { id, title, description = '', activeProfi
     isPinned: chat?.isPinned ?? 0,
     maxContext: Number(chat?.maxContext) > 0 ? chat.maxContext : 128000,
     archiveThreshold: chat?.archiveThreshold ?? 60000,
-    summarizedIndex: chat?.summarizedIndex ?? 0,
     activeProfiles: JSON.stringify(activeProfiles),
     activeWorkflows: JSON.stringify(activeWorkflows),
     backgroundImage,
@@ -41,8 +41,6 @@ export function workspaceRecord(chat, { id, title, description = '', activeProfi
     userBubbleOpacity: Number(userBubbleOpacity),
     aiBubbleOpacity: Number(aiBubbleOpacity),
     showContextBar: chat?.showContextBar ?? 0,
-    memoryBlocks: JSON.stringify(chat?.memoryBlocks || []),
-    knowledgeFiles: JSON.stringify(knowledgeFiles),
   };
 }
 
@@ -61,8 +59,6 @@ export default function ChatModal({ chat, draft, onClose }) {
   const [activeProfiles, setActiveProfiles] = useState(draft?.activeProfiles || []);
   const [activeWorkflows, setActiveWorkflows] = useState([]);
   const [searchProfiles, setSearchProfiles] = useState('');
-  // Preserved so editing an older workspace doesn't wipe legacy knowledge files.
-  const [knowledgeFiles, setKnowledgeFiles] = useState([]);
   const [profileToSetUp, setProfileToSetUp] = useState(null);
   const bgInputRef = useRef(null);
 
@@ -76,7 +72,6 @@ export default function ChatModal({ chat, draft, onClose }) {
     setAiBubbleOpacity(chat.aiBubbleOpacity ?? 0);
     setActiveProfiles(parseList(chat.activeProfiles));
     setActiveWorkflows(parseList(chat.activeWorkflows));
-    setKnowledgeFiles(parseList(chat.knowledgeFiles));
   }, [chat]);
 
   const handleBgImageUpload = async (e) => {
@@ -100,7 +95,7 @@ export default function ChatModal({ chat, draft, onClose }) {
     if (!title.trim()) return;
     const chatData = workspaceRecord(chat, {
       id: chatId, title, description, activeProfiles, activeWorkflows, backgroundImage: bgImage,
-      backdropOpacity, userBubbleOpacity, aiBubbleOpacity, knowledgeFiles,
+      backdropOpacity, userBubbleOpacity, aiBubbleOpacity,
     });
     if (isEditing) await handleSaveChat(chatData);
     else await handleCreateChat(chatData);

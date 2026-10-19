@@ -38,8 +38,6 @@ function hydrate(row) {
   };
 }
 
-// ---- Entities ----
-
 function listEntities({ workspaceId, type = null } = {}) {
   let rows;
   if (type) {
@@ -77,7 +75,10 @@ function updateEntity(id, fields = {}) {
   const cur = db.prepare('SELECT * FROM entities WHERE id = ?').get(id);
   if (!cur) return null;
   const nextData = fields.data != null ? { ...fields.data } : parseJsonObject(cur.data);
-  if (cur.status === 'proposed' && fields.status === 'confirmed') delete nextData.proposalEvidence;
+  if (cur.status === 'proposed' && fields.status === 'confirmed') {
+    delete nextData.proposalEvidence;
+    delete nextData._imported;
+  }
   const next = {
     type: fields.type != null ? fields.type : cur.type,
     canonicalName: fields.canonicalName != null ? String(fields.canonicalName).trim() : cur.canonicalName,
@@ -100,6 +101,22 @@ function updateEntity(id, fields = {}) {
     for (const link of ownedLinks) updateMetadata.run(JSON.stringify({ ...parseJsonObject(link.metadata_json), quantity: 1 }), link.id);
   }
   return getEntity(id);
+}
+
+// Written only by the main process: staged reviews, provenance and enrichment bookkeeping.
+const MAIN_OWNED_DATA_KEYS = ['_enrichPending', '_imported', 'proposalEvidence', 'narrativeOrigin', 'needsEnrichment'];
+
+/**
+ * An edit from the sheet. Its copy of data may predate background writes, so it is laid over the
+ * stored data: keys it leaves out keep their value, and main-owned keys are never taken from it.
+ */
+function updateEntityFromEditor(id, fields = {}) {
+  if (fields.data == null) return updateEntity(id, fields);
+  const cur = db.prepare('SELECT data FROM entities WHERE id = ?').get(id);
+  if (!cur) return null;
+  const incoming = { ...fields.data };
+  for (const key of MAIN_OWNED_DATA_KEYS) delete incoming[key];
+  return updateEntity(id, { ...fields, data: { ...parseJsonObject(cur.data), ...incoming } });
 }
 
 function deleteEntity(id) {
@@ -186,7 +203,7 @@ function resolveEnrichReview(id, { accept = {}, reject = {} } = {}) {
   const rejectFields = new Set(Array.isArray(reject.fields) ? reject.fields : []);
   const acceptLinks = new Set(Array.isArray(accept.links) ? accept.links : []);
   const rejectLinks = new Set(Array.isArray(reject.links) ? reject.links : []);
-  // Chapter proposals are no longer generated, but older staged blobs still carry them.
+  // Older staged blobs may still carry chapter proposals.
   const acceptChapters = new Set(Array.isArray(accept.chapters) ? accept.chapters : []);
   const rejectChapters = new Set(Array.isArray(reject.chapters) ? reject.chapters : []);
 
@@ -323,23 +340,24 @@ function findCandidates(mention, workspaceId = null, limit = 8) {
   return out.sort((a, b) => a.rank - b.rank || a.canonicalName.localeCompare(b.canonicalName)).slice(0, limit);
 }
 
-// Falls back to the legacy single loreDocumentId column.
+// Falls back to the legacy single loreDocumentId column. A chapter deleted before its links were
+// cleaned is skipped, so it never hides the chapters that still exist.
 function linkedLoreDocIds(ent) {
   if (!ent) return [];
   const ids = [];
   const arr = ent.data && Array.isArray(ent.data.loreDocumentIds) ? ent.data.loreDocumentIds : null;
   if (arr) for (const id of arr) { if (id) ids.push(id); }
   else if (ent.loreDocumentId) ids.push(ent.loreDocumentId);
-  return [...new Set(ids)];
+  const unique = [...new Set(ids)];
+  if (!unique.length || !db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'documents'").get()) return unique;
+  const existing = new Set(db.prepare(`SELECT id FROM documents WHERE id IN (${unique.map(() => '?').join(', ')})`).all(...unique).map(row => row.id));
+  return unique.filter(id => existing.has(id));
 }
-
-// ---- Relations (entity_links) ----
 
 function summary(row) {
   return row ? { id: row.id, canonicalName: row.canonicalName, type: row.type, data: parseJsonObject(row.data) } : null;
 }
 
-// Outgoing edges from an entity: returns the linked target entities. relType optional.
 function getLinksFrom(fromId, relType = null) {
   const sql = `
     SELECT l.id AS linkId, l.relType AS relType, l.label AS label, l.metadata_json AS metadataJson, e.id AS id, e.canonicalName AS canonicalName, e.type AS type, e.data AS data
@@ -350,7 +368,6 @@ function getLinksFrom(fromId, relType = null) {
   return rows.map(r => ({ linkId: r.linkId, relType: r.relType, label: r.label || null, metadata: linkMetadata(r.metadataJson), entity: summary(r) }));
 }
 
-// Incoming edges to an entity: returns the source entities. relType optional.
 function getLinksTo(toId, relType = null) {
   const sql = `
     SELECT l.id AS linkId, l.relType AS relType, l.label AS label, l.metadata_json AS metadataJson, e.id AS id, e.canonicalName AS canonicalName, e.type AS type, e.data AS data
@@ -411,6 +428,7 @@ function setLink({ workspaceId, fromId, relType, toId, single = false, label = n
   const id = crypto.randomUUID();
   db.prepare('INSERT INTO entity_links (id, workspaceId, fromId, relType, toId, label, metadata_json, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
     .run(id, workspaceId || null, fromId, relType, toId, cleanLabel, JSON.stringify(metadata || {}), Date.now());
+  relationshipChanged({ workspaceId, fromId, relType, toId });
   return { id };
 }
 
@@ -461,15 +479,33 @@ function positiveQuantity(value) {
   return Number.isFinite(quantity) ? Math.max(1, Math.round(quantity)) : 1;
 }
 
+// A relationship lives in the narrative ledger; every sheet edit to one is reported so the ledger follows.
+const relationshipListeners = new Set();
+function onRelationshipChanged(listener) {
+  relationshipListeners.add(listener);
+  return () => relationshipListeners.delete(listener);
+}
+
+function relationshipChanged(link) {
+  if (!link || link.relType !== 'related_to' || !link.workspaceId || !link.toId) return;
+  for (const listener of relationshipListeners) listener({ workspaceId: link.workspaceId, fromId: link.fromId, toId: link.toId });
+}
+
+function linkRow(linkId) {
+  return db.prepare('SELECT workspaceId, fromId, relType, toId FROM entity_links WHERE id = ?').get(linkId);
+}
+
 function removeLink(linkId) {
+  const link = linkRow(linkId);
   db.prepare('DELETE FROM entity_links WHERE id = ?').run(linkId);
+  relationshipChanged(link);
   return { id: linkId };
 }
 
-// Set (or clear) the free-text label on an existing edge, e.g. a member's role.
 function updateLinkLabel(linkId, label) {
   const clean = label != null && String(label).trim() ? String(label).trim() : null;
   db.prepare('UPDATE entity_links SET label = ? WHERE id = ?').run(clean, linkId);
+  relationshipChanged(linkRow(linkId));
   return { id: linkId, label: clean };
 }
 
@@ -482,8 +518,11 @@ function updateLink(linkId, { toId, label, metadata } = {}) {
   const nextMetadata = metadata === undefined ? linkMetadata(current.metadataJson) : metadata || {};
   const nextToId = toId === undefined ? current.toId : toId;
   if (!nextToId || !db.prepare('SELECT 1 FROM entities WHERE id = ?').get(nextToId)) throw new Error('target entity not found');
+  const before = linkRow(linkId);
   db.prepare('UPDATE entity_links SET toId = ?, label = ?, metadata_json = ? WHERE id = ?')
     .run(nextToId, cleanLabel, JSON.stringify(nextMetadata), linkId);
+  if (before.toId !== nextToId) relationshipChanged(before);
+  relationshipChanged(linkRow(linkId));
   return { id: linkId, toId: nextToId, label: cleanLabel, metadata: nextMetadata };
 }
 
@@ -690,6 +729,7 @@ module.exports = {
   findCandidates,
   normalizeName,
   linkedLoreDocIds,
+  updateEntityFromEditor,
   getLinksFrom,
   getLinksTo,
   listLinks,
@@ -699,6 +739,7 @@ module.exports = {
   removeLink,
   updateLinkLabel,
   updateLink,
+  onRelationshipChanged,
   summarizeBulkEntities,
   bulkSetAiPolicy,
   bulkAcceptProposed,

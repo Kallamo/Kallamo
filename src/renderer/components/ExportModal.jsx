@@ -27,7 +27,7 @@ function paginateBlocks(container, pageContentHeight) {
 
 export default function ExportModal({ editor, pageConfig, title, electronAPI, onClose }) {
   const [format, setFormat] = useState('pdf');
-  const paginate = true; // Kallamo always exports paginated (faithful to the paged editor).
+  const paginate = true;
   const [pageNumbers, setPageNumbers] = useState(false);
   const [numberPos, setNumberPos] = useState('center');
   const [pageNumberStart, setPageNumberStart] = useState(1);
@@ -52,7 +52,6 @@ export default function ExportModal({ editor, pageConfig, title, electronAPI, on
   const previewColRef = useRef(null);
   const previewCss = useMemo(() => proseCss('.wd-measure', pageConfig), [pageConfig]);
 
-  // Measure + paginate whenever the source or geometry changes.
   useLayoutEffect(() => {
     const el = measureRef.current;
     if (!el) return;
@@ -68,7 +67,6 @@ export default function ExportModal({ editor, pageConfig, title, electronAPI, on
     }
   }, [bodyHtml, previewCss, paginate, pageContentHeight, contentWidth]);
 
-  // Fit the page box to the available preview column width.
   useLayoutEffect(() => {
     const col = previewColRef.current;
     if (!col) return;

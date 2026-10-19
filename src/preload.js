@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // --- CHATS ---
   getChats: () => ipcRenderer.invoke('get-chats'),
   saveChat: (chat) => ipcRenderer.invoke('save-chat', chat),
+  updateChatKnowledgeFiles: (chatId, changes) => ipcRenderer.invoke('update-chat-knowledge-files', { chatId, changes }),
   restoreExampleWorkspace: () => ipcRenderer.invoke('restore-example-workspace'),
   deleteChat: (id) => ipcRenderer.invoke('delete-chat', id),
   getWorkspaceExperienceMode: (workspaceId) => ipcRenderer.invoke('get-workspace-experience-mode', { workspaceId }),

@@ -189,7 +189,6 @@ export default function KbManagerModal({ profile, onClose, onOpenSmartSearch }) 
     setSelectedBlockIds([]);
   }, [activeFilter]);
 
-  // Listen to IPC vectorization progress
   useEffect(() => {
     if (!electronAPI?.onVectorizationProgress || !profile?.id) return;
 
@@ -221,7 +220,6 @@ export default function KbManagerModal({ profile, onClose, onOpenSmartSearch }) 
     return () => unsub();
   }, [profile?.id, electronAPI]);
 
-  // --- Upload batch function ---
   const uploadFileBatch = async (files, renameMapping = {}, deleteBeforeUpload = false, type = 'searchable') => {
     setIsProcessing(true);
     let processed = 0;
@@ -282,7 +280,7 @@ export default function KbManagerModal({ profile, onClose, onOpenSmartSearch }) 
 
     setIsProcessing(false);
     setProgressMsg('');
-    await loadBlocks(); // refresh fully
+    await loadBlocks();
 
     if (addedCount > 0) {
       showToast(`Added ${addedCount} file(s)`, 'success');
@@ -308,7 +306,6 @@ export default function KbManagerModal({ profile, onClose, onOpenSmartSearch }) 
       deleteBeforeUpload = true;
       filesToUpload = [...fresh, ...conflicts];
     } else {
-      // action === 'skip'
       const skippedCount = conflicts.length;
       if (skippedCount > 0) {
         showToast(`Skipped ${skippedCount} file(s) that already exist`, 'info');
@@ -337,7 +334,6 @@ export default function KbManagerModal({ profile, onClose, onOpenSmartSearch }) 
     }
   };
 
-  // --- Add Searchable File(s) (RAG) ---
   const handleAddSearchableFile = async (e) => {
     const files = Array.from(e.target.files);
     e.target.value = '';
@@ -361,7 +357,6 @@ export default function KbManagerModal({ profile, onClose, onOpenSmartSearch }) 
     }
   };
 
-  // --- Add Constant File(s) ---
   const handleAddConstantFile = async (e) => {
     const files = Array.from(e.target.files);
     e.target.value = '';
@@ -385,7 +380,6 @@ export default function KbManagerModal({ profile, onClose, onOpenSmartSearch }) 
     }
   };
 
-  // --- Delete Chunk/Block ---
   const handleDeleteBlock = (block) => {
     setDeleteTargetBlock(block);
   };
@@ -484,7 +478,6 @@ export default function KbManagerModal({ profile, onClose, onOpenSmartSearch }) 
     }
   };
 
-  // --- Open Editor ---
   const openEditor = (block = null) => {
     setEditingBlock(block);
     setEditorError('');
@@ -505,7 +498,6 @@ export default function KbManagerModal({ profile, onClose, onOpenSmartSearch }) 
     setTimeout(() => editorTextareaRef.current?.focus(), 100);
   };
 
-  // --- Save Custom Snippet / Edited Chunk ---
   const handleSaveEditor = async () => {
     if (!editorText.trim()) {
       setEditorError('Content cannot be empty');
@@ -517,7 +509,6 @@ export default function KbManagerModal({ profile, onClose, onOpenSmartSearch }) 
 
     try {
       if (editingBlock) {
-        // --- EDITING EXISTING BLOCK ---
         const item = blocks.find(b => b.id === editingBlock.id);
         if (item) {
           if (item.type === 'manual') {
@@ -537,7 +528,6 @@ export default function KbManagerModal({ profile, onClose, onOpenSmartSearch }) 
             item.rawItem.name = item.source;
             item.rawItem.keywords = item.keywords;
           } else {
-            // Re-vectorize RAG / Manual chunk text with tags
             const vectorData = await electronAPI.vectorizeKbChunk(item.text, item.source, editorKeywords);
             if (vectorData) {
               item.rawItem = vectorData;
@@ -562,7 +552,6 @@ export default function KbManagerModal({ profile, onClose, onOpenSmartSearch }) 
           }
         }
       } else {
-        // --- ADDING NEW CUSTOM SNIPPET ---
         const title = editorTitle.trim() || 'Custom Memory';
         const text = editorText.trim();
         const newId = `manual_${Date.now()}`;
@@ -588,7 +577,6 @@ export default function KbManagerModal({ profile, onClose, onOpenSmartSearch }) 
           await electronAPI.saveProfileKbBlocks(profile.id, updatedBlocks);
           setBlocks(updatedBlocks);
         } else {
-          // Vectorize snippet text with tags
           const vectorData = await electronAPI.vectorizeKbChunk(text, title, editorKeywords);
           if (vectorData) {
             vectorData.id = newId;
@@ -617,7 +605,6 @@ export default function KbManagerModal({ profile, onClose, onOpenSmartSearch }) 
     }
   };
 
-  // Group searchable chunks by their parent file name
   const groupedBlocks = React.useMemo(() => {
     const list = [];
     const ragGroups = {};
@@ -653,7 +640,6 @@ export default function KbManagerModal({ profile, onClose, onOpenSmartSearch }) 
   // (e.g. freshly-created custom snippets) that don't yet carry a stored count.
   const tokenOf = (b) => b.tokenCount || tokenMap[b.id] || 0;
 
-  // Count any block missing a stored tokenCount accurately in the main process
   useEffect(() => {
     const missing = blocks.filter(b => !b.tokenCount && (b.text || '').length > 0 && tokenMap[b.id] == null);
     if (missing.length === 0 || !electronAPI?.countTokens) return;
@@ -672,7 +658,6 @@ export default function KbManagerModal({ profile, onClose, onOpenSmartSearch }) 
     return () => { cancelled = true; };
   }, [blocks, tokenMap]);
 
-  // Token budgeting: separate always-on (constant) context from searchable knowledge
   const tokenTotals = React.useMemo(() => {
     let alwaysOn = 0;
     let searchable = 0;
@@ -1154,7 +1139,6 @@ export default function KbManagerModal({ profile, onClose, onOpenSmartSearch }) 
             </div>
           )}
 
-          {/* Delete Confirmation Overlay Modal */}
           {deleteTargetBlock && (
             <ConfirmDialog
               tone="danger"
@@ -1180,7 +1164,6 @@ export default function KbManagerModal({ profile, onClose, onOpenSmartSearch }) 
             />
           )}
 
-          {/* Bulk Delete Confirmation Modal */}
           {isBulkDeleteConfirmOpen && (
             <ConfirmDialog
               tone="danger"

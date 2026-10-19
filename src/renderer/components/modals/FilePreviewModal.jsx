@@ -122,7 +122,6 @@ export default function FilePreviewModal({ file, onClose }) {
       );
     }
 
-    // Default fallback
     return (
       <div className="flex max-w-sm flex-col items-center gap-3 py-10 text-center">
         <ToneTile icon={FileText} color="var(--theme-text-muted)" />

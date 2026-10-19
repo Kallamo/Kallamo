@@ -1,4 +1,6 @@
 const { releaseOrphanedEntityReferences } = require('../features/worldbuild/entity-references');
+const { orphanWorkspaceIds, purgeWorkspace } = require('../features/workspace/workspace-ownership');
+const { releaseMissingDocuments } = require('../features/workspace/document-ownership');
 
 /** Predicates that name a moment the live scene already carries, never durable canon. */
 const SCENE_PREDICATE_LIST = [
@@ -1374,6 +1376,67 @@ const MIGRATIONS = [
         ON roleplay_character_memory (workspace_id, entity_id, created_at, ordinal);
       CREATE INDEX IF NOT EXISTS idx_roleplay_character_memory_origin
         ON roleplay_character_memory (workspace_id, origin_id);
+    `)
+  },
+  {
+    // The keyword index and the chunk-keyed tables follow knowledge_chunks on their own, so no
+    // write path can leave a stale or duplicated row behind.
+    id: 'knowledge_chunk_sync_v1',
+    up: db => {
+      if (!hasTable(db, 'knowledge_chunks') || !hasTable(db, 'knowledge_chunks_fts')) return;
+      const chunkTables = ['chunk_tag_suppressions', 'world_index_chunk_status'].filter(table => hasTable(db, table));
+      db.exec(`
+        CREATE TRIGGER IF NOT EXISTS trg_knowledge_chunks_fts_insert
+        AFTER INSERT ON knowledge_chunks
+        FOR EACH ROW BEGIN
+          DELETE FROM knowledge_chunks_fts WHERE chunkId = NEW.id;
+          INSERT INTO knowledge_chunks_fts (chunkId, text) VALUES (NEW.id, NEW.text);
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_knowledge_chunks_fts_update
+        AFTER UPDATE OF id, text ON knowledge_chunks
+        FOR EACH ROW BEGIN
+          DELETE FROM knowledge_chunks_fts WHERE chunkId = OLD.id;
+          INSERT INTO knowledge_chunks_fts (chunkId, text) VALUES (NEW.id, NEW.text);
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_knowledge_chunks_fts_delete
+        AFTER DELETE ON knowledge_chunks
+        FOR EACH ROW BEGIN
+          DELETE FROM knowledge_chunks_fts WHERE chunkId = OLD.id;
+          ${chunkTables.map(table => `DELETE FROM ${table} WHERE chunkId = OLD.id;`).join(' ')}
+        END;
+      `);
+      db.exec(`
+        DELETE FROM knowledge_chunks_fts;
+        INSERT INTO knowledge_chunks_fts (chunkId, text) SELECT id, text FROM knowledge_chunks;
+      `);
+      for (const table of chunkTables) db.exec(`DELETE FROM ${table} WHERE chunkId NOT IN (SELECT id FROM knowledge_chunks)`);
+    }
+  },
+  {
+    // Rows left behind by workspace, chapter and AI Profile deletes made before those deletes
+    // reached every table. An empty chats table may be a half-loaded database, so it is left alone.
+    id: 'data_integrity_repair_v1',
+    up: db => {
+      if (!['chats', 'documents', 'entities', 'knowledge_chunks'].every(table => hasTable(db, table))) return;
+      if (db.prepare('SELECT COUNT(*) AS count FROM chats').get().count > 0) {
+        for (const workspaceId of orphanWorkspaceIds(db)) purgeWorkspace(db, workspaceId);
+      }
+      releaseMissingDocuments(db);
+      if (hasTable(db, 'writing_profiles')) {
+        db.prepare("DELETE FROM knowledge_chunks WHERE ownerType = 'profile_kb' AND ownerId NOT IN (SELECT id FROM writing_profiles)").run();
+        if (hasTable(db, 'constant_memory')) {
+          db.prepare("DELETE FROM constant_memory WHERE ownerType = 'profile' AND ownerId NOT IN (SELECT id FROM writing_profiles)").run();
+        }
+      }
+    }
+  },
+  {
+    id: 'drop_deleted_records_v1',
+    up: db => db.exec(`
+      DROP TRIGGER IF EXISTS chats_delete_trigger;
+      DROP TRIGGER IF EXISTS writing_profiles_delete_trigger;
+      DROP TRIGGER IF EXISTS messages_delete_trigger;
+      DROP TABLE IF EXISTS deleted_records;
     `)
   }
 ];

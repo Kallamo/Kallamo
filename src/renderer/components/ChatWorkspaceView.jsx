@@ -1202,7 +1202,6 @@ export default function ChatWorkspaceView() {
             {activeSubView === 'memory' ? (
               <ChatMemoryView
                 chat={activeChat}
-                onSaveChat={handleSaveChat}
                 electronAPI={electronAPI}
                 backgroundImage={hasBg ? effectiveBackground : null}
                 hasBackdrop={hasBg}

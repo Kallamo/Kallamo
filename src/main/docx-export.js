@@ -37,7 +37,6 @@ function markLookup(marks) {
   return out;
 }
 
-// Inline content (text + hardBreak) -> array of TextRun.
 function runsFromInline(content, base) {
   const runs = [];
   for (const node of content || []) {

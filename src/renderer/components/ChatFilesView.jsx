@@ -119,11 +119,10 @@ export default function ChatFilesView({
         await electronAPI.deleteChatKbFile(chat.id, deleteTarget.name);
       }
 
-      const updatedKbFiles = kbFiles.filter(f => f.name.toLowerCase() !== deleteTarget.name.toLowerCase());
+      await electronAPI.updateChatKnowledgeFiles(chat.id, { remove: [deleteTarget.name] });
       const updatedPinnedFiles = pinnedFiles.filter(name => name.toLocaleLowerCase() !== deleteTarget.name.toLocaleLowerCase());
       await onSaveChat({
         ...chat,
-        knowledgeFiles: JSON.stringify(updatedKbFiles),
         pinnedFiles: JSON.stringify(updatedPinnedFiles)
       });
 
@@ -177,10 +176,8 @@ export default function ChatFilesView({
   return (
     <div className="ws-clear flex-1 flex flex-col h-full bg-surface-abyss/40 overflow-hidden relative">
 
-      {/* Top Filter and Search Bar */}
       <div className="ws-clear shrink-0 p-5 border-b border-gray-800/80 bg-surface-canvas/35 flex flex-col md:flex-row md:items-center justify-between gap-4">
 
-        {/* Category Pills */}
         <div className="flex flex-wrap gap-1.5 select-none">
           {['all', 'images', 'videos', 'documents', 'code'].map(category => (
             <button
@@ -196,7 +193,6 @@ export default function ChatFilesView({
           ))}
         </div>
 
-        {/* Search Input */}
         <div className="relative w-full md:w-64">
           <Search className="absolute left-2.5 top-1/2 transform -translate-y-1/2 text-gray-500 w-3.5 h-3.5" />
           <input
@@ -210,7 +206,6 @@ export default function ChatFilesView({
 
       </div>
 
-      {/* Grid Container */}
       <div className="flex-1 overflow-y-auto p-6 custom-scrollbar select-none">
 
         {loading ? (
@@ -240,7 +235,6 @@ export default function ChatFilesView({
                   className="group relative bg-surface-panel/45 border border-gray-800/80 rounded-xl overflow-hidden shadow-md hover:border-accent/30 transition-all flex flex-col aspect-[4/5] justify-between cursor-pointer"
                   onClick={() => onPreviewFile(file)}
                 >
-                  {/* Thumbnail / Icon Area */}
                   <div className="flex-1 flex items-center justify-center bg-surface-abyss/20 relative overflow-hidden">
                     {fileType === 'image' && fileUrl ? (
                       <img
@@ -262,7 +256,6 @@ export default function ChatFilesView({
                       </div>
                     )}
 
-                    {/* Overlay badge (Pinned / AI Generated) */}
                     <div className="absolute top-2 left-2 flex flex-col space-y-1 z-10">
                       {isPinned && (
                         <span className="bg-accent/15 border border-accent/30 text-accent text-[0.4375rem] font-bold px-1.5 py-0.5 rounded tracking-wider uppercase font-sans">
@@ -276,9 +269,7 @@ export default function ChatFilesView({
                       )}
                     </div>
 
-                    {/* Hover actions panel */}
                     <div className="absolute inset-0 bg-shade/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center space-x-2.5 z-10">
-                      {/* Reinject button */}
                       {!file.isAiGenerated && (
                         <button
                           onClick={(e) => { e.stopPropagation(); onReinject(file); }}
@@ -289,7 +280,6 @@ export default function ChatFilesView({
                         </button>
                       )}
 
-                      {/* Pin toggle button */}
                       {!file.isAiGenerated && (
                         <button
                           onClick={(e) => { e.stopPropagation(); handlePinToggle(file); }}
@@ -303,7 +293,6 @@ export default function ChatFilesView({
                         </button>
                       )}
 
-                      {/* Delete button */}
                       {!file.isAiGenerated && (
                         <button
                           onClick={(e) => { e.stopPropagation(); setDeleteTarget(file); }}
@@ -316,7 +305,6 @@ export default function ChatFilesView({
                     </div>
                   </div>
 
-                  {/* Metadata Footer bar */}
                   <div className="p-3 bg-surface-canvas/70 border-t border-gray-800/80 shrink-0">
                     <p className="text-[0.625rem] text-gray-200 font-bold truncate tracking-wide" title={file.name}>
                       {file.name}

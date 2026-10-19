@@ -35,7 +35,6 @@ import SummaryLogModal from '../features/memory-view/SummaryLogModal';
 
 export default function ChatMemoryView({
   chat,
-  onSaveChat,
   electronAPI,
   backgroundImage = null,
   hasBackdrop = false
@@ -255,7 +254,6 @@ export default function ChatMemoryView({
     }
   };
 
-  // Persist a chunk's full tag state, then refresh from source of truth.
   const persistChunkTags = async (chunkId, next) => {
     setFileChunkTags(prev => ({ ...prev, [chunkId]: next }));
     try {
@@ -311,7 +309,7 @@ export default function ChatMemoryView({
     } catch (e) { setChunkEntityCandidates([]); }
   };
 
-  // Add the typed text as a plain keyword (yellow). User territory only.
+  // Keywords are only ever added by the user.
   const addKeywordTag = (text) => {
     const rawTag = String(text || '').trim().toLowerCase();
     if (!rawTag) return;
@@ -322,7 +320,6 @@ export default function ChatMemoryView({
     setTagSuggestionsOpen(false);
   };
 
-  // Link an entity as a blue tag (dedup by entity id), picked from the suggestion list.
   const addEntityTag = (candidate) => {
     setEditorEntityTags(prev => prev.some(t => t.entity === candidate.id)
       ? prev
@@ -339,7 +336,6 @@ export default function ChatMemoryView({
     addKeywordTag(tagInput.trim());
   };
 
-  // As the user types, ask the registry for matching entities to surface in the list.
   const refreshEntityCandidates = async (text) => {
     const q = String(text || '').trim();
     if (q.length < 2 || typeof electronAPI?.findEntityCandidates !== 'function') {
@@ -523,7 +519,6 @@ export default function ChatMemoryView({
     setBulkEntityCandidates([]);
   }, [viewingFileBlock?.source]);
 
-  // Listen to IPC vectorization progress
   useEffect(() => {
     if (!electronAPI?.onVectorizationProgress || !chat?.id) return;
 
@@ -577,7 +572,6 @@ export default function ChatMemoryView({
     raw: b
   }));
 
-  // Group searchable chunks by their parent file name
   const groupedBlocks = React.useMemo(() => {
     const list = [];
     const ragGroups = {};
@@ -612,7 +606,6 @@ export default function ChatMemoryView({
     return list;
   }, [blocks]);
 
-  // Combine into a single normalized blocks list
   const combinedBlocks = React.useMemo(() => {
     return [
       ...groupedBlocks,
@@ -695,17 +688,13 @@ export default function ChatMemoryView({
   const handleToggleProfileScope = async (block, profileId) => {
     try {
       if (block.type === 'rag' || block.type === 'constant' || block.type === 'rag_file') {
-        const updatedKbFiles = kbFiles.map(f => {
-          if (f.name === block.source) {
-            const list = f.profiles || [];
-            const newList = list.includes(profileId) ? list.filter(id => id !== profileId) : [...list, profileId];
-            return { ...f, profiles: newList };
-          }
-          return f;
-        });
-        await onSaveChat({ ...chat, knowledgeFiles: JSON.stringify(updatedKbFiles) });
+        const file = kbFiles.find(f => f.name === block.source);
+        const list = file?.profiles || [];
+        const profiles = list.includes(profileId) ? list.filter(id => id !== profileId) : [...list, profileId];
+        const result = await electronAPI.updateChatKnowledgeFiles(chat.id, { patch: [{ name: block.source, changes: { profiles } }] });
+        if (!result?.success) throw new Error(result?.error || 'Unable to update memory scope.');
+        await refreshChats(chat.id);
 
-        // Update local block state so it reflects immediately
         setBlocks(prev => prev.map(b =>
           b.source === block.source
             ? { ...b, profiles: b.profiles.includes(profileId) ? b.profiles.filter(id => id !== profileId) : [...b.profiles, profileId] }
@@ -727,20 +716,15 @@ export default function ChatMemoryView({
     }
   };
 
-  // Toggle ingestion strategy (Constant vs RAG) for files
   const handleToggleIngestion = async (block) => {
     if (block.type !== 'rag' && block.type !== 'constant' && block.type !== 'rag_file') return;
     try {
-      const updatedKbFiles = kbFiles.map(f => {
-        if (f.name === block.source) {
-          const current = f.strategy;
-          const isCurrentConstant = !current || current === 'full_context' || current === 'constant';
-          const target = isCurrentConstant ? 'rag_search' : 'full_context';
-          return { ...f, strategy: target };
-        }
-        return f;
-      });
-      await onSaveChat({ ...chat, knowledgeFiles: JSON.stringify(updatedKbFiles) });
+      const current = kbFiles.find(f => f.name === block.source)?.strategy;
+      const isCurrentConstant = !current || current === 'full_context' || current === 'constant';
+      const strategy = isCurrentConstant ? 'rag_search' : 'full_context';
+      const result = await electronAPI.updateChatKnowledgeFiles(chat.id, { patch: [{ name: block.source, changes: { strategy } }] });
+      if (!result?.success) throw new Error(result?.error || 'Unable to change how this file is used.');
+      await refreshChats(chat.id);
       // Short delay to let background indexing trigger, then load blocks
       setTimeout(() => loadBlocks(), 500);
     } catch (err) {
@@ -751,7 +735,7 @@ export default function ChatMemoryView({
   const uploadFileBatch = async (files, renameMapping = {}, deleteBeforeUpload = false) => {
     setIsProcessing(true);
     let processed = 0;
-    const updatedKbFiles = [...kbFiles];
+    const uploaded = [];
 
     for (const file of files) {
       processed++;
@@ -766,10 +750,6 @@ export default function ChatMemoryView({
             const block = blocks.find(b => b.id === id);
             return !block || block.source !== file.name;
           }));
-          const existingIdx = updatedKbFiles.findIndex(existing => existing.name.toLowerCase() === file.name.toLowerCase());
-          if (existingIdx !== -1) {
-            updatedKbFiles.splice(existingIdx, 1);
-          }
         } catch (err) {
           console.error(`Failed to delete existing file ${file.name} for replacement:`, err);
         }
@@ -784,7 +764,7 @@ export default function ChatMemoryView({
           });
 
           if (savedFile) {
-            updatedKbFiles.push({
+            uploaded.push({
               name: savedFile.name,
               originalPath: savedFile.originalPath,
               internalPath: savedFile.internalPath,
@@ -800,14 +780,15 @@ export default function ChatMemoryView({
       }
     }
 
-    await onSaveChat({
-      ...chat,
-      knowledgeFiles: JSON.stringify(updatedKbFiles)
-    });
+    if (uploaded.length) {
+      const result = await electronAPI.updateChatKnowledgeFiles(chat.id, { upsert: uploaded });
+      if (!result?.success) showToast(result?.error || 'Could not register the uploaded files.', 'error');
+    }
+    await refreshChats(chat.id);
 
     setIsProcessing(false);
     setProgressMsg('');
-    setTimeout(() => loadBlocks(), 500); // refresh list
+    setTimeout(() => loadBlocks(), 500);
   };
 
   const handleResolveConflicts = async (action) => {
@@ -829,7 +810,6 @@ export default function ChatMemoryView({
       deleteBeforeUpload = true;
       filesToUpload = [...fresh, ...conflicts];
     } else {
-      // action === 'skip'
     }
 
     try {
@@ -943,12 +923,8 @@ export default function ChatMemoryView({
       // The file lives in three places: on disk with its chunks, in the chat row's JSON
       // registry, and in the current selection. Missing one leaves the UI offering a ghost.
       await electronAPI.deleteChatKbFile(chat.id, fileName);
-
-      const updatedKbFiles = kbFiles.filter(f => f.name.toLowerCase() !== fileName.toLowerCase());
-      await onSaveChat({
-        ...chat,
-        knowledgeFiles: JSON.stringify(updatedKbFiles)
-      });
+      await electronAPI.updateChatKnowledgeFiles(chat.id, { remove: [fileName] });
+      await refreshChats(chat.id);
 
       const deletedBlockIds = combinedBlocks.filter(b => b.source === fileName).map(b => b.id);
       setSelectedBlockIds(prev => prev.filter(id => !deletedBlockIds.includes(id)));
@@ -989,14 +965,8 @@ export default function ChatMemoryView({
         }
       }
 
-      // Drop any deleted files from the JSON metadata registry in one pass
       if (deletedFileNames.length > 0) {
-        const lowered = deletedFileNames.map(n => n.toLowerCase());
-        const updatedKbFiles = kbFiles.filter(f => !lowered.includes(f.name.toLowerCase()));
-        await onSaveChat({
-          ...chat,
-          knowledgeFiles: JSON.stringify(updatedKbFiles)
-        });
+        await electronAPI.updateChatKnowledgeFiles(chat.id, { remove: deletedFileNames });
       }
 
       setSelectedBlockIds([]);
@@ -1026,7 +996,6 @@ export default function ChatMemoryView({
     const entityTagsRemoved = [...origIds].filter(id => !curIds.has(id));
     try {
       if (editingBlock) {
-        // --- EDITING EXISTING BLOCK ---
         await electronAPI.saveChatKbBlock(chat.id, {
           id: editingBlock.id,
           type: editingBlock.type === 'snippet' ? 'manual' : editingBlock.type,
@@ -1055,7 +1024,6 @@ export default function ChatMemoryView({
           });
         }
       } else {
-        // --- ADDING NEW CUSTOM SNIPPET ---
         const title = editorTitle.trim() || 'Untitled note';
         const text = editorText.trim();
         const snippetId = `manual_${Date.now()}`;
@@ -1332,7 +1300,6 @@ export default function ChatMemoryView({
   return (
     <div className={`flex-1 flex flex-col md:flex-row h-full overflow-hidden select-none ${hasBackdrop ? 'has-backdrop' : ''}`}>
 
-      {/* Main Memory List Pane */}
       <div className="relative flex-1 flex flex-col h-full min-w-0 overflow-hidden">
         <div className="shrink-0 flex flex-col gap-5 px-6 pt-6">
           <div className="flex min-w-0 flex-wrap items-end justify-between gap-x-6 gap-y-3">
@@ -1446,7 +1413,6 @@ export default function ChatMemoryView({
           )}
         </div>
 
-        {/* Memory sections */}
         <div className="flex-1 overflow-y-auto custom-scrollbar px-6 pb-24 pt-4">
           {loading ? (
             <div className="overflow-hidden rounded-card border border-border-subtle glass-panel" aria-label="Loading memory">
@@ -1508,7 +1474,6 @@ export default function ChatMemoryView({
         />
       </div>
 
-      {/* Side panel */}
       <aside className="glass-rail w-full md:w-80 shrink-0 border-l border-border-subtle flex flex-col gap-8 overflow-y-auto custom-scrollbar px-6 py-7">
         <section className="flex flex-col gap-2.5">
           <span ref={worldIndexRef} className={`self-start ${sectionLabel}`}>World index</span>
@@ -1652,7 +1617,6 @@ export default function ChatMemoryView({
         </section>
       </aside>
 
-      {/* Note and chunk editor */}
       {editorOpen && (
         <Modal onClose={() => !savingSnippet && setEditorOpen(false)} size="wide" showClose={false} closeOnOverlay={false} className="h-[85vh] max-h-[44rem] !bg-surface-panel">
           <div className="flex shrink-0 items-center gap-3 border-b border-border-subtle py-4 pl-6 pr-4">
@@ -1868,7 +1832,6 @@ export default function ChatMemoryView({
         </Modal>
       )}
 
-      {/* Note delete confirmation */}
       {deleteTarget && (
         <ConfirmDialog
           tone="danger"
@@ -1933,7 +1896,6 @@ export default function ChatMemoryView({
         </Modal>
       )}
 
-      {/* File chunks */}
       {viewingFile && (
         <Modal onClose={() => setViewingFileBlock(null)} size="wide" showClose={false} className="h-[85vh] !bg-surface-panel">
           <div className="flex shrink-0 items-center gap-3 border-b border-border-subtle py-4 pl-6 pr-4">
@@ -2073,7 +2035,6 @@ export default function ChatMemoryView({
         </Modal>
       )}
 
-      {/* Choose what World Index tags */}
       {tagSelection && (
         <Modal onClose={() => !tagSelectionLoading && setTagSelection(null)} size="xl" showClose={false} className="max-h-[82vh] !bg-surface-panel">
           <div className="flex shrink-0 items-start gap-3 border-b border-border-subtle py-4 pl-6 pr-4">

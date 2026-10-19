@@ -18,7 +18,7 @@ const preview = (body) => {
 
 // Per-chapter review notes, with their excerpt and, for AI notes, provenance.
 export default function WritingNotesPanel({ documentId, documentTitle, workspaceId, electronAPI, onClose, onJump, onChange, refreshKey, expandId }) {
-  const { settings } = useApp();
+  const { settings, showToast } = useApp();
   const tokenDebug = Boolean(settings?.advanced?.tokenDebug);
   const ragDebug = Boolean(settings?.advanced?.ragDebug);
   const [notes, setNotes] = useState([]);
@@ -79,7 +79,8 @@ export default function WritingNotesPanel({ documentId, documentTitle, workspace
 
   const remove = async (id) => {
     setConfirmId(null);
-    await electronAPI.deleteDocumentNote(id);
+    const result = await electronAPI.deleteDocumentNote(id).catch(error => ({ success: false, error: error.message }));
+    if (!result?.success) showToast?.(`Could not delete the note: ${result?.error || 'unknown error'}`, 'error');
     changed();
   };
 
