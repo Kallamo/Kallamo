@@ -16,7 +16,7 @@ function looksLikeName(surface, type, proposalKind) {
   if (!/\p{L}/u.test(text)) return false;
   if (!hasCase(text)) return true;
   // Hyphenated compounds count as one word. The head is the first long word, past
-  // particles and articles like "van", "o" or "Os".
+  // particles and articles like "van", "the" or "Of".
   const words = text.split(/[^\p{L}\p{N}\p{M}'’-]+/u).filter(word => /\p{L}/u.test(word));
   const head = words.find(word => [...word.replace(/[-'’]/g, '')].length >= 4) || words[0];
   if (head && isUpper([...head][0])) return true;

@@ -41,7 +41,7 @@ function parseTaggerResponse(response) {
 
 // Budgeted by characters, not count, since chunk sizes differ by caller.
 // Too large truncates the reply and loses the batch; too small repeats the prompt every call.
-function createTaggerBatches(records, { maxChunks = 6, maxChars = 6000 } = {}) {
+function createTaggerBatches(records, { maxChunks = 12, maxChars = 6000 } = {}) {
   const batches = [];
   let batch = [];
   let chars = 0;

@@ -6,10 +6,10 @@ const index = buildNameIndex([
   { id: 'gate', type: 'Locations', canonicalName: 'Harbor Gate' },
   { id: 'harbor', type: 'Locations', canonicalName: 'Harbor' },
   { id: 'kai', type: 'Characters', canonicalName: 'Kai' },
-  { id: 'barnaby', type: 'Characters', canonicalName: '바나비' },
+  { id: 'doyun', type: 'Characters', canonicalName: '도윤' },
   { id: 'ivo', type: 'Characters', canonicalName: 'Ivo' },
   { id: 'elodie', type: 'Characters', canonicalName: 'Élodie' },
-  { id: 'order', type: 'Factions', canonicalName: 'Ordem' },
+  { id: 'order', type: 'Factions', canonicalName: 'Order' },
 ]);
 
 const found = (text: string, options = {}) =>
@@ -26,7 +26,7 @@ describe('literal mentions', () => {
   });
 
   test('finds a Korean name with an attached particle', () => {
-    expect(found('바나비가 왔다')).toEqual([['barnaby', '바나비']]);
+    expect(found('도윤이 왔다')).toEqual([['doyun', '도윤']]);
   });
 
   test('skips a name that is half of a hyphenated compound', () => {
@@ -38,10 +38,10 @@ describe('literal mentions', () => {
   });
 
   test('a name the text also writes in lowercase counts only away from a sentence start', () => {
-    const opening = 'A ordem chegou. Ordem manda.';
-    const inside = 'A ordem chegou, disse a Ordem.';
+    const opening = 'An order came. Order rules.';
+    const inside = 'An order came, said the Order.';
     expect(found(opening, { lowercaseWords: collectLowercaseWords([opening]) })).toEqual([]);
-    expect(found(inside, { lowercaseWords: collectLowercaseWords([inside]) })).toEqual([['order', 'Ordem']]);
+    expect(found(inside, { lowercaseWords: collectLowercaseWords([inside]) })).toEqual([['order', 'Order']]);
   });
 
   test('a folded text passed in gives the same mentions', () => {
@@ -50,7 +50,7 @@ describe('literal mentions', () => {
   });
 
   test('collects each lowercase word once, folded', () => {
-    expect([...collectLowercaseWords(['the Ordem and the ordem', 'Émile saw émile'])])
-      .toEqual(['the', 'and', 'ordem', 'saw', 'emile']);
+    expect([...collectLowercaseWords(['the Order and the order', 'Émile saw émile'])])
+      .toEqual(['the', 'and', 'order', 'saw', 'emile']);
   });
 });

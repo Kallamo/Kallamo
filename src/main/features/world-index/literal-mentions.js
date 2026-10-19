@@ -10,7 +10,7 @@ const WORD = /[\p{L}\p{N}\p{M}]/u;
 const MARK = /\p{M}/u;
 // Only a real hyphen joins a compound; dashes separate dialogue.
 const HYPHEN = /[-‐‑]/;
-// Korean attaches particles to the name ("바나비가", "바나비에게서").
+// Korean attaches particles to the name ("도윤이", "도윤에게서").
 const MAX_HANGUL_SUFFIX = 3;
 const SENTENCE_END = /[.!?…:;。！？؟।]/u;
 const OPENERS = /["'“”‘’«»„([{¡¿\-–—―*_\s]/u;
@@ -24,7 +24,7 @@ function nameShape(folded, original) {
   const cased = [...original].some(isUpper);
   return {
     usable: /\p{L}/u.test(folded) && letters >= (dense ? 2 : 3),
-    // A single cased word is where names and common nouns collide ("Ordem" / "ordem"),
+    // A single cased word is where names and common nouns collide ("Order" / "order"),
     // so only there does the casing written in the registry have to match.
     caseSensitive: cased && !compound && contentTokens < 2,
   };
