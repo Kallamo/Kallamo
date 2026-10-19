@@ -2,19 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { Check } from 'lucide-react';
 import Popover from './Popover';
 
-/**
- * Action menu anchored to a trigger. Items are real buttons with role="menuitem";
- * arrow keys move between them and Escape or a click outside closes the menu.
- *
- * Usage:
- *   const anchorRef = useRef(null);
- *   <IconButton ref={anchorRef} aria-haspopup="menu" aria-expanded={open} ... />
- *   <Menu anchorRef={anchorRef} open={open} onClose={() => setOpen(false)} label="Row actions">
- *     <MenuItem icon={Pencil} label="Edit" onSelect={edit} />
- *     <MenuSeparator />
- *     <MenuItem icon={Trash2} label="Delete" danger onSelect={remove} />
- *   </Menu>
- */
+/** The trigger carries aria-haspopup="menu" and aria-expanded; items are real menuitem buttons. */
 export function Menu({ anchorRef, open, onClose, label, align = 'right', className = 'w-64', children }) {
   const listRef = useRef(null);
 

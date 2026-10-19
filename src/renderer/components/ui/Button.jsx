@@ -2,16 +2,8 @@ import React from 'react';
 import { Loader2 } from 'lucide-react';
 
 /**
- * Shared button primitive for Kallamo.
- *
- * Variants:
- *  - primary  → accent fill (default call-to-action)
- *  - danger   → red fill (destructive confirm)
- *  - ghost    → bordered, low-emphasis (Cancel / secondary)
- *  - subtle   → borderless, lowest emphasis (inline text actions only)
- *
- * Sizes: sm | md (default). Every interactive button keeps a clear shape and
- * a comfortable hit area, never a bare borderless primary action.
+ * primary for the call to action, danger to confirm a destructive one, ghost for secondary.
+ * subtle is for inline text actions only: a primary action never goes borderless.
  */
 const VARIANTS = {
   primary: 'bg-accent/90 text-on-accent hover:bg-accent shadow-[0_0.375rem_1.125rem_-0.5rem] shadow-accent/50',

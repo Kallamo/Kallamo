@@ -19,7 +19,7 @@ import retrievalSettingsContract from '../../../shared/retrieval-settings.json';
 const RETRIEVAL_SETTING_DEFINITIONS = retrievalSettingsContract.definitions;
 const rangeProps = ({ min, max, step }) => ({ min, max, step });
 
-// Old callers ask for the four tabs this page had; each now maps to one of its pages.
+// Callers may still name a legacy tab; each maps to one of the pages.
 function startingPage(tab, section) {
   if (tab === 'engine') return section === 'embedding' ? 'embeddings' : 'roles';
   return { api: 'connections', interface: 'appearance', advanced: 'generation', about: 'about' }[tab] || tab || 'connections';
@@ -211,7 +211,6 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     };
   }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, smartTypography, streamingEnabled, chunkSize, similarity, profileKnowledgeTopK, workspaceDocumentsTopK, longTermMemoryTopK, worldbuildEntityLimit, worldbuildBreadth, executionDevice, ragDebug, agenticDebug, tokenDebug, narrativeStateDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage, taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName, narrativeStateMode, narrativeStateApiProfileId, narrativeStateModelName, retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, agenticGate, agenticToolProtocol, allowAiEntityCreation, archiveSummarization, promptCache, promptCacheContextPlacement]);
 
-  // Handle immediate save for selects and color choices
   const updateSetting = async (category, key, value) => {
     if (category === 'interface') {
       if (key === 'accentColor') setAccentColor(value);
@@ -315,7 +314,6 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     await handleSaveSettings(newSettings);
   };
 
-  // Debounced saver for ranges/sliders
   const saveTimeoutRef = useRef(null);
 
   const updateSettingWithDebounce = (key, value) => {
@@ -489,7 +487,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       apiKey: apiKey.trim(),
       customConfig: JSON.stringify(customConfigObj),
       models: JSON.stringify(modelsList),
-      // The request limit lives in each workspace; a connection no longer carries one of its own.
+      // The request limit lives in each workspace, not on the connection.
       contextWindow: null
     };
 
@@ -498,7 +496,6 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     setEditingApiId(null);
   };
 
-  // Data helpers
   const handleOpenWorkspace = () => {
     if (electronAPI.openWorkspaceFolder) electronAPI.openWorkspaceFolder();
   };
@@ -653,8 +650,6 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         : strictnessPct < 65 ? 'Moderate, a solid general setting'
           : strictnessPct < 85 ? 'Focused, good for specific lookups'
             : strictnessPct < 100 ? 'Strict, only strong matches get through' : 'Exact, only the closest matches';
-
-  // ------------------------------------------------------------------ pages
 
   const connectionsPage = () => (
     <>

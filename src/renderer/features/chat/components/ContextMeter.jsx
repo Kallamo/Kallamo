@@ -1,7 +1,6 @@
 const RADIUS = 7;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
-// Same scale the old top bar used: accent while there is room, orange near the limit, red at it.
 function toneFor(percentage) {
   if (percentage >= 95) return 'text-status-danger';
   if (percentage >= 75) return 'text-orange-400';

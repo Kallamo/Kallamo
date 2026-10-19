@@ -1,10 +1,5 @@
 import React from 'react';
 
-/**
- * Shared content section container, the standard nested card used across
- * Settings and panels. Optional title/description header and a right-aligned
- * `action` slot; children render the body.
- */
 export default function SectionCard({
   title = null,
   description = null,

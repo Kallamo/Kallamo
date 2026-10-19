@@ -22,14 +22,7 @@ function place(side, anchor, tip) {
   };
 }
 
-/**
- * The app's tooltip. Replaces the native `title` everywhere: plain text for a label,
- * or rich content (a name with its type, a time with its date). Wraps one element
- * without adding a node, shows on hover and keyboard focus, and names the trigger's
- * description for assistive tech.
- *
- *   <Tooltip content="Open roleplay panel" side="left"><button …/></Tooltip>
- */
+/** Use instead of the native `title`. Wraps one element without adding a node. */
 export default function Tooltip({ content, side = 'top', children, disabled = false }) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState(null);

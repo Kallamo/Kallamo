@@ -1,10 +1,7 @@
 import React, { useId } from 'react';
 import { Check } from 'lucide-react';
 
-/**
- * Shared checkbox. Accent-filled with a soft glow when checked, smooth
- * transition and a tactile press. Pass `label` for an inline clickable row.
- */
+/** Pass `label` for an inline clickable row. */
 export default function Checkbox({
   checked = false,
   onChange,

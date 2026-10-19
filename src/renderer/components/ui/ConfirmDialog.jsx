@@ -4,21 +4,8 @@ import Modal from './Modal';
 import Button from './Button';
 
 /**
- * Shared confirmation / decision dialog for Kallamo.
- *
- * Use for any choice the user must make (confirm, destructive, multi-option).
- * For transient feedback use showToast() instead, not this.
- *
- * Props:
- *  - tone:    'danger' | 'warning' | 'info' | 'question'  (icon + accent)
- *  - icon:    optional lucide icon override
- *  - title:   heading text
- *  - message: string or node, one plain-language sentence about what happens
- *  - actions: array of { label, onClick, variant, loading, autoFocus }
- *             ordered least → most destructive. Always include a Cancel.
- *  - onClose: called on Esc / overlay / close
- *
- * Layout: 2 actions render inline (right-aligned); 3+ stack full-width.
+ * For any choice the user must make; transient feedback uses showToast(). Order `actions` from
+ * least to most destructive and always include a Cancel.
  */
 const TONES = {
   danger: { Icon: Trash2, chip: 'bg-status-danger/10 text-status-danger' },

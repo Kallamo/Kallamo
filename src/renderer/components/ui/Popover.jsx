@@ -2,21 +2,8 @@ import React, { useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 
 /**
- * Anchored floating panel rendered into document.body via a portal, so it can
- * never be clipped or stacked behind by a parent's overflow / z-index. Position
- * is computed from the anchor's bounding rect with fixed coordinates, flips
- * above when there isn't room below, and re-measures on scroll / resize.
- *
- * Dismissal mirrors the app's useDismiss: a document mousedown outside both the
- * anchor and the panel closes it, as does Escape. No covering backdrop, so the
- * anchor input stays usable and adjacent triggers switch in a single click.
- *
- * Usage:
- *   const anchorRef = useRef(null);
- *   <div ref={anchorRef}><TextInput ... /></div>
- *   <Popover anchorRef={anchorRef} open={open} onClose={() => setOpen(false)}>
- *     ...menu items...
- *   </Popover>
+ * Portaled so no parent overflow can clip it. No backdrop: the anchor stays usable and an
+ * adjacent trigger switches in a single click.
  */
 export default function Popover({
   anchorRef,
@@ -59,9 +46,11 @@ export default function Popover({
       maxWidth: 'calc(100vw - 16px)',
     };
     if (scroll) next.maxHeight = Math.max(120, Math.min(maxHeight, (flipUp ? spaceAbove : spaceBelow) - gap));
-    const panelWidth = fitWidth ? (panelRef.current?.offsetWidth || rect.width) : matchAnchorWidth ? rect.width : 240;
-    if (align === 'right') next.right = Math.max(8, window.innerWidth - rect.right);
-    else next.left = Math.max(8, Math.min(rect.left, window.innerWidth - panelWidth - 8));
+    // The first pass runs before the panel exists; the follow-up frame clamps with its real width.
+    const panelWidth = matchAnchorWidth && !fitWidth ? rect.width : (panelRef.current?.offsetWidth || rect.width);
+    const maxOffset = Math.max(8, window.innerWidth - panelWidth - 8);
+    if (align === 'right') next.right = Math.min(maxOffset, Math.max(8, window.innerWidth - rect.right));
+    else next.left = Math.min(maxOffset, Math.max(8, rect.left));
     if (fitWidth) {
       next.width = 'max-content';
       next.minWidth = Math.min(rect.width, window.innerWidth - 16);

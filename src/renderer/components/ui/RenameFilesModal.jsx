@@ -4,18 +4,7 @@ import Modal from './Modal';
 import Button from './Button';
 import TextInput from './TextInput';
 
-/**
- * Lets the user manually rename conflicting files before upload, then confirms
- * to proceed with vectorization. Each field is pre-filled with a suggested
- * unique name; live validation blocks empty names and collisions (against
- * existing sources and against the other entered names).
- *
- * Props:
- *  - files:         conflict file objects ({ name, ... })
- *  - existingNames: names already taken in the Knowledge Base
- *  - loading:       confirm button busy state
- *  - onCancel()     · onConfirm(renameMapping)  where map = { originalName: newName }
- */
+/** Names must be unique against existing sources and each other. onConfirm receives { originalName: newName }. */
 function suggestUnique(originalName, takenLower) {
   const lastDot = originalName.lastIndexOf('.');
   const base = lastDot !== -1 ? originalName.slice(0, lastDot) : originalName;

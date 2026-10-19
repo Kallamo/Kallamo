@@ -132,14 +132,12 @@ export function parseMarkdown(text, lineNumbersEnabled = false) {
             return;
         }
 
-        // --- HORIZONTAL RULES ---
         if (/^(?:---|===|\*\*\*|___)\s*$/.test(trimmedBlock)) {
             closeListIfNeeded();
             htmlResult.push('<hr class="border-gray-800 my-4" />');
             return;
         }
 
-        // --- TABLES ---
         if (trimmedBlock.startsWith('|') && trimmedBlock.includes('\n')) {
             const lines = trimmedBlock.split('\n').map(l => l.trim()).filter(Boolean);
             if (lines.length >= 2) {

@@ -3,20 +3,8 @@ import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
 /**
- * Shared side panel (slide-out drawer). Use for contextual editors and viewers
- * that sit beside content, NOT for decisions (use ConfirmDialog) or centered
- * forms (use Modal).
- *
- * Drawers default to a viewport-level portal so parent overflow and stacking
- * contexts cannot clip them. Use `position="absolute"` only for an intentional
- * in-panel region that is not a floating layer.
- *
- * Props:
- *  - side:       'right' | 'left'   (default right)
- *  - width:      Tailwind width class (default 'w-[500px]')
- *  - title:      heading text  ·  icon: optional lucide icon  ·  subtitle: mono sub-line
- *  - overlay:    render a click-to-close backdrop (default false)
- *  - closeOnEsc: default true
+ * For editors and viewers beside the content; decisions use ConfirmDialog, centered forms Modal.
+ * Portaled so no parent clips it; `position="absolute"` only for a region inside a panel.
  */
 export default function Drawer({
   onClose,

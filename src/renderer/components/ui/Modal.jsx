@@ -4,15 +4,8 @@ import { X } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 
 /**
- * Shared modal shell for Kallamo.
- *
- * Owns the overlay, centering, blur (respects interface.blur setting),
- * enter animation, Esc-to-close, click-outside-to-close, and background
- * scroll lock. Children provide the content; pass `title` for a standard
- * header with close button, or omit it for a fully custom body.
- *
- * Never hand-roll overlay markup elsewhere, build on this.
- * `inline` renders the same content as a pane inside the page instead of over it.
+ * Every overlay builds on this; never hand-roll overlay markup. `inline` renders the same content
+ * as a pane inside the page.
  */
 const SIZES = {
   sm: 'max-w-sm',

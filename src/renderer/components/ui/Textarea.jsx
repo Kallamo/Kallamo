@@ -1,10 +1,6 @@
 import React, { useId } from 'react';
 
-/**
- * Shared multiline input. Same label/hint/error contract as TextInput.
- * Pass `monospace` for code/prompt content and `showCount` (with maxLength)
- * to surface a live character counter.
- */
+/** Same label/hint/error contract as TextInput. `showCount` needs maxLength. */
 const Textarea = React.forwardRef(function Textarea({
   label = null,
   hint = null,

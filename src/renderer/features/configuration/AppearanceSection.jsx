@@ -8,8 +8,7 @@ const fileUrl = path => `url("app-file:///${String(path).replace(/\\/g, '/')}")`
 export default function AppearanceSection({ sectionRef, activeChat, handleSaveChat, electronAPI, showToast }) {
   const inputRef = useRef(null);
   const background = activeChat.backgroundImage || '';
-  // Sliders move a local value at once; the workspace is saved once the hand rests, since a
-  // save per step re-renders the whole app and made dragging stutter.
+  // Saved once the hand rests: a save per step re-renders the whole app.
   const [levels, setLevels] = useState(() => readLevels(activeChat));
   const pendingRef = useRef({});
   const timerRef = useRef(null);

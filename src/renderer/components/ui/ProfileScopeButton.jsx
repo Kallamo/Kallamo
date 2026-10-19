@@ -3,9 +3,8 @@ import { AlertTriangle, Check, ChevronDown, Users } from 'lucide-react';
 import Popover from './Popover';
 
 /**
- * Which AI profiles may use an item. The default (every profile) stays quiet; a
- * restriction gets a brighter button with the profiles' colours, so a limit reads
- * from across a list. `profiles` are the chat's active profiles.
+ * The default (every profile) stays quiet; a restriction gets a brighter button in the
+ * profiles' colours, so a limit reads from across a list.
  */
 export default function ProfileScopeButton({ profiles = [], selectedIds = [], onToggle, disabled = false, fullWidth = false }) {
   const anchorRef = useRef(null);

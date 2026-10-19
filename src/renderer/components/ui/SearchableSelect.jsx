@@ -3,11 +3,8 @@ import { Check, ChevronDown, Search, X } from 'lucide-react';
 import Popover from './Popover';
 
 /**
- * Search-first selector for any option set that can grow. Options may include
- * aliases, keywords, a group, an icon and a short description. An option with
- * `disabled` stays visible, with `disabledLabel` in place of its group.
- * `searchInTrigger` turns the field itself into the search box while open,
- * instead of a second search field inside the list.
+ * For option sets that can grow. A `disabled` option stays visible under `disabledLabel`;
+ * `searchInTrigger` makes the field itself the search box.
  */
 export default function SearchableSelect({
   value = '',
