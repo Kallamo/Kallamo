@@ -58,11 +58,11 @@ describe('portable entity contracts', () => {
 
   test('rejects duplicate capabilities', () => {
     const result = validateEntityReference({
-      id: 'mara',
+      id: 'tess',
       projectId: 'project-example',
       kind: 'agent',
       typeId: 'character',
-      name: 'Mara',
+      name: 'Tess',
       aliases: [],
       capabilities: ['relationships', 'relationships']
     });

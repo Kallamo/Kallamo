@@ -31,9 +31,9 @@ describe('roleplay epistemic resolution', () => {
         toId TEXT, label TEXT, metadata_json TEXT, createdAt INTEGER
       );
     `);
-    insertEntity('alistair', 'Characters', 'Alistair', 'A veteran of the Order of Dawn.');
-    insertEntity('order', 'Factions', 'Order of Dawn', '');
-    insertEntity('kepler', 'Characters', 'Kepler', '');
+    insertEntity('rosalind', 'Characters', 'Rosalind', 'A veteran of the Order of Thorns.');
+    insertEntity('order', 'Factions', 'Order of Thorns', '');
+    insertEntity('corwin', 'Characters', 'Corwin', '');
   });
 
   afterEach(() => {
@@ -44,29 +44,29 @@ describe('roleplay epistemic resolution', () => {
   test('treats a Knowledge card as confirmed Awareness and absence as undetermined', () => {
     const knowledge = createWorldbuildKnowledgeService(db);
     knowledge.ensureAwareness({
-      workspaceId: 'workspace-one', ownerId: 'kepler', targetId: 'order',
+      workspaceId: 'workspace-one', ownerId: 'corwin', targetId: 'order',
       sourceType: 'manual', sourceId: 'manual-one'
     });
 
     const matrix = new EpistemicResolver(db).resolve({
       workspaceId: 'workspace-one',
-      subjectIds: ['kepler', 'alistair'],
+      subjectIds: ['corwin', 'rosalind'],
       targetIds: ['order'],
       through: { sequence: 0 }
     });
 
     expect(matrix.assessments).toContainEqual(expect.objectContaining({
-      subjectId: 'kepler', targetId: 'order', state: 'confirmed'
+      subjectId: 'corwin', targetId: 'order', state: 'confirmed'
     }));
     expect(matrix.assessments).toContainEqual(expect.objectContaining({
-      subjectId: 'alistair', targetId: 'order', state: 'derived'
+      subjectId: 'rosalind', targetId: 'order', state: 'derived'
     }));
   });
 
   test('does not turn veteran evidence into current membership', () => {
     const matrix = new EpistemicResolver(db).resolve({
       workspaceId: 'workspace-one',
-      subjectIds: ['alistair'],
+      subjectIds: ['rosalind'],
       targetIds: ['order'],
       through: { sequence: 0 }
     });
@@ -82,8 +82,8 @@ describe('roleplay epistemic resolution', () => {
   test('keeps an unsupported pair undetermined', () => {
     const matrix = new EpistemicResolver(db).resolve({
       workspaceId: 'workspace-one',
-      subjectIds: ['kepler'],
-      targetIds: ['alistair'],
+      subjectIds: ['corwin'],
+      targetIds: ['rosalind'],
       through: { sequence: 0 }
     });
 
@@ -93,16 +93,16 @@ describe('roleplay epistemic resolution', () => {
   test('requires a temporal record before treating a subject as explicitly unaware', () => {
     const knowledge = createWorldbuildKnowledgeService(db);
     knowledge.ensureAwareness({
-      workspaceId: 'workspace-one', ownerId: 'kepler', targetId: 'order',
+      workspaceId: 'workspace-one', ownerId: 'corwin', targetId: 'order',
       sourceType: 'manual', sourceId: 'manual-one'
     });
     knowledge.removeCard({
-      workspaceId: 'workspace-one', ownerId: 'kepler', targetId: 'order'
+      workspaceId: 'workspace-one', ownerId: 'corwin', targetId: 'order'
     });
 
     const matrix = new EpistemicResolver(db).resolve({
       workspaceId: 'workspace-one',
-      subjectIds: ['kepler'],
+      subjectIds: ['corwin'],
       targetIds: ['order'],
       through: { sequence: 999 }
     });
@@ -118,22 +118,22 @@ describe('roleplay epistemic resolution', () => {
       requestId: 'request-one',
       workspaceId: 'workspace-one',
       sequence: 4,
-      playerSubjectId: 'kepler',
+      playerSubjectId: 'corwin',
       sceneId: 'scene-one',
-      subjectIds: ['kepler', 'alistair'],
+      subjectIds: ['corwin', 'rosalind'],
       targetIds: ['order'],
       assessments: [{
-        subjectId: 'alistair', targetId: 'order', state: 'derived',
-        sourceIds: ['entity:alistair'], evidence: 'veteran of the Order of Dawn'
+        subjectId: 'rosalind', targetId: 'order', state: 'derived',
+        sourceIds: ['entity:rosalind'], evidence: 'veteran of the Order of Thorns'
       }],
-      deepenedPairs: [{ subjectId: 'alistair', targetId: 'order' }]
+      deepenedPairs: [{ subjectId: 'rosalind', targetId: 'order' }]
     });
     repository.attachOrigin('workspace-one', 'request-one', 'message-one');
 
     expect(repository.getByOrigin('workspace-one', 'message-one')).toEqual(expect.objectContaining({
       requestId: 'request-one',
       originId: 'message-one',
-      subjectIds: ['kepler', 'alistair']
+      subjectIds: ['corwin', 'rosalind']
     }));
     const stored = db.prepare(`
       SELECT manifest_json AS manifest FROM narrative_context_manifests
@@ -146,43 +146,43 @@ describe('roleplay epistemic resolution', () => {
   test('lets Agentic retrieval deepen one subject-target pair without a world dossier dump', () => {
     const knowledge = createWorldbuildKnowledgeService(db);
     knowledge.ensureAwareness({
-      workspaceId: 'workspace-one', ownerId: 'kepler', targetId: 'order',
+      workspaceId: 'workspace-one', ownerId: 'corwin', targetId: 'order',
       sourceType: 'manual', sourceId: 'manual-one'
     });
     const tools = new AgenticEpistemicTools(db);
 
-    expect(tools.inspectSubjectKnowledge('workspace-one', 'Kepler | Order of Dawn'))
-      .toContain('Kepler -> Order of Dawn: confirmed');
-    expect(tools.inspectSubjectEvidence('workspace-one', 'Alistair | Order of Dawn'))
+    expect(tools.inspectSubjectKnowledge('workspace-one', 'Corwin | Order of Thorns'))
+      .toContain('Corwin -> Order of Thorns: confirmed');
+    expect(tools.inspectSubjectEvidence('workspace-one', 'Rosalind | Order of Thorns'))
       .toContain('Assessment: derived');
   });
 
   test('exposes marked relationship snapshots through Agentic Knowledge inspection', () => {
     const knowledge = createWorldbuildKnowledgeService(db);
     db.prepare('INSERT INTO entity_links VALUES (?, ?, ?, ?, ?, NULL, ?, ?)').run(
-      'leader-one', 'workspace-one', 'order', 'led_by', 'alistair', '{}', 1,
+      'leader-one', 'workspace-one', 'order', 'led_by', 'rosalind', '{}', 1,
     );
     knowledge.ensureAwareness({
-      workspaceId: 'workspace-one', ownerId: 'kepler', targetId: 'order',
+      workspaceId: 'workspace-one', ownerId: 'corwin', targetId: 'order',
       sourceType: 'manual', sourceId: 'manual-one'
     });
     knowledge.setKnownRelationships({
-      workspaceId: 'workspace-one', ownerId: 'kepler', targetId: 'order',
+      workspaceId: 'workspace-one', ownerId: 'corwin', targetId: 'order',
       relationshipIds: ['leader-one']
     });
     db.prepare('DELETE FROM entity_links WHERE id = ?').run('leader-one');
 
     const result = new AgenticEpistemicTools(db)
-      .inspectSubjectKnowledge('workspace-one', 'Kepler | Order of Dawn');
+      .inspectSubjectKnowledge('workspace-one', 'Corwin | Order of Thorns');
 
-    expect(result).toContain('Known relationships: Order of Dawn / led_by / Alistair');
+    expect(result).toContain('Known relationships: Order of Thorns / led_by / Rosalind');
   });
 
   test('keeps inaccessible and revoked Knowledge content out of Agentic inspection', () => {
     const worldbuild = createWorldbuildDataService(db);
     worldbuild.saveSubjectEntry({
       workspaceId: 'workspace-one',
-      subjectId: 'kepler',
+      subjectId: 'corwin',
       kind: 'knowledge',
       entry: {
         aboutId: 'order',
@@ -194,7 +194,7 @@ describe('roleplay epistemic resolution', () => {
     });
     const active = worldbuild.saveSubjectEntry({
       workspaceId: 'workspace-one',
-      subjectId: 'kepler',
+      subjectId: 'corwin',
       kind: 'knowledge',
       entry: {
         aboutId: 'order',
@@ -206,13 +206,13 @@ describe('roleplay epistemic resolution', () => {
     });
     worldbuild.deleteSubjectEntry({
       workspaceId: 'workspace-one',
-      subjectId: 'kepler',
+      subjectId: 'corwin',
       kind: 'knowledge',
       entryId: active.known.find((entry: { statement: string }) => entry.statement.includes('dawnfall'))!.id
     });
 
     const result = new AgenticEpistemicTools(db)
-      .inspectSubjectKnowledge('workspace-one', 'Kepler | Order of Dawn');
+      .inspectSubjectKnowledge('workspace-one', 'Corwin | Order of Thorns');
 
     expect(result).not.toContain('eastern bell');
     expect(result).not.toContain('dawnfall');
@@ -223,7 +223,7 @@ describe('roleplay epistemic resolution', () => {
     const worldbuild = createWorldbuildDataService(db);
     worldbuild.saveSubjectEntry({
       workspaceId: 'workspace-one',
-      subjectId: 'kepler',
+      subjectId: 'corwin',
       kind: 'memory',
       entry: {
         summary: 'The hidden witness waited beneath the ash tree.',
@@ -232,7 +232,7 @@ describe('roleplay epistemic resolution', () => {
     });
     const active = worldbuild.saveSubjectEntry({
       workspaceId: 'workspace-one',
-      subjectId: 'kepler',
+      subjectId: 'corwin',
       kind: 'memory',
       entry: {
         summary: 'The forgotten route crossed the salt bridge.',
@@ -241,13 +241,13 @@ describe('roleplay epistemic resolution', () => {
     });
     worldbuild.deleteSubjectEntry({
       workspaceId: 'workspace-one',
-      subjectId: 'kepler',
+      subjectId: 'corwin',
       kind: 'memory',
       entryId: active.memories.find((entry: { summary: string }) => entry.summary.includes('salt bridge'))!.id
     });
 
     const result = new AgenticEpistemicTools(db)
-      .inspectSubjectMemories('workspace-one', 'Kepler');
+      .inspectSubjectMemories('workspace-one', 'Corwin');
 
     expect(result).not.toContain('ash tree');
     expect(result).not.toContain('salt bridge');
@@ -268,7 +268,7 @@ describe('roleplay epistemic resolution', () => {
     `).run();
 
     const result = new AgenticEpistemicTools(db)
-      .inspectSubjectKnowledge('workspace-one', 'Kepler | Order of Dawn');
+      .inspectSubjectKnowledge('workspace-one', 'Corwin | Order of Thorns');
 
     expect(result).not.toContain('glass vault');
   });
@@ -277,7 +277,7 @@ describe('roleplay epistemic resolution', () => {
     const worldbuild = createWorldbuildDataService(db);
     const first = worldbuild.saveSubjectEntry({
       workspaceId: 'workspace-one',
-      subjectId: 'kepler',
+      subjectId: 'corwin',
       kind: 'knowledge',
       entry: {
         aboutId: 'order',
@@ -289,7 +289,7 @@ describe('roleplay epistemic resolution', () => {
     });
     worldbuild.saveSubjectEntry({
       workspaceId: 'workspace-one',
-      subjectId: 'kepler',
+      subjectId: 'corwin',
       kind: 'knowledge',
       existingId: first.known[0].id,
       entry: {
@@ -302,24 +302,24 @@ describe('roleplay epistemic resolution', () => {
     });
 
     const result = new AgenticEpistemicTools(db)
-      .inspectSubjectKnowledge('workspace-one', 'Kepler | Order of Dawn');
+      .inspectSubjectKnowledge('workspace-one', 'Corwin | Order of Thorns');
 
     expect(result).not.toContain('sunset');
     expect(result).toContain('midnight');
   });
 
   test('enforces faction card audience before deepening faction Knowledge for a member', () => {
-    insertEntity('vanguard', 'Factions', 'Vanguard', '');
-    insertEntity('mara', 'Characters', 'Mara', '');
+    insertEntity('bulwark', 'Factions', 'Bulwark', '');
+    insertEntity('tess', 'Characters', 'Tess', '');
     db.prepare(`
       INSERT INTO entity_links (
         id, workspaceId, fromId, relType, toId, label, metadata_json, createdAt
-      ) VALUES ('membership-kepler', 'workspace-one', 'kepler', 'member_of', 'vanguard', NULL, '{}', 1)
+      ) VALUES ('membership-corwin', 'workspace-one', 'corwin', 'member_of', 'bulwark', NULL, '{}', 1)
     `).run();
     const worldbuild = createWorldbuildDataService(db);
     worldbuild.saveSubjectEntry({
       workspaceId: 'workspace-one',
-      subjectId: 'vanguard',
+      subjectId: 'bulwark',
       kind: 'knowledge',
       entry: {
         aboutId: 'order',
@@ -331,36 +331,36 @@ describe('roleplay epistemic resolution', () => {
     });
     worldbuild.setKnowledgeAudience({
       workspaceId: 'workspace-one',
-      ownerId: 'vanguard',
+      ownerId: 'bulwark',
       targetId: 'order',
       audienceType: 'selected-members',
-      memberIds: ['mara']
+      memberIds: ['tess']
     });
 
     const result = new AgenticEpistemicTools(db)
-      .inspectSubjectKnowledge('workspace-one', 'Kepler | Order of Dawn');
+      .inspectSubjectKnowledge('workspace-one', 'Corwin | Order of Thorns');
 
     expect(result).not.toContain('Greywatch');
   });
 
   test('combines direct Awareness with authorized faction Knowledge for the same target', () => {
-    insertEntity('vanguard', 'Factions', 'Vanguard', '');
+    insertEntity('bulwark', 'Factions', 'Bulwark', '');
     db.prepare(`
       INSERT INTO entity_links (
         id, workspaceId, fromId, relType, toId, label, metadata_json, createdAt
-      ) VALUES ('membership-kepler', 'workspace-one', 'kepler', 'member_of', 'vanguard', NULL, '{}', 1)
+      ) VALUES ('membership-corwin', 'workspace-one', 'corwin', 'member_of', 'bulwark', NULL, '{}', 1)
     `).run();
     const worldbuild = createWorldbuildDataService(db);
     worldbuild.ensureAwareness({
       workspaceId: 'workspace-one',
-      ownerId: 'kepler',
+      ownerId: 'corwin',
       targetId: 'order',
       sourceType: 'manual',
       sourceId: 'direct-awareness'
     });
     worldbuild.saveSubjectEntry({
       workspaceId: 'workspace-one',
-      subjectId: 'vanguard',
+      subjectId: 'bulwark',
       kind: 'knowledge',
       entry: {
         aboutId: 'order',
@@ -372,7 +372,7 @@ describe('roleplay epistemic resolution', () => {
     });
 
     const result = new AgenticEpistemicTools(db)
-      .inspectSubjectKnowledge('workspace-one', 'Kepler | Order of Dawn');
+      .inspectSubjectKnowledge('workspace-one', 'Corwin | Order of Thorns');
 
     expect(result).toContain('Greywatch');
   });
@@ -393,7 +393,7 @@ describe('roleplay epistemic resolution', () => {
       INSERT INTO narrative_awareness_records (
         workspace_id, awareness_id, subject_id, target_id, status,
         source_event_id, operation_id, payload_json, applied_at
-      ) VALUES ('workspace-one', ?, 'kepler', 'order', ?, ?, ?, '{}', ?)
+      ) VALUES ('workspace-one', ?, 'corwin', 'order', ?, ?, ?, '{}', ?)
     `);
     db.transaction(() => {
       for (let sequence = 1; sequence <= 500; sequence += 1) {
@@ -413,13 +413,13 @@ describe('roleplay epistemic resolution', () => {
 
     expect(resolver.resolve({
       workspaceId: 'workspace-one',
-      subjectIds: ['kepler'],
+      subjectIds: ['corwin'],
       targetIds: ['order'],
       through: { sequence: 250 }
     }).assessments[0].state).toBe('explicitly-unaware');
     expect(resolver.resolve({
       workspaceId: 'workspace-one',
-      subjectIds: ['kepler'],
+      subjectIds: ['corwin'],
       targetIds: ['order'],
       through: { sequence: 499 }
     }).assessments[0].state).toBe('confirmed');
@@ -461,7 +461,7 @@ describe('roleplay epistemic resolution', () => {
       INSERT INTO narrative_records (
         workspace_id, record_type, record_id, subject_id, source_event_id,
         operation_id, payload_json, applied_at
-      ) VALUES ('workspace-one', 'knowledge', ?, 'kepler', ?, ?, ?, ?)
+      ) VALUES ('workspace-one', 'knowledge', ?, 'corwin', ?, ?, ?, ?)
     `).run(
       input.recordId,
       input.eventId,
@@ -469,7 +469,7 @@ describe('roleplay epistemic resolution', () => {
       JSON.stringify({
         id: input.recordId,
         entryId: input.recordId,
-        subjectId: 'kepler',
+        subjectId: 'corwin',
         proposition: {
           subjectId: 'order',
           predicate: 'worldbuild-statement',

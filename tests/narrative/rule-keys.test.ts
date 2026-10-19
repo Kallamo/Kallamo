@@ -14,7 +14,7 @@ const WS = 'workspace-one';
 
 describe('rule keys', () => {
   test('a key is the name without accents, case or punctuation', () => {
-    expect(['Stamina (STA)', 'Força Bruta', 'Insight:'].map(slugKey)).toEqual(['stamina-sta', 'forca-bruta', 'insight']);
+    expect(['Stamina (STA)', 'Naïve Strength', 'Insight:'].map(slugKey)).toEqual(['stamina-sta', 'naive-strength', 'insight']);
   });
 
   test('a rename takes the new name, and only a real rename does', () => {

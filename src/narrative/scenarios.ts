@@ -22,7 +22,7 @@ function proposal(id: string, type: NarrativeProposal['changeSet']['event']['typ
         type,
         description,
         sceneId: 'scene-example',
-        participants: [{ entityId: 'mara', role: 'actor' }, { entityId: 'elias', role: 'recipient' }],
+        participants: [{ entityId: 'tess', role: 'actor' }, { entityId: 'elias', role: 'recipient' }],
         position: { sequence: 12 },
         evidenceIds: [evidenceId]
       },
@@ -36,7 +36,7 @@ function proposal(id: string, type: NarrativeProposal['changeSet']['event']['typ
 export const possessionTransferScenario = proposal(
   'proposal-transfer',
   'possession-transfer',
-  'Mara gives the brass key to Elias.',
+  'Tess gives the brass key to Elias.',
   'evidence-transfer',
   [
     {
@@ -51,7 +51,7 @@ export const possessionTransferScenario = proposal(
 export const secretRevelationScenario = proposal(
   'proposal-secret',
   'revelation',
-  'Mara tells Elias that the northern gate is unguarded.',
+  'Tess tells Elias that the northern gate is unguarded.',
   'evidence-secret',
   [
     {
@@ -81,7 +81,7 @@ export const secretRevelationScenario = proposal(
 export const deceptiveBeliefScenario = proposal(
   'proposal-deception',
   'deception',
-  'Mara lies to Elias that the vault is empty.',
+  'Tess lies to Elias that the vault is empty.',
   'evidence-deception',
   [
     {

@@ -5,8 +5,8 @@ import {
 } from '../../src/main/features/worldbuild/narrative-options';
 
 describe('controlled narrative options', () => {
-  test('resolves localized category requests', () => {
-    expect(resolveNarrativeOptionType('Raças | sentinels in the room')).toBe('Races');
+  test('resolves category synonyms', () => {
+    expect(resolveNarrativeOptionType('Ancestries | sentinels in the room')).toBe('Races');
     expect(resolveNarrativeOptionType('NPCs | possible identities')).toBe('Characters');
   });
 

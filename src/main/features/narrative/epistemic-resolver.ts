@@ -30,10 +30,7 @@ interface AwarenessEvidence {
   sourceIds: string[];
 }
 
-const STRONG_CONTEXT_TERMS = [
-  'veteran', 'former member', 'served in', 'served with', 'member of',
-  'veterano', 'ex-membro', 'serviu na', 'serviu com', 'membro da'
-];
+const STRONG_CONTEXT_TERMS = ['veteran', 'former member', 'served in', 'served with', 'member of'];
 
 export class EpistemicResolver {
   constructor(private readonly db: Database.Database) {}

@@ -150,26 +150,26 @@ describe('Kallamo roleplay system', () => {
   test('stores an active scene with participants, observers, and separate object presence', () => {
     roleplay.saveSettings('workspace-one', { playerEntityId: 'elias', defaultUpdatePolicy: 'review' });
     const scene = roleplay.saveScene('workspace-one', {
-      locationId: 'gate', participantIds: ['elias', 'mara'],
-      possibleObserverIds: ['mara'], objectIds: ['sword']
+      locationId: 'gate', participantIds: ['elias', 'tess'],
+      possibleObserverIds: ['tess'], objectIds: ['sword']
     });
 
     expect(scene).toMatchObject({
-      locationId: 'gate', participantIds: ['elias', 'mara'],
+      locationId: 'gate', participantIds: ['elias', 'tess'],
       possibleObserverIds: [], objectIds: ['sword'],
       perspective: { access: 'subjective', focalSubjectId: 'elias' }
     });
     expect(db.prepare("SELECT COUNT(*) AS count FROM entity_links WHERE relType = 'owned_by'").get())
       .toEqual({ count: 0 });
-    roleplay.saveSettings('workspace-one', { playerEntityId: 'mara' });
-    expect(roleplay.getScene('workspace-one')?.perspective).toEqual({ access: 'subjective', focalSubjectId: 'mara' });
-    expect(roleplay.getScene('workspace-one')?.participantIds).toEqual(['mara', 'elias']);
+    roleplay.saveSettings('workspace-one', { playerEntityId: 'tess' });
+    expect(roleplay.getScene('workspace-one')?.perspective).toEqual({ access: 'subjective', focalSubjectId: 'tess' });
+    expect(roleplay.getScene('workspace-one')?.participantIds).toEqual(['tess', 'elias']);
   });
 
   test('keeps the player in the scene and clears unsupported presence on location changes', () => {
     roleplay.saveSettings('workspace-one', { playerEntityId: 'elias' });
-    roleplay.saveScene('workspace-one', { locationId: 'gate', participantIds: ['mara'], possibleObserverIds: ['elias'], objectIds: ['sword'] });
-    expect(roleplay.getScene('workspace-one')).toMatchObject({ participantIds: ['elias', 'mara'], possibleObserverIds: [] });
+    roleplay.saveScene('workspace-one', { locationId: 'gate', participantIds: ['tess'], possibleObserverIds: ['elias'], objectIds: ['sword'] });
+    expect(roleplay.getScene('workspace-one')).toMatchObject({ participantIds: ['elias', 'tess'], possibleObserverIds: [] });
 
     db.prepare("INSERT INTO entities (id, workspaceId, type, canonicalName, data, status) VALUES ('tower', 'workspace-one', 'Locations', 'Tower', '{}', 'confirmed')").run();
     roleplay.saveScene('workspace-one', { locationId: 'tower' });
@@ -178,11 +178,11 @@ describe('Kallamo roleplay system', () => {
 
   test('keeps the cast when the user corrects the location, but not when the story moves', () => {
     roleplay.saveSettings('workspace-one', { playerEntityId: 'elias' });
-    roleplay.saveScene('workspace-one', { locationId: 'gate', participantIds: ['mara'], objectIds: ['sword'] });
+    roleplay.saveScene('workspace-one', { locationId: 'gate', participantIds: ['tess'], objectIds: ['sword'] });
     db.prepare("INSERT INTO entities (id, workspaceId, type, canonicalName, data, status) VALUES ('tower', 'workspace-one', 'Locations', 'Tower', '{}', 'confirmed')").run();
 
     roleplay.proposeSceneChange({ id: 'manual-move', workspaceId: 'workspace-one', patch: { locationId: 'tower' }, source: 'manual' });
-    expect(roleplay.getScene('workspace-one')).toMatchObject({ locationId: 'tower', participantIds: ['elias', 'mara'], objectIds: [] });
+    expect(roleplay.getScene('workspace-one')).toMatchObject({ locationId: 'tower', participantIds: ['elias', 'tess'], objectIds: [] });
 
     roleplay.saveSettings('workspace-one', { defaultUpdatePolicy: 'automatic' });
     roleplay.proposeSceneChange({ id: 'ai-move', workspaceId: 'workspace-one', patch: { locationId: 'gate' }, source: 'ai', provenanceId: 'message-move' });
@@ -193,13 +193,13 @@ describe('Kallamo roleplay system', () => {
     roleplay.saveSettings('workspace-one', { playerEntityId: 'elias' });
     const scene = roleplay.saveScene('workspace-one', {
       locationId: 'gate',
-      participantIds: ['mara'],
+      participantIds: ['tess'],
       possibleObserverIds: [],
       nearbyIds: ['wolf-one']
     });
 
     expect(scene).toMatchObject({
-      participantIds: ['elias', 'mara'],
+      participantIds: ['elias', 'tess'],
       possibleObserverIds: [],
       nearbyIds: ['wolf-one']
     });
@@ -240,20 +240,20 @@ describe('Kallamo roleplay system', () => {
 
     const unique = roleplay.proposeInventoryChange({
       id: 'move-sword', workspaceId: 'workspace-one', source: 'ai',
-      patch: { itemId: 'unique-sword', fromHolderId: 'elias', toHolderId: 'mara' }
+      patch: { itemId: 'unique-sword', fromHolderId: 'elias', toHolderId: 'tess' }
     });
     expect(unique.status).toBe('pending');
     roleplay.resolveInventoryChange('workspace-one', unique.id, 'approved');
-    expect(db.prepare("SELECT toId FROM entity_links WHERE fromId = 'unique-sword' AND relType = 'owned_by'").all()).toEqual([{ toId: 'mara' }]);
+    expect(db.prepare("SELECT toId FROM entity_links WHERE fromId = 'unique-sword' AND relType = 'owned_by'").all()).toEqual([{ toId: 'tess' }]);
 
     const quantity = roleplay.proposeInventoryChange({
       id: 'give-potion', workspaceId: 'workspace-one', source: 'ai',
-      patch: { itemId: 'potion', fromHolderId: 'elias', toHolderId: 'mara', quantity: 1 }
+      patch: { itemId: 'potion', fromHolderId: 'elias', toHolderId: 'tess', quantity: 1 }
     });
     roleplay.resolveInventoryChange('workspace-one', quantity.id, 'approved');
     const rows = db.prepare("SELECT toId, metadata_json FROM entity_links WHERE fromId = 'potion' AND relType = 'carried_by' ORDER BY toId").all() as Array<{ toId: string; metadata_json: string }>;
     expect(rows.map(row => ({ holder: row.toId, quantity: JSON.parse(row.metadata_json).quantity }))).toEqual([
-      { holder: 'elias', quantity: 2 }, { holder: 'mara', quantity: 1 }
+      { holder: 'elias', quantity: 2 }, { holder: 'tess', quantity: 1 }
     ]);
   });
 
@@ -317,15 +317,15 @@ describe('Kallamo roleplay system', () => {
     roleplay.saveScene('workspace-one', { participantIds: ['elias'] });
     const sceneChange = roleplay.proposeSceneChange({
       id: 'scene-change', workspaceId: 'workspace-one', source: 'ai',
-      provenanceId: 'message-scene', patch: { locationId: 'gate', participantIds: ['elias', 'mara'] }
+      provenanceId: 'message-scene', patch: { locationId: 'gate', participantIds: ['elias', 'tess'] }
     });
     expect(sceneChange.status).toBe('pending');
     expect(roleplay.getScene('workspace-one')?.participantIds).toEqual(['elias']);
     roleplay.resolveSceneChange('workspace-one', sceneChange.id, 'approved');
-    expect(roleplay.getScene('workspace-one')).toMatchObject({ locationId: 'gate', participantIds: ['elias', 'mara'] });
+    expect(roleplay.getScene('workspace-one')).toMatchObject({ locationId: 'gate', participantIds: ['elias', 'tess'] });
 
     const health = createHealth('review');
-    roleplay.setTargetValues('workspace-one', health.id, 'entity', ['elias', 'mara'], { current: 70 });
+    roleplay.setTargetValues('workspace-one', health.id, 'entity', ['elias', 'tess'], { current: 70 });
     expect(roleplay.listAssignments('workspace-one')).toHaveLength(2);
   });
 
@@ -366,10 +366,10 @@ describe('Kallamo roleplay system', () => {
       appliesTo: [], scope: 'chosen', updatePolicy: 'review'
     });
 
-    expect(roleplay.listEntityResources('workspace-one', 'mara')).toEqual([]);
+    expect(roleplay.listEntityResources('workspace-one', 'tess')).toEqual([]);
     roleplay.setTargetValue('workspace-one', mana.id, 'race', 'human', {});
     expect(roleplay.listEntityResources('workspace-one', 'elias')[0]).toMatchObject({ key: 'mana', current: 50, maximum: 50 });
-    expect(roleplay.listEntityResources('workspace-one', 'mara')).toEqual([]);
+    expect(roleplay.listEntityResources('workspace-one', 'tess')).toEqual([]);
   });
 
   test('story time recovers a resource for the given people and stops at the highest value', () => {
@@ -379,7 +379,7 @@ describe('Kallamo roleplay system', () => {
     });
     roleplay.setTargetValue('workspace-one', health.id, 'entity', 'elias', { current: 80 });
 
-    const changes = roleplay.applyElapsedTime('workspace-one', 'turn-9', 8 * 60, ['elias', 'mara']);
+    const changes = roleplay.applyElapsedTime('workspace-one', 'turn-9', 8 * 60, ['elias', 'tess']);
     expect(changes).toEqual([expect.objectContaining({ entityId: 'elias', source: 'time', nextValue: 96, reason: '8 hours passed' })]);
     roleplay.applyElapsedTime('workspace-one', 'turn-10', 8 * 60, ['elias']);
     expect(roleplay.listEntityResources('workspace-one', 'elias')[0].current).toBe(100);
@@ -437,7 +437,7 @@ describe('Kallamo roleplay system', () => {
   function seedEntities() {
     const insert = db.prepare('INSERT INTO entities (id, workspaceId, type, canonicalName, data, status) VALUES (?, ?, ?, ?, ?, ?)');
     insert.run('elias', 'workspace-one', 'Characters', 'Elias', '{}', 'confirmed');
-    insert.run('mara', 'workspace-one', 'Characters', 'Mara', '{}', 'confirmed');
+    insert.run('tess', 'workspace-one', 'Characters', 'Tess', '{}', 'confirmed');
     insert.run('human', 'workspace-one', 'Races', 'Human', '{}', 'confirmed');
     insert.run('gate', 'workspace-one', 'Locations', 'Northern Gate', '{}', 'confirmed');
     insert.run('sword', 'workspace-one', 'Items', 'Iron Sword', '{}', 'confirmed');

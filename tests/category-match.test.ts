@@ -39,12 +39,12 @@ describe('category matching', () => {
 
   test('ignores casing, spacing and accents', () => {
     expect(resolve('  CHARACTER ')).toBe('Characters');
-    expect(resolve('personagens')).toBeNull();
+    expect(resolve('figures')).toBeNull();
     expect(resolve('Chàracters')).toBe('Characters');
   });
 
   test('never invents a category the workspace does not have', () => {
-    expect(resolve('Personagens')).toBeNull();
+    expect(resolve('People')).toBeNull();
     expect(resolve('Places')).toBeNull();
     expect(resolve('Vehicles')).toBeNull();
     expect(resolve('')).toBeNull();

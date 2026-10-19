@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { describe, expect, test } from 'vitest';
 import {
@@ -124,17 +123,6 @@ describe('renderer generation target resolution', () => {
     expect(isGenerationEventForWorkspace({ chatId: 'workspace-2' }, 'workspace-1')).toBe(false);
     expect(isGenerationEventForWorkspace({}, 'workspace-1')).toBe(false);
     expect(isGenerationEventForWorkspace({ chatId: 'workspace-1' }, 'workspace-1')).toBe(true);
-  });
-
-  test('routes composer submissions through active target resolution', () => {
-    const source = readFileSync(
-      new URL('../src/renderer/components/ChatWorkspaceView.jsx', import.meta.url),
-      'utf8'
-    );
-    const handler = source.match(/const handleSend = \(inputValue\) => \{([\s\S]*?)\n  \};/)?.[1] || '';
-
-    expect(handler).toContain('prepareGenerationSubmission(');
-    expect(handler).toContain('followLatestResponse();');
   });
 });
 

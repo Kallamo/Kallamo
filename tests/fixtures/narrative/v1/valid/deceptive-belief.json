@@ -10,10 +10,10 @@
       "event": {
         "id": "proposal-deception-event",
         "type": "deception",
-        "description": "Mara lies to Elias that the vault is empty.",
+        "description": "Tess lies to Elias that the vault is empty.",
         "sceneId": "scene-example",
         "participants": [
-          { "entityId": "mara", "role": "actor" },
+          { "entityId": "tess", "role": "actor" },
           { "entityId": "elias", "role": "recipient" }
         ],
         "position": { "sequence": 12 },
@@ -41,7 +41,7 @@
         "id": "evidence-deception",
         "originType": "writing-document",
         "originId": "chapter-example",
-        "excerpt": "Mara lies to Elias that the vault is empty."
+        "excerpt": "Tess lies to Elias that the vault is empty."
       }
     ],
     "provenance": {
