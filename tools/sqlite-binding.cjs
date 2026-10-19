@@ -1,10 +1,5 @@
-// Which compiled better-sqlite3 binary belongs to the runtime that is asking.
-//
-// The addon is built against a V8 ABI, and Electron and Node do not share one:
-// a binary that runs the app cannot be loaded by the test runner, and the other
-// way round. Rebuilding on every switch made the suite unrunnable half the time,
-// so both binaries are kept side by side under prebuilds/ and each runtime is
-// pointed at its own.
+// Electron and Node do not share a V8 ABI, so each runtime gets its own better-sqlite3 binary,
+// kept side by side under prebuilds/ instead of rebuilding on every switch.
 const fs = require('fs');
 const path = require('path');
 

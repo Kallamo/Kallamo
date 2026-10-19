@@ -10,7 +10,6 @@ autoUpdater.logger = log;
 autoUpdater.logger.transports.file.level = 'info';
 log.info('Kallamo starting...');
 
-// MIME type lookup for local file serving
 const MIME_TYPES = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -126,7 +125,7 @@ function createWindow () {
     }
   });
 
-  // First launch has no saved state, so the old maximized default still applies.
+  // First launch has no saved state, so it opens maximized.
   if (!savedState || savedState.isMaximized) mainWindow.maximize();
 
   let saveStateTimer = null;
@@ -143,7 +142,6 @@ function createWindow () {
     saveWindowState(mainWindow);
   });
 
-  // Intercept and open external web links in the default browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http:') || url.startsWith('https:')) {
       require('electron').shell.openExternal(url);
@@ -291,7 +289,6 @@ app.whenReady().then(() => {
   });
 });
 
-// --- WINDOW CONTROL IPC HANDLERS ---
 ipcMain.on('window-minimize', (event) => {
   BrowserWindow.fromWebContents(event.sender).minimize();
 });
@@ -317,8 +314,6 @@ app.on('window-all-closed', () => {
   }
 });
 
-// --- AUTO-UPDATER LIFECYCLE ---
-
 // Lightweight semver comparison (returns 1 if a > b, -1 if a < b, 0 if equal)
 function compareSemver(a, b) {
   const pa = a.replace(/^v/, '').split('.').map(Number);
@@ -338,7 +333,6 @@ function setupAutoUpdater(mainWindow) {
     return;
   }
 
-  // Determine if electron-updater can handle this platform/target
   const platform = process.platform;
   const isAppImage = !!process.env.APPIMAGE;
   const canAutoUpdate = platform === 'win32' || isAppImage;
@@ -361,7 +355,6 @@ function setupAutoUpdater(mainWindow) {
       log.error('Auto-updater: Error detected during lifecycle checks:', err);
     });
   } else {
-    // macOS / Linux .deb, query the GitHub Releases API for the latest version
     log.info('Auto-updater: Platform does not support auto-update. Checking GitHub releases...');
 
     const https = require('https');

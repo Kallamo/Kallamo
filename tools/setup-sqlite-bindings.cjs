@@ -49,9 +49,8 @@ function main() {
   ensure(nodeBinding, 'node', process.versions.node);
   ensure(electronBinding, 'electron', electron);
 
-  // The app loads better-sqlite3 the ordinary way, so the copy inside the
-  // package has to be the Electron one. npm install replaces it with a Node
-  // build every time, which is what used to break `npm start`.
+  // The app loads the copy inside the package, so it has to be the Electron build;
+  // npm install puts a Node build there every time.
   const expected = electronTag(electron);
   const current = fs.existsSync(INSTALLED_MARKER)
     ? fs.readFileSync(INSTALLED_MARKER, 'utf8').trim()
