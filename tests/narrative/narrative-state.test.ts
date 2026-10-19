@@ -11,7 +11,7 @@ describe('Narrative State runtime', () => {
   let directory: string;
   let db: Database.Database;
   let system: NarrativeStateSystem;
-  const allowed = new Set(['elias', 'mara', 'guild']);
+  const allowed = new Set(['elias', 'tess', 'guild']);
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), 'kallamo-narrative-state-'));
@@ -32,12 +32,12 @@ describe('Narrative State runtime', () => {
 
   test('automatically applies high-confidence direct knowledge and a salient memory', () => {
     const result = system.createEvent(input('message-one', {
-      type: 'revelation', description: 'Mara reveals the gate code to Elias.', excerpt: 'The gate code is Dawnfall.',
-      participantIds: ['mara', 'elias'], confidence: 0.98,
+      type: 'revelation', description: 'Tess reveals the gate code to Elias.', excerpt: 'The gate code is Dawnfall.',
+      participantIds: ['tess', 'elias'], confidence: 0.98,
       operations: [
         { type: 'awareness', subjectId: 'elias', targetId: 'guild', confidence: 0.98 },
         { type: 'knowledge', subjectId: 'elias', proposition: { subjectId: 'guild', predicate: 'gate-code', object: 'Dawnfall' }, category: 'capability', acquisition: 'participant', confidence: 0.98 },
-        { type: 'memory', subjectId: 'elias', summary: 'Mara trusted Elias with the gate code.', category: 'bond', salience: 0.92 }
+        { type: 'memory', subjectId: 'elias', summary: 'Tess trusted Elias with the gate code.', category: 'bond', salience: 0.92 }
       ]
     }));
 
@@ -52,10 +52,10 @@ describe('Narrative State runtime', () => {
   test('persists explicit introduction facts without filling a Worldbuild record', () => {
     const result = system.createEvent(input('message-fact', {
       type: 'custom', description: 'Selka enters carrying a broken spear.', excerpt: 'Selka enters carrying a broken spear.',
-      participantIds: ['mara'], confidence: 0.98,
+      participantIds: ['tess'], confidence: 0.98,
       operations: [{
         type: 'fact',
-        proposition: { subjectId: 'mara', predicate: 'introduced-as', object: 'A mercenary carrying a broken spear.' },
+        proposition: { subjectId: 'tess', predicate: 'introduced-as', object: 'A mercenary carrying a broken spear.' },
         category: 'identity',
         confidence: 0.98
       }]
@@ -68,8 +68,8 @@ describe('Narrative State runtime', () => {
 
   test('keeps beliefs and relationship changes reviewable and applies them atomically', () => {
     const result = system.createEvent(input('message-two', {
-      type: 'deception', description: 'Mara accuses the guild of betrayal.', excerpt: 'The guild sold us out.',
-      participantIds: ['mara', 'elias'], confidence: 0.95,
+      type: 'deception', description: 'Tess accuses the guild of betrayal.', excerpt: 'The guild sold us out.',
+      participantIds: ['tess', 'elias'], confidence: 0.95,
       operations: [
         { type: 'belief', subjectId: 'elias', proposition: { subjectId: 'guild', predicate: 'betrayed-party', object: 'elias' }, category: 'secret', confidence: 0.72 },
         { type: 'relationship', sourceEntityId: 'elias', targetEntityId: 'guild', dimension: 'trust', value: -35, cause: 'betrayal', description: 'Elias believes the accusation.' }
@@ -91,8 +91,8 @@ describe('Narrative State runtime', () => {
 
   test('creates Awareness when a participating listener gains valid Knowledge', () => {
     const result = system.createEvent(input('reported-knowledge', {
-      type: 'revelation', description: 'Mara reports the gate weakness to Elias.', excerpt: 'The eastern hinge breaks under cold.',
-      participantIds: ['mara', 'elias'], confidence: 0.98,
+      type: 'revelation', description: 'Tess reports the gate weakness to Elias.', excerpt: 'The eastern hinge breaks under cold.',
+      participantIds: ['tess', 'elias'], confidence: 0.98,
       operations: [{
         type: 'knowledge',
         subjectId: 'elias',
@@ -109,13 +109,26 @@ describe('Narrative State runtime', () => {
       .toEqual([{ subject_id: 'elias', target_id: 'guild' }]);
   });
 
+  test('never makes a character aware of themselves', () => {
+    const result = system.createEvent(input('self-belief', {
+      type: 'custom', description: 'Elias doubts himself.', excerpt: 'I was never brave.',
+      participantIds: ['elias'], confidence: 0.95,
+      operations: [
+        { type: 'awareness', subjectId: 'elias', targetId: 'elias', confidence: 0.95 },
+        { type: 'belief', subjectId: 'elias', proposition: { subjectId: 'elias', predicate: 'self-view', object: 'He was never brave.' }, category: 'identity', confidence: 0.85 }
+      ]
+    }));
+
+    expect(result.record?.proposal.changeSet.operations.map(operation => operation.type)).toEqual(['set-belief']);
+  });
+
   test('keeps valid relationships when another extracted operation is malformed', () => {
     const result = system.createEvent(input('mixed-validity', {
-      type: 'revelation', description: 'Mara shares an incomplete account with Elias.', excerpt: 'There is more to this story.',
-      participantIds: ['mara', 'elias'], confidence: 0.95,
+      type: 'revelation', description: 'Tess shares an incomplete account with Elias.', excerpt: 'There is more to this story.',
+      participantIds: ['tess', 'elias'], confidence: 0.95,
       operations: [
         { type: 'knowledge', subjectId: 'elias', proposition: { subjectId: 'guild', predicate: 'incomplete-account' } as never, category: 'history', acquisition: 'reported', confidence: 0.95 },
-        { type: 'relationship', sourceEntityId: 'mara', targetEntityId: 'elias', dimension: 'overall', value: 20, cause: 'first-impression', impact: 'meaningful' }
+        { type: 'relationship', sourceEntityId: 'tess', targetEntityId: 'elias', dimension: 'overall', value: 20, cause: 'first-impression', impact: 'meaningful' }
       ]
     }));
 
@@ -126,12 +139,12 @@ describe('Narrative State runtime', () => {
   test('blocks the protagonist relationship perspective without blocking awareness', () => {
     const result = system.createEvent({
       ...input('protagonist-boundary', {
-        type: 'relationship-change', description: 'Elias and Mara recognize each other.', excerpt: 'We have met before.',
-        participantIds: ['elias', 'mara'], confidence: 0.95,
+        type: 'relationship-change', description: 'Elias and Tess recognize each other.', excerpt: 'We have met before.',
+        participantIds: ['elias', 'tess'], confidence: 0.95,
         operations: [
-          { type: 'awareness', subjectId: 'elias', targetId: 'mara', confidence: 0.95 },
-          { type: 'relationship', sourceEntityId: 'elias', targetEntityId: 'mara', dimension: 'overall', value: 20, cause: 'first-impression', impact: 'meaningful' },
-          { type: 'relationship', sourceEntityId: 'mara', targetEntityId: 'elias', dimension: 'overall', value: 20, cause: 'first-impression', impact: 'meaningful' }
+          { type: 'awareness', subjectId: 'elias', targetId: 'tess', confidence: 0.95 },
+          { type: 'relationship', sourceEntityId: 'elias', targetEntityId: 'tess', dimension: 'overall', value: 20, cause: 'first-impression', impact: 'meaningful' },
+          { type: 'relationship', sourceEntityId: 'tess', targetEntityId: 'elias', dimension: 'overall', value: 20, cause: 'first-impression', impact: 'meaningful' }
         ]
       }),
       excludedRelationshipSourceIds: new Set(['elias'])
@@ -140,13 +153,13 @@ describe('Narrative State runtime', () => {
     const operations = result.record?.proposal.changeSet.operations ?? [];
     expect(operations.some(operation => operation.type === 'grant-awareness' && operation.awareness.subjectId === 'elias')).toBe(true);
     expect(operations.some(operation => operation.type === 'set-relationship' && operation.relationship.sourceEntityId === 'elias')).toBe(false);
-    expect(operations.some(operation => operation.type === 'set-relationship' && operation.relationship.sourceEntityId === 'mara')).toBe(true);
+    expect(operations.some(operation => operation.type === 'set-relationship' && operation.relationship.sourceEntityId === 'tess')).toBe(true);
   });
 
   test('applies selected review items and records rejected items without losing audit history', () => {
     const result = system.createEvent(input('partial-review', {
-      type: 'deception', description: 'Mara makes two claims.', excerpt: 'The guild lied, but Elias is uncertain.',
-      participantIds: ['mara', 'elias'], confidence: 0.95,
+      type: 'deception', description: 'Tess makes two claims.', excerpt: 'The guild lied, but Elias is uncertain.',
+      participantIds: ['tess', 'elias'], confidence: 0.95,
       operations: [
         { type: 'belief', subjectId: 'elias', proposition: { subjectId: 'guild', predicate: 'lied', object: true }, category: 'secret', confidence: 0.72 },
         { type: 'relationship', sourceEntityId: 'elias', targetEntityId: 'guild', dimension: 'trust', value: -35, cause: 'betrayal', description: 'Elias distrusts the guild.' }
@@ -196,7 +209,7 @@ describe('Narrative State runtime', () => {
   test('never grants knowledge without an explicit observation in the same event', () => {
     const result = system.createEvent(input('unobserved-secret', {
       type: 'revelation', description: 'A secret is discussed outside Elias hearing.', excerpt: 'Keep Elias away from this.',
-      participantIds: ['mara'], confidence: 0.99,
+      participantIds: ['tess'], confidence: 0.99,
       operations: [{ type: 'knowledge', subjectId: 'elias', proposition: { subjectId: 'guild', predicate: 'secret-plan', object: true }, category: 'secret', acquisition: 'witness', confidence: 0.99 }]
     }));
     expect(result).toEqual({ skipped: 'no-valid-operations' });
@@ -204,18 +217,40 @@ describe('Narrative State runtime', () => {
 
   test('does not create the same active memory again in a later turn', () => {
     const event: ExtractedNarrativeEvent = {
-      type: 'custom', description: 'Elias remembers Mara warning him.', excerpt: 'Remember my warning.',
+      type: 'custom', description: 'Elias remembers Tess warning him.', excerpt: 'Remember my warning.',
       participantIds: ['elias'], confidence: 0.99,
-      operations: [{ type: 'memory', subjectId: 'elias', summary: 'Mara warned Elias about the gate.', category: 'revelation', salience: 0.95 }]
+      operations: [{ type: 'memory', subjectId: 'elias', summary: 'Tess warned Elias about the gate.', category: 'revelation', salience: 0.95 }]
     };
     expect(system.createEvent(input('memory-one', event)).record?.status).toBe('approved');
     expect(system.createEvent(input('memory-two', event))).toEqual({ skipped: 'no-valid-operations' });
     expect(db.prepare("SELECT COUNT(*) AS count FROM narrative_records WHERE record_type = 'memory'").get()).toEqual({ count: 1 });
   });
 
+  test('dates a turn memory with the story day the turn started on', () => {
+    db.prepare(`INSERT INTO roleplay_time_state (workspace_id, position_json, version, updated_at) VALUES ('workspace-one', ?, 1, 1)`)
+      .run(JSON.stringify({ eraId: 'ce', year: 1001, month: 5, day: 20, hour: 9, minute: 0 }));
+    db.prepare(`INSERT INTO roleplay_message_frames (workspace_id, origin_id, start_json, end_json, created_at, updated_at) VALUES ('workspace-one', 'framed-turn', ?, '{}', 1, 1)`)
+      .run(JSON.stringify({ position: { eraId: 'ce', year: 1001, month: 5, day: 19, hour: 23, minute: 0 } }));
+    const memory = (summary: string): ExtractedNarrativeEvent => ({
+      type: 'custom', description: summary, excerpt: summary, participantIds: ['elias'], confidence: 0.99,
+      operations: [{ type: 'memory', subjectId: 'elias', summary, category: 'revelation', salience: 0.95 }]
+    });
+    system.createEvent(input('framed-turn', memory('Tess warned Elias at midnight.')));
+    system.createEvent(input('unframed-turn', memory('Tess left the city.')));
+    system.createEvent({ ...input('lore-update', memory('Elias grew up by the docks.')), originType: 'worldbuild-update' });
+
+    const dates = (db.prepare("SELECT payload_json FROM narrative_records WHERE record_type = 'memory' ORDER BY rowid").all() as Array<{ payload_json: string }>)
+      .map(row => JSON.parse(row.payload_json).occurredOn ?? null);
+    expect(dates).toEqual([
+      { eraId: 'ce', year: 1001, month: 5, day: 19 },
+      { eraId: 'ce', year: 1001, month: 5, day: 20 },
+      null
+    ]);
+  });
+
   test('keeps idempotency and projections stable across a 500-turn campaign simulation', () => {
     for (let turn = 1; turn <= 500; turn += 1) {
-      const subjectId = turn % 2 ? 'elias' : 'mara';
+      const subjectId = turn % 2 ? 'elias' : 'tess';
       const event: ExtractedNarrativeEvent = {
         type: 'discovery', description: `${subjectId} discovers campaign clue ${turn}.`, excerpt: `Clue ${turn} is confirmed.`,
         participantIds: [subjectId], confidence: 0.99,
@@ -232,11 +267,11 @@ describe('Narrative State runtime', () => {
 
   test('refuses a turn whose only content was the scene, and says why', () => {
     const result = system.createEvent(input('scene-only', {
-      type: 'custom', description: 'Mara trains in the yard.', excerpt: 'Mara lifts the stave again.',
-      participantIds: ['mara', 'elias'], confidence: 0.98,
+      type: 'custom', description: 'Tess trains in the yard.', excerpt: 'Tess lifts the stave again.',
+      participantIds: ['tess', 'elias'], confidence: 0.98,
       operations: [
-        { type: 'knowledge', subjectId: 'elias', proposition: { subjectId: 'mara', predicate: 'training-decision', object: 'Mara is drilling with a stave in the yard right now.' }, category: 'scene-state', acquisition: 'witness', confidence: 0.97 },
-        { type: 'relationship', sourceEntityId: 'mara', targetEntityId: 'elias', dimension: 'overall', value: 60, cause: 'courtesy', impact: 'meaningful' }
+        { type: 'knowledge', subjectId: 'elias', proposition: { subjectId: 'tess', predicate: 'training-decision', object: 'Tess is drilling with a stave in the yard right now.' }, category: 'scene-state', acquisition: 'witness', confidence: 0.97 },
+        { type: 'relationship', sourceEntityId: 'tess', targetEntityId: 'elias', dimension: 'overall', value: 60, cause: 'courtesy', impact: 'meaningful' }
       ]
     }));
 
@@ -253,15 +288,15 @@ describe('Narrative State runtime', () => {
   test('stores one record when the same statement returns under a renamed predicate', () => {
     const statement = 'The eastern hinge gives way under deep cold.';
     const first = system.createEvent(input('statement-first', {
-      type: 'revelation', description: 'Mara explains the hinge.', excerpt: statement,
-      participantIds: ['mara', 'elias'], confidence: 0.98,
+      type: 'revelation', description: 'Tess explains the hinge.', excerpt: statement,
+      participantIds: ['tess', 'elias'], confidence: 0.98,
       operations: [{ type: 'knowledge', subjectId: 'elias', proposition: { subjectId: 'guild', predicate: 'hinge-weakness', object: statement }, category: 'capability', acquisition: 'reported', confidence: 0.98 }]
     }));
     expect(first.record?.status).toBe('approved');
 
     const second = system.createEvent(input('statement-again', {
       type: 'revelation', description: 'Elias repeats what he learned.', excerpt: statement,
-      participantIds: ['mara', 'elias'], confidence: 0.98,
+      participantIds: ['tess', 'elias'], confidence: 0.98,
       operations: [{ type: 'knowledge', subjectId: 'elias', proposition: { subjectId: 'guild', predicate: 'worldbuild-statement', object: statement }, category: 'capability', acquisition: 'witness', confidence: 0.98 }]
     }));
 
@@ -272,11 +307,11 @@ describe('Narrative State runtime', () => {
 
   test('writes the category and the cause onto the stored records', () => {
     system.createEvent(input('categorized', {
-      type: 'revelation', description: 'Mara admits she sold the guild out.', excerpt: 'It was me.',
-      participantIds: ['mara', 'elias'], confidence: 0.98,
+      type: 'revelation', description: 'Tess admits she sold the guild out.', excerpt: 'It was me.',
+      participantIds: ['tess', 'elias'], confidence: 0.98,
       operations: [
-        { type: 'knowledge', subjectId: 'elias', proposition: { subjectId: 'mara', predicate: 'guild-informant', object: 'Mara sold the guild plans to a rival house.' }, category: 'secret', acquisition: 'participant', confidence: 0.98 },
-        { type: 'relationship', sourceEntityId: 'mara', targetEntityId: 'elias', dimension: 'overall', value: 30, cause: 'revelation', impact: 'significant' }
+        { type: 'knowledge', subjectId: 'elias', proposition: { subjectId: 'tess', predicate: 'guild-informant', object: 'Tess sold the guild plans to a rival house.' }, category: 'secret', acquisition: 'participant', confidence: 0.98 },
+        { type: 'relationship', sourceEntityId: 'tess', targetEntityId: 'elias', dimension: 'overall', value: 30, cause: 'revelation', impact: 'significant' }
       ]
     }));
     const eventId = system.listEvents('workspace-one')[0].proposal.changeSet.event.id;

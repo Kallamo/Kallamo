@@ -13,7 +13,7 @@ import {
   type MemoryCategory,
   type RelationshipCause
 } from '../../../narrative/narrative-taxonomy';
-import type { Proposition } from '../../../narrative/contracts';
+import type { Proposition, WorldDay } from '../../../narrative/contracts';
 
 export interface ExtractedNarrativeEvent {
   type: 'movement' | 'possession-transfer' | 'revelation' | 'deception' | 'discovery' | 'relationship-change' | 'custom';
@@ -55,6 +55,8 @@ export type ExtractedNarrativeOperation =
     salience: number;
     accessibility?: 'available' | 'suppressed' | 'inaccessible';
     relatedEntityIds?: string[];
+    /** Set by a caller that already knows the day, such as a dated Event occurrence. */
+    occurredOn?: WorldDay;
   }
   | {
     type: 'relationship';
@@ -95,11 +97,7 @@ export interface QualityVerdict {
 }
 
 export interface QualityContext {
-  /**
-   * Whether the interpreter wrote this. Hand-authored and deterministic records keep the
-   * older, permissive rules: the author already decided the entry is worth keeping, and a
-   * seeded or imported world must not lose records to a taxonomy it predates.
-   */
+  /** Only the interpreter is held to the taxonomy; an author's or an import's records are kept as given. */
   modelAuthored: boolean;
   eventConfidence: number;
 }
@@ -143,12 +141,7 @@ function accept(operation: ExtractedNarrativeOperation): QualityVerdict {
   return { accepted: true, operation };
 }
 
-/**
- * A proposition is storable when it says something in words. An object that is still an
- * opaque key, an empty value, or three words of nothing is extraction debris, and a
- * structured object is only allowed through for the occurrence records that own their own
- * shape.
- */
+/** A raw key, an empty value or a few empty words is debris; only occurrences may store a structured object. */
 function assessProposition(proposition: Proposition, modelAuthored: boolean): QualityRejection | undefined {
   if (!proposition || typeof proposition !== 'object') return 'empty-statement';
   if (modelAuthored && isSceneStatePredicate(proposition.predicate)) return 'scene-state-predicate';
@@ -229,9 +222,8 @@ export interface QualityReview {
 }
 
 /**
- * Runs the gate over one event and enforces the per-kind budget. The budget is deliberately
- * applied after the gate, so a turn that legitimately produces six pieces of world lore keeps
- * them while a runaway response that produces forty is cut instead of flooding the store.
+ * The budget applies after the gate, so it only cuts a runaway model response, never legitimate
+ * records. What a person authors, such as an occurrence everyone present remembers, is not capped.
  */
 export function reviewExtractedOperations(
   operations: ExtractedNarrativeOperation[],
@@ -248,7 +240,7 @@ export function reviewExtractedOperations(
       continue;
     }
     const spent = used[operation.type] ?? 0;
-    if (spent >= OPERATION_BUDGET[operation.type]) {
+    if (context.modelAuthored && spent >= OPERATION_BUDGET[operation.type]) {
       rejections.push({ type: operation.type, reason: 'over-budget' });
       continue;
     }

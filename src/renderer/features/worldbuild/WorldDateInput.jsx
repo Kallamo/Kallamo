@@ -30,10 +30,8 @@ export function formatWorldDate(calendar, value, includeTime = false) {
   return `${date} | ${String(value.hour ?? 0).padStart(2, '0')}:${String(value.minute ?? 0).padStart(2, '0')}`;
 }
 
-// One way to write a date anywhere in the app: a single framed control with a labelled
-// segment per part, and, while empty, a button rather than fields already filled with a
-// default nobody chose. The loose four-input row this used to fall back to squeezed the
-// month down to an initial as soon as it sat in a narrow column.
+// The one date control in the app. While empty it shows a button, not fields filled with a
+// default nobody chose.
 export default function WorldDateInput({
   calendar,
   value,

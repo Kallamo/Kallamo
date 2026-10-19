@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import type { NarrativeOperation } from '../../../narrative/contracts';
+import type { NarrativeOperation, WorldDay } from '../../../narrative/contracts';
 import type { NarrativeEventLedgerRecord } from '../../../narrative/ledger';
 import { isValidNarrativeOperation, NarrativeStateSystem, type ExtractedNarrativeEvent } from '../narrative/narrative-state';
 import { RoleplaySystem, type RoleplayInventoryPatch } from '../narrative/roleplay-system';
@@ -167,7 +167,8 @@ export class EventOccurrenceService {
           summary: `${title}: ${summary}`,
           salience: 1,
           accessibility: participant.memoryAccessibility,
-          relatedEntityIds: memoryRelatedIds
+          relatedEntityIds: memoryRelatedIds,
+          ...memoryDay(startDate)
         })),
         ...(input.relationshipChanges ?? []).map(change => ({
           type: 'relationship' as const,
@@ -285,6 +286,7 @@ export class EventOccurrenceService {
               accessibility: participant.memoryAccessibility,
               status: 'active' as const,
               relatedEntityIds: memoryRelatedIds,
+              occurredOn: memoryDay(startDate).occurredOn,
             },
           };
         }
@@ -301,6 +303,7 @@ export class EventOccurrenceService {
             accessibility: participant.memoryAccessibility,
             status: 'active' as const,
             relatedEntityIds: memoryRelatedIds,
+            ...memoryDay(startDate),
           },
         };
       });
@@ -844,4 +847,11 @@ function parseArray<T>(value: unknown): T[] {
   } catch {
     return [];
   }
+}
+
+// A participant remembers the occurrence on the day it started; an undated one stays undated.
+function memoryDay(startDate: Record<string, unknown> | null): { occurredOn?: WorldDay } {
+  if (!startDate || typeof startDate.eraId !== 'string') return {};
+  const day = { eraId: startDate.eraId, year: Number(startDate.year), month: Number(startDate.month), day: Number(startDate.day) };
+  return [day.year, day.month, day.day].every(value => Number.isInteger(value) && value >= 1) ? { occurredOn: day } : {};
 }

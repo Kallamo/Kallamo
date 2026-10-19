@@ -108,11 +108,8 @@ export function projectCurrentNarrativeRecords(
       else relationships.set(key, projected);
       return;
     }
-    // Two records that say the same thing about the same subject are one statement, however
-    // they were phrased into a predicate or filed as an acquisition. Keying on the entry id
-    // alone let every re-observation of the same fact stack up and reach the prompt again.
-    // The entry index keeps a hand-edited statement able to replace the text it revises,
-    // which a content key alone could not do.
+    // Keyed on the statement so repeated observations collapse; the entry index lets an edited
+    // statement replace the text it revises.
     const entryId = String(payload.entryId ?? '');
     const key = statementIdentity(row.subject_id, payload);
     const target = row.record_type === 'knowledge' ? knowledge : beliefs;
@@ -121,12 +118,12 @@ export function projectCurrentNarrativeRecords(
     if (previousKey && previousKey !== key) target.delete(previousKey);
     if (payload.status === 'active') {
       target.set(key, projected);
-      if (entryId) index.set(entryId, key);
+      // A record without an entryId is revised under its own id.
+      const handle = entryId || String(payload.id ?? '');
+      if (handle) index.set(handle, key);
       return;
     }
-    // A retirement ends its own record, never a different record that happens to say the
-    // same thing. Two subjects, or two copies retired one by one, would otherwise take the
-    // surviving statement down with them.
+    // A retirement ends its own record, never another copy that happens to say the same thing.
     if (previousKey) {
       target.delete(previousKey);
     } else if (isSameRecord(target.get(key), entryId, payload)) {
@@ -144,10 +141,6 @@ export function projectCurrentNarrativeRecords(
   ];
 }
 
-/**
- * What identifies a statement in the projection: whose perspective it is, who it is about,
- * and what it says. The predicate is not part of it, because that is the part that drifts.
- */
 function isSameRecord(
   holder: ProjectedNarrativeRecord | undefined,
   entryId: string,
@@ -159,6 +152,7 @@ function isSameRecord(
   return String(holder.payload.id ?? '') === String(payload.id ?? '');
 }
 
+/** Whose perspective, who it is about and what it says; for prose the drifting predicate is left out. */
 function statementIdentity(subjectId: string, payload: Record<string, unknown>): string {
   const proposition = objectValue(payload.proposition);
   const aboutId = String(proposition.subjectId ?? '');

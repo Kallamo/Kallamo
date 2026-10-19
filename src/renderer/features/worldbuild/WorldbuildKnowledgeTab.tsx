@@ -10,6 +10,7 @@ import Button from '../../components/ui/Button';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import Modal from '../../components/ui/Modal';
 import SearchableSelect from '../../components/ui/SearchableSelect';
+import WorldDateInput, { formatWorldDate, type WorldDateValue } from './WorldDateInput';
 import {
   DURABLE_KNOWLEDGE_CATEGORIES,
   KNOWLEDGE_CATEGORY_LABELS,
@@ -109,11 +110,14 @@ interface Props {
   entities: WorldbuildEntity[];
   api: WorldbuildApi;
   showToast: Toast;
+  /** The world calendar and the story's current moment; memories are dated against them. */
+  calendar?: Record<string, any> | null;
+  clock?: WorldDateValue | null;
   /** Opens another sheet, used to send an Event record back to the occurrence that owns it. */
   onOpenEntity?(entityId: string, options?: { tab?: string }): void;
 }
 
-export default function WorldbuildKnowledgeTab({ workspaceId, entity, entities, api, showToast, onOpenEntity }: Props) {
+export default function WorldbuildKnowledgeTab({ workspaceId, entity, entities, api, showToast, calendar = null, clock = null, onOpenEntity }: Props) {
   const [surface, setSurface] = useState<Surface>('knowledge');
   const [memberships, setMemberships] = useState<Array<{ fromId: string; toId: string }>>([]);
   const [projection, setProjection] = useState<WorldbuildKnowledgeProjection | null>(null);
@@ -344,7 +348,7 @@ export default function WorldbuildKnowledgeTab({ workspaceId, entity, entities, 
             })}
           </div>
       </div>
-      <Memories key={entity.id} hidden={surface !== 'memories'} loading={loading} workspaceId={workspaceId} owner={entity} projection={currentProjection} api={api} reload={reload} showToast={showToast} onOpenEntity={onOpenEntity} composeSignal={composeSignal} />
+      <Memories key={entity.id} hidden={surface !== 'memories'} loading={loading} workspaceId={workspaceId} owner={entity} projection={currentProjection} api={api} reload={reload} showToast={showToast} calendar={calendar} clock={clock} onOpenEntity={onOpenEntity} composeSignal={composeSignal} />
 
       {addingCard && <AddCardModal owner={entity} entities={entities} existing={currentProjection?.cards ?? []} onClose={() => setAddingCard(false)} onAdd={addCard} />}
       {selectedCard && currentProjection && (
@@ -400,10 +404,8 @@ const SOURCE_LABELS: Record<string, string> = {
   memory: 'a memory', narrative: 'the narrative state', fact: 'a fact', statement: 'a statement', import: 'an import',
 };
 
-/* What a statement is, not just what it says. The same sentence can be a piece of public lore
-   or something a character would die before repeating, and only the label separates them. It
-   is also what the Narrative State filters on, so an authored entry speaks the same language
-   as an extracted one. */
+/* The same sentence can be public lore or a secret; only the category tells them apart, and it is
+   what the Narrative State filters on. */
 const CATEGORY_HINTS: Record<DurableKnowledgeCategory, string> = {
   'world-lore': 'How the world, an institution, a material or a custom works.',
   identity: 'Who or what someone really is.',
@@ -428,10 +430,8 @@ export function entryCategoryLabel(value: unknown): string | null {
   return memory ? MEMORY_CATEGORY_LABELS[memory] : null;
 }
 
-/* Four stored methods, two an author needs to choose between. Observed covers both kinds of
-   first-hand acquisition, since the difference between taking part and watching is already
-   carried by the scene. Inferred only ever arrives from the Narrative State, so it is shown
-   but never offered. */
+/* Observed covers both first-hand methods, since the scene already says which. Inferred only comes
+   from the Narrative State, so it is shown but never offered. */
 const ACQUISITION_META: Record<Acquisition, { label: string; icon: typeof Eye; hint: string }> = {
   witness: { label: 'Observed', icon: Eye, hint: 'They found this out for themselves.' },
   participant: { label: 'Observed', icon: Eye, hint: 'They were part of it.' },
@@ -1004,9 +1004,7 @@ function mergeRelationships(current: WorldbuildKnownRelationship[], known: World
   return [...byId.values()];
 }
 
-/* How a subject came by something is not decoration: a character who observed a thing can
-   act on it, while one who was told it can be wrong, can name their source, and can be
-   lied to. Recording the teller is what lets a scene trace a rumour back. */
+/* What was told can be wrong or a lie; recording the teller lets a scene trace a rumour back. */
 function AcquisitionPicker({ owner, entities, acquisition, informantIds, onChange }: {
   owner: WorldbuildEntity;
   entities: WorldbuildEntity[];
@@ -1121,10 +1119,8 @@ function orient(relationship: WorldbuildKnownRelationship, subjectId: string, ty
   };
 }
 
-/* Ties told the way the subject would tell them. Their name is the constant on every row,
-   so it is dropped and only the other party and the verb remain, grouped by what that
-   other party is. The flat list this replaces repeated the subject's name a dozen times
-   and read as a form to fill in rather than a set of facts to choose between. */
+/* Ties told the way the subject would tell them: the subject's name is dropped, leaving the other
+   party and the verb, grouped by what that party is. */
 function KnownConnections({ subjectId, subjectName, relationships, currentIds, selectedIds, entities, busy, onChange }: {
   subjectId: string;
   subjectName: string;
@@ -1268,12 +1264,8 @@ function audienceSummary(audienceType: 'all-members' | 'selected-members', chose
   return total ? `${chosen} of ${total} members` : `${chosen} chosen`;
 }
 
-/* Faction Knowledge is collective by default and the restricted mode is written as an
-   exception to that, not as a blank list to fill in: choosing it seeds the whole roster so
-   the author removes the two who are out of the loop instead of naming the eighteen who
-   are in. Only the roster can receive either way, since every reader of a shared card
-   reaches it through a current membership. Someone already named who has since left stays
-   visible rather than vanishing. */
+/* Restricting seeds the whole roster, so the author removes who is out of the loop rather than
+   naming who is in. Someone named who has since left stays visible. */
 function FactionAudience({ roster, entities, audienceType, selectedMemberIds, busy, onChange }: {
   roster: string[];
   entities: WorldbuildEntity[];
@@ -1394,15 +1386,17 @@ function joinNames(names: string[]): string {
   return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 }
 
-function Memories({ hidden, loading, workspaceId, owner, projection, api, reload, showToast, onOpenEntity, composeSignal = 0 }: {
+type MemoryDraft = { summary: string; accessibility: MemoryAccessibility; occurredOn: WorldDateValue | null };
+const EMPTY_MEMORY: MemoryDraft = { summary: '', accessibility: 'available', occurredOn: null };
+
+function Memories({ hidden, loading, workspaceId, owner, projection, api, reload, showToast, calendar, clock, onOpenEntity, composeSignal = 0 }: {
   hidden: boolean; loading: boolean; composeSignal?: number;
+  calendar: Record<string, any> | null; clock: WorldDateValue | null;
   workspaceId: string; owner: WorldbuildEntity; projection: WorldbuildKnowledgeProjection | null;
   api: WorldbuildApi; reload(options?: { cardIdToSelect?: string; preserveSelection?: boolean }): Promise<boolean>; showToast: Toast;
   onOpenEntity?(entityId: string, options?: { tab?: string }): void;
 }) {
-  const [draft, setDraft] = useState<{ summary: string; accessibility: MemoryAccessibility }>({
-    summary: '', accessibility: 'available',
-  });
+  const [draft, setDraft] = useState<MemoryDraft>(EMPTY_MEMORY);
   const [editing, setEditing] = useState<WorldbuildKnowledgeEntry | null>(null);
   const [composing, setComposing] = useState(false);
   const [deleting, setDeleting] = useState<WorldbuildKnowledgeEntry | null>(null);
@@ -1415,7 +1409,7 @@ function Memories({ hidden, loading, workspaceId, owner, projection, api, reload
   useEffect(() => {
     if (!composeSignal) return;
     setEditing(null);
-    setDraft({ summary: '', accessibility: 'available' });
+    setDraft(EMPTY_MEMORY);
     setComposing(true);
   }, [composeSignal]);
 
@@ -1447,7 +1441,7 @@ function Memories({ hidden, loading, workspaceId, owner, projection, api, reload
         subjectId: owner.id,
         kind: 'memory',
         existingId: editing?.id,
-        entry: { summary: draft.summary.trim(), accessibility: draft.accessibility },
+        entry: { summary: draft.summary.trim(), accessibility: draft.accessibility, occurredOn: draft.occurredOn },
       });
       if (!result.success) {
         mutationCurrent = await reconcileCurrentScope();
@@ -1461,7 +1455,7 @@ function Memories({ hidden, loading, workspaceId, owner, projection, api, reload
         refreshed = false;
       }
       if (!mutationCurrent) return;
-      setDraft({ summary: '', accessibility: 'available' });
+      setDraft(EMPTY_MEMORY);
       setEditing(null);
       setComposing(false);
       showToast(
@@ -1481,13 +1475,13 @@ function Memories({ hidden, loading, workspaceId, owner, projection, api, reload
   const startEditing = (entry: WorldbuildKnowledgeEntry) => {
     setEditing(entry);
     setComposing(false);
-    setDraft({ summary: entry.summary || '', accessibility: entry.accessibility });
+    setDraft({ summary: entry.summary || '', accessibility: entry.accessibility, occurredOn: entry.occurredOn ?? null });
   };
 
   const cancelEditing = () => {
     setEditing(null);
     setComposing(false);
-    setDraft({ summary: '', accessibility: 'available' });
+    setDraft(EMPTY_MEMORY);
   };
 
   const remove = async () => {
@@ -1537,6 +1531,20 @@ function Memories({ hidden, loading, workspaceId, owner, projection, api, reload
           <label htmlFor="memory-summary" className="mb-1.5 block text-xs font-medium text-text-muted">Memory</label>
           <textarea ref={memoryInputRef} id="memory-summary" className={`${INPUT} custom-scrollbar min-h-28 max-h-48 resize-none overflow-y-auto leading-relaxed`} value={draft.summary} onChange={event => setDraft(current => ({ ...current, summary: event.target.value }))} placeholder={`What does ${name} remember?`} />
 
+          {calendar && (
+            <div className="mt-4">
+              <span className="mb-1.5 block text-xs font-medium text-text-muted">When it happened</span>
+              <WorldDateInput
+                label="When it happened"
+                emptyLabel="Set the day"
+                calendar={calendar}
+                value={draft.occurredOn}
+                seedValue={storyDay(clock)}
+                onChange={occurredOn => setDraft(current => ({ ...current, occurredOn }))}
+              />
+            </div>
+          )}
+
           <fieldset className="mt-4">
             <legend className="mb-2 text-xs font-medium text-text-muted">Can {name} recall it?</legend>
             <div className="grid gap-2 md:grid-cols-3">
@@ -1584,6 +1592,7 @@ function Memories({ hidden, loading, workspaceId, owner, projection, api, reload
               <Statement
                 key={entry.id}
                 entry={entry}
+                calendar={calendar}
                 onEdit={entry.managed ? undefined : () => startEditing(entry)}
                 onDelete={entry.managed ? undefined : () => setDeleting(entry)}
                 onOpenOrigin={originEventId && onOpenEntity ? () => onOpenEntity(originEventId, { tab: 'occurrences' }) : undefined}
@@ -1614,8 +1623,15 @@ function Memories({ hidden, loading, workspaceId, owner, projection, api, reload
   );
 }
 
-function Statement({ entry, entities = [], onEdit, onDelete, onOpenOrigin }: {
-  entry: WorldbuildKnowledgeEntry; entities?: WorldbuildEntity[];
+// Only the day: a memory is placed on the calendar, not at an hour.
+function storyDay(clock: WorldDateValue | null): WorldDateValue | null {
+  if (!clock) return null;
+  const { eraId, year, month, day } = clock;
+  return { eraId, year, month, day };
+}
+
+function Statement({ entry, entities = [], calendar = null, onEdit, onDelete, onOpenOrigin }: {
+  entry: WorldbuildKnowledgeEntry; entities?: WorldbuildEntity[]; calendar?: Record<string, any> | null;
   onEdit?(): void; onDelete?(): void; onOpenOrigin?(): void;
 }) {
   const menuRef = useRef<HTMLButtonElement | null>(null);
@@ -1633,6 +1649,7 @@ function Statement({ entry, entities = [], onEdit, onDelete, onOpenOrigin }: {
     .map(id => entities.find(item => item.id === id)?.canonicalName)
     .filter((name): name is string => Boolean(name));
   const dot = <span aria-hidden="true" className="text-text-disabled">·</span>;
+  const happenedOn = entry.kind === 'memory' && calendar && entry.occurredOn ? formatWorldDate(calendar, entry.occurredOn) : '';
   return (
     <article className="group flex gap-3 py-3 text-sm text-text-secondary">
       {MemoryIcon && (
@@ -1644,6 +1661,7 @@ function Statement({ entry, entities = [], onEdit, onDelete, onOpenOrigin }: {
         <div className="mb-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs">
           {entry.kind === 'memory' ? (
             <>
+              {happenedOn && <><span className="font-medium tabular-nums text-text-secondary">{happenedOn}</span>{dot}</>}
               <span className="inline-flex items-center gap-1 text-text-muted">{OriginIcon && <OriginIcon className="h-3 w-3" aria-hidden="true" />}{origin.label}</span>
               {occurrenceTitle && (onOpenOrigin
                 ? <button type="button" onClick={onOpenOrigin} className="ml-1 inline-flex min-h-6 max-w-full items-center gap-1.5 truncate rounded-full border border-border-subtle bg-surface-hover/35 px-2.5 font-medium text-text-secondary hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-entity-event" />{occurrenceTitle}</button>
@@ -1701,8 +1719,6 @@ function EmptyState({ text, onClick }: { text: string; onClick(): void }) {
   return <button type="button" onClick={onClick} className="col-span-full rounded-card border border-dashed border-border-subtle px-5 py-9 text-sm text-text-muted transition-colors hover:border-border-strong hover:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none"><Plus className="mx-auto mb-2 h-5 w-5" aria-hidden="true" />{text}</button>;
 }
 
-/* One quiet line instead of four boxed chips: the counts are secondary to the
-   subject's identity, and chips were what crowded the card at narrow widths. */
 function CardStats({ counts }: { counts: Array<{ value: number; label: string }> }) {
   const filled = counts.filter(entry => entry.value > 0);
   if (!filled.length) {
@@ -1727,7 +1743,7 @@ function KnowledgeSection({ id, open, onToggle, icon: Icon, title, description, 
 }) {
   const triggerId = `${id}-trigger`;
   const panelId = `${id}-panel`;
-  // Flat parts of one card, separated by rules, as in the rest of the sheet.
+  // Sections are flat parts of one card, so they take no icon.
   void Icon;
   return (
     <section className="border-t border-border-subtle first:border-t-0">

@@ -256,6 +256,18 @@ function validateNarrativeMemoryValue(value: unknown, path: string, issues: Vali
   if (memory.status !== undefined) requireEnum(memory, 'status', ['active', 'superseded', 'forgotten'], path, issues);
   if (memory.supersedesMemoryId !== undefined) requireString(memory, 'supersedesMemoryId', path, issues);
   if (memory.relatedEntityIds !== undefined) requireStringArray(memory, 'relatedEntityIds', path, issues);
+  if (memory.occurredOn !== undefined) validateWorldDay(memory.occurredOn, `${path}.occurredOn`, issues);
+}
+
+function validateWorldDay(value: unknown, path: string, issues: ValidationIssue[]): void {
+  const day = requireRecord(value, path, issues);
+  if (!day) return;
+  requireString(day, 'eraId', path, issues);
+  for (const key of ['year', 'month', 'day']) {
+    if (!Number.isInteger(day[key]) || (day[key] as number) < 1) {
+      addIssue(issues, VALIDATION_ISSUE_CODES.OUT_OF_RANGE, `${path}.${key}`, 'Expected a whole number of at least 1.');
+    }
+  }
 }
 
 function validateRelationshipValue(value: unknown, path: string, issues: ValidationIssue[]): void {

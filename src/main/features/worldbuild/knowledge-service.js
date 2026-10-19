@@ -30,15 +30,11 @@ const KNOWABLE_RELATION_TYPES = new Set([
   'adjacent_to',
   'related_to',
 ]);
-// carried_by is deliberately absent. It is the inventory edge for stackable item types,
-// which changes every time someone picks something up or puts it down, so marking it as
-// known records a fact that is stale by the next scene. owned_by covers the durable
-// half of the same question and is what a perspective can actually hold on to.
+// carried_by is left out: it changes with every pick-up, so knowing it would be stale by the next
+// scene. owned_by is the durable half.
 
-// title and wording, which is why the Relationships tab shows the reverse edge as an
-// incoming perspective it will not let you edit. A card about someone therefore offers
-// only the edges they are the source of. "Barnaby regards Alistair" is Barnaby's to
-// know, and it belongs on Barnaby's card, not on Alistair's.
+// A related_to edge is one side's own view with its own title, so it is only knowable from the
+// entity it starts from.
 const PERSPECTIVE_RELATION_TYPES = new Set(['related_to']);
 
 function isKnowableForTarget(relation, targetId) {
@@ -480,11 +476,8 @@ function createWorldbuildKnowledgeService(db) {
   }
 
   /**
-   * Marked rows that the current rules no longer consider knowable: a relation type that
-   * has since been dropped, or the far side of a perspective edge. Filtering them at read
-   * time is not enough, because chat-context queries worldbuild_known_relationships
-   * directly, so they would keep reaching retrieval. Every read of a workspace runs this,
-   * which makes the repair happen once and stay done.
+   * Rows the rules do not consider knowable. Filtering at read time is not enough: chat-context
+   * reads worldbuild_known_relationships directly.
    */
   function pruneUnknowableRelationships(workspaceId) {
     const knowable = [...KNOWABLE_RELATION_TYPES];

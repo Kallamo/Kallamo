@@ -30,6 +30,25 @@ describe('current narrative record projection', () => {
     expect(projectCurrentNarrativeRecords(rows)).toEqual([]);
   });
 
+  test('a revision replaces a Knowledge record without an entry id', () => {
+    const rows = [
+      record('knowledge', 'knowledge-legacy', 1, {
+        id: 'knowledge-legacy',
+        status: 'active',
+        proposition: { subjectId: 'order', predicate: 'statement', object: 'Old statement' }
+      }),
+      record('knowledge', 'knowledge-two', 2, {
+        id: 'knowledge-two',
+        entryId: 'knowledge-legacy',
+        status: 'active',
+        proposition: { subjectId: 'order', predicate: 'statement', object: 'Current statement' }
+      })
+    ];
+
+    expect(projectCurrentNarrativeRecords(rows).map(value => value.row.record_id))
+      .toEqual(['knowledge-two']);
+  });
+
   test('removes forgotten and superseded memories from the current projection', () => {
     const rows = [
       record('memory', 'memory-one', 1, {

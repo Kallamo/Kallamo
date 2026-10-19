@@ -13,8 +13,8 @@ const authored = { modelAuthored: false, eventConfidence: 0.95 };
 function knowledge(patch: Partial<Extract<ExtractedNarrativeOperation, { type: 'knowledge' }>> = {}) {
   return {
     type: 'knowledge' as const,
-    subjectId: 'kepler',
-    proposition: { subjectId: 'alistair', predicate: 'past-service', object: 'Alistair commanded the northern march.' },
+    subjectId: 'corwin',
+    proposition: { subjectId: 'rosalind', predicate: 'past-service', object: 'Rosalind commanded the northern march.' },
     category: 'history',
     acquisition: 'reported' as const,
     confidence: 0.95,
@@ -47,7 +47,7 @@ describe('Narrative State quality gate', () => {
   test('refuses scene state under a durable category, whatever the predicate is called', () => {
     const renamed = knowledge({
       category: 'world-lore',
-      proposition: { subjectId: 'nex', predicate: 'current-activity', object: 'Being trained with a combat stave in the courtyard.' }
+      proposition: { subjectId: 'pip', predicate: 'current-activity', object: 'Being trained with a combat stave in the courtyard.' }
     });
 
     expect(assessExtractedOperation(renamed, model))
@@ -56,7 +56,7 @@ describe('Narrative State quality gate', () => {
 
   test('refuses a record whose content is an opaque key', () => {
     const identifier = knowledge({
-      proposition: { subjectId: 'kepler', predicate: 'seen-at', object: 'bd4d6b65-3500-42f3-ac94-d73d9e76ab02' }
+      proposition: { subjectId: 'corwin', predicate: 'seen-at', object: 'bd4d6b65-3500-42f3-ac94-d73d9e76ab02' }
     });
 
     expect(assessExtractedOperation(identifier, model))
@@ -65,7 +65,7 @@ describe('Narrative State quality gate', () => {
 
   test('refuses an empty statement under a predicate that says nothing on its own', () => {
     const empty = knowledge({
-      proposition: { subjectId: 'alistair', predicate: 'worldbuild-statement', object: 'Something' }
+      proposition: { subjectId: 'rosalind', predicate: 'worldbuild-statement', object: 'Something' }
     });
 
     expect(assessExtractedOperation(empty, model)).toEqual({ accepted: false, reason: 'trivial-statement' });
@@ -81,8 +81,8 @@ describe('Narrative State quality gate', () => {
   });
 
   test('refuses a subject knowing world lore about itself, and keeps its own secret', () => {
-    const lore = knowledge({ subjectId: 'alistair', category: 'history' });
-    const secret = knowledge({ subjectId: 'alistair', category: 'secret' });
+    const lore = knowledge({ subjectId: 'rosalind', category: 'history' });
+    const secret = knowledge({ subjectId: 'rosalind', category: 'secret' });
 
     expect(assessExtractedOperation(lore, model)).toEqual({ accepted: false, reason: 'self-referential' });
     expect(assessExtractedOperation(secret, model).accepted).toBe(true);
@@ -90,7 +90,7 @@ describe('Narrative State quality gate', () => {
 
   test('refuses a relationship change caused by ordinary courtesy', () => {
     const courtesy: ExtractedNarrativeOperation = {
-      type: 'relationship', sourceEntityId: 'nex', targetEntityId: 'kepler',
+      type: 'relationship', sourceEntityId: 'pip', targetEntityId: 'corwin',
       dimension: 'overall', value: 60, cause: 'courtesy', impact: 'meaningful'
     };
 
@@ -99,7 +99,7 @@ describe('Narrative State quality gate', () => {
 
   test('keeps a relationship change with a cause that earns it', () => {
     const rescue: ExtractedNarrativeOperation = {
-      type: 'relationship', sourceEntityId: 'nex', targetEntityId: 'kepler',
+      type: 'relationship', sourceEntityId: 'pip', targetEntityId: 'corwin',
       dimension: 'overall', value: 75, cause: 'rescue', impact: 'significant'
     };
 
@@ -108,7 +108,7 @@ describe('Narrative State quality gate', () => {
 
   test('refuses a relationship change the interpreter was unsure about', () => {
     const rescue: ExtractedNarrativeOperation = {
-      type: 'relationship', sourceEntityId: 'nex', targetEntityId: 'kepler',
+      type: 'relationship', sourceEntityId: 'pip', targetEntityId: 'corwin',
       dimension: 'overall', value: 75, cause: 'rescue'
     };
 
@@ -118,7 +118,7 @@ describe('Narrative State quality gate', () => {
 
   test('refuses a routine memory and keeps one a character carries', () => {
     const routine: ExtractedNarrativeOperation = {
-      type: 'memory', subjectId: 'nex', summary: 'Nex ate breakfast at the inn before the others woke.',
+      type: 'memory', subjectId: 'pip', summary: 'Pip ate breakfast at the inn before the others woke.',
       category: 'routine', salience: 0.9
     };
     const formative: ExtractedNarrativeOperation = { ...routine, category: 'formative' };
@@ -130,14 +130,14 @@ describe('Narrative State quality gate', () => {
   test('leaves hand-authored records alone', () => {
     expect(assessExtractedOperation(knowledge({ category: undefined }), authored).accepted).toBe(true);
     expect(assessExtractedOperation({
-      type: 'relationship', sourceEntityId: 'nex', targetEntityId: 'kepler',
+      type: 'relationship', sourceEntityId: 'pip', targetEntityId: 'corwin',
       dimension: 'trust', value: 40, title: 'Mentor'
     }, authored).accepted).toBe(true);
   });
 
   test('caps a runaway response instead of letting it flood the campaign', () => {
     const many = Array.from({ length: 20 }, (unused, index) => knowledge({
-      proposition: { subjectId: 'alistair', predicate: `clue-${index}`, object: `Alistair revealed detail number ${index}.` }
+      proposition: { subjectId: 'rosalind', predicate: `clue-${index}`, object: `Rosalind revealed detail number ${index}.` }
     }));
 
     const review = reviewExtractedOperations(many, model);
@@ -145,6 +145,14 @@ describe('Narrative State quality gate', () => {
     expect(review.operations).toHaveLength(OPERATION_BUDGET.knowledge);
     expect(review.rejections.filter(rejection => rejection.reason === 'over-budget'))
       .toHaveLength(20 - OPERATION_BUDGET.knowledge);
+  });
+
+  test('never caps what a person authored', () => {
+    const many = Array.from({ length: 20 }, (unused, index) => knowledge({
+      proposition: { subjectId: 'rosalind', predicate: `clue-${index}`, object: `Rosalind revealed detail number ${index}.` }
+    }));
+
+    expect(reviewExtractedOperations(many, authored).operations).toHaveLength(20);
   });
 
   test('reports every refusal so a silent turn can explain itself', () => {
@@ -172,7 +180,7 @@ describe('Narrative State quality gate', () => {
       confidence: 0.9
     };
     const encounter: ExtractedNarrativeOperation = {
-      type: 'relationship', sourceEntityId: 'valera', targetEntityId: 'kepler',
+      type: 'relationship', sourceEntityId: 'valera', targetEntityId: 'corwin',
       dimension: 'overall', value: 0, cause: 'first-impression', impact: 'meaningful'
     };
 

@@ -59,7 +59,7 @@ describe('Narrative State record hygiene', () => {
 
   function knowledgePayload(id: string, predicate: string, object: unknown, extra: Record<string, unknown> = {}) {
     return {
-      id, entryId: `entry-${id}`, subjectId: 'elian',
+      id, entryId: `entry-${id}`, subjectId: 'brann',
       proposition: { subjectId: 'null-lead', predicate, object },
       sourceEventId: `event-${id}`, acquisition: 'witness', confidence: 0.95,
       accessibility: 'available', status: 'active', ...extra
@@ -68,9 +68,9 @@ describe('Narrative State record hygiene', () => {
 
   test('retires the same statement stored under a renamed predicate and a second acquisition', () => {
     const statement = 'It is heavier than iron by volume.';
-    writeRecord({ recordType: 'knowledge', recordId: 'k1', subjectId: 'elian', payload: knowledgePayload('k1', 'material-density', statement) });
-    writeRecord({ recordType: 'knowledge', recordId: 'k2', subjectId: 'elian', payload: knowledgePayload('k2', 'worldbuild-statement', statement, { acquisition: 'reported', confidence: 0.75 }) });
-    writeRecord({ recordType: 'knowledge', recordId: 'k3', subjectId: 'elian', payload: knowledgePayload('k3', 'observed-weight', statement) });
+    writeRecord({ recordType: 'knowledge', recordId: 'k1', subjectId: 'brann', payload: knowledgePayload('k1', 'material-density', statement) });
+    writeRecord({ recordType: 'knowledge', recordId: 'k2', subjectId: 'brann', payload: knowledgePayload('k2', 'worldbuild-statement', statement, { acquisition: 'reported', confidence: 0.75 }) });
+    writeRecord({ recordType: 'knowledge', recordId: 'k3', subjectId: 'brann', payload: knowledgePayload('k3', 'observed-weight', statement) });
 
     const report = new NarrativeMaintenance(db).compact(WORKSPACE);
 
@@ -81,19 +81,19 @@ describe('Narrative State record hygiene', () => {
 
   test('keeps the same statement held by two different subjects', () => {
     const statement = 'The shoring runes were forged with the Imperial seal.';
-    writeRecord({ recordType: 'knowledge', recordId: 'k1', subjectId: 'elian', payload: { ...knowledgePayload('k1', 'evidence', statement), subjectId: 'elian' } });
-    writeRecord({ recordType: 'knowledge', recordId: 'k2', subjectId: 'kepler', payload: { ...knowledgePayload('k2', 'evidence', statement), subjectId: 'kepler' } });
+    writeRecord({ recordType: 'knowledge', recordId: 'k1', subjectId: 'brann', payload: { ...knowledgePayload('k1', 'evidence', statement), subjectId: 'brann' } });
+    writeRecord({ recordType: 'knowledge', recordId: 'k2', subjectId: 'corwin', payload: { ...knowledgePayload('k2', 'evidence', statement), subjectId: 'corwin' } });
 
     expect(new NarrativeMaintenance(db).compact(WORKSPACE)).toMatchObject({ duplicates: 0, retired: 0 });
   });
 
   test('retires model-written scene detail and content that is only an identifier', () => {
     writeRecord({
-      recordType: 'fact', recordId: 'f1', subjectId: 'kepler',
-      payload: { id: 'f1', proposition: { subjectId: 'kepler', predicate: 'current-location', object: 'bd4d6b65-3500-42f3-ac94-d73d9e76ab02' }, status: 'active', evidenceIds: [] }
+      recordType: 'fact', recordId: 'f1', subjectId: 'corwin',
+      payload: { id: 'f1', proposition: { subjectId: 'corwin', predicate: 'current-location', object: 'bd4d6b65-3500-42f3-ac94-d73d9e76ab02' }, status: 'active', evidenceIds: [] }
     });
     writeRecord({
-      recordType: 'knowledge', recordId: 'k1', subjectId: 'kepler',
+      recordType: 'knowledge', recordId: 'k1', subjectId: 'corwin',
       payload: knowledgePayload('k1', 'seen-at', '7409ca21-6297-4fea-82eb-9109cbd85bb6')
     });
 
@@ -105,7 +105,7 @@ describe('Narrative State record hygiene', () => {
 
   test('never judges a hand-authored record for durability', () => {
     writeRecord({
-      recordType: 'knowledge', recordId: 'k1', subjectId: 'kepler', interpreter: 'user',
+      recordType: 'knowledge', recordId: 'k1', subjectId: 'corwin', interpreter: 'user',
       payload: knowledgePayload('k1', 'current-activity', 'Waiting by the forge.')
     });
 
@@ -113,9 +113,9 @@ describe('Narrative State record hygiene', () => {
   });
 
   test('previews without changing anything', () => {
-    const statement = 'Alistair carries a glass heart in his chest.';
-    writeRecord({ recordType: 'memory', recordId: 'm1', subjectId: 'elian', payload: { id: 'm1', subjectId: 'elian', eventId: 'event-m1', summary: statement, accessibility: 'available', status: 'active' } });
-    writeRecord({ recordType: 'memory', recordId: 'm2', subjectId: 'elian', payload: { id: 'm2', subjectId: 'elian', eventId: 'event-m2', summary: `${statement}  `, accessibility: 'available', status: 'active' } });
+    const statement = 'Rosalind carries a glass heart in his chest.';
+    writeRecord({ recordType: 'memory', recordId: 'm1', subjectId: 'brann', payload: { id: 'm1', subjectId: 'brann', eventId: 'event-m1', summary: statement, accessibility: 'available', status: 'active' } });
+    writeRecord({ recordType: 'memory', recordId: 'm2', subjectId: 'brann', payload: { id: 'm2', subjectId: 'brann', eventId: 'event-m2', summary: `${statement}  `, accessibility: 'available', status: 'active' } });
 
     const maintenance = new NarrativeMaintenance(db);
     expect(maintenance.preview(WORKSPACE)).toMatchObject({ duplicates: 1, retired: 1 });

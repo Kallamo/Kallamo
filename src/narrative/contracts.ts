@@ -138,18 +138,10 @@ export interface Knowledge {
   confidence: Confidence;
   accessibility: KnowledgeAccessibility;
   status: 'active' | 'forgotten' | 'revoked' | 'superseded';
-  /**
-   * What kind of knowledge this is. Model-authored records must carry a durable category to
-   * be stored at all; the field stays optional so records written before the taxonomy, and
-   * hand-authored entries, remain valid.
-   */
+  /** Required of model-written records; optional so authored and older records stay valid. */
   category?: KnowledgeCategory;
   factIds?: NarrativeId[];
-  /**
-   * Who passed this on, when the subject did not find it out for themselves. Only
-   * meaningful for reported acquisition: a first-hand observation has no teller. Knowing
-   * the teller is what makes a chain of hearsay traceable and a lie attributable.
-   */
+  /** Who passed this on. Reported acquisition only: a first-hand observation has no teller. */
   informantIds?: NarrativeId[];
 }
 
@@ -177,6 +169,15 @@ export interface NarrativeMemory {
   status?: 'active' | 'superseded' | 'forgotten';
   supersedesMemoryId?: NarrativeId;
   relatedEntityIds?: NarrativeId[];
+  /** The story day it happened, in the world calendar; absent when nobody knows. */
+  occurredOn?: WorldDay;
+}
+
+export interface WorldDay {
+  eraId: string;
+  year: number;
+  month: number;
+  day: number;
 }
 
 export interface RelationshipState {

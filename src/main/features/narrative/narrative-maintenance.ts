@@ -7,16 +7,8 @@ import {
 } from '../../../narrative/narrative-taxonomy';
 
 /**
- * Housekeeping for a campaign that already ran under the older rules.
- *
- * The gate only protects what is written from now on. A world that has been played for months
- * still holds the same observation stored six times, scene chatter filed as durable knowledge,
- * and records whose content is a raw key. Every one of those reaches the prompt on every
- * relevant turn, so leaving them in place keeps paying for a problem that is already fixed.
- *
- * Nothing is deleted. A retired record keeps its row, its event and its evidence, and only its
- * status changes to the value each projection already treats as "not current", which is the
- * same lever the review flow uses.
+ * Retires stored records the quality gate would refuse today. Nothing is deleted: only the status
+ * changes to the value each projection already treats as not current.
  */
 
 export type RetirementReason = 'duplicate' | 'scene-state' | 'identifier-content';
@@ -130,10 +122,7 @@ export class NarrativeMaintenance {
     return report;
   }
 
-  /**
-   * The first active copy of a statement wins and every later copy is a duplicate, so the
-   * record that first established something keeps its place in the narrative sequence.
-   */
+  /** The first copy wins, so the record that established something keeps its place in the sequence. */
   private classify(
     row: MaintenanceRow,
     payload: Record<string, unknown>,
