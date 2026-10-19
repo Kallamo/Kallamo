@@ -87,6 +87,8 @@ export interface SkillChangeInput {
   reason?: string;
   source: 'ai' | 'manual';
   provenanceId?: string;
+  /** An AI change that waits for a person even when the world applies them automatically. */
+  forceReview?: boolean;
 }
 
 export const DEFAULT_SKILL_RANKS = ['Novice', 'Apprentice', 'Competent', 'Master'];
@@ -286,7 +288,7 @@ export class RoleplaySkills {
     if (!settings.enabled) return null;
     if (input.source === 'ai' && config.policy === 'manual') return null;
     if (!this.learningIds(input.workspaceId).includes(input.entityId)) return null;
-    const status = input.source === 'ai' && config.policy === 'review' ? 'pending' : 'applied';
+    const status = input.source === 'ai' && (config.policy === 'review' || input.forceReview) ? 'pending' : 'applied';
     const reason = String(input.reason || '');
     let skill = input.skillKey ? this.findSkillByReference(input.workspaceId, input.skillKey) : undefined;
     let kind: SkillChangeKind = input.kind;
@@ -439,7 +441,6 @@ export class RoleplaySkills {
     return (this.db.prepare('SELECT * FROM roleplay_skills WHERE workspace_id = ?').all(workspaceId) as Array<Record<string, unknown>>).map(hydrateSkill);
   }
 
-  /** A skill the AI named, by name or by key. */
   findSkillByReference(workspaceId: string, reference: unknown): SkillDefinition | undefined {
     return findByReference(this.allSkills(workspaceId), reference);
   }

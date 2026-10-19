@@ -6,6 +6,8 @@ function filterUpdateFields(entity, fields) {
     // receives what its sheet can show.
     const GROUP_ONLY = ['abundance', 'nature'];
     const INDIVIDUAL_ONLY = ['status', 'personality'];
+    // A birth date on the world calendar is the age's source; an old document's age is a past snapshot.
+    if (entity.data?.birthDate) fields = fields.filter(field => field !== 'age');
     if (entity.type === 'Creatures') {
         const isGroup = entity.data?.scope === 'group';
         const excluded = isGroup ? INDIVIDUAL_ONLY : GROUP_ONLY;
@@ -66,15 +68,29 @@ function isUnsupportedNumericDelta(value, support) {
     const numericValue = Number(value);
     if (!Number.isFinite(numericValue)) return false;
     const explanation = String(support || '');
-    const hasDelta = /(?:^|[\s:(])(?:\+|-)\s*\d+(?:[.,]\d+)?\b|(?:increase|decrease|gain|loss|raised|lowered|aumento|redução|ganho|perda)\s+(?:by|de)?\s*\d/iu.test(explanation);
+    const hasDelta = /(?:^|[\s:(])(?:\+|-)\s*\d+(?:[.,]\d+)?\b|(?:increase|decrease|gain|loss|raised|lowered)\s+(?:by)?\s*\d/iu.test(explanation);
     if (!hasDelta) return false;
 
     const escaped = String(numericValue).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const hasExplicitResult = new RegExp(`(?:→|➔|->|to|para|becomes?|became|result(?:s|ed)?\\s+in|novo valor|valor final)\\s*${escaped}(?![\\d.,])`, 'iu').test(explanation);
+    const hasExplicitResult = new RegExp(`(?:→|➔|->|to|becomes?|became|result(?:s|ed)?\\s+in|new value|final value)\\s*${escaped}(?![\\d.,])`, 'iu').test(explanation);
     return !hasExplicitResult;
 }
 
+const comparableText = value => String(value ?? '').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+
+// A replacement of a written description must carry it forward: one that drops most of it, or
+// only repeats part of it, would cost the user their text for nothing new.
+function isWeakTextReplacement(currentValue, proposedValue, { floor = 120 } = {}) {
+    const current = comparableText(currentValue);
+    const proposed = comparableText(proposedValue);
+    if (!current || !proposed) return false;
+    if (current.includes(proposed)) return true;
+    return current.length >= floor && proposed.length < current.length * 0.5;
+}
+
 module.exports = {
+    isWeakTextReplacement,
+    comparableText,
     filterUpdateFields,
     filterUpdateRelations,
     buildFieldCoverage,

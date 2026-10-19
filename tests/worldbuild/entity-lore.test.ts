@@ -2,13 +2,13 @@ import { createRequire } from 'node:module';
 import { describe, expect, test } from 'vitest';
 
 const require = createRequire(import.meta.url);
-const { validateEntityLore, validateEntityLoreAppend } = require('../../src/main/features/worldbuild/entity-lore');
+const { buildLorePrompt, validateEntityLore, validateEntityLoreAppend } = require('../../src/main/features/worldbuild/entity-lore');
 const evidence = new Set(['E_1']);
 
 describe('entity lore validation', () => {
   test('rejects single-event summaries for an empty record', () => {
     const result = validateEntityLore({
-      lore: { value: 'Kepler learned a custom in Zeth.', support: 'One passage.', evidence: ['E_1'] },
+      lore: { value: 'Corwin learned a custom in Kesh.', support: 'One passage.', evidence: ['E_1'] },
     }, '', evidence);
     expect(result).toBeNull();
   });
@@ -37,9 +37,27 @@ describe('entity lore validation', () => {
   });
 
   test('accepts grounded cumulative lore with valid evidence', () => {
-    const value = 'Kaelen was a miner and Mara’s father. '.repeat(14);
+    const value = 'Dorian was a miner and Tess’s father. '.repeat(14);
     expect(validateEntityLore({
       lore: { value, support: 'The cited records establish his history and relationships.', evidence: ['E_1'] },
     }, '', evidence)).toEqual({ value: value.trim(), support: 'The cited records establish his history and relationships.', evidence: ['E_1'] });
+  });
+});
+
+describe('entity lore prompt', () => {
+  const prompt = (entityType: string, skillsInUse: boolean) => buildLorePrompt({
+    entityName: 'Corwin', entityType, currentLore: '', findings: [], evidence: '', skillsInUse,
+  });
+
+  test('keeps the sections a character sheet already has out of the lore', () => {
+    expect(prompt('Characters', false)).toContain('physical appearance, clothing, temperament');
+    expect(prompt('Characters', false)).not.toContain('fighting style');
+    expect(prompt('Characters', true)).toContain('skills, techniques, magic and fighting style');
+  });
+
+  test('a type without those sections only gets the writing rules', () => {
+    expect(prompt('Locations', true)).not.toContain('Its sheet keeps');
+    expect(prompt('Locations', true)).toContain('Never mention documents');
+    expect(prompt('Locations', true)).toContain('general traits of its race, species, people or culture');
   });
 });

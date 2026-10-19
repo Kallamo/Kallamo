@@ -96,6 +96,14 @@ describe('Roleplay skills', () => {
     expect(skills.getEntitySkills(WS, 'hero').skills[0].rankName).toBe('Competent');
   });
 
+  test('a change the caller asks to review waits even when the world applies them automatically', () => {
+    enable();
+    skills.saveSkill(WS, { name: 'Smithing' });
+    const change = ai('a1', { kind: 'assign', skillKey: 'smithing', rank: 'Novice', forceReview: true })!;
+    expect(change.status).toBe('pending');
+    expect(skills.getEntitySkills(WS, 'hero').skills).toEqual([]);
+  });
+
   test('a skill the AI creates waits as proposed and is unusable until confirmed', () => {
     enable({ policy: 'review' });
     expect(ai('c0', { kind: 'create', name: 'Tempering' })).toBeNull();

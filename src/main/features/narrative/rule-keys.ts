@@ -1,18 +1,10 @@
-/**
- * Keys name a world's attributes, skills and resources inside exported packages. They follow the
- * name, so a renamed rule still matches what it is in another world; the AI and the stored values
- * never depend on them.
- */
+/** Package keys follow the name, so a renamed rule still matches in another world. Nothing else reads them. */
 export function slugKey(name: string): string {
   return String(name || '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim()
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
-/**
- * The key for a saved rule. A new rule keeps a valid key it was given (an import names one); a
- * rename takes the new name's key; anything else keeps its key. A name with no Latin letters or
- * digits keeps the key it had, and a clash gets a numbered suffix.
- */
+/** A name with no Latin letters or digits cannot make a key, so it keeps the one it had. */
 export function ruleKey(input: {
   name: string;
   givenKey?: string;

@@ -24,12 +24,14 @@ const {
 const {
     selectRetrievedEntries
 } = require('./features/ai-engine/retrieval-selection');
-const { normalizeDirectionalRelationship, normalizeRelationshipLabel, validateNarrativeChange } = require('./features/worldbuild/entity-review');
+const { normalizeRelationshipLabel, resolveRelationshipUpdate, validateNarrativeChange } = require('./features/worldbuild/entity-review');
 const {
     filterUpdateFields,
     filterUpdateRelations,
     buildFieldCoverage,
     isUnsupportedNumericDelta,
+    isWeakTextReplacement,
+    comparableText,
 } = require('./features/worldbuild/entity-update-contract');
 const { buildEntityUpdateSchema, buildEntityLoreSchema } = require('./features/worldbuild/entity-update-schema');
 const {
@@ -41,6 +43,7 @@ const {
 } = require('./features/worldbuild/entity-fields');
 const { decodeEntityUpdate, isEntityUpdateShape } = require('./features/worldbuild/entity-update-protocol');
 const { buildLorePrompt, buildLoreAppendPrompt, validateEntityLore, validateEntityLoreAppend } = require('./features/worldbuild/entity-lore');
+const { precedingPassageText, memorySummaries, entitySkillContext } = require('./features/worldbuild/entity-update-context');
 const { buildNarrativeOptionPalette } = require('./features/worldbuild/narrative-options');
 const { createEntityUpdateState } = require('./features/worldbuild/entity-update-state');
 const { shouldStopEntityUpdates } = require('./features/worldbuild/entity-update-resilience');
@@ -2198,8 +2201,7 @@ async function vectorizeDocument(documentId, progressCallback = null) {
 
     if (toDelete.length) {
         const delChunk = db.prepare('DELETE FROM knowledge_chunks WHERE id = ?');
-        const delFts = db.prepare('DELETE FROM knowledge_chunks_fts WHERE chunkId = ?');
-        db.transaction(() => { for (const id of toDelete) { delChunk.run(id); delFts.run(id); } })();
+        db.transaction(() => { for (const id of toDelete) { delChunk.run(id); } })();
     }
 
     let added = 0;
@@ -3567,7 +3569,7 @@ function loadNarrativeLocationInventoryState(workspaceId, locationId, itemIds) {
 
 const NARRATIVE_TRIAGE_SYSTEM_PROMPT = `You route Roleplay turns to durable-state analyzers and estimate elapsed narrative time. Inspect the user action, final narrative, current time, calendar, time matrix, compact scene, named entities, and locally extracted candidate signals. Candidate signals are hints, not conclusions.
 Return JSON only with {"consequential":boolean,"types":["entity","scene","resource","inventory","awareness","knowledge","belief","memory","relationship","fact"],"entityIds":["existing-id"],"presentIds":["existing-id"],"confidence":0.0,"evidence":["short verbatim excerpt"],"requiresFullAnalysis":boolean,"reason":"brief","timeAdvance":null,"sceneMemory":[]}. entityIds lists every supplied entity the turn involves or is about, including one that is discussed or implied without being present. presentIds lists the supplied Characters and Creatures physically in the scene when the turn ends, including anyone who arrived during it and excluding anyone only mentioned, remembered or written to.
-Always evaluate elapsed time, even when no other durable domain is consequential. For an in-world action, timeAdvance is {"actionType":"short_snake_case","basis":"explicit|matrix","duration":{"years":0,"months":0,"days":0,"hours":0,"minutes":0},"targetPosition":null,"confidence":0.0,"evidence":"short verbatim excerpt"}. When the final narrative establishes an absolute ending date or time, set basis to "explicit", copy the complete resulting calendar position into targetPosition, and also return the calculated duration. Use null for out-of-character instructions, corrections, hypothetical actions, or when no in-world time passed. A skip of days, months or years is returned in the same duration object and is accepted only when the turn says so in words, so return the span the text states and never one it merely recounts as history: an estimate on its own is held to a week. Travel always costs time: when the turn completes a journey between places, timeAdvance is never null, and its duration must match the distance actually crossed rather than the length of the passage describing it. Walking somewhere is usually described in two lines and still takes as long as the walk takes, so read the duration off the timeMatrix category the journey belongs to and never below that category's minimumMinutes.
+Always evaluate elapsed time, even when no other durable domain is consequential. For an in-world action, timeAdvance is {"actionType":"short_snake_case","basis":"explicit|matrix","duration":{"years":0,"months":0,"days":0,"hours":0,"minutes":0},"targetPosition":null,"confidence":0.0,"evidence":"short verbatim excerpt","statedSpan":null}. When the final narrative establishes an absolute ending date or time, set basis to "explicit", copy the complete resulting calendar position into targetPosition, and also return the calculated duration. Use null for out-of-character instructions, corrections, hypothetical actions, or when no in-world time passed. A skip of days, months or years is returned in the same duration object and is accepted only when the turn says so in words: an estimate on its own is held to a week. Whenever the user message or the narrative states a span of time, also return statedSpan as {"excerpt":"the exact words that state it, copied verbatim","amount":3,"unit":"minutes|hours|days|weeks|months|years|decades","asserts":"now|framing|history"}: "now" when that time passes in this turn, "framing" when it only frames a scene (a flashback or a setting), "history" when it recounts the world's past. Otherwise statedSpan is null. Never translate or paraphrase the excerpt. Travel always costs time: when the turn completes a journey between places, timeAdvance is never null, and its duration must match the distance actually crossed rather than the length of the passage describing it. Walking somewhere is usually described in two lines and still takes as long as the walk takes, so read the duration off the timeMatrix category the journey belongs to and never below that category's minimumMinutes.
 An explicit final position or duration in the narrative wins over the matrix. Reconcile every clock reference with currentTime; do not describe a turn as reaching a later time while returning null or a conflicting duration. Otherwise choose a reasonable value within the supplied matrix: Micro for dialogue lines, combat rounds, lockpicking, and quick scans; Local for same-district walking, wound care, and careful room inspection; Transit for cross-district travel, crowds, minor repairs, and setting camp; Macro for crafting, deep study, rest, and inter-city travel; Timeskip for supported downtime, recovery, waiting, long-distance travel, or another transition spanning one or more calendar days. Do not advance hours during line-by-line dialogue. Do not use a tiny advance for substantial travel. A jump of one day or more must be explicitly supported by the final narrative or by a completed action whose duration is covered by the configured Timeskip range. Return calendar units directly instead of assuming a 24-hour day.
 Mark inventory for explicit pickup, drop, transfer, gift, theft, loss, consumption, equip, unequip, drawing, sheathing, or quantity change. Mark scene for explicit arrival, departure, movement, participation, observer, nearby, object, or location change. Mark epistemic domains only for information actually communicated, perceived, discovered, remembered, believed, or relationally consequential. Mark relationship for a first demonstrated encounter or interaction that must initialize a directional relationship, even when its initial value is 0, and for an event that materially and durably changes an existing value. Direct conversation is mutual interaction. Listening or overhearing is interaction only from the aware listener toward the speaker unless the speaker also perceives the listener. Mere co-presence is not interaction. Ordinary politeness, irritation, banter, compliance, disagreement, or passing mood does not change an existing value. Mark resource for an actual value change, not a price mention or hypothetical. When progression is supplied, also mark resource for an outcome that earns experience, or training that changes an attribute, for one of progression.characterIds. When skills is supplied, also mark resource when one of skills.characterIds clearly learns a skill or reaches a milestone in one. A concrete edition of a supplied recurring Event is consequential when it actually takes place, even if the tradition itself is already known.
 A newly introduced persistent named character, stably identifiable individual creature, named location, or narratively important unique item is consequential even without an existing ID. An unnamed person distinguished only by appearance, ancestry, clothing, age, expression, or scene position may be routed as a sparse entity candidate, but is not yet a Worldbuild identity. Mark false for crowds, atmosphere, repetition, casual dialogue, hypotheticals, offers not completed, item mentions without possession changes, and events without durable consequences. Presence alone never grants awareness or knowledge. Set requiresFullAnalysis only when four or more domains interact or the consequence cannot be safely isolated.
@@ -3860,9 +3862,12 @@ function resolveTravelFloorMinutes({ startLocationId, endLocationId, locationLin
 
 function resolveNarrativeTimeAdvance({ timeAdvance, startClock, calendar, userMessage, narrativeResponse }) {
     const calendarService = require('./features/worldbuild/calendar-service');
-    // A strongly stated span moves the clock even when the interpreter reported nothing.
-    const statedSpan = calendarService.extractElapsedSpan(calendar, `${userMessage || ''}
-${narrativeResponse || ''}`);
+    // A span asserted as passing now moves the clock even when the estimate is smaller.
+    const { statedSpan, check: spanCheck } = calendarService.resolveStatedSpan(calendar, {
+        claimedSpan: timeAdvance?.statedSpan,
+        sourceText: `${userMessage || ''}
+${narrativeResponse || ''}`
+    });
     // The clock parser only reads the current day, so a stated skip of a day or more outranks it.
     const spansDays = Boolean(statedSpan) && statedSpan.minutes >= calendar.hoursPerDay * 60;
     const responseTarget = spansDays ? null : calendarService.extractClockTarget(narrativeResponse, startClock, calendar);
@@ -3887,6 +3892,8 @@ ${narrativeResponse || ''}`);
         current.targetPosition = null;
     }
     if (statedSpan) current.statedSpan = statedSpan;
+    else delete current.statedSpan;
+    if (spanCheck) current.spanCheck = spanCheck;
     return current;
 }
 
@@ -3894,7 +3901,7 @@ function hasPlayerInventoryAction(text, itemName) {
     const normalized = normalizeInventoryText(text);
     const primaryTerm = normalizeInventoryText(itemName).match(/[a-z0-9]+/g)?.find(term => term.length >= 4);
     if (!primaryTerm || !normalized.includes(primaryTerm)) return false;
-    return /\b(?:eu|meu|minha|pegava|peguei|pego|tirava|tirei|tiro|colocava|coloquei|coloco|guardava|guardei|guardo|largava|larguei|largo|deixava|deixei|deixo|vestia|vesti|visto|equipava|equipei|equipo|empunhava|empunhei|empunho|i|my)\b/.test(normalized);
+    return /\b(?:i|my)\b/.test(normalized);
 }
 
 function normalizeNarrativeInventoryPatch(value, currentInventoryState, currentLocationInventoryState = [], context = {}) {
@@ -3971,16 +3978,16 @@ function inferNarrativeEquipmentState(text, itemName) {
     const windowEnd = Math.min(normalizedText.length, itemIndex + 220);
     const actionWindow = normalizedText.slice(windowStart, windowEnd);
     const equipPatterns = [
-        /\b(?:desembainh\w*|draw\w*|drew|wield\w*|brandish\w*|empunh\w*|sac(?:ei|ou|ava|ar|ando)\w*)\b/g,
-        /\b(?:peg\w*|hold\w*|held|grip\w*)\b.{0,90}\b(?:mao|hand)\b/g,
-        /\b(?:na|em|in|on)\s+(?:a|o|uma|um|my|your|his|her|the)?\s*(?:mao|hand)\b/g,
-        /\b(?:vest\w*|wear\w*|wore|put on|equip\w*)\b/g,
-        /\b(?:retir\w*|draw\w*)\b.{0,100}\b(?:do|da|from)\s+(?:cinto|cintura|bainha|coldre|belt|waist|scabbard|sheath|holster)\b/g
+        /\b(?:draw\w*|drew|wield\w*|brandish\w*)\b/g,
+        /\b(?:hold\w*|held|grip\w*)\b.{0,90}\bhand\b/g,
+        /\b(?:in|on)\s+(?:my|your|his|her|the)?\s*hand\b/g,
+        /\b(?:wear\w*|wore|put on|equip\w*)\b/g,
+        /\bdraw\w*\b.{0,100}\bfrom\s+(?:belt|waist|scabbard|sheath|holster)\b/g
     ];
     const unequipPatterns = [
-        /\b(?:embainh\w*|sheathe\w*|stow\w*|store\w*|put away|put back|guard\w*|deix\w*)\b/g,
-        /\b(?:guard\w*|deix\w*|coloc\w*|put)\b.{0,100}\b(?:cinto|cintura|bainha|coldre|belt|waist|scabbard|sheath|holster|inventario|inventory|mochila|bag|pack|bolsa|pocket)\b/g,
-        /\b(?:tir\w*|remov\w*|take off|took off)\b.{0,90}\b(?:mao|hand|corpo|body|armadura|armor|capacete|helmet)\b/g
+        /\b(?:sheathe\w*|stow\w*|store\w*|put away|put back)\b/g,
+        /\bput\b.{0,100}\b(?:belt|waist|scabbard|sheath|holster|inventory|bag|pack|pocket)\b/g,
+        /\b(?:remov\w*|take off|took off)\b.{0,90}\b(?:hand|body|armor|helmet)\b/g
     ];
     const equipIndex = lastPatternIndex(actionWindow, equipPatterns);
     const unequipIndex = lastPatternIndex(actionWindow, unequipPatterns);
@@ -4214,6 +4221,13 @@ function chunkValues(values, size) {
     return chunks;
 }
 
+// Choice values are stored as opaque ids; the model reads and answers with labels.
+function choiceOptionLabels(field, value) {
+    if (field.valueType !== 'single-choice' && field.valueType !== 'multiple-choice') return value;
+    const label = id => field.options.find(option => option.id === id)?.label || id;
+    return Array.isArray(value) ? value.map(label) : label(value);
+}
+
 function customFieldPromptShape(field) {
     if (field.valueType === 'boolean') return 'true or false';
     if (field.valueType === 'number' || field.valueType === 'range') return 'a JSON number';
@@ -4362,6 +4376,12 @@ function enrichRelationsForEntity(entity) {
     return filterUpdateRelations(entity, ENRICH_RELATIONS[entity.type] || []);
 }
 
+// What a related_to edge already says, read from the entity whose perspective it is.
+function currentRelationship(ownerId, targetId) {
+    const link = entitiesStore.getLinksFrom(ownerId, 'related_to').find(row => row.entity?.id === targetId);
+    return link ? { title: link.label || '', value: Number(link.metadata?.value || 0), description: String(link.metadata?.description || '') } : null;
+}
+
 function submitEntityNarrativeSuggestions({ workspaceId, entity, changes, allEntities, evidenceEntries, interpreterId }) {
     if (!Array.isArray(changes) || !changes.length) return null;
     const entityByName = new Map();
@@ -4373,7 +4393,40 @@ function submitEntityNarrativeSuggestions({ workspaceId, entity, changes, allEnt
     }
     const entityIds = new Set(allEntities.map(candidate => candidate.id));
     const resolveTarget = (id, name) => entityIds.has(id) ? id : entityByName.get(entitiesStore.normalizeName(name)) || null;
+    const recordedMemories = new Map();
+    const memoriesOf = ownerId => {
+        if (!recordedMemories.has(ownerId)) {
+            const rows = db.prepare(`SELECT payload_json FROM narrative_records WHERE workspace_id = ? AND record_type = 'memory' AND subject_id = ?`).all(workspaceId, ownerId);
+            recordedMemories.set(ownerId, rows.flatMap(row => {
+                try {
+                    const memory = JSON.parse(row.payload_json);
+                    return memory?.status === 'active' ? [comparableText(memory.summary)] : [];
+                } catch { return []; }
+            }).filter(Boolean));
+        }
+        return recordedMemories.get(ownerId);
+    };
+    // The same past event, told again with fewer or the same words, is not a new memory.
+    const isKnownMemory = (ownerId, summary) => {
+        const text = comparableText(summary);
+        return memoriesOf(ownerId).some(known => known === text || known.includes(text) || (text.length > 40 && text.includes(known)));
+    };
     const operationsByOwner = new Map();
+    const memoryScenes = new Set();
+    const evidenceText = new Map(evidenceEntries.map(entry => [entry.id, String(entry.chunk.text || '')]));
+    const ownerEntity = new Map(allEntities.map(candidate => [candidate.id, candidate]));
+    // A memory needs its owner in the scene: one the cited passages never name was not there.
+    // The first memory for an owner and scene stands; later ones split the same moment.
+    const acceptsMemory = (ownerId, evidenceIds) => {
+        const owner = ownerEntity.get(ownerId);
+        const cited = (evidenceIds || []).filter(id => evidenceText.has(id));
+        if (!owner || !cited.length) return false;
+        if (owner.id !== entity.id && !cited.some(id => textMentionsEntity(evidenceText.get(id), entityMentionNames(owner)))) return false;
+        const scene = `${ownerId}\u0000${cited.slice().sort()[0]}`;
+        if (memoryScenes.has(scene)) return false;
+        memoryScenes.add(scene);
+        return true;
+    };
     for (const change of changes) {
         if (entity.type === 'Characters' && change.kind === 'fact') continue;
         const validation = validateNarrativeChange(change, entity.id, entityIds);
@@ -4392,10 +4445,22 @@ function submitEntityNarrativeSuggestions({ workspaceId, entity, changes, allEnt
             const targetId = resolveTarget(change.targetId, change.target);
             if (targetId && targetId !== ownerId) operations.push({ type: 'awareness', subjectId: ownerId, targetId, confidence });
         } else if (change.kind === 'memory' && change.value) {
-            operations.push({ type: 'memory', subjectId: ownerId, summary: change.value, salience: 0.8, accessibility });
+            if (isKnownMemory(ownerId, change.value) || !acceptsMemory(ownerId, change.evidence)) continue;
+            memoriesOf(ownerId).push(comparableText(change.value));
+            const relatedId = resolveTarget(change.targetId, change.target);
+            operations.push({ type: 'memory', subjectId: ownerId, summary: change.value, salience: 0.8, accessibility, relatedEntityIds: relatedId && relatedId !== ownerId ? [relatedId] : [] });
         } else if (change.kind === 'knowledge' || change.kind === 'belief') {
             const aboutId = resolveTarget(change.targetId, change.target) || ownerId;
             if (!aboutId || !change.value) continue;
+            // What the subject did or lived through belongs to their memories, not to what they know
+            // about the world: a character never learns their own deeds.
+            if (change.kind === 'knowledge' && (aboutId === ownerId || method === 'participant')) {
+                if (isKnownMemory(ownerId, change.value) || !acceptsMemory(ownerId, change.evidence)) continue;
+                memoriesOf(ownerId).push(comparableText(change.value));
+                operations.push({ type: 'memory', subjectId: ownerId, summary: change.value, salience: 0.8, accessibility, relatedEntityIds: aboutId !== ownerId ? [aboutId] : [] });
+                if (operations.length) operationsByOwner.set(ownerId, operations);
+                continue;
+            }
             const proposition = { subjectId: aboutId, predicate: 'worldbuild-statement', object: change.value };
             if (change.kind === 'knowledge') {
                 operations.push({ type: 'knowledge', subjectId: ownerId, proposition, acquisition: method, confidence, accessibility });
@@ -4404,16 +4469,17 @@ function submitEntityNarrativeSuggestions({ workspaceId, entity, changes, allEnt
         } else if (change.kind === 'relationship') {
             const targetId = resolveTarget(change.targetId, change.target);
             if (!targetId || targetId === ownerId || !change.sourcePerspective) continue;
+            const current = currentRelationship(ownerId, targetId);
             const title = normalizeRelationshipLabel(change.targetRole);
-            if (!title) continue;
+            if (!title && !current?.title) continue;
+            const update = resolveRelationshipUpdate(current, { title, value: change.score, description: change.sourcePerspective });
+            if (!update) continue;
             operations.push({
                 type: 'relationship',
                 sourceEntityId: ownerId,
                 targetEntityId: targetId,
                 dimension: change.key || 'overall',
-                title,
-                value: Math.max(-100, Math.min(100, Math.round(change.score || 0))),
-                description: change.sourcePerspective,
+                ...update,
             });
         }
         if (operations.length) operationsByOwner.set(ownerId, operations);
@@ -4546,7 +4612,9 @@ function chronologicalSlice(entries, budget) {
     return selected.sort((a, b) => a.order - b.order);
 }
 
-function selectEntityEvidence(entries, budget = 5000) {
+const WRITTEN_TEXT_FIELDS = new Set(['appearance', 'personality', 'description', 'abilities', 'content']);
+
+function selectEntityEvidence(entries, budget = 5500) {
     const selectByStrength = (candidates, candidateBudget) => {
         const tagged = chronologicalSlice(candidates.filter(entry => entry.chunk.isTagged), candidateBudget);
         const used = tagged.reduce((sum, entry) => sum + (entry.tokenCount ?? estimateTokens(entry.prompt)), 0);
@@ -4608,7 +4676,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
     const updateState = createEntityUpdateState(db);
     const runId = updateState.startRun(workspaceId, targets.map(entity => entity.id));
     const taggedWritingChunks = db.prepare(`
-        SELECT DISTINCT kc.id, kc.text, kc.source, kc.createdAt,
+        SELECT DISTINCT kc.id, kc.text, kc.source, kc.createdAt, kc.ownerId, kc.ownerType, kc.ordinal,
           COALESCE(kc.content_hash, '') AS contentHash, 'Writing Desk' AS evidenceSource, 1 AS isTagged
         FROM chunk_tags ct
         JOIN knowledge_chunks kc ON ct.chunkId = kc.id AND kc.ownerType = 'document'
@@ -4617,11 +4685,33 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
         ORDER BY kc.createdAt ASC
     `);
     const memoryChunks = db.prepare(`
-        SELECT id, text, source, ownerType, createdAt, COALESCE(content_hash, '') AS contentHash
+        SELECT id, text, source, ownerId, ownerType, ordinal, createdAt, COALESCE(content_hash, '') AS contentHash
         FROM knowledge_chunks
         WHERE ownerId = ? AND ownerType IN ('chat_kb', 'chat_memory') AND enabled = 1
         ORDER BY createdAt ASC
     `).all(workspaceId).map(chunk => ({ ...chunk, evidenceSource: 'Memory' }));
+    const precedingChunk = {
+        byOrdinal: db.prepare(`
+            SELECT id, text FROM knowledge_chunks
+            WHERE ownerId = ? AND ownerType = ? AND source = ? AND ordinal = ? AND enabled = 1
+            LIMIT 1
+        `),
+        byTime: db.prepare(`
+            SELECT id, text FROM knowledge_chunks
+            WHERE ownerId = ? AND ownerType = ? AND source = ? AND createdAt < ? AND enabled = 1
+            ORDER BY createdAt DESC LIMIT 1
+        `),
+    };
+    const existingMemories = db.prepare(`
+        SELECT payload_json FROM narrative_records
+        WHERE workspace_id = ? AND record_type = 'memory' AND subject_id = ?
+        ORDER BY applied_at DESC
+        LIMIT 40
+    `);
+    const { RoleplaySkills } = require('../../dist-main/main/features/narrative/roleplay-skills');
+    const skillSystem = new RoleplaySkills(db);
+    const playerEntityId = skillSystem.getSettings(workspaceId).playerEntityId;
+    const playerEntity = playerEntityId ? all.find(entity => entity.id === playerEntityId && entity.status !== 'proposed') || null : null;
     const constantMemoryChunks = await loadConstantMemoryChunks(workspaceId);
     const taggedMemoryChunks = db.prepare(`
         SELECT ct.chunkId FROM chunk_tags ct
@@ -4651,7 +4741,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
     };
 
     let updated = 0, staged = 0, upToDate = 0, noEvidence = 0, failed = 0;
-    let canonicalSuggestionCount = 0, narrativeSuggestionCount = 0;
+    let canonicalSuggestionCount = 0, narrativeSuggestionCount = 0, skillSuggestionCount = 0;
     let evidenceUsed = 0, taggedEvidenceRemaining = 0, textMatchesDeferred = 0;
     let emptyFieldsExamined = 0, emptyFieldSuggestions = 0;
     let emptyFieldsWithoutSupport = 0, emptyFieldsAwaitingEvidence = 0;
@@ -4773,7 +4863,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
             const value = ent.data?.customFields?.[field.key];
             if (value != null) currentCustomFields[field.key] = {
                 label: field.label,
-                value,
+                value: choiceOptionLabels(field, value),
                 access: field.aiAccess,
                 ...(field.aiGuidance ? { guidance: field.aiGuidance } : {})
             };
@@ -4781,12 +4871,18 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
 
         const evidencePrefix = crypto.randomBytes(2).toString('hex');
         const evidenceExample = `E_${evidencePrefix}_1`;
-        const evidenceEntries = chunks.map((chunk, index) => ({
-            id: `E_${evidencePrefix}_${index + 1}`,
-            order: index,
-            chunk,
-            prompt: `[E_${evidencePrefix}_${index + 1} | ${chunk.evidenceSource}: ${chunk.source || 'Untitled'} | ${chunk.isTagged ? 'indexed entity match' : 'name or alias match'} | chunk ${chunk.id}]\n${chunk.text}`
-        }));
+        const runChunkIds = new Set(chunks.map(chunk => chunk.id));
+        const evidenceEntries = chunks.map((chunk, index) => {
+            const lead = precedingPassageText(precedingChunk, chunk, runChunkIds);
+            return {
+                id: `E_${evidencePrefix}_${index + 1}`,
+                order: index,
+                chunk,
+                prompt: `[E_${evidencePrefix}_${index + 1} | ${chunk.evidenceSource}: ${chunk.source || 'Untitled'} | ${chunk.isTagged ? 'indexed entity match' : 'name or alias match'} | chunk ${chunk.id}]\n` +
+                    (lead ? `(Preceding passage of the same source, context only and never evidence: ${lead})\n` : '') +
+                    chunk.text
+            };
+        });
         const includedEvidence = selectEntityEvidence(evidenceEntries);
         const includedIds = new Set(includedEvidence.map(entry => entry.id));
         const skippedTextualEvidence = evidenceEntries.filter(entry => !entry.chunk.isTagged && !includedIds.has(entry.id));
@@ -4846,48 +4942,92 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                 .join('\n');
             return content ? `### ${system.canonicalName}${aliases}\n${content.slice(0, 2400)}` : '';
         }).filter(Boolean).join('\n\n');
-        const narrativeEntityContext = all
+        const narrativeEntities = all
             .filter(candidate => candidate.status !== 'proposed' && (
                 candidate.id === ent.id
                 || relatedIds.has(candidate.id)
                 || textMentionsEntity(evidenceWindow, entityMentionNames(candidate))
             ))
-            .slice(0, 60)
+            .slice(0, 60);
+        const narrativeEntityContext = narrativeEntities
             .map(candidate => `- ${candidate.canonicalName}: ${candidate.id}`)
             .join('\n');
+        // Others' relationships with people in these passages, so an update edits them instead of starting over.
+        const narrativeIds = new Set(narrativeEntities.map(candidate => candidate.id));
+        // How others see this entity comes first; then a few bonds per person, so one cast list cannot fill it.
+        const otherRelationships = narrativeEntities
+            .filter(candidate => candidate.id !== ent.id && ['Characters', 'Creatures'].includes(candidate.type))
+            .flatMap(candidate => entitiesStore.getLinksFrom(candidate.id, 'related_to')
+                .filter(link => narrativeIds.has(link.entity?.id))
+                .sort((a, b) => Number(b.entity.id === ent.id) - Number(a.entity.id === ent.id) || Number(relatedIds.has(b.entity.id)) - Number(relatedIds.has(a.entity.id)))
+                .slice(0, 3)
+                .map(link => ({
+                    aboutThis: link.entity.id === ent.id,
+                    line: `- ${candidate.canonicalName} → ${link.entity.canonicalName}: "${link.label || ''}", score ${Number(link.metadata?.value || 0)}${link.metadata?.description ? `; ${String(link.metadata.description).slice(0, 80)}` : ''}`,
+                })))
+            .sort((a, b) => Number(b.aboutThis) - Number(a.aboutThis))
+            .slice(0, 12)
+            .map(entry => entry.line);
 
         const allowLore = ent.type !== 'System';
+        const skillContext = entitySkillContext(skillSystem, workspaceId, ent, evidenceWindow);
+        const skillOperations = skillContext ? [
+            skillContext.config.aiAssigns ? 'give a catalog skill the evidence shows them using or having' : '',
+            skillContext.config.aiRaises ? 'raise a held skill when the evidence shows a level beyond its current rank' : '',
+            skillContext.config.aiCreates ? 'add a new skill when no catalog skill covers a clearly shown ability' : '',
+        ].filter(Boolean) : [];
+        const skillLines = skillContext
+            ? `SKILLS (the world's Rules). Ranks from lowest to highest: ${skillContext.config.ranks.join(', ')}.\n` +
+                `Held: ${skillContext.held.length ? skillContext.held.map(skill => `${skill.name} (${skill.rankName})`).join(', ') : '(none)'}\n` +
+                (skillContext.related.length ? `Catalog skills these passages may concern:\n${skillContext.related.map(skill => `- ${skillContext.describe(skill)}`).join('\n')}\n` : '') +
+                `kind "skill": key is the exact skill name, value the rank name the evidence shows, target the parent skill name for a new sub-skill or "", sourcePerspective a one-sentence meaning only for a new skill. You may ${skillOperations.join('; ')}. ` +
+                `Never lower a rank. Use the closest catalog skill before creating one.` +
+                (skillContext.config.guidance?.trim() ? `\nWorld rule for skills: ${skillContext.config.guidance.trim()}` : '') + '\n'
+            : '';
+        const knownMemories = ['Characters', 'Creatures'].includes(ent.type) ? memorySummaries(existingMemories, workspaceId, ent.id).slice(0, 10) : [];
         const responseShape = `{"changes":[{"kind":"field","key":"<allowed field key>","value":"<JSON encoded value>","subjectId":"","targetId":"","perspectiveOwnerId":"","target":"","targetRole":"","sourcePerspective":"","score":0,"method":"","accessibility":"","support":"<direct support>","evidence":["${evidenceExample}"]}]}`;
+        const kinds = ['field', 'link', ...(allowLore ? ['history'] : []), ...(skillContext ? ['skill'] : []), 'fact', 'awareness', 'knowledge', 'belief', 'memory', 'relationship'];
         const systemPrompt =
             getSystemLanguageInstruction() + "\n" +
             `You maintain a story's world bible. Update the record for one ${ent.type.replace(/s$/, '')} named "${ent.canonicalName}" ` +
-            `using the CURRENT RECORD plus ONLY the NEW STORY EVIDENCE provided. Extract supported changes and narrative findings; lore is composed in a separate step.\n` +
+            `using the CURRENT RECORD plus ONLY the NEW STORY EVIDENCE provided. Extract supported changes and narrative findings; lore is composed in a separate step from your history findings.\n` +
             `Return one valid JSON object and nothing else. Use {"changes":[]} when nothing should change. Every change uses this fixed shape:\n${responseShape}\n` +
             `All keys are required. Use an empty string or 0 for fields that do not apply. Encode field values as JSON inside value: plain text remains plain text, numbers use "12", booleans use "true", and lists use "[\\"one\\",\\"two\\"]". ` +
-            `Kinds: field, link, fact, awareness, knowledge, belief, memory, relationship. Never output angle-bracket placeholders.\n` +
+            `Kinds: ${kinds.join(', ')}. Never output angle-bracket placeholders.\n` +
             `ENTITY TYPE CONTRACT:\n${ENRICH_TYPE_GUIDANCE[ent.type] || 'A persistent canonical world entity.'}\n` +
             (fieldLines ? `Allowed data fields:\n${fieldLines}\n` : '') +
+            (allowLore ? `kind "history": value is one durable statement for the lore (origin, role, title, trajectory, or an event that changed this entity), written as a full sentence. Never appearance, temperament${skillContext ? ', abilities' : ''}, a passing scene detail, or a general trait of its race, people, or culture.\n` : '') +
+            skillLines +
             (relBlocks.length ? `Allowed links (use the exact candidate names, never invent a name):\n${relBlocks.map(b => b.line).join('\n')}\n` : '') +
             `STRICT RULES:\n` +
-            `- Fill a field or propose a link ONLY when the passages state it explicitly and unambiguously. When unsure, omit it — returning few or no fields is correct and expected.\n` +
-            `- Every proposed change must cite one or more supplied evidence IDs. Never cite an ID that does not support the exact change.\n` +
-            `- Set certainty to "explicit" only when the evidence directly entails the exact value or relation. Inference, implication, symbolism, genre convention, probability, and interpretation are not explicit. Omit anything that is not explicit.\n` +
+            `- Return a change ONLY when the passages state it explicitly and unambiguously. Inference, implication, symbolism, genre convention, probability, and interpretation are not explicit: omit them. Returning few or no changes is correct and expected.\n` +
+            `- Never return a change to say that something is absent, unknown, or not established; omit it instead.\n` +
+            `- Every change must cite one or more supplied evidence IDs that support that exact change. support restates what the evidence says; never speculate about why a current value differs.\n` +
+            `- A preceding passage shown before an evidence block only tells whose section or scene the block belongs to. Use it to decide who a line is about; never cite it.\n` +
+            (playerEntity && playerEntity.id !== ent.id ? `- In roleplay logs, "you" and "your" refer to the player character ${playerEntity.canonicalName} (id ${playerEntity.id}).\n` : '') +
+            (playerEntity && playerEntity.id === ent.id ? `- In roleplay logs, "you" and "your" refer to ${ent.canonicalName}, the player character.\n` : '') +
             `- Do not return unchanged fields or unchanged links. An empty changes array is correct when the new evidence changes nothing.\n` +
-            `- Existing values are canonical context, not protected blanks. When new explicit evidence changes an existing value, propose the replacement and explain the direct support. Never replace a value merely to rephrase it.\n` +
-            `- EMPTY FIELD COVERAGE: inspect every field marked EMPTY and fill every one directly supported by the supplied evidence. Do not omit a supported empty field merely to be cautious. If no supplied evidence establishes its value, omit it rather than inventing a placeholder.\n` +
+            `- Existing values are canonical context, not protected blanks. When new explicit evidence changes an existing value, return the full replacement: keep every part of the current value that is still true and change only what the evidence changes. Never replace a value merely to rephrase it, and never shorten it to one scene.\n` +
+            `- EMPTY fields: fill one only when the evidence describes a durable trait for it. A single reaction, gesture, or action in one scene does not fill appearance or personality.\n` +
             `- Never infer, estimate, or compute a value. Numeric fields require the explicit resulting absolute value. A delta such as "+1", "-2", "gained 1", or "increased by 2" is not a field value unless the evidence also states the resulting total. Never replace a newer canonical number with an older progression value.\n` +
             `- Persistent fields contain durable canonical characteristics. Do not place a temporary pose, scene location, passing emotion, current lighting, momentary clothing, or short-lived injury into appearance, personality, disposition, description, or another lasting field.\n` +
-            `- Only link two entities when the text directly establishes that exact relation. In particular, only nest a location inside another when the passages explicitly say one place is physically within the other — never by mere association or proximity.\n` +
-            `- RELATIONSHIP DIRECTION: SOURCE is always the current record (${ent.canonicalName}); TARGET is the named related entity. targetRole must state what TARGET is to SOURCE (Kaelen to Mara: targetRole "Daughter"; Mara to Kaelen: targetRole "Father"). value and sourcePerspective describe only how SOURCE feels about and relates to TARGET. Never return TARGET's feelings toward SOURCE. The reciprocal direction belongs exclusively to TARGET's own record.\n` +
+            `- Only link two entities when the text directly establishes that exact relation. A name, title, accent, or appearance in a scene does not establish origin, residence, or membership. Only nest a location inside another when the passages explicitly say one place is physically within the other.\n` +
+            `- RELATIONSHIP DIRECTION: SOURCE is always the current record (${ent.canonicalName}); TARGET is the named related entity. targetRole must state what TARGET is to SOURCE (Dorian to Tess: targetRole "Daughter"; Tess to Dorian: targetRole "Father"). value and sourcePerspective describe only how SOURCE feels about and relates to TARGET. Never return TARGET's feelings toward SOURCE. The reciprocal direction belongs exclusively to TARGET's own record.\n` +
+            `- Return a relationship only when the evidence shows SOURCE's own attitude, bond, or role toward TARGET. Fighting, meeting, or sharing a scene once is not a relationship. targetRole is a complete short role of one to four words, never a sentence.\n` +
+            `- An existing relationship (in Current links and relationships or EXISTING RELATIONSHIPS OF OTHERS) is edited, not rewritten: return its targetRole exactly as it is unless the bond itself changed in kind, such as an ally becoming an enemy; write sourcePerspective as the current perspective carried forward with only what the evidence changes; move score from its current value by what the evidence shows.\n` +
             `- Every narrative change must state ownership explicitly. subjectId is the entity whose mind, memory, knowledge, belief, fact, or perspective owns the change. perspectiveOwnerId must equal subjectId for relationships. targetId is the existing entity the statement or relationship is about. Use the IDs from the candidate context, never infer ownership from the current record.\n` +
             `- Awareness requires evidence that the perspective owner knows the target exists. Documentary extraction alone never grants it.\n` +
             `- For knowledge, belief, and memory, put the statement or summary in value. For knowledge and belief, target must be the exact existing entity the proposition is primarily about, not a location, group, or concept merely mentioned in the sentence.\n` +
-            `- KNOWLEDGE requires evidence of how subjectId acquired the proposition inside the story: direct participation, direct witnessing, or explicit communication/reporting. The update model inferring something while reading a document is never character Knowledge. Biography, public canon, self-description, predictions, private information unavailable to the subject, and documentary analysis are not new Knowledge. Use belief for an explicitly evidenced in-story belief; otherwise omit the change. Never use method "inferred" for Knowledge.\n` +
+            `- MEMORY is what subjectId did, lived through, decided, or took part in, told as a past event with who was involved (targetId: the main other entity involved, or ""). Anything the subject did or experienced is a memory, never knowledge. Do not record a memory that only restates a current trait or one already listed under EXISTING MEMORIES.\n` +
+            `- A memory belongs only to someone present in the scene, or who perceived it directly. Never give a memory of a conversation or event to someone who was absent, even when it is about them.\n` +
+            `- A memory is a moment that matters to its owner: a bond formed or broken, a decision, a revelation, a victory, a loss, a turning point. Never record logistics or routine: walking somewhere, leaving, checking for danger, handing over paperwork, waiting.\n` +
+            `- At most one memory per scene for each owner: tell what mattered in that scene in a single memory instead of splitting it into steps.\n` +
+            `- KNOWLEDGE is a fact about someone or something else that subjectId learned inside the story by witnessing it or being told (method "witness" or "reported"). The update model inferring something while reading a document is never character Knowledge. Biography, public canon, self-description, predictions, private information unavailable to the subject, and documentary analysis are not new Knowledge. Never use method "inferred" for Knowledge.\n` +
+            `- BELIEF is something subjectId explicitly holds true in the story. It is never your own reading of their motives or psychology.\n` +
             (ent.type === 'Characters'
                 ? `- Never return fact for a Character update. Global canonical Facts belong to the workspace Fact registry, not to a character sheet.\n`
                 : `- Use fact for an explicit canonical proposition. Put a concise predicate in key, the proposition in value, and its existing subject name in target.\n`) +
-            `- Use relationship only for a directional relationship update backed by the evidence. targetRole says what TARGET is to SOURCE; sourcePerspective describes SOURCE's perspective. score is from -100 to 100.\n` +
-            `- CANONICAL SYSTEM / CONCEPT CONTEXT defines setting-specific terms. Use it to interpret evidence, but do not copy a concept's facts into this entity unless the evidence explicitly connects them.\n` +
+            `- CANONICAL SYSTEM / CONCEPT CONTEXT defines setting-specific terms. Use it to interpret evidence, but do not copy a concept's facts into this entity unless the evidence explicitly connects them. The same holds for a passage about a race, people, or culture in general: it describes the group, not this entity.\n` +
             `Do not invent facts, names, or fields absent from the passages.`;
         const userPromptPrefix =
             `${allowLore ? 'CURRENT RECORD' : 'CURRENT CONCEPT'}:\nName: ${ent.canonicalName}\nAliases: ${ent.aliases?.join(', ') || '(none)'}\n` +
@@ -4896,6 +5036,8 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
             (Object.keys(currentData).length ? `Current fields: ${JSON.stringify(currentData)}\n` : '') +
             (Object.keys(currentCustomFields).length ? `Current custom fields (read-only fields are context and must never be proposed): ${JSON.stringify(currentCustomFields)}\n` : '') +
             (currentLinks.length ? `Current links and relationships: ${JSON.stringify(currentLinks)}\n` : '') +
+            (otherRelationships.length ? `EXISTING RELATIONSHIPS OF OTHERS (how each one already sees the other):\n${otherRelationships.join('\n')}\n` : '') +
+            (knownMemories.length ? `EXISTING MEMORIES (already recorded, never repeat): ${knownMemories.map(summary => `«${summary.slice(0, 110)}»`).join(' ')}\n` : '') +
             (narrativeEntityContext ? `\nENTITY IDS FOR NARRATIVE FINDINGS:\n${narrativeEntityContext}\n` : '') +
             (systemContext ? `\nCANONICAL SYSTEM / CONCEPT CONTEXT:\n${systemContext}\n` : '');
         const buildUserPrompt = evidence => `${userPromptPrefix}\nNEW STORY EVIDENCE (chronological):\n${evidence}`;
@@ -4996,7 +5138,6 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
             const validEvidenceIds = new Set(includedEvidence.map(entry => entry.id));
             const readProposal = (raw) => {
                 if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.value == null) return null;
-                if (String(raw.certainty || '').toLowerCase() !== 'explicit') return null;
                 const support = String(raw.support || '').trim();
                 if (!support) return null;
                 const evidence = (Array.isArray(raw.evidence) ? raw.evidence : [])
@@ -5007,7 +5148,6 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
             };
             const readTypedProposal = (raw) => {
                 if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.value == null) return null;
-                if (String(raw.certainty || '').toLowerCase() !== 'explicit') return null;
                 const support = String(raw.support || '').trim();
                 if (!support) return null;
                 const evidence = (Array.isArray(raw.evidence) ? raw.evidence : [])
@@ -5030,6 +5170,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                     v = match;
                 }
                 const cur = ent.data?.[f] == null ? '' : String(ent.data[f]).trim();
+                if (WRITTEN_TEXT_FIELDS.has(f) && isWeakTextReplacement(cur, v)) continue;
                 if (v !== cur) proposedData[f] = { value: v, evidence: proposal.evidence, support: proposal.support };
             }
             for (const field of writableCustomFields) {
@@ -5069,18 +5210,67 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                     evidence: Array.isArray(item.evidence) ? item.evidence.map(String) : [],
                 }));
             });
+            const relationshipSpec = relSpecs.find(spec => spec.detailed);
+            // A new relationship that names no feeling is an empty card in the review.
+            const isEmptyRelationship = change => {
+                if (change.kind !== 'relationship' || !relationshipSpec) return false;
+                const ownerId = change.subjectId || ent.id;
+                const targetId = all.some(entity => entity.id === change.targetId)
+                    ? change.targetId
+                    : resolveRelationTarget(change.target, relationshipSpec, workspaceId);
+                // An existing one is edited later, from what it already says.
+                return !(targetId && currentRelationship(ownerId, targetId)) && Math.round(Number(change.score) || 0) === 0;
+            };
             const narrativeChanges = [...parsed.narrative, ...relationshipLinkChanges].filter(change =>
                 !(ent.type === 'Characters' && change.kind === 'fact')
-                &&
-                change.support
+                && change.support
                 && change.evidence.some(id => validEvidenceIds.has(id))
+                && !isEmptyRelationship(change)
             );
+
+            const proposedLinks = [];
+            const incomingLinks = (parsed.links && typeof parsed.links === 'object') ? parsed.links : {};
+            for (const { spec } of relBlocks) {
+                if (spec.detailed) continue;
+                const raw = incomingLinks[spec.key];
+                if (raw == null) continue;
+                const items = Array.isArray(raw) ? raw : [raw];
+                const existing = existingLinksByTarget(ent.id, spec);
+                const seen = new Set();
+                for (const item of items) {
+                    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+                    const support = String(item.support || '').trim();
+                    if (!support) continue;
+                    const evidence = (Array.isArray(item.evidence) ? item.evidence : [])
+                        .map(String)
+                        .filter(id => validEvidenceIds.has(id));
+                    if (!evidence.length) continue;
+                    const name = String(item.target || item.name || '').trim();
+                    if (!name) continue;
+                    const rawTargetRole = item.targetRole ?? item.label;
+                    const label = spec.labeled && rawTargetRole != null ? normalizeRelationshipLabel(rawTargetRole) : null;
+                    const targetId = resolveRelationTarget(name, spec, workspaceId);
+                    if (!targetId || targetId === ent.id) continue;
+                    // A name shared by a specific being and a species must land on the shape asked for.
+                    if (spec.targetScope && !relationCandidates(all, ent, spec).some(candidate => candidate.id === targetId)) continue;
+                    const existingLink = existing.get(targetId);
+                    if (existingLink) continue;
+                    const dedupe = `${targetId}:${label || ''}`;
+                    if (seen.has(dedupe)) continue;
+                    seen.add(dedupe);
+                    proposedLinks.push({ relKey: spec.key, relLabel: spec.label, relType: spec.relType, from: spec.from, single: !!spec.single, label, metadata: undefined, existingLinkId: undefined, targetId, targetName: name, evidence, support });
+                    if (spec.single) break; // one target for single-valued relations
+                }
+            }
+
+            const historyFindings = (parsed.history || []).filter(finding => finding.support && finding.evidence.some(id => validEvidenceIds.has(id)));
             let loreProposal = null;
             let loreFailure = null;
-            if (allowLore) {
+            // Lore is moved by history. A new link alone only starts a lore that does not exist yet.
+            if (allowLore && (historyFindings.length || (!String(ent.lore || '').trim() && proposedLinks.length))) {
                 const canonicalFindings = [
-                    ...Object.entries(proposedData).map(([key, proposal]) => ({ kind: 'field', key, value: proposal.value, support: proposal.support, evidence: proposal.evidence })),
-                    ...Object.entries(parsed.links || {}).flatMap(([key, links]) => (Array.isArray(links) ? links : [links]).map(link => ({ kind: 'link', key, ...link }))),
+                    ...historyFindings,
+                    ...proposedLinks.map(link => ({ kind: 'link', key: link.relKey, target: link.targetName, ...(link.label ? { targetRole: link.label } : {}), support: link.support, evidence: link.evidence })),
                     ...narrativeChanges.filter(change => change.kind === 'fact'),
                 ];
                 if (canonicalFindings.length) {
@@ -5102,6 +5292,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                             currentLore: ent.lore,
                             findings: canonicalFindings,
                             evidence: loreEvidence,
+                            skillsInUse: Boolean(skillContext),
                         });
                         const loreResult = await sendJsonRequest({
                             apiProfileId,
@@ -5134,45 +5325,42 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
             const incomingLore = loreProposal?.value || '';
             const loreChanged = Boolean(loreProposal);
 
-            const proposedLinks = [];
-            const incomingLinks = (parsed.links && typeof parsed.links === 'object') ? parsed.links : {};
-            for (const { spec } of relBlocks) {
-                if (spec.detailed) continue;
-                const raw = incomingLinks[spec.key];
-                if (raw == null) continue;
-                const items = Array.isArray(raw) ? raw : [raw];
-                const existing = existingLinksByTarget(ent.id, spec);
-                const seen = new Set();
-                for (const item of items) {
-                    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
-                    if (String(item.certainty || '').toLowerCase() !== 'explicit') continue;
-                    const support = String(item.support || '').trim();
-                    if (!support) continue;
-                    const evidence = (Array.isArray(item.evidence) ? item.evidence : [])
-                        .map(String)
-                        .filter(id => validEvidenceIds.has(id));
-                    if (!evidence.length) continue;
-                    const name = String(item.target || item.name || '').trim();
-                    if (!name) continue;
-                    const rawTargetRole = item.targetRole ?? item.label;
-                    const label = spec.labeled && rawTargetRole != null ? normalizeRelationshipLabel(rawTargetRole) : null;
-                    const targetId = resolveRelationTarget(name, spec, workspaceId);
-                    if (!targetId || targetId === ent.id) continue;
-                    // A name shared by a specific being and a species must land on the shape asked for.
-                    if (spec.targetScope && !relationCandidates(all, ent, spec).some(candidate => candidate.id === targetId)) continue;
-                    const existingLink = existing.get(targetId);
-                    const metadata = spec.detailed ? normalizeDirectionalRelationship(item, ent.canonicalName) : undefined;
-                    if (spec.detailed && !metadata) continue;
-                    if (existingLink && !spec.detailed) continue;
-                    if (existingLink && spec.detailed
-                        && (label || null) === (existingLink.label || null)
-                        && metadata.value === Number(existingLink.metadata?.value || 0)
-                        && metadata.description === String(existingLink.metadata?.description || '').trim()) continue;
-                    const dedupe = `${targetId}:${label || ''}`;
-                    if (seen.has(dedupe)) continue;
-                    seen.add(dedupe);
-                    proposedLinks.push({ relKey: spec.key, relLabel: spec.label, relType: spec.relType, from: spec.from, single: !!spec.single, label, metadata, existingLinkId: existingLink?.linkId, targetId, targetName: name, evidence, support });
-                    if (spec.single) break; // one target for single-valued relations
+            const skillChanges = [];
+            if (skillContext) {
+                const { config: skillConfig, held } = skillContext;
+                const rankOf = name => skillConfig.ranks.findIndex(rank => comparableText(rank) === comparableText(name));
+                const skillProvenance = `entity-update:${runId}:${ent.id}`;
+                for (const finding of parsed.skills || []) {
+                    if (!finding.support || !finding.evidence.some(id => validEvidenceIds.has(id))) continue;
+                    const requested = rankOf(finding.rank);
+                    const known = skillSystem.findSkillByReference(workspaceId, finding.name);
+                    const heldSkill = known ? held.find(skill => skill.skillId === known.id) : null;
+                    let operation = null;
+                    // Documents are read out of order, so a rank only rises toward a level the evidence
+                    // shows, one step a run, and never falls.
+                    if (heldSkill) {
+                        if (skillConfig.aiRaises && requested > heldSkill.rank) operation = { kind: 'rank', skillKey: known.key, direction: 1 };
+                    } else if (known) {
+                        if (skillConfig.aiAssigns && known.status === 'confirmed') operation = { kind: 'assign', skillKey: known.key, rank: Math.max(0, requested) };
+                    } else if (skillConfig.aiCreates && finding.description) {
+                        operation = { kind: 'create', name: finding.name, description: finding.description, parentKey: finding.parent || undefined, rank: Math.max(0, requested) };
+                    }
+                    if (!operation) continue;
+                    try {
+                        const change = skillSystem.proposeChange({
+                            id: `${skillProvenance}:skill:${crypto.createHash('sha256').update(comparableText(finding.name)).digest('hex').slice(0, 12)}`,
+                            workspaceId,
+                            entityId: ent.id,
+                            ...operation,
+                            reason: finding.support.slice(0, 240),
+                            source: 'ai',
+                            provenanceId: skillProvenance,
+                            forceReview: policy !== 'open',
+                        });
+                        if (change) skillChanges.push(change);
+                    } catch (error) {
+                        console.warn(`[Entity Update] Ignored a skill change for ${ent.canonicalName}:`, error.message);
+                    }
                 }
             }
 
@@ -5185,7 +5373,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                 interpreterId: `${apiProfileId}:${model}`,
             });
             const hasCanonicalChange = Object.keys(proposedData).length || loreChanged || proposedLinks.length;
-            const hasChange = hasCanonicalChange || narrativeSuggestion?.record;
+            const hasChange = hasCanonicalChange || narrativeSuggestion?.record || skillChanges.length;
             evidenceUsed += includedEvidence.length;
             taggedEvidenceRemaining += pendingTaggedEvidence.length;
             textMatchesDeferred += skippedTextualEvidence.length;
@@ -5194,9 +5382,10 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                 + (loreChanged ? 1 : 0);
             const narrativeProposalCount = (narrativeSuggestion?.records || [])
                 .reduce((total, record) => total + (record?.proposal?.changeSet?.operations?.length || 0), 0);
-            const proposalCount = canonicalProposalCount + narrativeProposalCount;
+            const proposalCount = canonicalProposalCount + narrativeProposalCount + skillChanges.length;
             canonicalSuggestionCount += canonicalProposalCount;
             narrativeSuggestionCount += narrativeProposalCount;
+            skillSuggestionCount += skillChanges.length;
             const emptySuggestionCount = emptyWritableFields.filter(field => Object.hasOwn(proposedData, field)).length;
             const emptyFieldsStillOpen = Math.max(0, emptyWritableFields.length - emptySuggestionCount);
             emptyFieldsExamined += emptyWritableFields.length;
@@ -5301,7 +5490,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
     return {
         runId, entities: targets.length, processedEntities, updated, staged, upToDate, noEvidence,
         failed, failures, evidenceUsed, taggedEvidenceRemaining, textMatchesDeferred,
-        canonicalSuggestionCount, narrativeSuggestionCount, emptyFieldsExamined,
+        canonicalSuggestionCount, narrativeSuggestionCount, skillSuggestionCount, emptyFieldsExamined,
         emptyFieldSuggestions, emptyFieldsWithoutSupport, emptyFieldsAwaitingEvidence,
         stoppedEarly, cancelled, remaining: targets.length - processedEntities, tokenUsage
     };

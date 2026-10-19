@@ -3,11 +3,7 @@ import { RoleplayProgression } from './roleplay-progression';
 import { RoleplaySkills } from './roleplay-skills';
 import { findByReference } from './rule-keys';
 
-/**
- * Who a new character already is when the story introduces them: a level, attributes and
- * skills the text shows or clearly implies. Stored on the entity proposal with names, so the
- * review can read it, and written only when the entity is created.
- */
+/** Stored on the proposal by name so the review can read it; written only once the entity exists. */
 export interface StartingProfile {
   level?: number;
   attributes?: Array<{ key: string; name: string; value: number }>;

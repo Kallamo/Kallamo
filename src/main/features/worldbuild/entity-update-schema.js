@@ -7,6 +7,8 @@ function strictObject(properties, required = Object.keys(properties)) {
 const CHANGE_KINDS = [
   'field',
   'link',
+  'history',
+  'skill',
   'fact',
   'awareness',
   'knowledge',

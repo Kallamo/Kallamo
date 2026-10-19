@@ -5,6 +5,7 @@ const {
   filterUpdateRelations,
   buildFieldCoverage,
   isUnsupportedNumericDelta,
+  isWeakTextReplacement,
   listEmptyWritableFields,
 } = require('../../src/main/features/worldbuild/entity-update-contract');
 
@@ -30,6 +31,22 @@ describe('entity update contract', () => {
     expect(filterUpdateFields(entity, fields)).toEqual(['itemType', 'description']);
     expect(filterUpdateRelations(entity, relations).map((relation: { key: string }) => relation.key))
       .toEqual(['creator', 'owner', 'currentLocation']);
+  });
+});
+
+describe('field replacement guards', () => {
+  test('a birth date on the calendar keeps the AI away from the age field', () => {
+    expect(filterUpdateFields({ type: 'Characters', data: { birthDate: { year: 970 } } }, ['status', 'age', 'appearance']))
+      .toEqual(['status', 'appearance']);
+    expect(filterUpdateFields({ type: 'Characters', data: {} }, ['status', 'age'])).toEqual(['status', 'age']);
+  });
+
+  test('rejects a replacement that drops most of a written text or only repeats part of it', () => {
+    const current = 'Competitive and sarcastic, unable to stay still for long. Turns everything into a challenge, impatient with hesitation, yet respects persistent effort.';
+    expect(isWeakTextReplacement(current, 'Cold and calculating in combat.')).toBe(true);
+    expect(isWeakTextReplacement(current, 'competitive and sarcastic')).toBe(true);
+    expect(isWeakTextReplacement(current, `${current} Since the tournament he no longer smiles at the crowd.`)).toBe(false);
+    expect(isWeakTextReplacement('', 'A first description.')).toBe(false);
   });
 });
 

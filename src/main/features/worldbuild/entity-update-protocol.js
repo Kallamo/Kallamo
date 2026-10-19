@@ -9,28 +9,39 @@ function isEntityUpdateShape(value) {
 }
 
 function decodeEntityUpdate(value) {
-  const decoded = { lore: null, data: {}, links: {}, narrative: [] };
+  const decoded = { data: {}, links: {}, narrative: [], history: [], skills: [] };
   for (const change of value.changes) {
-    const proposal = {
-      value: decodeValue(change.value),
-      certainty: 'explicit',
-      support: String(change.support || '').trim(),
-      evidence: Array.isArray(change.evidence) ? change.evidence.map(String) : [],
-    };
-    if (change.kind === 'field' && change.key) decoded.data[change.key] = proposal;
-    else if (change.kind === 'link' && change.key) {
+    const support = String(change.support || '').trim();
+    const evidence = Array.isArray(change.evidence) ? change.evidence.map(String) : [];
+    if (change.kind === 'field' && change.key) {
+      decoded.data[change.key] = { value: decodeValue(change.value), support, evidence };
+    } else if (change.kind === 'link' && change.key) {
       const item = {
         target: String(change.target || '').trim(),
         targetRole: String(change.targetRole || '').trim(),
         source: '',
         value: change.score,
         sourcePerspective: String(change.sourcePerspective || '').trim(),
-        certainty: 'explicit',
-        support: proposal.support,
-        evidence: proposal.evidence,
+        support,
+        evidence,
       };
       if (!decoded.links[change.key]) decoded.links[change.key] = [];
       decoded.links[change.key].push(item);
+    } else if (change.kind === 'history') {
+      const statement = String(change.value || '').trim();
+      if (statement) decoded.history.push({ kind: 'history', value: statement, support, evidence });
+    } else if (change.kind === 'skill') {
+      // The schema is closed, so a skill reuses the generic slots: key names it, value is the
+      // rank, target its parent and sourcePerspective the meaning of a skill not yet in the catalog.
+      const name = String(change.key || '').trim();
+      if (name) decoded.skills.push({
+        name,
+        rank: String(change.value || '').trim(),
+        parent: String(change.target || '').trim(),
+        description: String(change.sourcePerspective || '').trim(),
+        support,
+        evidence,
+      });
     } else {
       decoded.narrative.push({
         kind: change.kind,
@@ -45,8 +56,8 @@ function decodeEntityUpdate(value) {
         score: Number(change.score),
         method: String(change.method || ''),
         accessibility: String(change.accessibility || ''),
-        support: proposal.support,
-        evidence: proposal.evidence,
+        support,
+        evidence,
       });
     }
   }

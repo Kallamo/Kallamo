@@ -28,7 +28,7 @@ const ENRICH_FIELDS = {
 };
 
 const ENRICH_TYPE_GUIDANCE = {
-    Characters: 'A specific person or personified agent. Record their current canonical state, not temporary scene circumstances or thematic interpretations.',
+    Characters: 'A specific person or personified agent. Each kind of information has one home: the body and visible look go to appearance; temperament to personality; origin, role, titles, trajectory and life-changing events to history; abilities, techniques, magic, class and fighting style to skills when the world uses them, otherwise to history; places and groups to links; feelings toward others to relationships. Record the durable canonical state, never temporary scene circumstances or thematic interpretations.',
     Creatures: 'An individual creature or a creature group/species. Respect its scope: individuals have status; groups have abundance. Do not convert metaphorical descriptions into biology or powers.',
     Locations: 'A persistent physical place. Do not treat a temporary scene setting, organization, plane of thought, or mere association as physical containment.',
     Items: 'A persistent object, artifact, equipment, or resource. Distinguish possession, use, creation, and discovery; they are not interchangeable.',
@@ -43,8 +43,8 @@ const ENRICH_TYPE_GUIDANCE = {
 const ENRICH_FIELD_GUIDANCE = {
     status: 'Current state only. alive requires explicit survival or a current direct action that cannot be posthumous. deceased requires explicit confirmation of death or a canonically defined irreversible equivalent. Surrender, defeat, disappearance, transformation, assimilation, imprisonment, incapacitation, or leaving a role are not death. missing means whereabouts are explicitly unknown; unknown means the evidence cannot establish a state.',
     age: 'A literal current age explicitly stated for this character. Never calculate it from dates, elapsed time, appearance, or life stage.',
-    appearance: 'Stable physical appearance, clothing, presentation, and distinguishing features explicitly attributed to this individual. Exclude temporary pose, location, lighting, injuries that immediately resolve, and subjective comparisons.',
-    personality: 'Stable temperament, habits, values, instincts, and contradictions explicitly established across narration or behavior. Do not turn a single reaction, mood, or unsupported interpretation into a lasting trait.',
+    appearance: 'The body and stable visible features explicitly attributed to this individual: build, skin, hair, eyes, marks, scars, voice, habitual dress. Weapons, armor and carried gear are equipment, not appearance; techniques, powers and fighting style are abilities; reactions and gestures in one scene are neither. Exclude temporary pose, location, lighting, injuries that immediately resolve, and subjective comparisons.',
+    personality: 'Stable temperament, values, habits and contradictions, established by explicit characterization or by the same behavior across more than one scene. One reaction, one fight, one tactic or one mood is not personality. Techniques, magic and fighting style are abilities, never personality.',
     disposition: 'A stable default attitude toward relevant people, not a momentary emotional reaction in one scene.',
     nature: 'The explicitly established category of this creature group or species, such as Beast, Spirit, or Deity. Do not infer it from appearance or abilities.',
     abundance: 'World-level prevalence of a resource or creature group, not the quantity present in one scene.',
