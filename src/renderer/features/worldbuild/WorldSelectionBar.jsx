@@ -10,7 +10,7 @@ const count = (value) => <span className="text-xs tabular-nums text-text-subtle"
 // Bulk actions for the rows picked in the sidebar. Only what applies to the selection
 // shows; the main action leads, the rest wait in a menu with Delete set apart.
 export default function WorldSelectionBar({
-  count: selectedCount, hiddenCount = 0, proposedCount, updateCount, confirmedCount, busy,
+  count: selectedCount, hiddenCount = 0, proposedCount, updateCount, narrativeCount = 0, confirmedCount, busy,
   selectOptions, policyOptions, onClear, onAction,
 }) {
   const selectRef = useRef(null);
@@ -59,7 +59,7 @@ export default function WorldSelectionBar({
           <MenuItem key={option.key} icon={option.icon} label={option.label} trailing={count(option.count)} disabled={!option.count} onSelect={run(option.onSelectAll)} />
         ))}
       </Menu>
-      <Menu anchorRef={policyRef} open={menu === 'policy'} onClose={close} label="Set AI policy" className="w-72">
+      <Menu anchorRef={policyRef} open={menu === 'policy'} onClose={close} label="Set AI policy" className="w-72" align="left">
         <MenuLabel>Set AI policy</MenuLabel>
         {policyOptions.map(option => (
           <MenuItem key={option.key} icon={option.icon} label={option.label} description={option.description} disabled={busy} onSelect={run(option.onApply)} />
@@ -69,6 +69,7 @@ export default function WorldSelectionBar({
         {proposedCount > 0 && <MenuItem icon={X} label={`Dismiss ${proposedCount} ${proposedCount === 1 ? 'proposal' : 'proposals'}`} description="Confirmed entities in the selection stay." onSelect={run(() => onAction('reject-proposed'))} />}
         {updateCount > 0 && proposedCount > 0 && <MenuItem icon={Check} label="Accept suggested updates" onSelect={run(() => onAction('accept-updates'))} />}
         {updateCount > 0 && <MenuItem icon={X} label="Reject suggested updates" description="Current values stay as they are." onSelect={run(() => onAction('reject-updates'))} />}
+        {narrativeCount > 0 && <MenuItem icon={X} label="Reject Narrative state suggestions" description="What they know, remember and feel stays as it is." onSelect={run(() => onAction('reject-narrative'))} />}
         {confirmedCount > 0 && <MenuItem icon={RefreshCw} label="Read the story again" description="The next update rereads their passages." onSelect={run(() => onAction('reprocess'))} />}
         <MenuSeparator />
         <MenuItem icon={Trash2} danger label={`Delete ${selectedCount} ${selectedCount === 1 ? 'entity' : 'entities'}`} onSelect={run(() => onAction('delete'))} />

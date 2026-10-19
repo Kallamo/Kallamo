@@ -52,10 +52,10 @@ describe('Narrative chat context integration', () => {
   test('keeps player and scene actor knowledge in separate narrator scopes', () => {
     setWorkspaceExperienceMode(db, 'workspace-one', 'roleplay');
     saveKnowledge('elias', 'The northern gate is unguarded.', 'available');
-    saveKnowledge('mara', 'The northern gate is trapped.', 'available');
+    saveKnowledge('tess', 'The northern gate is trapped.', 'available');
     new NarrativeSceneRepository(db).save({
       id: 'scene-one', projectId: 'workspace-one', status: 'active',
-      participantIds: ['elias', 'mara'], possibleObserverIds: [],
+      participantIds: ['elias', 'tess'], possibleObserverIds: [],
       perspective: { access: 'subjective', focalSubjectId: 'elias' },
       position: { sequence: 50 }
     });
@@ -64,26 +64,26 @@ describe('Narrative chat context integration', () => {
 
     expect(result.context).toContain('ROLEPLAY NARRATIVE CONTEXT');
     expect(result.context).toContain('PLAYER PERSPECTIVE: ELIAS');
-    expect(result.context).toContain('SCENE ACTOR PERSPECTIVE: MARA');
+    expect(result.context).toContain('SCENE ACTOR PERSPECTIVE: TESS');
     expect(result.context).toContain('The northern gate is unguarded.');
     expect(result.context).toContain('The northern gate is trapped.');
     const playerSection = result.context
       .split('--- PLAYER PERSPECTIVE: ELIAS ---')[1]
-      .split('--- SCENE ACTOR PERSPECTIVE: MARA ---')[0];
+      .split('--- SCENE ACTOR PERSPECTIVE: TESS ---')[0];
     expect(playerSection).toContain('The northern gate is unguarded.');
     expect(playerSection).not.toContain('The northern gate is trapped.');
     expect(result.context).toContain('A tagged archive says everyone knows the gate secret.');
     expect(result.context).toContain('This material is story evidence for the narrator.');
     expect(result.bundle?.scopes).toEqual(expect.arrayContaining([
       expect.objectContaining({ scopeId: 'subject:elias' }),
-      expect.objectContaining({ scopeId: 'subject:mara' })
+      expect.objectContaining({ scopeId: 'subject:tess' })
     ]));
-    expect(result.manifest?.subjectIds).toEqual(expect.arrayContaining(['elias', 'mara']));
+    expect(result.manifest?.subjectIds).toEqual(expect.arrayContaining(['elias', 'tess']));
   });
 
   test('sends what each scene actor perceived and heard, never the player', () => {
     setWorkspaceExperienceMode(db, 'workspace-one', 'roleplay');
-    for (const [id, name] of [['elias', 'Elias'], ['mara', 'Mara']]) {
+    for (const [id, name] of [['elias', 'Elias'], ['tess', 'Tess']]) {
       db.prepare(`
         INSERT INTO entities (id, workspaceId, type, canonicalName, aliases, lore, data, status, createdAt, last_modified)
         VALUES (?, 'workspace-one', 'Characters', ?, '[]', '', '{}', 'confirmed', 1, 1)
@@ -91,14 +91,14 @@ describe('Narrative chat context integration', () => {
     }
     new NarrativeSceneRepository(db).save({
       id: 'scene-one', projectId: 'workspace-one', status: 'active',
-      participantIds: ['elias', 'mara'], possibleObserverIds: [],
+      participantIds: ['elias', 'tess'], possibleObserverIds: [],
       perspective: { access: 'subjective', focalSubjectId: 'elias' },
       position: { sequence: 50 }
     });
     new CharacterSceneMemory(db).recordTurn({
-      workspaceId: 'workspace-one', originId: 'reply-1', presentIds: ['elias', 'mara'], locationId: null, createdAt: 10,
+      workspaceId: 'workspace-one', originId: 'reply-1', presentIds: ['elias', 'tess'], locationId: null, createdAt: 10,
       updates: [
-        { entityId: 'mara', perceived: [], heard: [{ fromId: 'elias', text: 'he says the gate held eight guards' }], stance: 'doubts Elias' },
+        { entityId: 'tess', perceived: [], heard: [{ fromId: 'elias', text: 'he says the gate held eight guards' }], stance: 'doubts Elias' },
         { entityId: 'elias', perceived: ['the player is never remembered'], heard: [], stance: '' }
       ]
     });
@@ -106,7 +106,7 @@ describe('Narrative chat context integration', () => {
     const result = plan();
     const memory = result.context.split('--- CHARACTER SCENE MEMORY ---')[1];
 
-    expect(memory).toContain('Mara');
+    expect(memory).toContain('Tess');
     expect(memory).toContain('heard from Elias: he says the gate held eight guards');
     expect(memory).toContain('stance: doubts Elias');
     expect(memory).not.toContain('the player is never remembered');
@@ -182,9 +182,31 @@ describe('Narrative chat context integration', () => {
     expect(dossier.context).toContain('Material: Iron');
   });
 
+  test('gives the model a choice label instead of its option id', () => {
+    const rarity = worldbuild.saveFieldDefinition({
+      projectId: 'workspace-one', typeId: 'Locations', label: 'Rarity',
+      valueType: 'single-choice', options: ['Unique', 'Legendary'], position: 2, aiAccess: 'read-only'
+    });
+    const legendary = (rarity as unknown as { options: Array<{ id: string; label: string }> }).options[1].id;
+    const data = JSON.parse((db.prepare("SELECT data FROM entities WHERE id = 'northern-gate'").get() as { data: string }).data);
+    db.prepare("UPDATE entities SET data = ? WHERE id = 'northern-gate'")
+      .run(JSON.stringify({ ...data, customFields: { ...data.customFields, rarity: legendary } }));
+
+    const dossier = context.plan({
+      requestId: 'choice-label',
+      workspaceId: 'workspace-one',
+      query: 'Tell me about the northern road.',
+      tokenBudget: 1000,
+      items: [{ id: 'chunk-gate', kind: 'workspace-text', source: 'Archive', content: 'The northern road passes through the gate.', relevance: 0.9, entityExpansion: 'dossier' }]
+    });
+
+    expect(dossier.context).toContain('Rarity: Legendary');
+    expect(dossier.context).not.toContain(legendary);
+  });
+
   test('collapses repeated standard-mode memories while preserving their provenance', () => {
     const summary = 'The same patrol crossed the northern gate before dawn.';
-    for (const [id, name] of [['elias', 'Elias'], ['mara', 'Mara']]) {
+    for (const [id, name] of [['elias', 'Elias'], ['tess', 'Tess']]) {
       db.prepare(`
         INSERT INTO entities (
           id, workspaceId, type, canonicalName, aliases, lore, data, status, createdAt, last_modified
@@ -192,12 +214,12 @@ describe('Narrative chat context integration', () => {
       `).run(id, name);
     }
     const narrativeState = new NarrativeStateSystem(db);
-    for (const subjectId of ['elias', 'mara']) {
+    for (const subjectId of ['elias', 'tess']) {
       narrativeState.createEvent({
         workspaceId: 'workspace-one',
         originId: `memory-${subjectId}`,
         interpreterId: 'system-model',
-        allowedEntityIds: new Set(['elias', 'mara', 'northern-gate']),
+        allowedEntityIds: new Set(['elias', 'tess', 'northern-gate']),
         event: {
           type: 'custom',
           description: `${subjectId} remembers the patrol.`,
@@ -212,7 +234,7 @@ describe('Narrative chat context integration', () => {
     const result = context.plan({
       requestId: 'deduplicated-memories',
       workspaceId: 'workspace-one',
-      query: 'What do Elias and Mara remember about the northern gate?',
+      query: 'What do Elias and Tess remember about the northern gate?',
       tokenBudget: 2000,
       items: [{
         id: 'chunk-gate',
@@ -226,6 +248,41 @@ describe('Narrative chat context integration', () => {
     expect(result.context.split(summary)).toHaveLength(2);
     const memoryItem = result.plan.package.items.find(item => item.content.includes(summary));
     expect(memoryItem?.provenanceIds.length).toBeGreaterThanOrEqual(4);
+  });
+
+  test('tells the model which story day a memory happened on', () => {
+    db.prepare(`
+      INSERT INTO entities (
+        id, workspaceId, type, canonicalName, aliases, lore, data, status, createdAt, last_modified
+      ) VALUES ('elias', 'workspace-one', 'Characters', 'Elias', '[]', '', '{}', 'confirmed', 1, 1)
+    `).run();
+    db.prepare('INSERT INTO worldbuild_calendars (workspace_id, definition_json, updated_at) VALUES (?, ?, 1)').run(
+      'workspace-one',
+      JSON.stringify({ months: [{ name: 'Frostmoon', days: 30 }, { name: 'Thawmoon', days: 30 }], eras: [{ id: 'ce', shortName: 'CE' }] })
+    );
+    db.prepare(`INSERT INTO roleplay_time_state (workspace_id, position_json, version, updated_at) VALUES ('workspace-one', ?, 1, 1)`)
+      .run(JSON.stringify({ eraId: 'ce', year: 1001, month: 2, day: 16, hour: 8, minute: 0 }));
+    const summary = 'Elias watched the northern gate close.';
+    new NarrativeStateSystem(db).createEvent({
+      workspaceId: 'workspace-one',
+      originId: 'dated-memory',
+      interpreterId: 'system-model',
+      allowedEntityIds: new Set(['elias']),
+      event: {
+        type: 'custom', description: summary, excerpt: summary, participantIds: ['elias'], confidence: 0.99,
+        operations: [{ type: 'memory', subjectId: 'elias', summary, category: 'formative', salience: 0.9 }]
+      }
+    });
+
+    const result = context.plan({
+      requestId: 'dated-memory',
+      workspaceId: 'workspace-one',
+      query: 'What does Elias remember about the northern gate?',
+      tokenBudget: 2000,
+      items: [{ id: 'chunk-gate', kind: 'workspace-text', source: 'Archive', content: 'Elias stood at the northern gate.', entityExpansion: 'dossier' }]
+    });
+
+    expect(result.context).toContain(`${summary}\nHappened on: 16 Thawmoon 1001 CE`);
   });
 
   test('keeps proportional expansion inside the user configured Worldbuild limits', () => {
@@ -274,7 +331,7 @@ describe('Narrative chat context integration', () => {
       ) VALUES (?, ?, 'System', ?, '[]', ?, '{}', 'confirmed', 1, 1)
     `).run('aether-weave', 'workspace-one', 'Aether Weave', 'A rare method of shaping light.');
     worldbuild.saveSubjectEntry({
-      workspaceId: 'workspace-one', subjectId: 'mara', kind: 'knowledge',
+      workspaceId: 'workspace-one', subjectId: 'tess', kind: 'knowledge',
       entry: {
         aboutId: 'aether-weave',
         statement: 'The Aether Weave destabilizes near iron.',
@@ -285,7 +342,7 @@ describe('Narrative chat context integration', () => {
     });
     new NarrativeSceneRepository(db).save({
       id: 'scene-concept', projectId: 'workspace-one', status: 'active',
-      participantIds: ['elias', 'mara'], possibleObserverIds: [],
+      participantIds: ['elias', 'tess'], possibleObserverIds: [],
       perspective: { access: 'subjective', focalSubjectId: 'elias' },
       position: { sequence: 50 }
     });
@@ -294,14 +351,14 @@ describe('Narrative chat context integration', () => {
     const result = context.plan({
       requestId: 'concept-request',
       workspaceId: 'workspace-one',
-      query: 'Mara mentions the Aether Weave.',
+      query: 'Tess mentions the Aether Weave.',
       tokenBudget: 2000,
       items: []
     });
 
     const playerSection = result.context
       .split('--- PLAYER PERSPECTIVE: ELIAS ---')[1]
-      .split('--- SCENE ACTOR PERSPECTIVE: MARA ---')[0];
+      .split('--- SCENE ACTOR PERSPECTIVE: TESS ---')[0];
     expect(playerSection).toContain('Aether Weave: undetermined');
     expect(playerSection).not.toContain('destabilizes near iron');
     expect(result.context).toContain('Aether Weave: confirmed');
@@ -366,20 +423,20 @@ describe('Narrative chat context integration', () => {
         id, workspaceId, type, canonicalName, aliases, lore, data,
         status, createdAt, last_modified
       ) VALUES (?, ?, 'Factions', ?, '[]', '', '{}', 'confirmed', 1, 1)
-    `).run('vanguard', 'workspace-one', 'Vanguard');
+    `).run('bulwark', 'workspace-one', 'Bulwark');
     db.prepare(`
       INSERT INTO entities (
         id, workspaceId, type, canonicalName, aliases, lore, data,
         status, createdAt, last_modified
       ) VALUES (?, ?, 'Characters', ?, '[]', '', '{}', 'confirmed', 1, 1)
-    `).run('mara', 'workspace-one', 'Mara');
+    `).run('tess', 'workspace-one', 'Tess');
     db.prepare('INSERT INTO entity_links VALUES (?, ?, ?, ?, ?, NULL, ?, ?)')
-      .run('membership-one', 'workspace-one', 'elias', 'member_of', 'vanguard', '{}', 1);
+      .run('membership-one', 'workspace-one', 'elias', 'member_of', 'bulwark', '{}', 1);
     worldbuild.saveSubjectEntry({
-      workspaceId: 'workspace-one', subjectId: 'vanguard', kind: 'knowledge',
+      workspaceId: 'workspace-one', subjectId: 'bulwark', kind: 'knowledge',
       entry: {
         aboutId: 'northern-gate',
-        statement: 'The Vanguard watches the northern gate.',
+        statement: 'The Bulwark watches the northern gate.',
         confidence: 1,
         acquisition: 'reported',
         accessibility: 'available'
@@ -392,16 +449,16 @@ describe('Narrative chat context integration', () => {
       position: { sequence: 50 }
     });
 
-    expect(plan().context).toContain('The Vanguard watches the northern gate.');
+    expect(plan().context).toContain('The Bulwark watches the northern gate.');
 
     worldbuild.setKnowledgeAudience({
       workspaceId: 'workspace-one',
-      ownerId: 'vanguard',
+      ownerId: 'bulwark',
       targetId: 'northern-gate',
       audienceType: 'selected-members',
-      memberIds: ['mara']
+      memberIds: ['tess']
     });
-    expect(plan().context).not.toContain('The Vanguard watches the northern gate.');
+    expect(plan().context).not.toContain('The Bulwark watches the northern gate.');
   });
 
   test('retrieves only individually marked relationship snapshots for a subjective perspective', () => {
@@ -411,12 +468,12 @@ describe('Narrative chat context integration', () => {
         id, workspaceId, type, canonicalName, aliases, lore, data,
         status, createdAt, last_modified
       ) VALUES (?, ?, 'Factions', ?, '[]', '', '{}', 'confirmed', 1, 1)
-    `).run('vanguard', 'workspace-one', 'Vanguard');
+    `).run('bulwark', 'workspace-one', 'Bulwark');
     db.prepare('INSERT INTO entity_links VALUES (?, ?, ?, ?, ?, NULL, ?, ?)')
-      .run('leader-one', 'workspace-one', 'vanguard', 'led_by', 'mara', '{}', 1);
+      .run('leader-one', 'workspace-one', 'bulwark', 'led_by', 'tess', '{}', 1);
     worldbuild.ensureAwareness({
-      workspaceId: 'workspace-one', ownerId: 'elias', targetId: 'vanguard',
-      sourceType: 'manual', sourceId: 'manual-vanguard',
+      workspaceId: 'workspace-one', ownerId: 'elias', targetId: 'bulwark',
+      sourceType: 'manual', sourceId: 'manual-bulwark',
     });
     new NarrativeSceneRepository(db).save({
       id: 'scene-known-relationship', projectId: 'workspace-one', status: 'active',
@@ -428,20 +485,20 @@ describe('Narrative chat context integration', () => {
     const before = context.plan({
       requestId: 'relationship-before',
       workspaceId: 'workspace-one',
-      query: 'Who leads the Vanguard?',
+      query: 'Who leads the Bulwark?',
       tokenBudget: 2000,
       items: []
     });
-    expect(before.context).not.toContain('Known relationship: Vanguard / led by / Mara');
+    expect(before.context).not.toContain('Known relationship: Bulwark / led by / Tess');
     db.prepare(`
       INSERT INTO entities (
         id, workspaceId, type, canonicalName, aliases, lore, data,
         status, createdAt, last_modified
       ) VALUES (?, ?, 'Characters', ?, '[]', '', '{}', 'confirmed', 1, 1)
-    `).run('mara', 'workspace-one', 'Mara');
+    `).run('tess', 'workspace-one', 'Tess');
 
     worldbuild.setKnownRelationships({
-      workspaceId: 'workspace-one', ownerId: 'elias', targetId: 'vanguard',
+      workspaceId: 'workspace-one', ownerId: 'elias', targetId: 'bulwark',
       relationshipIds: ['leader-one'],
     });
     db.prepare('DELETE FROM entity_links WHERE id = ?').run('leader-one');
@@ -449,11 +506,11 @@ describe('Narrative chat context integration', () => {
     const after = context.plan({
       requestId: 'relationship-after',
       workspaceId: 'workspace-one',
-      query: 'Who leads the Vanguard?',
+      query: 'Who leads the Bulwark?',
       tokenBudget: 2000,
       items: []
     });
-    expect(after.context).toContain('Known relationship: Vanguard / led by / Mara');
+    expect(after.context).toContain('Known relationship: Bulwark / led by / Tess');
     expect(after.context).not.toContain('Relationship type:');
   });
 
@@ -464,24 +521,24 @@ describe('Narrative chat context integration', () => {
       VALUES (?, 'workspace-one', ?, ?, '[]', '', '{}', 'confirmed', 1, 1)
     `);
     entity.run('elias', 'Characters', 'Elias');
-    entity.run('mara', 'Characters', 'Mara');
-    entity.run('vanguard', 'Factions', 'Vanguard');
-    db.prepare('INSERT INTO entity_links VALUES (?, ?, ?, ?, ?, NULL, ?, ?)').run('led', 'workspace-one', 'vanguard', 'led_by', 'mara', '{}', 1);
-    for (const ownerId of ['elias', 'mara']) {
-      worldbuild.ensureAwareness({ workspaceId: 'workspace-one', ownerId, targetId: 'vanguard', sourceType: 'manual', sourceId: `manual-${ownerId}` });
-      worldbuild.setKnownRelationships({ workspaceId: 'workspace-one', ownerId, targetId: 'vanguard', relationshipIds: ['led'] });
+    entity.run('tess', 'Characters', 'Tess');
+    entity.run('bulwark', 'Factions', 'Bulwark');
+    db.prepare('INSERT INTO entity_links VALUES (?, ?, ?, ?, ?, NULL, ?, ?)').run('led', 'workspace-one', 'bulwark', 'led_by', 'tess', '{}', 1);
+    for (const ownerId of ['elias', 'tess']) {
+      worldbuild.ensureAwareness({ workspaceId: 'workspace-one', ownerId, targetId: 'bulwark', sourceType: 'manual', sourceId: `manual-${ownerId}` });
+      worldbuild.setKnownRelationships({ workspaceId: 'workspace-one', ownerId, targetId: 'bulwark', relationshipIds: ['led'] });
     }
     new NarrativeSceneRepository(db).save({
       id: 'scene-shared', projectId: 'workspace-one', status: 'active',
-      participantIds: ['elias', 'mara'], possibleObserverIds: [],
+      participantIds: ['elias', 'tess'], possibleObserverIds: [],
       perspective: { access: 'subjective', focalSubjectId: 'elias' },
       position: { sequence: 50 }
     });
 
-    const result = context.plan({ requestId: 'shared-bond', workspaceId: 'workspace-one', query: 'Who leads the Vanguard?', tokenBudget: 4000, items: [] });
-    expect(result.context.match(/Known relationship: Vanguard \/ led by \/ Mara/g)).toHaveLength(1);
-    const shared = result.context.split('--- SHARED SUBJECT CONTEXT: ELIAS, MARA ---')[1] ?? '';
-    expect(shared.split('\n--- ')[0]).toContain('Known relationship: Vanguard / led by / Mara');
+    const result = context.plan({ requestId: 'shared-bond', workspaceId: 'workspace-one', query: 'Who leads the Bulwark?', tokenBudget: 4000, items: [] });
+    expect(result.context.match(/Known relationship: Bulwark \/ led by \/ Tess/g)).toHaveLength(1);
+    const shared = result.context.split('--- SHARED SUBJECT CONTEXT: ELIAS, TESS ---')[1] ?? '';
+    expect(shared.split('\n--- ')[0]).toContain('Known relationship: Bulwark / led by / Tess');
   });
 
   test('keeps known relationships that touch the turn focus and leaves out ties between others', () => {
@@ -490,14 +547,14 @@ describe('Narrative chat context integration', () => {
       INSERT INTO entities (id, workspaceId, type, canonicalName, aliases, lore, data, status, createdAt, last_modified)
       VALUES (?, 'workspace-one', ?, ?, '[]', '', '{}', 'confirmed', 1, 1)
     `);
-    entity.run('vanguard', 'Factions', 'Vanguard');
-    entity.run('mara', 'Characters', 'Mara');
+    entity.run('bulwark', 'Factions', 'Bulwark');
+    entity.run('tess', 'Characters', 'Tess');
     entity.run('order', 'Factions', 'Order');
     entity.run('ser', 'Characters', 'Ser');
     const link = db.prepare('INSERT INTO entity_links VALUES (?, ?, ?, ?, ?, NULL, ?, ?)');
-    link.run('led', 'workspace-one', 'vanguard', 'led_by', 'mara', '{}', 1);
+    link.run('led', 'workspace-one', 'bulwark', 'led_by', 'tess', '{}', 1);
     link.run('member', 'workspace-one', 'ser', 'member_of', 'order', '{}', 1);
-    for (const [targetId, relationshipIds] of [['vanguard', ['led']], ['mara', ['led']], ['order', ['member']]] as const) {
+    for (const [targetId, relationshipIds] of [['bulwark', ['led']], ['tess', ['led']], ['order', ['member']]] as const) {
       worldbuild.ensureAwareness({ workspaceId: 'workspace-one', ownerId: 'elias', targetId, sourceType: 'manual', sourceId: `manual-${targetId}` });
       worldbuild.setKnownRelationships({ workspaceId: 'workspace-one', ownerId: 'elias', targetId, relationshipIds: [...relationshipIds] });
     }
@@ -510,16 +567,16 @@ describe('Narrative chat context integration', () => {
     db.prepare('INSERT INTO chunk_tags (chunkId, tag, entity) VALUES (?, ?, ?)').run('chunk-order', 'Order', 'order');
 
     const result = context.plan({
-      requestId: 'relationship-focus', workspaceId: 'workspace-one', query: 'What does Mara want from the Vanguard?', tokenBudget: 4000,
+      requestId: 'relationship-focus', workspaceId: 'workspace-one', query: 'What does Tess want from the Bulwark?', tokenBudget: 4000,
       items: [{ id: 'chunk-order', kind: 'workspace-memory', source: 'Archive', content: 'The Order marched past.', relevance: 0.8 }]
     });
-    expect(result.context.match(/Known relationship: Vanguard \/ led by \/ Mara/g)).toHaveLength(1);
+    expect(result.context.match(/Known relationship: Bulwark \/ led by \/ Tess/g)).toHaveLength(1);
     expect(result.context).not.toContain('Known relationship: Ser / member of / Order');
   });
 
   test('standard provides identified canon and knowledge from different subjects without a scene', () => {
     saveKnowledge('elias', 'The northern gate is unguarded.', 'available');
-    saveKnowledge('mara', 'The northern gate is trapped.', 'available');
+    saveKnowledge('tess', 'The northern gate is trapped.', 'available');
 
     const result = plan();
 
@@ -528,13 +585,13 @@ describe('Narrative chat context integration', () => {
     expect(result.context).toContain('Owner: elias');
     expect(result.context).toContain('Narrative sequence:');
     expect(result.context).toContain('The northern gate is unguarded.');
-    expect(result.context).toContain('Owner: mara');
+    expect(result.context).toContain('Owner: tess');
     expect(result.context).toContain('The northern gate is trapped.');
   });
 
   test('standard keeps suppressed and inaccessible subject records blocked', () => {
     saveKnowledge('elias', 'A suppressed gate detail.', 'suppressed');
-    saveKnowledge('mara', 'An inaccessible gate detail.', 'inaccessible');
+    saveKnowledge('tess', 'An inaccessible gate detail.', 'inaccessible');
 
     const result = plan();
 
@@ -544,10 +601,10 @@ describe('Narrative chat context integration', () => {
 
   test('switching modes changes the Kallamo request without changing narrative data', () => {
     saveKnowledge('elias', 'The northern gate is unguarded.', 'available');
-    saveKnowledge('mara', 'The northern gate is trapped.', 'available');
+    saveKnowledge('tess', 'The northern gate is trapped.', 'available');
     new NarrativeSceneRepository(db).save({
       id: 'scene-switch', projectId: 'workspace-one', status: 'active',
-      participantIds: ['elias', 'mara'], possibleObserverIds: [],
+      participantIds: ['elias', 'tess'], possibleObserverIds: [],
       perspective: { access: 'subjective', focalSubjectId: 'elias' },
       position: { sequence: 50 }
     });
@@ -561,7 +618,7 @@ describe('Narrative chat context integration', () => {
     expect(roleplay.plan.package.perspective).toEqual({ access: 'subjective', focalSubjectId: 'elias' });
     expect(standard.context).toContain('The northern gate is trapped.');
     expect(roleplay.context).toContain('PLAYER PERSPECTIVE: ELIAS');
-    expect(roleplay.context).toContain('SCENE ACTOR PERSPECTIVE: MARA');
+    expect(roleplay.context).toContain('SCENE ACTOR PERSPECTIVE: TESS');
     expect(roleplay.context).toContain('The northern gate is trapped.');
     expect(snapshotNarrativeData()).toEqual(before);
   });
@@ -585,20 +642,20 @@ describe('Narrative chat context integration', () => {
       .run('elias', 'workspace-one', 'Elias');
     db.prepare(`INSERT INTO entities (id, workspaceId, type, canonicalName, aliases, lore, data, status, createdAt, last_modified)
       VALUES (?, ?, 'Characters', ?, '[]', '', '{}', 'confirmed', 1, 1)`)
-      .run('mara', 'workspace-one', 'Mara');
+      .run('tess', 'workspace-one', 'Tess');
     const roleplay = new RoleplaySystem(db);
     const health = roleplay.saveDefinition('workspace-one', {
       name: 'Health', key: 'health', color: '#dc2626', minimum: 0, maximum: 100,
       appliesTo: ['Characters'], updatePolicy: 'review'
     });
     roleplay.setTargetValue('workspace-one', health.id, 'entity', 'elias', { current: 80 });
-    roleplay.setTargetValue('workspace-one', health.id, 'entity', 'mara', { current: 35 });
+    roleplay.setTargetValue('workspace-one', health.id, 'entity', 'tess', { current: 35 });
     roleplay.saveSettings('workspace-one', { playerEntityId: 'elias' });
     setWorkspaceExperienceMode(db, 'workspace-one', 'roleplay');
 
     const result = context.plan({
       requestId: 'state-request', workspaceId: 'workspace-one', query: 'How am I doing?', tokenBudget: 1000,
-      items: [{ id: 'state-query', kind: 'worldbuild-canon', source: 'Worldbuild', content: 'Elias and Mara', entityIds: ['elias', 'mara'] }]
+      items: [{ id: 'state-query', kind: 'worldbuild-canon', source: 'Worldbuild', content: 'Elias and Tess', entityIds: ['elias', 'tess'] }]
     });
 
     expect(result.plan.package.perspective).toEqual({ access: 'subjective', focalSubjectId: 'elias' });
@@ -613,12 +670,12 @@ describe('Narrative chat context integration', () => {
     db.prepare(`INSERT INTO entities (id, workspaceId, type, canonicalName, aliases, lore, data, status, createdAt, last_modified)
       VALUES (?, 'workspace-one', 'Characters', ?, '[]', '', '{}', 'confirmed', 1, 1)`).run('elias', 'Elias');
     db.prepare(`INSERT INTO entities (id, workspaceId, type, canonicalName, aliases, lore, data, status, createdAt, last_modified)
-      VALUES (?, 'workspace-one', 'Characters', ?, '[]', '', '{}', 'confirmed', 1, 1)`).run('mara', 'Mara');
+      VALUES (?, 'workspace-one', 'Characters', ?, '[]', '', '{}', 'confirmed', 1, 1)`).run('tess', 'Tess');
     db.prepare(`INSERT INTO entity_links (id, workspaceId, fromId, relType, toId, label, metadata_json, createdAt)
-      VALUES ('bond', 'workspace-one', 'elias', 'related_to', 'mara', 'Oldest friend', ?, 1)`)
-      .run(JSON.stringify({ value: 72, description: 'Elias trusts Mara with his life.' }));
+      VALUES ('bond', 'workspace-one', 'elias', 'related_to', 'tess', 'Oldest friend', ?, 1)`)
+      .run(JSON.stringify({ value: 72, description: 'Elias trusts Tess with his life.' }));
     new NarrativeSceneRepository(db).save({
-      id: 'scene-empty-rag', projectId: 'workspace-one', status: 'active', participantIds: ['elias', 'mara'], possibleObserverIds: [],
+      id: 'scene-empty-rag', projectId: 'workspace-one', status: 'active', participantIds: ['elias', 'tess'], possibleObserverIds: [],
       perspective: { access: 'subjective', focalSubjectId: 'elias' }, position: { sequence: 1 }
     });
     setWorkspaceExperienceMode(db, 'workspace-one', 'roleplay');
@@ -628,7 +685,29 @@ describe('Narrative chat context integration', () => {
     expect(result.context).toContain('Scene: scene-empty-rag');
     expect(result.context).toContain('Title: Oldest friend');
     expect(result.context).toContain('Value: 72');
-    expect(result.context).toContain('Description: Elias trusts Mara with his life.');
+    expect(result.context).toContain('Description: Elias trusts Tess with his life.');
+  });
+
+  test('renders a relationship once, from the ledger, when an edge holds the same pair', () => {
+    db.prepare(`INSERT INTO entities (id, workspaceId, type, canonicalName, aliases, lore, data, status, createdAt, last_modified)
+      VALUES (?, 'workspace-one', 'Characters', ?, '[]', '', '{}', 'confirmed', 1, 1)`).run('elias', 'Elias');
+    db.prepare(`INSERT INTO entities (id, workspaceId, type, canonicalName, aliases, lore, data, status, createdAt, last_modified)
+      VALUES (?, 'workspace-one', 'Characters', ?, '[]', '', '{}', 'confirmed', 1, 1)`).run('tess', 'Tess');
+    db.prepare(`INSERT INTO entity_links (id, workspaceId, fromId, relType, toId, label, metadata_json, createdAt)
+      VALUES ('bond', 'workspace-one', 'elias', 'related_to', 'tess', 'Oldest friend', ?, 1)`)
+      .run(JSON.stringify({ value: 72, description: 'Elias trusts Tess with his life.' }));
+    createWorldbuildDataService(db).recordRelationship({ workspaceId: 'workspace-one', fromId: 'elias', toId: 'tess' });
+    new NarrativeSceneRepository(db).save({
+      id: 'scene-ledger', projectId: 'workspace-one', status: 'active', participantIds: ['elias', 'tess'], possibleObserverIds: [],
+      perspective: { access: 'subjective', focalSubjectId: 'elias' }, position: { sequence: 1 }
+    });
+    setWorkspaceExperienceMode(db, 'workspace-one', 'roleplay');
+
+    const result = context.plan({ requestId: 'ledger-pair', workspaceId: 'workspace-one', query: 'What happens?', tokenBudget: 2000, items: [] });
+
+    expect(result.context).toContain('Elias → Tess');
+    expect(result.context.split('Title: Oldest friend')).toHaveLength(2);
+    expect(result.context).toContain('Value: 72');
   });
 
   test('retrieves introduction facts for a sparse narrative entity on the next turn', () => {

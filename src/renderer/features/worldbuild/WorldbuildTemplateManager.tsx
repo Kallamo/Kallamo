@@ -34,9 +34,8 @@ export default function WorldbuildTemplateManager({ workspaceId, api, templates,
   useEffect(() => { setDraft(saved); setFieldDraft(null); }, [saved]);
   useEffect(() => { api.listWorldbuildFieldDefinitions(workspaceId, typeId).then(result => setFields(result.fields || [])).catch(() => setFields([])); }, [api, typeId, workspaceId]);
   const sections = draft.layout.sections ?? [];
-  // Section renames, order and visibility live in the draft until saved. Field edits
-  // persist immediately, so they carry the draft with them: a field's section lives in
-  // the template, and leaving it unsaved used to strand the field outside its section.
+  // Field edits persist immediately and carry the draft with them, since a field's section lives
+  // in the template.
   const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
   const variants = variantsOf(typeId);
   const variantOf = (section: WorldbuildTemplateSection) => templatableSections(typeId).find(item => item.id === section.id)?.variant;
@@ -84,7 +83,7 @@ export default function WorldbuildTemplateManager({ workspaceId, api, templates,
       const result = await api.saveWorldbuildFieldDefinition({
         id: fieldDraft.definition?.id, key: fieldDraft.definition?.key,
         projectId: workspaceId, typeId, label: fieldDraft.label.trim(), valueType: fieldDraft.valueType,
-        options: isChoice ? fieldDraft.optionsText.split('\n').map(label => ({ id: label, label })).filter(option => option.label.trim()) : undefined,
+        options: isChoice ? optionsFromText(fieldDraft.optionsText, fieldDraft.definition?.options) : undefined,
         required: fieldDraft.required, position: fieldDraft.definition?.position ?? fields.length,
         aiAccess: fieldDraft.aiAccess, aiGuidance: fieldDraft.aiGuidance,
         clearValuesOnTypeChange,
@@ -197,6 +196,21 @@ export default function WorldbuildTemplateManager({ workspaceId, api, templates,
     {confirmingTypeChange && fieldDraft?.definition && <ConfirmDialog tone="warning" title="Change field type" message={`Change “${fieldDraft.definition.label}” from ${fieldDraft.definition.valueType} to ${fieldDraft.valueType}? Existing values in every ${typeId.toLowerCase()} entry will be permanently cleared.`} actions={[{ label: 'Cancel', variant: 'ghost', onClick: () => setConfirmingTypeChange(false) }, { label: 'Change type', variant: 'danger', loading: saving, autoFocus: true, onClick: () => saveField(true) }]} onClose={() => setConfirmingTypeChange(false)} />}
     {confirmingClose && <ConfirmDialog tone="warning" title="Discard section changes" message="The renames, order and visibility you changed have not been saved. Close anyway?" actions={[{ label: 'Keep editing', variant: 'ghost', onClick: () => setConfirmingClose(false) }, { label: 'Discard', variant: 'danger', autoFocus: true, onClick: onClose }]} onClose={() => setConfirmingClose(false)} />}
   </Modal>;
+}
+
+// Stored values point at option ids, so an edited line keeps its id: by label first, then a line
+// changed in place is a rename. Any other line is a new option.
+function optionsFromText(text: string, previous: Array<{ id: string; label: string }> = []) {
+  const labels = text.split('\n').map(label => label.trim()).filter(Boolean);
+  const byLabel = new Map(previous.map(option => [option.label.trim().toLocaleLowerCase(), option.id]));
+  const kept = new Set(labels.flatMap(label => byLabel.get(label.toLocaleLowerCase()) ?? []));
+  const used = new Set<string>();
+  return labels.map((label, index) => {
+    const renamed = previous[index] && !kept.has(previous[index].id) ? previous[index].id : undefined;
+    const id = [byLabel.get(label.toLocaleLowerCase()), renamed].find(candidate => candidate && !used.has(candidate));
+    if (id) used.add(id);
+    return id ? { id, label } : { label };
+  });
 }
 
 // How each value type reads to a person, shown beside every field.

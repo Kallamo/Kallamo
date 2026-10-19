@@ -23,13 +23,12 @@ interface ReviewOperation {
   category?: string | null;
   cause?: string | null;
   confidence?: number;
+  /** Relationships only: the proposed score and what the relationship says now, when it exists. */
+  value?: number;
+  current?: { title: string; value: number } | null;
 }
 
-/**
- * What kind of durable record this is, in the reviewer's words. It is the fastest way to see
- * whether a suggestion belongs in the campaign at all: a secret and a piece of world lore read
- * the same as bare sentences and are worth very different amounts of attention.
- */
+/** A secret and world lore read the same as bare sentences; the tag says which deserves attention. */
 function operationTag(operation: ReviewOperation): string | null {
   const cause = normalizeRelationshipCause(operation.cause);
   if (cause) return RELATIONSHIP_CAUSE_LABELS[cause];
@@ -142,7 +141,7 @@ export default function WorldbuildNarrativeReview({
                         <span className="text-text-disabled" aria-hidden="true">·</span>
                         <span className="text-text-subtle">{scope}</span>
                       </div>
-                      {operation.title && <p className="mt-1 text-sm font-semibold text-text-primary">{operation.title}</p>}
+                      {operation.kind === 'relationship' ? <RelationshipChange operation={operation} /> : operation.title && <p className="mt-1 text-sm font-semibold text-text-primary">{operation.title}</p>}
                       <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-text-secondary">{operation.summary || 'Nothing usable was read from the story.'}</p>
                       <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-xs text-text-subtle">
                         {operation.method && <span className="inline-flex items-center gap-1"><Eye className="h-3 w-3" aria-hidden="true" />{sentence(operation.method)}</span>}
@@ -174,6 +173,28 @@ export default function WorldbuildNarrativeReview({
           </section>
         );
       })}
+    </div>
+  );
+}
+
+/** A relationship that already exists is shown as an edit: the role it keeps or changes, and where the score goes. */
+function RelationshipChange({ operation }: { operation: ReviewOperation }) {
+  const { current } = operation;
+  const title = operation.title || '';
+  const kept = Boolean(current) && current!.title.trim() === title.trim();
+  const score = operation.value;
+  return (
+    <div className="mt-1 space-y-0.5">
+      <p className="flex flex-wrap items-baseline gap-x-2 text-sm">
+        {current && !kept && current.title && <><span className="text-text-subtle line-through">{current.title}</span><span className="text-text-subtle" aria-hidden="true">→</span></>}
+        <span className="font-semibold text-text-primary">{title}</span>
+        {kept && <span className="text-xs text-text-subtle">kept</span>}
+      </p>
+      {score !== undefined && Number.isFinite(score) && (
+        <p className="text-xs tabular-nums text-text-muted">
+          {current ? <>Score {current.value} → <span className="font-semibold text-text-secondary">{score}</span></> : <>Score <span className="font-semibold text-text-secondary">{score}</span>, new relationship</>}
+        </p>
+      )}
     </div>
   );
 }

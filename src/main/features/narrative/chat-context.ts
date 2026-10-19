@@ -84,6 +84,8 @@ interface FieldRow {
   field_key: string;
   label: string;
   ai_access: string;
+  value_type?: string;
+  options_json?: string | null;
 }
 
 interface KnownEntityAggregate {
@@ -513,6 +515,24 @@ export class NarrativeChatContext {
     return new Map(rows.map(row => [row.id, row.canonicalName]));
   }
 
+  // Read straight from the stored definition: the context only needs names, and must not create one.
+  private getCalendarNames(workspaceId: string): CalendarNames | null {
+    const exists = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'worldbuild_calendars'").get();
+    const row = exists
+      ? this.db.prepare('SELECT definition_json FROM worldbuild_calendars WHERE workspace_id = ?').get(workspaceId) as { definition_json: string } | undefined
+      : undefined;
+    if (!row) return null;
+    try {
+      const definition = JSON.parse(row.definition_json) as { months?: Array<{ name?: string }>; eras?: Array<{ id?: string; shortName?: string; name?: string }> };
+      return {
+        months: (definition.months ?? []).map(month => String(month?.name ?? '')),
+        eras: new Map((definition.eras ?? []).map(era => [String(era?.id ?? ''), String(era?.shortName || era?.name || '')]))
+      };
+    } catch {
+      return null;
+    }
+  }
+
   private getLatestPosition(workspaceId: string): NarrativePosition {
     const row = this.db.prepare(`
       SELECT COALESCE(MAX(narrative_sequence), 0) AS sequence
@@ -650,7 +670,7 @@ export class NarrativeChatContext {
       WHERE workspaceId = ? AND id IN (${placeholders}) AND status != 'proposed'
     `).all(workspaceId, ...entityIds) as EntityRow[];
     const fields = this.db.prepare(`
-      SELECT type_id, field_key, label, ai_access
+      SELECT type_id, field_key, label, ai_access, value_type, options_json
       FROM worldbuild_field_definitions WHERE workspace_id = ?
     `).all(workspaceId) as FieldRow[];
     if (perspective.access !== 'omniscient') {
@@ -794,9 +814,11 @@ export class NarrativeChatContext {
       recordTypes: ['fact', 'state', 'knowledge', 'belief', 'memory', 'relationship']
     });
     // Tellers and entity-reference objects are named in one read, so no uuid reaches the model.
-    const informantNames = this.getEntityNames(workspaceId, [...new Set(rows.flatMap(({ payload }) => [
+    const calendar = this.getCalendarNames(workspaceId);
+    const informantNames = this.getEntityNames(workspaceId, [...new Set(rows.flatMap(({ row, payload }) => [
       ...(Array.isArray(payload.informantIds) ? payload.informantIds.map(String) : []),
-      ...entityReferencesIn(payload)
+      ...entityReferencesIn(payload),
+      ...(row.record_type === 'relationship' ? [row.subject_id, String(payload.targetEntityId ?? '')] : [])
     ]))]);
     return rows.flatMap(({ row, payload }) => {
       const aboutId = String((payload.proposition as Record<string, unknown> | undefined)?.subjectId ?? '');
@@ -820,7 +842,7 @@ export class NarrativeChatContext {
         && perspective.focalSubjectId
         && !canSubjectAccessOccurrence(this.db, workspaceId, row.source_event_id, perspective.focalSubjectId)
       ) return [];
-      const normalized = normalizeRecord(row, payload, informantNames);
+      const normalized = normalizeRecord(row, payload, informantNames, calendar);
       if (!normalized) return [];
       if (
         perspective.access === 'subjective'
@@ -885,7 +907,12 @@ export class NarrativeChatContext {
     const authorized = new Set(perspective.access === 'subjective'
       ? [perspective.focalSubjectId!]
       : perspective.access === 'explicit' ? perspective.allowedSubjectIds ?? [] : []);
-    return rows.filter(row => perspective.access === 'omniscient' || authorized.has(row.fromId)).map(row => {
+    // A relationship the narrative ledger holds is rendered from the ledger; the edge would repeat it.
+    const ledgerPairs = new Set(loadCurrentNarrativeRecords(this.db, { workspaceId, recordTypes: ['relationship'] })
+      .map(({ row, payload }) => `${row.subject_id}\u0000${String(payload.targetEntityId ?? '')}`));
+    return rows
+      .filter(row => row.relType !== 'related_to' || !ledgerPairs.has(`${row.fromId}\u0000${row.toId}`))
+      .filter(row => perspective.access === 'omniscient' || authorized.has(row.fromId)).map(row => {
       const metadata = parseObject(row.metadataJson);
       const value = Number(metadata.value);
       const description = String(metadata.description ?? '').trim();
@@ -1098,7 +1125,8 @@ export class NarrativeChatContext {
 function normalizeRecord(
   row: NarrativeRecordRow,
   payload: Record<string, unknown>,
-  nameById: Map<string, string> = new Map()
+  nameById: Map<string, string> = new Map(),
+  calendar: CalendarNames | null = null
 ): { content: string; epistemic: ContextEpistemicMetadata } | undefined {
   const subjectId = row.subject_id;
   if (row.record_type === 'fact') {
@@ -1126,7 +1154,13 @@ function normalizeRecord(
     const title = String(payload.title ?? '').trim();
     const description = String(payload.description ?? '').trim();
     return {
-      content: `${title ? `${title}\n` : ''}Dimension: ${dimension}\nValue: ${Number(payload.value)}${description ? `\nDescription: ${description}` : ''}`,
+      content: [
+        `${nameById.get(subjectId) ?? subjectId} → ${nameById.get(targetId) ?? targetId}`,
+        ...(title ? [`Title: ${title}`] : []),
+        `Dimension: ${dimension}`,
+        `Value: ${Number(payload.value)}`,
+        ...(description ? [`Description: ${description}`] : [])
+      ].join('\n'),
       epistemic: { kind: 'relationship', subjectIds: [subjectId, targetId] }
     };
   }
@@ -1135,8 +1169,10 @@ function normalizeRecord(
     if ((payload.status ?? 'active') === 'forgotten') return undefined;
     const content = String(payload.summary ?? '').trim();
     if (!content) return undefined;
+    const happenedOn = formatWorldDay(payload.occurredOn, calendar);
     return {
-      content: withCategory(payload, content),
+      content: withCategory(payload, happenedOn ? `${content}
+Happened on: ${happenedOn}` : content),
       epistemic: { kind: 'memory', subjectId, accessibility: accessibility(payload.accessibility) }
     };
   }
@@ -1173,6 +1209,21 @@ function normalizeRecord(
 }
 
 /** A secret and world lore read the same as bare sentences; the category says which may be repeated aloud. */
+interface CalendarNames {
+  months: string[];
+  eras: Map<string, string>;
+}
+
+function formatWorldDay(value: unknown, calendar: CalendarNames | null): string {
+  if (!value || typeof value !== 'object') return '';
+  const date = value as Record<string, unknown>;
+  const [year, month, day] = [date.year, date.month, date.day].map(Number);
+  if (![year, month, day].every(part => Number.isInteger(part) && part >= 1)) return '';
+  const monthName = calendar?.months[month - 1] || `month ${month}`;
+  const era = calendar?.eras.get(String(date.eraId ?? '')) ?? '';
+  return `${day} ${monthName} ${year}${era ? ` ${era}` : ''}`;
+}
+
 function withCategory(payload: Record<string, unknown>, content: string): string {
   const label = categoryLabel(payload.category);
   return label ? `${content}
@@ -1198,9 +1249,23 @@ function composeKnownEntity(entity: EntityRow, fields: FieldRow[], knownFieldKey
       ? (data.customFields as Record<string, unknown> | undefined)?.[key.slice('customFields.'.length)]
       : data[key];
     if (value === undefined || value === null || value === '') continue;
-    lines.push(`${field?.label || nativeFieldLabel(key)}: ${formatNarrativeValue(value)}`);
+    lines.push(`${field?.label || nativeFieldLabel(key)}: ${formatNarrativeValue(field ? choiceLabels(field, value) : value)}`);
   }
   return lines.join('\n');
+}
+
+// A choice field stores opaque option ids; the model reads the label the user chose.
+function choiceLabels(field: FieldRow, value: unknown): unknown {
+  if (field.value_type !== 'single-choice' && field.value_type !== 'multiple-choice') return value;
+  let options: Array<{ id?: string; label?: string }> = [];
+  try {
+    const parsed: unknown = JSON.parse(field.options_json || '[]');
+    if (Array.isArray(parsed)) options = parsed;
+  } catch {
+    return value;
+  }
+  const label = (id: unknown) => options.find(option => option?.id === id)?.label || id;
+  return Array.isArray(value) ? value.map(label) : label(value);
 }
 
 // The name, type and first sentence of the description: enough to place a name a passage uses.
@@ -1267,7 +1332,7 @@ function composeEntity(entity: EntityRow, fields: FieldRow[]): string {
     .filter(field => field.type_id === entity.type && field.ai_access !== 'hidden')
     .forEach(field => {
       const value = customFields[field.field_key];
-      if (value !== undefined && value !== null && value !== '') parts.push(`${field.label}: ${formatValue(value)}`);
+      if (value !== undefined && value !== null && value !== '') parts.push(`${field.label}: ${formatValue(choiceLabels(field, value))}`);
     });
   return parts.join('\n');
 }

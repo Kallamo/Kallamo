@@ -200,8 +200,25 @@ function createWorldbuildDataService(db) {
     };
   }
 
+  // The review compares a relationship with what it says now, which may have moved since it was proposed.
+  function currentRelationshipOf(workspaceId) {
+    const hasLinks = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'entity_links'").get();
+    const statement = hasLinks ? db.prepare(`
+      SELECT label, metadata_json FROM entity_links
+      WHERE workspaceId = ? AND fromId = ? AND toId = ? AND relType = 'related_to'
+      ORDER BY createdAt LIMIT 1
+    `) : null;
+    return (sourceId, targetId) => {
+      const row = statement?.get(workspaceId, sourceId, targetId);
+      if (!row) return null;
+      const metadata = parseObject(row.metadata_json);
+      return { title: row.label || '', value: Number(metadata.value || 0) };
+    };
+  }
+
   function getSubjectReview(workspaceId, subjectId) {
     const resolveEntityName = createEntityNameResolver(workspaceId);
+    const currentRelationship = currentRelationshipOf(workspaceId);
     const proposals = db.prepare(`
       SELECT DISTINCT events.event_id, events.description, events.operations_json,
         events.provenance_created_at, events.provenance_prompt_version, evidence.excerpt
@@ -221,7 +238,10 @@ function createWorldbuildDataService(db) {
       const operations = JSON.parse(row.operations_json);
       const visibleOperations = operations
         .map(operation => summarizeProposedOperation(operation, resolveEntityName))
-        .filter(Boolean);
+        .filter(Boolean)
+        .map(operation => operation.kind === 'relationship'
+          ? { ...operation, current: currentRelationship(operation.subjectId, operation.targetId) }
+          : operation);
       return visibleOperations.length ? [{
         eventId: row.event_id,
         description: row.description,
@@ -233,6 +253,33 @@ function createWorldbuildDataService(db) {
       }] : [];
     });
     return { subjectId, proposals };
+  }
+
+  // What waits for review on these sheets outside their staged update, so a bulk action can resolve it.
+  function listPendingReviewIds(workspaceId, entityIds) {
+    const ids = [...new Set((entityIds || []).filter(Boolean))];
+    if (!ids.length) return { narrativeEventIds: [], skillChangeIds: [] };
+    const placeholders = ids.map(() => '?').join(', ');
+    const narrativeEventIds = db.prepare(`
+      SELECT DISTINCT events.event_id
+      FROM narrative_events events
+      JOIN narrative_event_participants participants
+        ON participants.workspace_id = events.workspace_id
+        AND participants.event_id = events.event_id
+        AND participants.ordinal = 0
+      LEFT JOIN narrative_event_evidence evidence
+        ON evidence.workspace_id = events.workspace_id AND evidence.event_id = events.event_id AND evidence.ordinal = 0
+      LEFT JOIN narrative_origin_lifecycle lifecycle
+        ON lifecycle.workspace_id = evidence.workspace_id AND lifecycle.origin_id = evidence.origin_id
+      WHERE events.workspace_id = ? AND events.status = 'proposed'
+        AND (lifecycle.status IS NULL OR lifecycle.status = 'active')
+        AND participants.entity_id IN (${placeholders})
+    `).all(workspaceId, ...ids).map(row => row.event_id);
+    const skillChangeIds = db.prepare(`
+      SELECT change_id FROM roleplay_skill_changes
+      WHERE workspace_id = ? AND status = 'pending' AND source = 'ai' AND entity_id IN (${placeholders})
+    `).all(workspaceId, ...ids).map(row => row.change_id);
+    return { narrativeEventIds, skillChangeIds };
   }
 
   function listReviewCounts(workspaceId) {
@@ -248,6 +295,16 @@ function createWorldbuildDataService(db) {
           + (Array.isArray(pending.chapters) ? pending.chapters.length : 0)
         : 0;
       counts.set(entity.id, { entityUpdates, narrative: 0 });
+    }
+    // A skill the AI wants to give or raise is reviewed on the sheet too; it is stored once, in the Rules.
+    const skillChanges = db.prepare(`
+      SELECT entity_id, COUNT(*) AS total FROM roleplay_skill_changes
+      WHERE workspace_id = ? AND status = 'pending' AND source = 'ai'
+      GROUP BY entity_id
+    `).all(workspaceId);
+    for (const row of skillChanges) {
+      const current = counts.get(row.entity_id);
+      if (current) current.entityUpdates += row.total;
     }
     const events = db.prepare(`
       SELECT events.operations_json, participants.entity_id AS owner_id
@@ -296,9 +353,7 @@ function createWorldbuildDataService(db) {
     return row ? { id: row.record_id, payload: JSON.parse(row.payload_json), managed: Boolean(row.occurrence_id) } : null;
   }
 
-  // Records owned by an Event occurrence are edited there. Rewriting one here would add
-  // a revision at a later narrative sequence, and every later edit of the occurrence,
-  // which rewrites its records in place, would silently stop showing.
+  // Occurrence records are edited in their event: a revision here would shadow its later edits.
   function requireEditableRecord(current) {
     if (current?.managed) throw new Error('This entry belongs to an Event occurrence. Open the event to change it.');
   }
@@ -323,10 +378,7 @@ function createWorldbuildDataService(db) {
           sourceType: 'statement',
           sourceId,
         });
-        // Being told something means knowing who told you. Without this a reported entry
-        // could name an informant the subject has no awareness of, which reads as a
-        // message from nowhere the moment retrieval tries to attribute it. Only hearsay
-        // has a teller, so a first-hand record grants nothing here either.
+        // Being told something means knowing who told you; otherwise retrieval attributes it to no one.
         const tellers = kind === 'knowledge' && entry?.acquisition === 'reported'
           ? normalizeIds(entry?.informantIds)
           : [];
@@ -513,6 +565,64 @@ function createWorldbuildDataService(db) {
     return listWorldFacts(workspaceId);
   }
 
+  // The narrative ledger is the one source of a relationship; a sheet edit is a new entry in it,
+  // and removing the last edge between two characters retires the pair.
+  function recordRelationship({ workspaceId, fromId, toId } = {}) {
+    if (!workspaceId || !fromId || !toId) return;
+    const link = db.prepare(`
+      SELECT label, metadata_json FROM entity_links
+      WHERE workspaceId = ? AND fromId = ? AND toId = ? AND relType = 'related_to'
+      ORDER BY createdAt LIMIT 1
+    `).get(workspaceId, fromId, toId);
+    const current = currentLedgerRelationship(workspaceId, fromId, toId);
+    const eventId = crypto.randomUUID();
+    const evidenceId = crypto.randomUUID();
+    let relationship;
+    if (link) {
+      const metadata = parseObject(link.metadata_json);
+      const value = Number(metadata.value);
+      const next = {
+        title: link.label || '',
+        value: Number.isFinite(value) ? Math.max(-100, Math.min(100, value)) : 0,
+        description: String(metadata.description || ''),
+      };
+      if (current && current.title === next.title && Number(current.value) === next.value
+        && String(current.description || '') === next.description) return;
+      relationship = {
+        id: crypto.randomUUID(), sourceEntityId: fromId, targetEntityId: toId, dimension: 'overall',
+        ...next, status: 'active', sourceEventId: eventId, evidenceIds: [evidenceId],
+      };
+    } else {
+      if (!current) return;
+      relationship = { ...current, id: crypto.randomUUID(), status: 'retired', sourceEventId: eventId, evidenceIds: [evidenceId] };
+    }
+    persistManualEvent({
+      workspaceId, subjectId: fromId, eventId, evidenceId, createdAt: new Date().toISOString(),
+      operations: [{ id: crypto.randomUUID(), type: 'set-relationship', evidenceIds: [evidenceId], relationship }],
+      action: link ? 'updated' : 'removed',
+      eventDescription: link ? 'Worldbuild relationship updated.' : 'Worldbuild relationship removed.',
+    });
+  }
+
+  function currentLedgerRelationship(workspaceId, fromId, toId) {
+    const row = db.prepare(`
+      SELECT records.payload_json FROM narrative_records records
+      JOIN narrative_events events
+        ON events.workspace_id = records.workspace_id AND events.event_id = records.source_event_id
+      LEFT JOIN narrative_event_evidence evidence
+        ON evidence.workspace_id = events.workspace_id AND evidence.event_id = events.event_id AND evidence.ordinal = 0
+      LEFT JOIN narrative_origin_lifecycle lifecycle
+        ON lifecycle.workspace_id = events.workspace_id AND lifecycle.origin_id = evidence.origin_id
+      WHERE records.workspace_id = ? AND records.record_type = 'relationship' AND records.subject_id = ?
+        AND json_extract(records.payload_json, '$.targetEntityId') = ?
+        AND lower(COALESCE(json_extract(records.payload_json, '$.dimension'), 'overall')) = 'overall'
+        AND COALESCE(lifecycle.status, 'active') = 'active'
+      ORDER BY events.narrative_sequence DESC, records.rowid DESC LIMIT 1
+    `).get(workspaceId, fromId, toId);
+    const payload = row ? parseObject(row.payload_json) : null;
+    return payload && payload.status !== 'retired' ? payload : null;
+  }
+
   function persistManualEvent({ workspaceId, subjectId, participantId, eventId, evidenceId, createdAt, operations, action, eventDescription, excerpt }) {
     const sequence = nextNarrativeSequence(workspaceId);
     const description = eventDescription || `Worldbuild Knowledge entry ${action}.`;
@@ -552,11 +662,13 @@ function createWorldbuildDataService(db) {
     getSubjectKnowledge,
     getSubjectReview,
     listReviewCounts,
+    listPendingReviewIds,
     listWorldFacts,
     saveWorldFact,
     deleteWorldFact,
     saveSubjectEntry,
     deleteSubjectEntry,
+    recordRelationship,
     listKnowledgeCards: knowledgeCards.listCards,
     getKnowledgeCard: knowledgeCards.getCard,
     ensureAwareness: knowledgeCards.ensureAwareness,
@@ -575,9 +687,7 @@ function normalizeFieldDefinition(input = {}) {
   const label = requireText(input.label, 'label');
   const valueType = FIELD_TYPES.has(input.valueType) ? input.valueType : null;
   if (!valueType) throw new Error('Unsupported custom field type.');
-  const key = String(input.key || label)
-    .trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  if (!key) throw new Error('Custom field key is required.');
+  const key = String(input.key || '').trim() || fieldKeyFromLabel(label);
   const isChoice = valueType === 'single-choice' || valueType === 'multiple-choice';
   const options = isChoice ? normalizeOptions(input.options) : undefined;
   if (isChoice && !options.length) throw new Error('Choice fields need at least one option.');
@@ -593,16 +703,27 @@ function normalizeFieldDefinition(input = {}) {
   };
 }
 
+// Values store the option id, so it never derives from the label: a rename keeps every stored value.
+function newOptionId() {
+  return `opt-${crypto.randomUUID().slice(0, 8)}`;
+}
+
+// Only set when the field is created; the key then stays fixed through renames.
+function fieldKeyFromLabel(label) {
+  const slug = label.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return slug || `field-${crypto.randomUUID().slice(0, 8)}`;
+}
+
 function normalizeOptions(options) {
   if (!Array.isArray(options)) return [];
   const seen = new Set();
   return options.flatMap(option => {
     const label = String(option?.label ?? option ?? '').trim();
     if (!label) return [];
-    const base = String(option?.id || label).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-    let id = base || crypto.randomUUID();
-    let suffix = 2;
-    while (seen.has(id)) id = `${base}-${suffix++}`;
+    const given = typeof option?.id === 'string' ? option.id.trim() : '';
+    let id = given && !seen.has(given) ? given : newOptionId();
+    while (seen.has(id)) id = newOptionId();
     seen.add(id);
     return [{ id, label }];
   });
@@ -646,20 +767,26 @@ function projectSubjectKnowledge(projectId, subjectId, rows, resolveEntityName) 
   const known = new Map();
   const beliefs = new Map();
   const memories = new Map();
+  const entryKeys = { knowledge: new Map(), belief: new Map() };
   for (const row of rows) {
     const payload = JSON.parse(row.payload_json);
     const record = toEntry(row, payload, resolveEntityName);
     if (row.record_type === 'observation') {
       if (payload.supersedesObservationId) observations.delete(payload.supersedesObservationId);
       if ((payload.status || 'active') === 'active') observations.set(row.record_id, record);
-    } else if (row.record_type === 'knowledge') {
+    } else if (row.record_type === 'knowledge' || row.record_type === 'belief') {
+      const target = row.record_type === 'knowledge' ? known : beliefs;
+      const index = entryKeys[row.record_type];
       const key = payload.entryId || propositionKey(payload);
-      if (payload.status === 'active') known.set(key, record);
-      else known.delete(key);
-    } else if (row.record_type === 'belief') {
-      const key = payload.entryId || propositionKey(payload);
-      if (payload.status === 'active') beliefs.set(key, record);
-      else beliefs.delete(key);
+      // A record without an entryId is revised under its own id, not its statement key.
+      const previousKey = payload.entryId ? index.get(payload.entryId) : undefined;
+      if (previousKey && previousKey !== key) target.delete(previousKey);
+      if (payload.status === 'active') {
+        target.set(key, record);
+        index.set(payload.entryId || payload.id, key);
+      } else {
+        target.delete(key);
+      }
     } else if (row.record_type === 'memory') {
       if (payload.supersedesMemoryId) memories.delete(payload.supersedesMemoryId);
       if ((payload.status || 'active') !== 'forgotten') memories.set(payload.id, record);
@@ -692,7 +819,7 @@ function summarizeProposedOperation(operation, resolveEntityName) {
   }
   if (operation.type === 'set-relationship') {
     const value = operation.relationship;
-    return { ...common, kind: 'relationship', subjectId: value.sourceEntityId, targetId: value.targetEntityId, cause: value.cause || null, title: value.title || value.dimension, summary: value.description || String(value.value) };
+    return { ...common, kind: 'relationship', subjectId: value.sourceEntityId, targetId: value.targetEntityId, cause: value.cause || null, title: value.title || value.dimension, value: Number(value.value), summary: value.description || String(value.value) };
   }
   if (operation.type === 'grant-knowledge') return { ...common, kind: 'knowledge', subjectId: operation.knowledge.subjectId, targetId: operation.knowledge.proposition?.subjectId, acquisition: operation.knowledge.acquisition, category: operation.knowledge.category || null, confidence: operation.knowledge.confidence, summary: formatPropositionObject(operation.knowledge.proposition?.object, resolveEntityName) };
   if (operation.type === 'set-belief') return { ...common, kind: 'belief', subjectId: operation.belief.subjectId, targetId: operation.belief.proposition?.subjectId, category: operation.belief.category || null, confidence: operation.belief.confidence, summary: formatPropositionObject(operation.belief.proposition?.object, resolveEntityName) };
@@ -709,11 +836,8 @@ function summarizeProposedOperation(operation, resolveEntityName) {
   return { ...common, kind: 'memory', subjectId: operation.memory.subjectId, category: operation.memory.category || null, summary: operation.memory.summary };
 }
 
-// Where an entry came from. A record written under an Event occurrence's narrative
-// event belongs to that occurrence and is edited there, never here: a revision saved
-// from the Knowledge tab lands at a higher narrative sequence and would shadow every
-// later edit of the occurrence. Everything else is either authored by hand or applied
-// from Narrative State, the same three origins the Facts registry already names.
+// A record under an Event occurrence belongs to it and is edited there. The three origins match
+// the Facts registry.
 function entryOrigin(row) {
   if (row.occurrence_id) {
     return {
@@ -754,7 +878,7 @@ function toEntry(row, payload, resolveEntityName) {
     };
   }
   if (row.record_type === 'memory') {
-    return { ...common, kind: 'memory', summary: payload.summary, category: payload.category || null };
+    return { ...common, kind: 'memory', summary: payload.summary, category: payload.category || null, occurredOn: payload.occurredOn || null };
   }
   return {
     ...common,
@@ -804,6 +928,7 @@ function buildActiveOperation(kind, subjectId, entry, current, eventId, evidence
         id: crypto.randomUUID(), subjectId, eventId, summary,
         accessibility: normalizeAccessibility(entry.accessibility), status: 'active',
         ...category(normalizeMemoryCategory(entry.category)),
+        ...worldDay(entry.occurredOn),
         ...(current ? { supersedesMemoryId: current.payload.id } : {}),
       },
     };
@@ -823,9 +948,8 @@ function buildActiveOperation(kind, subjectId, entry, current, eventId, evidence
         accessibility: normalizeAccessibility(entry.accessibility), status: 'active',
         ...category(normalizeKnowledgeCategory(entry.category)),
         factIds: normalizeIds(entry.factIds),
-        // Only hearsay has a teller. Keeping informants off a first-hand record stops a
-        // stale name surviving a switch from reported back to observed, and a subject is
-        // never its own informant: naming itself would grant it awareness of itself.
+        // Only hearsay has a teller, so a switch back to observed drops the name. A subject is never
+        // its own informant.
         ...(acquisition === 'reported'
           ? { informantIds: normalizeIds(entry.informantIds).filter(id => id !== subjectId) }
           : {}),
@@ -842,6 +966,13 @@ function buildActiveOperation(kind, subjectId, entry, current, eventId, evidence
       factIds: normalizeIds(entry.factIds),
     },
   };
+}
+
+/** An optional story day; a partial or malformed date is dropped rather than stored half-set. */
+function worldDay(value) {
+  if (!value || typeof value !== 'object' || typeof value.eraId !== 'string' || !value.eraId) return {};
+  const day = { eraId: value.eraId, year: Number(value.year), month: Number(value.month), day: Number(value.day) };
+  return [day.year, day.month, day.day].every(part => Number.isInteger(part) && part >= 1) ? { occurredOn: day } : {};
 }
 
 /** Keeps an unset category out of the payload instead of storing an empty value. */
@@ -921,15 +1052,9 @@ function propositionKey(payload) {
   return `${payload.proposition?.subjectId || ''}\u0000${payload.proposition?.predicate || ''}`;
 }
 
-/* Manual Facts store their statement as a plain string, so the predicate is the
-   author's own title. System records such as recorded-occurrence store a
-   structured object instead; those get a readable projection and are flagged as
-   managed so the registry does not offer to edit them in place. */
 const ENTITY_REFERENCE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// A proposition object is either prose or a reference to an entity, and the contract does not
-// say which. Anchoring on the id is what lets a record survive a rename, so the reference is
-// kept in storage and resolved here, on the way out, instead of reaching the reader as a uuid.
+// Storage keeps the entity reference so a record survives a rename; it is named on the way out.
 function formatPropositionObject(object, resolveEntityName) {
   if (typeof object !== 'string') return String(object ?? '');
   const trimmed = object.trim();
@@ -937,6 +1062,8 @@ function formatPropositionObject(object, resolveEntityName) {
   return (resolveEntityName && resolveEntityName(trimmed)) || object;
 }
 
+/* Manual Facts store a plain string, so the predicate is the author's title. System records store
+   a structured object and are flagged managed, so the registry never offers to edit them. */
 function renderProposition(proposition, resolveEntityName) {
   const object = proposition?.object;
   const predicate = String(proposition?.predicate || '');

@@ -1,10 +1,5 @@
-// The one description of what a sheet is made of. The sheet renderer and the template
-// editor both read it, so a section cannot exist in one and be missing from the other.
-// Before this file the two kept their own lists and had drifted: the editor offered a
-// "Content" section for System while the sheet rendered "concept", an "Overview" for
-// Creatures while the sheet rendered "details", and it knew nothing at all about the
-// inventory, connections, knowledge or occurrences tabs, so hiding or renaming those
-// silently did nothing.
+// What a sheet is made of. The sheet renderer and the template editor both read it, so a section
+// cannot exist in one and be missing from the other. Add sections here only.
 
 export const TAB_LABELS = {
   data: 'Data',
@@ -15,9 +10,8 @@ export const TAB_LABELS = {
 };
 export const TAB_ORDER = ['data', 'inventory', 'connections', 'knowledge', 'occurrences'];
 
-// `variant` narrows a section to one shape of a type. Creatures are the only type with
-// two shapes today: a specific being carries a life, an inventory and relationships,
-// while a species or swarm carries none of them.
+// `variant` narrows a section to one shape of a type: a specific being carries a life, an
+// inventory and relationships, a species or swarm none of them.
 export const VARIANT_LABELS = { individual: 'Specific being', group: 'Group or species' };
 // Declared per type rather than derived from the sections: a shape is real even when it
 // adds nothing of its own, which is exactly the case for a species or swarm.
@@ -75,11 +69,8 @@ export const TYPE_SECTIONS = {
   ],
 };
 
-// Templates saved before the ids were unified point at sections that never rendered.
-// Reading them through this map keeps a user's order and renames instead of dropping
-// them. `label` is the name the old editor defaulted to: a section still carrying it was
-// never really named by anyone, so it takes the sheet's own name rather than renaming
-// the sheet after a default that was wrong to begin with.
+// Section ids stored by older templates, mapped so order and renames survive. A section still
+// carrying the default `label` was never named by anyone, so it takes the sheet's own name.
 const LEGACY_SECTIONS = {
   System: { content: { id: 'concept', label: 'Content' } },
   Creatures: { overview: { id: 'details', label: 'Overview' } },
@@ -117,11 +108,7 @@ export const tabLabel = (typeId, variant, tab) => {
 // features, so renaming or hiding them would promise an edit the app cannot honour.
 export const templateSections = (typeId) => nativeSections(typeId).filter(item => item.tab === 'data');
 
-/**
- * Read a stored template through the current registry: legacy ids are mapped onto the
- * section they became, and anything no longer templatable is dropped. Both the sheet and
- * the editor read templates through here, so a saved layout means the same on both sides.
- */
+/** Legacy ids map onto their section and anything not templatable is dropped, the same for sheet and editor. */
 export const normalizeTemplateSections = (typeId, sections = []) => {
   const allowed = new Set(templateSections(typeId).map(item => item.id));
   const seen = new Set();

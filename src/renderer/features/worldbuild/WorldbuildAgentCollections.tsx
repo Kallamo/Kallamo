@@ -252,8 +252,6 @@ function EntityCombobox({ options, value, query, onChange, autoFocus, placeholde
       onChange(targetId, selected?.canonicalName || '');
     }}
     // Group by the type's own name, trimmed to its first word so the tag stays short.
-    // Labelling everything that is not a character "Entity" hid what a faction or a
-    // creature actually was.
     options={options.map(option => ({
       id: option.id,
       label: option.canonicalName,

@@ -3,9 +3,9 @@ import { displayNativeValue, displayProposalValue } from '../../src/renderer/fea
 
 describe('AI review display values', () => {
   test('shows the custom option label instead of its internal slug', () => {
-    const definitions = [{ key: 'raridade', valueType: 'single-choice', options: [{ id: 'nico', label: '🔴 Único' }] }];
-    expect(displayProposalValue('customFields.raridade', { value: 'nico' }, definitions, []))
-      .toBe('🔴 Único');
+    const definitions = [{ key: 'rarity', valueType: 'single-choice', options: [{ id: 'unique', label: '🔴 Unique' }] }];
+    expect(displayProposalValue('customFields.rarity', { value: 'unique' }, definitions, []))
+      .toBe('🔴 Unique');
   });
 
   test('shows entity names instead of stored reference ids', () => {

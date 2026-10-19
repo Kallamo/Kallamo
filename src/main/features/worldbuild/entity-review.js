@@ -1,3 +1,5 @@
+const { comparableText, isWeakTextReplacement } = require('./entity-update-contract');
+
 function discardEnrichPending(currentData) {
   const pending = currentData?._enrichPending;
   if (!pending || typeof pending !== 'object') return null;
@@ -21,16 +23,45 @@ function normalizeDirectionalRelationship(proposal, sourceName) {
   return { value: Math.max(-100, Math.min(100, Math.round(value))), description };
 }
 
+const MAX_ROLE_WORDS = 6;
+
+// A role is kept whole or not at all: cutting it at a word count leaves a broken phrase in
+// whatever language the AI writes.
 function normalizeRelationshipLabel(value) {
   const role = String(value || '').split(/[;,.\n:]/, 1)[0].trim();
-  if (/(?:\b(?:and|or|of|to|who|e|ou|de|do|da|que))$/iu.test(role)) return null;
-  const normalized = role.split('/').map(part => {
-    const words = part.trim().split(/\s+/).filter(Boolean);
-    const limit = words.length > 4 && /^(?:and|or|of|to|who|e|ou|de|do|da|que)$/iu.test(words[3]) ? 5 : 4;
-    return words.slice(0, limit).join(' ');
-  }).filter(Boolean).join(' / ');
-  if (!normalized) return null;
-  return normalized;
+  const parts = role.split('/').map(part => part.trim().split(/\s+/).filter(Boolean));
+  if (parts.some(words => words.length > MAX_ROLE_WORDS)) return null;
+  const normalized = parts.map(words => words.join(' ')).filter(Boolean).join(' / ');
+  return normalized || null;
+}
+
+const RELATIONSHIP_STEP = 25;
+const REVERSAL_STEP = 50;
+const REVERSAL_FLOOR = 20;
+
+// An existing relationship is edited from what it already says. Documents are read out of order,
+// so one run moves the score a bounded step, and only a reversal (ally to enemy) may rename it.
+function resolveRelationshipUpdate(current, proposed) {
+  const requested = Math.max(-100, Math.min(100, Math.round(Number(proposed.value) || 0)));
+  const title = String(proposed.title || '').trim();
+  const description = String(proposed.description || '').trim();
+  if (!current) return { title, value: requested, description };
+  const currentValue = Math.round(Number(current.value) || 0);
+  const reversal = (currentValue >= REVERSAL_FLOOR && requested <= -REVERSAL_FLOOR)
+    || (currentValue <= -REVERSAL_FLOOR && requested >= REVERSAL_FLOOR);
+  const step = reversal ? REVERSAL_STEP : RELATIONSHIP_STEP;
+  const delta = requested - currentValue;
+  const value = currentValue + Math.sign(delta) * Math.min(Math.abs(delta), step);
+  const currentTitle = String(current.title || '').trim();
+  const nextTitle = currentTitle && !reversal ? currentTitle : title || currentTitle;
+  const currentDescription = String(current.description || '').trim();
+  const nextDescription = !description || (currentDescription && isWeakTextReplacement(currentDescription, description, { floor: 40 }))
+    ? currentDescription
+    : description;
+  const unchanged = comparableText(nextTitle) === comparableText(currentTitle)
+    && comparableText(nextDescription) === comparableText(currentDescription)
+    && Math.abs(value - currentValue) < 5;
+  return unchanged ? null : { title: nextTitle, value, description: nextDescription };
 }
 
 function validateNarrativeChange(change, currentEntityId, entityIds) {
@@ -63,5 +94,6 @@ module.exports = {
   discardEnrichPending,
   normalizeDirectionalRelationship,
   normalizeRelationshipLabel,
+  resolveRelationshipUpdate,
   validateNarrativeChange,
 };

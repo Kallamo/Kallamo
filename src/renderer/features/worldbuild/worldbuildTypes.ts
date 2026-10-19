@@ -42,6 +42,8 @@ export interface WorldbuildKnowledgeEntry {
    * before categories existed, which stay readable and are shown as unclassified.
    */
   category?: string | null;
+  /** The story day a memory happened, in the world calendar. Null when nobody set one. */
+  occurredOn?: { eraId: string; year: number; month: number; day: number } | null;
   /** Who passed it on. Only carried by reported Knowledge; first-hand records have none. */
   informantIds?: string[];
   relationToCanon?: 'aligned' | 'contradicted' | 'unknown';
@@ -147,7 +149,7 @@ export interface WorldbuildApi {
     fields?: EntityFieldDefinition[];
     error?: string;
   }>;
-  saveWorldbuildFieldDefinition(definition: Partial<EntityFieldDefinition> & { clearValuesOnTypeChange?: boolean }): Promise<{
+  saveWorldbuildFieldDefinition(definition: Omit<Partial<EntityFieldDefinition>, 'options'> & { options?: Array<{ id?: string; label: string }>; clearValuesOnTypeChange?: boolean }): Promise<{
     success: boolean;
     field?: EntityFieldDefinition;
     error?: string;

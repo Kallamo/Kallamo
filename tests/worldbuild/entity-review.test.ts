@@ -6,6 +6,7 @@ const {
   discardEnrichPending,
   normalizeDirectionalRelationship,
   normalizeRelationshipLabel,
+  resolveRelationshipUpdate,
   validateNarrativeChange,
 } = require('../../src/main/features/worldbuild/entity-review.js');
 
@@ -17,7 +18,7 @@ describe('bulk entity update rejection', () => {
       _enrichPending: {
         data: { personality: { value: 'Bold' } },
         lore: { value: 'Replacement lore' },
-        links: [{ targetId: 'mara' }],
+        links: [{ targetId: 'tess' }],
         chapters: [{ id: 'chapter-one' }],
         evidence: { E1: { excerpt: 'Evidence' } }
       }
@@ -38,41 +39,41 @@ describe('bulk entity update rejection', () => {
 });
 
 describe('narrative update hardening', () => {
-  const entities = new Set(['alistair', 'elian', 'kepler', 'isolde']);
+  const entities = new Set(['rosalind', 'brann', 'corwin', 'sabine']);
 
-  test('rejects roles left with a dangling connector', () => {
-    expect(normalizeRelationshipLabel('Salvador de')).toBeNull();
-    expect(normalizeRelationshipLabel('Capitã e líder que')).toBeNull();
+  test('keeps a short role whole instead of cutting it at a word count', () => {
+    expect(normalizeRelationshipLabel('Rival in the arena who')).toBe('Rival in the arena who');
+    expect(normalizeRelationshipLabel('Companion who offered presence')).toBe('Companion who offered presence');
   });
 
   test('rejects a relationship whose perspective belongs to the target', () => {
     expect(validateNarrativeChange({
       kind: 'relationship',
-      subjectId: 'alistair',
-      targetId: 'elian',
-      perspectiveOwnerId: 'elian',
-      sourcePerspective: 'Elian admires Alistair.',
-    }, 'alistair', entities)).toEqual({ valid: false, reason: 'perspective-owner-mismatch' });
+      subjectId: 'rosalind',
+      targetId: 'brann',
+      perspectiveOwnerId: 'brann',
+      sourcePerspective: 'Brann admires Rosalind.',
+    }, 'rosalind', entities)).toEqual({ valid: false, reason: 'perspective-owner-mismatch' });
   });
 
   test('routes explicit knowledge to its declared owner', () => {
     expect(validateNarrativeChange({
       kind: 'knowledge',
-      subjectId: 'kepler',
-      targetId: 'isolde',
-      value: 'Isolde lives in Zeth.',
+      subjectId: 'corwin',
+      targetId: 'sabine',
+      value: 'Sabine lives in Kesh.',
       method: 'reported',
-    }, 'isolde', entities)).toEqual({ valid: true, ownerId: 'kepler' });
+    }, 'sabine', entities)).toEqual({ valid: true, ownerId: 'corwin' });
   });
 
   test('rejects knowledge inferred by the update model instead of acquired in the story', () => {
     expect(validateNarrativeChange({
       kind: 'knowledge',
-      subjectId: 'kepler',
-      targetId: 'isolde',
-      value: 'Isolde may still be alive.',
+      subjectId: 'corwin',
+      targetId: 'sabine',
+      value: 'Sabine may still be alive.',
       method: 'inferred',
-    }, 'isolde', entities)).toEqual({
+    }, 'sabine', entities)).toEqual({
       valid: false,
       reason: 'knowledge-acquisition-not-demonstrated',
     });
@@ -81,10 +82,10 @@ describe('narrative update hardening', () => {
   test('rejects knowledge without an explicit acquisition method', () => {
     expect(validateNarrativeChange({
       kind: 'knowledge',
-      subjectId: 'kepler',
-      targetId: 'isolde',
-      value: 'Isolde lives in Zeth.',
-    }, 'isolde', entities)).toEqual({
+      subjectId: 'corwin',
+      targetId: 'sabine',
+      value: 'Sabine lives in Kesh.',
+    }, 'sabine', entities)).toEqual({
       valid: false,
       reason: 'knowledge-acquisition-not-demonstrated',
     });
@@ -93,40 +94,67 @@ describe('narrative update hardening', () => {
   test('rejects document-only observations from Update Entities', () => {
     expect(validateNarrativeChange({
       kind: 'observation',
-      subjectId: 'alistair',
+      subjectId: 'rosalind',
       method: 'reported',
-    }, 'alistair', entities)).toEqual({ valid: false, reason: 'document-observation' });
+    }, 'rosalind', entities)).toEqual({ valid: false, reason: 'document-observation' });
   });
 });
 
 describe('directional relationship proposals', () => {
   test('keeps only the source entity perspective', () => {
-    expect(normalizeDirectionalRelationship({ source: 'Arkanos', value: 75, sourcePerspective: 'Arkanos trusts Alistair.' }, 'Arkanos'))
-      .toEqual({ value: 75, description: 'Arkanos trusts Alistair.' });
+    expect(normalizeDirectionalRelationship({ source: 'Quillon', value: 75, sourcePerspective: 'Quillon trusts Rosalind.' }, 'Quillon'))
+      .toEqual({ value: 75, description: 'Quillon trusts Rosalind.' });
   });
 
   test('rejects the reciprocal perspective from the target entity', () => {
-    expect(normalizeDirectionalRelationship({ source: 'Alistair', value: 40, sourcePerspective: 'Alistair respects Arkanos.' }, 'Arkanos'))
+    expect(normalizeDirectionalRelationship({ source: 'Rosalind', value: 40, sourcePerspective: 'Rosalind respects Quillon.' }, 'Quillon'))
       .toBeNull();
   });
 
   test('clamps relationship intensity to the supported range', () => {
-    expect(normalizeDirectionalRelationship({ source: 'Arkanos', value: 140, sourcePerspective: 'Complete devotion.' }, 'Arkanos')?.value)
+    expect(normalizeDirectionalRelationship({ source: 'Quillon', value: 140, sourcePerspective: 'Complete devotion.' }, 'Quillon')?.value)
       .toBe(100);
   });
 
   test('keeps only the concise relationship role before an explanation', () => {
-    expect(normalizeRelationshipLabel('aliada; reconhece nele um trabalhador lutando contra o sistema'))
-      .toBe('aliada');
+    expect(normalizeRelationshipLabel('ally; sees in him a worker fighting the system'))
+      .toBe('ally');
   });
 
-  test('limits an unpunctuated relationship role to four words', () => {
-    expect(normalizeRelationshipLabel('aliado militar soldado do esquadrão profundamente leal'))
-      .toBe('aliado militar soldado do esquadrão');
+  test('drops a role that is a sentence rather than truncating it', () => {
+    expect(normalizeRelationshipLabel('military ally and soldier of Ravenhold deeply loyal')).toBeNull();
   });
 
   test('preserves concise roles on both sides of a slash', () => {
-    expect(normalizeRelationshipLabel('Companheiro de Luto / Arquiteto Moral da Resistência'))
-      .toBe('Companheiro de Luto / Arquiteto Moral da Resistência');
+    expect(normalizeRelationshipLabel('Road Companion / Moral Guardian of Kesh'))
+      .toBe('Road Companion / Moral Guardian of Kesh');
+  });
+});
+
+describe('editing an existing relationship', () => {
+  const current = { title: 'Mentor', value: 60, description: 'Brann trusts Rosalind with the forge and listens when she corrects him, even in front of others.' };
+
+  test('a new relationship is taken as proposed', () => {
+    expect(resolveRelationshipUpdate(null, { title: 'Rival', value: -30, description: 'Brann resents her.' }))
+      .toEqual({ title: 'Rival', value: -30, description: 'Brann resents her.' });
+  });
+
+  test('keeps the title and moves the score one bounded step', () => {
+    const update = resolveRelationshipUpdate(current, { title: 'Trusted teacher', value: 95, description: `${current.description} After the trial he defends her openly.` });
+    expect(update).toEqual({ title: 'Mentor', value: 85, description: `${current.description} After the trial he defends her openly.` });
+  });
+
+  test('only a reversal may rename the bond, still within a step', () => {
+    expect(resolveRelationshipUpdate(current, { title: 'Betrayer', value: -60, description: `${current.description} Then she sold the forge.` }))
+      .toEqual({ title: 'Betrayer', value: 10, description: `${current.description} Then she sold the forge.` });
+  });
+
+  test('keeps the current perspective when the new one drops most of it', () => {
+    expect(resolveRelationshipUpdate(current, { title: 'Mentor', value: 75, description: 'He respects her.' })?.description)
+      .toBe(current.description);
+  });
+
+  test('nothing to review when only the wording around the same bond changed', () => {
+    expect(resolveRelationshipUpdate(current, { title: 'Wise teacher', value: 62, description: 'He trusts her.' })).toBeNull();
   });
 });

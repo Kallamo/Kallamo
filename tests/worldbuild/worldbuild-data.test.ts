@@ -5,7 +5,10 @@ import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { runDatabaseMigrations } from '../../src/main/database/migrations.js';
 import { createWorldbuildDataService } from '../../src/main/features/worldbuild/worldbuild-data.js';
+import { NarrativeStateSystem } from '../../src/main/features/narrative/narrative-state';
+import { RoleplaySkills } from '../../src/main/features/narrative/roleplay-skills';
 import { openTestDatabase } from '../sqlite-test-database';
+import { loadCurrentNarrativeRecords } from '../../src/main/features/narrative/narrative-record-projection';
 
 describe('Worldbuild runtime data adapter', () => {
   let directory: string;
@@ -25,6 +28,48 @@ describe('Worldbuild runtime data adapter', () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
+  test('a proposed relationship is reviewed against what it says now, and AI skill changes count', () => {
+    db.exec(`
+      CREATE TABLE entities (
+        id TEXT PRIMARY KEY, workspaceId TEXT, type TEXT NOT NULL, canonicalName TEXT NOT NULL,
+        data TEXT, status TEXT NOT NULL DEFAULT 'confirmed', last_modified INTEGER DEFAULT 0
+      );
+      CREATE TABLE entity_links (
+        id TEXT PRIMARY KEY, workspaceId TEXT, fromId TEXT, relType TEXT,
+        toId TEXT, label TEXT, metadata_json TEXT, createdAt INTEGER
+      );
+    `);
+    const insert = db.prepare('INSERT INTO entities (id, workspaceId, type, canonicalName, data) VALUES (?, ?, ?, ?, ?)');
+    insert.run('brann', 'workspace-one', 'Characters', 'Brann', '{}');
+    insert.run('tess', 'workspace-one', 'Characters', 'Tess', '{}');
+    db.prepare(`INSERT INTO entity_links VALUES ('link', 'workspace-one', 'brann', 'related_to', 'tess', 'Mentor', '{"value":60}', 1)`).run();
+    new NarrativeStateSystem(db).createEvent({
+      workspaceId: 'workspace-one', originId: 'entity-update:brann', interpreterId: 'system-model',
+      originType: 'worldbuild-update', forceReview: true, allowedEntityIds: new Set(['brann', 'tess']),
+      event: {
+        type: 'custom', description: 'Worldbuild update suggestions for Brann.', excerpt: 'Brann defends Tess.',
+        participantIds: ['brann', 'tess'], confidence: 0.85,
+        operations: [{ type: 'relationship', sourceEntityId: 'brann', targetEntityId: 'tess', dimension: 'overall', title: 'Mentor', value: 80, description: 'He defends her.' }],
+      },
+    });
+    const relationship = service.getSubjectReview('workspace-one', 'brann').proposals[0].operations
+      .find((operation: { kind: string }) => operation.kind === 'relationship');
+    expect(relationship).toMatchObject({ title: 'Mentor', value: 80, current: { title: 'Mentor', value: 60 } });
+
+    const skills = new RoleplaySkills(db);
+    skills.saveSettings('workspace-one', { enabled: true, config: { policy: 'review' } });
+    skills.setMembers('workspace-one', [{ targetType: 'entity', targetId: 'brann' }]);
+    skills.saveSkill('workspace-one', { name: 'Smithing' });
+    expect(skills.proposeChange({ id: 'skill-change', workspaceId: 'workspace-one', entityId: 'brann', kind: 'assign', skillKey: 'smithing', source: 'ai' })?.status).toBe('pending');
+    expect(service.listReviewCounts('workspace-one').brann.entityUpdates).toBe(1);
+    const pending = service.listPendingReviewIds('workspace-one', ['brann']);
+    expect(pending.skillChangeIds).toEqual(['skill-change']);
+    expect(pending.narrativeEventIds).toHaveLength(1);
+    expect(service.listPendingReviewIds('workspace-one', ['tess'])).toEqual({ narrativeEventIds: [], skillChangeIds: [] });
+    new NarrativeStateSystem(db).resolveEvent('workspace-one', pending.narrativeEventIds[0], 'rejected');
+    expect(service.listPendingReviewIds('workspace-one', ['brann']).narrativeEventIds).toEqual([]);
+  });
+
   test('stores and updates reusable typed field definitions', () => {
     const field = service.saveFieldDefinition({
       projectId: 'workspace-one',
@@ -40,6 +85,32 @@ describe('Worldbuild runtime data adapter', () => {
     expect(service.listFieldDefinitions('workspace-one', 'Items')).toEqual([field]);
     const updated = service.saveFieldDefinition({ ...field, label: 'Primary material' });
     expect(service.listFieldDefinitions('workspace-one', 'Items')).toEqual([updated]);
+  });
+
+  test('a choice option keeps its id through a rename, and any label gets one', () => {
+    const field = service.saveFieldDefinition({
+      projectId: 'workspace-one', typeId: 'Items', label: '희귀도',
+      valueType: 'single-choice', options: ['전설', 'Legendary', 'Legendary'], position: 0, aiAccess: 'read-write'
+    });
+    type Option = { id: string; label: string };
+    const optionsOf = (definition: unknown) => (definition as { options: Option[] }).options;
+    const options = optionsOf(field);
+    expect(field.key).toMatch(/^field-/);
+    expect(options.map(option => option.label)).toEqual(['전설', 'Legendary', 'Legendary']);
+    expect(new Set(options.map(option => option.id)).size).toBe(3);
+    expect(options.every(option => option.id.startsWith('opt-'))).toBe(true);
+
+    const renamed = service.saveFieldDefinition({ ...field, options: [{ ...options[1], label: 'Mythic' }, options[0]] });
+    expect(renamed.key).toBe(field.key);
+    expect(optionsOf(renamed)).toEqual([{ id: options[1].id, label: 'Mythic' }, options[0]]);
+  });
+
+  test('keeps the option ids an older build derived from the label', () => {
+    const field = service.saveFieldDefinition({
+      projectId: 'workspace-one', typeId: 'Items', label: 'Material',
+      valueType: 'single-choice', options: [{ id: 'lend-rio', label: 'Legendary' }], position: 0, aiAccess: 'read-write'
+    });
+    expect((field as unknown as { options: unknown }).options).toEqual([{ id: 'lend-rio', label: 'Legendary' }]);
   });
 
   test('stores visual entity templates without changing canonical type ids', () => {
@@ -98,24 +169,50 @@ describe('Worldbuild runtime data adapter', () => {
 
   test('adds, revises, and removes a Known entry through narrative revisions', () => {
     const added = service.saveSubjectEntry({
-      workspaceId: 'workspace-one', subjectId: 'mara', kind: 'knowledge',
+      workspaceId: 'workspace-one', subjectId: 'tess', kind: 'knowledge',
       entry: { aboutId: 'northern-gate', statement: 'The gate is sealed.', confidence: 0.8, acquisition: 'witness', accessibility: 'available' }
     });
     expect(added.known).toHaveLength(1);
 
     const revised = service.saveSubjectEntry({
-      workspaceId: 'workspace-one', subjectId: 'mara', kind: 'knowledge',
+      workspaceId: 'workspace-one', subjectId: 'tess', kind: 'knowledge',
       existingId: added.known[0].id,
       entry: { aboutId: 'northern-gate', statement: 'The gate has reopened.', confidence: 1, acquisition: 'witness', accessibility: 'available' }
     });
     expect(revised.known).toEqual([expect.objectContaining({ statement: 'The gate has reopened.' })]);
 
     const removed = service.deleteSubjectEntry({
-      workspaceId: 'workspace-one', subjectId: 'mara', kind: 'knowledge', entryId: revised.known[0].id
+      workspaceId: 'workspace-one', subjectId: 'tess', kind: 'knowledge', entryId: revised.known[0].id
     });
     expect(removed.known).toEqual([]);
     expect(db.prepare("SELECT COUNT(*) AS count FROM narrative_records WHERE record_type = 'knowledge'").get())
       .toEqual({ count: 3 });
+  });
+
+  test('revising a Known entry without an entry id replaces it', () => {
+    const added = service.saveSubjectEntry({
+      workspaceId: 'workspace-one', subjectId: 'tess', kind: 'knowledge',
+      entry: { aboutId: 'northern-gate', statement: 'The gate is sealed.', acquisition: 'witness', accessibility: 'available' }
+    });
+    // Older narrative records carry no entryId; their record id is their only handle.
+    const row = db.prepare("SELECT record_id, payload_json FROM narrative_records WHERE record_type = 'knowledge'").get() as { record_id: string; payload_json: string };
+    const legacy = JSON.parse(row.payload_json);
+    delete legacy.entryId;
+    db.prepare('UPDATE narrative_records SET record_id = ?, payload_json = ? WHERE record_id = ?')
+      .run(legacy.id, JSON.stringify(legacy), row.record_id);
+    expect(service.getSubjectKnowledge('workspace-one', 'tess').known).toHaveLength(added.known.length);
+
+    const revised = service.saveSubjectEntry({
+      workspaceId: 'workspace-one', subjectId: 'tess', kind: 'knowledge',
+      existingId: legacy.id,
+      entry: { aboutId: 'northern-gate', statement: 'The gate has reopened.', acquisition: 'witness', accessibility: 'available' }
+    });
+    expect(revised.known).toEqual([expect.objectContaining({ statement: 'The gate has reopened.' })]);
+
+    const removed = service.deleteSubjectEntry({
+      workspaceId: 'workspace-one', subjectId: 'tess', kind: 'knowledge', entryId: revised.known[0].id
+    });
+    expect(removed.known).toEqual([]);
   });
 
   test('replaces and forgets memories without erasing their history', () => {
@@ -140,6 +237,20 @@ describe('Worldbuild runtime data adapter', () => {
       .toEqual({ count: 3 });
   });
 
+  test('keeps an optional story day on a memory and drops a half-set one', () => {
+    const dated = service.saveSubjectEntry({
+      workspaceId: 'workspace-one', subjectId: 'vharos', kind: 'memory',
+      entry: { summary: 'Vharos saw the gate close.', accessibility: 'available', occurredOn: { eraId: 'ce', year: 1001, month: 3, day: 16 } }
+    });
+    expect(dated.memories[0].occurredOn).toEqual({ eraId: 'ce', year: 1001, month: 3, day: 16 });
+
+    const cleared = service.saveSubjectEntry({
+      workspaceId: 'workspace-one', subjectId: 'vharos', kind: 'memory', existingId: dated.memories[0].id,
+      entry: { summary: 'Vharos saw the gate close.', accessibility: 'available', occurredOn: { eraId: 'ce', year: 1001, month: 0, day: 16 } }
+    });
+    expect(cleared.memories[0].occurredOn).toBeNull();
+  });
+
   test('marks entries owned by an Event occurrence and keeps them read-only here', () => {
     const added = service.saveSubjectEntry({
       workspaceId: 'workspace-one', subjectId: 'vharos', kind: 'memory',
@@ -158,7 +269,7 @@ describe('Worldbuild runtime data adapter', () => {
       INSERT INTO worldbuild_event_occurrences (
         workspace_id, occurrence_id, event_entity_id, narrative_event_id,
         title, summary, source, archived, created_at, updated_at
-      ) VALUES (?, 'occurrence-one', 'silver-tournament', ?, 'The Silver Tournament', '', 'user', 0, 1, 1)
+      ) VALUES (?, 'occurrence-one', 'silver-tournament', ?, 'The Harvest Fair', '', 'user', 0, 1, 1)
     `).run('workspace-one', narrativeEventId);
 
     const projection = service.getSubjectKnowledge('workspace-one', 'vharos');
@@ -169,7 +280,7 @@ describe('Worldbuild runtime data adapter', () => {
           kind: 'occurrence',
           occurrenceId: 'occurrence-one',
           eventEntityId: 'silver-tournament',
-          title: 'The Silver Tournament',
+          title: 'The Harvest Fair',
         },
       })
     ]);
@@ -189,14 +300,14 @@ describe('Worldbuild runtime data adapter', () => {
 
   test('rejects new manual observations without deleting legacy support', () => {
     expect(() => service.saveSubjectEntry({
-      workspaceId: 'workspace-one', subjectId: 'mara', kind: 'observation',
-      entry: { summary: 'Mara witnessed the northern gate collapse.', confidence: 0.9, method: 'witness', accessibility: 'available' }
+      workspaceId: 'workspace-one', subjectId: 'tess', kind: 'observation',
+      entry: { summary: 'Tess witnessed the northern gate collapse.', confidence: 0.9, method: 'witness', accessibility: 'available' }
     })).toThrow('Unsupported Knowledge entry type.');
   });
 
   test('keeps Faction knowledge separate from member knowledge', () => {
     service.saveSubjectEntry({
-      workspaceId: 'workspace-one', subjectId: 'mara', kind: 'belief',
+      workspaceId: 'workspace-one', subjectId: 'tess', kind: 'belief',
       entry: { aboutId: 'vault', statement: 'The vault is empty.', confidence: 0.7 }
     });
     service.saveSubjectEntry({
@@ -215,16 +326,16 @@ describe('Worldbuild runtime data adapter', () => {
       workspaceId: 'workspace-one', subjectId: 'elias', kind: 'knowledge',
       entry: {
         aboutId: 'vault', statement: 'The vault opens at dusk.', confidence: 0.75,
-        acquisition: 'reported', informantIds: ['mara', 'elias'],
+        acquisition: 'reported', informantIds: ['tess', 'elias'],
       }
     });
 
     expect(reported.known).toEqual([
-      expect.objectContaining({ acquisition: 'reported', informantIds: ['mara'] })
+      expect.objectContaining({ acquisition: 'reported', informantIds: ['tess'] })
     ]);
     const awareOf = service.getSubjectKnowledge('workspace-one', 'elias')
       .cards.map((card: { targetId: string }) => card.targetId);
-    expect([...awareOf].sort()).toEqual(['mara', 'vault']);
+    expect([...awareOf].sort()).toEqual(['tess', 'vault']);
   });
 
   test('drops informants when Knowledge was acquired first-hand', () => {
@@ -232,7 +343,7 @@ describe('Worldbuild runtime data adapter', () => {
       workspaceId: 'workspace-one', subjectId: 'elias', kind: 'knowledge',
       entry: {
         aboutId: 'vault', statement: 'The vault opens at dusk.', confidence: 0.95,
-        acquisition: 'witness', informantIds: ['mara'],
+        acquisition: 'witness', informantIds: ['tess'],
       }
     });
 
@@ -258,14 +369,14 @@ describe('Worldbuild runtime data adapter', () => {
       entry: {
         title: 'Northern gate status',
         statement: 'The northern gate collapsed during the siege.',
-        relatedEntityIds: ['northern-gate', 'mara'],
+        relatedEntityIds: ['northern-gate', 'tess'],
       },
     });
     expect(added).toEqual([
       expect.objectContaining({
         title: 'Northern gate status',
         statement: 'The northern gate collapsed during the siege.',
-        relatedEntityIds: ['northern-gate', 'mara'],
+        relatedEntityIds: ['northern-gate', 'tess'],
       }),
     ]);
 
@@ -275,7 +386,7 @@ describe('Worldbuild runtime data adapter', () => {
       entry: {
         title: 'Northern gate status',
         statement: 'The northern gate partially collapsed during the siege.',
-        relatedEntityIds: ['northern-gate', 'mara'],
+        relatedEntityIds: ['northern-gate', 'tess'],
       },
     });
     expect(revised).toEqual([
@@ -302,11 +413,11 @@ describe('Worldbuild runtime data adapter', () => {
     });
 
     const knowledge = service.saveSubjectEntry({
-      workspaceId: 'workspace-one', subjectId: 'mara', kind: 'knowledge',
+      workspaceId: 'workspace-one', subjectId: 'tess', kind: 'knowledge',
       entry: { aboutId: 'northern-gate', statement: 'The gate collapsed.', factIds: [fact.id], confidence: 1, acquisition: 'witness', accessibility: 'available' },
     });
     const belief = service.saveSubjectEntry({
-      workspaceId: 'workspace-one', subjectId: 'mara', kind: 'belief',
+      workspaceId: 'workspace-one', subjectId: 'tess', kind: 'belief',
       entry: { aboutId: 'northern-gate', statement: 'The collapse was deliberate.', factIds: [fact.id], confidence: 0.7 },
     });
 
@@ -319,9 +430,44 @@ describe('Worldbuild runtime data adapter', () => {
       entry: {
         title: 'Northern gate status',
         statement: 'The northern gate partially collapsed during the siege.',
-        relatedEntityIds: ['northern-gate', 'mara'],
+        relatedEntityIds: ['northern-gate', 'tess'],
       },
     });
     expect(revisedFact.id).toBe(fact.id);
+  });
+
+  test('a sheet edit to a relationship becomes the one current ledger entry for the pair', () => {
+    db.exec(`
+      CREATE TABLE entities (
+        id TEXT PRIMARY KEY, workspaceId TEXT, type TEXT NOT NULL, canonicalName TEXT NOT NULL,
+        data TEXT, status TEXT NOT NULL DEFAULT 'confirmed', last_modified INTEGER DEFAULT 0
+      );
+      CREATE TABLE entity_links (
+        id TEXT PRIMARY KEY, workspaceId TEXT, fromId TEXT, relType TEXT,
+        toId TEXT, label TEXT, metadata_json TEXT, createdAt INTEGER
+      );
+    `);
+    const insert = db.prepare('INSERT INTO entities (id, workspaceId, type, canonicalName, data) VALUES (?, ?, ?, ?, ?)');
+    insert.run('brann', 'workspace-one', 'Characters', 'Brann', '{}');
+    insert.run('tess', 'workspace-one', 'Characters', 'Tess', '{}');
+    db.prepare(`INSERT INTO entity_links VALUES ('link', 'workspace-one', 'brann', 'related_to', 'tess', 'Stranger', '{"value":10,"description":"They just met."}', 1)`).run();
+    service.recordRelationship({ workspaceId: 'workspace-one', fromId: 'brann', toId: 'tess' });
+    const current = () => loadCurrentNarrativeRecords(db, { workspaceId: 'workspace-one', recordTypes: ['relationship'] })
+      .map(({ payload }) => ({ title: payload.title, value: payload.value, description: payload.description }));
+    expect(current()).toEqual([{ title: 'Stranger', value: 10, description: 'They just met.' }]);
+
+    db.prepare(`DELETE FROM entity_links`).run();
+    db.prepare(`INSERT INTO entity_links VALUES ('link', 'workspace-one', 'brann', 'related_to', 'tess', 'Mentor', '{"value":60,"description":"He trains her."}', 1)`).run();
+    service.recordRelationship({ workspaceId: 'workspace-one', fromId: 'brann', toId: 'tess' });
+    expect(current()).toEqual([{ title: 'Mentor', value: 60, description: 'He trains her.' }]);
+
+    const events = () => (db.prepare('SELECT COUNT(*) AS n FROM narrative_events').get() as { n: number }).n;
+    const before = events();
+    service.recordRelationship({ workspaceId: 'workspace-one', fromId: 'brann', toId: 'tess' });
+    expect(events()).toBe(before);
+
+    db.prepare(`DELETE FROM entity_links`).run();
+    service.recordRelationship({ workspaceId: 'workspace-one', fromId: 'brann', toId: 'tess' });
+    expect(current()).toEqual([]);
   });
 });

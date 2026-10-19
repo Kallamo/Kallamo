@@ -43,6 +43,7 @@ import { WorldbuildInventory, WorldbuildRelationships } from '../features/worldb
 import WorldbuildTemplateManager from '../features/worldbuild/WorldbuildTemplateManager';
 import WorldbuildRoleplayResources, { RaceRoleplayDefaults } from '../features/worldbuild/WorldbuildRoleplayResources';
 import WorldbuildEntitySkills from '../features/worldbuild/WorldbuildEntitySkills';
+import { describeSkillChange, skillChangeItems } from '../features/roleplay/changeKinds';
 import { displayNativeValue, displayProposalValue } from '../features/worldbuild/reviewDisplay';
 import {
   ABUNDANCE_HELP, CREATURE_NATURES, DISPOSITION, entityMeta, fieldLabel, ITEM_TYPES, itemMeta, meta, TYPES,
@@ -858,6 +859,22 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const hasEntityReview = selectedReviewCounts.entityUpdates > 0;
   const hasNarrativeReview = selectedReviewCounts.narrative > 0;
   const hasReview = hasEntityReview || hasNarrativeReview;
+  // Skills the AI wants to give or raise live in the Rules; the sheet's review shows the same changes.
+  const [reviewSkillChanges, setReviewSkillChanges] = useState([]);
+  const loadReviewSkillChanges = useCallback(async () => {
+    if (!workspaceId || !selectedId) { setReviewSkillChanges([]); return; }
+    try {
+      const config = await electronAPI.getRoleplayConfiguration?.(workspaceId);
+      setReviewSkillChanges(skillChangeItems(config).filter(change => change.entityId === selectedId && change.status === 'pending' && change.source === 'ai'));
+    } catch { setReviewSkillChanges([]); }
+  }, [electronAPI, workspaceId, selectedId]);
+  useEffect(() => {
+    if (!hasEntityReview) { setReviewSkillChanges([]); return undefined; }
+    loadReviewSkillChanges();
+    const refresh = event => { if (!event.detail?.workspaceId || event.detail.workspaceId === workspaceId) loadReviewSkillChanges(); };
+    window.addEventListener('roleplay-state-change', refresh);
+    return () => window.removeEventListener('roleplay-state-change', refresh);
+  }, [hasEntityReview, loadReviewSkillChanges, workspaceId]);
   const isFaction = selected?.type === 'Factions';
   // Which tabs a sheet shows follows from the type and its shape. The relational tabs are
   // systematic, so the template has no say over them.
@@ -1172,7 +1189,16 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     showToast('The next update reads this entity\'s passages again.', 'success');
   };
 
-  const remove = async () => { if (!selected?.id) { setSelected(null); return; } setSaving(true); try { await electronAPI.deleteEntity(selected.id); setSelected(null); await load(); } finally { setSaving(false); } };
+  const remove = async () => {
+    if (!selected?.id) { setSelected(null); return; }
+    setSaving(true);
+    try {
+      const r = await electronAPI.deleteEntity(selected.id);
+      if (!r?.success) { showToast(`Could not delete: ${r?.error || 'unknown error'}`, 'error'); return; }
+      setSelected(null);
+      await load();
+    } finally { setSaving(false); }
+  };
 
   const mergeInto = async (targetId, prefer = 'target') => {
     if (!selected?.id || !targetId) return;
@@ -1259,6 +1285,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       if (res.textMatchesDeferred) bits.push(`${res.textMatchesDeferred} lower-priority text matches deferred`);
       if (res.canonicalSuggestionCount) bits.push(`${res.canonicalSuggestionCount} entity suggestions`);
       if (res.narrativeSuggestionCount) bits.push(`${res.narrativeSuggestionCount} Narrative state suggestions`);
+      if (res.skillSuggestionCount) bits.push(`${res.skillSuggestionCount} skill ${res.skillSuggestionCount === 1 ? 'suggestion' : 'suggestions'}`);
       if (res.emptyFieldSuggestions) bits.push(`${res.emptyFieldSuggestions} empty field suggestions`);
       if (res.emptyFieldsWithoutSupport) bits.push(`${res.emptyFieldsWithoutSupport} empty fields without supporting evidence`);
       if (res.emptyFieldsAwaitingEvidence) bits.push(`${res.emptyFieldsAwaitingEvidence} empty fields still awaiting deferred evidence`);
@@ -1380,6 +1407,24 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     } catch (e) { showToast(`Review failed: ${e.message}`, 'error'); }
     finally { setSaving(false); }
   };
+  const resolveSkillReview = async (changes, decision) => {
+    if (!changes.length) return;
+    setSaving(true);
+    try {
+      for (const change of changes) {
+        const r = await electronAPI.resolveRoleplaySkillChange(workspaceId, change.id, decision);
+        if (!r?.success) { showToast(`Review failed: ${r?.error || 'unknown error'}`, 'error'); break; }
+      }
+      window.dispatchEvent(new CustomEvent('roleplay-state-change', { detail: { workspaceId } }));
+      await load();
+    } catch (e) { showToast(`Review failed: ${e.message}`, 'error'); }
+    finally { setSaving(false); }
+  };
+  // Accept all and Reject all cover the staged sheet update and the skill changes together.
+  const resolveWholeReview = async (accept, staged) => {
+    await resolveSkillReview(reviewSkillChanges, accept ? 'approved' : 'rejected');
+    if (staged) await resolveReview(accept ? staged : {}, accept ? {} : staged);
+  };
 
   const reloadRel = async () => { await loadRelations({ id: selected.id, type: selected.type }); await load(); };
   // Any { success:false } surfaces as a toast, so a failed link never looks like a no-op.
@@ -1474,7 +1519,9 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const visibleIds = useMemo(() => new Set(filtered.map(entity => entity.id)), [filtered]);
   const hiddenSelectedCount = useMemo(() => selectedEntities.filter(entity => !visibleIds.has(entity.id)).length, [selectedEntities, visibleIds]);
   const selectedProposedCount = selectedEntities.filter(entity => entity.status === 'proposed').length;
-  const selectedUpdateCount = selectedEntities.filter(entity => entity.status !== 'proposed' && ((reviewCounts[entity.id]?.entityUpdates || 0) > 0 || (reviewCounts[entity.id]?.narrative || 0) > 0)).length;
+  // Sheet updates and Narrative state are resolved by different actions, so each counts on its own.
+  const selectedUpdateCount = selectedEntities.filter(entity => entity.status !== 'proposed' && (reviewCounts[entity.id]?.entityUpdates || 0) > 0).length;
+  const selectedNarrativeCount = selectedEntities.filter(entity => entity.status !== 'proposed' && (reviewCounts[entity.id]?.narrative || 0) > 0).length;
   const selectedConfirmedCount = selectedEntities.length - selectedProposedCount;
 
   useEffect(() => {
@@ -1505,13 +1552,16 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       else if (action === 'accept-updates') showToast(`Accepted AI updates for ${result.accepted} entit${result.accepted === 1 ? 'y' : 'ies'}.`, 'success');
       else if (action === 'reject-proposed') showToast(`Rejected ${result.rejected} proposed entit${result.rejected === 1 ? 'y' : 'ies'}.`, 'success');
       else if (action === 'reject-updates') showToast(`Rejected AI updates for ${result.rejected} entit${result.rejected === 1 ? 'y' : 'ies'}.`, 'success');
+      else if (action === 'reject-narrative') showToast(`Rejected ${result.rejected} Narrative state ${result.rejected === 1 ? 'suggestion' : 'suggestions'}.`, 'success');
       else if (action === 'reprocess') showToast(`${result.reset} entit${result.reset === 1 ? 'y is' : 'ies are'} ready to be reprocessed.`, 'success');
       else if (action === 'delete') showToast(`Deleted ${result.deleted} entit${result.deleted === 1 ? 'y' : 'ies'}.`, 'success');
       const selectedId = selected?.id;
       if (selectedId && ids.includes(selectedId) && (action === 'delete' || (action === 'reject-proposed' && selected?.status === 'proposed'))) setSelected(null);
       setSelectedIds(new Set());
       setBulkConfirm(null);
+      if (result.skills) window.dispatchEvent(new CustomEvent('roleplay-state-change', { detail: { workspaceId } }));
       await load();
+      if (action === 'reject-narrative') await loadSubjectReview();
       if (action !== 'delete' && selectedId && ids.includes(selectedId)) {
         const refreshed = await electronAPI.getEntity(selectedId);
         if (refreshed?.entity) await openEntity(refreshed.entity);
@@ -2192,7 +2242,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       confirm: 'Delete entities',
       message: `${summary.proposed} proposed and ${summary.entities - summary.proposed} confirmed entities will be permanently deleted, together with ${summary.relationships} relationships and ${summary.storyTags} World Index associations.${describeStoryImpact(summary)} This cannot be undone.`,
     };
-    const updateDetails = `${summary.pendingFields} field changes, ${summary.pendingLore} lore updates, and ${summary.pendingLinks} relationships`;
+    const updateDetails = `${summary.pendingFields} field changes, ${summary.pendingLore} lore updates, ${summary.pendingLinks} relationships, and ${summary.pendingSkills || 0} skill changes`;
     if (action === 'accept-proposed') return {
       tone: 'warning', title: 'Accept proposed entities', confirm: 'Accept proposals',
       message: `${summary.proposed} selected proposals will become confirmed entities. Possible duplicates still need to be merged manually.`,
@@ -2208,6 +2258,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     if (action === 'reject-updates') return {
       tone: 'danger', title: 'Reject AI updates', confirm: 'Reject updates',
       message: `Discard all pending AI changes for ${summary.pendingUpdates} selected entities: ${updateDetails}. Current canonical data will not be changed.`,
+    };
+    if (action === 'reject-narrative') return {
+      tone: 'danger', title: 'Reject Narrative state suggestions', confirm: 'Reject suggestions',
+      message: `Discard ${summary.pendingNarrative || 0} pending Narrative state ${summary.pendingNarrative === 1 ? 'suggestion' : 'suggestions'} for the selected entities: what they know, believe, remember and feel. Nothing already recorded changes.`,
     };
     if (action === 'reprocess') return {
       tone: 'warning', title: 'Reprocess selected entities', confirm: 'Reset progress',
@@ -2451,6 +2505,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             hiddenCount={hiddenSelectedCount}
             proposedCount={selectedProposedCount}
             updateCount={selectedUpdateCount}
+            narrativeCount={selectedNarrativeCount}
             confirmedCount={selectedConfirmedCount}
             busy={bulkSaving}
             selectOptions={[
@@ -2633,8 +2688,9 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
 
 
             {/* Staged AI enrichment (review policy): per-field accept/reject */}
-            {charTab === 'review' && hasEntityReview && reviewKind === 'entity' && !isNew && selected.status !== 'proposed' && selected.data?._enrichPending && (() => {
-              const pending = selected.data._enrichPending;
+            {charTab === 'review' && hasEntityReview && reviewKind === 'entity' && !isNew && selected.status !== 'proposed' && (selected.data?._enrichPending || reviewSkillChanges.length > 0) && (() => {
+              const pending = selected.data?._enrichPending || {};
+              const hasStagedUpdate = Boolean(selected.data?._enrichPending);
               const pData = (pending.data && typeof pending.data === 'object') ? pending.data : {};
               const proposalValue = proposal => proposal && typeof proposal === 'object' && 'value' in proposal ? proposal.value : proposal;
               const proposalEvidence = proposal => {
@@ -2655,8 +2711,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                   <div className="flex flex-wrap items-center gap-2">
                     {reviewSwitcher || <><ScanEye className="h-4 w-4 shrink-0 text-status-info" aria-hidden="true" /><h2 className="text-sm font-semibold text-text-primary">Suggested updates</h2></>}
                     <span className="flex-1" />
-                    <Button size="sm" variant="subtle" loading={saving} onClick={() => resolveReview({}, { fields: allFields, lore: true, links: allLinks, chapters: allChapters })}>Reject all</Button>
-                    <Button size="sm" variant="ghost" icon={Check} loading={saving} onClick={() => resolveReview({ fields: allFields, lore: true, links: allLinks, chapters: allChapters }, {})}>Accept all</Button>
+                    <Button size="sm" variant="subtle" loading={saving} onClick={() => resolveWholeReview(false, hasStagedUpdate ? { fields: allFields, lore: true, links: allLinks, chapters: allChapters } : null)}>Reject all</Button>
+                    <Button size="sm" variant="ghost" icon={Check} loading={saving} onClick={() => resolveWholeReview(true, hasStagedUpdate ? { fields: allFields, lore: true, links: allLinks, chapters: allChapters } : null)}>Accept all</Button>
                   </div>
                   <p className="caption mt-1.5">The AI read new passages and suggests these changes. Nothing changes until you accept.</p>
                   <div className="mt-2 divide-y divide-border-subtle">
@@ -2709,6 +2765,19 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                           </div>
                       </div>
                     ); })}
+                    {reviewSkillChanges.map(change => (
+                      <div key={change.id} className="flex items-start gap-4 py-3.5">
+                        <div className="min-w-0 flex-1 text-sm">
+                          <span className="block text-xs font-medium text-text-muted">Skill</span>
+                          <div className="mt-1 text-text-primary">{describeSkillChange(change, selected.canonicalName)}</div>
+                          {change.reason && <p className="mt-1 text-xs leading-relaxed text-text-muted">{change.reason}</p>}
+                        </div>
+                        <div className="flex shrink-0 items-start gap-1.5">
+                            <Button size="sm" variant="subtle" icon={X} disabled={saving} onClick={() => resolveSkillReview([change], 'rejected')}>Reject</Button>
+                            <Button size="sm" variant="ghost" icon={Check} disabled={saving} className="!border-status-success/35 !text-status-success" onClick={() => resolveSkillReview([change], 'approved')}>Accept</Button>
+                          </div>
+                      </div>
+                    ))}
                     {chapters.map(c => (
                       <div key={c.id} className="flex items-start gap-4 py-3.5">
                         <div className="min-w-0 flex-1 text-sm">
@@ -2749,7 +2818,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                         api={electronAPI}
                         showToast={showToast}
                         switcher={reviewSwitcher}
-                        onChanged={async () => { await load(); await loadSubjectReview(); }}
+                        onChanged={async () => { await load(); await loadSubjectReview(); await loadRelations(selected); }}
                       />
                     )}
                   </div>
@@ -2760,6 +2829,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                     entities={entities}
                     api={electronAPI}
                     showToast={showToast}
+                    calendar={worldCalendar}
+                    clock={worldClock}
                     onOpenEntity={openEntityById}
                   />
                 ) : charTab === 'occurrences' && hasOccurrencesTab ? (
