@@ -98,15 +98,27 @@ function RulesCompare({ rules }) {
 export default function ImportWorldbuildModal({ inspected, workspaceName = null, currentDate = null, onCancel, onImport }) {
   const { rules, calendar } = inspected;
   const hasRuleChoice = Boolean(rules?.localRules && rules?.differs);
-  const canTakeCalendar = Boolean(calendar && !calendar.same && !calendar.datesThatDoNotFit);
+  const datesToAdjust = calendar?.datesToAdjust || [];
   const [rulesMode, setRulesMode] = useState('merge');
-  const [calendarMode, setCalendarMode] = useState(calendar && !calendar.same && calendar.datesThatDoNotFit === 0 && !inspected.worldHasEntities ? 'replace' : 'keep');
+  const [calendarMode, setCalendarMode] = useState(calendar && !calendar.same && !datesToAdjust.length && !inspected.worldHasEntities ? 'replace' : 'keep');
+  const [clearDates, setClearDates] = useState(() => new Set());
   const [busy, setBusy] = useState(false);
   const ends = rules ? outcomes(rules) : null;
+  const toggleClear = key => setClearDates(current => {
+    const next = new Set(current);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
 
   const run = async () => {
     setBusy(true);
-    try { await onImport({ rulesMode: rules ? rulesMode : 'merge', calendarMode: calendar && !calendar.same ? calendarMode : null }); } finally { setBusy(false); }
+    try {
+      await onImport({
+        rulesMode: rules ? rulesMode : 'merge',
+        calendarMode: calendar && !calendar.same ? calendarMode : null,
+        clearDates: calendarMode === 'replace' ? [...clearDates] : [],
+      });
+    } finally { setBusy(false); }
   };
 
   const left = (
@@ -146,13 +158,33 @@ export default function ImportWorldbuildModal({ inspected, workspaceName = null,
             <RadioCard
               name="import-calendar"
               selected={calendarMode === 'replace'}
-              onSelect={() => canTakeCalendar && setCalendarMode('replace')}
+              onSelect={() => setCalendarMode('replace')}
               title="Use the package's calendar"
-              description={canTakeCalendar
-                ? 'It replaces yours, with its months, weekdays and current date.'
-                : `${plural(calendar.datesThatDoNotFit, 'date', 'dates')} in your world would not fit it, so it cannot replace yours.`}
+              description={`It replaces yours, with its months and weekdays.${calendar.clockResets ? ' The roleplay clock starts over on its first day.' : ''}`}
               aside={<span className="shrink-0 text-right text-xs font-semibold text-text-secondary">{calendar.packageName}</span>}
-            />
+            >
+              {calendarMode === 'replace' && datesToAdjust.length > 0 && (
+                <span className="ml-7 mt-2.5 block space-y-1.5 border-t border-border-subtle pt-2.5">
+                  <span className="block text-xs font-semibold text-text-muted">{plural(datesToAdjust.length, 'date moves', 'dates move')} to the nearest day that fits</span>
+                  {datesToAdjust.map(item => {
+                    const cleared = clearDates.has(item.key);
+                    return (
+                      <span key={item.key} className="flex items-center gap-2 text-xs">
+                        <span className="min-w-0 flex-1 truncate text-text-secondary"><b className="font-semibold text-text-primary">{item.entityName}</b> · {item.label}</span>
+                        <span className={`shrink-0 tabular-nums ${cleared ? 'text-text-subtle line-through' : 'text-text-muted'}`}>{item.from} → {item.to}</span>
+                        <button
+                          type="button"
+                          onClick={event => { event.preventDefault(); toggleClear(item.key); }}
+                          className="shrink-0 rounded px-1.5 py-0.5 text-xs font-medium text-text-muted hover:bg-surface-hover hover:text-text-primary"
+                        >
+                          {cleared ? 'Move' : 'Clear'}
+                        </button>
+                      </span>
+                    );
+                  })}
+                </span>
+              )}
+            </RadioCard>
           </div>
         </div>
       )}

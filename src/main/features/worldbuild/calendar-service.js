@@ -1055,6 +1055,25 @@ function collectInvalidDates(db, workspaceId, candidateCalendar) {
   return invalid;
 }
 
+function describeDate(calendar, input) {
+  const date = parseObject(input, {});
+  const month = calendar.months[integer(date.month) - 1]?.name || `Month ${date.month}`;
+  const era = calendar.eras.find(candidate => candidate.id === date.eraId);
+  return [date.day, month, date.year, era?.shortName].filter(part => part !== undefined && part !== null && part !== '').join(' ');
+}
+
+// Adopting another calendar never blocks: entity dates move to their nearest valid day unless
+// cleared, and the RP clock restarts at the new calendar's first day.
+function adoptCalendar(db, workspaceId, input, clearKeys = []) {
+  const calendar = normalizeCalendar(input);
+  const cleared = new Set(clearKeys);
+  const resolutions = collectInvalidDates(db, workspaceId, calendar).map(item => ({
+    key: item.key,
+    date: item.kind === 'roleplay' || cleared.has(item.key) ? null : item.suggestedDate
+  }));
+  return saveCalendar(db, workspaceId, calendar, resolutions);
+}
+
 function setNestedDate(data, field, value) {
   if (field === 'recurrence.anchorDate') {
     const recurrence = { ...(data.recurrence || {}) };
@@ -1245,8 +1264,10 @@ module.exports = {
   extractClockTarget,
   matrixMinimumMinutes,
   minutesToDuration,
+  adoptCalendar,
   collectInvalidDates,
   compareDates,
+  describeDate,
   formatClock,
   getCalendar,
   getCalendarEntries,

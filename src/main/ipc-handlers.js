@@ -3077,19 +3077,26 @@ ipcMain.handle('inspect-worldbuild-package', async (event, { workspaceId } = {})
     const rules = payload?.roleplayRules
       ? getRulesPackager().difference(workspaceId, payload.roleplayRules, getCalendarService().getTimeMatrix(db, workspaceId))
       : null;
-    // The package's calendar is offered only when this world's dates still fit it.
+    // Dates that do not fit the package's calendar are shown with where they would move.
     const calendarService = getCalendarService();
-    const currentCalendar = calendarService.getCalendar(db, workspaceId);
+    const currentCalendar = calendarService.normalizeCalendar(calendarService.getCalendar(db, workspaceId));
     let calendar = null;
     if (payload?.calendar) {
       const incoming = calendarService.normalizeCalendar(payload.calendar);
-      const same = JSON.stringify(calendarService.normalizeCalendar(currentCalendar)) === JSON.stringify(incoming);
+      const same = JSON.stringify(currentCalendar) === JSON.stringify(incoming);
+      const invalid = same ? [] : calendarService.collectInvalidDates(db, workspaceId, incoming);
       calendar = {
         same,
         packageName: incoming.name || 'Unnamed calendar',
         currentName: currentCalendar?.name || 'Unnamed calendar',
-        currentClock: calendarService.getRoleplayClock(db, workspaceId) || null,
-        datesThatDoNotFit: same ? 0 : calendarService.collectInvalidDates(db, workspaceId, incoming).length
+        clockResets: invalid.some(item => item.kind === 'roleplay'),
+        datesToAdjust: invalid.filter(item => item.kind === 'entity').map(item => ({
+          key: item.key,
+          entityName: item.entityName,
+          label: item.label,
+          from: calendarService.describeDate(currentCalendar, item.date),
+          to: calendarService.describeDate(incoming, item.suggestedDate)
+        }))
       };
     }
     let fileBytes = 0;
@@ -3113,7 +3120,7 @@ ipcMain.handle('inspect-worldbuild-package', async (event, { workspaceId } = {})
   }
 });
 
-ipcMain.handle('import-worldbuild', async (event, { workspaceId, filePath, rulesMode = 'merge', calendarMode = null } = {}) => {
+ipcMain.handle('import-worldbuild', async (event, { workspaceId, filePath, rulesMode = 'merge', calendarMode = null, clearDates = [] } = {}) => {
   try {
     if (!filePath || !fs.existsSync(filePath)) return { success: false, error: 'Choose a Worldbuild package to import.' };
     const filePaths = [filePath];
@@ -3123,25 +3130,26 @@ ipcMain.handle('import-worldbuild', async (event, { workspaceId, filePath, rules
     const existingEntityCount = db.prepare(
       "SELECT COUNT(*) AS count FROM entities WHERE workspaceId = ? AND status != 'proposed'"
     ).get(workspaceId)?.count || 0;
+    // Entities first, so a package that fails to land leaves this world's calendar untouched.
+    const { idMap, ...res } = entitiesStore.importWorldbuild(workspaceId, payload);
     let calendarImported = false;
     let calendarConflict = false;
     if (payload.calendar && calendarMode) {
       if (calendarMode === 'replace') {
-        const calendarResult = getCalendarService().saveCalendar(db, workspaceId, payload.calendar, []);
+        const calendarResult = getCalendarService().adoptCalendar(db, workspaceId, payload.calendar, Array.isArray(clearDates) ? clearDates : []);
         calendarImported = calendarResult.saved;
         calendarConflict = !calendarResult.saved;
       }
     } else if (payload.calendar) {
       const currentCalendar = getCalendarService().getCalendar(db, workspaceId);
       if (existingEntityCount === 0) {
-        const calendarResult = getCalendarService().saveCalendar(db, workspaceId, payload.calendar, []);
+        const calendarResult = getCalendarService().adoptCalendar(db, workspaceId, payload.calendar);
         calendarImported = calendarResult.saved;
         calendarConflict = !calendarResult.saved;
       } else {
         calendarConflict = JSON.stringify(currentCalendar) !== JSON.stringify(payload.calendar);
       }
     }
-    const { idMap, ...res } = entitiesStore.importWorldbuild(workspaceId, payload);
     // Packages without images stay valid; each image is checked before it is copied in.
     let imagesAdded = 0;
     if (Array.isArray(payload.images)) {

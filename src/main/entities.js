@@ -553,7 +553,7 @@ function importWorldbuild(workspaceId, payload) {
     throw new Error('Not a valid Kallamo Worldbuild file.');
   }
   const idMap = new Map();
-  let entitiesAdded = 0, linksAdded = 0;
+  let entitiesAdded = 0, linksAdded = 0, linksSkipped = 0;
   db.transaction(() => {
     for (const e of payload.entities) {
       if (!e || !e.type || !e.canonicalName) continue;
@@ -572,12 +572,19 @@ function importWorldbuild(workspaceId, payload) {
       const fromId = idMap.get(l.fromRef);
       const toId = idMap.get(l.toRef);
       if (!fromId || !toId || fromId === toId) continue;
-      if (l.relType === 'carried_by') setInventoryLink({ workspaceId, itemId: fromId, holderId: toId, metadata: l.metadata || {} });
-      else setLink({ workspaceId, fromId, relType: l.relType, toId, single: false, label: l.label || null, metadata: l.metadata || {} });
-      linksAdded++;
+      // Holding goes through the inventory, which picks owned_by or carried_by from the item's nature.
+      // A link this world's rules reject is skipped, not allowed to sink the whole package.
+      try {
+        if (l.relType === 'carried_by' || l.relType === 'owned_by') setInventoryLink({ workspaceId, itemId: fromId, holderId: toId, metadata: l.metadata || {} });
+        else setLink({ workspaceId, fromId, relType: l.relType, toId, single: false, label: l.label || null, metadata: l.metadata || {} });
+        linksAdded++;
+      } catch (error) {
+        console.warn('[import-worldbuild] skipped a link:', error.message);
+        linksSkipped++;
+      }
     }
   })();
-  return { entitiesAdded, linksAdded, idMap };
+  return { entitiesAdded, linksAdded, linksSkipped, idMap };
 }
 
 function bulkEntityRows(workspaceId, ids) {

@@ -1384,9 +1384,9 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     if (!inspected?.success) { showToast(`Import failed: ${inspected?.error || 'unknown error'}`, 'error'); return; }
     setWorldImport(inspected);
   };
-  const finishImport = async ({ rulesMode, calendarMode }) => {
+  const finishImport = async ({ rulesMode, calendarMode, clearDates }) => {
     const inspected = worldImport;
-    const r = await electronAPI.importWorldbuild(workspaceId, inspected.filePath, rulesMode, calendarMode);
+    const r = await electronAPI.importWorldbuild(workspaceId, inspected.filePath, rulesMode, calendarMode, clearDates);
     if (r?.cancelled) { setWorldImport(null); return; }
     if (!r?.success) { showToast(`Import failed: ${r?.error || 'unknown error'}`, 'error'); return; }
     setWorldImport(null);
