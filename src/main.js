@@ -3,11 +3,9 @@ app.setName('Kallamo');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
-const { autoUpdater } = require('electron-updater');
 const log = require('electron-log');
 
-autoUpdater.logger = log;
-autoUpdater.logger.transports.file.level = 'info';
+log.transports.file.level = 'info';
 log.info('Kallamo starting...');
 
 const MIME_TYPES = {
@@ -58,8 +56,8 @@ app.on('second-instance', () => {
 });
 
 require('./main/perf-monitor').install();
-require('./main/database');
-require('./main/ipc-handlers');
+const splash = require('./main/splash');
+const updater = require('./main/updater');
 
 // A file, not the DB: it is read before the window exists and must never block startup.
 const WINDOW_STATE_FILE = () => path.join(app.getPath('userData'), 'window-state.json');
@@ -106,9 +104,32 @@ function isViteDevRunning() {
   });
 }
 
+// The version that last opened the data; a different one means migrations are about to run.
+const LAST_VERSION_FILE = () => path.join(app.getPath('userData'), 'last-version.json');
+
+function openedByNewVersion() {
+  try {
+    return JSON.parse(fs.readFileSync(LAST_VERSION_FILE(), 'utf-8')).version !== app.getVersion();
+  } catch (e) {
+    return false;
+  }
+}
+
+function rememberVersion() {
+  try {
+    fs.writeFileSync(LAST_VERSION_FILE(), JSON.stringify({ version: app.getVersion() }), 'utf-8');
+  } catch (e) {
+    log.warn('Could not record the app version:', e);
+  }
+}
+
+// Built hidden and shown once its data is on screen, so it appears ready, in one go.
+const REVEAL_FALLBACK_MS = 20000;
+
 function createWindow () {
   const savedState = readWindowState();
   const mainWindow = new BrowserWindow({
+    show: false,
     width: savedState?.width ?? 1200,
     height: savedState?.height ?? 800,
     x: savedState?.x,
@@ -125,8 +146,21 @@ function createWindow () {
     }
   });
 
-  // First launch has no saved state, so it opens maximized.
-  if (!savedState || savedState.isMaximized) mainWindow.maximize();
+  let revealed = false;
+  const reveal = async () => {
+    if (revealed || mainWindow.isDestroyed()) return;
+    revealed = true;
+    await splash.close();
+    if (mainWindow.isDestroyed()) return;
+    // First launch has no saved state, so it opens maximized.
+    if (!savedState || savedState.isMaximized) mainWindow.maximize();
+    else mainWindow.show();
+    mainWindow.focus();
+  };
+  const onAppReady = (event) => { if (event.sender === mainWindow.webContents) reveal(); };
+  ipcMain.on('app-ready', onAppReady);
+  mainWindow.on('closed', () => ipcMain.off('app-ready', onAppReady));
+  mainWindow.webContents.once('did-finish-load', () => setTimeout(reveal, REVEAL_FALLBACK_MS));
 
   let saveStateTimer = null;
   const scheduleSaveWindowState = () => {
@@ -181,12 +215,23 @@ function createWindow () {
     });
   }
 
-  setupAutoUpdater(mainWindow);
+  updater.attachWindow(mainWindow);
 
   return mainWindow;
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  await splash.open();
+  if (await updater.runAtLaunch(splash) === 'install') return;
+
+  splash.setStatus({ stage: openedByNewVersion() ? 'migrating' : 'opening' });
+  // One beat so the status paints before the database work, which holds this thread.
+  await new Promise(resolve => setTimeout(resolve, 60));
+  require('./main/database');
+  require('./main/ipc-handlers');
+  rememberVersion();
+  splash.setStatus({ stage: 'opening' });
+
   try {
     require('./main/workflow-runner').markInterruptedSummaries();
   } catch (e) {
@@ -312,94 +357,4 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
-});
-
-// Lightweight semver comparison (returns 1 if a > b, -1 if a < b, 0 if equal)
-function compareSemver(a, b) {
-  const pa = a.replace(/^v/, '').split('.').map(Number);
-  const pb = b.replace(/^v/, '').split('.').map(Number);
-  for (let i = 0; i < 3; i++) {
-    const na = pa[i] || 0;
-    const nb = pb[i] || 0;
-    if (na > nb) return 1;
-    if (na < nb) return -1;
-  }
-  return 0;
-}
-
-function setupAutoUpdater(mainWindow) {
-  if (!app.isPackaged) {
-    log.info('Auto-updater: Skipping update checks in development environment.');
-    return;
-  }
-
-  const platform = process.platform;
-  const isAppImage = !!process.env.APPIMAGE;
-  const canAutoUpdate = platform === 'win32' || isAppImage;
-
-  if (canAutoUpdate) {
-    log.info('Auto-updater: Checking for updates via electron-updater...');
-    autoUpdater.checkForUpdatesAndNotify();
-
-    autoUpdater.on('update-available', (info) => {
-      log.info(`Auto-updater: Update available. Version: ${info.version}`);
-      mainWindow.webContents.send('update-available', info.version);
-    });
-
-    autoUpdater.on('update-downloaded', (info) => {
-      log.info(`Auto-updater: Update downloaded. Version: ${info.version}`);
-      mainWindow.webContents.send('update-downloaded', info.version);
-    });
-
-    autoUpdater.on('error', (err) => {
-      log.error('Auto-updater: Error detected during lifecycle checks:', err);
-    });
-  } else {
-    log.info('Auto-updater: Platform does not support auto-update. Checking GitHub releases...');
-
-    const https = require('https');
-    const latestUrl = 'https://api.github.com/repos/Kallamo/Kallamo/releases/latest';
-    const options = {
-      headers: {
-        'User-Agent': 'Kallamo-Updater',
-        'Accept': 'application/vnd.github+json'
-      }
-    };
-
-    https.get(latestUrl, options, (res) => {
-      if (res.statusCode !== 200) {
-        log.error(`Auto-updater: GitHub releases API returned HTTP ${res.statusCode}.`);
-        res.resume();
-        return;
-      }
-
-      let data = '';
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => {
-        try {
-          const release = JSON.parse(data);
-          const latestVersion = release.tag_name;
-          const currentVersion = app.getVersion();
-          if (latestVersion && compareSemver(latestVersion, currentVersion) > 0) {
-            log.info(`Auto-updater: Newer version available: ${latestVersion} (current: ${currentVersion})`);
-            mainWindow.webContents.send('update-outdated', {
-              version: latestVersion.replace(/^v/, ''),
-              url: release.html_url || 'https://github.com/Kallamo/Kallamo/releases/latest'
-            });
-          } else {
-            log.info('Auto-updater: App is up to date.');
-          }
-        } catch (e) {
-          log.error('Auto-updater: Failed to parse GitHub releases response:', e);
-        }
-      });
-    }).on('error', (err) => {
-      log.error('Auto-updater: Failed to fetch GitHub releases:', err);
-    });
-  }
-}
-
-ipcMain.on('install-update', () => {
-  log.info('Auto-updater IPC: quitAndInstall request received.');
-  autoUpdater.quitAndInstall();
 });
