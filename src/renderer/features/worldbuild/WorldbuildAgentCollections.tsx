@@ -12,6 +12,10 @@ import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import Modal from '../../components/ui/Modal';
 import { itemFamily, itemMeta, meta } from './worldbuildConfig';
 import type { Toast, WorldbuildEntity } from './worldbuildTypes';
+import { FieldEye, SpoilerCover, SpoilerMenuItem, SpoilerText } from './Spoilers';
+
+// Each row of a list is hidden on its own, under the link it shows.
+const linkKey = (link: { linkId: string }) => `link:${link.linkId}`;
 
 // A faction's stance is the body's own position, which is not the sum of what its
 // members feel. The wording says so, so the two never get recorded in the same voice.
@@ -151,8 +155,8 @@ export function WorldbuildRelationships({ workspaceId, subject, links, options, 
       <div className="divide-y divide-border-subtle">
         {editor && !editor.link && <div className="pb-3"><RelationshipEditor subjectName={subject.canonicalName} draft={editor} setDraft={setEditor} options={available} copy={copy} onSave={save} onClose={() => setEditor(null)} saving={saving} /></div>}
         {outgoing.map(link => editor?.link?.linkId === link.linkId
-          ? <div key={link.linkId} className="py-3"><RelationshipEditor subjectName={subject.canonicalName} draft={editor} setDraft={setEditor} options={[link.entity as WorldbuildEntity, ...available]} copy={copy} onSave={save} onClose={() => setEditor(null)} saving={saving} /></div>
-          : <RelationshipRow key={link.linkId} link={link} onEdit={() => startEdit(link)} onDelete={() => setDeleting(link)} />)}
+          ? <div key={link.linkId} className="py-3"><SpoilerCover field={linkKey(link)}><RelationshipEditor subjectName={subject.canonicalName} draft={editor} setDraft={setEditor} options={[link.entity as WorldbuildEntity, ...available]} copy={copy} onSave={save} onClose={() => setEditor(null)} saving={saving} /></SpoilerCover></div>
+          : <div key={link.linkId}><SpoilerCover field={linkKey(link)} className="my-2.5"><RelationshipRow link={link} onEdit={() => startEdit(link)} onDelete={() => setDeleting(link)} /></SpoilerCover></div>)}
         {!outgoing.length && !editor && <p className="py-3 text-sm text-text-disabled">{copy.emptyDetail}</p>}
       </div>
       {incoming.length > 0 && (
@@ -165,7 +169,7 @@ export function WorldbuildRelationships({ workspaceId, subject, links, options, 
             <span className="flex-1" />
             <span className="text-xs font-normal text-text-subtle">Written on their sheets</span>
           </button>
-          {showIncoming && <div className="mt-1 divide-y divide-border-subtle">{incoming.map(link => <RelationshipRow key={link.linkId} link={link} readOnly />)}</div>}
+          {showIncoming && <div className="mt-1 divide-y divide-border-subtle">{incoming.map(link => <div key={link.linkId}><SpoilerCover field={linkKey(link)} className="my-2.5"><RelationshipRow link={link} readOnly /></SpoilerCover></div>)}</div>}
         </div>
       )}
       {deleting && <ConfirmDialog title="Delete relationship" message={`Delete ${subject.canonicalName}'s relationship with ${deleting.entity.canonicalName}? This removes only this direction and cannot be undone.`} actions={[
@@ -188,9 +192,9 @@ function RelationshipRow({ link, onEdit, onDelete, readOnly = false }: { link: E
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border ${meta(link.entity.type).medallion}`}><Icon className="h-3.5 w-3.5" aria-hidden="true" /></span>
           <h4 className="text-sm font-semibold text-text-primary">{link.entity.canonicalName}</h4>
-          {link.label ? <span className="text-sm font-medium text-accent">{link.label}</span> : <span className="text-sm text-text-disabled">No label</span>}
+          {link.label ? <span className="text-sm font-medium text-accent"><SpoilerText text={link.label} /></span> : <span className="text-sm text-text-disabled">No label</span>}
         </div>
-        {description && <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-text-muted">{description}</p>}
+        {description && <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-text-muted"><SpoilerText text={description} /></p>}
       </div>
       <div className="pt-1" aria-label={`Feeling ${value > 0 ? '+' : ''}${value} out of 100`}>
         <div className="flex justify-between text-xs text-text-subtle"><span>Hostile</span><span className={`font-semibold tabular-nums ${value === 0 ? 'text-text-muted' : positive ? 'text-status-success' : 'text-status-danger'}`}>{value > 0 ? '+' : ''}{value}</span><span>Close</span></div>
@@ -199,7 +203,7 @@ function RelationshipRow({ link, onEdit, onDelete, readOnly = false }: { link: E
           <span aria-hidden="true" className={`absolute top-0 bottom-0 rounded-full ${positive ? 'left-1/2 bg-status-success' : 'right-1/2 bg-status-danger'}`} style={{ width: `${Math.abs(value) / 2}%` }} />
         </div>
       </div>
-      {readOnly ? <span className="w-8" /> : <RowActions onEdit={onEdit!} onDelete={onDelete!} />}
+      {readOnly ? <FieldEye field={linkKey(link)} className="mt-0.5" /> : <RowActions spoiler={linkKey(link)} onEdit={onEdit!} onDelete={onDelete!} />}
     </article>
   );
 }
@@ -300,8 +304,8 @@ export function WorldbuildInventory({ workspaceId, subject, links, options, api,
     finally { setSaving(false); }
   };
   return <CollectionShell icon={Backpack} title="Carried" count={links.length || undefined} empty={!links.length && !editor} emptyVerb="Add item" onAdd={available.length ? startAdd : undefined}>
-    {editor && <div className="pt-2"><InventoryEditor draft={editor} setDraft={setEditor} options={editor.link ? [editor.link.entity as WorldbuildEntity] : available} onSave={save} onClose={() => setEditor(null)} saving={saving} /></div>}
-    <div className="grid grid-cols-1 gap-2.5 py-2 sm:grid-cols-2">{links.map(link => <InventoryCard key={link.linkId} link={link} onEdit={() => startEdit(link)} onDelete={() => setDeleting(link)} />)}</div>
+    {editor && <div className="pt-2"><InventoryEditor spoiler={editor.link ? linkKey(editor.link) : null} draft={editor} setDraft={setEditor} options={editor.link ? [editor.link.entity as WorldbuildEntity] : available} onSave={save} onClose={() => setEditor(null)} saving={saving} /></div>}
+    <div className="grid grid-cols-1 gap-2.5 py-2 sm:grid-cols-2">{links.map(link => <SpoilerCover key={link.linkId} field={linkKey(link)} className="w-full justify-center py-3"><InventoryCard link={link} onEdit={() => startEdit(link)} onDelete={() => setDeleting(link)} /></SpoilerCover>)}</div>
     {deleting && <ConfirmDialog title="Remove inventory item" message={`Remove ${deleting.entity.canonicalName} from ${subject.canonicalName}'s inventory? The Worldbuild item itself will not be deleted.`} actions={[
       { label: 'Cancel', variant: 'ghost', onClick: () => setDeleting(null) },
       { label: 'Remove', variant: 'danger', loading: saving, autoFocus: true, onClick: remove },
@@ -325,24 +329,24 @@ function InventoryCard({ link, onEdit, onDelete }: { link: EntityLink; onEdit():
         !isUnique && quantity > 1 ? `×${quantity}` : null,
         condition || null,
       ].filter(Boolean).join(' · ')}{link.metadata?.equipped ? <span className="text-text-secondary"> · Equipped</span> : null}</p>
-      {notes && <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-text-subtle">{notes}</p>}
+      {notes && <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-text-subtle"><SpoilerText text={notes} /></p>}
     </div>
-    <RowActions onEdit={onEdit} onDelete={onDelete} />
+    <RowActions spoiler={linkKey(link)} onEdit={onEdit} onDelete={onDelete} />
   </article>;
 }
 
-function InventoryEditor({ draft, setDraft, options, onSave, onClose, saving }: { draft: InventoryDraft; setDraft(draft: InventoryDraft): void; options: WorldbuildEntity[]; onSave(): void; onClose(): void; saving: boolean }) {
+function InventoryEditor({ draft, setDraft, options, onSave, onClose, saving, spoiler = null }: { draft: InventoryDraft; setDraft(draft: InventoryDraft): void; options: WorldbuildEntity[]; onSave(): void; onClose(): void; saving: boolean; spoiler?: string | null }) {
   const update = (patch: Partial<InventoryDraft>) => setDraft({ ...draft, ...patch });
   const isUnique = isUniqueItem(options.find(option => option.id === draft.itemId));
   return <Modal size="lg" title={draft.link ? 'Edit inventory item' : 'Add inventory item'} icon={Backpack} iconClassName="text-text-muted" onClose={onClose} closeOnEsc={!saving} closeOnOverlay={!saving}>
-    <div className="space-y-5 p-5">
+    <SpoilerCover field={spoiler}><div className="space-y-5 p-5">
       <div className={`grid gap-4 ${isUnique ? 'grid-cols-1' : 'grid-cols-[minmax(0,1fr)_8rem]'}`}>
         <Field label="Item"><SearchableSelect value={draft.itemId} disabled={Boolean(draft.link)} onChange={(itemId: string) => update({ itemId })} options={options.map(option => ({ id: option.id, label: option.canonicalName, aliases: option.aliases, group: itemMeta(option.data?.itemType).label, icon: itemMeta(option.data?.itemType).icon }))} placeholder="Search for an item" /></Field>
-        {!isUnique && <Field label="Quantity"><NumberInput className={INPUT} min={1} value={Number(draft.quantity)} onChange={quantity => update({ quantity })} /></Field>}
+        {!isUnique && <Field label="Quantity"><NumberInput className={INPUT} min={1} value={Number(draft.quantity)} onChange={quantity => update({ quantity: quantity ?? undefined })} /></Field>}
       </div>
       <Field label="Condition"><input className={INPUT} value={draft.condition} onChange={event => update({ condition: event.target.value })} placeholder="Worn, pristine, damaged…" /></Field>
       <Field label="Notes"><textarea className={`${INPUT} min-h-28 resize-y`} value={draft.notes} onChange={event => update({ notes: event.target.value })} placeholder="How it is carried, used, or distinguished…" /></Field>
-    </div>
+    </div></SpoilerCover>
     <ModalFooter saving={saving} valid={Boolean(draft.itemId) && draft.quantity >= 1} onClose={onClose} onSave={onSave} label="Save item" />
   </Modal>;
 }
@@ -369,13 +373,14 @@ function CollectionShell({ icon: Icon, title, count, empty = false, emptyVerb = 
   </section>;
 }
 
-function RowActions({ onEdit, onDelete }: { onEdit(): void; onDelete(): void }) {
+function RowActions({ onEdit, onDelete, spoiler = null }: { onEdit(): void; onDelete(): void; spoiler?: string | null }) {
   const anchorRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   return <>
     <IconButton ref={anchorRef} icon={MoreHorizontal} size="sm" label="Actions" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(v => !v)} />
     <Menu anchorRef={anchorRef} open={open} onClose={() => setOpen(false)} label="Actions" className="w-44">
       <MenuItem icon={Pencil} label="Edit" onSelect={() => { setOpen(false); onEdit(); }} />
+      <SpoilerMenuItem field={spoiler} onDone={() => setOpen(false)} />
       <MenuSeparator />
       <MenuItem icon={Trash2} label="Delete" danger onSelect={() => { setOpen(false); onDelete(); }} />
     </Menu>

@@ -42,7 +42,7 @@ const {
     entityDataFacts
 } = require('./features/worldbuild/entity-fields');
 const { decodeEntityUpdate, isEntityUpdateShape } = require('./features/worldbuild/entity-update-protocol');
-const { buildLorePrompt, buildLoreAppendPrompt, validateEntityLore, validateEntityLoreAppend } = require('./features/worldbuild/entity-lore');
+const { buildLorePrompt, buildLoreAppendPrompt, buildSpoilerRetryNote, validateEntityLore, validateEntityLoreAppend } = require('./features/worldbuild/entity-lore');
 const { precedingPassageText, memorySummaries, entitySkillContext } = require('./features/worldbuild/entity-update-context');
 const { buildNarrativeOptionPalette } = require('./features/worldbuild/narrative-options');
 const { createEntityUpdateState } = require('./features/worldbuild/entity-update-state');
@@ -50,6 +50,7 @@ const { shouldStopEntityUpdates } = require('./features/worldbuild/entity-update
 const { NARRATIVE_TRIAGE_SCHEMA, NARRATIVE_STATE_SCHEMA } = require('../../dist-main/main/features/narrative/narrative-state-schema');
 const { findReachableLocations, locationSizesOf, travelCategory } = require('../../dist-main/main/features/worldbuild/location-graph');
 const { findByReference } = require('../../dist-main/main/features/narrative/rule-keys');
+const { missingSpoilers } = require('../../dist-main/shared/spoilers');
 const {
     compactNarrativeManifest,
     extractNarrativeSignals,
@@ -5028,6 +5029,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                 ? `- Never return fact for a Character update. Global canonical Facts belong to the workspace Fact registry, not to a character sheet.\n`
                 : `- Use fact for an explicit canonical proposition. Put a concise predicate in key, the proposition in value, and its existing subject name in target.\n`) +
             `- CANONICAL SYSTEM / CONCEPT CONTEXT defines setting-specific terms. Use it to interpret evidence, but do not copy a concept's facts into this entity unless the evidence explicitly connects them. The same holds for a passage about a race, people, or culture in general: it describes the group, not this entity.\n` +
+            `- Text between || and || in the current record is a spoiler: true, but hidden from the person reading the sheet. A new value for a field that holds one must keep each span exactly, markers included, and must never restate it outside them. Write a new fact that would spoil a surprise inside new || markers on a single line.\n` +
             `Do not invent facts, names, or fields absent from the passages.`;
         const userPromptPrefix =
             `${allowLore ? 'CURRENT RECORD' : 'CURRENT CONCEPT'}:\nName: ${ent.canonicalName}\nAliases: ${ent.aliases?.join(', ') || '(none)'}\n` +
@@ -5049,7 +5051,8 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
             let outputTokenEstimate = 0;
             let retryCount = 0;
             const sendJsonRequest = async (requestParams, schema = jsonSchema) => {
-                const params = { maxPayloadTokens: workspacePayloadTokens(workspaceId), ...requestParams };
+                // Worldbuild text is rewritten here, so its spoiler markers must reach the model and come back.
+                const params = { maxPayloadTokens: workspacePayloadTokens(workspaceId), keepSpoilerMarkers: true, ...requestParams };
                 const estimatedInput = estimateTokens(`${params.systemPrompt || ''}\n${params.newPrompt || ''}\n${JSON.stringify(schema || {})}`);
                 try {
                     const result = await sendApiRequest({ ...params, jsonMode: true, jsonSchema: schema, includeResponseMetadata: true });
@@ -5171,6 +5174,8 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                 }
                 const cur = ent.data?.[f] == null ? '' : String(ent.data[f]).trim();
                 if (WRITTEN_TEXT_FIELDS.has(f) && isWeakTextReplacement(cur, v)) continue;
+                // A rewrite that drops or alters a spoiler would show it to the reader; the field keeps its text.
+                if (WRITTEN_TEXT_FIELDS.has(f) && missingSpoilers(cur, v).length) continue;
                 if (v !== cur) proposedData[f] = { value: v, evidence: proposal.evidence, support: proposal.support };
             }
             for (const field of writableCustomFields) {
@@ -5294,23 +5299,38 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                             evidence: loreEvidence,
                             skillsInUse: Boolean(skillContext),
                         });
-                        const loreResult = await sendJsonRequest({
-                            apiProfileId,
-                            model,
-                            systemPrompt: loreSystemPrompt,
-                            chatHistory: [],
-                            newPrompt: lorePrompt,
-                            temperature: 0.1,
-                            maxTokens,
-                            manualMode,
-                            manualJson,
-                        }, buildEntityLoreSchema());
-                        const loreObject = parseEntityUpdateObject(loreResult.content).value;
-                        loreProposal = appendLore
-                            ? validateEntityLoreAppend(loreObject, ent.lore, validEvidenceIds)
-                            : validateEntityLore(loreObject, ent.lore, validEvidenceIds);
+                        let loreResult = null;
+                        let loreObject = null;
+                        let lostSpoilers = [];
+                        // A lore that loses a spoiler is asked for once more, naming what must stay;
+                        // a second loss is reported and the stored lore is left as it is.
+                        for (let attempt = 0; attempt < 2; attempt++) {
+                            loreResult = await sendJsonRequest({
+                                apiProfileId,
+                                model,
+                                systemPrompt: loreSystemPrompt,
+                                chatHistory: [],
+                                newPrompt: attempt === 0 ? lorePrompt : `${lorePrompt}\n\n${buildSpoilerRetryNote(lostSpoilers)}`,
+                                temperature: 0.1,
+                                maxTokens,
+                                manualMode,
+                                manualJson,
+                            }, buildEntityLoreSchema());
+                            loreObject = parseEntityUpdateObject(loreResult.content).value;
+                            loreProposal = appendLore
+                                ? validateEntityLoreAppend(loreObject, ent.lore, validEvidenceIds)
+                                : validateEntityLore(loreObject, ent.lore, validEvidenceIds);
+                            lostSpoilers = loreProposal ? missingSpoilers(ent.lore, loreProposal.value) : [];
+                            if (!lostSpoilers.length) break;
+                            if (attempt === 0) retryCount++;
+                        }
+                        if (lostSpoilers.length) {
+                            loreProposal = null;
+                            loreFailure = `The Lore update for ${ent.canonicalName} would have removed or changed a spoiler, so it was not applied.`;
+                            console.warn(`[Entity Update] ${loreFailure}`);
+                        }
                         // A cut-off or unreadable reply is a failure; a valid no-op stays silent.
-                        if (!loreProposal && (loreResult.truncated || !loreObject)) {
+                        if (!loreProposal && !loreFailure && (loreResult.truncated || !loreObject)) {
                             loreFailure = loreResult.truncated
                                 ? `The Lore update for ${ent.canonicalName} reached the System AI output limit and was not applied.`
                                 : `The Lore update for ${ent.canonicalName} could not be read and was not applied.`;

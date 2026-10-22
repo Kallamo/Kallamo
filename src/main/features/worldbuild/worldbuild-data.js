@@ -854,6 +854,7 @@ function toEntry(row, payload, resolveEntityName) {
   const origin = entryOrigin(row);
   const common = {
     id: payload.id,
+    entryId: payload.entryId || payload.id,
     subjectId: payload.subjectId,
     accessibility: payload.accessibility || 'available',
     origin,
@@ -922,10 +923,11 @@ function buildActiveOperation(kind, subjectId, entry, current, eventId, evidence
   }
   if (kind === 'memory') {
     const summary = requireText(entry.summary, 'summary');
+    const memoryId = crypto.randomUUID();
     return {
       id: operationId, type: 'record-memory', evidenceIds: [evidenceId],
       memory: {
-        id: crypto.randomUUID(), subjectId, eventId, summary,
+        id: memoryId, entryId: current?.payload.entryId || current?.payload.id || newEntryId(entry) || memoryId, subjectId, eventId, summary,
         accessibility: normalizeAccessibility(entry.accessibility), status: 'active',
         ...category(normalizeMemoryCategory(entry.category)),
         ...worldDay(entry.occurredOn),
@@ -941,7 +943,7 @@ function buildActiveOperation(kind, subjectId, entry, current, eventId, evidence
     return {
       id: operationId, type: 'grant-knowledge', evidenceIds: [evidenceId],
       knowledge: {
-        id: crypto.randomUUID(), entryId: current?.payload.entryId || current?.payload.id || crypto.randomUUID(),
+        id: crypto.randomUUID(), entryId: current?.payload.entryId || current?.payload.id || newEntryId(entry) || crypto.randomUUID(),
         subjectId, proposition, sourceEventId: eventId,
         acquisition,
         confidence: normalizeConfidence(entry.confidence),
@@ -959,13 +961,18 @@ function buildActiveOperation(kind, subjectId, entry, current, eventId, evidence
   return {
     id: operationId, type: 'set-belief', evidenceIds: [evidenceId],
     belief: {
-      id: crypto.randomUUID(), entryId: current?.payload.entryId || current?.payload.id || crypto.randomUUID(),
+      id: crypto.randomUUID(), entryId: current?.payload.entryId || current?.payload.id || newEntryId(entry) || crypto.randomUUID(),
       subjectId, proposition, sourceEventId: eventId,
       confidence: normalizeConfidence(entry.confidence), relationToCanon: 'unknown', status: 'active',
       ...category(normalizeKnowledgeCategory(entry.category)),
       factIds: normalizeIds(entry.factIds),
     },
   };
+}
+
+/** A package import names its new entries up front, so their hidden marks can follow them. */
+function newEntryId(entry) {
+  return typeof entry?.entryId === 'string' && entry.entryId.trim() ? entry.entryId.trim() : null;
 }
 
 /** An optional story day; a partial or malformed date is dropped rather than stored half-set. */

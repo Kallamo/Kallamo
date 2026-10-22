@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  Plus, Search, BookOpen, Package, Users, 
+  Plus, Search, BookOpen, Package, Users, EyeOff, 
   Trash2, Save, X, Pencil, Check, Link2, Globe, Tag, ScrollText, Info, Replace,
   RefreshCw, Upload, Download, ChevronRight, ChevronDown, MoreHorizontal, ListChecks, Loader2, Gem, 
   NotebookText, Backpack, Braces, AlertTriangle, LayoutTemplate, BookCheck, CircleHelp, ChevronLeft, UserMinus, Undo2, Crown, AlignLeft, CalendarDays, CalendarRange, Drama, GripVertical, Gamepad2, IdCard, Landmark, Scale, Lightbulb, ListTree, LogOut, MapPinned, Merge, PencilLine, ScanEye, ScanFace, Shield, UserRound, ImagePlus, Image as ImageIcon, Crop, Flag, MapPin, ChevronsDownUp, ChevronsUpDown,
@@ -53,6 +53,8 @@ import { isInvertedNesting, locationSizeGuide, locationSizeLabel, locationSizeOf
 import SegmentedControl from './ui/SegmentedControl';
 import SelectMenu from './ui/SelectMenu';
 import { normalizeTemplateSections, sheetTabs as sheetTabsFor, tabLabel } from '../features/worldbuild/worldbuildSections';
+import { FieldEye, SpoilerCover, SpoilerRow, SpoilerScope, SpoilerText, SpoilerTextArea } from '../features/worldbuild/Spoilers';
+import { hiddenFields, withFieldHidden } from '../../shared/spoilers';
 
 // Frosted dark inputs: their own dark backing guarantees legible text over BOTH
 // light and dark workspace backgrounds, while the blur keeps the background alive.
@@ -200,18 +202,25 @@ const InfoPopover = ({ items }) => {
 
 const FieldLabel = ({ children }) => <label className="mb-1.5 block text-xs font-medium text-text-muted">{children}</label>;
 const Hint = ({ children }) => <span className="caption mt-1 block">{children}</span>;
-const Edit = ({ label, hint, children }) => (
-  <div>{label && <FieldLabel>{label}</FieldLabel>}{children}{hint && <Hint>{hint}</Hint>}</div>
+// `spoiler` names the field the eye hides from readers; a hidden one stays closed until clicked.
+const Edit = ({ label, hint, spoiler, children }) => (
+  <div>
+    {spoiler
+      ? <div className="mb-1.5 flex items-center gap-1"><label className="block text-xs font-medium text-text-muted">{label}</label><FieldEye field={spoiler} /></div>
+      : label && <FieldLabel>{label}</FieldLabel>}
+    {spoiler ? <SpoilerCover field={spoiler}>{children}</SpoilerCover> : children}
+    {hint && <Hint>{hint}</Hint>}
+  </div>
 );
 
 // Read-only field in the rendered sheet. `value` may be a node (a state tag, a chip
 // row) as well as text; `full` spans the whole row of the surrounding FactGrid.
-const ViewField = ({ label, value, empty = 'Not set', full = false }) => (
+const ViewField = ({ label, value, empty = 'Not set', full = false, spoiler }) => (
   <div className={full ? 'col-span-full min-w-0' : 'min-w-0'}>
     <div className="mb-1 text-xs font-medium text-text-muted">{label}</div>
     {value === null || value === undefined || value === ''
       ? <div className="text-sm text-text-disabled">{empty}</div>
-      : typeof value === 'object' ? value : <div className="text-sm text-text-primary whitespace-pre-wrap break-words leading-relaxed">{value}</div>}
+      : <SpoilerCover field={spoiler}>{typeof value === 'object' ? value : <div className="text-sm text-text-primary whitespace-pre-wrap break-words leading-relaxed"><SpoilerText text={value} /></div>}</SpoilerCover>}
   </div>
 );
 
@@ -221,18 +230,18 @@ const FactGrid = ({ children, columns = 3 }) => (
 );
 
 // Long text folds after a few lines, so a sheet reads as a sheet and not as one essay.
-const Prose = ({ text, empty = 'Not written yet', clamp = true }) => {
+const Prose = ({ text, empty = 'Not written yet', clamp = true, spoiler }) => {
   const [open, setOpen] = useState(false);
   const value = String(text || '').trim();
   if (!value) return <p className="text-sm text-text-disabled">{empty}</p>;
   const long = clamp && (value.length > 520 || value.split('\n').length > 6);
   return (
-    <div>
-      <p className={`text-sm leading-relaxed text-text-secondary whitespace-pre-wrap ${long && !open ? 'line-clamp-5' : ''}`}>{value}</p>
+    <SpoilerCover field={spoiler}><div>
+      <p className={`text-sm leading-relaxed text-text-secondary whitespace-pre-wrap ${long && !open ? 'line-clamp-5' : ''}`}><SpoilerText text={value} /></p>
       {long && <button type="button" onClick={() => setOpen(v => !v)} className="mt-2 inline-flex items-center gap-1 rounded text-xs font-semibold text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
         {open ? 'Show less' : 'Show all'}<ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden="true" />
       </button>}
-    </div>
+    </div></SpoilerCover>
   );
 };
 
@@ -244,10 +253,10 @@ const recurrenceText = (recurrence, calendar) => {
   return `${interval === 1 ? `Every ${unit}` : `Every ${interval} ${unit}s`} since ${formatWorldDate(calendar, recurrence.anchorDate)}`;
 };
 
-const LongField = ({ label, text, empty = 'Not set' }) => (
+const LongField = ({ label, text, empty = 'Not set', spoiler }) => (
   <div className="border-t border-border-subtle pt-4">
     <div className="mb-1.5 text-xs font-medium text-text-muted">{label}</div>
-    <Prose text={text} empty={empty} />
+    <Prose text={text} empty={empty} spoiler={spoiler} />
   </div>
 );
 
@@ -416,7 +425,7 @@ function LocationCoverMenu({ cover, childNames = [], parentName, onChoose, onFra
 }
 
 // Other names as chips. The sheet still stores them as one comma-separated string.
-function AliasInput({ value, onChange, placeholder }) {
+function AliasInput({ value, onChange, placeholder, withEyes = false }) {
   const [draft, setDraft] = useState('');
   const names = String(value || '').split(',').map(name => name.trim()).filter(Boolean);
   const commit = (list) => onChange(list.join(', '));
@@ -429,7 +438,8 @@ function AliasInput({ value, onChange, placeholder }) {
     <div className="wb-input flex min-h-10 w-full flex-wrap items-center gap-1.5 rounded-control border border-border-default bg-surface-input/90 px-2 py-1.5 backdrop-blur-md focus-within:border-accent/70 focus-within:ring-2 focus-within:ring-accent/20">
       {names.map(name => (
         <span key={name} className="inline-flex min-h-6 items-center gap-1 rounded-full border border-border-subtle bg-surface-hover/35 py-0.5 pl-2.5 pr-1 text-xs font-medium text-text-secondary">
-          {name}
+          {withEyes ? <SpoilerCover field={`alias:${name}`} compact>{name}</SpoilerCover> : name}
+          {withEyes && <FieldEye field={`alias:${name}`} size="sm" />}
           <button type="button" aria-label={`Remove ${name}`} onClick={() => commit(names.filter(item => item !== name))} className="rounded p-0.5 text-text-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><X className="h-3 w-3" /></button>
         </span>
       ))}
@@ -448,11 +458,11 @@ function AliasInput({ value, onChange, placeholder }) {
 const draftFor = (type, data = {}) => ({ id: null, type, canonicalName: '', aliases: '', lore: '', loreDocumentId: '', status: 'confirmed', data });
 
 // Links need a saved entity id, so these render nothing before the first save.
-function SingleRelation({ label, hint, current, options, onSet, disabled }) {
+function SingleRelation({ label, hint, current, options, onSet, disabled, spoiler }) {
   if (disabled) return null;
   const currentName = options.find(o => o.id === current)?.canonicalName;
   return (
-    <Edit label={label} hint={hint}>
+    <Edit label={label} hint={hint} spoiler={spoiler}>
       <div className="flex items-center gap-2 flex-wrap">
         {currentName
           ? <div className="inline-flex min-h-9 items-center gap-2 rounded-control border border-border-default bg-surface-input/70 pl-3 pr-1.5 text-sm font-medium text-text-primary">
@@ -465,16 +475,17 @@ function SingleRelation({ label, hint, current, options, onSet, disabled }) {
     </Edit>
   );
 }
-function MultiRelation({ label, hint, links, options, onAdd, onRemove, disabled }) {
+function MultiRelation({ label, hint, links, options, onAdd, onRemove, disabled, spoiler }) {
   if (disabled) return null;
   const linked = new Set(links.map(l => l.entity.id));
   const remaining = options.filter(o => !linked.has(o.id));
   return (
-    <Edit label={label} hint={hint}>
+    <Edit label={label} hint={hint} spoiler={spoiler}>
       <div className="flex flex-wrap items-center gap-1.5">
         {links.map(l => (
           <span key={l.linkId} className="inline-flex min-h-6 items-center gap-1.5 text-xs font-medium text-text-primary bg-surface-hover/65 border border-border-default rounded-full pl-2.5 pr-1 py-0.5">
-            <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${meta(l.entity.type).dot || 'bg-text-subtle'}`} />{l.entity.canonicalName}
+            <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${meta(l.entity.type).dot || 'bg-text-subtle'}`} /><SpoilerCover field={`link:${l.linkId}`} compact>{l.entity.canonicalName}</SpoilerCover>
+            <FieldEye field={`link:${l.linkId}`} size="sm" />
             <button type="button" onClick={() => onRemove(l.linkId)} aria-label={`Remove ${l.entity.canonicalName}`} className="text-text-muted hover:text-status-danger cursor-pointer p-0.5"><X className="w-3 h-3" /></button>
           </span>
         ))}
@@ -620,9 +631,11 @@ function MemberList({ links, calendar, kind = 'member', leaderId, editing, optio
         ? <p className="text-sm text-text-disabled">{empty}</p>
         : <div className="divide-y divide-border-subtle">
             {shown.map(link => (
-              <MemberRow key={link.linkId} link={link} calendar={calendar} kind={kind} isLeader={link.entity.id === leaderId}
-                editing={editing} onOpen={onOpen} onSetRole={onSetRole} onSetMeta={onSetMeta}
-                onSetFormer={onSetFormer} onRestore={onRestore} onRemove={onRemove} />
+              <SpoilerRow key={link.linkId} field={`link:${link.linkId}`} editing={editing}>
+                <MemberRow link={link} calendar={calendar} kind={kind} isLeader={link.entity.id === leaderId}
+                  editing={editing} onOpen={onOpen} onSetRole={onSetRole} onSetMeta={onSetMeta}
+                  onSetFormer={onSetFormer} onRestore={onRestore} onRemove={onRemove} />
+              </SpoilerRow>
             ))}
           </div>}
       {shown.length < rows.length && <button type="button" onClick={() => setShowAll(true)} className="mt-1 inline-flex items-center gap-1 rounded text-xs font-semibold text-text-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">Show {rows.length - shown.length} more<ChevronDown className="h-3.5 w-3.5" aria-hidden="true" /></button>}
@@ -1135,6 +1148,22 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const startNew = (type, data = {}) => { setOpenCreateSections(new Set()); setSurface('entities'); setShowCreate(false); setEditingSection(null); setCharTab('data'); setSelected(draftFor(type, data)); setRel({}); };
   const patch = (f) => setSelected(p => ({ ...p, ...f }));
   const patchData = (f) => setSelected(p => ({ ...p, data: { ...p.data, ...f } }));
+  // What the reader may see is a viewing setting, not content: it is saved the moment the eye
+  // is used, so Cancel on a section never brings a secret back into view.
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const toggleHidden = (field, hidden) => {
+    const current = selectedRef.current;
+    if (!current) return;
+    const spoilers = withFieldHidden(current.data || {}, field, hidden).spoilers;
+    selectedRef.current = { ...current, data: { ...(current.data || {}), spoilers } };
+    setSelected(p => (p && p.id === current.id ? { ...p, data: { ...(p.data || {}), spoilers } } : p));
+    if (!current.id) return;
+    setEntities(list => list.map(item => item.id === current.id ? { ...item, data: { ...(item.data || {}), spoilers } } : item));
+    electronAPI.updateEntity(current.id, { data: { spoilers } })
+      .then(r => { if (!r?.success) showToast(`Could not save what is hidden: ${r?.error || 'unknown error'}`, 'error'); })
+      .catch(e => showToast(`Could not save what is hidden: ${e.message}`, 'error'));
+  };
   const applyIntegratedEntity = (entity) => {
     setSelected(current => current?.id === entity.id ? { ...current, data: entity.data || {} } : current);
     setEntities(current => current.map(item => item.id === entity.id ? { ...item, data: entity.data || {} } : item));
@@ -1612,7 +1641,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const remainingDocs = documents.filter(d => !linkedDocs.includes(d.id));
   const loreEdit = (
     <>
-      <Edit><LTextarea aria-label="Lore" rows={5} placeholder="History, secrets, texture." value={selected?.lore || ''} onChange={(e) => patch({ lore: e.target.value })} /></Edit>
+      <Edit><SpoilerTextArea aria-label="Lore" rows={5} placeholder="History, secrets, texture." value={selected?.lore || ''} onChange={(e) => patch({ lore: e.target.value })} /></Edit>
       <div className="border-t border-border-subtle pt-3">
         <div className="flex items-center gap-2.5">
           <BookOpen className="h-4 w-4 shrink-0 text-text-subtle" aria-hidden="true" />
@@ -1650,9 +1679,9 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const sectionsFor = (type) => {
     const S = [];
     if (type === 'System') {
-      S.push({ key: 'concept', title: "Always in the AI's context", quiet: true, icon: AiGlyph, scalar: true, empty: !String(selected.data.content || '').trim(),
+      S.push({ key: 'concept', spoiler: 'content', title: "Always in the AI's context", quiet: true, icon: AiGlyph, scalar: true, empty: !String(selected.data.content || '').trim(),
         view: <Prose text={selected.data.content} empty="No rules written yet." />,
-        edit: <Edit label="Content"><LTextarea rows={10} placeholder="Rules and concepts of this universe the AI should always honor." value={selected.data.content || ''} onChange={(e) => patchData({ content: e.target.value })} /></Edit> });
+        edit: <Edit label="Content"><SpoilerTextArea rows={10} placeholder="Rules and concepts of this universe the AI should always honor." value={selected.data.content || ''} onChange={(e) => patchData({ content: e.target.value })} /></Edit> });
     }
     if (type === 'Locations') {
       const size = locationSizeOf(selected);
@@ -1664,16 +1693,16 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       S.push({ key: 'overview', title: 'Overview', icon: locationSizeIcon(size), scalar: true,
         view: <>
           <FactGrid columns={4}>
-            <ViewField label="Size" value={size ? <LocationSizeValue size={size} /> : null} />
-            <ViewField label="Type" value={selected.data.locationType} />
-            <ViewField label="Inside" value={rel.inside?.entity ? <EntityChip entity={rel.inside.entity} onOpen={openEntityById} /> : null} />
-            <ViewField label="Owner or leader" value={rel.leader?.entity ? <EntityChip entity={rel.leader.entity} onOpen={openEntityById} /> : null} />
+            <ViewField label="Size" spoiler="size" value={size ? <LocationSizeValue size={size} /> : null} />
+            <ViewField label="Type" spoiler="locationType" value={selected.data.locationType} />
+            <ViewField label="Inside" spoiler="inside" value={rel.inside?.entity ? <EntityChip entity={rel.inside.entity} onOpen={openEntityById} /> : null} />
+            <ViewField label="Owner or leader" spoiler="leader" value={rel.leader?.entity ? <EntityChip entity={rel.leader.entity} onOpen={openEntityById} /> : null} />
           </FactGrid>
           <NestingWarning size={size} parent={parent} />
-          <LongField label="Description" text={selected.data.description} />
+          <LongField label="Description" spoiler="description" text={selected.data.description} />
         </>,
         edit: <>
-          <Edit label="Size" hint={size ? `${locationSizeGuide(size)} Select it again to clear.` : 'How this place relates to a scene. Leave it empty if you are unsure.'}>
+          <Edit label="Size" spoiler="size" hint={size ? `${locationSizeGuide(size)} Select it again to clear.` : 'How this place relates to a scene. Leave it empty if you are unsure.'}>
             <SegmentedControl
               label="Size"
               value={size}
@@ -1681,13 +1710,13 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               onChange={(value) => patchData({ size: value === size ? null : value })}
             />
           </Edit>
-          <Edit label="Type" hint="Its kind in your own words."><LInput placeholder="e.g. kingdom, space station, tavern, bridge" value={selected.data.locationType || ''} onChange={(e) => patchData({ locationType: e.target.value })} /></Edit>
-          <Edit label="Description"><LTextarea rows={5} placeholder="What this place looks and feels like, including its defining features." value={selected.data.description || ''} onChange={(e) => patchData({ description: e.target.value })} /></Edit>
-          <SingleRelation label="Inside another place" hint="Nest this within a larger location." disabled={unsaved} current={rel.inside?.entity?.id} options={parentOptions} onSet={(id) => setSingle('inside', id)} />
+          <Edit label="Type" spoiler="locationType" hint="Its kind in your own words."><LInput placeholder="e.g. kingdom, space station, tavern, bridge" value={selected.data.locationType || ''} onChange={(e) => patchData({ locationType: e.target.value })} /></Edit>
+          <Edit label="Description" spoiler="description"><SpoilerTextArea rows={5} placeholder="What this place looks and feels like, including its defining features." value={selected.data.description || ''} onChange={(e) => patchData({ description: e.target.value })} /></Edit>
+          <SingleRelation label="Inside another place" spoiler="inside" hint="Nest this within a larger location." disabled={unsaved} current={rel.inside?.entity?.id} options={parentOptions} onSet={(id) => setSingle('inside', id)} />
           <NestingWarning size={size} parent={parent} />
-          <SingleRelation label="Owner or leader" hint="Who holds or rules this place, if anyone." disabled={unsaved} current={rel.leader?.entity?.id} options={byType.Characters} onSet={(id) => setSingle('led_by', id)} />
+          <SingleRelation label="Owner or leader" spoiler="leader" hint="Who holds or rules this place, if anyone." disabled={unsaved} current={rel.leader?.entity?.id} options={byType.Characters} onSet={(id) => setSingle('led_by', id)} />
         </> });
-      S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, empty: loreEmpty, view: loreView, edit: loreEdit });
+      S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, spoiler: 'lore', empty: loreEmpty, view: loreView, edit: loreEdit });
       const childIds = new Set(insideLinks.filter(link => link.toId === selected.id).map(link => link.fromId));
       const children = byType.Locations
         .filter(o => childIds.has(o.id))
@@ -1705,23 +1734,23 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       S.push({ key: 'details', title: 'Details', icon: itemMeta(selected.data.itemType).icon, scalar: true,
         view: <>
           <FactGrid>
-            <ViewField label="Nature" value={isUniqueItem ? 'Unique item' : 'Item type'} />
-            <ViewField label="Category" value={selected.data.itemType ? <span className="inline-flex items-center gap-1.5 text-sm text-text-primary">{React.createElement(itemMeta(selected.data.itemType).icon, { className: 'h-3.5 w-3.5 text-entity-item', 'aria-hidden': true })}{selected.data.itemType}</span> : null} />
-            {isUniqueItem && <ViewField label="Owner" value={rel.ownedBy ? <EntityChip entity={rel.ownedBy.entity} onOpen={openEntityById} /> : <span className="inline-flex items-center gap-1.5 text-sm text-text-secondary">{selected?.data?.ownership === 'lost' ? <CircleHelp className="h-3.5 w-3.5 text-text-muted" aria-hidden="true" /> : <AiGlyph className="h-3.5 w-3.5 text-text-muted" aria-hidden="true" />}{ownerLabel}</span>} />}
-            {isUniqueItem && <ViewField label="Where it is" value={rel.locatedIn?.entity?.canonicalName} empty={rel.ownedBy ? `In ${rel.ownedBy.entity.canonicalName}'s inventory` : 'Not set'} />}
-            <ViewField label="Creator" value={rel.createdBy?.entity ? <EntityChip entity={rel.createdBy.entity} onOpen={openEntityById} /> : null} empty="Unknown" />
-            {isItemType && <ViewField label="How common" value={selected.data.abundance} />}
-            {isItemType && <ViewField full label="Where found" value={<ChipList onOpen={openEntityById} links={rel.foundIn} empty="Not set" />} />}
-            {isItemType && <ViewField full label="Where sold" value={<ChipList onOpen={openEntityById} links={rel.soldIn} empty="Not set" />} />}
+            <ViewField label="Nature" spoiler="itemNature" value={isUniqueItem ? 'Unique item' : 'Item type'} />
+            <ViewField label="Category" spoiler="itemType" value={selected.data.itemType ? <span className="inline-flex items-center gap-1.5 text-sm text-text-primary">{React.createElement(itemMeta(selected.data.itemType).icon, { className: 'h-3.5 w-3.5 text-entity-item', 'aria-hidden': true })}{selected.data.itemType}</span> : null} />
+            {isUniqueItem && <ViewField label="Owner" spoiler="owner" value={rel.ownedBy ? <EntityChip entity={rel.ownedBy.entity} onOpen={openEntityById} /> : <span className="inline-flex items-center gap-1.5 text-sm text-text-secondary">{selected?.data?.ownership === 'lost' ? <CircleHelp className="h-3.5 w-3.5 text-text-muted" aria-hidden="true" /> : <AiGlyph className="h-3.5 w-3.5 text-text-muted" aria-hidden="true" />}{ownerLabel}</span>} />}
+            {isUniqueItem && <ViewField label="Where it is" spoiler="location" value={rel.locatedIn?.entity?.canonicalName} empty={rel.ownedBy ? `In ${rel.ownedBy.entity.canonicalName}'s inventory` : 'Not set'} />}
+            <ViewField label="Creator" spoiler="creator" value={rel.createdBy?.entity ? <EntityChip entity={rel.createdBy.entity} onOpen={openEntityById} /> : null} empty="Unknown" />
+            {isItemType && <ViewField label="How common" spoiler="abundance" value={selected.data.abundance} />}
+            {isItemType && <ViewField full label="Where found" spoiler="foundIn" value={<ChipList onOpen={openEntityById} links={rel.foundIn} empty="Not set" />} />}
+            {isItemType && <ViewField full label="Where sold" spoiler="soldIn" value={<ChipList onOpen={openEntityById} links={rel.soldIn} empty="Not set" />} />}
           </FactGrid>
-          <LongField label="Description" text={selected.data.description} />
+          <LongField label="Description" spoiler="description" text={selected.data.description} />
         </>,
         edit: <>
-          <Edit label="Nature" hint={(selected.data.itemNature || 'type') === 'unique' ? 'A unique item exists only once, in one inventory or one place.' : 'An item type can exist in quantities.'}>
+          <Edit label="Nature" spoiler="itemNature" hint={(selected.data.itemNature || 'type') === 'unique' ? 'A unique item exists only once, in one inventory or one place.' : 'An item type can exist in quantities.'}>
             <SegmentedControl label="Item nature" value={selected.data.itemNature || 'type'} onChange={(itemNature) => patchData({ itemNature })} options={[{ value: 'type', label: 'Item type' }, { value: 'unique', label: 'Unique item' }]} />
           </Edit>
           <div className={`grid grid-cols-1 gap-3 ${isItemType ? 'sm:grid-cols-2' : ''}`}>
-          <Edit label="Category">
+          <Edit label="Category" spoiler="itemType">
             <SearchableSelect
               value={selected.data.itemType || ''}
               onChange={(itemType) => patchData({ itemType })}
@@ -1736,10 +1765,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               ariaLabel="Item category"
             />
           </Edit>
-          {isItemType && <Edit label={<>How common <InfoPopover items={ABUNDANCE_HELP} /></>}><ChoiceSelect label="How common" value={selected.data.abundance} onChange={(e) => patchData({ abundance: e.target.value })} options={RARITY} /></Edit>}
+          {isItemType && <Edit label={<>How common <InfoPopover items={ABUNDANCE_HELP} /></>} spoiler="abundance"><ChoiceSelect label="How common" value={selected.data.abundance} onChange={(e) => patchData({ abundance: e.target.value })} options={RARITY} /></Edit>}
           </div>
-          <SingleRelation label="Creator" hint="Leave blank if unknown." disabled={unsaved} current={rel.createdBy?.entity?.id} options={byType.Characters} onSet={(id) => setSingle('created_by', id)} />
-          {isUniqueItem && !unsaved && <Edit label="Owner" hint="A unique item can be in one inventory or one world location.">
+          <SingleRelation label="Creator" spoiler="creator" hint="Leave blank if unknown." disabled={unsaved} current={rel.createdBy?.entity?.id} options={byType.Characters} onSet={(id) => setSingle('created_by', id)} />
+          {isUniqueItem && !unsaved && <Edit label="Owner" spoiler="owner" hint="A unique item can be in one inventory or one world location.">
             <div className="flex items-center gap-2 flex-wrap">
               <button type="button" onClick={() => setOwner('ai')} aria-pressed={ownerVal === 'ai'} className={`inline-flex min-h-9 items-center gap-2 rounded-control border px-3 py-2 text-xs font-semibold transition-colors ${ownerVal === 'ai' ? 'border-border-strong bg-surface-hover text-text-primary' : 'border-border-default bg-surface-input/70 text-text-muted hover:border-border-strong hover:text-text-primary'}`}><AiGlyph className="h-3.5 w-3.5" />Decided by the AI</button>
               <button type="button" onClick={() => setOwner('lost')} aria-pressed={ownerVal === 'lost'} className={`inline-flex min-h-9 items-center gap-2 rounded-control border px-3 py-2 text-xs font-semibold transition-colors ${ownerVal === 'lost' ? 'border-border-strong bg-surface-hover text-text-primary' : 'border-border-default bg-surface-input/70 text-text-muted hover:border-border-strong hover:text-text-primary'}`}><CircleHelp className="h-3.5 w-3.5" />Unknown or lost</button>
@@ -1747,20 +1776,20 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               <EntityPickerButton icon={rel.ownedBy ? Replace : Plus} label={rel.ownedBy ? 'Change' : 'Choose entity'} title="Choose owner" options={ownerOptions} onPick={setOwner} />
             </div>
           </Edit>}
-          {isUniqueItem && <SingleRelation label="Current location" hint="Setting a location removes this item from its current inventory." disabled={unsaved} current={rel.locatedIn?.entity?.id} options={presenceLocations} onSet={setItemLocation} />}
-          {isItemType && <MultiRelation label="Where found" hint="Places where this item type can be found, gathered, or obtained." disabled={unsaved} links={rel.foundIn || []} options={byType.Locations} onAdd={(id) => addMulti('found_in', id)} onRemove={removeLink} />}
-          {isItemType && <MultiRelation label="Where sold" hint="Places where this item type can normally be purchased." disabled={unsaved} links={rel.soldIn || []} options={byType.Locations} onAdd={(id) => addMulti('sold_in', id)} onRemove={removeLink} />}
-          <Edit label="Description"><LTextarea rows={4} placeholder="What it looks like and does." value={selected.data.description || ''} onChange={(e) => patchData({ description: e.target.value })} /></Edit>
+          {isUniqueItem && <SingleRelation label="Current location" spoiler="location" hint="Setting a location removes this item from its current inventory." disabled={unsaved} current={rel.locatedIn?.entity?.id} options={presenceLocations} onSet={setItemLocation} />}
+          {isItemType && <MultiRelation label="Where found" spoiler="foundIn" hint="Places where this item type can be found, gathered, or obtained." disabled={unsaved} links={rel.foundIn || []} options={byType.Locations} onAdd={(id) => addMulti('found_in', id)} onRemove={removeLink} />}
+          {isItemType && <MultiRelation label="Where sold" spoiler="soldIn" hint="Places where this item type can normally be purchased." disabled={unsaved} links={rel.soldIn || []} options={byType.Locations} onAdd={(id) => addMulti('sold_in', id)} onRemove={removeLink} />}
+          <Edit label="Description" spoiler="description"><SpoilerTextArea rows={4} placeholder="What it looks like and does." value={selected.data.description || ''} onChange={(e) => patchData({ description: e.target.value })} /></Edit>
         </> });
-      S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, empty: loreEmpty, view: loreView, edit: loreEdit });
+      S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, spoiler: 'lore', empty: loreEmpty, view: loreView, edit: loreEdit });
     }
     if (type === 'Races') {
-      S.push({ key: 'desc', title: 'Description', icon: AlignLeft, scalar: true, empty: !String(selected.data.description || '').trim(), view: <Prose text={selected.data.description} />, edit: <Edit><LTextarea aria-label="Description" rows={5} placeholder="Traits, appearance, culture." value={selected.data.description || ''} onChange={(e) => patchData({ description: e.target.value })} /></Edit> });
+      S.push({ key: 'desc', title: 'Description', icon: AlignLeft, scalar: true, spoiler: 'description', empty: !String(selected.data.description || '').trim(), view: <Prose text={selected.data.description} />, edit: <Edit><SpoilerTextArea aria-label="Description" rows={5} placeholder="Traits, appearance, culture." value={selected.data.description || ''} onChange={(e) => patchData({ description: e.target.value })} /></Edit> });
       if (!unsaved && selected.status !== 'proposed') S.push({ key: 'roleplay', raw: <RaceRoleplayDefaults workspaceId={workspaceId} race={selected} api={electronAPI} showToast={showToast} /> });
       S.push({ key: 'members', title: 'Known members', icon: Users, scalar: false, derived: true, relationalOnly: true, count: rel.members?.length || null, empty: !(rel.members || []).length, emptyNote: 'Filled in as characters take this race',
         right: <span className="mr-2 text-xs text-text-subtle">Filled from each character's race</span>,
         view: <KnownMembers links={rel.members || []} portraits={portraits} onOpen={openEntityById} /> });
-      S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, empty: loreEmpty, view: loreView, edit: loreEdit });
+      S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, spoiler: 'lore', empty: loreEmpty, view: loreView, edit: loreEdit });
     }
     if (type === 'Creatures') {
       const natureOpts = [...new Set([...CREATURE_NATURES, ...byType.Creatures.filter(c => c.data?.scope === 'group').map(c => c.data?.nature).filter(Boolean)])];
@@ -1768,20 +1797,20 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       S.push({ key: 'details', title: 'Details', icon: ListTree, scalar: true,
         view: <>
           <FactGrid>
-            {!isIndividual && <ViewField label="Nature" value={selected.data.nature} />}
-            {isIndividual && <ViewField label="Species" value={rel.isRace?.entity ? <button type="button" onClick={() => openEntityById(rel.isRace.entity.id)} className="rounded-sm text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{rel.isRace.entity.canonicalName}</button> : null} />}
-            <ViewField label="Disposition" value={<StateTag map={DISPOSITION} value={selected.data.disposition || 'unknown'} />} />
-            {!isIndividual && <ViewField label="How common" value={selected.data.abundance} />}
-            <ViewField label="Threat" value={selected.data.threat} />
-            {isIndividual && <ViewField label="Born" value={formatWorldDate(worldCalendar, selected.data.birthDate)} />}
-            {isIndividual && selected.data.status === 'deceased' && <ViewField label="Died" value={formatWorldDate(worldCalendar, selected.data.deathDate)} />}
-            {isIndividual && selected.data.status === 'missing' && <ViewField label="Disappeared" value={formatWorldDate(worldCalendar, selected.data.missingDate)} />}
-            <ViewField label="Habitat" value={(rel.foundIn || []).length ? <ChipList onOpen={openEntityById} links={rel.foundIn} /> : null} />
+            {!isIndividual && <ViewField label="Nature" spoiler="nature" value={selected.data.nature} />}
+            {isIndividual && <ViewField label="Species" spoiler="race" value={rel.isRace?.entity ? <button type="button" onClick={() => openEntityById(rel.isRace.entity.id)} className="rounded-sm text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{rel.isRace.entity.canonicalName}</button> : null} />}
+            <ViewField label="Disposition" spoiler="disposition" value={<StateTag map={DISPOSITION} value={selected.data.disposition || 'unknown'} />} />
+            {!isIndividual && <ViewField label="How common" spoiler="abundance" value={selected.data.abundance} />}
+            <ViewField label="Threat" spoiler="threat" value={selected.data.threat} />
+            {isIndividual && <ViewField label="Born" spoiler="birthDate" value={formatWorldDate(worldCalendar, selected.data.birthDate)} />}
+            {isIndividual && selected.data.status === 'deceased' && <ViewField label="Died" spoiler="deathDate" value={formatWorldDate(worldCalendar, selected.data.deathDate)} />}
+            {isIndividual && selected.data.status === 'missing' && <ViewField label="Disappeared" spoiler="missingDate" value={formatWorldDate(worldCalendar, selected.data.missingDate)} />}
+            <ViewField label="Habitat" spoiler="foundIn" value={(rel.foundIn || []).length ? <ChipList onOpen={openEntityById} links={rel.foundIn} /> : null} />
           </FactGrid>
-          <LongField label="Abilities and traits" text={selected.data.abilities} />
+          <LongField label="Abilities and traits" spoiler="abilities" text={selected.data.abilities} />
         </>,
         edit: <>
-          <Edit label="This creature is">
+          <Edit label="This creature is" spoiler="scope">
             <SegmentedControl label="Creature shape" value={selected.data.scope || 'individual'} onChange={(scope) => patchData({ scope })} options={[{ value: 'individual', label: 'A specific being' }, { value: 'group', label: 'A group or species' }]} />
             <Hint>A species has no single life. One tamed wolf does.</Hint>
             {isIndividual && (rel.inventory?.length || 0) + (rel.relationships?.length || 0) > 0 && (
@@ -1790,75 +1819,75 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           </Edit>
           <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-2">
             {isIndividual
-              ? <SingleRelation label="Species" disabled={unsaved} current={rel.isRace?.entity?.id} options={byType.Creatures.filter(creature => creature.data?.scope === 'group' && creature.id !== selected.id)} onSet={(id) => setSingle('is_race', id)} />
-              : <Edit label="Nature"><FreeDatalist value={selected.data.nature} onChange={(e) => patchData({ nature: e.target.value })} options={natureOpts} placeholder="e.g. Beast, Spirit, Deity" /></Edit>}
-            <Edit label="Threat"><ChoiceSelect label="Threat" value={selected.data.threat} onChange={(e) => patchData({ threat: e.target.value })} options={THREAT} /></Edit>
+              ? <SingleRelation label="Species" spoiler="race" disabled={unsaved} current={rel.isRace?.entity?.id} options={byType.Creatures.filter(creature => creature.data?.scope === 'group' && creature.id !== selected.id)} onSet={(id) => setSingle('is_race', id)} />
+              : <Edit label="Nature" spoiler="nature"><FreeDatalist value={selected.data.nature} onChange={(e) => patchData({ nature: e.target.value })} options={natureOpts} placeholder="e.g. Beast, Spirit, Deity" /></Edit>}
+            <Edit label="Threat" spoiler="threat"><ChoiceSelect label="Threat" value={selected.data.threat} onChange={(e) => patchData({ threat: e.target.value })} options={THREAT} /></Edit>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <Edit label="Disposition"><StateSelect label="Disposition" map={DISPOSITION} value={selected.data.disposition || 'unknown'} onChange={(e) => patchData({ disposition: e.target.value })} /></Edit>
-            {isIndividual && <Edit label="Status"><StateSelect label="Status" map={STATUS} value={selected.data.status || 'unknown'} onChange={(e) => patchData({ status: e.target.value })} /></Edit>}
-            {!isIndividual && <Edit label={<>How common <InfoPopover items={ABUNDANCE_HELP} /></>}><ChoiceSelect label="How common" value={selected.data.abundance} onChange={(e) => patchData({ abundance: e.target.value })} options={RARITY} /></Edit>}
-            {isIndividual && worldCalendar && <div className={selected.data.birthDate ? 'sm:col-span-3' : ''}><Edit label="Born"><WorldDateInput label="Birth date" emptyLabel="Set date" calendar={worldCalendar} value={selected.data.birthDate} onChange={birthDate => patchData({ birthDate })} /></Edit></div>}
+            <Edit label="Disposition" spoiler="disposition"><StateSelect label="Disposition" map={DISPOSITION} value={selected.data.disposition || 'unknown'} onChange={(e) => patchData({ disposition: e.target.value })} /></Edit>
+            {isIndividual && <Edit label="Status" spoiler="status"><StateSelect label="Status" map={STATUS} value={selected.data.status || 'unknown'} onChange={(e) => patchData({ status: e.target.value })} /></Edit>}
+            {!isIndividual && <Edit label={<>How common <InfoPopover items={ABUNDANCE_HELP} /></>} spoiler="abundance"><ChoiceSelect label="How common" value={selected.data.abundance} onChange={(e) => patchData({ abundance: e.target.value })} options={RARITY} /></Edit>}
+            {isIndividual && worldCalendar && <div className={selected.data.birthDate ? 'sm:col-span-3' : ''}><Edit label="Born" spoiler="birthDate"><WorldDateInput label="Birth date" emptyLabel="Set date" calendar={worldCalendar} value={selected.data.birthDate} onChange={birthDate => patchData({ birthDate })} /></Edit></div>}
           </div>
-          <Edit label="Abilities and traits" hint="Short, concrete powers the AI can use in a scene."><LTextarea rows={3} placeholder="e.g. flies, breathes fire, immune to steel." value={selected.data.abilities || ''} onChange={(e) => patchData({ abilities: e.target.value })} /></Edit>
+          <Edit label="Abilities and traits" spoiler="abilities" hint="Short, concrete powers the AI can use in a scene."><SpoilerTextArea rows={3} placeholder="e.g. flies, breathes fire, immune to steel." value={selected.data.abilities || ''} onChange={(e) => patchData({ abilities: e.target.value })} /></Edit>
           {isIndividual && worldCalendar && <Checkbox checked={Boolean(selected.data.showBirthday)} onChange={showBirthday => patchData({ showBirthday })} label="Show the birthday on the calendar" />}
-          {isIndividual && selected.data.status === 'deceased' && worldCalendar && <Edit label="Death date"><WorldDateInput label="Death date" emptyLabel="Set death date" calendar={worldCalendar} value={selected.data.deathDate} onChange={deathDate => patchData({ deathDate })} /></Edit>}
-          {isIndividual && selected.data.status === 'missing' && worldCalendar && <Edit label="Disappearance date"><WorldDateInput label="Disappearance date" emptyLabel="Set disappearance date" calendar={worldCalendar} value={selected.data.missingDate} onChange={missingDate => patchData({ missingDate })} /></Edit>}
-          <MultiRelation label="Habitat" hint="Where it is found or dwells." disabled={unsaved} links={rel.foundIn || []} options={byType.Locations} onAdd={(id) => addMulti('found_in', id)} onRemove={removeLink} />
+          {isIndividual && selected.data.status === 'deceased' && worldCalendar && <Edit label="Death date" spoiler="deathDate"><WorldDateInput label="Death date" emptyLabel="Set death date" calendar={worldCalendar} value={selected.data.deathDate} onChange={deathDate => patchData({ deathDate })} /></Edit>}
+          {isIndividual && selected.data.status === 'missing' && worldCalendar && <Edit label="Disappearance date" spoiler="missingDate"><WorldDateInput label="Disappearance date" emptyLabel="Set disappearance date" calendar={worldCalendar} value={selected.data.missingDate} onChange={missingDate => patchData({ missingDate })} /></Edit>}
+          <MultiRelation label="Habitat" spoiler="foundIn" hint="Where it is found or dwells." disabled={unsaved} links={rel.foundIn || []} options={byType.Locations} onAdd={(id) => addMulti('found_in', id)} onRemove={removeLink} />
         </> });
       // A species has a shared look worth describing, but no single temperament: a
       // personality belongs to one being, never to every member of a kind.
-      S.push({ key: 'appearance', title: 'Appearance', icon: ScanFace, scalar: true, empty: !String(selected.data.appearance || '').trim(), view: <Prose text={selected.data.appearance} />, edit: <Edit hint={isIndividual ? undefined : 'What members of this kind typically look like.'}><LTextarea aria-label="Appearance" rows={5} placeholder={isIndividual ? 'Physical presence and distinguishing features.' : 'Shared build, markings, and distinguishing features.'} value={selected.data.appearance || ''} onChange={(e) => patchData({ appearance: e.target.value })} /></Edit> });
+      S.push({ key: 'appearance', title: 'Appearance', icon: ScanFace, scalar: true, spoiler: 'appearance', empty: !String(selected.data.appearance || '').trim(), view: <Prose text={selected.data.appearance} />, edit: <Edit hint={isIndividual ? undefined : 'What members of this kind typically look like.'}><SpoilerTextArea aria-label="Appearance" rows={5} placeholder={isIndividual ? 'Physical presence and distinguishing features.' : 'Shared build, markings, and distinguishing features.'} value={selected.data.appearance || ''} onChange={(e) => patchData({ appearance: e.target.value })} /></Edit> });
       if (!isIndividual && !unsaved && selected.status !== 'proposed') S.push({ key: 'roleplay', raw: <RaceRoleplayDefaults workspaceId={workspaceId} race={selected} api={electronAPI} showToast={showToast} /> });
       if (!isIndividual) S.push({ key: 'members', title: 'Known members', icon: Users, scalar: false, derived: true, relationalOnly: true, count: rel.members?.length || null, empty: !(rel.members || []).length, emptyNote: 'Filled in as specific beings take this species',
         right: <span className="mr-2 text-xs text-text-subtle">Filled from each specific being's species</span>,
         view: <KnownMembers links={rel.members || []} portraits={portraits} onOpen={openEntityById} /> });
-      if (isIndividual) S.push({ key: 'personality', title: 'Personality', icon: Drama, scalar: true, empty: !String(selected.data.personality || '').trim(), view: <Prose text={selected.data.personality} />, edit: <Edit><LTextarea aria-label="Personality" rows={5} placeholder="Temperament, instincts, habits, and values." value={selected.data.personality || ''} onChange={(e) => patchData({ personality: e.target.value })} /></Edit> });
-      S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, empty: loreEmpty, view: loreView, edit: loreEdit });
+      if (isIndividual) S.push({ key: 'personality', title: 'Personality', icon: Drama, scalar: true, spoiler: 'personality', empty: !String(selected.data.personality || '').trim(), view: <Prose text={selected.data.personality} />, edit: <Edit><SpoilerTextArea aria-label="Personality" rows={5} placeholder="Temperament, instincts, habits, and values." value={selected.data.personality || ''} onChange={(e) => patchData({ personality: e.target.value })} /></Edit> });
+      S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, spoiler: 'lore', empty: loreEmpty, view: loreView, edit: loreEdit });
     }
     if (type === 'Factions') {
-      S.push({ key: 'desc', title: 'Description', icon: AlignLeft, scalar: true, empty: !String(selected.data.description || '').trim(), view: <Prose text={selected.data.description} />, edit: <Edit><LTextarea aria-label="Description" rows={5} placeholder="Goals, structure, reputation." value={selected.data.description || ''} onChange={(e) => patchData({ description: e.target.value })} /></Edit> });
-      S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, empty: loreEmpty, view: loreView, edit: loreEdit });
+      S.push({ key: 'desc', title: 'Description', icon: AlignLeft, scalar: true, spoiler: 'description', empty: !String(selected.data.description || '').trim(), view: <Prose text={selected.data.description} />, edit: <Edit><SpoilerTextArea aria-label="Description" rows={5} placeholder="Goals, structure, reputation." value={selected.data.description || ''} onChange={(e) => patchData({ description: e.target.value })} /></Edit> });
+      S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, spoiler: 'lore', empty: loreEmpty, view: loreView, edit: loreEdit });
     }
     if (type === 'Events') {
       const kindOpts = ['Battle', 'Festival', 'Holiday', 'Disaster', 'Ceremony', 'Discovery'];
       S.push({ key: 'overview', title: 'Overview', icon: Info, scalar: true,
         view: <>
           <FactGrid>
-            <ViewField label="How often" value={(selected.data.eventNature || 'one-time') === 'recurring' ? 'Recurring' : 'Once'} />
-            <ViewField label="Kind" value={selected.data.kind} />
+            <ViewField label="How often" spoiler="eventNature" value={(selected.data.eventNature || 'one-time') === 'recurring' ? 'Recurring' : 'Once'} />
+            <ViewField label="Kind" spoiler="kind" value={selected.data.kind} />
             {(selected.data.eventNature || 'one-time') === 'recurring'
-              ? <ViewField full label="Schedule" value={recurrenceText(selected.data.recurrence, worldCalendar)} />
-              : <ViewField full label="Date" value={selected.data.startDate ? `${formatWorldDate(worldCalendar, selected.data.startDate)}${selected.data.endDate ? ` to ${formatWorldDate(worldCalendar, selected.data.endDate)}` : ''}` : null} />}
-            <ViewField full label="Where" value={<ChipList onOpen={openEntityById} links={rel.happenedAt} empty="No place set." />} />
-            <ViewField full label="Who took part" value={<ChipList onOpen={openEntityById} links={rel.involved} empty="No one set." />} />
+              ? <ViewField full label="Schedule" spoiler="date" value={recurrenceText(selected.data.recurrence, worldCalendar)} />
+              : <ViewField full label="Date" spoiler="date" value={selected.data.startDate ? `${formatWorldDate(worldCalendar, selected.data.startDate)}${selected.data.endDate ? ` to ${formatWorldDate(worldCalendar, selected.data.endDate)}` : ''}` : null} />}
+            <ViewField full label="Where" spoiler="happenedAt" value={<ChipList onOpen={openEntityById} links={rel.happenedAt} empty="No place set." />} />
+            <ViewField full label="Who took part" spoiler="involved" value={<ChipList onOpen={openEntityById} links={rel.involved} empty="No one set." />} />
           </FactGrid>
         </>,
         edit: <>
-          <Edit label="How often">
+          <Edit label="How often" spoiler="eventNature">
             <SegmentedControl label="How often" value={selected.data.eventNature || 'one-time'} onChange={(eventNature) => patchData({ eventNature })} options={[{ value: 'one-time', label: 'Once' }, { value: 'recurring', label: 'Recurring' }]} />
           </Edit>
-          <Edit label="Kind" hint="Type your own or reuse one."><FreeDatalist value={selected.data.kind} onChange={(e) => patchData({ kind: e.target.value })} options={kindOpts} placeholder="e.g. Battle, Festival, Holiday" /></Edit>
+          <Edit label="Kind" spoiler="kind" hint="Type your own or reuse one."><FreeDatalist value={selected.data.kind} onChange={(e) => patchData({ kind: e.target.value })} options={kindOpts} placeholder="e.g. Battle, Festival, Holiday" /></Edit>
           {worldCalendar && (selected.data.eventNature || 'one-time') === 'recurring' ? (
             <>
-              <Edit label="First time"><WorldDateInput label="First time" emptyLabel="Set the first occurrence" calendar={worldCalendar} value={selected.data.recurrence?.anchorDate} onChange={anchorDate => patchData({ recurrence: { ...(selected.data.recurrence || {}), anchorDate } })} /></Edit>
-              <Edit label="Repeats every"><div className="grid grid-cols-[7rem_1fr] gap-2"><NumberInput className={FIELD} min={1} value={selected.data.recurrence?.interval || 1} onChange={interval => patchData({ recurrence: { ...(selected.data.recurrence || {}), interval } })} /><SelectMenu ariaLabel="Repeat unit" value={selected.data.recurrence?.unit || 'year'} onChange={unit => patchData({ recurrence: { ...(selected.data.recurrence || {}), unit } })} options={[{ value: 'day', label: 'Days' }, { value: 'week', label: 'Weeks' }, { value: 'month', label: 'Months' }, { value: 'year', label: 'Years' }]} /></div></Edit>
+              <Edit label="First time" spoiler="date"><WorldDateInput label="First time" emptyLabel="Set the first occurrence" calendar={worldCalendar} value={selected.data.recurrence?.anchorDate} onChange={anchorDate => patchData({ recurrence: { ...(selected.data.recurrence || {}), anchorDate } })} /></Edit>
+              <Edit label="Repeats every" spoiler="date"><div className="grid grid-cols-[7rem_1fr] gap-2"><NumberInput className={FIELD} min={1} value={selected.data.recurrence?.interval || 1} onChange={interval => patchData({ recurrence: { ...(selected.data.recurrence || {}), interval } })} /><SelectMenu ariaLabel="Repeat unit" value={selected.data.recurrence?.unit || 'year'} onChange={unit => patchData({ recurrence: { ...(selected.data.recurrence || {}), unit } })} options={[{ value: 'day', label: 'Days' }, { value: 'week', label: 'Weeks' }, { value: 'month', label: 'Months' }, { value: 'year', label: 'Years' }]} /></div></Edit>
             </>
           ) : worldCalendar ? (
             <>
               <div className={`grid grid-cols-1 gap-3 ${selected.data.startDate || selected.data.endDate ? '' : 'sm:grid-cols-2'}`}>
-                <Edit label="Starts"><WorldDateInput label="Starts" emptyLabel="Set date" calendar={worldCalendar} value={selected.data.startDate} onChange={startDate => patchData({ startDate })} /></Edit>
-                <Edit label="Ends" hint="Leave empty for a single day."><WorldDateInput label="Ends" emptyLabel="Add end date" calendar={worldCalendar} value={selected.data.endDate} onChange={endDate => patchData({ endDate })} /></Edit>
+                <Edit label="Starts" spoiler="date"><WorldDateInput label="Starts" emptyLabel="Set date" calendar={worldCalendar} value={selected.data.startDate} onChange={startDate => patchData({ startDate })} /></Edit>
+                <Edit label="Ends" spoiler="date" hint="Leave empty for a single day."><WorldDateInput label="Ends" emptyLabel="Add end date" calendar={worldCalendar} value={selected.data.endDate} onChange={endDate => patchData({ endDate })} /></Edit>
               </div>
             </>
           ) : null}
           {!unsaved && <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <MultiRelation label="Where" disabled={unsaved} links={rel.happenedAt || []} options={byType.Locations} onAdd={(id) => addMulti('happened_at', id)} onRemove={removeLink} />
-            <MultiRelation label="Who took part" disabled={unsaved} links={rel.involved || []} options={byType.Characters} onAdd={(id) => addMulti('involved', id)} onRemove={removeLink} />
+            <MultiRelation label="Where" spoiler="happenedAt" disabled={unsaved} links={rel.happenedAt || []} options={byType.Locations} onAdd={(id) => addMulti('happened_at', id)} onRemove={removeLink} />
+            <MultiRelation label="Who took part" spoiler="involved" disabled={unsaved} links={rel.involved || []} options={byType.Characters} onAdd={(id) => addMulti('involved', id)} onRemove={removeLink} />
           </div>}
         </> });
-      S.push({ key: 'desc', title: 'Description', icon: AlignLeft, scalar: true, empty: !String(selected.data.description || '').trim(), view: <Prose text={selected.data.description} />, edit: <Edit><LTextarea aria-label="Description" rows={5} placeholder="What happened, and why it matters." value={selected.data.description || ''} onChange={(e) => patchData({ description: e.target.value })} /></Edit> });
-      S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, empty: loreEmpty, view: loreView, edit: loreEdit });
+      S.push({ key: 'desc', title: 'Description', icon: AlignLeft, scalar: true, spoiler: 'description', empty: !String(selected.data.description || '').trim(), view: <Prose text={selected.data.description} />, edit: <Edit><SpoilerTextArea aria-label="Description" rows={5} placeholder="What happened, and why it matters." value={selected.data.description || ''} onChange={(e) => patchData({ description: e.target.value })} /></Edit> });
+      S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, spoiler: 'lore', empty: loreEmpty, view: loreView, edit: loreEdit });
     }
     return S;
   };
@@ -1870,7 +1899,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     const membershipRow = (link, former) => {
       const since = formatWorldDate(worldCalendar, link.metadata?.joined);
       return (
-        <button key={link.linkId} type="button" onClick={() => openEntityById(link.entity.id)}
+        <SpoilerRow key={link.linkId} field={`link:${link.linkId}`} editing={editingSection === 'fac'}>
+        <button type="button" onClick={() => openEntityById(link.entity.id)}
           className={`flex w-full items-center gap-3 rounded-control py-1.5 text-left transition-colors hover:bg-surface-hover/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${former ? 'opacity-70' : ''}`}>
           <span aria-hidden="true" className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border ${meta('Factions').medallion}`}><Flag className="h-3.5 w-3.5" /></span>
           <span className={`truncate text-sm font-semibold ${former ? 'text-text-secondary' : 'text-text-primary'}`}>{link.entity.canonicalName}</span>
@@ -1878,9 +1908,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           <span className="flex-1" />
           <span className="shrink-0 text-xs text-text-subtle">{former ? 'Former member' : since ? `Since ${since}` : ''}</span>
         </button>
+        </SpoilerRow>
       );
     };
-    return { key: 'fac', title: 'Factions', icon: Flag, scalar: false, emptyVerb: 'Add',
+    return { key: 'fac', title: 'Factions', icon: Flag, scalar: false, emptyVerb: 'Add', spoiler: 'factions',
       empty: !(rel.memberOf || []).length && !pastFactions.length,
       view: <div className="space-y-0.5">
         {(rel.memberOf || []).map(link => membershipRow(link, false))}
@@ -1897,29 +1928,29 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       { key: 'identity', title: 'Identity', icon: IdCard, scalar: true,
         view: <>
           <FactGrid>
-            <ViewField label="Race" value={rel.isRace?.entity ? <EntityChip entity={rel.isRace.entity} onOpen={openEntityById} /> : null} />
-            <ViewField label="Age" value={selected.data.age} />
-            <ViewField label="Born" value={formatWorldDate(worldCalendar, selected.data.birthDate)} />
-            {selected.data.status === 'deceased' && <ViewField label="Died" value={formatWorldDate(worldCalendar, selected.data.deathDate)} />}
-            {selected.data.status === 'missing' && <ViewField label="Disappeared" value={formatWorldDate(worldCalendar, selected.data.missingDate)} />}
+            <ViewField label="Race" spoiler="race" value={rel.isRace?.entity ? <EntityChip entity={rel.isRace.entity} onOpen={openEntityById} /> : null} />
+            <ViewField label="Age" spoiler="age" value={selected.data.age} />
+            <ViewField label="Born" spoiler="birthDate" value={formatWorldDate(worldCalendar, selected.data.birthDate)} />
+            {selected.data.status === 'deceased' && <ViewField label="Died" spoiler="deathDate" value={formatWorldDate(worldCalendar, selected.data.deathDate)} />}
+            {selected.data.status === 'missing' && <ViewField label="Disappeared" spoiler="missingDate" value={formatWorldDate(worldCalendar, selected.data.missingDate)} />}
           </FactGrid>
         </>,
         edit: <>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <Edit label="Status"><StateSelect label="Status" map={STATUS} value={selected.data.status || 'unknown'} onChange={(e) => patchData({ status: e.target.value })} /></Edit>
-            <Edit label="Age"><LInput placeholder="e.g. 34" value={selected.data.age || ''} onChange={(e) => patchData({ age: e.target.value })} /></Edit>
-            {worldCalendar && <div className={selected.data.birthDate ? 'sm:col-span-3' : ''}><Edit label="Born">
+            <Edit label="Status" spoiler="status"><StateSelect label="Status" map={STATUS} value={selected.data.status || 'unknown'} onChange={(e) => patchData({ status: e.target.value })} /></Edit>
+            <Edit label="Age" spoiler="age"><LInput placeholder="e.g. 34" value={selected.data.age || ''} onChange={(e) => patchData({ age: e.target.value })} /></Edit>
+            {worldCalendar && <div className={selected.data.birthDate ? 'sm:col-span-3' : ''}><Edit label="Born" spoiler="birthDate">
               <WorldDateInput label="Birth date" emptyLabel="Set date" calendar={worldCalendar} value={selected.data.birthDate} onChange={birthDate => patchData({ birthDate })} />
             </Edit></div>}
           </div>
           {worldCalendar && <Checkbox checked={Boolean(selected.data.showBirthday)} onChange={showBirthday => patchData({ showBirthday })} label="Show the birthday on the calendar" />}
-          <SingleRelation label="Race" disabled={unsaved} current={rel.isRace?.entity?.id} options={byType.Races} onSet={(id) => setSingle('is_race', id)} />
-          {selected.data.status === 'deceased' && worldCalendar && <Edit label="Death date"><WorldDateInput label="Death date" emptyLabel="Set death date" calendar={worldCalendar} value={selected.data.deathDate} onChange={deathDate => patchData({ deathDate })} /></Edit>}
-          {selected.data.status === 'missing' && worldCalendar && <Edit label="Disappearance date"><WorldDateInput label="Disappearance date" emptyLabel="Set disappearance date" calendar={worldCalendar} value={selected.data.missingDate} onChange={missingDate => patchData({ missingDate })} /></Edit>}
+          <SingleRelation label="Race" spoiler="race" disabled={unsaved} current={rel.isRace?.entity?.id} options={byType.Races} onSet={(id) => setSingle('is_race', id)} />
+          {selected.data.status === 'deceased' && worldCalendar && <Edit label="Death date" spoiler="deathDate"><WorldDateInput label="Death date" emptyLabel="Set death date" calendar={worldCalendar} value={selected.data.deathDate} onChange={deathDate => patchData({ deathDate })} /></Edit>}
+          {selected.data.status === 'missing' && worldCalendar && <Edit label="Disappearance date" spoiler="missingDate"><WorldDateInput label="Disappearance date" emptyLabel="Set disappearance date" calendar={worldCalendar} value={selected.data.missingDate} onChange={missingDate => patchData({ missingDate })} /></Edit>}
         </> },
-      { key: 'appearance', title: 'Appearance', icon: ScanFace, scalar: true, empty: !String(selected.data.appearance || '').trim(), view: <Prose text={selected.data.appearance} />, edit: <Edit><LTextarea aria-label="Appearance" rows={5} placeholder="Physical presence, clothing, and distinguishing features." value={selected.data.appearance || ''} onChange={(e) => patchData({ appearance: e.target.value })} /></Edit> },
-      { key: 'personality', title: 'Personality', icon: Drama, scalar: true, empty: !String(selected.data.personality || '').trim(), view: <Prose text={selected.data.personality} />, edit: <Edit><LTextarea aria-label="Personality" rows={5} placeholder="Temperament, habits, values, and contradictions." value={selected.data.personality || ''} onChange={(e) => patchData({ personality: e.target.value })} /></Edit> },
-      { key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, empty: loreEmpty, view: loreView, edit: loreEdit },
+      { key: 'appearance', title: 'Appearance', icon: ScanFace, scalar: true, spoiler: 'appearance', empty: !String(selected.data.appearance || '').trim(), view: <Prose text={selected.data.appearance} />, edit: <Edit><SpoilerTextArea aria-label="Appearance" rows={5} placeholder="Physical presence, clothing, and distinguishing features." value={selected.data.appearance || ''} onChange={(e) => patchData({ appearance: e.target.value })} /></Edit> },
+      { key: 'personality', title: 'Personality', icon: Drama, scalar: true, spoiler: 'personality', empty: !String(selected.data.personality || '').trim(), view: <Prose text={selected.data.personality} />, edit: <Edit><SpoilerTextArea aria-label="Personality" rows={5} placeholder="Temperament, habits, values, and contradictions." value={selected.data.personality || ''} onChange={(e) => patchData({ personality: e.target.value })} /></Edit> },
+      { key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, spoiler: 'lore', empty: loreEmpty, view: loreView, edit: loreEdit },
     ];
     if (charTab === 'inventory') return [
       { key: 'inv', raw: <WorldbuildInventory workspaceId={workspaceId} subject={selected} links={rel.inventory || []} options={byType.Items} api={electronAPI} showToast={showToast} onChanged={() => loadRelations(selected)} /> },
@@ -1949,27 +1980,27 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     return [
       { key: 'overview', title: 'Command and territory', icon: Crown, scalar: true,
         view: <FactGrid>
-          <ViewField label="Leader" value={rel.leader?.entity ? <EntityChip entity={rel.leader.entity} onOpen={openEntityById} /> : null} />
-          <ViewField label="Founded" value={formatWorldDate(worldCalendar, selected.data.foundedDate)} empty="Unknown" />
-          <ViewField label="Founded by" value={founders.length
+          <ViewField label="Leader" spoiler="leader" value={rel.leader?.entity ? <EntityChip entity={rel.leader.entity} onOpen={openEntityById} /> : null} />
+          <ViewField label="Founded" spoiler="founded" value={formatWorldDate(worldCalendar, selected.data.foundedDate)} empty="Unknown" />
+          <ViewField label="Founded by" spoiler="foundedBy" value={founders.length
             ? <div className="flex flex-wrap gap-1.5">{founders.map(link => <EntityChip key={link.linkId} entity={link.entity} onOpen={openEntityById} />)}</div>
             : null} empty="Not recorded" />
-          <ViewField full label="Area of operation" value={<ChipList onOpen={openEntityById} links={rel.operatesIn} empty="No territory set." />} />
+          <ViewField full label="Area of operation" spoiler="area" value={<ChipList onOpen={openEntityById} links={rel.operatesIn} empty="No territory set." />} />
         </FactGrid>,
         edit: <>
-          <SingleRelation label="Leader (optional)" hint="Who heads this faction. They join the roster automatically, with an editable rank." disabled={unsaved} current={leaderId} options={candidates} onSet={setFactionLeader} />
-          {worldCalendar && <Edit label="Founded" hint="When this faction came into being."><WorldDateInput label="Founded" emptyLabel="Set founding date" calendar={worldCalendar} value={selected.data.foundedDate} onChange={foundedDate => patchData({ foundedDate })} /></Edit>}
-          <Edit label="Founded by" hint="Mark a founder with the star on their row in Members or Former members.">
+          <SingleRelation label="Leader (optional)" spoiler="leader" hint="Who heads this faction. They join the roster automatically, with an editable rank." disabled={unsaved} current={leaderId} options={candidates} onSet={setFactionLeader} />
+          {worldCalendar && <Edit label="Founded" spoiler="founded" hint="When this faction came into being."><WorldDateInput label="Founded" emptyLabel="Set founding date" calendar={worldCalendar} value={selected.data.foundedDate} onChange={foundedDate => patchData({ foundedDate })} /></Edit>}
+          <Edit label="Founded by" spoiler="foundedBy" hint="Mark a founder with the star on their row in Members or Former members.">
             {founders.length
               ? <div className="flex flex-wrap gap-1.5">{founders.map(link => <EntityChip key={link.linkId} entity={link.entity} onOpen={openEntityById} />)}</div>
               : <span className="caption">Nobody marked yet.</span>}
           </Edit>
-          <MultiRelation label="Area of operation" hint="Locations this faction works out of." disabled={unsaved} links={rel.operatesIn || []} options={byType.Locations} onAdd={(id) => addMulti('operates_in', id)} onRemove={removeLink} />
+          <MultiRelation label="Area of operation" spoiler="area" hint="Locations this faction works out of." disabled={unsaved} links={rel.operatesIn || []} options={byType.Locations} onAdd={(id) => addMulti('operates_in', id)} onRemove={removeLink} />
         </> },
-      { key: 'members', title: 'Members', icon: Users, scalar: false, count: rel.members?.length || null, emptyVerb: 'Add', empty: !(rel.members || []).length,
+      { key: 'members', title: 'Members', icon: Users, scalar: false, spoiler: 'members', count: rel.members?.length || null, emptyVerb: 'Add', empty: !(rel.members || []).length,
         view: roster(false),
         edit: unsaved ? null : roster(true) },
-      { key: 'formerMembers', title: 'Former members', icon: UserMinus, scalar: false, empty: !(rel.formerMembers || []).length, derived: !(rel.formerMembers || []).length,
+      { key: 'formerMembers', title: 'Former members', icon: UserMinus, scalar: false, spoiler: 'formerMembers', empty: !(rel.formerMembers || []).length, derived: !(rel.formerMembers || []).length,
         view: <MemberList links={rel.formerMembers} calendar={worldCalendar} kind="former" onOpen={openEntityById} empty="Nobody has left yet." />,
         edit: <div>
           <p className="caption mb-2">They keep what they already knew. From here on, whatever the faction shares with all members no longer reaches them.</p>
@@ -2077,7 +2108,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     const active = selected?.id === entity.id;
     const picked = selectedIds.has(entity.id);
     const status = (entity.type === 'Characters' || (entity.type === 'Creatures' && (entity.data?.scope || 'individual') !== 'group')) && STATUS_TONE[entity.data?.status]
-      ? entity.data.status : null;
+      && !hiddenFields(entity.data).includes('status') ? entity.data.status : null;
     return (
       <div className="relative">
         <button type="button" onClick={() => manageMode ? toggleEntitySelection(entity.id) : openEntity(entity)} aria-pressed={manageMode ? picked : undefined}
@@ -2181,11 +2212,12 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     // Template values edit as a draft, so a section holding any of them saves like a scalar one.
     const savable = s.scalar || withFields;
     return (
-      <Section key={s.key} icon={s.icon} title={s.title} count={s.count} right={s.right} quiet={s.quiet} editing={editing} empty={empty} emptyVerb={s.emptyVerb} emptyNote={s.emptyNote}
+      <Section key={s.key} icon={s.icon} title={s.title} count={s.count} quiet={s.quiet} editing={editing} empty={empty} emptyVerb={s.emptyVerb} emptyNote={s.emptyNote}
+        right={editing && s.spoiler ? <>{s.right}<FieldEye field={s.spoiler} className="mr-1" /></> : s.right}
         showPencil={!s.derived} onEdit={() => setEditingSection(s.key)}>
         {editing ? (
           <>
-            {s.edit}
+            {s.spoiler ? <SpoilerCover field={s.spoiler}>{s.edit}</SpoilerCover> : s.edit}
             {withFields && customFieldsFor(s.key, true)}
             <div className="flex items-center justify-end gap-2 pt-1">
               {savable ? (
@@ -2204,7 +2236,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           const cells = shortFields.length ? customFieldsFor(s.key, false, 'short') : null;
           const [view, placed] = cells ? injectIntoGrid(s.view, cells) : [s.view, false];
           return <>
-            {view}
+            {s.spoiler ? <SpoilerCover field={s.spoiler}>{view}</SpoilerCover> : view}
             {cells && !placed && <FactGrid>{cells}</FactGrid>}
             {withFields && (s.custom ? customFieldsFor(s.key) : customFieldsFor(s.key, false, 'long'))}
           </>;
@@ -2572,6 +2604,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           />
         ) : (
           <div className="mx-auto max-w-3xl space-y-4 p-6" inert={sheetBeingRead || undefined} aria-busy={sheetBeingRead || undefined}>
+            <SpoilerScope key={selected.id || 'new'} data={selected.data} onToggle={toggleHidden}>
             {sheetBeingRead && (
               <SheetNotice busy icon={Loader2} title="The AI is reading this sheet" text="It opens for editing again as soon as this entity is done. Other sheets stay editable." />
             )}
@@ -2613,7 +2646,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                   <div className="min-w-0 flex-1 space-y-3.5">
                     {isNew && <div className={`text-xs font-semibold ${m.soft}`}>New {m.label.toLowerCase()}</div>}
                     <Edit label={nameLabel}><LInput autoFocus placeholder={placeholderName(selected.type)} value={selected.canonicalName} onChange={(e) => patch({ canonicalName: e.target.value })} /></Edit>
-                    {showAliases && <Edit label="Other names" hint="Aliases and titles. When the story mentions any of them, it points to this sheet."><AliasInput value={selected.aliases} placeholder={isNew ? placeholderAlias(selected.type) : 'Type and press Enter'} onChange={(aliases) => patch({ aliases })} /></Edit>}
+                    {showAliases && <Edit label="Other names" hint="Aliases and titles. When the story mentions any of them, it points to this sheet."><AliasInput withEyes={!isNew} value={selected.aliases} placeholder={isNew ? placeholderAlias(selected.type) : 'Type and press Enter'} onChange={(aliases) => patch({ aliases })} /></Edit>}
                     {!isNew && (
                       <div className="flex justify-end gap-2">
                         <Button variant="ghost" size="sm" onClick={cancelSection}>Cancel</Button>
@@ -2628,9 +2661,9 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                   <div className="min-w-0 flex-1">
                     <div className="flex min-h-5 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
                       <span className={`font-semibold ${m.soft}`}>{sheetTypeLabel}</span>
-                      {sheetVariantLabel && <><span className="text-text-disabled" aria-hidden="true">·</span><span className="text-text-secondary">{sheetVariantLabel}</span></>}
-                      {hasLifeStatus && <><span className="text-text-disabled" aria-hidden="true">·</span><StateTag map={STATUS} value={selected.data.status || 'unknown'} /></>}
-                      {rel.isRace?.entity && <><span className="text-text-disabled" aria-hidden="true">·</span><span className="text-text-secondary">{rel.isRace.entity.canonicalName}</span></>}
+                      {sheetVariantLabel && <><span className="text-text-disabled" aria-hidden="true">·</span><SpoilerCover field="scope" compact><span className="text-text-secondary">{sheetVariantLabel}</span></SpoilerCover></>}
+                      {hasLifeStatus && <><span className="text-text-disabled" aria-hidden="true">·</span><SpoilerCover field="status" compact><StateTag map={STATUS} value={selected.data.status || 'unknown'} /></SpoilerCover></>}
+                      {rel.isRace?.entity && <><span className="text-text-disabled" aria-hidden="true">·</span><SpoilerCover field="race" compact><span className="text-text-secondary">{rel.isRace.entity.canonicalName}</span></SpoilerCover></>}
                       {playerEntityId && playerEntityId === selected.id && <span className="ml-1 inline-flex h-5.5 items-center gap-1 rounded-full border border-accent/30 px-2 font-medium text-accent"><Gamepad2 aria-hidden="true" className="h-3.5 w-3.5" />You play them</span>}
                     </div>
                     <h1 className="mt-1 line-clamp-2 break-words text-2xl font-bold leading-tight text-text-primary">{selected.canonicalName}</h1>
@@ -2639,7 +2672,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                       return source ? <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-text-subtle"><ImageIcon className="h-3.5 w-3.5" aria-hidden="true" />Background from<EntityChip entity={source} onOpen={openEntityById} /></div> : null;
                     })()}
                     {showAliases && (aliasesArr(selected.aliases).length > 0
-                      ? <div className="mt-2.5 flex flex-wrap items-center gap-1.5"><span className="mr-0.5 text-xs text-text-subtle">Also</span>{aliasesArr(selected.aliases).map((a, i) => <Chip key={i}>{a}</Chip>)}</div>
+                      ? <div className="mt-2.5 flex flex-wrap items-center gap-1.5"><span className="mr-0.5 text-xs text-text-subtle">Also</span>{aliasesArr(selected.aliases).map((a, i) => <SpoilerCover key={i} field={`alias:${a}`} compact><Chip>{a}</Chip></SpoilerCover>)}</div>
                       : <button type="button" onClick={() => setEditingSection('__header__')} className="-ml-2 mt-1.5 inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-semibold text-text-subtle transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Plus className="h-3.5 w-3.5" aria-hidden="true" />Add other names</button>)}
                   </div>
                   <div className="flex shrink-0 items-start gap-1">
@@ -2725,10 +2758,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                         <div key={f} className="flex items-start gap-4 py-3.5">
                           <div className="min-w-0 flex-1">
                             <span className="block text-xs font-medium text-text-muted">{pData[f]?.fieldLabel || fieldLabel(f)}</span>
-                            <div className="mt-1 flex flex-wrap items-baseline gap-2 text-sm">
-                              {!empty && <><span className="text-text-subtle line-through">{curStr}</span><ChevronRight className="h-3.5 w-3.5 self-center text-text-subtle" aria-hidden="true" /></>}
-                              <span className="text-text-primary">{displayProposalValue(f, pData[f], fieldDefinitions, entities)}</span>
-                            </div>
+                            <SpoilerCover field={customFieldKey ? null : f}><div className="mt-1 flex flex-wrap items-baseline gap-2 text-sm">
+                              {!empty && <><span className="text-text-subtle line-through"><SpoilerText text={curStr} /></span><ChevronRight className="h-3.5 w-3.5 self-center text-text-subtle" aria-hidden="true" /></>}
+                              <span className="text-text-primary"><SpoilerText text={displayProposalValue(f, pData[f], fieldDefinitions, entities)} /></span>
+                            </div></SpoilerCover>
                             <EvidenceReferences excerpts={proposalEvidence(pData[f])} support={proposalSupport(pData[f])} />
                           </div>
                           <div className="flex shrink-0 items-start gap-1.5">
@@ -2742,7 +2775,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                       <div className="flex items-start gap-4 py-3.5">
                         <div className="min-w-0 flex-1">
                           <span className="block text-xs font-medium text-text-muted">Lore</span>
-                          <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-text-primary">{String(proposalValue(pending.lore))}</p>
+                          <SpoilerCover field="lore"><p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-text-primary"><SpoilerText text={String(proposalValue(pending.lore))} /></p></SpoilerCover>
                           <EvidenceReferences excerpts={proposalEvidence(pending.lore)} support={proposalSupport(pending.lore)} />
                         </div>
                         <div className="flex shrink-0 items-start gap-1.5">
@@ -2756,7 +2789,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                         <div className="min-w-0 flex-1 text-sm">
                           <span className="block text-xs font-medium text-text-muted">{l.relLabel || l.relKey}</span>
                           <div className="mt-1 flex flex-wrap items-center gap-2 text-text-primary">{entities.find(e => e.id === l.targetId) ? <EntityChip entity={entities.find(e => e.id === l.targetId)} onOpen={openEntityById} /> : <span>{l.targetName}</span>}{l.label && <span>{l.label}</span>}</div>
-                          {l.metadata && <p className="mt-1 text-xs text-text-muted"><span className="font-semibold text-text-secondary">How {selected.canonicalName} sees {l.targetName}:</span> {l.metadata.value}{l.metadata.description ? ` · ${l.metadata.description}` : ''}</p>}
+                          {l.metadata && <p className="mt-1 text-xs text-text-muted"><span className="font-semibold text-text-secondary">How {selected.canonicalName} sees {l.targetName}:</span> {l.metadata.value}{l.metadata.description ? <> · <SpoilerText text={l.metadata.description} /></> : ''}</p>}
                           <EvidenceReferences excerpts={proposalEvidence(l)} support={proposalSupport(l)} />
                         </div>
                         <div className="flex shrink-0 items-start gap-1.5">
@@ -2834,6 +2867,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                     onOpenEntity={openEntityById}
                   />
                 ) : charTab === 'occurrences' && hasOccurrencesTab ? (
+                  // Each occurrence carries its date, so a hidden date keeps the whole list closed.
+                  <SpoilerCover field="date">
                   <WorldbuildEventOccurrences
                     workspaceId={workspaceId}
                     eventEntity={selected}
@@ -2842,6 +2877,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                     api={electronAPI}
                     showToast={showToast}
                   />
+                  </SpoilerCover>
                 ) : (
                   <>
                     {sections.map(renderSection)}
@@ -2849,6 +2885,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                 )}
               </>
             )}
+            </SpoilerScope>
           </div>
         )}
       </div>
@@ -2878,7 +2915,7 @@ function KnownMembers({ links, portraits, onOpen }) {
           {shown.map(link => {
             const entity = link.entity;
             const portrait = portraits?.[entity.id];
-            const status = STATUS_TONE[entity.data?.status] ? entity.data.status : null;
+            const status = STATUS_TONE[entity.data?.status] && !hiddenFields(entity.data).includes('status') ? entity.data.status : null;
             const typeInfo = meta(entity.type);
             return (
               <button key={link.linkId} type="button" onClick={() => onOpen(entity.id)}
@@ -2906,7 +2943,7 @@ function KnownMembers({ links, portraits, onOpen }) {
 function ChipList({ links, empty, onOpen }) {
   if (!links || links.length === 0) return <p className="text-sm text-text-disabled">{empty}</p>;
   return <div className="flex flex-wrap gap-1.5">{links.map(l => (
-    <EntityChip key={l.linkId} entity={l.entity} label={l.label} onOpen={onOpen} />
+    <SpoilerCover key={l.linkId} field={`link:${l.linkId}`} compact><EntityChip entity={l.entity} label={l.label} onOpen={onOpen} /></SpoilerCover>
   ))}</div>;
 }
 

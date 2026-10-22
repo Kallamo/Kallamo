@@ -4,6 +4,10 @@ import type { EntityFieldDefinition, EntityFieldType } from '../../../narrative/
 import SearchableSelect from '../../components/ui/SearchableSelect';
 import type { Toast, WorldbuildApi, WorldbuildEntity, WorldbuildEntityTemplate } from './worldbuildTypes';
 import { TYPES } from './worldbuildConfig';
+import { FieldEye, SpoilerCover, SpoilerText, SpoilerTextArea } from './Spoilers';
+
+// A template field is hidden from readers under its own key, like a native field.
+const spoilerKey = (definition: EntityFieldDefinition) => `customFields.${definition.key}`;
 
 const INPUT = 'wb-input min-h-10 w-full rounded-control border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary placeholder:text-text-subtle focus:border-accent/70 focus:outline-none focus:ring-2 focus:ring-accent/20';
 
@@ -113,7 +117,7 @@ export default function WorldbuildCustomFields({ workspaceId, entity, entities, 
     return <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">{fields.map(definition => (
       <div key={definition.id} className="min-w-0 rounded-control border border-border-subtle bg-surface-canvas/30 px-3 py-2.5">
         <div className="truncate text-xs font-medium text-text-muted">{labelOf(definition)}</div>
-        <FieldValue definition={definition} value={valueOf(definition)} entities={entities} large />
+        <SpoilerCover field={spoilerKey(definition)}><FieldValue definition={definition} value={valueOf(definition)} entities={entities} large /></SpoilerCover>
       </div>
     ))}</div>;
   }
@@ -136,12 +140,13 @@ function FieldShell({ definition, value, editing = false, full = false, children
     <div className={`min-w-0 ${full ? 'col-span-full' : ''}`}>
       <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-text-muted">
         <span className="truncate">{labelOf(definition)}</span>
+        {editing && <FieldEye field={spoilerKey(definition)} size="sm" />}
         {missing && <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-status-warning" />}
         {editing && definition.required && <span className="text-status-warning">Required</span>}
         {editing && definition.aiAccess === 'read-only' && <span data-tooltip="The AI reads it but never changes it" className="inline-flex text-text-subtle"><Lock className="h-3 w-3" aria-label="Read only for the AI" /></span>}
         {editing && definition.aiAccess === 'hidden' && <span data-tooltip="Hidden from the AI" className="inline-flex text-text-subtle"><EyeOff className="h-3 w-3" aria-label="Hidden from the AI" /></span>}
       </div>
-      {missing ? <p className="inline-flex items-center gap-1.5 text-sm text-status-warning"><AlertCircle className="h-3.5 w-3.5" aria-hidden="true" />Needs a value</p> : children}
+      {missing ? <p className="inline-flex items-center gap-1.5 text-sm text-status-warning"><AlertCircle className="h-3.5 w-3.5" aria-hidden="true" />Needs a value</p> : <SpoilerCover field={spoilerKey(definition)}>{children}</SpoilerCover>}
     </div>
   );
 }
@@ -180,7 +185,7 @@ function FieldInput({ definition, value, onChange, entities }: { definition: Ent
     }
     return <SearchableSelect value={String(value ?? '')} onChange={onChange} options={entityOptions} placeholder="Search for an entity" />;
   }
-  if (type === 'long-text') return <textarea aria-label={definition.label} className={`${INPUT} min-h-24 resize-y`} value={String(value ?? '')} onChange={event => onChange(event.target.value)} />;
+  if (type === 'long-text') return <SpoilerTextArea aria-label={definition.label} rows={3} value={String(value ?? '')} onChange={event => onChange(event.target.value)} />;
   if (type === 'range') {
     const min = definition.constraints?.min ?? 0;
     const max = definition.constraints?.max ?? 100;
@@ -226,7 +231,7 @@ function FieldValue({ definition, value, entities, large = false }: { definition
   }
   if (Array.isArray(value)) return <div className="flex flex-wrap gap-1.5">{value.map(item => <span key={String(item)} className="inline-flex min-h-6 items-center rounded-full border border-border-subtle bg-surface-hover/35 px-2.5 py-0.5 text-xs font-medium text-text-secondary">{optionNames.get(String(item)) ?? String(item)}</span>)}</div>;
   if (type === 'single-choice') return <p className="text-sm text-text-primary">{optionNames.get(String(value)) ?? String(value)}</p>;
-  return <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-text-primary">{String(value)}</p>;
+  return <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-text-primary"><SpoilerText text={String(value)} /></p>;
 }
 
 function emptyValue(type: EntityFieldType): unknown {

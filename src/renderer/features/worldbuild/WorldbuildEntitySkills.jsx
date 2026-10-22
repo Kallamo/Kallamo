@@ -4,6 +4,7 @@ import Button from '../../components/ui/Button';
 import IconButton from '../../components/ui/IconButton';
 import SearchableSelect from '../../components/ui/SearchableSelect';
 import { describeSkillChange, skillChangeItems } from '../roleplay/changeKinds';
+import { FieldEye, SpoilerCover } from './Spoilers';
 
 /**
  * A character's skills, drawn as a sheet section while the world uses skills. Edit gives,
@@ -83,7 +84,8 @@ export default function WorldbuildEntitySkills({ workspaceId, entity, api, showT
         {held.length > 0 ? (
           <div className="divide-y divide-border-subtle overflow-hidden rounded-card border border-border-subtle bg-surface-canvas/40">
             {held.map(skill => (
-              <div key={skill.skillId} className={`flex min-h-11 items-center gap-3 py-1.5 pr-2 ${skill.parentId ? 'pl-8' : 'pl-3.5'}`}>
+              <SpoilerCover key={skill.skillId} field={`skill:${skill.key}`} className="m-1.5">
+              <div className={`flex min-h-11 items-center gap-3 py-1.5 pr-2 ${skill.parentId ? 'pl-8' : 'pl-3.5'}`}>
                 {skill.parentId && <CornerDownRight aria-hidden="true" className="-ml-4 h-3.5 w-3.5 shrink-0 text-text-subtle" />}
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[0.8125rem] font-semibold text-text-secondary">{skill.name}</span>
@@ -91,6 +93,7 @@ export default function WorldbuildEntitySkills({ workspaceId, entity, api, showT
                 </span>
                 {editing ? (
                   <>
+                    <FieldEye field={`skill:${skill.key}`} />
                     <SearchableSelect className="w-40" clearable={false} value={String(skill.rank)} onChange={value => setRank(skill.skillId, Number(value))} options={rankOptions} ariaLabel={`${skill.name} rank`} />
                     <IconButton icon={Trash2} size="sm" tone="danger" label={`Remove ${skill.name}`} onClick={() => setRank(skill.skillId, null)} />
                   </>
@@ -98,6 +101,7 @@ export default function WorldbuildEntitySkills({ workspaceId, entity, api, showT
                   <span className="shrink-0 rounded-full bg-tint/[0.06] px-2.5 py-0.5 text-xs font-semibold text-text-primary">{skill.rankName}</span>
                 )}
               </div>
+              </SpoilerCover>
             ))}
           </div>
         ) : !editing && (

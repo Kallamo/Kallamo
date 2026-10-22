@@ -103,6 +103,27 @@ describe('LLM request composition', () => {
     expect(plainJsonBody.response_format).toEqual({ type: 'json_object' });
   });
 
+  test('sends spoiler text without its markers unless the caller rewrites Worldbuild text', async () => {
+    const database = createDatabase({ provider: 'OpenAI' });
+    const params = {
+      apiProfileId: 'api-profile',
+      model: 'gpt-4.1-mini',
+      systemPrompt: 'Lore: Harrow ||is the Hollowhart||.',
+      newPrompt: 'Is a || b || c true?',
+      conversation: [{ role: 'tool', results: [{ id: 'call-1', content: 'Found ||a secret||.' }] }],
+      maxPayloadTokens: 8192
+    };
+    const plain = JSON.parse((await buildRequest(params, { database })).requestBodyPayload);
+    const kept = JSON.parse((await buildRequest({ ...params, keepSpoilerMarkers: true }, { database })).requestBodyPayload);
+    const question = JSON.parse((await buildRequest({ ...params, conversation: null }, { database })).requestBodyPayload);
+
+    expect(plain.messages[0].content).toBe('Lore: Harrow is the Hollowhart.');
+    expect(JSON.stringify(plain.messages)).toContain('Found a secret.');
+    expect(question.messages.at(-1).content).toBe('Is a || b || c true?');
+    expect(kept.messages[0].content).toBe('Lore: Harrow ||is the Hollowhart||.');
+    expect(JSON.stringify(kept.messages)).toContain('Found ||a secret||.');
+  });
+
   test('places the schema in the final Bedrock Claude payload', async () => {
     const database = createDatabase({
       provider: 'AWS Bedrock',

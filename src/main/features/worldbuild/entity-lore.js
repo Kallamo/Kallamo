@@ -49,12 +49,21 @@ function loreScope(entityType, skillsInUse) {
     'Write as the world bible, in the third person and in the story\'s own terms. Never mention documents, records, sheets, evidence, sources, or what is unknown or not yet established. Do not guess with words such as "suggests" or "seems". ';
 }
 
+// Spoilers hide text from the person reading the sheet, not from the story.
+const SPOILER_RULE = 'Text written between || and || is a spoiler: it is true and part of the lore, but hidden from the person reading the sheet until they choose to reveal it. ' +
+  'Keep every such span exactly as it is, with its || markers and the same words. Never quote, summarize, or paraphrase a spoiler outside its markers. ' +
+  'When a new finding reveals more of something hidden, or would spoil a surprise for someone who has not reached it in the story, write it inside new || markers on a single line. ';
+
+function buildSpoilerRetryNote(lostSpoilers) {
+  return `Your previous answer removed or changed these spoilers. Answer again and keep each one exactly as written here:\n${lostSpoilers.join('\n')}`;
+}
+
 function buildLorePrompt({ entityName, entityType, currentLore, findings, evidence, skillsInUse = false }) {
   return `CURRENT LORE:\n${String(currentLore || '').trim() || '(none)'}\n\n` +
     `VALIDATED NEW FINDINGS:\n${JSON.stringify(findings)}\n\n` +
     `SUPPORTING EVIDENCE:\n${evidence}\n\n` +
     `Write a cumulative world-bible lore entry for ${entityName} (${entityType}). ${loreScope(entityType, skillsInUse)}` +
-    `Preserve established information and integrate only the supported new findings. ` +
+    `Preserve established information and integrate only the supported new findings. ${SPOILER_RULE}` +
     `Do not reduce the entity to one event or cultural detail. Do not add headings merely to fill space. Do not invent motives, causation, or conclusions. ` +
     `Return only {"lore":{"value":"...","support":"...","evidence":["E_ID"]}}.`;
 }
@@ -64,7 +73,7 @@ function buildLoreAppendPrompt({ entityName, entityType, currentLore, findings, 
     `VALIDATED NEW FINDINGS:\n${JSON.stringify(findings)}\n\n` +
     `SUPPORTING EVIDENCE:\n${evidence}\n\n` +
     `The lore entry for ${entityName} (${entityType}) is long, so it is extended instead of rewritten. ${loreScope(entityType, skillsInUse)}` +
-    `Write only the new paragraphs to add at its end, with what the current lore does not already contain. ` +
+    `Write only the new paragraphs to add at its end, with what the current lore does not already contain. ${SPOILER_RULE}` +
     `Do not restate, summarize, or rephrase the current lore. Do not invent motives, causation, or conclusions. When the evidence adds nothing new, return an empty value. ` +
     `Return only {"lore":{"value":"...","support":"...","evidence":["E_ID"]}}.`;
 }
@@ -72,7 +81,9 @@ function buildLoreAppendPrompt({ entityName, entityType, currentLore, findings, 
 module.exports = {
   buildLorePrompt,
   buildLoreAppendPrompt,
+  buildSpoilerRetryNote,
   isEntityLoreShape,
+  SPOILER_RULE,
   validateEntityLore,
   validateEntityLoreAppend
 };

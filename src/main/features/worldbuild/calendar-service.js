@@ -1,4 +1,5 @@
 const { chunkContainsEvidence, normalizeEvidence } = require('../world-index/evidence-match');
+const { hiddenFields } = require('../../../../dist-main/shared/spoilers');
 
 const STANDARD_MONTHS = [
   ['January', 31], ['February', 28], ['March', 31], ['April', 30],
@@ -1180,14 +1181,18 @@ function getCalendarEntries(db, workspaceId, year, month, eraId) {
     if (!startDate || !validateDate(calendar, startDate)) return [];
     const endDate = parseObject(row.endDateJson, null);
     const eventData = parseObject(row.eventData, {});
-    return [{ ...row, category: eventData.category || eventData.eventCategory || null, startDate, endDate: endDate && validateDate(calendar, endDate) ? endDate : startDate }];
+    const secret = hiddenFields(eventData);
+    return [{ ...row, category: eventData.category || eventData.eventCategory || null, startDate, endDate: endDate && validateDate(calendar, endDate) ? endDate : startDate, hidden: secret.includes('date') }];
   });
   const entries = [];
   for (let day = 1; day <= length; day += 1) {
     const date = { ...dateBase, day };
     for (const row of rows) {
       const data = parseObject(row.data, {});
+      // A date the reader hides would show itself just by sitting on a day, so the entry says so.
+      const secret = new Set(hiddenFields(data));
       if (row.type === 'Events') {
+        const hidden = secret.has('date');
         const hasRecordedOccurrence = occurrenceRows.some(occurrence => occurrence.eventEntityId === row.id
           && compareDates(calendar, date, occurrence.startDate) >= 0
           && compareDates(calendar, date, occurrence.endDate) <= 0);
@@ -1195,12 +1200,12 @@ function getCalendarEntries(db, workspaceId, year, month, eraId) {
         if (nature === 'recurring') {
           const anchor = data.recurrence?.anchorDate || data.startDate;
           if (!hasRecordedOccurrence && anchor && validateDate(calendar, anchor) && recurrenceMatches(calendar, anchor, data.recurrence || {}, date)) {
-            entries.push({ id: `${row.id}:${toOrdinal(calendar, date)}`, entityId: row.id, date, title: row.canonicalName, kind: 'recurring-event', category: data.category || data.eventCategory || null, entityType: row.type });
+            entries.push({ id: `${row.id}:${toOrdinal(calendar, date)}`, entityId: row.id, date, title: row.canonicalName, kind: 'recurring-event', category: data.category || data.eventCategory || null, entityType: row.type, hidden });
           }
         } else if (!hasRecordedOccurrence && data.startDate && validateDate(calendar, data.startDate)) {
           const endDate = data.endDate && validateDate(calendar, data.endDate) ? data.endDate : data.startDate;
           if (compareDates(calendar, date, data.startDate) >= 0 && compareDates(calendar, date, endDate) <= 0) {
-            entries.push({ id: `${row.id}:${toOrdinal(calendar, date)}`, entityId: row.id, date, title: row.canonicalName, kind: 'event', category: data.category || data.eventCategory || null, entityType: row.type });
+            entries.push({ id: `${row.id}:${toOrdinal(calendar, date)}`, entityId: row.id, date, title: row.canonicalName, kind: 'event', category: data.category || data.eventCategory || null, entityType: row.type, hidden });
           }
         }
         continue;
@@ -1212,7 +1217,7 @@ function getCalendarEntries(db, workspaceId, year, month, eraId) {
         const afterBirth = compareDates(calendar, date, data.birthDate) >= 0;
         const beforeDeath = !activeDeathDate || compareDates(calendar, date, activeDeathDate) <= 0;
         if (afterBirth && beforeDeath) {
-          entries.push({ id: `${row.id}:birthday:${toOrdinal(calendar, date)}`, entityId: row.id, date, title: `${row.canonicalName}'s birthday`, kind: 'birthday', entityType: row.type });
+          entries.push({ id: `${row.id}:birthday:${toOrdinal(calendar, date)}`, entityId: row.id, date, title: `${row.canonicalName}'s birthday`, kind: 'birthday', entityType: row.type, hidden: secret.has('birthDate') });
         }
       }
       for (const [field, kind, suffix] of [
@@ -1222,7 +1227,7 @@ function getCalendarEntries(db, workspaceId, year, month, eraId) {
       ]) {
         const marker = field ? data[field] : null;
         if (marker && compareDates(calendar, date, marker) === 0) {
-          entries.push({ id: `${row.id}:${kind}`, entityId: row.id, date, title: `${row.canonicalName} ${suffix}`, kind, entityType: row.type });
+          entries.push({ id: `${row.id}:${kind}`, entityId: row.id, date, title: `${row.canonicalName} ${suffix}`, kind, entityType: row.type, hidden: secret.has(field) || (kind !== 'birth' && secret.has('status')) });
         }
       }
     }
@@ -1235,7 +1240,8 @@ function getCalendarEntries(db, workspaceId, year, month, eraId) {
         title: occurrence.title,
         kind: 'event-occurrence',
         category: occurrence.category,
-        entityType: 'Events'
+        entityType: 'Events',
+        hidden: occurrence.hidden
       });
     }
   }

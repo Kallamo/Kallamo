@@ -23,6 +23,8 @@ export interface WorldbuildEntryOrigin {
 
 export interface WorldbuildKnowledgeEntry {
   id: string;
+  /** The same across revisions of one entry; `id` changes with every edit. */
+  entryId?: string;
   kind: WorldbuildKnowledgeEntryKind;
   subjectId: string;
   accessibility: 'available' | 'suppressed' | 'inaccessible';

@@ -1324,7 +1324,7 @@ function composeEntity(entity: EntityRow, fields: FieldRow[]): string {
   if (entity.lore?.trim()) parts.push(entity.lore.trim());
   Object.entries(data)
     .filter(([key, value]) => !key.startsWith('_')
-      && !['description', 'content', 'customFields', 'loreDocumentId', 'loreDocumentIds', 'aiPolicy'].includes(key)
+      && !['description', 'content', 'customFields', 'loreDocumentId', 'loreDocumentIds', 'aiPolicy', 'spoilers'].includes(key)
       && value !== undefined && value !== null && value !== '')
     .forEach(([key, value]) => parts.push(`${humanizeKey(key)}: ${formatValue(value)}`));
   const customFields = parseObject(data.customFields);

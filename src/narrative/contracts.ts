@@ -160,6 +160,8 @@ export interface Belief {
 
 export interface NarrativeMemory {
   id: NarrativeId;
+  /** Stays the same across revisions, so what refers to the memory survives an edit. */
+  entryId?: NarrativeId;
   subjectId: NarrativeId;
   eventId: NarrativeId;
   summary: string;

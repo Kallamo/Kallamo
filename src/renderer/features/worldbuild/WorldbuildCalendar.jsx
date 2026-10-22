@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Popover from '../../components/ui/Popover';
-import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, List, Plus, RotateCcw, Save, Settings2, Trash2, Bookmark } from 'lucide-react';
+import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, List, Plus, RotateCcw, Save, Settings2, Trash2, Bookmark, Eye, EyeOff } from 'lucide-react';
 import ColorField from '../../components/ui/ColorField';
 import SelectMenu from '../../components/ui/SelectMenu';
 import NumberInput from '../../components/ui/NumberInput';
@@ -95,6 +95,8 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
   const [storyClock, setStoryClock] = useState(null);
   const [openSettingsSection, setOpenSettingsSection] = useState('rules');
   const [openSeasonId, setOpenSeasonId] = useState(null);
+  // Dates the reader hid stay off the grid until asked for, since their day alone gives them away.
+  const [showHidden, setShowHidden] = useState(false);
 
   const loadCalendar = useCallback(async () => {
     const result = await api.getWorldCalendar(workspaceId);
@@ -199,15 +201,17 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
     date: resolutionDraft[item.key] ?? null
   })));
 
+  const hiddenCount = (monthData?.entries || []).filter(entry => entry.hidden).length;
+  const shownEntries = useMemo(() => (monthData?.entries || []).filter(entry => showHidden || !entry.hidden), [monthData, showHidden]);
   const entriesByDay = useMemo(() => {
     const map = new Map();
-    for (const entry of monthData?.entries || []) {
+    for (const entry of shownEntries) {
       const values = map.get(entry.date.day) || [];
       values.push(entry);
       map.set(entry.date.day, values);
     }
     return map;
-  }, [monthData]);
+  }, [shownEntries]);
 
   if (!calendar || !draft || !cursor) return <div className="p-8 text-sm text-text-subtle">Loading calendar…</div>;
   const hasUnsavedChanges = JSON.stringify(draft) !== JSON.stringify(calendar);
@@ -292,6 +296,7 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
             <MonthPicker calendar={calendar} cursor={cursor} onChange={setCursor} />
             <button type="button" aria-label="Next month" onClick={() => moveMonth(1)} className="rounded-control p-2 text-text-muted transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><ChevronRight className="h-4 w-4" /></button>
             <span className="flex-1" />
+            {hiddenCount > 0 && <button type="button" onClick={() => setShowHidden(value => !value)} aria-pressed={showHidden} className="inline-flex items-center gap-1.5 rounded-control px-2.5 py-1.5 text-xs font-semibold text-text-secondary transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{showHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}{showHidden ? 'Hide hidden dates' : `Reveal ${hiddenCount} hidden`}</button>}
             <button type="button" onClick={goToStoryDay} disabled={!storyClock} className="inline-flex items-center gap-1.5 rounded-control px-2.5 py-1.5 text-xs font-semibold text-text-secondary transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40" data-tooltip={storyClock ? formatWorldDate(calendar, storyClock) : 'No story day yet'}><Bookmark className="h-3.5 w-3.5" />Go to story day</button>
           </div>
 
@@ -330,7 +335,7 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
             </>
           ) : (
             <div className="divide-y divide-border-subtle">
-              {(monthData?.entries || []).map(entry => {
+              {shownEntries.map(entry => {
                 const visual = entryVisual(entry);
                 return <button key={entry.id} type="button" onClick={() => onOpenEntity(entry.entityId)} className="flex w-full items-center gap-4 px-5 py-3 text-left transition-colors duration-200 ease-standard hover:bg-surface-hover/40">
                   <span className="w-10 font-mono text-sm" style={{ color: visual.color }}>{entry.date.day}</span>
@@ -338,7 +343,7 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
                   <span className="calendar-entry rounded-full px-2 py-0.5 text-xs font-semibold" style={{ '--calendar-entry-color': visual.color }}>{visual.label}</span>
                 </button>;
               })}
-              {!monthData?.entries?.length && <p className="px-5 py-10 text-center text-sm text-text-disabled">No entries in this month.</p>}
+              {!shownEntries.length && <p className="px-5 py-10 text-center text-sm text-text-disabled">No entries in this month.</p>}
             </div>
           )}
         </section>

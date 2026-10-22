@@ -526,22 +526,49 @@ function updateLink(linkId, { toId, label, metadata } = {}) {
   return { id: linkId, toId: nextToId, label: cleanLabel, metadata: nextMetadata };
 }
 
+// What a reader may not see travels with the world. A hidden row names a link by its local id,
+// so a package names it by its ends instead; hidden statements are remapped with their Knowledge.
+const LOCAL_LINK_KEY = /^link:([^|]+)$/;
+const PACKAGED_LINK_KEY = /^link:([^|]+)\|([^|]+)\|([^|]+)$/;
+
+function packageSpoilers(data, linkById) {
+  if (!Array.isArray(data.spoilers)) return data;
+  const spoilers = data.spoilers.flatMap(key => {
+    if (typeof key !== 'string') return [];
+    const local = key.match(LOCAL_LINK_KEY);
+    if (!local) return [key];
+    const link = linkById.get(local[1]);
+    return link ? [`link:${link.relType}|${link.fromId}|${link.toId}`] : [];
+  });
+  return { ...data, spoilers };
+}
+
+function unpackSpoilers(spoilers, idMap, linkIdByEnds) {
+  return spoilers.flatMap(key => {
+    const packaged = typeof key === 'string' ? key.match(PACKAGED_LINK_KEY) : null;
+    if (!packaged) return [key];
+    const linkId = linkIdByEnds.get(`${packaged[1]}|${idMap.get(packaged[2])}|${idMap.get(packaged[3])}`);
+    return linkId ? [`link:${linkId}`] : [];
+  });
+}
+
 // Chapter links and staged proposals are dropped: they only mean something in this workspace.
 function exportWorldbuild(workspaceId) {
   const rows = db.prepare('SELECT * FROM entities WHERE workspaceId IS ? AND status != ?').all(workspaceId || null, 'proposed');
   const ids = new Set(rows.map(r => r.id));
+  const linkRows = db.prepare('SELECT id, fromId, toId, relType, label, metadata_json AS metadataJson FROM entity_links WHERE workspaceId IS ?').all(workspaceId || null)
+    .filter(l => ids.has(l.fromId) && ids.has(l.toId));
+  const linkById = new Map(linkRows.map(l => [l.id, l]));
   const entities = rows.map(r => ({
     ref: r.id,
     type: r.type,
     canonicalName: r.canonicalName,
     aliases: parseJsonArray(r.aliases),
     lore: r.lore || '',
-    data: stripInternal(parseJsonObject(r.data)),
+    data: packageSpoilers(stripInternal(parseJsonObject(r.data)), linkById),
     status: r.status || 'confirmed',
   }));
-  const linkRows = db.prepare('SELECT fromId, toId, relType, label, metadata_json AS metadataJson FROM entity_links WHERE workspaceId IS ?').all(workspaceId || null);
   const links = linkRows
-    .filter(l => ids.has(l.fromId) && ids.has(l.toId))
     .map(l => ({ fromRef: l.fromId, toRef: l.toId, relType: l.relType, label: l.label || null, metadata: linkMetadata(l.metadataJson) }));
   return { kallamoWorldbuild: 1, exportedAt: Date.now(), entities, links };
 }
@@ -553,6 +580,7 @@ function importWorldbuild(workspaceId, payload) {
     throw new Error('Not a valid Kallamo Worldbuild file.');
   }
   const idMap = new Map();
+  const linkIdByEnds = new Map();
   let entitiesAdded = 0, linksAdded = 0, linksSkipped = 0;
   db.transaction(() => {
     for (const e of payload.entities) {
@@ -575,16 +603,27 @@ function importWorldbuild(workspaceId, payload) {
       // Holding goes through the inventory, which picks owned_by or carried_by from the item's nature.
       // A link this world's rules reject is skipped, not allowed to sink the whole package.
       try {
-        if (l.relType === 'carried_by' || l.relType === 'owned_by') setInventoryLink({ workspaceId, itemId: fromId, holderId: toId, metadata: l.metadata || {} });
-        else setLink({ workspaceId, fromId, relType: l.relType, toId, single: false, label: l.label || null, metadata: l.metadata || {} });
+        const created = l.relType === 'carried_by' || l.relType === 'owned_by'
+          ? setInventoryLink({ workspaceId, itemId: fromId, holderId: toId, metadata: l.metadata || {} })
+          : setLink({ workspaceId, fromId, relType: l.relType, toId, single: false, label: l.label || null, metadata: l.metadata || {} });
+        if (created?.id) linkIdByEnds.set(`${l.relType}|${fromId}|${toId}`, created.id);
         linksAdded++;
       } catch (error) {
         console.warn('[import-worldbuild] skipped a link:', error.message);
         linksSkipped++;
       }
     }
+    // Hidden rows point at links, which exist only now.
+    const updateData = db.prepare('UPDATE entities SET data = ? WHERE id = ?');
+    for (const e of payload.entities) {
+      const entityId = idMap.get(e?.ref);
+      const spoilers = e?.data?.spoilers;
+      if (!entityId || !Array.isArray(spoilers) || !spoilers.some(key => PACKAGED_LINK_KEY.test(String(key)))) continue;
+      const row = db.prepare('SELECT data FROM entities WHERE id = ?').get(entityId);
+      updateData.run(JSON.stringify({ ...parseJsonObject(row?.data), spoilers: unpackSpoilers(spoilers, idMap, linkIdByEnds) }), entityId);
+    }
   })();
-  return { entitiesAdded, linksAdded, linksSkipped, idMap };
+  return { entitiesAdded, linksAdded, linksSkipped, idMap, linkIdByEnds };
 }
 
 function bulkEntityRows(workspaceId, ids) {

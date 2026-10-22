@@ -11,6 +11,10 @@ import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import Modal from '../../components/ui/Modal';
 import SearchableSelect from '../../components/ui/SearchableSelect';
 import WorldDateInput, { formatWorldDate, type WorldDateValue } from './WorldDateInput';
+import { SpoilerCover, SpoilerMenuItem, SpoilerText, SpoilerTextArea } from './Spoilers';
+
+// A statement or memory is hidden from readers under its own id on the owner's sheet.
+const entryKey = (entry: { id: string; entryId?: string } | null | undefined) => (entry ? `knowledge:${entry.entryId || entry.id}` : null);
 import {
   DURABLE_KNOWLEDGE_CATEGORIES,
   KNOWLEDGE_CATEGORY_LABELS,
@@ -469,7 +473,7 @@ function KnowledgeCardModal({ workspaceId, owner, card, entity, entities, roster
   const [audienceType, setAudienceType] = useState(card.audienceType);
   const [selectedMemberIds, setSelectedMemberIds] = useState(card.selectedMemberIds);
   const statementEditorRef = useRef<HTMLElement | null>(null);
-  const statementInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const statementInputRef = useRef<{ focus(options?: unknown): void } | null>(null);
   const statements = [
     ...projection.known.filter(entry => entry.aboutId === card.targetId),
     ...projection.beliefs.filter(entry => entry.aboutId === card.targetId),
@@ -935,7 +939,7 @@ function KnowledgeCardModal({ workspaceId, owner, card, entity, entities, roster
           )}
 
           <label htmlFor="knowledge-statement" className="mb-1.5 mt-4 block text-xs font-medium text-text-muted">Statement</label>
-          <textarea ref={statementInputRef} id="knowledge-statement" className={`${INPUT} custom-scrollbar min-h-28 max-h-48 resize-none overflow-y-auto leading-relaxed`} value={draft.statement} onChange={event => setDraft(current => ({ ...current, statement: event.target.value }))} placeholder="Add a specific statement about this subject" />
+          <SpoilerCover field={entryKey(editing)}><SpoilerTextArea ref={statementInputRef} id="knowledge-statement" rows={4} value={draft.statement} onChange={event => setDraft(current => ({ ...current, statement: event.target.value }))} placeholder="Add a specific statement about this subject" /></SpoilerCover>
           <div className="mt-3 flex justify-end gap-2">
             <Button variant="ghost" onClick={cancelEditing} disabled={saving || (!editing && !draft.statement.trim())}>{editing ? 'Cancel' : 'Clear'}</Button>
             <Button onClick={saveStatement} loading={saving} disabled={!draft.statement.trim()}>{editing ? 'Save changes' : 'Add statement'}</Button>
@@ -1402,7 +1406,7 @@ function Memories({ hidden, loading, workspaceId, owner, projection, api, reload
   const [deleting, setDeleting] = useState<WorldbuildKnowledgeEntry | null>(null);
   const [saving, setSaving] = useState(false);
   const memoryEditorRef = useRef<HTMLDivElement | null>(null);
-  const memoryInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const memoryInputRef = useRef<{ focus(options?: unknown): void } | null>(null);
   const composerOpen = composing || Boolean(editing);
   const [filter, setFilter] = useState<MemoryAccessibility | 'all'>('all');
   const name = firstName(owner.canonicalName);
@@ -1529,7 +1533,7 @@ function Memories({ hidden, loading, workspaceId, owner, projection, api, reload
           </div>
 
           <label htmlFor="memory-summary" className="mb-1.5 block text-xs font-medium text-text-muted">Memory</label>
-          <textarea ref={memoryInputRef} id="memory-summary" className={`${INPUT} custom-scrollbar min-h-28 max-h-48 resize-none overflow-y-auto leading-relaxed`} value={draft.summary} onChange={event => setDraft(current => ({ ...current, summary: event.target.value }))} placeholder={`What does ${name} remember?`} />
+          <SpoilerCover field={entryKey(editing)}><SpoilerTextArea ref={memoryInputRef} id="memory-summary" rows={4} value={draft.summary} onChange={event => setDraft(current => ({ ...current, summary: event.target.value }))} placeholder={`What does ${name} remember?`} /></SpoilerCover>
 
           {calendar && (
             <div className="mt-4">
@@ -1675,13 +1679,14 @@ function Statement({ entry, entities = [], calendar = null, onEdit, onDelete, on
             </>
           )}
         </div>
-        <p className="whitespace-pre-wrap leading-relaxed text-text-primary">{entry.statement || entry.summary}</p>
+        <SpoilerCover field={entryKey(entry)}><p className="whitespace-pre-wrap leading-relaxed text-text-primary"><SpoilerText text={entry.statement || entry.summary} /></p></SpoilerCover>
       </div>
-      {(onEdit || onDelete) && (
+      {(
         <>
           <IconButton ref={menuRef} icon={MoreHorizontal} size="sm" label={`${label} entry actions`} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen(value => !value)} />
           <Menu anchorRef={menuRef} open={menuOpen} onClose={() => setMenuOpen(false)} label={`${label} entry actions`} className="w-48" align="right">
             {onEdit && <MenuItem icon={Pencil} label="Edit" onSelect={() => { setMenuOpen(false); onEdit(); }} />}
+            <SpoilerMenuItem field={entryKey(entry)} onDone={() => setMenuOpen(false)} />
             {onDelete && <MenuItem icon={Trash2} label="Delete" danger onSelect={() => { setMenuOpen(false); onDelete(); }} />}
           </Menu>
         </>

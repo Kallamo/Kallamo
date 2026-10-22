@@ -8,6 +8,7 @@ const { assertPayloadWithinLimit, estimatePayloadTokens, normalizeMaxApiPayload,
 const { tokenRatio, recordTokenCount, correctedLimit, useTokenCalibrationStore } = require('./token-calibration');
 const { supportsNativeTools, applyConversation, applyCacheBreakpoint, readToolReply, readUsage, flattenConversation } = require('./tool-conversation');
 const { isLongTtlRefused, markLongTtlRefused, planPromptCache, recordCacheOutcome } = require('./prompt-cache');
+const { stripSpoilerMarkers } = require('../../../../dist-main/shared/spoilers');
 
 function getDatabase() {
     return require('../../database');
@@ -499,22 +500,27 @@ function markLastHistoryMessage(messages, control = CACHE_CONTROL) {
     return [...messages.slice(0, -1), { ...last, content }];
 }
 
-// --- CORE API REQUESTS ---
-
-async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistory = [], newPrompt = '', temperature, maxTokens, maxPayloadTokens, payloadLimit = null, payloadBreakdown = null, learnTokenCount = false, manualMode, manualJson, attachedImages, stream = false, jsonMode = false, jsonSchema = null, conversation = null, tools = null, promptCache = null }, dependencies = {}) {
+async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistory = [], newPrompt = '', temperature, maxTokens, maxPayloadTokens, payloadLimit = null, payloadBreakdown = null, learnTokenCount = false, manualMode, manualJson, attachedImages, stream = false, jsonMode = false, jsonSchema = null, conversation = null, tools = null, promptCache = null, keepSpoilerMarkers = false }, dependencies = {}) {
     const db = dependencies.database || getDatabase();
     useTokenCalibrationStore(db);
-    const resolveVariables = createPromptVariableResolver(db);
+    const resolvePromptVariables = createPromptVariableResolver(db);
+    // Spoiler markers only hide text from the reader; the model reads the plain text. Only a
+    // caller that rewrites Worldbuild text keeps them, so it can hand them back intact.
+    const resolveVariables = keepSpoilerMarkers ? resolvePromptVariables : (text) => stripSpoilerMarkers(resolvePromptVariables(text));
 
     // A segmented caller hands over the stable head and the volatile tail apart so this layer
-    // decides where each belongs. A single systemPrompt keeps the request it had before.
+    // decides where each belongs. A single systemPrompt is sent unchanged.
     const contextPlacement = promptCache && promptCache.placement === 'turn' ? 'turn' : 'system';
     const stableSystem = promptCache && promptCache.stable != null ? resolveVariables(String(promptCache.stable)) : null;
     const volatileSystem = stableSystem === null ? '' : resolveVariables(String(promptCache.volatile || ''));
     systemPrompt = resolveVariables(systemPrompt);
     newPrompt = resolveVariables(newPrompt);
     if (Array.isArray(conversation)) {
-        conversation = conversation.map(entry => (entry.role === 'user' ? { ...entry, text: resolveVariables(entry.text) } : entry));
+        conversation = conversation.map(entry => (entry.role === 'user'
+            ? { ...entry, text: resolveVariables(entry.text) }
+            : entry.role === 'tool' && !keepSpoilerMarkers && Array.isArray(entry.results)
+                ? { ...entry, results: entry.results.map(result => ({ ...result, content: stripSpoilerMarkers(result.content) })) }
+                : entry));
     }
 
     if (stableSystem !== null) {

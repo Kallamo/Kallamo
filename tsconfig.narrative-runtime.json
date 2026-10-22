@@ -18,6 +18,7 @@
     "src/main/features/worldbuild/event-occurrences.ts",
     "src/main/features/worldbuild/location-graph.ts",
     "src/shared/location-sizes.ts",
+    "src/shared/spoilers.ts",
     "src/shared/retrieval-settings-runtime.ts"
   ]
 }

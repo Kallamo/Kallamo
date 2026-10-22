@@ -248,6 +248,7 @@ function validateNarrativeMemoryValue(value: unknown, path: string, issues: Vali
   const memory = requireRecord(value, path, issues);
   if (!memory) return;
   requireString(memory, 'id', path, issues);
+  if (memory.entryId !== undefined) requireString(memory, 'entryId', path, issues);
   requireString(memory, 'subjectId', path, issues);
   requireString(memory, 'eventId', path, issues);
   requireString(memory, 'summary', path, issues);
