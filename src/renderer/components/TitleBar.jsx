@@ -3,7 +3,7 @@ import { Settings } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Logotype } from '../logo';
 
-export default function TitleBar({ onOpenSettings, onPreloadSettings, bare = false }) {
+export default function TitleBar({ onOpenSettings, onPreloadSettings }) {
   const { electronAPI, setCurrentView } = useApp();
 
   return (
@@ -12,18 +12,17 @@ export default function TitleBar({ onOpenSettings, onPreloadSettings, bare = fal
       <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-gradient-to-b from-titlebar-shade via-titlebar-shade/30 via-70% to-transparent"></div>
       <div className="absolute inset-0 titlebar-drag z-0"></div>
       
-      {/* While the app opens, the launch screen carries the logo and nothing else is ready to open. */}
-      {!bare && <div 
+      <div 
         onClick={() => setCurrentView('dashboard')}
         className="z-10 flex items-center ml-2 titlebar-nodrag cursor-pointer group"
         aria-label="Go to Dashboard"
         data-tooltip="Go to Dashboard"
       >
         <Logotype height={20} className="text-gray-300 group-hover:text-text-primary transition-all duration-300 ease-out transform group-hover:scale-[1.03] group-hover:-translate-y-[1px]" />
-      </div>}
+      </div>
 
-      <div className="z-10 ml-auto flex space-x-1 items-center titlebar-nodrag pr-2">
-        {onOpenSettings && !bare && (
+      <div className="z-10 flex space-x-1 items-center titlebar-nodrag pr-2">
+        {onOpenSettings && (
           <>
             <button
               type="button"

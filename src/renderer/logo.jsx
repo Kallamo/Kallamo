@@ -28,7 +28,7 @@ const SPECTRUM = 'conic-gradient(from -24.97deg at 101.47px 323.7px, #9c27b0 0.0
 
 const cleanId = (id) => id.replace(/[^a-zA-Z0-9_-]/g, '');
 
-export default function Logo({ className = '', size = 24, fluteColor = 'white', colorful = true, compact, shimmer = false, ...props }) {
+export default function Logo({ className = '', size = 24, fluteColor = 'white', colorful = true, compact, ...props }) {
   const uid = cleanId(useId());
   const small = compact ?? size < 32;
   const height = Math.round((size * MARK_H) / MARK_W);
@@ -47,34 +47,32 @@ export default function Logo({ className = '', size = 24, fluteColor = 'white', 
         <mask id={`m${uid}`} maskUnits="userSpaceOnUse" x="-100" y="-100" width="500" height="600">
           <rect x="-100" y="-100" width="500" height="600" fill="white" />
           <path d={small ? RIBBON_GAP_SMALL : RIBBON_GAP} fill="black" />
-          {!small && LIPS.map((d, i) => <path key={i} d={d} fill="black" />)}
         </mask>
+        {/* Each reed owns its lip cut, so the cut moves with the reed when the reeds play. */}
+        {!small && LIPS.map((d, i) => (
+          <mask key={i} id={`l${uid}${i}`} maskUnits="userSpaceOnUse" x="-100" y="-100" width="500" height="600">
+            <rect x="-100" y="-100" width="500" height="600" fill="white" />
+            <path d={d} fill="black" />
+          </mask>
+        ))}
         <clipPath id={`r${uid}`}><path d={RIBBON} /></clipPath>
-        {shimmer && (
-          <linearGradient id={`s${uid}`} x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0" stopColor="white" stopOpacity="0" />
-            <stop offset="0.5" stopColor="white" stopOpacity="0.45" />
-            <stop offset="1" stopColor="white" stopOpacity="0" />
-          </linearGradient>
-        )}
       </defs>
       <g mask={`url(#m${uid})`}>
         {PIPES.map((d, i) => (
-          <path key={i} className={`logo-flute logo-flute-${i + 1}`} d={d} fill={fluteColor} />
+          <g key={i} className={`logo-flute logo-flute-${i + 1}`}>
+            <path d={d} fill={fluteColor} mask={small ? undefined : `url(#l${uid}${i})`} />
+          </g>
         ))}
       </g>
-      <g className="logo-ribbon">
-        {colorful ? (
-          <g clipPath={`url(#r${uid})`}>
-            <foreignObject x={-10.0} y={-23.7} width={MARK_W} height={MARK_H}>
-              <div xmlns="http://www.w3.org/1999/xhtml" style={{ width: '100%', height: '100%', background: SPECTRUM }} />
-            </foreignObject>
-            {shimmer && <rect className="logo-shimmer" x={-60} y={40} width={60} height={120} fill={`url(#s${uid})`} />}
-          </g>
-        ) : (
-          <path d={RIBBON} fill="currentColor" />
-        )}
-      </g>
+      {colorful ? (
+        <g clipPath={`url(#r${uid})`}>
+          <foreignObject x={-10.0} y={-23.7} width={MARK_W} height={MARK_H}>
+            <div xmlns="http://www.w3.org/1999/xhtml" style={{ width: '100%', height: '100%', background: SPECTRUM }} />
+          </foreignObject>
+        </g>
+      ) : (
+        <path d={RIBBON} fill="currentColor" />
+      )}
     </svg>
   );
 }

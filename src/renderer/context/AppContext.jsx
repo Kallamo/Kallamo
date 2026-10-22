@@ -35,7 +35,7 @@ const api = window.electronAPI || {
   onWorkflowContextOverflow: () => () => { },
   respondToError: () => { },
   respondToOverflow: () => { },
-  installUpdate: () => { },
+  installUpdate: () => { }, appReady: () => { },
   onUpdateAvailable: () => () => { },
   onUpdateDownloaded: () => () => { },
   onReindexProgress: () => () => { },
@@ -46,7 +46,7 @@ export const AppProvider = ({ children }) => {
   const [currentView, setCurrentView] = useState('dashboard'); // 'dashboard', 'library', 'chat'
   const [activeWorkspaceView, setActiveWorkspaceView] = useState('chat');
   const [chats, setChats] = useState([]);
-  // False until the first chats and profiles arrive, so the home never flashes as empty.
+  // False until the first chats and profiles arrive; the window is revealed only after that.
   const [dataReady, setDataReady] = useState(false);
   const [writingProfiles, setWritingProfiles] = useState([]);
   const [workflows, setWorkflows] = useState([]);
@@ -181,6 +181,10 @@ export const AppProvider = ({ children }) => {
   useEffect(() => {
     loadInitialData();
   }, []);
+
+  useEffect(() => {
+    if (dataReady) api.appReady?.();
+  }, [dataReady]);
 
   useEffect(() => {
     const unsubProgress = api.onWorkflowProgress((progress) => {

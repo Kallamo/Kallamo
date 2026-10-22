@@ -2,7 +2,6 @@ import React, { Suspense, useState, useEffect } from 'react';
 import { AppProvider, useApp, useEngineDownloadProgress, useReindexingProgress, useToast } from './context/AppContext';
 import TitleBar from './components/TitleBar';
 import DashboardView from './components/DashboardView';
-import LaunchScreen from './features/workspaces/LaunchScreen';
 import {
   ChatWorkspaceView,
   ContextOverflowModal,
@@ -443,7 +442,7 @@ function MainLayout() {
 
   return (
     <div className={`flex-1 relative flex flex-col pt-10 overflow-hidden bg-surface-canvas w-full h-full select-none ${fontClass}`}>
-      <TitleBar bare={!dataReady} onOpenSettings={() => setShowSettingsModal(true)} onPreloadSettings={() => SettingsModal.preload()} />
+      <TitleBar onOpenSettings={() => setShowSettingsModal(true)} onPreloadSettings={() => SettingsModal.preload()} />
 
       {/* Local AI Engine download: full-screen overlay, or a discreet card when it runs in the background */}
       <EngineDownloadStatus />
@@ -453,7 +452,6 @@ function MainLayout() {
       {/* Every screen runs under the transparent title bar and keeps its own content below it. */}
       <main className="flex-1 relative flex flex-col overflow-hidden w-full h-full z-10 -mt-10">
         <Suspense fallback={null}>
-          {!dataReady && <LaunchScreen />}
           {dataReady && currentView === 'dashboard' && <DashboardView />}
           {currentView === 'library' && <LibraryView />}
           {currentView === 'chat' && (

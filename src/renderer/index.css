@@ -541,31 +541,6 @@ select.wb-input option:hover {
   transition: transform 0.4s ease;
 }
 
-/* Launch: the reeds rise one by one, the ribbon binds them, then light runs along it while data loads. */
-@keyframes logo-launch-rise {
-  from { opacity: 0; transform: translateY(1.375rem); }
-  to { opacity: 1; transform: none; }
-}
-
-@keyframes logo-launch-bind {
-  from { clip-path: inset(0 100% 0 0); }
-  to { clip-path: inset(0 0 0 0); }
-}
-
-@keyframes logo-launch-sweep {
-  0% { transform: translateX(-140px); }
-  60%, 100% { transform: translateX(240px); }
-}
-
-.logo-launch .logo-flute { animation: logo-launch-rise 0.55s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
-.logo-launch .logo-flute-1 { animation-delay: 0.2s; }
-.logo-launch .logo-flute-2 { animation-delay: 0.27s; }
-.logo-launch .logo-flute-3 { animation-delay: 0.34s; }
-.logo-launch .logo-flute-4 { animation-delay: 0.41s; }
-.logo-launch .logo-flute-5 { animation-delay: 0.48s; }
-.logo-launch .logo-ribbon { animation: logo-launch-bind 0.6s cubic-bezier(0.4, 0, 0.2, 1) 0.7s both; }
-.logo-launch .logo-shimmer { animation: logo-launch-sweep 2.6s ease-in-out 1.5s infinite; }
-
 .logo-flute-1 { animation: logo-ambient-wave 4s ease-in-out infinite; animation-delay: 0s; }
 .logo-flute-2 { animation: logo-ambient-wave 4s ease-in-out infinite; animation-delay: 0.25s; }
 .logo-flute-3 { animation: logo-ambient-wave 4s ease-in-out infinite; animation-delay: 0.5s; }
