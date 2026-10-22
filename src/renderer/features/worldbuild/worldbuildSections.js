@@ -21,7 +21,12 @@ const section = (id, label, tab = 'data', extra = {}) => ({ id, label, tab, ...e
 
 export const TYPE_SECTIONS = {
   System: [section('concept', 'Concept')],
-  Locations: [section('overview', 'Overview'), section('lore', 'Lore')],
+  Locations: [
+    section('overview', 'Overview'),
+    section('lore', 'Lore'),
+    // A Region or Area holds what everyone local to it knows; a place or a spot does not.
+    section('knowledge', 'Knowledge', 'knowledge', { variant: 'shared' }),
+  ],
   Items: [section('details', 'Details'), section('lore', 'Lore')],
   Races: [
     section('desc', 'Description'),
@@ -58,6 +63,7 @@ export const TYPE_SECTIONS = {
     // A specific being can belong to a group the same way a person can: a bonded mount,
     // a familiar, a dragon that rules a cult. Only the species-wide shape cannot.
     section('fac', 'Factions', 'connections', { variant: 'individual' }),
+    section('loc', 'Places', 'connections', { variant: 'individual' }),
     section('rels', 'Relationships', 'connections', { variant: 'individual' }),
     section('knowledge', 'Knowledge', 'knowledge', { variant: 'individual' }),
   ],

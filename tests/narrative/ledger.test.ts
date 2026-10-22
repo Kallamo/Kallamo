@@ -180,7 +180,8 @@ describe('Narrative Event Ledger SQLite repository', () => {
       { id: 'roleplay_character_scene_memory_v1' },
       { id: 'knowledge_chunk_sync_v1' },
       { id: 'data_integrity_repair_v1' },
-      { id: 'drop_deleted_records_v1' }
+      { id: 'drop_deleted_records_v1' },
+      { id: 'worldbuild_knowledge_locality_source_v1' },
     ]);
     expect(db.prepare('PRAGMA table_info(entity_links)').all()).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'metadata_json', type: 'TEXT' })

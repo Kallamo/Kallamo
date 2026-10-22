@@ -3,7 +3,7 @@ export interface WorldbuildKnowledgeService {
     workspaceId: string;
     ownerId: string;
     targetId: string;
-    sourceType: 'manual' | 'relationship' | 'faction-membership' | 'inventory' | 'memory' | 'narrative' | 'fact' | 'statement' | 'import';
+    sourceType: 'manual' | 'relationship' | 'faction-membership' | 'inventory' | 'memory' | 'narrative' | 'fact' | 'statement' | 'import' | 'locality';
     sourceId: string;
     knownAs?: string;
     audienceType?: 'all-members' | 'selected-members';

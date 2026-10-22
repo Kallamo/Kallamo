@@ -1,5 +1,5 @@
 export type SheetTabId = 'data' | 'inventory' | 'connections' | 'knowledge' | 'occurrences';
-export type SheetVariant = 'individual' | 'group';
+export type SheetVariant = 'individual' | 'group' | 'shared';
 
 export interface NativeSection {
   id: string;

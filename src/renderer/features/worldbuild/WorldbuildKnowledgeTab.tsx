@@ -12,6 +12,7 @@ import Modal from '../../components/ui/Modal';
 import SearchableSelect from '../../components/ui/SearchableSelect';
 import WorldDateInput, { formatWorldDate, type WorldDateValue } from './WorldDateInput';
 import { SpoilerCover, SpoilerMenuItem, SpoilerText, SpoilerTextArea } from './Spoilers';
+import { locationSizeOf } from '../../../shared/location-sizes';
 
 // A statement or memory is hidden from readers under its own id on the owner's sheet.
 const entryKey = (entry: { id: string; entryId?: string } | null | undefined) => (entry ? `knowledge:${entry.entryId || entry.id}` : null);
@@ -148,6 +149,44 @@ export default function WorldbuildKnowledgeTab({ workspaceId, entity, entities, 
     () => memberships.filter(link => link.fromId === entity.id).map(link => link.toId),
     [memberships, entity.id],
   );
+  // A Region or Area speaks to everyone local to it or to an Area inside it, and a local reads
+  // every Region and Area around the place they are local to. Both read the same two link sets.
+  const [placeLinks, setPlaceLinks] = useState<{ local: Array<{ fromId: string; toId: string }>; inside: Array<{ fromId: string; toId: string }> }>({ local: [], inside: [] });
+  const isPlace = entity.type === 'Locations';
+  // A place holds no memories, so a sheet opened on Memories elsewhere lands on Subjects here.
+  useEffect(() => { if (isPlace) setSurface('knowledge'); }, [isPlace]);
+  const locals = useMemo(() => {
+    if (!isPlace) return [];
+    const within = new Set([entity.id]);
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const link of placeLinks.inside) {
+        if (within.has(link.toId) && !within.has(link.fromId)) { within.add(link.fromId); grew = true; }
+      }
+    }
+    return [...new Set(placeLinks.local.filter(link => within.has(link.toId)).map(link => link.fromId))];
+  }, [isPlace, entity.id, placeLinks]);
+  const ownPlaces = useMemo(() => {
+    if (isPlace) return [];
+    const sharing = (id: string) => ['region', 'area'].includes(locationSizeOf(entities.find(item => item.id === id)) ?? '');
+    const found: string[] = [];
+    const seen = new Set<string>();
+    let frontier = placeLinks.local.filter(link => link.fromId === entity.id).map(link => link.toId);
+    frontier.forEach(id => { seen.add(id); found.push(id); });
+    while (frontier.length) {
+      const next: string[] = [];
+      for (const id of frontier) {
+        for (const link of placeLinks.inside) {
+          if (link.fromId !== id || seen.has(link.toId)) continue;
+          seen.add(link.toId);
+          next.push(link.toId);
+          if (sharing(link.toId)) found.push(link.toId);
+        }
+      }
+      frontier = next;
+    }
+    return found;
+  }, [isPlace, entity.id, entities, placeLinks]);
   const filteredCards = useMemo(() => {
     const query = normalizeSearch(cardSearch);
     if (!query) return currentProjection?.cards ?? [];
@@ -234,6 +273,17 @@ export default function WorldbuildKnowledgeTab({ workspaceId, entity, entities, 
     return () => { active = false; };
   }, [api, entity.id, workspaceId]);
 
+  useEffect(() => {
+    let active = true;
+    Promise.all([api.listEntityLinks(workspaceId, 'local_to'), api.listEntityLinks(workspaceId, 'inside')]).then(([local, inside]) => {
+      if (!active) return;
+      setPlaceLinks({ local: local.success ? local.links ?? [] : [], inside: inside.success ? inside.links ?? [] : [] });
+    }).catch(() => {
+      if (active) setPlaceLinks({ local: [], inside: [] });
+    });
+    return () => { active = false; };
+  }, [api, entity.id, workspaceId]);
+
   const addCard = async (targetId: string) => {
     const mutationScope = projectionScope;
     const result = await api.ensureWorldbuildAwareness({
@@ -270,7 +320,7 @@ export default function WorldbuildKnowledgeTab({ workspaceId, entity, entities, 
       <div className="flex flex-wrap items-center gap-2">
       <div role="tablist" aria-label="Knowledge views" aria-orientation="horizontal" className="inline-flex gap-1 rounded-control border border-border-default bg-surface-input p-1">
         <SurfaceButton id="knowledge-surface-tab" controls="knowledge-surface-panel" active={surface === 'knowledge'} onClick={() => setSurface('knowledge')} onKeyDown={event => handleSurfaceKeyDown(event, 'knowledge')} icon={KnowledgeGlyph} label="Subjects" count={currentProjection?.cards.length ?? 0} />
-        <SurfaceButton id="memories-surface-tab" controls="memories-surface-panel" active={surface === 'memories'} onClick={() => setSurface('memories')} onKeyDown={event => handleSurfaceKeyDown(event, 'memories')} icon={Brain} label="Memories" count={currentProjection?.memories.length ?? 0} />
+        {!isPlace && <SurfaceButton id="memories-surface-tab" controls="memories-surface-panel" active={surface === 'memories'} onClick={() => setSurface('memories')} onKeyDown={event => handleSurfaceKeyDown(event, 'memories')} icon={Brain} label="Memories" count={currentProjection?.memories.length ?? 0} />}
       </div>
       <span className="flex-1" />
       {surface === 'knowledge'
@@ -284,7 +334,9 @@ export default function WorldbuildKnowledgeTab({ workspaceId, entity, entities, 
             <span>
               {entity.type === 'Factions'
                 ? <>Each card is something {entity.canonicalName} knows exists. What the group knows reaches its whole roster{roster.length ? `, ${roster.length} today` : ''}, unless a card names exceptions.</>
-                : <>Each card is something {firstName(entity.canonicalName)} knows exists. Open it to choose what else {firstName(entity.canonicalName)} knows.<SharingRule entity={entity} factions={ownFactions} entities={entities} onOpenEntity={onOpenEntity} /></>}
+                : isPlace
+                  ? <>Everyone local to {entity.canonicalName}, or to an Area inside it, reads these cards in play{locals.length ? `: ${locals.length} ${locals.length === 1 ? 'character' : 'characters'} today` : ''}. Places inside join on their own; remove one to keep it secret.</>
+                  : <>Each card is something {firstName(entity.canonicalName)} knows exists. Open it to choose what else {firstName(entity.canonicalName)} knows.<SharingRule entity={entity} groups={[...ownFactions, ...ownPlaces]} entities={entities} onOpenEntity={onOpenEntity} /></>}
             </span>
           </p>
           <div>
@@ -352,7 +404,7 @@ export default function WorldbuildKnowledgeTab({ workspaceId, entity, entities, 
             })}
           </div>
       </div>
-      <Memories key={entity.id} hidden={surface !== 'memories'} loading={loading} workspaceId={workspaceId} owner={entity} projection={currentProjection} api={api} reload={reload} showToast={showToast} calendar={calendar} clock={clock} onOpenEntity={onOpenEntity} composeSignal={composeSignal} />
+      {!isPlace && <Memories key={entity.id} hidden={surface !== 'memories'} loading={loading} workspaceId={workspaceId} owner={entity} projection={currentProjection} api={api} reload={reload} showToast={showToast} calendar={calendar} clock={clock} onOpenEntity={onOpenEntity} composeSignal={composeSignal} />}
 
       {addingCard && <AddCardModal owner={entity} entities={entities} existing={currentProjection?.cards ?? []} onClose={() => setAddingCard(false)} onAdd={addCard} />}
       {selectedCard && currentProjection && (
@@ -406,6 +458,7 @@ const emptyStatementDraft = (): StatementDraft => ({
 const SOURCE_LABELS: Record<string, string> = {
   manual: 'you', relationship: 'a relationship', 'faction-membership': 'faction membership', inventory: 'their inventory',
   memory: 'a memory', narrative: 'the narrative state', fact: 'a fact', statement: 'a statement', import: 'an import',
+  locality: 'where it lies',
 };
 
 /* The same sentence can be public lore or a secret; only the category tells them apart, and it is
@@ -1342,20 +1395,20 @@ function FactionAudience({ roster, entities, audienceType, selectedMemberIds, bu
 
 /* The direction is the part that is easy to get backwards, so the sheet says it outright
    on both sides of the relationship rather than leaving it to be inferred from behavior. */
-function SharingRule({ entity, factions, entities, onOpenEntity }: {
-  entity: WorldbuildEntity; factions: string[]; entities: WorldbuildEntity[];
+function SharingRule({ entity, groups, entities, onOpenEntity }: {
+  entity: WorldbuildEntity; groups: string[]; entities: WorldbuildEntity[];
   onOpenEntity?(entityId: string, options?: { tab?: string }): void;
 }) {
-  const found = factions.map(id => entities.find(item => item.id === id)).filter((item): item is WorldbuildEntity => Boolean(item));
+  const found = groups.map(id => entities.find(item => item.id === id)).filter((item): item is WorldbuildEntity => Boolean(item));
   if (!found.length) return null;
   return (
     <>
       {' '}In play {firstName(entity.canonicalName)} also reads what{' '}
-      {found.map((faction, index) => (
-        <Fragment key={faction.id}>
+      {found.map((group, index) => (
+        <Fragment key={group.id}>
           {index > 0 && (index === found.length - 1 ? ' and ' : ', ')}
-          <button type="button" onClick={() => onOpenEntity?.(faction.id, { tab: 'knowledge' })}
-            className="rounded font-medium text-text-secondary underline decoration-border-strong underline-offset-2 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{faction.canonicalName}</button>
+          <button type="button" onClick={() => onOpenEntity?.(group.id, { tab: 'knowledge' })}
+            className="rounded font-medium text-text-secondary underline decoration-border-strong underline-offset-2 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{group.canonicalName}</button>
         </Fragment>
       ))}
       {' '}{found.length > 1 ? 'share' : 'shares'}.

@@ -1438,6 +1438,33 @@ const MIGRATIONS = [
       DROP TRIGGER IF EXISTS messages_delete_trigger;
       DROP TABLE IF EXISTS deleted_records;
     `)
+  },
+  {
+    id: 'worldbuild_knowledge_locality_source_v1',
+    up: (db) => {
+      if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'worldbuild_knowledge_sources'").get()) return;
+      db.exec(`
+        CREATE TABLE worldbuild_knowledge_sources_next (
+          workspace_id TEXT NOT NULL,
+          card_id TEXT NOT NULL,
+          source_type TEXT NOT NULL CHECK (source_type IN (
+            'manual', 'relationship', 'faction-membership', 'inventory',
+            'memory', 'narrative', 'fact', 'statement', 'import', 'locality'
+          )),
+          source_id TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY (workspace_id, card_id, source_type, source_id),
+          FOREIGN KEY (workspace_id, card_id)
+            REFERENCES worldbuild_knowledge_cards (workspace_id, card_id) ON DELETE CASCADE
+        );
+        INSERT INTO worldbuild_knowledge_sources_next (workspace_id, card_id, source_type, source_id, created_at)
+        SELECT workspace_id, card_id, source_type, source_id, created_at FROM worldbuild_knowledge_sources;
+        DROP TABLE worldbuild_knowledge_sources;
+        ALTER TABLE worldbuild_knowledge_sources_next RENAME TO worldbuild_knowledge_sources;
+        CREATE INDEX IF NOT EXISTS idx_worldbuild_knowledge_source
+          ON worldbuild_knowledge_sources (workspace_id, source_type, source_id);
+      `);
+    }
   }
 ];
 

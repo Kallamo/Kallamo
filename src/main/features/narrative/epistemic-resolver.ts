@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import type { NarrativePosition } from '../../../narrative/contracts';
 import type { EpistemicAssessment, EpistemicAssessmentState } from '../../../narrative/context-bundle';
 import { createWorldbuildKnowledgeService } from '../worldbuild/knowledge-service';
+import { sharedKnowledgeCards } from '../worldbuild/knowledge-groups';
 
 export interface EpistemicResolutionRequest {
   workspaceId: string;
@@ -85,35 +86,19 @@ export class EpistemicResolver {
         sourceIds: [row.sourceId]
       });
     }
-    const cardRows = this.db.prepare(`
+    const ownRows = this.db.prepare(`
       SELECT cards.owner_id AS subjectId, cards.target_id AS targetId,
         cards.card_id AS sourceId
       FROM worldbuild_knowledge_cards cards
       WHERE cards.workspace_id = ? AND cards.status = 'active'
         AND cards.owner_id IN (${subjectPlaceholders})
         AND cards.target_id IN (${targetPlaceholders})
-      UNION
-      SELECT membership.fromId AS subjectId, cards.target_id AS targetId,
-        cards.card_id AS sourceId
-      FROM worldbuild_knowledge_cards cards
-      JOIN entity_links membership
-        ON membership.workspaceId = cards.workspace_id
-        AND membership.relType = 'member_of'
-        AND membership.toId = cards.owner_id
-        AND membership.fromId IN (${subjectPlaceholders})
-      LEFT JOIN worldbuild_knowledge_audience_members audience
-        ON audience.workspace_id = cards.workspace_id
-        AND audience.card_id = cards.card_id
-        AND audience.entry_type = 'card'
-        AND audience.entry_id = cards.card_id
-        AND audience.member_id = membership.fromId
-      WHERE cards.workspace_id = ? AND cards.status = 'active'
-        AND cards.target_id IN (${targetPlaceholders})
-        AND (cards.audience_type = 'all-members' OR audience.member_id IS NOT NULL)
-    `).all(
-      workspaceId, ...subjectIds, ...targetIds,
-      ...subjectIds, workspaceId, ...targetIds
-    ) as Array<{ subjectId: string; targetId: string; sourceId: string }>;
+    `).all(workspaceId, ...subjectIds, ...targetIds) as Array<{ subjectId: string; targetId: string; sourceId: string }>;
+    const cardRows = [
+      ...ownRows,
+      ...sharedKnowledgeCards(this.db, workspaceId, subjectIds, targetIds)
+        .map(card => ({ subjectId: card.memberId, targetId: card.targetId, sourceId: card.cardId }))
+    ];
     for (const row of cardRows) {
       result.set(pairKey(row.subjectId, row.targetId), {
         state: 'confirmed',

@@ -20,7 +20,7 @@ describe('Worldbuild sheet sections', () => {
     const individual = sheetSections('Creatures', 'individual').map(section => section.id);
     const group = sheetSections('Creatures', 'group').map(section => section.id);
 
-    expect(individual).toEqual(['details', 'appearance', 'personality', 'lore', 'inv', 'fac', 'rels', 'knowledge']);
+    expect(individual).toEqual(['details', 'appearance', 'personality', 'lore', 'inv', 'fac', 'loc', 'rels', 'knowledge']);
     // A species has a shared look worth describing, but no single temperament.
     expect(group).toEqual(['details', 'appearance', 'lore', 'members']);
     expect(variantsOf('Creatures')).toEqual(['individual', 'group']);
@@ -34,6 +34,8 @@ describe('Worldbuild sheet sections', () => {
     expect(sheetTabs('Creatures', 'individual')).toEqual(['data', 'inventory', 'connections', 'knowledge']);
     expect(sheetTabs('Creatures', 'group')).toEqual(['data']);
     expect(sheetTabs('Locations', null)).toEqual(['data']);
+    // A Region or Area holds what its locals know; a place or a spot has nothing to share.
+    expect(sheetTabs('Locations', 'shared')).toEqual(['data', 'knowledge']);
   });
 
   test('a tab named after its only section reads as that section', () => {

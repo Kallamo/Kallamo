@@ -29,6 +29,7 @@ import {
   statementKey
 } from '../../../narrative/narrative-taxonomy';
 import { canSubjectAccessOccurrence, isFactionOccurrenceMemoryShared } from '../worldbuild/event-occurrences';
+import { sharedKnowledgeCards } from '../worldbuild/knowledge-groups';
 import { describeLocationChain, loadLocationChain } from '../worldbuild/location-graph';
 import { NarrativeContextManifestRepository, type NarrativeContextManifest } from './context-manifest';
 import { RoleplayContextOrchestrator } from './roleplay-context-orchestrator';
@@ -692,36 +693,25 @@ export class NarrativeChatContext {
           })] : [];
         });
       }
-      const ownerPlaceholders = ownerIds.map(() => '?').join(', ');
-      const cards = this.db.prepare(`
-        SELECT DISTINCT cards.card_id AS cardId, cards.owner_id AS sourceOwnerId,
-          cards.target_id AS targetId, cards.known_as AS knownAs,
-          CASE WHEN cards.owner_id IN (${ownerPlaceholders}) THEN cards.owner_id ELSE members.fromId END AS effectiveOwnerId
+      const ownCards = this.db.prepare(`
+        SELECT cards.card_id AS cardId, cards.owner_id AS sourceOwnerId,
+          cards.target_id AS targetId, cards.known_as AS knownAs, cards.owner_id AS effectiveOwnerId
         FROM worldbuild_knowledge_cards cards
-        LEFT JOIN entity_links members
-          ON members.workspaceId = cards.workspace_id
-          AND members.relType = 'member_of'
-          AND members.toId = cards.owner_id
-          AND members.fromId IN (${ownerPlaceholders})
-        LEFT JOIN worldbuild_knowledge_audience_members audience
-          ON audience.workspace_id = cards.workspace_id
-          AND audience.card_id = cards.card_id
-          AND audience.entry_type = 'card'
-          AND audience.entry_id = cards.card_id
-          AND audience.member_id = members.fromId
         WHERE cards.workspace_id = ?
           AND cards.status = 'active'
           AND cards.target_id IN (${placeholders})
-          AND (
-            cards.owner_id IN (${ownerPlaceholders})
-            OR (
-              members.fromId IS NOT NULL
-              AND (cards.audience_type = 'all-members' OR audience.member_id IS NOT NULL)
-            )
-          )
-      `).all(
-        ...ownerIds, ...ownerIds, workspaceId, ...entityIds, ...ownerIds
-      ) as Array<{ cardId: string; sourceOwnerId: string; targetId: string; knownAs: string | null; effectiveOwnerId: string }>;
+          AND cards.owner_id IN (${ownerIds.map(() => '?').join(', ')})
+      `).all(workspaceId, ...entityIds, ...ownerIds) as Array<{ cardId: string; sourceOwnerId: string; targetId: string; knownAs: string | null; effectiveOwnerId: string }>;
+      const cards = [
+        ...ownCards,
+        ...sharedKnowledgeCards(this.db, workspaceId, ownerIds, entityIds).map(card => ({
+          cardId: card.cardId,
+          sourceOwnerId: card.groupId,
+          targetId: card.targetId,
+          knownAs: card.knownAs,
+          effectiveOwnerId: card.memberId
+        }))
+      ];
       const byId = new Map(entities.map(entity => [entity.id, entity]));
       const aggregates = new Map<string, KnownEntityAggregate>();
       cards.forEach(card => {
@@ -809,6 +799,7 @@ export class NarrativeChatContext {
     const relevantIds = new Set(entityIds);
     const requiredFactIds = new Set(explicitFactIds);
     const queryTerms = meaningfulTerms(query);
+    const sharedCache = new Map<string, Set<string>>();
     const rows = loadCurrentNarrativeRecords(this.db, {
       workspaceId,
       recordTypes: ['fact', 'state', 'knowledge', 'belief', 'memory', 'relationship']
@@ -849,7 +840,7 @@ export class NarrativeChatContext {
         && perspective.focalSubjectId
         && (row.record_type === 'knowledge' || row.record_type === 'belief')
         && row.subject_id !== perspective.focalSubjectId
-        && this.isFactionKnowledgeShared(workspaceId, row.subject_id, aboutId, perspective.focalSubjectId)
+        && this.isGroupKnowledgeShared(workspaceId, row.subject_id, aboutId, perspective.focalSubjectId, sharedCache)
       ) {
         normalized.epistemic = row.record_type === 'knowledge'
           ? { kind: 'knowledge', subjectId: perspective.focalSubjectId, accessibility: accessibility(payload.accessibility) }
@@ -1007,51 +998,40 @@ export class NarrativeChatContext {
       ? [perspective.focalSubjectId!]
       : perspective.allowedSubjectIds ?? [];
     if (!ownerIds.length) return [];
-    const ownerPlaceholders = ownerIds.map(() => '?').join(', ');
     const entityPlaceholders = entityIds.map(() => '?').join(', ');
-    const rows = this.db.prepare(`
+    // Each card a reader holds or inherits from a faction or a place they are local to.
+    const readers = new Map<string, Array<{ sourceOwnerId: string; effectiveOwnerId: string }>>();
+    const addReader = (cardId: string, sourceOwnerId: string, effectiveOwnerId: string) => {
+      const list = readers.get(cardId) ?? [];
+      list.push({ sourceOwnerId, effectiveOwnerId });
+      readers.set(cardId, list);
+    };
+    for (const card of this.db.prepare(`
+      SELECT card_id AS cardId, owner_id AS ownerId FROM worldbuild_knowledge_cards
+      WHERE workspace_id = ? AND status = 'active' AND owner_id IN (${ownerIds.map(() => '?').join(', ')})
+    `).all(workspaceId, ...ownerIds) as Array<{ cardId: string; ownerId: string }>) addReader(card.cardId, card.ownerId, card.ownerId);
+    for (const card of sharedKnowledgeCards(this.db, workspaceId, ownerIds)) addReader(card.cardId, card.groupId, card.memberId);
+    if (!readers.size) return [];
+    const cardIds = [...readers.keys()];
+    const relationshipRows = this.db.prepare(`
       SELECT relationships.relationship_id AS relationshipId,
         relationships.from_id AS fromId, relationships.from_name AS fromName,
         relationships.relation_type AS relationType,
         relationships.relation_label AS relationLabel,
         relationships.to_id AS toId, relationships.to_name AS toName,
         relationships.metadata_json AS metadataJson,
-        cards.card_id AS cardId, cards.owner_id AS sourceOwnerId,
-        CASE WHEN cards.owner_id IN (${ownerPlaceholders}) THEN cards.owner_id ELSE members.fromId END AS effectiveOwnerId
+        relationships.card_id AS cardId
       FROM worldbuild_known_relationships relationships
-      JOIN worldbuild_knowledge_cards cards
-        ON cards.workspace_id = relationships.workspace_id
-        AND cards.card_id = relationships.card_id
-      LEFT JOIN entity_links members
-        ON members.workspaceId = cards.workspace_id
-        AND members.relType = 'member_of'
-        AND members.toId = cards.owner_id
-        AND members.fromId IN (${ownerPlaceholders})
-      LEFT JOIN worldbuild_knowledge_audience_members audience
-        ON audience.workspace_id = cards.workspace_id
-        AND audience.card_id = cards.card_id
-        AND audience.entry_type = 'card'
-        AND audience.entry_id = cards.card_id
-        AND audience.member_id = members.fromId
       WHERE relationships.workspace_id = ?
-        AND cards.status = 'active'
+        AND relationships.card_id IN (${cardIds.map(() => '?').join(', ')})
         AND (relationships.from_id IN (${entityPlaceholders}) OR relationships.to_id IN (${entityPlaceholders}))
-        AND (
-          cards.owner_id IN (${ownerPlaceholders})
-          OR (
-            members.fromId IS NOT NULL
-            AND (cards.audience_type = 'all-members' OR audience.member_id IS NOT NULL)
-          )
-        )
-    `).all(
-      ...ownerIds, ...ownerIds, workspaceId,
-      ...entityIds, ...entityIds, ...ownerIds
-    ) as Array<{
+    `).all(workspaceId, ...cardIds, ...entityIds, ...entityIds) as Array<{
       relationshipId: string; fromId: string; fromName: string;
       relationType: string; relationLabel: string | null;
       toId: string; toName: string; metadataJson: string | null;
-      cardId: string; sourceOwnerId: string; effectiveOwnerId: string;
+      cardId: string;
     }>;
+    const rows = relationshipRows.flatMap(row => (readers.get(row.cardId) ?? []).map(reader => ({ ...row, ...reader })));
     // A bond known through several cards (one's own, a faction's) is still one bond to the reader.
     const known = new Map<string, { row: typeof rows[number]; provenance: string[] }>();
     for (const row of rows) {
@@ -1075,26 +1055,21 @@ export class NarrativeChatContext {
     }));
   }
 
-  private isFactionKnowledgeShared(workspaceId: string, factionId: string, targetId: string, memberId: string): boolean {
-    return Boolean(this.db.prepare(`
-      SELECT 1
-      FROM worldbuild_knowledge_cards cards
-      JOIN entity_links membership
-        ON membership.workspaceId = cards.workspace_id
-        AND membership.relType = 'member_of'
-        AND membership.fromId = ?
-        AND membership.toId = cards.owner_id
-      LEFT JOIN worldbuild_knowledge_audience_members audience
-        ON audience.workspace_id = cards.workspace_id
-        AND audience.card_id = cards.card_id
-        AND audience.entry_type = 'card'
-        AND audience.entry_id = cards.card_id
-        AND audience.member_id = ?
-      WHERE cards.workspace_id = ? AND cards.owner_id = ? AND cards.target_id = ?
-        AND cards.status = 'active'
-        AND (cards.audience_type = 'all-members' OR audience.member_id IS NOT NULL)
-      LIMIT 1
-    `).get(memberId, memberId, workspaceId, factionId, targetId));
+  /** Whether a statement a faction or a place holds about a target reaches this member. */
+  private isGroupKnowledgeShared(
+    workspaceId: string,
+    groupId: string,
+    targetId: string,
+    memberId: string,
+    cache: Map<string, Set<string>>
+  ): boolean {
+    let readable = cache.get(memberId);
+    if (!readable) {
+      readable = new Set(sharedKnowledgeCards(this.db, workspaceId, [memberId])
+        .map(card => `${card.groupId}\u0000${card.targetId}`));
+      cache.set(memberId, readable);
+    }
+    return readable.has(`${groupId}\u0000${targetId}`);
   }
 
   private candidate(input: {

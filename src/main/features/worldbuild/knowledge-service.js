@@ -2,8 +2,10 @@ const crypto = require('crypto');
 
 const SOURCE_TYPES = new Set([
   'manual', 'relationship', 'faction-membership', 'inventory',
-  'memory', 'narrative', 'fact', 'statement', 'import',
+  'memory', 'narrative', 'fact', 'statement', 'import', 'locality',
 ]);
+// Locations that hold common knowledge for the people local to them.
+const SHARING_SIZES = new Set(['region', 'area']);
 const NATIVE_FIELDS = {
   Characters: ['status', 'age', 'appearance', 'personality'],
   Creatures: ['status', 'disposition', 'nature', 'abundance', 'threat', 'abilities', 'appearance', 'personality'],
@@ -360,14 +362,108 @@ function createWorldbuildKnowledgeService(db) {
         });
       }
     }
+    const locality = hasTable(db, 'entities') ? localityGrants(projectId) : [];
+    grants.push(...locality);
+    pruneLocality(projectId, locality);
     // Reconcile runs on every read, and almost every grant already holds. Granting again
     // would only move updated_at, so only the grants that would change something are written.
     const settled = settledGrantKeys(projectId);
     const pending = grants.filter(grant => !settled.has(grantKey(grant)));
     if (!pending.length) return;
     db.transaction(() => {
-      for (const grant of pending) grantAwareness(grant);
+      for (const grant of pending) {
+        grantAwareness(grant);
+        if (grant.sourceType === 'locality') seedLocalityFields(grant);
+      }
     })();
+  }
+
+  // A Region or Area knows every location inside it, down to the next Region or Area: that one
+  // is known as a name, and what lies inside it is its own locals' to know.
+  function localityGrants(workspaceId) {
+    const sizes = new Map(cached(`
+      SELECT id, data FROM entities WHERE workspaceId = ? AND type = 'Locations' AND status != 'proposed'
+    `).all(workspaceId).map(row => [row.id, sizeOf(row.data)]));
+    const children = new Map();
+    for (const link of cached(`
+      SELECT id, fromId, toId FROM entity_links WHERE workspaceId = ? AND relType = 'inside'
+    `).all(workspaceId)) {
+      if (!sizes.has(link.fromId) || !sizes.has(link.toId)) continue;
+      const list = children.get(link.toId) || [];
+      list.push({ targetId: link.fromId, sourceId: link.id });
+      children.set(link.toId, list);
+    }
+    const grants = [];
+    for (const [ownerId, size] of sizes) {
+      if (!SHARING_SIZES.has(size)) continue;
+      const seen = new Set([ownerId]);
+      let frontier = [ownerId];
+      while (frontier.length) {
+        const next = [];
+        for (const parentId of frontier) {
+          for (const child of children.get(parentId) || []) {
+            if (seen.has(child.targetId)) continue;
+            seen.add(child.targetId);
+            grants.push({ workspaceId, ownerId, targetId: child.targetId, sourceType: 'locality', sourceId: child.sourceId });
+            if (!SHARING_SIZES.has(sizes.get(child.targetId))) next.push(child.targetId);
+          }
+        }
+        frontier = next;
+      }
+    }
+    return grants;
+  }
+
+  // A location that left an Area takes its card there with it, unless something else still holds it.
+  function pruneLocality(workspaceId, expected) {
+    const wanted = new Set(expected.map(grantKey));
+    const stale = cached(`
+      SELECT cards.card_id, cards.owner_id, cards.target_id, sources.source_type, sources.source_id
+      FROM worldbuild_knowledge_sources sources
+      JOIN worldbuild_knowledge_cards cards
+        ON cards.workspace_id = sources.workspace_id AND cards.card_id = sources.card_id
+      WHERE sources.workspace_id = ? AND sources.source_type = 'locality'
+    `).all(workspaceId).filter(row => !wanted.has(grantKey(rowGrant(row))));
+    if (!stale.length) return;
+    db.transaction(() => {
+      const now = Date.now();
+      for (const row of stale) {
+        cached(`
+          DELETE FROM worldbuild_knowledge_sources
+          WHERE workspace_id = ? AND card_id = ? AND source_type = 'locality' AND source_id = ?
+        `).run(workspaceId, row.card_id, row.source_id);
+        const remaining = cached(`
+          SELECT 1 FROM worldbuild_knowledge_sources WHERE workspace_id = ? AND card_id = ? LIMIT 1
+        `).get(workspaceId, row.card_id);
+        if (remaining) continue;
+        cached(`
+          UPDATE worldbuild_knowledge_cards SET status = 'revoked', updated_at = ?
+          WHERE workspace_id = ? AND card_id = ? AND status = 'active'
+        `).run(now, workspaceId, row.card_id);
+        persistTemporalAwareness({
+          workspaceId, ownerId: row.owner_id, targetId: row.target_id,
+          sourceType: 'locality', sourceId: `left:${row.source_id}`, status: 'revoked',
+        });
+      }
+    })();
+  }
+
+  // Locals see what anyone passing by sees. A card the author already shaped keeps its fields.
+  function seedLocalityFields(grant) {
+    const card = cached(`
+      SELECT card_id FROM worldbuild_knowledge_cards
+      WHERE workspace_id = ? AND owner_id = ? AND target_id = ? AND status = 'active'
+    `).get(grant.workspaceId, grant.ownerId, grant.targetId);
+    if (!card) return;
+    const shaped = cached('SELECT 1 FROM worldbuild_known_fields WHERE workspace_id = ? AND card_id = ? LIMIT 1')
+      .get(grant.workspaceId, card.card_id);
+    if (shaped) return;
+    const insert = cached(`
+      INSERT OR IGNORE INTO worldbuild_known_fields (
+        workspace_id, card_id, field_key, source_type, source_id, audience_type, created_at
+      ) VALUES (?, ?, ?, 'locality', ?, 'inherit', ?)
+    `);
+    for (const key of NATIVE_FIELDS.Locations) insert.run(grant.workspaceId, card.card_id, key, grant.sourceId, Date.now());
   }
 
   // Grants that write nothing when repeated: excluded ones, and ones whose card is active,
@@ -634,6 +730,12 @@ function parseObject(raw) {
   } catch {
     return {};
   }
+}
+
+// The same reading as shared/location-sizes, which this file cannot require: it is built alongside it.
+function sizeOf(raw) {
+  const size = parseObject(raw).size;
+  return typeof size === 'string' ? size.trim().toLowerCase() : null;
 }
 
 function hasFilledValue(value) {

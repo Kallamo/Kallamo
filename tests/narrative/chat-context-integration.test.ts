@@ -461,6 +461,41 @@ describe('Narrative chat context integration', () => {
     expect(plan().context).not.toContain('The Bulwark watches the northern gate.');
   });
 
+  test('gives a local what the Area knows, and leaves a visitor without it', () => {
+    setWorkspaceExperienceMode(db, 'workspace-one', 'roleplay');
+    const insert = db.prepare(`
+      INSERT INTO entities (
+        id, workspaceId, type, canonicalName, aliases, lore, data,
+        status, createdAt, last_modified
+      ) VALUES (?, 'workspace-one', ?, ?, '[]', '', ?, 'confirmed', 1, 1)
+    `);
+    insert.run('march', 'Locations', 'The March', JSON.stringify({ size: 'area' }));
+    insert.run('elias', 'Characters', 'Elias', '{}');
+    insert.run('tess', 'Characters', 'Tess', '{}');
+    const link = db.prepare('INSERT INTO entity_links VALUES (?, ?, ?, ?, ?, NULL, ?, ?)');
+    link.run('gate-inside', 'workspace-one', 'northern-gate', 'inside', 'march', '{}', 1);
+    link.run('elias-local', 'workspace-one', 'elias', 'local_to', 'march', '{}', 1);
+    worldbuild.saveSubjectEntry({
+      workspaceId: 'workspace-one', subjectId: 'march', kind: 'knowledge',
+      entry: { aboutId: 'northern-gate', statement: 'Everyone in the March knows the gate sticks in the rain.', confidence: 1, acquisition: 'witness', accessibility: 'available' }
+    });
+    new NarrativeSceneRepository(db).save({
+      id: 'scene-locals', projectId: 'workspace-one', status: 'active',
+      participantIds: ['elias', 'tess'], possibleObserverIds: [],
+      perspective: { access: 'subjective', focalSubjectId: 'elias' },
+      position: { sequence: 50 }
+    });
+
+    const result = plan().context;
+    const local = result.split('--- PLAYER PERSPECTIVE: ELIAS ---')[1].split('--- SCENE ACTOR PERSPECTIVE: TESS ---')[0];
+    const visitor = result.split('--- SCENE ACTOR PERSPECTIVE: TESS ---')[1] ?? '';
+    expect(local).toContain('Everyone in the March knows the gate sticks in the rain.');
+    expect(local).toContain('Known entity reference: Northern Gate');
+    expect(local).toContain('Authorized fields from the canonical entity record: Description');
+    expect(visitor).not.toContain('Everyone in the March knows the gate sticks in the rain.');
+    expect(visitor).not.toContain('Known entity reference: Northern Gate');
+  });
+
   test('retrieves only individually marked relationship snapshots for a subjective perspective', () => {
     setWorkspaceExperienceMode(db, 'workspace-one', 'roleplay');
     db.prepare(`

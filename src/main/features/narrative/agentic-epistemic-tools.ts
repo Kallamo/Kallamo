@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import { EpistemicResolver } from './epistemic-resolver';
 import { RoleplaySystem } from './roleplay-system';
 import { isFactionOccurrenceMemoryShared } from '../worldbuild/event-occurrences';
+import { sharedKnowledgeCards } from '../worldbuild/knowledge-groups';
 import { loadCurrentNarrativeRecords } from './narrative-record-projection';
 
 interface EntityRow {
@@ -55,38 +56,16 @@ export class AgenticEpistemicTools {
       targetIds: [pair.target.id],
       through: { sequence: this.latestSequence(workspaceId) }
     }).assessments[0];
-    const cards = this.db.prepare(`
-      SELECT cards.card_id AS cardId, cards.known_as AS knownAs,
-        cards.owner_id AS sourceOwnerId
-      FROM worldbuild_knowledge_cards cards
-      LEFT JOIN entity_links membership
-        ON membership.workspaceId = cards.workspace_id
-        AND membership.relType = 'member_of'
-        AND membership.fromId = ?
-        AND membership.toId = cards.owner_id
-      LEFT JOIN worldbuild_knowledge_audience_members audience
-        ON audience.workspace_id = cards.workspace_id
-        AND audience.card_id = cards.card_id
-        AND audience.entry_type = 'card'
-        AND audience.entry_id = cards.card_id
-        AND audience.member_id = ?
-      WHERE cards.workspace_id = ? AND cards.target_id = ? AND cards.status = 'active'
-        AND (
-          cards.owner_id = ?
-          OR (
-            membership.fromId IS NOT NULL
-            AND (cards.audience_type = 'all-members' OR audience.member_id IS NOT NULL)
-          )
-      )
-      ORDER BY CASE WHEN cards.owner_id = ? THEN 0 ELSE 1 END
-    `).all(
-      pair.subject.id,
-      pair.subject.id,
-      workspaceId,
-      pair.target.id,
-      pair.subject.id,
-      pair.subject.id
-    ) as Array<{ cardId: string; knownAs: string | null; sourceOwnerId: string }>;
+    // The subject's own card first, then what a faction or a place they are local to shares.
+    const cards = [
+      ...this.db.prepare(`
+        SELECT card_id AS cardId, known_as AS knownAs, owner_id AS sourceOwnerId
+        FROM worldbuild_knowledge_cards
+        WHERE workspace_id = ? AND owner_id = ? AND target_id = ? AND status = 'active'
+      `).all(workspaceId, pair.subject.id, pair.target.id) as Array<{ cardId: string; knownAs: string | null; sourceOwnerId: string }>,
+      ...sharedKnowledgeCards(this.db, workspaceId, [pair.subject.id], [pair.target.id])
+        .map(card => ({ cardId: card.cardId, knownAs: card.knownAs, sourceOwnerId: card.groupId }))
+    ];
     const fields = unique(cards.flatMap(card => this.db.prepare(`
       SELECT field_key AS fieldKey FROM worldbuild_known_fields
       WHERE workspace_id = ? AND card_id = ? ORDER BY field_key

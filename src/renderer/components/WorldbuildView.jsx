@@ -733,7 +733,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     const id = selected?.id;
     if (!workspaceId || !id) return undefined;
     let active = true;
-    const knowledge = ['Characters', 'Factions', 'Creatures'].includes(selected.type)
+    const knowledge = ['Characters', 'Factions', 'Creatures', 'Locations'].includes(selected.type)
       ? electronAPI.getWorldbuildSubjectKnowledge?.(workspaceId, id).then(result => result?.success && result.projection ? (result.projection.cards?.length || 0) + (result.projection.memories?.length || 0) : null).catch(() => null)
       : Promise.resolve(null);
     const occurrences = selected.type === 'Events'
@@ -858,7 +858,9 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
 
   const isNew = !selected?.id;
   const isIndividualCreature = selected?.type === 'Creatures' && (selected?.data?.scope || 'individual') !== 'group';
-  const hasKnowledgeTab = selected?.type === 'Characters' || selected?.type === 'Factions' || isIndividualCreature;
+  // A Region or Area is where common knowledge lives, read by everyone local to it.
+  const isSharingLocation = selected?.type === 'Locations' && ['region', 'area'].includes(locationSizeOf(selected));
+  const hasKnowledgeTab = selected?.type === 'Characters' || selected?.type === 'Factions' || isIndividualCreature || isSharingLocation;
   const hasOccurrencesTab = selected?.type === 'Events';
   // Read through the registry, as the editor does, so legacy section ids keep their place.
   const storedTemplate = templates.find(template => template.typeId === selected?.type);
@@ -891,7 +893,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const isFaction = selected?.type === 'Factions';
   // Which tabs a sheet shows follows from the type and its shape. The relational tabs are
   // systematic, so the template has no say over them.
-  const sheetVariant = selected?.type === 'Creatures' ? (isIndividualCreature ? 'individual' : 'group') : null;
+  const sheetVariant = selected?.type === 'Creatures' ? (isIndividualCreature ? 'individual' : 'group') : isSharingLocation ? 'shared' : null;
   const visibleSheetTabs = sheetTabsFor(selected?.type, sheetVariant);
   if (hasReview && !isNew) visibleSheetTabs.push('review');
   const sheetTabLabel = (tab) => tab === 'review' ? 'Review' : tabLabel(selected?.type, sheetVariant, tab);
@@ -928,6 +930,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     return m;
   }, [entities]);
   // Where a single object can lie: places and spots before the regions that contain them.
+  const sharingLocations = useMemo(() => (byType.Locations || []).filter(location => ['region', 'area'].includes(locationSizeOf(location))), [byType.Locations]);
   const presenceLocations = useMemo(() => sortLocationsForPresence(byType.Locations || []), [byType.Locations]);
   // A species or swarm is not someone a relation can point at: only specific beings own things,
   // hold a relationship, or are regarded by a faction.
@@ -1083,7 +1086,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       // A specific being's species is the same link as a character's race.
       Creatures: (ent.data?.scope || 'individual') === 'group'
         ? { foundIn: ['from', 'found_in'], members: ['to', 'is_race'] }
-        : { foundIn: ['from', 'found_in'], isRace: ['from', 'is_race'], memberOf: ['from', 'member_of'], formerMemberOf: ['from', 'former_member_of'] },
+        : { foundIn: ['from', 'found_in'], isRace: ['from', 'is_race'], memberOf: ['from', 'member_of'], formerMemberOf: ['from', 'former_member_of'], localTo: ['from', 'local_to'] },
       Events: { happenedAt: ['from', 'happened_at'], involved: ['from', 'involved'] },
       Factions: {
         operatesIn: ['from', 'operates_in'], members: ['to', 'member_of'],
@@ -1092,6 +1095,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       Characters: {
         isRace: ['from', 'is_race'], memberOf: ['from', 'member_of'],
         formerMemberOf: ['from', 'former_member_of'], connectedTo: ['from', 'connected_to'],
+        localTo: ['from', 'local_to'],
       },
     }[ent.type] || {};
     const singles = new Set(['inside', 'leader', 'createdBy', 'ownedBy', 'locatedIn', 'isRace']);
@@ -1957,7 +1961,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     ];
     return [
       membershipSection('Groups this character belongs to.'),
-      { key: 'loc', title: 'Places', icon: MapPin, scalar: false, emptyVerb: 'Add', empty: !(rel.connectedTo || []).length, view: <ChipList onOpen={openEntityById} links={rel.connectedTo} empty="Tied to no place." />, edit: <MultiRelation label="Locations" hint="Places this character is tied to." disabled={unsaved} links={rel.connectedTo || []} options={byType.Locations} onAdd={(id) => addMulti('connected_to', id)} onRemove={removeLink} /> },
+      placesSection('character', true),
       { key: 'rels', raw: <WorldbuildRelationships workspaceId={workspaceId} subject={selected} links={rel.relationships || []} options={[...byType.Characters, ...individualCreatures]} api={electronAPI} showToast={showToast} onChanged={() => loadRelations(selected)} /> },
     ];
   };
@@ -2012,10 +2016,28 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     ];
   };
 
+  // Local to says where someone knows what everyone knows; only a Region or Area holds that.
+  const placesSection = (noun, withTies) => {
+    const localTo = rel.localTo || [];
+    const tied = withTies ? rel.connectedTo || [] : [];
+    return {
+      key: 'loc', title: 'Places', icon: MapPin, scalar: false, spoiler: 'places', emptyVerb: 'Add', empty: !localTo.length && !tied.length,
+      view: <div className="space-y-4">
+        <ViewField label="Local to" spoiler="localTo" empty="Local nowhere yet." value={localTo.length ? <ChipList onOpen={openEntityById} links={localTo} /> : null} />
+        {withTies && <ViewField label="Tied to" empty="Tied to no place." value={tied.length ? <ChipList onOpen={openEntityById} links={tied} /> : null} />}
+      </div>,
+      edit: <>
+        <MultiRelation label="Local to" spoiler="localTo" hint={`Regions and Areas this ${noun} is from. In play they know what everyone there knows.`} disabled={unsaved} links={localTo} options={sharingLocations} onAdd={(id) => addMulti('local_to', id)} onRemove={removeLink} />
+        {withTies && <MultiRelation label="Tied to" hint={`Places this ${noun} is tied to.`} disabled={unsaved} links={tied} options={byType.Locations} onAdd={(id) => addMulti('connected_to', id)} onRemove={removeLink} />}
+      </>,
+    };
+  };
+
   const individualCreatureSections = () => {
     if (charTab === 'inventory') return [{ key: 'inv', raw: <WorldbuildInventory workspaceId={workspaceId} subject={selected} links={rel.inventory || []} options={byType.Items} api={electronAPI} showToast={showToast} onChanged={() => loadRelations(selected)} /> }];
     if (charTab === 'connections') return [
       membershipSection('Groups this being belongs to. A pack, a cult, or the household that keeps it.'),
+      placesSection('being', false),
       { key: 'rels', raw: <WorldbuildRelationships workspaceId={workspaceId} subject={selected} links={rel.relationships || []} options={[...byType.Characters, ...individualCreatures]} api={electronAPI} showToast={showToast} onChanged={() => loadRelations(selected)} /> },
     ];
     // Appearance and personality are part of the Creatures sheet itself, which decides
@@ -2085,7 +2107,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     inventory: rel.inventory?.length || 0,
     connections: isFaction
       ? (rel.members?.length || 0)
-      : (rel.memberOf?.length || 0) + (rel.connectedTo?.length || 0) + (rel.relationships?.length || 0),
+      : (rel.memberOf?.length || 0) + (rel.connectedTo?.length || 0) + (rel.localTo?.length || 0) + (rel.relationships?.length || 0),
   };
   const nameLabel = selected?.type === 'System' ? 'Title' : 'Name';
   const showAliases = !!selected;
