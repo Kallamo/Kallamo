@@ -603,7 +603,7 @@ function ResourceChangeFields({ editor, setEditor, index, definitions, entities 
   return <div className="grid gap-3 sm:grid-cols-3">
     <ConsequenceField label="Who"><SearchableSelect ariaLabel="State consequence subject" value={change.entityId} onChange={(entityId: string) => put({ entityId, definitionId: '' })} options={options(entities)} placeholder="Choose entity…" searchPlaceholder="Filter entities…" /></ConsequenceField>
     <ConsequenceField label="State"><SearchableSelect ariaLabel="State consequence definition" value={change.definitionId} onChange={(definitionId: string) => put({ definitionId })} options={availableDefinitions.map(definition => ({ id: definition.id, label: definition.name, group: definition.appliesTo.join(', ') }))} placeholder="Choose state…" searchPlaceholder="Filter states…" /></ConsequenceField>
-    <ConsequenceField label="Becomes"><NumberInput className={INPUT} integer={false} value={Number(change.value)} onChange={value => put({ value })} aria-label="Resulting state value" /></ConsequenceField>
+    <ConsequenceField label="Becomes"><NumberInput className={INPUT} integer={false} value={Number(change.value)} onChange={value => put({ value: value ?? undefined })} aria-label="Resulting state value" /></ConsequenceField>
   </div>;
 }
 
