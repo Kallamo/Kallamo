@@ -6,6 +6,7 @@
 const WORKSPACE_OWNED_COLUMNS = [
   { table: 'folders', column: 'workspaceId' },
   { table: 'documents', column: 'workspaceId' },
+  { table: 'in_world_texts', column: 'workspace_id' },
   { table: 'pinned_directives', column: 'workspaceId' },
   { table: 'pending_suggestions', column: 'workspaceId' },
   { table: 'document_notes', column: 'workspaceId' },

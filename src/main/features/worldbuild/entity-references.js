@@ -70,7 +70,9 @@ const ENTITY_REFERENCE_COLUMNS = [
   { table: 'worldbuild_event_occurrences', column: 'consequences_json', merge: 'repoint', delete: 'keep history' },
   { table: 'worldbuild_field_definitions', column: 'default_value_json', merge: 'repoint', delete: 'unlist' },
   { table: 'entities', column: 'data', merge: 'repoint', delete: 'unlist' },
-  { table: 'entity_redirects', column: 'to_id', merge: 'repoint', delete: 'remove' }
+  { table: 'entity_redirects', column: 'to_id', merge: 'repoint', delete: 'remove' },
+  { table: 'in_world_texts', column: 'item_id', merge: 'repoint', delete: 'clear, the text stays in-world' },
+  { table: 'in_world_texts', column: 'author_id', merge: 'repoint', delete: 'clear' }
 ];
 
 const IGNORED_ENTITY_REFERENCE_COLUMNS = [
@@ -337,6 +339,11 @@ function repointEntityReferences(db, { workspaceId, sourceId, targetId, prefer =
       db.prepare(`UPDATE roleplay_character_memory SET ${column} = ? WHERE workspace_id = ? AND ${column} = ?`).run(targetId, workspaceId, sourceId);
     }
   }
+  if (has('in_world_texts')) {
+    for (const column of ['item_id', 'author_id']) {
+      db.prepare(`UPDATE in_world_texts SET ${column} = ? WHERE workspace_id = ? AND ${column} = ?`).run(targetId, workspaceId, sourceId);
+    }
+  }
   if (has('roleplay_turn_presence')) {
     db.prepare('UPDATE roleplay_turn_presence SET location_id = ? WHERE workspace_id = ? AND location_id = ?').run(targetId, workspaceId, sourceId);
   }
@@ -533,6 +540,12 @@ function releaseEntityReferences(db, { workspaceId, entityId }) {
     db.prepare('DELETE FROM roleplay_character_memory WHERE workspace_id = ? AND entity_id = ?').run(workspaceId, entityId);
     db.prepare('UPDATE roleplay_character_memory SET source_id = NULL WHERE workspace_id = ? AND source_id = ?').run(workspaceId, entityId);
   }
+  // Without its item a text still lives inside the story, so it stays out of the story search.
+  if (has('in_world_texts')) {
+    for (const column of ['item_id', 'author_id']) {
+      db.prepare(`UPDATE in_world_texts SET ${column} = NULL WHERE workspace_id = ? AND ${column} = ?`).run(workspaceId, entityId);
+    }
+  }
   if (has('roleplay_turn_presence')) {
     db.prepare('UPDATE roleplay_turn_presence SET location_id = NULL WHERE workspace_id = ? AND location_id = ?').run(workspaceId, entityId);
     rewriteJsonColumn(db, { table: 'roleplay_turn_presence', column: 'present_ids_json', where: "workspace_id = ? AND present_ids_json LIKE ? ESCAPE '\\'", params: [workspaceId, like], transform: unlist });
@@ -625,7 +638,9 @@ function releaseOrphanedEntityReferences(db) {
     ['roleplay_character_memory', 'entity_id'],
     ['worldbuild_knowledge_cards', 'owner_id'],
     ['worldbuild_knowledge_cards', 'target_id'],
-    ['worldbuild_knowledge_audience_members', 'member_id']
+    ['worldbuild_knowledge_audience_members', 'member_id'],
+    ['in_world_texts', 'item_id'],
+    ['in_world_texts', 'author_id']
   ];
   const orphans = new Map();
   for (const [table, column, condition] of candidates) {

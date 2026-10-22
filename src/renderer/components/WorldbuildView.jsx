@@ -13,6 +13,7 @@ import NumberInput from './ui/NumberInput';
 import Checkbox from './ui/Checkbox';
 import Popover from './ui/Popover';
 import Menu, { MenuItem, MenuLabel, MenuSeparator } from './ui/Menu';
+import WorldbuildItemText from '../features/worldbuild/WorldbuildItemText';
 import IconButton from './ui/IconButton';
 import Tooltip from './ui/Tooltip';
 import WorldSelectionBar from '../features/worldbuild/WorldSelectionBar';
@@ -654,6 +655,19 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   // Update Entities always uses System AI, independently of the Tagger executor.
   const hasSystemAi = !!settings?.advanced?.systemApiProfileId && !!settings?.advanced?.systemModelName;
   const workspaceId = chat?.id;
+  // The Writing Desk opens on the page with its folder expanded, even if it was never visited.
+  const openWritingPage = useCallback(async ({ documentId, folderId }) => {
+    try {
+      const [current, tree] = await Promise.all([electronAPI.getWritingDeskState?.(workspaceId), electronAPI.getWritingTree?.(workspaceId)]);
+      const parentOf = new Map((tree?.folders || []).map(folder => [folder.id, folder.parentId || null]));
+      const chain = [];
+      for (let id = folderId; id && !chain.includes(id); id = parentOf.get(id)) chain.push(id);
+      const expandedFolderIds = [...new Set([...(current?.state?.expandedFolderIds || []), ...chain])];
+      await electronAPI.setWritingDeskState?.(workspaceId, { expandedFolderIds, lastDocumentId: documentId });
+    } catch { /* the event below still opens it when the desk is mounted */ }
+    window.dispatchEvent(new CustomEvent('writing-desk-open-document', { detail: { workspaceId, documentId, folderId } }));
+    setActiveWorkspaceView('writing');
+  }, [electronAPI, workspaceId, setActiveWorkspaceView]);
 
   const [cachedRegistry] = useState(() => registryCache.get(workspaceId));
   const [entities, setEntities] = useState(() => cachedRegistry?.entities || []);
@@ -1043,7 +1057,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     offset: savedView?.sheetScroll || 0,
     ready: savedView?.entityId ? selected?.id === savedView.entityId : !!savedView && surface === savedView.surface,
   });
-  useEffect(() => { electronAPI.getWritingTree(workspaceId).then(t => setDocuments(t?.documents || [])).catch(() => setDocuments([])); }, [workspaceId, electronAPI]);
+  // In-world texts belong to an item's pages, never to a sheet's background chapters.
+  useEffect(() => { electronAPI.getWritingTree(workspaceId).then(t => setDocuments((t?.documents || []).filter(d => !d.inWorld))).catch(() => setDocuments([])); }, [workspaceId, electronAPI]);
   useEffect(() => {
     if (!workspaceId || !electronAPI.listWorldbuildEntityTemplates) return;
     electronAPI.listWorldbuildEntityTemplates(workspaceId).then(result => setTemplates(result?.templates || [])).catch(() => setTemplates([]));
@@ -2734,6 +2749,9 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               )}
             </div>
 
+            {!isNew && selected.status !== 'proposed' && charTab === 'data' && selected.type === 'Items' && (
+              <WorldbuildItemText workspaceId={workspaceId} item={selected} api={electronAPI} showToast={showToast} onOpenPage={openWritingPage} />
+            )}
             {!isNew && selected.status !== 'proposed' && charTab === 'data' && (selected.type === 'Characters' || (selected.type === 'Creatures' && (selected.data?.scope || 'individual') !== 'group')) && (
               <>
                 <WorldbuildRoleplayResources workspaceId={workspaceId} entity={selected} entities={entities} api={electronAPI} showToast={showToast} onOpen={openEntityById} />

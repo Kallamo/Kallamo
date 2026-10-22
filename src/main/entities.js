@@ -350,7 +350,10 @@ function linkedLoreDocIds(ent) {
   else if (ent.loreDocumentId) ids.push(ent.loreDocumentId);
   const unique = [...new Set(ids)];
   if (!unique.length || !db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'documents'").get()) return unique;
-  const existing = new Set(db.prepare(`SELECT id FROM documents WHERE id IN (${unique.map(() => '?').join(', ')})`).all(...unique).map(row => row.id));
+  // A text written inside the story is not the entity's background, so it never reads as canon.
+  const inWorld = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'in_world_texts'").get()
+    ? ' AND id NOT IN (SELECT document_id FROM in_world_texts)' : '';
+  const existing = new Set(db.prepare(`SELECT id FROM documents WHERE id IN (${unique.map(() => '?').join(', ')})${inWorld}`).all(...unique).map(row => row.id));
   return unique.filter(id => existing.has(id));
 }
 

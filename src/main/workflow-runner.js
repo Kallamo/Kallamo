@@ -1,5 +1,6 @@
 const db = require('./database');
 const entitiesStore = require('./entities');
+const inWorldTexts = require('./features/worldbuild/in-world-texts');
 const { sendApiRequest, sendAgentRequest, nativeToolSupport, getReservedOutputTokens, resolvePayloadLimit, createPromptVariableResolver } = require('./features/llm/llm.service');
 const { sendApiRequestStream } = require('./features/llm/llm.stream');
 const { applyGenerationHistory, resolveWorkspaceGenerationTarget } = require('./features/chat/generation-target');
@@ -241,6 +242,30 @@ function serializeContextBundle(planned) {
         excluded,
         manifest
     };
+}
+
+// A text read in the scene arrives whole up to this size; a longer one names the pages left out.
+const IN_WORLD_TEXT_TOKENS = 1800;
+
+function roleplaySystem() {
+    const { RoleplaySystem } = require('../../dist-main/main/features/narrative/roleplay-system');
+    return new RoleplaySystem(db);
+}
+
+// Items named in the player's message or the last reply, read when their pages are within reach.
+function readTextsInPlay(chatId, isRoleplay, mentionText, maxTokens) {
+    try {
+        return inWorldTexts.textsInPlay(db, {
+            workspaceId: chatId,
+            roleplay: isRoleplay ? roleplaySystem() : null,
+            mentionText,
+            maxTokens,
+            estimate: estimateTokens
+        });
+    } catch (error) {
+        console.warn('[In-world texts] Could not read texts in play:', error.message);
+        return [];
+    }
 }
 
 // --- TOKEN UTILITIES ---
@@ -904,7 +929,19 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             }
             const historyNeed = planActiveHistory(historySource, availableForContext, historyCacheScopeId).tokens;
             // Profile knowledge is packed first; what it leaves is the narrative planner's budget.
-            const retrievalBudget = splitRetrievalBudget({ availableTokens: availableForContext, historyTokens: historyNeed });
+            const splitBudget = splitRetrievalBudget({ availableTokens: availableForContext, historyTokens: historyNeed });
+            // A text named this turn and within reach is read whether or not the planner runs; its
+            // pages come out of the retrieval budget so the payload limit still holds.
+            const lastReply = [...activeMessages].reverse().find(message => message.role === 'ai')?.content || '';
+            const textReadings = includeChatContext
+                ? readTextsInPlay(chatId, isRoleplayWorkspace, `${messageContent || currentInput}\n${lastReply}`, Math.min(IN_WORLD_TEXT_TOKENS, Math.floor(splitBudget / 3)))
+                : [];
+            const textTokens = textReadings.reduce((total, reading) => total + reading.tokens, 0);
+            const retrievalBudget = Math.max(0, splitBudget - textTokens);
+            if (textReadings.length) {
+                contextBlock += `\n\n--- TEXTS IN THE WORLD ---\n${textReadings.map(reading => reading.text).join('\n\n')}\n`;
+                chatKbTokens += textTokens;
+            }
             const planWorkspaceContext = shouldPlanWorkspaceContext(chatId, includeChatContext);
             const profileRetrievalHeader = isRoleplayWorkspace
                 ? '--- NARRATOR REFERENCE: PROFILE RETRIEVAL ---'
@@ -941,6 +978,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     userRequest: messageContent,
                     knownEntities: plannerGate.entities,
                     mentionedIds: plannerGate.mentionedIds,
+                    readItemIds: new Set(textReadings.map(reading => reading.itemId)),
                     toolProtocol: String(debugSettings.agenticToolProtocol || 'auto') === 'text' ? 'text' : 'auto'
                 });
                 if (agenticResult) {
@@ -3630,7 +3668,7 @@ RELATIONSHIP CAUSES. Every relationship operation must name the cause that actua
 Causes that move it: betrayal, sacrifice, rescue, revelation, oath, cruelty, humiliation, forgiveness, shared-loss, sustained-trust, material-debt, first-impression.
 Causes that never move it: courtesy, banter, routine-cooperation, mood, compliance, instruction, presence. A helping hand, a polite greeting, following an order, training together, sharing a room and ordinary kindness are not changes of regard. Name one of these and return the current value unchanged, or omit the operation entirely.
 
-Awareness requires demonstrated interaction, recognition, testimony, discovery, conscious possession, or a relationship. Shared presence is insufficient. Grant knowledge only when the subject actually acquires the exact proposition in this turn. Set acquisition from how they came by it: participant or witness for first-hand perception, reported when someone told them, inferred when they reasoned it out. Return informantIds only with reported acquisition, naming the supplied ids of whoever told them, and omit the field otherwise. A subject is never their own informant, and never records knowledge about themselves unless the category is secret, identity or intent. Narrator-only information, unnoticed events, private thoughts, vague implication, and contextual availability are not character knowledge. Use belief for rumors, deception, disputed claims, suspicion, and unsupported inference. When a speaker reports observations and a personal theory, listeners gain reported Knowledge of the observations and of the speaker's claim; only the speaker receives the Belief unless a listener explicitly accepts it. Existing Awareness in currentKnowledgeCards is sufficient; do not repeat it only to make knowledge valid. Group knowledge requires explicit collective communication or a shared source. Do not union member knowledge. A Faction that learns through one of its own uses reported acquisition with that member in informantIds. Knowledge held by a Faction is institutional and never becomes a member's own record automatically: when a scene shows a member being told what the group holds, record it for that member with reported acquisition naming who told them.
+Awareness requires demonstrated interaction, recognition, testimony, discovery, conscious possession, or a relationship. Shared presence is insufficient. Grant knowledge only when the subject actually acquires the exact proposition in this turn. Set acquisition from how they came by it: participant or witness for first-hand perception, reported when someone told them, inferred when they reasoned it out. Reading a written text in the scene counts as being told by its author: use reported, with the author's id in informantIds when the author is known, and record what the text claims as the author's claim, not as fact. Return informantIds only with reported acquisition, naming the supplied ids of whoever told them, and omit the field otherwise. A subject is never their own informant, and never records knowledge about themselves unless the category is secret, identity or intent. Narrator-only information, unnoticed events, private thoughts, vague implication, and contextual availability are not character knowledge. Use belief for rumors, deception, disputed claims, suspicion, and unsupported inference. When a speaker reports observations and a personal theory, listeners gain reported Knowledge of the observations and of the speaker's claim; only the speaker receives the Belief unless a listener explicitly accepts it. Existing Awareness in currentKnowledgeCards is sufficient; do not repeat it only to make knowledge valid. Group knowledge requires explicit collective communication or a shared source. Do not union member knowledge. A Faction that learns through one of its own uses reported acquisition with that member in informantIds. Knowledge held by a Faction is institutional and never becomes a member's own record automatically: when a scene shows a member being told what the group holds, record it for that member with reported acquisition naming who told them.
 A proposition object is a statement in words, never an id and never a bare key. When an object names an entity, use its supplied id; otherwise write plain prose. Scene membership, position and current activity belong to scenePatch alone and never to a fact, knowledge or belief, whatever the predicate is called. A perception shared by everyone present, withheld from nobody, and without later consequence is already carried by the scene and needs no record.
 Relationship changes only the directional numeric bar. Never return a title or description. currentScene.playerEntityId identifies the Player. The Player's feelings are unknowable: never emit a relationship operation whose sourceEntityId is the Player. You may emit Awareness with the Player as subject or target. When an NPC is explicitly presented to the Player, record Player-to-NPC Awareness, NPC-to-Player Awareness, and only the NPC-to-Player directional relationship. Use currentRelationshipState as the baseline and return an absolute value. On a first demonstrated encounter or interaction, initialize the supported non-Player directional relationship and Awareness card with cause first-impression. Direct mutual interaction normally requires both directions. Listening or overhearing requires listener-to-speaker only unless the speaker perceives the listener. Default a new relationship to 0. Prior favorable or adverse information normally supports an initial value within -25 to 25 with meaningful impact. Significant explicit evidence may support up to -50 or 50 with significant impact. Set drastic impact and use values approaching -100 or 100 only for extreme explicit evidence such as established hatred, mortal enmity, absolute devotion, or an equivalent relationship-defining fact. Directions may differ. For an existing relationship, a meaningful durable shift should stay near 5 points, a significant major act or repeated pattern may move up to 15, and drastic is reserved for explicit betrayal, sacrifice, life-saving action, devastating revelation, or equivalent rupture.
 Ignore existing knowledge and existing memories when deciding what happened, but never restate something the campaign already holds. A turn that changes nothing durable returns no events at all, and that is a correct answer. Most turns produce at most one or two records, and returning many is a sign the durability test was skipped.`;
@@ -4683,6 +4721,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
         JOIN knowledge_chunks kc ON ct.chunkId = kc.id AND kc.ownerType = 'document'
         JOIN documents d ON d.id = kc.ownerId
         WHERE ct.entity = ? AND d.workspaceId = ? AND kc.enabled = 1
+          AND d.id NOT IN (SELECT document_id FROM in_world_texts)
         ORDER BY kc.createdAt ASC
     `);
     const memoryChunks = db.prepare(`
@@ -5829,13 +5868,14 @@ async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory 
     const retrievedLore = new Map();
     const retrievedWorldFacts = new Map(); // Deterministic Worldbuild registry facts (lore + relations).
     const retrievedNarrativeOptions = new Map();
+    const retrievedTexts = new Map(); // Pages of in-world texts read through their item.
     const readFiles = new Map();
     // Ids the free deterministic pass found. They are the floor this loop may not fall below.
     const seededIds = new Set();
 
     const retrievedIds = () => [
         ...retrievedProfileChunks.keys(), ...retrievedChatChunks.keys(), ...retrievedMemories.keys(),
-        ...retrievedLore.keys(), ...retrievedWorldFacts.keys(), ...retrievedNarrativeOptions.keys(), ...readFiles.keys()
+        ...retrievedLore.keys(), ...retrievedWorldFacts.keys(), ...retrievedNarrativeOptions.keys(), ...retrievedTexts.keys(), ...readFiles.keys()
     ];
 
     // The best rank each passage reached inside a lookup, and whether the agent's sources were applied.
@@ -6239,6 +6279,35 @@ ${isRoleplay ? `- PERSPECTIVE: lookup_entity returns what the narrator knows. Us
                         preview: index < AGENT_FULL_RESULTS_PER_CALL ? 'full' : 'digest',
                         meta: `read_lore "${call.arg}"`
                     });
+                });
+            }
+        } else if (call.name === 'read_text') {
+            let reading = null;
+            let reason = 'no workspace context in this run';
+            if (includeChatContext) {
+                try {
+                    const itemId = entitiesStore.resolveMention(call.arg, 'Items', chatId);
+                    if (!itemId) reason = 'no item by that name';
+                    else if (options.readItemIds?.has(itemId)) reason = 'its pages are already in the context';
+                    else if (isRoleplay && !inWorldTexts.itemsInScene(db, roleplaySystem(), chatId).has(itemId)) reason = 'that item is not within reach of the scene';
+                    else {
+                        reading = inWorldTexts.readItemText(db, chatId, itemId, { maxTokens: IN_WORLD_TEXT_TOKENS, estimate: estimateTokens });
+                        if (!reading) reason = 'the item has no written text';
+                    }
+                } catch (e) { reason = e.message; }
+            }
+            hits = reading ? 1 : 0;
+            if (!reading) {
+                pushNote(`Tool [read_text] for "${call.arg}": nothing to read (${reason}).`);
+            } else {
+                const id = `text:${reading.itemId}`;
+                retrievedTexts.set(id, { text: reading.text, source: reading.itemName, read: true });
+                pushNote(`Tool [read_text] for "${call.arg}": the written pages of ${reading.itemName}.`);
+                pushResult({
+                    id, source: reading.itemName,
+                    full: reading.text.length > MAX_AGENT_FILE_CHARS ? `${reading.text.slice(0, MAX_AGENT_FILE_CHARS)}\n[...truncated for agent reasoning; the full text is preserved for the final context...]` : reading.text,
+                    preview: 'full',
+                    meta: `read_text "${call.arg}"`
                 });
             }
         } else if (call.name === 'read_file') {
@@ -6778,6 +6847,7 @@ ${isRoleplay ? `- PERSPECTIVE: lookup_entity returns what the narrator knows. Us
         chat: '--- CHAT KNOWLEDGE BASE CHUNKS ---',
         memory: '--- CHAT SUMMARIZED MEMORIES & SNIPPETS ---',
         lore: '--- LINKED LORE (WRITING DESK) ---',
+        texts: '--- TEXTS IN THE WORLD ---',
         facts: '--- WORLDBUILD FACTS ---',
         options: '--- WORLDBUILD OPTIONS ---'
     };
@@ -6808,6 +6878,10 @@ ${isRoleplay ? `- PERSPECTIVE: lookup_entity returns what the narrator knows. Us
     }
     for (const [id, r] of retrievedLore.entries()) {
         contextItems.push({ section: sections.lore, ids: [id], source: r.source, text: `[Linked Lore - ${r.source}]: ${r.text}`, tier: r.uncited ? uncitedTier([id]) : 2, score: r.score || 0, origin: 'chat', narrativeKind: 'worldbuild-canon' });
+    }
+    // Narrator material: routed with canon so no character's perspective receives it unread.
+    for (const [id, r] of retrievedTexts.entries()) {
+        contextItems.push({ section: sections.texts, ids: [id], source: r.source, text: r.text, tier: 1, score: 1, truncatable: true, origin: 'chat', narrativeKind: 'worldbuild-canon' });
     }
     for (const [id, r] of retrievedWorldFacts.entries()) {
         contextItems.push({ section: sections.facts, ids: [id], source: r.source, text: `[${r.source}]: ${r.text}`, tier: r.uncited ? SEEDED_UNCITED_TIER : 0, score: 1, truncatable: true, origin: 'chat', narrativeKind: 'worldbuild-canon', entityIds: r.entityIds || [id] });

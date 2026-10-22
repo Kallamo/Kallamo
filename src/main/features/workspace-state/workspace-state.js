@@ -26,7 +26,8 @@ function setWorkspaceUiState(workspaceId, scope, value) {
   `).run(workspaceId, scope, JSON.stringify(value || {}), Date.now());
 }
 
-function normalizeWritingDeskState(value = {}) {
+function normalizeWritingDeskState(value) {
+  value = value || {};
   const expandedFolderIds = Array.isArray(value.expandedFolderIds)
     ? [...new Set(value.expandedFolderIds.filter(id => typeof id === 'string' && id))]
     : [];

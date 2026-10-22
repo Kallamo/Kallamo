@@ -6,7 +6,7 @@ import {
   Bold, Italic, Underline, Strikethrough, List, ListOrdered, Quote, ChevronDown, ChevronRight, Search, Check,
   Table as TableIcon, Rows3, Trash2, Combine, ArrowUpToLine, ArrowDownToLine, ArrowLeftToLine, ArrowRightToLine,
   AlignLeft, AlignCenter, AlignRight, AlignJustify, AlignVerticalSpaceAround, Plus, FileCog, Asterisk, Download,
-  ExternalLink, Unlink, PanelLeftClose, PanelLeftOpen, Pin, Target, X, AlertTriangle, CircleAlert
+  ExternalLink, Unlink, PanelLeftClose, PanelLeftOpen, Pin, Target, X, AlertTriangle, CircleAlert, ScrollText
 } from 'lucide-react';
 import {
   AiGlyph, SuggestionPendingGlyph, IndexingGlyph, IndexedGlyph, IndexOutdatedGlyph, IndexErrorGlyph, IndexNeverGlyph,
@@ -659,7 +659,7 @@ export default function WritingEditor({
   doc, folderName, electronAPI, workspaceId, inFlight = false, inFlightProfileId = null, pending = null, onDispatch, onResolved,
   toolbarMode = 'fixed', smartTypography = true, onDocPatch, onRename, jumpRef, onOpenEntity,
   chaptersHidden = false, onToggleChapters, rightPanel = '', onTogglePanel, notesCount = 0, directivesCount = 0, analysesCount = 0,
-  indexingElsewhere = false, indexingProgress = null, onIndexingChange,
+  indexingElsewhere = false, indexingProgress = null, onIndexingChange, inWorld = false, onInWorld,
 }) {
   const { showToast, settings } = useApp();
   const tokenDebug = Boolean(settings?.advanced?.tokenDebug);
@@ -1191,6 +1191,13 @@ export default function WritingEditor({
           />
         </label>
 
+        {inWorld ? (
+          // Written inside the story: read only when its item is read, never through story memory.
+          <button type="button" onClick={onInWorld}
+            className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-border-default bg-tint/[0.04] px-2.5 text-xs font-semibold text-text-secondary transition-colors hover:bg-tint/[0.08] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            <ScrollText className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />In-world text
+          </button>
+        ) : (<>
         <button
           type="button"
           ref={vecBtnRef}
@@ -1222,6 +1229,7 @@ export default function WritingEditor({
           <MenuSeparator />
           <MenuItem label="Refresh entity tags" description="Re-tags what the AI already has, without reading it again. Use after changing your Worldbuild entities." onSelect={runRetag} />
         </Menu>
+        </>)}
 
         <Divider />
         <IconButton icon={Search} label="Find and replace (Ctrl F)" size="sm" tooltipSide="bottom" aria-pressed={showFind} className={showFind ? '!bg-tint/[0.12] !text-text-primary' : ''} onClick={() => setShowFind(v => !v)} />

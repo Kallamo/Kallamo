@@ -507,9 +507,11 @@ function invalidateVectorCache(ids = null) {
     for (const id of ids) vectorCache.delete(id);
 }
 
-// Every surface the Tagger marks, so an entity's dossier is not limited to chat archives.
+// Every surface the Tagger marks, so an entity's dossier is not limited to chat archives. Texts
+// written inside the story are read only through their item, never as story passages.
 const WORKSPACE_CHUNK_SCOPE = `((kc.ownerId = ? AND kc.ownerType IN ('chat_memory', 'chat_kb'))
-     OR (kc.ownerType = 'document' AND kc.ownerId IN (SELECT id FROM documents WHERE workspaceId = ?)))`;
+     OR (kc.ownerType = 'document' AND kc.ownerId IN (SELECT id FROM documents WHERE workspaceId = ?)
+       AND kc.ownerId NOT IN (SELECT document_id FROM in_world_texts)))`;
 
 function chunkScope(ownerId, ownerType, scope) {
     return scope === 'workspace'

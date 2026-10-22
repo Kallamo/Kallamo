@@ -11,9 +11,10 @@ import { Menu, MenuItem, MenuLabel, MenuSeparator } from './ui/Menu';
 import WritingDirectivesPanel from './WritingDirectivesPanel';
 import WritingNotesPanel from './WritingNotesPanel';
 import WritingAnalysesPanel from './WritingAnalysesPanel';
+import InWorldTextDialog from '../features/worldbuild/InWorldTextDialog';
 import {
   Folder, FolderOpen, FolderPlus, Plus, ChevronDown, ChevronLeft, FileText, Trash2, FolderInput,
-  PenLine, Download, FileInput, MoreHorizontal
+  PenLine, Download, FileInput, MoreHorizontal, ScrollText
 } from 'lucide-react';
 import { AiGlyph, AiNoteGlyph, IndexingGlyph, SuggestionPendingGlyph, WritingGlyph } from './ui/glyphs';
 
@@ -31,6 +32,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
   const [editingId, setEditingId] = useState(null);
   const [editValue, setEditValue] = useState('');
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [inWorldTarget, setInWorldTarget] = useState(null);
   const [exportFolderTarget, setExportFolderTarget] = useState(null);
   const [rowMenu, setRowMenu] = useState(null); // { item, view: 'actions' | 'move' }
   const rowMenuAnchorRef = useRef(null);
@@ -134,9 +136,30 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
   const loadTree = useCallback(async () => {
     const data = await electronAPI.getWritingTree(workspaceId);
     setTree(data || { folders: [], documents: [] });
+    return data;
   }, [electronAPI, workspaceId]);
 
   useEffect(() => { loadTree(); }, [loadTree]);
+
+  // Another view (an item's pages) can ask for a chapter; its folder and every parent open with it.
+  useEffect(() => {
+    const open = async event => {
+      const { workspaceId: target, documentId, folderId } = event.detail || {};
+      if (target !== workspaceId || !documentId) return;
+      const data = await loadTree();
+      const parentOf = new Map((data?.folders || []).map(folder => [folder.id, folder.parentId || null]));
+      const nextExpanded = { ...navigationStateRef.current.expanded };
+      for (let id = folderId; id && !nextExpanded[id]; id = parentOf.get(id)) nextExpanded[id] = true;
+      updateNavigationState(nextExpanded, documentId);
+    };
+    window.addEventListener('writing-desk-open-document', open);
+    return () => window.removeEventListener('writing-desk-open-document', open);
+  }, [workspaceId, updateNavigationState, loadTree]);
+
+  // An item sheet can mark or create pages; the tree shows them with their own icon.
+  useEffect(() => electronAPI.onInWorldTextsChanged?.(payload => {
+    if (payload?.workspaceId === workspaceId) loadTree();
+  }), [electronAPI, workspaceId, loadTree]);
 
   useEffect(() => {
     let active = true;
@@ -572,7 +595,9 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
       >
         {dropLine(item, 'before')}
         {dropLine(item, 'after')}
-        <FileText className={`h-4 w-4 shrink-0 ${active ? 'text-accent' : 'text-text-subtle'}`} aria-hidden="true" />
+        {doc.inWorld
+          ? <Tooltip content="In-world text: the AI reads it only through its item"><span className="inline-flex shrink-0"><ScrollText className={`h-4 w-4 ${active ? 'text-accent' : 'text-entity-item'}`} aria-label="In-world text" /></span></Tooltip>
+          : <FileText className={`h-4 w-4 shrink-0 ${active ? 'text-accent' : 'text-text-subtle'}`} aria-hidden="true" />}
         {editingId === doc.id ? renderEditable(item) : (
           <>
             <span className={`min-w-0 flex-1 truncate ${active ? 'font-semibold' : ''}`}>{doc.title || 'Untitled'}</span>
@@ -658,6 +683,8 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
           <WritingEditor
             key={currentDoc.id}
             doc={currentDoc}
+            inWorld={!!tree.documents.find(d => d.id === currentDoc.id)?.inWorld}
+            onInWorld={() => setInWorldTarget(currentDoc)}
             folderName={currentFolder?.name || null}
             electronAPI={electronAPI}
             workspaceId={workspaceId}
@@ -758,6 +785,10 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
           <>
             <MenuItem icon={PenLine} label="Rename" onSelect={() => { close(); startRename(menuItem); }} />
             <MenuItem icon={FolderInput} label="Move to" onSelect={() => setRowMenu({ ...rowMenu, view: 'move' })} />
+            {menuItem.type === 'document' && (
+              <MenuItem icon={ScrollText} label="In-world text" description={menuItem.inWorld ? 'Written inside the story' : 'A journal, letter or notice in the story'}
+                onSelect={() => { close(); setInWorldTarget(menuItem); }} />
+            )}
             {menuItem.type === 'folder' && (
               <MenuItem
                 icon={Download}
@@ -785,6 +816,17 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
             { label: 'Delete', variant: 'danger', autoFocus: true, onClick: () => doDelete(deleteTarget) },
           ]}
           onClose={() => setDeleteTarget(null)}
+        />
+      )}
+
+      {inWorldTarget && (
+        <InWorldTextDialog
+          workspaceId={workspaceId}
+          document={inWorldTarget}
+          electronAPI={electronAPI}
+          showToast={showToast}
+          onChanged={loadTree}
+          onClose={() => setInWorldTarget(null)}
         />
       )}
 

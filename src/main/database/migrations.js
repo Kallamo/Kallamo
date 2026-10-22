@@ -1465,6 +1465,23 @@ const MIGRATIONS = [
           ON worldbuild_knowledge_sources (workspace_id, source_type, source_id);
       `);
     }
+  },
+  {
+    // A Writing Desk document written inside the story, held by an Item and read only through it.
+    id: 'in_world_texts_v1',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS in_world_texts (
+          document_id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL,
+          item_id TEXT,
+          author_id TEXT,
+          ordinal INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_in_world_texts_item ON in_world_texts (workspace_id, item_id, ordinal);
+      `);
+    }
   }
 ];
 

@@ -8,7 +8,8 @@ const DOCUMENT_REFERENCE_COLUMNS = [
   { table: 'document_analyses', column: 'documentId', delete: 'remove' },
   { table: 'pending_suggestions', column: 'documentId', delete: 'remove' },
   { table: 'entities', column: 'loreDocumentId', delete: 'next linked chapter, or none' },
-  { table: 'entities', column: 'data', delete: 'unlist from loreDocumentIds and staged chapters' }
+  { table: 'entities', column: 'data', delete: 'unlist from loreDocumentIds and staged chapters' },
+  { table: 'in_world_texts', column: 'document_id', delete: 'remove' }
 ];
 
 const hasTable = (db, name) => Boolean(
@@ -61,6 +62,7 @@ function purgeDocuments(db, documentIds) {
       for (const table of ['document_notes', 'document_analyses', 'pending_suggestions']) {
         if (hasTable(db, table)) db.prepare(`DELETE FROM ${table} WHERE documentId = ?`).run(id);
       }
+      if (hasTable(db, 'in_world_texts')) db.prepare('DELETE FROM in_world_texts WHERE document_id = ?').run(id);
       unlinkFromEntities(db, id);
       db.prepare('DELETE FROM documents WHERE id = ?').run(id);
     }
@@ -101,6 +103,7 @@ function releaseMissingDocuments(db) {
   for (const table of ['document_notes', 'document_analyses', 'pending_suggestions']) {
     if (hasTable(db, table)) db.prepare(`DELETE FROM ${table} WHERE documentId NOT IN (SELECT id FROM documents)`).run();
   }
+  if (hasTable(db, 'in_world_texts')) db.prepare('DELETE FROM in_world_texts WHERE document_id NOT IN (SELECT id FROM documents)').run();
   const rows = db.prepare(`
     SELECT id, loreDocumentId, data FROM entities
     WHERE loreDocumentId IS NOT NULL OR data LIKE '%loreDocumentIds%' OR data LIKE '%"chapters"%'

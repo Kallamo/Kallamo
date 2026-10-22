@@ -210,6 +210,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getWorkspaceUiState: (workspaceId, scope) => ipcRenderer.invoke('get-workspace-ui-state', { workspaceId, scope }),
   setWorkspaceUiState: (workspaceId, scope, value) => ipcRenderer.invoke('set-workspace-ui-state', { workspaceId, scope, value }),
   getWritingDeskState: (workspaceId) => ipcRenderer.invoke('get-writing-desk-state', { workspaceId }),
+  getInWorldText: (documentId) => ipcRenderer.invoke('get-in-world-text', { documentId }),
+  setInWorldText: (documentId, itemId, authorId) => ipcRenderer.invoke('set-in-world-text', { documentId, itemId, authorId }),
+  clearInWorldText: (documentId) => ipcRenderer.invoke('clear-in-world-text', { documentId }),
+  listItemTexts: (workspaceId, itemId) => ipcRenderer.invoke('list-item-texts', { workspaceId, itemId }),
+  moveItemText: (documentId, direction) => ipcRenderer.invoke('move-item-text', { documentId, direction }),
+  createItemText: (workspaceId, itemId, title, defaults) => ipcRenderer.invoke('create-item-text', { workspaceId, itemId, title, defaults }),
+  onInWorldTextsChanged: (callback) => {
+    const listener = (event, payload) => callback(payload);
+    ipcRenderer.on('in-world-texts-changed', listener);
+    return () => ipcRenderer.removeListener('in-world-texts-changed', listener);
+  },
   setWritingDeskState: (workspaceId, state) => ipcRenderer.invoke('set-writing-desk-state', { workspaceId, state }),
   getEntity: (id) => ipcRenderer.invoke('get-entity', { id }),
   createEntity: (payload) => ipcRenderer.invoke('create-entity', payload),

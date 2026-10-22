@@ -29,6 +29,7 @@ const { registerWorkspaceStateIpc } = require('./features/workspace-state/worksp
 const { createWorldbuildDataService } = require('./features/worldbuild/worldbuild-data');
 const { exportAuthoredKnowledge, importAuthoredKnowledge } = require('./features/worldbuild/knowledge-package');
 const entitiesStore = require('./entities');
+const inWorldTexts = require('./features/worldbuild/in-world-texts');
 const { chunkText, extractTextFromFile, extractDocxHtml, vectorizeChunks, insertChunksToDb, deleteChunksFromDb, searchKnowledgeBase, searchChatKnowledgeBase, searchChatMemories, RAG_MODEL_ID, RAG_MODEL_DIM, generateEmbeddingVector, countTokens } = require('./rag-service');
 const { normalizeMaxApiPayload } = require('./features/llm/payload-budget');
 
@@ -2165,9 +2166,12 @@ ipcMain.handle('add-profile-searchable-file', async (event, { profileId, name, p
 ipcMain.handle('get-writing-tree', async (event, { workspaceId }) => {
   try {
     const folders = db.prepare('SELECT * FROM folders WHERE workspaceId = ? ORDER BY position ASC, name COLLATE NOCASE').all(workspaceId);
-    const documents = db.prepare(
-      'SELECT id, workspaceId, folderId, title, position, updatedAt FROM documents WHERE workspaceId = ? ORDER BY position ASC, title COLLATE NOCASE'
-    ).all(workspaceId);
+    const documents = db.prepare(`
+      SELECT d.id, d.workspaceId, d.folderId, d.title, d.position, d.updatedAt, t.item_id AS inWorldItemId,
+        CASE WHEN t.document_id IS NULL THEN 0 ELSE 1 END AS inWorld
+      FROM documents d LEFT JOIN in_world_texts t ON t.document_id = d.id
+      WHERE d.workspaceId = ? ORDER BY d.position ASC, d.title COLLATE NOCASE
+    `).all(workspaceId);
     return { folders, documents };
   } catch (e) {
     console.error('[Writing Desk] Error loading tree:', e);
@@ -2191,14 +2195,16 @@ function nextPosition(workspaceId, type, parentId) {
   return (row && row.m != null ? row.m : -1) + 1;
 }
 
-ipcMain.handle('create-folder', async (event, { workspaceId, name, parentId }) => {
+function insertFolder({ workspaceId, name, parentId = null }) {
   const id = crypto.randomUUID();
   const now = Date.now();
   const position = nextPosition(workspaceId, 'folder', parentId);
   db.prepare('INSERT INTO folders (id, workspaceId, name, parentId, position, createdAt, last_modified) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run(id, workspaceId, name || 'New folder', parentId || null, position, now, now);
   return { id, workspaceId, name: name || 'New folder', parentId: parentId || null, position, createdAt: now };
-});
+}
+
+ipcMain.handle('create-folder', async (event, { workspaceId, name, parentId }) => insertFolder({ workspaceId, name, parentId }));
 
 ipcMain.handle('reorder-writing-items', async (event, { updates }) => {
   try {
@@ -2270,6 +2276,57 @@ function insertDocumentWithDefaults({ workspaceId, folderId, title, content, def
 ipcMain.handle('create-document', async (event, { workspaceId, folderId, title, content, defaults }) => {
   const docContent = content || JSON.stringify({ type: 'doc', content: [{ type: 'paragraph' }] });
   return insertDocumentWithDefaults({ workspaceId, folderId, title: title || 'Untitled', content: docContent, defaults });
+});
+
+// --- IN-WORLD TEXTS: documents written inside the story, held by an item ---
+
+ipcMain.handle('get-in-world-text', async (event, { documentId } = {}) => {
+  try { return { success: true, text: inWorldTexts.getInWorldText(db, documentId) }; }
+  catch (e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('set-in-world-text', async (event, { documentId, itemId = null, authorId = null } = {}) => {
+  try {
+    const text = inWorldTexts.setInWorldText(db, { documentId, itemId, authorId });
+    event.sender.send('in-world-texts-changed', { workspaceId: text.workspaceId });
+    return { success: true, text };
+  } catch (e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('clear-in-world-text', async (event, { documentId } = {}) => {
+  try {
+    const before = inWorldTexts.getInWorldText(db, documentId);
+    inWorldTexts.clearInWorldText(db, documentId);
+    if (before) event.sender.send('in-world-texts-changed', { workspaceId: before.workspaceId });
+    return { success: true };
+  } catch (e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('list-item-texts', async (event, { workspaceId, itemId } = {}) => {
+  try { return { success: true, pages: inWorldTexts.listItemTexts(db, workspaceId, itemId) }; }
+  catch (e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('move-item-text', async (event, { documentId, direction } = {}) => {
+  try { return { success: true, pages: inWorldTexts.moveItemText(db, documentId, Number(direction) < 0 ? -1 : 1) }; }
+  catch (e) { return { success: false, error: e.message }; }
+});
+
+// A new page for an item, in the shared texts folder, ready to write in the Writing Desk.
+ipcMain.handle('create-item-text', async (event, { workspaceId, itemId, title, defaults } = {}) => {
+  try {
+    const doc = db.transaction(() => {
+      const folder = inWorldTexts.itemTextFolder(db, workspaceId, itemId, insertFolder);
+      const created = insertDocumentWithDefaults({
+        workspaceId, folderId: folder.id, title: title || 'Untitled page',
+        content: JSON.stringify({ type: 'doc', content: [{ type: 'paragraph' }] }), defaults
+      });
+      inWorldTexts.setInWorldText(db, { documentId: created.id, itemId });
+      return created;
+    })();
+    event.sender.send('in-world-texts-changed', { workspaceId });
+    return { success: true, document: doc, folderId: doc.folderId };
+  } catch (e) { return { success: false, error: e.message }; }
 });
 
 ipcMain.handle('rename-document', async (event, { id, title }) => {
@@ -3004,10 +3061,12 @@ ipcMain.handle('worldbuild-export-summary', async (event, { workspaceId } = {}) 
     for (const entity of data.entities) typeCounts[entity.type] = (typeCounts[entity.type] || 0) + 1;
     const pendingReview = db.prepare("SELECT COUNT(*) AS count FROM entities WHERE workspaceId = ? AND status = 'proposed'").get(workspaceId)?.count || 0;
     const knowledge = exportAuthoredKnowledge({ db, worldbuildData, workspaceId, entityIds: data.entities.map(entity => entity.ref) });
+    const texts = inWorldTexts.exportItemTexts(db, workspaceId, data.entities.map(entity => entity.ref));
     return {
       success: true,
       entities: data.entities.length,
       knowledge: knowledge.entries.length,
+      texts: texts.length,
       typeCounts,
       links: data.links.length,
       calendarName: getCalendarService().getCalendar(db, workspaceId)?.name || null,
@@ -3025,6 +3084,7 @@ ipcMain.handle('export-worldbuild', async (event, { workspaceId, includeImages =
     const data = entitiesStore.exportWorldbuild(workspaceId);
     data.calendar = getCalendarService().getCalendar(db, workspaceId);
     data.knowledge = exportAuthoredKnowledge({ db, worldbuildData, workspaceId, entityIds: data.entities.map(entity => entity.ref) });
+    data.texts = inWorldTexts.exportItemTexts(db, workspaceId, data.entities.map(entity => entity.ref));
     const packager = getRulesPackager();
     if (packager.hasRules(workspaceId)) {
       data.roleplayRules = packager.export(workspaceId, new Set(data.entities.map(entity => entity.ref)), Boolean(includeCurrentValues), getCalendarService().getTimeMatrix(db, workspaceId));
@@ -3178,8 +3238,12 @@ ipcMain.handle('import-worldbuild', async (event, { workspaceId, filePath, rules
     }
     // After the rules, so a statement can name anything the package brought.
     const knowledgeResult = importAuthoredKnowledge({ db, worldbuildData, workspaceId, knowledge: payload.knowledge, idMap, linkIdByEnds });
+    const textResult = inWorldTexts.importItemTexts(db, workspaceId, payload.texts, idMap, {
+      createFolder: insertFolder,
+      createDocument: ({ workspaceId: ws, folderId, title, content }) => insertDocumentWithDefaults({ workspaceId: ws, folderId, title, content })
+    });
     refreshNameTagsFor(workspaceId);
-    return { success: true, ...res, ...knowledgeResult, imagesAdded, calendarImported, calendarConflict, rulesImported };
+    return { success: true, ...res, ...knowledgeResult, ...textResult, imagesAdded, calendarImported, calendarConflict, rulesImported };
   } catch (e) {
     console.error('[import-worldbuild] failed:', e);
     return { success: false, error: e.message };

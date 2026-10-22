@@ -177,7 +177,7 @@ async function gatherRag({ profileId, workspaceId, currentDocId, retrievalQuery,
     } catch (e) { }
     try {
         const siblingIds = db.prepare(
-            'SELECT id FROM documents WHERE workspaceId = ? AND id != ?'
+            'SELECT id FROM documents WHERE workspaceId = ? AND id != ? AND id NOT IN (SELECT document_id FROM in_world_texts)'
         ).all(workspaceId, currentDocId).map(r => r.id);
         if (siblingIds.length) {
             // Chapter indexing tags sibling chapters too, so they take the same tag boost.

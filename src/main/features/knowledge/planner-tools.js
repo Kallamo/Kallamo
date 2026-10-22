@@ -32,6 +32,12 @@ const PLANNER_TOOLS = [
     description: "For an entity with a linked lore document (Writing Desk), returns the passages of that document most relevant to the request. Use it when lookup_entity shows the entity has authored lore and you need its canonical background. Does nothing if the entity has no linked lore."
   },
   {
+    name: 'read_text',
+    arg: 'query',
+    hint: 'item name or alias',
+    description: "Reads the written pages of an item that exists in the story, such as a journal, a letter or a notice, in reading order. Use it when someone reads, opens or studies that item. What it returns is what the text says, written by its author, not established truth, and only a character who reads it learns it. In a roleplay the item must be within reach of the scene."
+  },
+  {
     name: 'expand',
     arg: 'query',
     hint: 'R3 or a source name',
