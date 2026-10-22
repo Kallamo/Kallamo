@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Check, Image as ImageIcon, Plus, RotateCcw, SlidersHorizontal } from 'lucide-react';
+import { Check, Drama, Image as ImageIcon, Plus, RotateCcw, SlidersHorizontal } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { newWorkspaceId, workspaceRecord } from '../../components/modals/ChatModal';
 import exampleCover from '../../../assets/onboarding-bg.svg';
@@ -47,10 +47,10 @@ export default function EmptyWorkspaces({ onMoreOptions }) {
     }
   };
 
-  const restore = async () => {
-    setRestoring(true);
+  const restore = async (which = 'lighthouse') => {
+    setRestoring(which);
     try {
-      const result = await electronAPI.restoreExampleWorkspace();
+      const result = which === 'evenwell' ? await electronAPI.restoreEvenwellWorkspace() : await electronAPI.restoreExampleWorkspace();
       if (!result?.success) throw new Error(result?.error || 'The sample story could not be restored.');
       setChats(await electronAPI.getChats());
       setWritingProfiles(await electronAPI.getWritingProfiles());
@@ -149,15 +149,26 @@ export default function EmptyWorkspaces({ onMoreOptions }) {
           <p className="text-sm leading-relaxed text-text-muted">
             Mara inherits the lighthouse where her grandfather vanished. A first chapter, a chat with Brainstorming and a small world, ready to try things on.
           </p>
-          <button
-            type="button"
-            onClick={restore}
-            disabled={restoring}
-            className="mt-2 inline-flex h-11 self-start items-center gap-2 rounded-xl border border-border-default bg-tint/[0.04] px-5 text-sm font-semibold text-text-primary transition-colors hover:bg-surface-hover disabled:cursor-wait disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-          >
-            <RotateCcw className="h-4 w-4" aria-hidden="true" />
-            {restoring ? 'Restoring…' : 'Restore The Lighthouse'}
-          </button>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => restore('lighthouse')}
+              disabled={Boolean(restoring)}
+              className="inline-flex h-11 items-center gap-2 rounded-xl border border-border-default bg-tint/[0.04] px-5 text-sm font-semibold text-text-primary transition-colors hover:bg-surface-hover disabled:cursor-wait disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            >
+              <RotateCcw className="h-4 w-4" aria-hidden="true" />
+              {restoring === 'lighthouse' ? 'Restoring…' : 'Restore The Lighthouse'}
+            </button>
+            <button
+              type="button"
+              onClick={() => restore('evenwell')}
+              disabled={Boolean(restoring)}
+              className="inline-flex h-11 items-center gap-2 rounded-xl px-4 text-sm font-semibold text-text-secondary transition-colors hover:bg-tint/[0.05] hover:text-text-primary disabled:cursor-wait disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            >
+              <Drama className="h-4 w-4" aria-hidden="true" />
+              {restoring === 'evenwell' ? 'Restoring…' : 'Restore Evenwell'}
+            </button>
+          </div>
         </div>
       </section>
     </div>

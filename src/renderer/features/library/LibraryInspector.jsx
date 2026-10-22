@@ -44,7 +44,7 @@ export function LibraryRail({ tabs, activeTab, onTab, search, onSearch, onBack, 
         <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-subtle" aria-hidden="true" />
         <input value={search} onChange={e => onSearch(e.target.value)} placeholder="Search" aria-label="Search the library" className="h-8 w-full rounded-control border border-border-default bg-surface-input pl-9 pr-3 text-[0.8125rem] text-text-secondary placeholder:text-text-subtle focus:border-accent focus:outline-none" />
       </div>
-      <div className="mt-2.5 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto custom-scrollbar pr-0.5">{children}</div>
+      <div data-tour="library-rail" className="mt-2.5 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto custom-scrollbar pr-0.5">{children}</div>
     </aside>
   );
 }
@@ -106,7 +106,7 @@ function SetupNotice({ title, text, action, onAction }) {
         <div className="text-sm font-semibold text-status-setup-strong">{title}</div>
         <div className="mt-0.5 text-[0.8125rem] text-text-muted">{text}</div>
       </div>
-      <button type="button" onClick={onAction} className="inline-flex min-h-8 shrink-0 items-center rounded-control bg-status-setup px-3 text-xs font-semibold text-on-setup transition-[filter] hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-setup/50">{action}</button>
+      <button type="button" data-tour="setup-action" onClick={onAction} className="inline-flex min-h-8 shrink-0 items-center rounded-control bg-status-setup px-3 text-xs font-semibold text-on-setup transition-[filter] hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-setup/50">{action}</button>
     </div>
   );
 }

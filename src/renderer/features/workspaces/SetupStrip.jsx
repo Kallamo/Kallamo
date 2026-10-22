@@ -1,12 +1,12 @@
 import React from 'react';
-import { Check, Plug } from 'lucide-react';
+import { Check, Lightbulb, Plug } from 'lucide-react';
 
-// Shown until at least one AI profile can reply; each step opens where it gets done.
-export default function SetupStrip({ hasApiProfile, onOpenSettings, onOpenLibrary, workspaceLabel }) {
+// Shown until an AI profile first can reply, then never again; each step opens where it gets done.
+export default function SetupStrip({ hasConnection, onOpenSettings, onOpenLibrary, onGuide, hasWorkspace }) {
   const steps = [
-    { title: 'Add an API key', text: 'Settings, API profiles. Any provider, or a local model.', action: 'Open Settings', onClick: onOpenSettings, done: hasApiProfile },
+    { title: 'Add a connection', text: 'In Settings, under Connections. Any provider, or a local model.', action: 'Open Settings', onClick: onOpenSettings, done: hasConnection },
     { title: 'Link it to a profile', text: 'Pick the connection and a model in the profile. The example profiles only need that.', action: 'Open Library', onClick: onOpenLibrary, done: false },
-    { title: workspaceLabel ? `Open ${workspaceLabel}` : 'Create a workspace', text: 'Then write, chat or build the world with the AI.', action: null, done: false },
+    { title: hasWorkspace ? 'Open a workspace' : 'Create a workspace', text: 'Then write, chat or build the world with the AI.', action: null, done: false },
   ];
   const current = steps.findIndex(step => !step.done);
 
@@ -16,6 +16,17 @@ export default function SetupStrip({ hasApiProfile, onOpenSettings, onOpenLibrar
         <Plug className="h-4 w-4 text-status-warning" aria-hidden="true" />
         <h2 className="text-sm font-bold text-text-primary">Connect a model so the AI can write</h2>
         <span className="caption">The profiles can't reply until one is linked. This goes away once one works.</span>
+        <span className="flex-1" />
+        {onGuide && (
+          <button
+            type="button"
+            onClick={onGuide}
+            className="inline-flex h-[1.875rem] items-center gap-1.5 rounded-lg bg-accent/90 px-3 text-xs font-semibold text-on-accent shadow-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          >
+            <Lightbulb className="h-3.5 w-3.5" aria-hidden="true" />
+            Guide me step by step
+          </button>
+        )}
       </div>
       <ol className="grid grid-cols-1 gap-3 md:grid-cols-3">
         {steps.map((step, index) => (

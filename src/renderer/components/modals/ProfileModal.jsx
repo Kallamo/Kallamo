@@ -183,7 +183,7 @@ export default function ProfileModal({ profile, preset, starters = null, onClose
             </div>
           </section>
 
-          <section className="flex flex-col gap-3.5">
+          <section data-tour="profile-connection" className="flex flex-col gap-3.5">
             <h3 className="text-sm font-bold text-text-primary">Connection</h3>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -331,7 +331,7 @@ export default function ProfileModal({ profile, preset, starters = null, onClose
         )}
         <span className="flex-1" />
         <Button variant="subtle" onClick={onClose}>Cancel</Button>
-        <Button onClick={handleSave} disabled={!name.trim()}>Save profile</Button>
+        <Button data-tour="profile-save" onClick={handleSave} disabled={!name.trim()}>Save profile</Button>
       </footer>
     </Modal>
   );

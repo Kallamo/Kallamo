@@ -3187,68 +3187,71 @@ ipcMain.handle('inspect-worldbuild-package', async (event, { workspaceId } = {})
 ipcMain.handle('import-worldbuild', async (event, { workspaceId, filePath, rulesMode = 'merge', calendarMode = null, clearDates = [] } = {}) => {
   try {
     if (!filePath || !fs.existsSync(filePath)) return { success: false, error: 'Choose a Worldbuild package to import.' };
-    const filePaths = [filePath];
     let payload;
     try { payload = readWorldbuildPackage(filePath); }
     catch (e) { return { success: false, error: 'Could not read the package. It is not a valid Worldbuild file.' }; }
-    const existingEntityCount = db.prepare(
-      "SELECT COUNT(*) AS count FROM entities WHERE workspaceId = ? AND status != 'proposed'"
-    ).get(workspaceId)?.count || 0;
-    // Entities first, so a package that fails to land leaves this world's calendar untouched.
-    const { idMap, linkIdByEnds, ...res } = entitiesStore.importWorldbuild(workspaceId, payload);
-    let calendarImported = false;
-    let calendarConflict = false;
-    if (payload.calendar && calendarMode) {
-      if (calendarMode === 'replace') {
-        const calendarResult = getCalendarService().adoptCalendar(db, workspaceId, payload.calendar, Array.isArray(clearDates) ? clearDates : []);
-        calendarImported = calendarResult.saved;
-        calendarConflict = !calendarResult.saved;
-      }
-    } else if (payload.calendar) {
-      const currentCalendar = getCalendarService().getCalendar(db, workspaceId);
-      if (existingEntityCount === 0) {
-        const calendarResult = getCalendarService().adoptCalendar(db, workspaceId, payload.calendar);
-        calendarImported = calendarResult.saved;
-        calendarConflict = !calendarResult.saved;
-      } else {
-        calendarConflict = JSON.stringify(currentCalendar) !== JSON.stringify(payload.calendar);
-      }
-    }
-    // Packages without images stay valid; each image is checked before it is copied in.
-    let imagesAdded = 0;
-    if (Array.isArray(payload.images)) {
-      const zip = new AdmZip(filePaths[0]);
-      for (const image of payload.images) {
-        const entityId = idMap.get(image?.ref);
-        const file = String(image?.file || '');
-        if (!entityId || !['portrait', 'background'].includes(image?.kind)) continue;
-        if (!file.startsWith('images/') || file.includes('..') || file.includes('\\')) continue;
-        const entry = zip.getEntry(file);
-        if (!entry) continue;
-        try {
-          if (entityImages.importPackaged({ workspaceId, entityId, kind: image.kind, buffer: entry.getData(), extension: path.extname(file).toLowerCase(), focus: image.focus })) imagesAdded += 1;
-        } catch (error) { console.warn('[import-worldbuild] skipped an image:', error.message); }
-      }
-    }
-    let rulesImported = false;
-    if (payload.roleplayRules && ['merge', 'replace', 'skip'].includes(rulesMode)) {
-      const outcome = getRulesPackager().import(workspaceId, payload.roleplayRules, rulesMode, idMap);
-      if (outcome.timeMatrix) getCalendarService().saveTimeMatrix(db, workspaceId, payload.roleplayRules.timeMatrix);
-      rulesImported = rulesMode !== 'skip';
-    }
-    // After the rules, so a statement can name anything the package brought.
-    const knowledgeResult = importAuthoredKnowledge({ db, worldbuildData, workspaceId, knowledge: payload.knowledge, idMap, linkIdByEnds });
-    const textResult = inWorldTexts.importItemTexts(db, workspaceId, payload.texts, idMap, {
-      createFolder: insertFolder,
-      createDocument: ({ workspaceId: ws, folderId, title, content }) => insertDocumentWithDefaults({ workspaceId: ws, folderId, title, content })
-    });
-    refreshNameTagsFor(workspaceId);
-    return { success: true, ...res, ...knowledgeResult, ...textResult, imagesAdded, calendarImported, calendarConflict, rulesImported };
+    return importWorldbuildPayload(workspaceId, filePath, payload, { rulesMode, calendarMode, clearDates });
   } catch (e) {
     console.error('[import-worldbuild] failed:', e);
     return { success: false, error: e.message };
   }
 });
+
+function importWorldbuildPayload(workspaceId, filePath, payload, { rulesMode = 'merge', calendarMode = null, clearDates = [], confirmed = false } = {}) {
+  const existingEntityCount = db.prepare(
+    "SELECT COUNT(*) AS count FROM entities WHERE workspaceId = ? AND status != 'proposed'"
+  ).get(workspaceId)?.count || 0;
+  // Entities first, so a package that fails to land leaves this world's calendar untouched.
+  const { idMap, linkIdByEnds, ...res } = entitiesStore.importWorldbuild(workspaceId, payload, { confirmed });
+  let calendarImported = false;
+  let calendarConflict = false;
+  if (payload.calendar && calendarMode) {
+    if (calendarMode === 'replace') {
+      const calendarResult = getCalendarService().adoptCalendar(db, workspaceId, payload.calendar, Array.isArray(clearDates) ? clearDates : []);
+      calendarImported = calendarResult.saved;
+      calendarConflict = !calendarResult.saved;
+    }
+  } else if (payload.calendar) {
+    const currentCalendar = getCalendarService().getCalendar(db, workspaceId);
+    if (existingEntityCount === 0) {
+      const calendarResult = getCalendarService().adoptCalendar(db, workspaceId, payload.calendar);
+      calendarImported = calendarResult.saved;
+      calendarConflict = !calendarResult.saved;
+    } else {
+      calendarConflict = JSON.stringify(currentCalendar) !== JSON.stringify(payload.calendar);
+    }
+  }
+  // Packages without images stay valid; each image is checked before it is copied in.
+  let imagesAdded = 0;
+  if (Array.isArray(payload.images)) {
+    const zip = new AdmZip(filePath);
+    for (const image of payload.images) {
+      const entityId = idMap.get(image?.ref);
+      const file = String(image?.file || '');
+      if (!entityId || !['portrait', 'background'].includes(image?.kind)) continue;
+      if (!file.startsWith('images/') || file.includes('..') || file.includes('\\')) continue;
+      const entry = zip.getEntry(file);
+      if (!entry) continue;
+      try {
+        if (entityImages.importPackaged({ workspaceId, entityId, kind: image.kind, buffer: entry.getData(), extension: path.extname(file).toLowerCase(), focus: image.focus })) imagesAdded += 1;
+      } catch (error) { console.warn('[import-worldbuild] skipped an image:', error.message); }
+    }
+  }
+  let rulesImported = false;
+  if (payload.roleplayRules && ['merge', 'replace', 'skip'].includes(rulesMode)) {
+    const outcome = getRulesPackager().import(workspaceId, payload.roleplayRules, rulesMode, idMap);
+    if (outcome.timeMatrix) getCalendarService().saveTimeMatrix(db, workspaceId, payload.roleplayRules.timeMatrix);
+    rulesImported = rulesMode !== 'skip';
+  }
+  // After the rules, so a statement can name anything the package brought.
+  const knowledgeResult = importAuthoredKnowledge({ db, worldbuildData, workspaceId, knowledge: payload.knowledge, idMap, linkIdByEnds });
+  const textResult = inWorldTexts.importItemTexts(db, workspaceId, payload.texts, idMap, {
+    createFolder: insertFolder,
+    createDocument: ({ workspaceId: ws, folderId, title, content }) => insertDocumentWithDefaults({ workspaceId: ws, folderId, title, content })
+  });
+  refreshNameTagsFor(workspaceId);
+  return { success: true, ...res, ...knowledgeResult, ...textResult, imagesAdded, calendarImported, calendarConflict, rulesImported };
+}
 
 ipcMain.handle('get-entity-links', async (event, { id, direction, relType } = {}) => {
   try {
@@ -3457,6 +3460,51 @@ function replyExcerpt(content, max = 240) {
   const prose = paragraphs.find(p => p.length >= 60 && !/^[-=]{3,}$/.test(p) && (p.match(/\|/g) || []).length < 2) || paragraphs[0] || '';
   return prose.length > max ? `${prose.slice(0, max).replace(/\s+\S*$/, '')}…` : prose;
 }
+
+let evenwellOnboarding = null;
+function getEvenwellOnboarding() {
+  if (!evenwellOnboarding) {
+    const { createEvenwellOnboarding } = require('./features/onboarding/evenwell-seed');
+    const { setWorkspaceExperienceMode } = require('../../dist-main/main/features/narrative/mode-orchestration');
+    evenwellOnboarding = createEvenwellOnboarding({
+      db,
+      readPackage: readWorldbuildPackage,
+      importPayload: importWorldbuildPayload,
+      roleplay: getRoleplaySystem,
+      calendar: getCalendarService(),
+      setExperienceMode: (workspaceId, mode) => setWorkspaceExperienceMode(db, workspaceId, mode),
+      purgeWorkspace
+    });
+  }
+  return evenwellOnboarding;
+}
+
+ipcMain.handle('get-onboarding-story', async (event, { workspaceId } = {}) => {
+  try { return { success: true, story: getEvenwellOnboarding().getStory(workspaceId) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('set-onboarding-stage', async (event, { workspaceId, stage } = {}) => {
+  try { return { success: true, story: getEvenwellOnboarding().setStage(workspaceId, stage) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('begin-onboarding-story', async (event, { workspaceId, entityId } = {}) => {
+  try { return { success: true, ...getEvenwellOnboarding().begin(workspaceId, entityId) }; }
+  catch (error) {
+    log.error('[Onboarding] Starting the story failed:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('restore-evenwell-workspace', async () => {
+  try {
+    return { success: true, id: getEvenwellOnboarding().seed() };
+  } catch (error) {
+    log.error('[Workspaces] Restoring Evenwell failed:', error);
+    return { success: false, error: error.message };
+  }
+});
 
 ipcMain.handle('restore-example-workspace', async () => {
   try {
@@ -6454,7 +6502,9 @@ app.whenReady().then(() => {
   }, 3000);
 });
 
-
-
-
-
+// After every handler above exists: the seed imports through them.
+try {
+  if (getEvenwellOnboarding().seedOnce()) console.log('[Onboarding] Seeded the Evenwell story.');
+} catch (error) {
+  log.error('[Onboarding] Seeding Evenwell failed:', error);
+}

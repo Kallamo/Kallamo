@@ -13,6 +13,7 @@ import NumberInput from './ui/NumberInput';
 import Checkbox from './ui/Checkbox';
 import Popover from './ui/Popover';
 import Menu, { MenuItem, MenuLabel, MenuSeparator } from './ui/Menu';
+import { useTour } from '../features/onboarding/GuidedTour';
 import WorldbuildItemText from '../features/worldbuild/WorldbuildItemText';
 import IconButton from './ui/IconButton';
 import Tooltip from './ui/Tooltip';
@@ -139,7 +140,7 @@ const AiPolicyControl = ({ value, onChange, className = '' }) => {
   const Icon = AI_POLICY[cur].icon;
   return (
     <>
-      <button ref={anchorRef} type="button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(v => !v)}
+      <button ref={anchorRef} type="button" data-tour="wb-policy" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(v => !v)}
         className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-control border border-border-default bg-surface-canvas/60 px-2.5 backdrop-blur-sm text-xs font-medium text-text-secondary transition-colors hover:border-border-strong hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${className}`}>
         <Icon className="h-3.5 w-3.5" aria-hidden="true" /><span className="text-text-subtle">AI</span>{AI_POLICY[cur].label}<ChevronDown className="h-3.5 w-3.5 text-text-subtle" aria-hidden="true" />
       </button>
@@ -358,10 +359,10 @@ function SheetActionsMenu({ onPortrait, hasPortrait, onEditName, onMerge, onRepr
   const run = (action) => () => { setOpen(false); action(); };
   return (
     <>
-      <IconButton ref={anchorRef} icon={MoreHorizontal} label="Sheet actions" size="sm" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(v => !v)} />
+      <IconButton ref={anchorRef} data-tour="wb-sheet-actions" icon={MoreHorizontal} label="Sheet actions" size="sm" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(v => !v)} />
       <Menu anchorRef={anchorRef} open={open} onClose={() => setOpen(false)} label="Sheet actions" className="w-64">
         <MenuItem icon={PencilLine} label="Edit name and aliases" onSelect={run(onEditName)} />
-        {onPortrait && <MenuItem icon={ImagePlus} label={hasPortrait ? 'Change portrait' : 'Add portrait'} description="Also shown beside them in roleplay." onSelect={run(onPortrait)} />}
+        {onPortrait && <MenuItem data-tour="wb-add-portrait" icon={ImagePlus} label={hasPortrait ? 'Change portrait' : 'Add portrait'} description="Also shown beside them in roleplay." onSelect={run(onPortrait)} />}
         <MenuItem icon={Merge} label="Merge into another entity" description="Keeps this name as an alias." onSelect={run(onMerge)} />
         {onReprocess && <MenuItem icon={RefreshCw} label="Read the story again" description="The next update rereads its passages." onSelect={run(onReprocess)} />}
         <MenuSeparator />
@@ -651,7 +652,17 @@ const registryCache = new Map();
 const viewCache = worldbuildViewCache;
 
 export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFocusHandled, focusSurface, onSurfaceHandled }) {
-  const { showToast, settings, openSettings } = useApp();
+  const { showToast, settings, openSettings, uiFlags, setActiveWorkspaceView } = useApp();
+  const { tour, startTour } = useTour();
+  const tourRef = useRef(tour);
+  tourRef.current = tour;
+  // The first visit gets the overview tour, unless another guide is already running here.
+  useEffect(() => {
+    if (uiFlags.worldbuildTourSeen) return undefined;
+    const timer = setTimeout(() => { if (!tourRef.current) startTour('worldbuild'); }, 600);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // Update Entities always uses System AI, independently of the Tagger executor.
   const hasSystemAi = !!settings?.advanced?.systemApiProfileId && !!settings?.advanced?.systemModelName;
   const workspaceId = chat?.id;
@@ -2295,10 +2306,12 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       return <Section key={s.key} icon={s.icon} title={s.title} empty showPencil onEdit={() => setOpenCreateSections(current => new Set(current).add(s.key))} />;
     }
     return (
-      <Section key={s.key} icon={s.icon} title={s.title}>
-        {s.edit}
-        {withFields && customFieldsFor(s.key, true)}
-      </Section>
+      <div key={s.key} data-tour={`wb-new-${s.key}`}>
+        <Section icon={s.icon} title={s.title} right={s.spoiler ? <FieldEye field={s.spoiler} className="mr-1" /> : null}>
+          {s.edit}
+          {withFields && customFieldsFor(s.key, true)}
+        </Section>
+      </div>
     );
   };
 
@@ -2429,7 +2442,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           <div className="flex h-8 items-center gap-1">
             <span className="pl-1 text-[0.9375rem] font-bold text-text-primary">Worldbuild</span>
             <span className="flex-1" />
-            <button type="button" disabled={enriching || entities.length === 0 || !hasSystemAi} onClick={() => runEnrichment()}
+            <button type="button" data-tour="wb-update" disabled={enriching || entities.length === 0 || !hasSystemAi} onClick={() => runEnrichment()}
               data-tooltip={!hasSystemAi ? 'Choose an API connection and a model for System AI in Settings to update entities' : enriching ? undefined : 'Reads the story again and suggests changes. Locked sheets are skipped.'}
               className="mr-0.5 inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-control border border-status-info/45 bg-status-info/15 px-2.5 text-xs font-semibold text-text-primary transition-colors hover:bg-status-info/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-default disabled:border-status-info/25 disabled:bg-status-info/[0.07] disabled:text-text-muted">
               {enriching ? <Loader2 className="h-3.5 w-3.5 animate-spin text-status-info" aria-hidden="true" /> : <RefreshCw className="h-3.5 w-3.5 text-status-info" aria-hidden="true" />}
@@ -2441,15 +2454,17 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             <Menu anchorRef={moreMenuRef} open={showMoreMenu} onClose={() => setShowMoreMenu(false)} label="Worldbuild actions" className="w-64">
               <MenuItem icon={Upload} label="Import" description="Bring in a .klwb file to review." onSelect={() => { setShowMoreMenu(false); importWorld(); }} />
               <MenuItem icon={Download} label="Export" description={exportableCount ? 'Save this world as a .klwb file.' : 'Nothing to export yet.'} disabled={!exportableCount} onSelect={() => { setShowMoreMenu(false); setShowExportModal(true); }} />
+              <MenuSeparator />
+              <MenuItem icon={Lightbulb} label="Take the tour" description="A one-minute look around Worldbuild." onSelect={() => { setShowMoreMenu(false); startTour('worldbuild'); }} />
             </Menu>
           </div>
-          <div className="flex gap-2">
+          <div data-tour="wb-search-create" className="flex gap-2">
             <div className="relative min-w-0 flex-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-subtle" aria-hidden="true" />
               <input ref={searchRef} value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape' && search) { e.stopPropagation(); setSearch(''); } }} placeholder="Search the world" aria-label="Search the world" aria-keyshortcuts="Control+K" className={`${FIELD} pl-9 ${search || sidebarWidth < 360 ? '' : 'pr-14'}`} />
               {!search && sidebarWidth >= 360 && <kbd aria-hidden="true" className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-border-default px-1.5 py-0.5 font-sans text-xs text-text-subtle">Ctrl K</kbd>}
             </div>
-            <div ref={createRef} className="shrink-0">
+            <div ref={createRef} data-tour="wb-create" className="shrink-0">
               <Button icon={Plus} onClick={() => setShowCreate(v => !v)} aria-haspopup="menu" aria-expanded={showCreate}>Create</Button>
             </div>
             <Menu anchorRef={createRef} open={showCreate} onClose={() => setShowCreate(false)} label="Create" className="w-64">
@@ -2457,7 +2472,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                 const t = typeMeta(option.type);
                 const Icon = option.id === 'Creatures:group' ? Users : option.id === 'Items:unique' ? Gem : t.icon;
                 return (
-                  <button key={option.id} type="button" role="menuitem" onClick={() => startNew(option.type, option.data)}
+                  <button key={option.id} type="button" role="menuitem" data-tour={`wb-create-${option.id}`} onClick={() => startNew(option.type, option.data)}
                     className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-surface-hover focus-visible:bg-surface-hover focus-visible:outline-none">
                     <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border ${t.medallion}`}><Icon className="h-3.5 w-3.5" aria-hidden="true" /></span>
                     <span className="min-w-0 flex-1">
@@ -2491,7 +2506,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           </div>
         </div>
 
-        <div ref={listScrollRef} onScroll={(e) => { scrollOffsets.current.list = e.currentTarget.scrollTop; }} aria-busy={!registryFresh} className={`flex-1 overflow-y-auto custom-scrollbar px-2 pb-2 ${registryFresh ? '' : 'pointer-events-none'}`}>
+        <div ref={listScrollRef} data-tour="wb-list" onScroll={(e) => { scrollOffsets.current.list = e.currentTarget.scrollTop; }} aria-busy={!registryFresh} className={`flex-1 overflow-y-auto custom-scrollbar px-2 pb-2 ${registryFresh ? '' : 'pointer-events-none'}`}>
           {/* The world's own pages sit above the review card, which comes and goes, so they never move. */}
           {!manageMode && (
             <nav aria-label="World" className="pt-2">
@@ -2501,7 +2516,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                 <span aria-hidden="true" className="h-px flex-1 bg-border-subtle" />
               </div>
               {/* Four across, title only; what each holds is in its tooltip. */}
-              <div className="grid grid-cols-4 gap-1.5">
+              <div data-tour="wb-world-tools" className="grid grid-cols-4 gap-1.5">
                 {[
                   { key: 'calendar', icon: CalendarDays, label: 'Calendar', meta: (worldClock && worldCalendar && formatWorldDate(worldCalendar, worldClock)) || worldCalendar?.name || 'Not set up' },
                   { key: 'facts', icon: BookCheck, label: 'Facts', meta: String(factCount || 0) },
@@ -2669,7 +2684,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                 <Button size="sm" variant="subtle" icon={Trash2} className="!text-status-danger" onClick={() => setConfirmDelete(true)}>Delete</Button>
               </SheetNotice>
             )}
-            <div className={`ws-card relative overflow-hidden rounded-surface border ${m.ring} bg-surface-panel-muted/60 backdrop-blur-md`}>
+            <div data-tour={isNew ? 'wb-new-head' : 'wb-sheet-head'} data-entity-id={isNew ? undefined : selected.id} data-entity-name={isNew ? undefined : selected.canonicalName} data-entity-type={selected.type}
+              className={`ws-card relative overflow-hidden rounded-surface border ${m.ring} bg-surface-panel-muted/60 backdrop-blur-md`}>
               <div aria-hidden="true" className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${m.wash} via-transparent to-transparent`} />
               <div className="relative p-5">
               {coverStyle && <>
@@ -2736,7 +2752,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                     const on = charTab === t;
                     const count = t === 'review' ? selectedReviewCounts.entityUpdates + selectedReviewCounts.narrative : tabCounts[t];
                     return (
-                      <button key={t} type="button" role="tab" aria-selected={on} onClick={() => { setCharTab(t); setEditingSection(null); }}
+                      <button key={t} type="button" role="tab" aria-selected={on} data-tour={`wb-tab-${t}`} onClick={() => { setCharTab(t); setEditingSection(null); }}
                         className={`relative inline-flex h-11 shrink-0 items-center gap-1.5 px-2.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${on ? 'font-semibold text-text-primary' : 'font-medium text-text-muted hover:text-text-primary'}`}>
                         {SheetTabIcon[t] && React.createElement(SheetTabIcon[t], { className: `h-4 w-4 ${on ? 'text-accent' : ''}`, 'aria-hidden': true })}
                         {sheetTabLabel(t)}
@@ -2873,14 +2889,14 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               <>
                 {sections.map(renderCreateSection)}
                 {/* Links need a saved sheet, so the footer says what opens next beside the only two actions. */}
-                <div className="sticky bottom-4 z-10 flex items-center gap-3 rounded-card border border-border-default bg-surface-panel/95 px-4 py-3 shadow-overlay backdrop-blur-xl">
+                <div data-tour="wb-new-footer" className="sticky bottom-4 z-10 flex items-center gap-3 rounded-card border border-border-default bg-surface-panel/95 px-4 py-3 shadow-overlay backdrop-blur-xl">
                   {createRelationHint(selected.type) ? <p className="caption flex min-w-0 flex-1 items-center gap-1.5"><Link2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />{createRelationHint(selected.type)}</p> : <span className="flex-1" />}
                   <Button variant="ghost" onClick={() => setSelected(null)}>Discard</Button>
-                  <Button icon={Check} loading={saving} onClick={() => persist()}>Create {typeMeta(selected.type).label.toLowerCase()}</Button>
+                  <Button data-tour="wb-create-entity" icon={Check} loading={saving} onClick={() => persist()}>Create {typeMeta(selected.type).label.toLowerCase()}</Button>
                 </div>
               </>
             ) : (
-              <>
+              <div data-tour="wb-sheet-body" className="space-y-4">
                 {charTab === 'review' && hasReview ? (
                   <div className="space-y-4">
                     {reviewKind === 'narrative' && hasNarrativeReview && (
@@ -2923,7 +2939,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                     {sections.map(renderSection)}
                   </>
                 )}
-              </>
+              </div>
             )}
             </SpoilerScope>
           </div>

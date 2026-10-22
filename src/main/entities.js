@@ -578,7 +578,8 @@ function exportWorldbuild(workspaceId) {
 
 // No de-dupe by name: a same-named entity is not assumed to be the same one.
 // Everything lands as `proposed` for the user to review.
-function importWorldbuild(workspaceId, payload) {
+// A user's package lands as proposals to review; a package the app ships lands confirmed.
+function importWorldbuild(workspaceId, payload, { confirmed = false } = {}) {
   if (!payload || payload.kallamoWorldbuild !== 1 || !Array.isArray(payload.entities)) {
     throw new Error('Not a valid Kallamo Worldbuild file.');
   }
@@ -589,11 +590,11 @@ function importWorldbuild(workspaceId, payload) {
     for (const e of payload.entities) {
       if (!e || !e.type || !e.canonicalName) continue;
       const data = stripInternal((e.data && typeof e.data === 'object' && !Array.isArray(e.data)) ? e.data : {});
-      data._imported = true;
+      if (!confirmed) data._imported = true;
       const created = createEntity({
         workspaceId, type: e.type, canonicalName: e.canonicalName,
         aliases: Array.isArray(e.aliases) ? e.aliases : [],
-        lore: e.lore || '', data, status: 'proposed',
+        lore: e.lore || '', data, status: confirmed ? 'confirmed' : 'proposed',
       });
       idMap.set(e.ref, created.id);
       entitiesAdded++;

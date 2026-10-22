@@ -6,7 +6,7 @@ import RoleplayChip from './RoleplayChip';
 import { displayDescription, isExampleWorkspace, leadImage, plural, timeAgo } from './workspaceFormat';
 
 // The most recent workspace as a full-width banner: its cover, its latest reply, and a way straight back in.
-export default function ContinueHero({ chat, onOpen }) {
+export default function ContinueHero({ chat, onOpen, onBegin }) {
   // A picture that fails to load steps down: the scene's place, then the cover, then none.
   const [failed, setFailed] = useState(0);
   const sceneImage = chat.experienceMode === 'roleplay' && Boolean(chat.roleplayScene?.background?.path);
@@ -17,6 +17,8 @@ export default function ContinueHero({ chat, onOpen }) {
   const example = isExampleWorkspace(chat);
   const description = displayDescription(chat);
   const reply = chat.lastReply;
+  // An example story nobody has played yet starts from the beginning, which may need a model first.
+  const unstarted = example && roleplay && !chat.messageCount;
   const stats = [
     [MessageSquare, plural(chat.messageCount || 0, 'message')],
     [Users, `${chat.entityCount || 0} ${chat.entityCount === 1 ? 'entity' : 'entities'}`],
@@ -73,10 +75,10 @@ export default function ContinueHero({ chat, onOpen }) {
         <div className="flex flex-wrap items-center gap-2.5">
           <button
             type="button"
-            onClick={() => onOpen(chat, 'chat')}
+            onClick={() => (unstarted && onBegin ? onBegin(chat) : onOpen(chat, 'chat'))}
             className="inline-flex h-11 items-center gap-2 rounded-xl bg-accent px-5 text-sm font-semibold text-on-accent shadow-sm transition-[filter,transform] hover:brightness-110 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
-            Continue
+            {unstarted ? 'Begin' : 'Continue'}
             <ArrowRight className="h-4 w-4" aria-hidden="true" />
           </button>
           <HeroButton icon={WorldbuildGlyph} onClick={() => onOpen(chat, 'worldbuild')}>Worldbuild</HeroButton>

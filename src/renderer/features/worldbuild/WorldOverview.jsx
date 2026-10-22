@@ -58,7 +58,7 @@ export default function WorldOverview({ workspaceName, entities, typeMeta, calen
         })}
       </div>
       <div className="grid items-start gap-4 md:grid-cols-2">
-        <section className="ws-card rounded-card border border-border-default bg-surface-panel-muted/60 backdrop-blur-md">
+        <section data-tour="wb-review" className="ws-card rounded-card border border-border-default bg-surface-panel-muted/60 backdrop-blur-md">
           <header className="flex min-h-11 items-center gap-2.5 border-b border-border-subtle px-4"><AiGlyph className="h-4 w-4 text-text-muted" /><h2 className="text-sm font-semibold text-text-primary">Waiting for review</h2></header>
           <div className="space-y-2 p-4 text-sm">
             {waiting === 0 && <p className="text-text-disabled">Nothing waiting. Suggestions from the AI land here.</p>}

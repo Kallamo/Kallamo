@@ -25,9 +25,9 @@ export function SettingsHeader({ title, description, actions = null, back = null
   );
 }
 
-export function SettingsGroup({ title, aside = null, id, children, className = '' }) {
+export function SettingsGroup({ title, aside = null, id, children, className = '', ...rest }) {
   return (
-    <section id={id} className={`scroll-mt-6 ${className}`}>
+    <section id={id} className={`scroll-mt-6 ${className}`} {...rest}>
       {(title || aside) && (
         <div className="mb-2.5 mt-7 flex items-baseline justify-between gap-4">
           <h2 className="text-[0.8125rem] font-semibold text-text-secondary">{title}</h2>
@@ -63,9 +63,9 @@ export function RunsOnBar({ mode, children }) {
 }
 
 // One option: what it is on the left, its control on the right.
-export function SettingsRow({ label, description, children, align = 'center', className = '', disabled = false }) {
+export function SettingsRow({ label, description, children, align = 'center', className = '', disabled = false, ...rest }) {
   return (
-    <div className={`flex gap-6 border-t border-tint/[0.055] px-[1.125rem] py-3.5 first:border-t-0 ${align === 'start' ? 'items-start' : 'items-center'} ${disabled ? 'opacity-50' : ''} ${className}`}>
+    <div className={`flex gap-6 border-t border-tint/[0.055] px-[1.125rem] py-3.5 first:border-t-0 ${align === 'start' ? 'items-start' : 'items-center'} ${disabled ? 'opacity-50' : ''} ${className}`} {...rest}>
       <div className="min-w-0 flex-1">
         <div className="text-sm font-semibold text-text-primary">{label}</div>
         {description && <div className="mt-0.5 text-[0.8125rem] leading-relaxed text-text-muted">{description}</div>}

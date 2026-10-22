@@ -656,7 +656,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       <SettingsHeader
         title="Connections"
         description="Where requests go. Your AI profiles and Kallamo’s own roles pick their models from these."
-        actions={<Button icon={Plus} onClick={openNewApiForm}>Add connection</Button>}
+        actions={<Button data-tour="add-connection" icon={Plus} onClick={openNewApiForm}>Add connection</Button>}
       />
       {apiProfiles.length === 0 ? (
         <SettingsGroup title="Your connections">
@@ -701,13 +701,13 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         actions={(
           <>
             <Button variant="subtle" onClick={() => setShowAddApiForm(false)}>Cancel</Button>
-            <Button onClick={handleSaveApi} disabled={!canSaveApi}>{editingApiId ? 'Save connection' : 'Create connection'}</Button>
+            <Button data-tour="create-connection" onClick={handleSaveApi} disabled={!canSaveApi}>{editingApiId ? 'Save connection' : 'Create connection'}</Button>
           </>
         )}
       />
 
       <SettingsGroup title="Provider">
-        <div role="radiogroup" aria-label="Provider" className="grid grid-cols-2 gap-2 p-3.5 lg:grid-cols-4">
+        <div role="radiogroup" aria-label="Provider" data-tour="provider-grid" className="grid grid-cols-2 gap-2 p-3.5 lg:grid-cols-4">
           {PROVIDERS.map(p => {
             const selected = p.value === apiProvider;
             return (
@@ -730,7 +730,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         </div>
       </SettingsGroup>
 
-      <SettingsGroup title="Details">
+      <SettingsGroup title="Details" data-tour="connection-details">
         <SettingsRow label="Name" description="How it appears in profiles and roles.">
           <input value={apiName} onChange={e => setApiName(e.target.value)} placeholder={provider.namePlaceholder} className={`${fieldClass} w-80`} />
         </SettingsRow>
@@ -770,14 +770,14 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
             >
               <input value={apiBaseUrl} onChange={e => setApiBaseUrl(e.target.value)} placeholder={provider.urlPlaceholder} className={`${fieldClass} w-80 font-mono text-[0.8125rem]`} />
             </SettingsRow>
-            <SettingsRow label="API key" description={apiProvider === 'Local' ? 'Optional. Most local servers do not need one.' : 'Stored on this computer only.'}>
+            <SettingsRow data-tour="api-key" label="API key" description={apiProvider === 'Local' ? 'Optional. Most local servers do not need one.' : 'Stored on this computer only.'}>
               <SecretInput value={apiKey} onChange={setApiKey} placeholder={provider.keyPlaceholder} shown={showApiKey} onToggle={() => setShowApiKey(!showApiKey)} />
             </SettingsRow>
           </>
         )}
       </SettingsGroup>
 
-      <SettingsGroup title="Models" aside="Profiles and roles choose from these">
+      <SettingsGroup title="Models" aside="Profiles and roles choose from these" data-tour="connection-models">
         <form
           className="flex gap-2.5 px-[1.125rem] py-3"
           onSubmit={e => { e.preventDefault(); handleAddModel(); }}
@@ -843,7 +843,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
               <span className="text-xs font-semibold text-accent">Default</span>
             </div>
             <p className="mt-1 text-[0.8125rem] leading-relaxed text-text-muted">Every role set to System AI uses this model.</p>
-            <div className="mt-3.5 flex min-h-[2.875rem] items-center overflow-hidden rounded-xl border border-tint/[0.08] bg-surface-inset">
+            <div data-tour="system-ai" className="mt-3.5 flex min-h-[2.875rem] items-center overflow-hidden rounded-xl border border-tint/[0.08] bg-surface-inset">
               {modelBar('System AI', systemApiProfileId, systemModelName, value => updateSetting('advanced', 'systemApiProfileId', value), value => updateSetting('advanced', 'systemModelName', value))}
             </div>
             {!systemAiReady && (
@@ -863,7 +863,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         </div>
       </SettingsGroup>
 
-      <section id="ai-engine-roles-config" className="scroll-mt-6">
+      <section id="ai-engine-roles-config" data-tour="ai-roles" className="scroll-mt-6">
         <div className="mb-2.5 mt-7 flex items-baseline justify-between gap-4">
           <h2 className="text-[0.8125rem] font-semibold text-text-secondary">Roles</h2>
           <span className="caption text-right">Each one can share System AI, run its own model, or be off</span>
@@ -1288,7 +1288,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   return (
     <div role="dialog" aria-label="Settings" className="fixed inset-0 z-40 flex surface-page titlebar-nodrag select-none animate-in fade-in duration-150">
       <aside className="flex w-[15.25rem] shrink-0 flex-col border-r border-tint/[0.05] surface-rail px-3.5 pb-4 pt-16">
-        <button type="button" onClick={onClose} className="inline-flex items-center gap-1.5 self-start rounded-md px-2.5 text-[0.8125rem] font-semibold text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+        <button type="button" data-tour="settings-back" onClick={onClose} className="inline-flex items-center gap-1.5 self-start rounded-md px-2.5 text-[0.8125rem] font-semibold text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
           <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />Back
         </button>
         <h1 className="mx-2.5 mb-4 mt-3 text-xl font-extrabold tracking-[-0.015em] text-text-primary">Settings</h1>
@@ -1322,6 +1322,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                       key={item.id}
                       type="button"
                       aria-current={active ? 'page' : undefined}
+                      data-tour={`settings-nav-${item.id}`}
                       onClick={() => goTo(item.id)}
                       className={`flex h-[2.125rem] w-full items-center gap-2.5 rounded-lg px-2.5 text-[0.8125rem] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${active ? 'bg-accent/[0.13] font-semibold text-text-primary shadow-[inset_3px_0_0_var(--app-accent)]' : 'text-text-muted hover:bg-tint/[0.035] hover:text-text-secondary'}`}
                     >
@@ -1559,7 +1560,7 @@ function ConnectionRow({ connection, models, users, onEdit, onDuplicate, onAddMo
   const [menuOpen, setMenuOpen] = useState(false);
   const usedBy = describeUsers(users);
   return (
-    <div className="flex items-start gap-4 border-t border-tint/[0.055] px-[1.125rem] py-4 first:border-t-0">
+    <div data-tour="connection-row" className="flex items-start gap-4 border-t border-tint/[0.055] px-[1.125rem] py-4 first:border-t-0">
       <ProviderMark provider={connection.provider} />
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-baseline gap-2.5">

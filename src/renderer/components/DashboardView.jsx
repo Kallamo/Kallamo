@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Search, Plus, LibraryBig, MessageSquare } from 'lucide-react';
+import { Search, Plus, LibraryBig, MessageSquare, Plug, Lightbulb, Settings, Link2 } from 'lucide-react';
 import { ToneTile } from './modals/ModalParts';
 import { useApp } from '../context/AppContext';
 import ChatModal from './modals/ChatModal';
+import ProfileModal from './modals/ProfileModal';
 import DeleteModal from './modals/DeleteModal';
 import SegmentedControl from './ui/SegmentedControl';
 import EmptyState from './ui/EmptyState';
@@ -11,6 +12,8 @@ import WorkspaceCard, { NewWorkspaceTile } from '../features/workspaces/Workspac
 import SetupStrip from '../features/workspaces/SetupStrip';
 import EmptyWorkspaces from '../features/workspaces/EmptyWorkspaces';
 import DiscordButton from '../features/workspaces/DiscordButton';
+import ConfirmDialog from './ui/ConfirmDialog';
+import { useTour } from '../features/onboarding/GuidedTour';
 
 const SORTS = [
   { value: 'recent', label: 'Recent' },
@@ -30,12 +33,17 @@ export default function DashboardView() {
     setActiveWorkspaceView,
     openSettings,
     electronAPI,
+    uiFlags,
+    dismissHint,
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [sort, setSort] = useState('recent');
   const [chatModal, setChatModal] = useState(null); // { chat, draft } while the create/edit dialog is open
   const [chatToDelete, setChatToDelete] = useState(null);
+  const [gate, setGate] = useState(null); // { chat, profile } when Begin finds no model to reply
+  const [profileToLink, setProfileToLink] = useState(null);
+  const { startTour } = useTour();
 
   // Counts and the latest reply change while you work inside a workspace; refresh on return.
   useEffect(() => {
@@ -61,6 +69,10 @@ export default function DashboardView() {
   }, [chats, query, sort]);
 
   const noProfileReady = writingProfiles.length === 0 || writingProfiles.every(profile => profile.needsSetup);
+  // Once any profile has worked, setup is learned; a later broken link is caught by the Begin dialog.
+  useEffect(() => {
+    if (!noProfileReady && !uiFlags.setupStripDone) dismissHint('setupStripDone');
+  }, [noProfileReady, uiFlags.setupStripDone]);
   const isEmpty = chats.length === 0;
   const showHero = Boolean(!isEmpty && !query && hero);
 
@@ -68,6 +80,13 @@ export default function DashboardView() {
     setActiveWorkspaceView(view);
     handleSelectChat(chat.id);
   };
+  const begin = chat => {
+    const blocked = profilesOf(chat).find(profile => profile.needsSetup);
+    if (blocked) setGate({ chat, profile: blocked });
+    else openWorkspace(chat, 'chat');
+  };
+  const guideProfileName = () => (writingProfiles.find(profile => profile.needsSetup && (hero?.activeProfiles || []).includes(profile.id))
+    || writingProfiles.find(profile => profile.needsSetup))?.name;
   const togglePin = chat => handleSaveChat({ ...chat, isPinned: chat.isPinned ? 0 : 1 });
   const openCreate = () => setChatModal({ chat: null });
   const confirmDelete = async () => {
@@ -80,14 +99,15 @@ export default function DashboardView() {
     <div className={`relative flex h-full w-full flex-col overflow-hidden select-none ${showHero ? 'bg-surface-canvas' : 'surface-page'}`}>
       {/* The banner runs up under the title bar; without it, content fades out before reaching it. */}
       <div className={`relative z-10 flex-1 overflow-y-auto custom-scrollbar ${showHero ? '' : '[mask-image:linear-gradient(to_bottom,transparent_0,transparent_2.25rem,black_4.25rem)]'}`}>
-        {showHero && <ContinueHero chat={hero} onOpen={openWorkspace} />}
+        {showHero && <ContinueHero chat={hero} onOpen={openWorkspace} onBegin={begin} />}
         <div className={`mx-auto flex w-full max-w-[75rem] flex-col gap-5 px-8 pb-28 ${showHero ? 'pt-10' : 'pt-[4.75rem]'}`}>
-          {!query && noProfileReady && (
+          {!query && noProfileReady && !uiFlags.setupStripDone && (
             <SetupStrip
-              hasApiProfile={apiProfiles.length > 0}
+              hasConnection={apiProfiles.some(api => api.hasCredentials)}
               onOpenSettings={() => openSettings('api')}
               onOpenLibrary={() => setCurrentView('library')}
-              workspaceLabel={hero?.title}
+              onGuide={() => startTour('setup', { profileName: guideProfileName() })}
+              hasWorkspace={!isEmpty}
             />
           )}
 
@@ -111,7 +131,7 @@ export default function DashboardView() {
                 <span aria-hidden="true" className="mx-1 h-[1.375rem] w-px bg-tint/10" />
               </>
             )}
-            <HeaderButton icon={LibraryBig} onClick={() => setCurrentView('library')}>Library</HeaderButton>
+            <HeaderButton icon={LibraryBig} tour="library-button" onClick={() => setCurrentView('library')}>Library</HeaderButton>
             {!isEmpty && <HeaderButton icon={Plus} onClick={openCreate} primary>New workspace</HeaderButton>}
           </header>
 
@@ -140,6 +160,39 @@ export default function DashboardView() {
 
       <DiscordButton />
 
+      {gate && !apiProfiles.length && (
+        <ConfirmDialog
+          tone="warning"
+          icon={Plug}
+          title="No model is connected yet"
+          message={(
+            <>
+              <p>{gate.profile.name} needs a model to {gate.chat.experienceMode === 'roleplay' ? 'narrate the story and play its characters' : 'reply'}. Nothing is connected in Settings yet.</p>
+              <p className="mt-2">You can still open {gate.chat.title} and look around, but no one will reply until a model is connected.</p>
+            </>
+          )}
+          actions={[
+            { label: 'Guide me step by step', variant: 'primary', icon: Lightbulb, autoFocus: true, onClick: () => { setGate(null); startTour('setup', { profileName: gate.profile.name }); } },
+            { label: 'Add a connection in Settings', icon: Settings, onClick: () => { setGate(null); openSettings('api'); } },
+            { label: `Open ${gate.chat.title} without a model`, onClick: () => { const { chat } = gate; setGate(null); openWorkspace(chat, 'chat'); } },
+          ]}
+          onClose={() => setGate(null)}
+        />
+      )}
+      {gate && apiProfiles.length > 0 && (
+        <ConfirmDialog
+          tone="warning"
+          icon={Link2}
+          title={gate.chat.experienceMode === 'roleplay' ? 'The narrator has no model yet' : 'This profile has no model yet'}
+          message={<p>There is a connection in Settings, but {gate.profile.name} does not use it yet.</p>}
+          actions={[
+            { label: 'Open without a model', onClick: () => { const { chat } = gate; setGate(null); openWorkspace(chat, 'chat'); } },
+            { label: 'Link a model', variant: 'primary', icon: Link2, autoFocus: true, onClick: () => { setProfileToLink(gate.profile); setGate(null); } },
+          ]}
+          onClose={() => setGate(null)}
+        />
+      )}
+      {profileToLink && <ProfileModal profile={profileToLink} onClose={() => setProfileToLink(null)} />}
       {chatModal && <ChatModal chat={chatModal.chat} draft={chatModal.draft} onClose={() => setChatModal(null)} />}
       {chatToDelete && (
         <DeleteModal
@@ -161,10 +214,11 @@ export default function DashboardView() {
   );
 }
 
-function HeaderButton({ icon: Icon, children, onClick, primary = false }) {
+function HeaderButton({ icon: Icon, children, onClick, primary = false, tour }) {
   return (
     <button
       type="button"
+      data-tour={tour}
       onClick={onClick}
       className={`inline-flex h-9 items-center gap-2 rounded-[0.625rem] px-3.5 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${primary
         ? 'bg-accent/90 text-on-accent shadow-[0_0.375rem_1.125rem_-0.5rem] shadow-accent/50 hover:bg-accent'

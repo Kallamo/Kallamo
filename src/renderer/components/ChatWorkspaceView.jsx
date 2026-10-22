@@ -14,6 +14,7 @@ import GenerationBubble from '../features/chat/components/GenerationBubble';
 import ContextMeter from '../features/chat/components/ContextMeter';
 import ReplyTargetPicker from '../features/chat/components/ReplyTargetPicker';
 import RoleplayQuickPanel from '../features/roleplay/RoleplayQuickPanel';
+import StoryIntro from '../features/onboarding/StoryIntro';
 import { prepareGenerationSubmission, resolveActiveGenerationTarget } from '../features/chat/generation-target';
 import { holdDeferredFrames, safeParseDebugNotice, safeParseJson } from '../features/chat/diagnostic-format';
 import { useArchiveHistory } from '../features/chat/useArchiveHistory';
@@ -965,6 +966,7 @@ export default function ChatWorkspaceView() {
     >
       {hasBg && <div style={bgStyle} className="absolute inset-0 z-0" />}
       {hasBg && <div style={backdropStyle} className="absolute inset-0 z-0" />}
+      {roleplayMode && <StoryIntro workspaceId={activeChat.id} workspaceTitle={activeChat.title} visible={isChatVisible} />}
 
       <div className="flex-1 flex flex-col h-full relative z-10 overflow-hidden">
         {isDragging && (

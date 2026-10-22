@@ -48,39 +48,41 @@ export default function WorldbuildImageDialog({ title, image, shape = 'square', 
 
   return (
     <Modal onClose={onClose} size={wide ? 'xl' : 'lg'} title={title} icon={ImageIcon} iconClassName="text-text-muted">
-      <div className={`flex gap-5 p-5 ${wide ? 'flex-col' : 'flex-col sm:flex-row sm:items-center'}`}>
-        <div ref={frameRef} role="img" aria-label={framed ? 'Drag or use the arrow keys to frame the image' : 'No image yet'} tabIndex={framed ? 0 : -1}
-          onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onKeyDown={onKeyDown}
-          style={framedImageStyle(framed)}
-          className={`relative shrink-0 overflow-hidden rounded-card border border-border-default bg-surface-canvas/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${framed ? 'cursor-grab active:cursor-grabbing' : ''} ${wide ? 'aspect-[16/6] w-full' : 'h-64 w-64'}`}>
-          {!framed && <button type="button" onClick={() => inputRef.current?.click()} className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm font-semibold text-text-muted hover:text-text-primary"><Upload className="h-5 w-5" aria-hidden="true" />Choose an image</button>}
+      <div data-tour="wb-image-dialog">
+        <div className={`flex gap-5 p-5 ${wide ? 'flex-col' : 'flex-col sm:flex-row sm:items-center'}`}>
+          <div ref={frameRef} role="img" aria-label={framed ? 'Drag or use the arrow keys to frame the image' : 'No image yet'} tabIndex={framed ? 0 : -1}
+            onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onKeyDown={onKeyDown}
+            style={framedImageStyle(framed)}
+            className={`relative shrink-0 overflow-hidden rounded-card border border-border-default bg-surface-canvas/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${framed ? 'cursor-grab active:cursor-grabbing' : ''} ${wide ? 'aspect-[16/6] w-full' : 'h-64 w-64'}`}>
+            {!framed && <button type="button" onClick={() => inputRef.current?.click()} className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm font-semibold text-text-muted hover:text-text-primary"><Upload className="h-5 w-5" aria-hidden="true" />Choose an image</button>}
+          </div>
+          <div className="min-w-0 flex-1 space-y-4">
+            {framed && !wide && (
+              <div className="flex items-end gap-3" aria-hidden="true">
+                <span className="h-16 w-16 rounded-card border border-border-default" style={framedImageStyle(framed)} />
+                <span className="h-9 w-9 rounded-full border border-border-default" style={framedImageStyle(framed)} />
+                <span className="h-6 w-6 rounded-full border border-border-default" style={framedImageStyle(framed)} />
+              </div>
+            )}
+            {framed && <p className="caption">{wide ? 'Drag to frame it. The header and the scene use the same framing.' : 'Drag to frame the face. The same crop is used in every size.'}</p>}
+            {framed && (
+              <label className="flex items-center gap-2.5">
+                <span className="sr-only">Zoom</span>
+                <Minus className="h-3.5 w-3.5 text-text-subtle" aria-hidden="true" />
+                <input type="range" min="1" max="3" step="0.05" value={focus.zoom} onChange={event => setFocus(current => ({ ...current, zoom: Number(event.target.value) }))} className="min-w-0 flex-1 accent-[var(--color-accent)]" aria-label="Zoom" />
+                <Plus className="h-3.5 w-3.5 text-text-subtle" aria-hidden="true" />
+              </label>
+            )}
+            <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden" onChange={pick} />
+            <Button size="sm" variant="ghost" icon={Upload} loading={busy} className="whitespace-nowrap" onClick={() => inputRef.current?.click()}>{framed ? 'Choose another image' : 'Choose an image'}</Button>
+          </div>
         </div>
-        <div className="min-w-0 flex-1 space-y-4">
-          {framed && !wide && (
-            <div className="flex items-end gap-3" aria-hidden="true">
-              <span className="h-16 w-16 rounded-card border border-border-default" style={framedImageStyle(framed)} />
-              <span className="h-9 w-9 rounded-full border border-border-default" style={framedImageStyle(framed)} />
-              <span className="h-6 w-6 rounded-full border border-border-default" style={framedImageStyle(framed)} />
-            </div>
-          )}
-          {framed && <p className="caption">{wide ? 'Drag to frame it. The header and the scene use the same framing.' : 'Drag to frame the face. The same crop is used in every size.'}</p>}
-          {framed && (
-            <label className="flex items-center gap-2.5">
-              <span className="sr-only">Zoom</span>
-              <Minus className="h-3.5 w-3.5 text-text-subtle" aria-hidden="true" />
-              <input type="range" min="1" max="3" step="0.05" value={focus.zoom} onChange={event => setFocus(current => ({ ...current, zoom: Number(event.target.value) }))} className="min-w-0 flex-1 accent-[var(--color-accent)]" aria-label="Zoom" />
-              <Plus className="h-3.5 w-3.5 text-text-subtle" aria-hidden="true" />
-            </label>
-          )}
-          <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden" onChange={pick} />
-          <Button size="sm" variant="ghost" icon={Upload} loading={busy} className="whitespace-nowrap" onClick={() => inputRef.current?.click()}>{framed ? 'Choose another image' : 'Choose an image'}</Button>
+        <div className="flex items-center gap-2 border-t border-border-subtle px-5 py-3.5">
+          {framed && onRemove && <Button variant="subtle" icon={Trash2} className="!text-status-danger" onClick={onRemove}>Remove</Button>}
+          <span className="flex-1" />
+          <Button variant="ghost" data-tour="wb-image-cancel" onClick={onClose}>Cancel</Button>
+          <Button disabled={!framed} loading={busy} onClick={() => onSaveFocus(focus)}>{wide ? 'Save background' : 'Save portrait'}</Button>
         </div>
-      </div>
-      <div className="flex items-center gap-2 border-t border-border-subtle px-5 py-3.5">
-        {framed && onRemove && <Button variant="subtle" icon={Trash2} className="!text-status-danger" onClick={onRemove}>Remove</Button>}
-        <span className="flex-1" />
-        <Button variant="ghost" onClick={onClose}>Cancel</Button>
-        <Button disabled={!framed} loading={busy} onClick={() => onSaveFocus(focus)}>{wide ? 'Save background' : 'Save portrait'}</Button>
       </div>
     </Modal>
   );

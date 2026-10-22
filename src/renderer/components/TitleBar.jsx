@@ -26,6 +26,7 @@ export default function TitleBar({ onOpenSettings, onPreloadSettings }) {
           <>
             <button
               type="button"
+              data-tour="settings-button"
               onClick={onOpenSettings}
               onMouseEnter={onPreloadSettings}
               onFocus={onPreloadSettings}

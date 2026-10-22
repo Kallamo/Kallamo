@@ -41,7 +41,7 @@ export function Menu({ anchorRef, open, onClose, label, align = 'right', classNa
 }
 
 /** `checked` turns the item into one choice of a group (menuitemradio) with a check mark. */
-export function MenuItem({ icon: Icon, iconClassName = 'text-text-muted', label, description, trailing, danger = false, disabled = false, checked, onSelect }) {
+export function MenuItem({ icon: Icon, iconClassName = 'text-text-muted', label, description, trailing, danger = false, disabled = false, checked, onSelect, ...rest }) {
   const isChoice = checked !== undefined;
   return (
     <button
@@ -50,6 +50,7 @@ export function MenuItem({ icon: Icon, iconClassName = 'text-text-muted', label,
       aria-checked={isChoice ? checked : undefined}
       disabled={disabled}
       onClick={onSelect}
+      {...rest}
       className={`flex w-full items-start gap-3 rounded-lg px-2.5 py-2 text-left transition-colors cursor-pointer
         focus-visible:outline-none focus-visible:bg-surface-hover hover:bg-surface-hover disabled:opacity-50 disabled:pointer-events-none
         ${danger ? 'text-status-danger' : 'text-text-primary'}`}

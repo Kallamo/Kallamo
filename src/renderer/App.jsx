@@ -1,6 +1,7 @@
 import React, { Suspense, useState, useEffect } from 'react';
 import { AppProvider, useApp, useEngineDownloadProgress, useReindexingProgress, useToast } from './context/AppContext';
 import TitleBar from './components/TitleBar';
+import { TourProvider } from './features/onboarding/GuidedTour';
 import DashboardView from './components/DashboardView';
 import {
   ChatWorkspaceView,
@@ -495,7 +496,9 @@ function MainLayout() {
 export default function App() {
   return (
     <AppProvider>
-      <MainLayout />
+      <TourProvider>
+        <MainLayout />
+      </TourProvider>
     </AppProvider>
   );
 }
