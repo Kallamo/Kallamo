@@ -141,6 +141,19 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [retrievalPlannerMode, setRetrievalPlannerMode] = useState(settings.advanced.retrievalPlannerMode || 'profile');
   const [retrievalPlannerApiProfileId, setRetrievalPlannerApiProfileId] = useState(settings.advanced.retrievalPlannerApiProfileId || '');
   const [retrievalPlannerModelName, setRetrievalPlannerModelName] = useState(settings.advanced.retrievalPlannerModelName || '');
+  // Mirrors the delete in the main process, so a later save cannot bring the deleted connection back.
+  const forgetConnection = id => {
+    const roles = [
+      [systemApiProfileId, setSystemApiProfileId, setSystemModelName],
+      [taggerApiProfileId, setTaggerApiProfileId, setTaggerModelName],
+      [summarizerApiProfileId, setSummarizerApiProfileId, setSummarizerModelName],
+      [narrativeStateApiProfileId, setNarrativeStateApiProfileId, setNarrativeStateModelName],
+      [retrievalPlannerApiProfileId, setRetrievalPlannerApiProfileId, setRetrievalPlannerModelName],
+    ];
+    for (const [current, setId, setModel] of roles) {
+      if (current === id) { setId(''); setModel(''); }
+    }
+  };
   const [agenticGate, setAgenticGate] = useState(settings.advanced.agenticGate || 'auto');
   const [agenticToolProtocol, setAgenticToolProtocol] = useState(settings.advanced.agenticToolProtocol || 'auto');
   const [allowAiEntityCreation, setAllowAiEntityCreation] = useState(settings.advanced.allowAiEntityCreation || false);
@@ -1365,7 +1378,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
             : 'Nothing uses it right now.'}
           actions={[
             { label: 'Cancel', variant: 'ghost', onClick: () => setConnectionToDelete(null) },
-            { label: 'Delete connection', variant: 'danger', autoFocus: true, onClick: async () => { const id = connectionToDelete.id; setConnectionToDelete(null); await handleDeleteApiProfile(id); } },
+            { label: 'Delete connection', variant: 'danger', autoFocus: true, onClick: async () => { const id = connectionToDelete.id; setConnectionToDelete(null); await handleDeleteApiProfile(id); forgetConnection(id); } },
           ]}
           onClose={() => setConnectionToDelete(null)}
         />

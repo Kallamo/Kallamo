@@ -402,8 +402,10 @@ export const AppProvider = ({ children }) => {
 
   const handleDeleteApiProfile = async (id) => {
     await api.deleteApiProfile(id);
-    const updated = await api.getApiProfiles();
+    const [updated, profiles, fresh] = await Promise.all([api.getApiProfiles(), api.getWritingProfiles(), api.getSettings()]);
     setApiProfiles(updated);
+    setWritingProfiles(profiles);
+    if (fresh) setSettings(fresh);
   };
 
   const handleRespondToError = (decision) => {

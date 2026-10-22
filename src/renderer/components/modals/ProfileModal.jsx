@@ -128,7 +128,7 @@ export default function ProfileModal({ profile, preset, starters = null, onClose
   const subtitle = isEditing
     ? `AI profile · ${workspaceUses === 0 ? 'not used in any workspace' : `in ${workspaceUses} workspace${workspaceUses === 1 ? '' : 's'}`}`
     : 'A voice, a model and the rules it follows, usable in any workspace.';
-  const apiLabel = selectedApi ? [selectedApi.provider, 'Keys and endpoints live in Settings, API profiles.'].filter(Boolean).join('. ') : 'Connections are set up in Settings, API profiles.';
+  const apiLabel = selectedApi ? [selectedApi.provider, 'Keys and endpoints live in Settings, under Connections.'].filter(Boolean).join('. ') : 'Connections are set up in Settings.';
 
   return (
     <Modal
@@ -210,7 +210,7 @@ export default function ProfileModal({ profile, preset, starters = null, onClose
               </div>
             </div>
             {!apiProfiles.length ? (
-              <p className="flex items-center gap-2 text-xs text-status-warning"><Plug className="h-3.5 w-3.5" aria-hidden="true" />No connections yet. Add one in Settings, API profiles.</p>
+              <p className="flex items-center gap-2 text-xs text-status-warning"><Plug className="h-3.5 w-3.5" aria-hidden="true" />No connections yet. Add one in Settings, under Connections.</p>
             ) : (!apiProfileId || !model) ? (
               <p className="flex items-center gap-2 text-xs text-status-warning"><Plug className="h-3.5 w-3.5" aria-hidden="true" />Without a connection and a model this profile can't reply.</p>
             ) : (

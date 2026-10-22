@@ -1166,6 +1166,29 @@ function seedOnboarding() {
   }
 }
 
+// Nothing may keep pointing at a deleted connection, or it shows as linked. Embedding is left
+// as set: changing it means reindexing, and its settings already flag a missing connection.
+const CONNECTION_ROLES = ['system', 'tagger', 'summarizer', 'narrativeState', 'retrievalPlanner'];
+function releaseMissingConnections() {
+  const missing = "apiProfileId IS NOT NULL AND apiProfileId NOT IN (SELECT id FROM api_profiles)";
+  db.prepare(`UPDATE writing_profiles SET apiProfileId = NULL, model = NULL WHERE ${missing}`).run();
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
+  let advanced = null;
+  try { advanced = row ? JSON.parse(row.value) : null; } catch { advanced = null; }
+  if (!advanced) return;
+  const known = new Set(db.prepare('SELECT id FROM api_profiles').all().map(r => r.id));
+  let changed = false;
+  for (const role of CONNECTION_ROLES) {
+    const id = advanced[`${role}ApiProfileId`];
+    if (!id || known.has(id)) continue;
+    advanced[`${role}ApiProfileId`] = '';
+    advanced[`${role}ModelName`] = '';
+    changed = true;
+  }
+  if (changed) db.prepare("UPDATE settings SET value = ? WHERE key = 'advanced'").run(JSON.stringify(advanced));
+}
+db.releaseMissingConnections = releaseMissingConnections;
+
 // Brings the sample story back on request, after its workspace was deleted.
 db.restoreExampleWorkspace = seedExampleWorkspace;
 
@@ -1173,11 +1196,13 @@ db.restoreExampleWorkspace = seedExampleWorkspace;
 if (app.isReady()) {
   migrateConstantMemoryToSQLite();
   encryptExistingKeys();
+  releaseMissingConnections();
   seedOnboarding();
 } else {
   app.whenReady().then(() => {
     migrateConstantMemoryToSQLite();
     encryptExistingKeys();
+    releaseMissingConnections();
     seedOnboarding();
   });
 }
