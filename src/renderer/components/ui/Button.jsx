@@ -35,7 +35,7 @@ export default function Button({
     <button
       disabled={isDisabled}
       className={[
-        'inline-flex items-center justify-center gap-1.5 rounded-control font-semibold',
+        'inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-control font-semibold',
         'tracking-wide transition-[color,background-color,border-color,filter,transform] cursor-pointer select-none',
         'active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
         'disabled:opacity-50 disabled:pointer-events-none disabled:active:scale-100',

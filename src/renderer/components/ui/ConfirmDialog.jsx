@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useLayoutEffect, useRef, useState } from 'react';
 import { AlertTriangle, Trash2, Info, HelpCircle } from 'lucide-react';
 import Modal from './Modal';
 import Button from './Button';
@@ -24,7 +24,17 @@ export default function ConfirmDialog({
 }) {
   const toneConf = TONES[tone] || TONES.danger;
   const Icon = icon || toneConf.Icon;
-  const stacked = actions.length >= 3;
+  // Labels never wrap: a row that cannot hold them on one line stacks instead.
+  const rowRef = useRef(null);
+  const labels = actions.map(action => action.label).join('|');
+  const [stackedFor, setStackedFor] = useState(null);
+  const overflows = stackedFor === labels;
+  useLayoutEffect(() => {
+    if (actions.length >= 3 || overflows) return;
+    const row = rowRef.current;
+    if (row && row.scrollWidth > row.clientWidth) setStackedFor(labels);
+  }, [labels, overflows, actions.length]);
+  const stacked = actions.length >= 3 || overflows;
 
   return (
     <Modal onClose={onClose} size="sm" showClose={false}>
@@ -41,6 +51,7 @@ export default function ConfirmDialog({
         </div>
 
         <div
+          ref={rowRef}
           className={
             stacked
               ? 'flex flex-col gap-2 pt-1'
@@ -52,6 +63,7 @@ export default function ConfirmDialog({
               key={i}
               variant={action.variant || 'ghost'}
               loading={action.loading}
+              icon={action.icon}
               autoFocus={action.autoFocus}
               fullWidth={stacked}
               onClick={() => action.onClick?.()}
