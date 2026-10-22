@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { CalendarDays, Check, Eye, Info, Link, Plus, Scale, Upload, Image as ImageIcon } from 'lucide-react';
+import { BookOpenCheck, CalendarDays, Check, Eye, Info, Link, Plus, Scale, Upload, Image as ImageIcon } from 'lucide-react';
 import Modal from '../../components/ui/Modal';
 import Button from '../../components/ui/Button';
 import { RadioCard, ToneTile, TypeStrip, megabytes } from '../../components/modals/ModalParts';
@@ -264,6 +264,7 @@ export function ImportWorldbuildDone({ inspected, result, rulesMode, onClose, on
         <div className="flex gap-2">
           {stat(result.entitiesAdded ?? inspected.entities, 'new entities', 'var(--theme-status-info)', Plus)}
           {result.linksAdded > 0 && stat(result.linksAdded, 'links', 'var(--theme-text-muted)', Link)}
+          {result.knowledgeAdded > 0 && stat(result.knowledgeAdded, 'Knowledge entries', 'var(--theme-text-muted)', BookOpenCheck)}
           {result.imagesAdded > 0 && stat(result.imagesAdded, 'images', 'var(--theme-text-muted)', ImageIcon)}
         </div>
         {(rulesLine || calendarLine) && (

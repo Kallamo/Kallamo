@@ -31,6 +31,7 @@ export default function ExportWorldbuildModal({ workspaceId, workspaceName = nul
   const inside = [
     { key: 'sheets', label: `${plural(count, 'sheet', 'sheets')}, with lore and data` },
     summary?.links ? { key: 'links', label: `${plural(summary.links, 'link', 'links')} between them` } : null,
+    summary?.knowledge ? { key: 'knowledge', label: `${plural(summary.knowledge, 'Knowledge entry', 'Knowledge entries')} you wrote, with what each one may read` } : null,
     { key: 'calendar', label: summary?.calendarName ? <>The calendar, <b className="font-semibold text-text-primary">{summary.calendarName}</b></> : 'The calendar' },
     rules ? { key: 'rules', label: `Roleplay rules: ${describeRules(rules)}` } : null,
     images > 0 && includeImages ? imageLine : null,

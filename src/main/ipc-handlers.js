@@ -27,6 +27,7 @@ const {
 const { selectActiveMessages, selectArchivableMessages, coverageStats } = require('./features/chat/archive-coverage');
 const { registerWorkspaceStateIpc } = require('./features/workspace-state/workspace-state');
 const { createWorldbuildDataService } = require('./features/worldbuild/worldbuild-data');
+const { exportAuthoredKnowledge, importAuthoredKnowledge } = require('./features/worldbuild/knowledge-package');
 const entitiesStore = require('./entities');
 const { chunkText, extractTextFromFile, extractDocxHtml, vectorizeChunks, insertChunksToDb, deleteChunksFromDb, searchKnowledgeBase, searchChatKnowledgeBase, searchChatMemories, RAG_MODEL_ID, RAG_MODEL_DIM, generateEmbeddingVector, countTokens } = require('./rag-service');
 const { normalizeMaxApiPayload } = require('./features/llm/payload-budget');
@@ -3002,9 +3003,11 @@ ipcMain.handle('worldbuild-export-summary', async (event, { workspaceId } = {}) 
     const typeCounts = {};
     for (const entity of data.entities) typeCounts[entity.type] = (typeCounts[entity.type] || 0) + 1;
     const pendingReview = db.prepare("SELECT COUNT(*) AS count FROM entities WHERE workspaceId = ? AND status = 'proposed'").get(workspaceId)?.count || 0;
+    const knowledge = exportAuthoredKnowledge({ db, worldbuildData, workspaceId, entityIds: data.entities.map(entity => entity.ref) });
     return {
       success: true,
       entities: data.entities.length,
+      knowledge: knowledge.entries.length,
       typeCounts,
       links: data.links.length,
       calendarName: getCalendarService().getCalendar(db, workspaceId)?.name || null,
@@ -3021,6 +3024,7 @@ ipcMain.handle('export-worldbuild', async (event, { workspaceId, includeImages =
     const win = BrowserWindow.fromWebContents(event.sender);
     const data = entitiesStore.exportWorldbuild(workspaceId);
     data.calendar = getCalendarService().getCalendar(db, workspaceId);
+    data.knowledge = exportAuthoredKnowledge({ db, worldbuildData, workspaceId, entityIds: data.entities.map(entity => entity.ref) });
     const packager = getRulesPackager();
     if (packager.hasRules(workspaceId)) {
       data.roleplayRules = packager.export(workspaceId, new Set(data.entities.map(entity => entity.ref)), Boolean(includeCurrentValues), getCalendarService().getTimeMatrix(db, workspaceId));
@@ -3131,7 +3135,7 @@ ipcMain.handle('import-worldbuild', async (event, { workspaceId, filePath, rules
       "SELECT COUNT(*) AS count FROM entities WHERE workspaceId = ? AND status != 'proposed'"
     ).get(workspaceId)?.count || 0;
     // Entities first, so a package that fails to land leaves this world's calendar untouched.
-    const { idMap, ...res } = entitiesStore.importWorldbuild(workspaceId, payload);
+    const { idMap, linkIdByEnds, ...res } = entitiesStore.importWorldbuild(workspaceId, payload);
     let calendarImported = false;
     let calendarConflict = false;
     if (payload.calendar && calendarMode) {
@@ -3172,8 +3176,10 @@ ipcMain.handle('import-worldbuild', async (event, { workspaceId, filePath, rules
       if (outcome.timeMatrix) getCalendarService().saveTimeMatrix(db, workspaceId, payload.roleplayRules.timeMatrix);
       rulesImported = rulesMode !== 'skip';
     }
+    // After the rules, so a statement can name anything the package brought.
+    const knowledgeResult = importAuthoredKnowledge({ db, worldbuildData, workspaceId, knowledge: payload.knowledge, idMap, linkIdByEnds });
     refreshNameTagsFor(workspaceId);
-    return { success: true, ...res, imagesAdded, calendarImported, calendarConflict, rulesImported };
+    return { success: true, ...res, ...knowledgeResult, imagesAdded, calendarImported, calendarConflict, rulesImported };
   } catch (e) {
     console.error('[import-worldbuild] failed:', e);
     return { success: false, error: e.message };
