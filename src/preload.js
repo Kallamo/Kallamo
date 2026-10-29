@@ -238,7 +238,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getEntityReview: (workspaceId) => ipcRenderer.invoke('get-entity-review', { workspaceId }),
   summarizeBulkEntities: (workspaceId, ids) => ipcRenderer.invoke('summarize-bulk-entities', { workspaceId, ids }),
   bulkManageEntities: (workspaceId, ids, action, policy) => ipcRenderer.invoke('bulk-manage-entities', { workspaceId, ids, action, policy }),
-  exportWorldbuild: (workspaceId, includeImages = true, includeCurrentValues = false) => ipcRenderer.invoke('export-worldbuild', { workspaceId, includeImages, includeCurrentValues }),
+  exportWorldbuild: (workspaceId, options = {}) => ipcRenderer.invoke('export-worldbuild', { workspaceId, ...options }),
   worldbuildExportSummary: (workspaceId) => ipcRenderer.invoke('worldbuild-export-summary', { workspaceId }),
   inspectWorldbuildPackage: (workspaceId) => ipcRenderer.invoke('inspect-worldbuild-package', { workspaceId }),
   importWorldbuild: (workspaceId, filePath, rulesMode = 'merge', calendarMode = null, clearDates = []) => ipcRenderer.invoke('import-worldbuild', { workspaceId, filePath, rulesMode, calendarMode, clearDates }),

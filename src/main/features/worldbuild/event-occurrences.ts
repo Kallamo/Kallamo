@@ -101,10 +101,15 @@ export class EventOccurrenceService {
   private readonly narrativeState: NarrativeStateSystem;
   private readonly roleplay: RoleplaySystem;
 
+  // A package import writes occurrences whose entities still wait for review, so it may name them.
+  private readonly usable: string;
+
   constructor(
     private readonly db: Database.Database,
-    private readonly calendarService: EventOccurrenceCalendarService
+    private readonly calendarService: EventOccurrenceCalendarService,
+    options: { includeProposed?: boolean } = {}
   ) {
+    this.usable = options.includeProposed ? '1 = 1' : "status != 'proposed'";
     this.narrativeState = new NarrativeStateSystem(db);
     this.roleplay = new RoleplaySystem(db);
   }
@@ -594,7 +599,7 @@ export class EventOccurrenceService {
   private requireEventEntity(workspaceId: string, eventEntityId: string): { id: string; name: string } {
     const row = this.db.prepare(`
       SELECT id, canonicalName AS name FROM entities
-      WHERE workspaceId = ? AND id = ? AND type = 'Events' AND status != 'proposed'
+      WHERE workspaceId = ? AND id = ? AND type = 'Events' AND ${this.usable}
     `).get(workspaceId, eventEntityId) as { id: string; name: string } | undefined;
     if (!row) throw new Error('A confirmed Worldbuild Event is required.');
     return row;
@@ -691,7 +696,7 @@ export class EventOccurrenceService {
   private requireEntity(workspaceId: string, entityId: string): { type: string; scope: string } {
     const row = this.db.prepare(`
       SELECT type, data FROM entities
-      WHERE workspaceId = ? AND id = ? AND status != 'proposed'
+      WHERE workspaceId = ? AND id = ? AND ${this.usable}
     `).get(workspaceId, entityId) as { type: string; data: string } | undefined;
     if (!row) throw new Error('A referenced occurrence entity was not found.');
     const data = parseObject(row.data);
@@ -700,7 +705,7 @@ export class EventOccurrenceService {
 
   private listConfirmedEntityIds(workspaceId: string): string[] {
     return (this.db.prepare(`
-      SELECT id FROM entities WHERE workspaceId = ? AND status != 'proposed'
+      SELECT id FROM entities WHERE workspaceId = ? AND ${this.usable}
     `).all(workspaceId) as Array<{ id: string }>).map(row => row.id);
   }
 }

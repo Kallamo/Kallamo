@@ -75,6 +75,15 @@ describe('in-world texts', () => {
     expect(reading.text).toContain('[Further pages not shown here: 19 Leaffall 59 YC.]');
   });
 
+  test('keep a crossed-out line marked as crossed out', () => {
+    const page = addDocument('17 Harvest 58 YC', 'Tracks at the Fold.');
+    harness.db.prepare('UPDATE documents SET content = ? WHERE id = ?').run(JSON.stringify({ type: 'doc', content: [
+      { type: 'paragraph', content: [{ type: 'text', text: 'I made them deeper.', marks: [{ type: 'strike' }] }] },
+    ] }), page);
+    texts.setInWorldText(harness.db, { documentId: page, itemId: world.journal });
+    expect(texts.readItemText(harness.db, 'ws', world.journal).text).toContain('~~I made them deeper.~~');
+  });
+
   test('come into play only when named and, in a roleplay, within reach of the scene', () => {
     const page = addDocument('Page', 'The forest goes quiet.');
     texts.setInWorldText(harness.db, { documentId: page, itemId: world.journal, authorId: world.harrow });

@@ -13,13 +13,18 @@ function parseJson(text, fallback) {
 const BLOCKS = new Set(['paragraph', 'heading', 'blockquote', 'listItem', 'codeBlock', 'horizontalRule']);
 
 // Writing Desk content is ProseMirror JSON; blocks become paragraphs, a hard break a new line.
+// Struck text stays marked, since a crossed-out line is part of what the author wrote.
 function documentText(content) {
   const root = typeof content === 'string' ? parseJson(content, null) : content;
   if (!root) return typeof content === 'string' ? content : '';
   const blocks = [];
   const walk = (node, into) => {
     if (!node || typeof node !== 'object') return;
-    if (node.type === 'text') { into.push(node.text || ''); return; }
+    if (node.type === 'text') {
+      const struck = (node.marks || []).some(mark => mark?.type === 'strike');
+      into.push(struck ? `~~${node.text || ''}~~` : (node.text || ''));
+      return;
+    }
     if (node.type === 'hardBreak') { into.push('\n'); return; }
     if (BLOCKS.has(node.type)) {
       const parts = [];
@@ -221,10 +226,22 @@ function exportItemTexts(db, workspaceId, entityRefs) {
 
 const TEXTS_FOLDER = 'In-world texts';
 
+// The shared folder is the one earlier texts already sit in, so renaming it keeps new pages there.
+function existingTextsRoot(db, workspaceId) {
+  if (!hasTable(db, 'in_world_texts')) return null;
+  return db.prepare(`
+    SELECT root.id FROM in_world_texts AS texts
+    JOIN documents AS doc ON doc.id = texts.document_id
+    JOIN folders AS item ON item.id = doc.folderId
+    JOIN folders AS root ON root.id = item.parentId AND root.parentId IS NULL
+    WHERE texts.workspace_id = ? LIMIT 1
+  `).get(workspaceId) || null;
+}
+
 // Each item's pages sit in their own folder under one shared folder, so two texts never interleave.
 function itemTextFolder(db, workspaceId, itemId, createFolder) {
   const find = (name, parentId) => db.prepare('SELECT id FROM folders WHERE workspaceId = ? AND name = ? AND parentId IS ?').get(workspaceId, name, parentId);
-  const root = find(TEXTS_FOLDER, null) || createFolder({ workspaceId, name: TEXTS_FOLDER });
+  const root = existingTextsRoot(db, workspaceId) || find(TEXTS_FOLDER, null) || createFolder({ workspaceId, name: TEXTS_FOLDER });
   const itemName = db.prepare('SELECT canonicalName FROM entities WHERE id = ?').get(itemId)?.canonicalName || 'Untitled item';
   return find(itemName, root.id) || createFolder({ workspaceId, name: itemName, parentId: root.id });
 }

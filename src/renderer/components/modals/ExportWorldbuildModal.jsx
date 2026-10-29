@@ -17,6 +17,7 @@ export default function ExportWorldbuildModal({ workspaceId, workspaceName = nul
   const [summary, setSummary] = useState(null);
   const [includeImages, setIncludeImages] = useState(true);
   const [includeCurrentValues, setIncludeCurrentValues] = useState(false);
+  const [includeChapters, setIncludeChapters] = useState(true);
   useEffect(() => {
     let active = true;
     api?.worldbuildExportSummary?.(workspaceId).then(result => { if (active && result?.success) setSummary(result); }).catch(() => {});
@@ -24,25 +25,35 @@ export default function ExportWorldbuildModal({ workspaceId, workspaceName = nul
   }, [api, workspaceId]);
   const count = summary?.entities ?? entityCount;
   const images = summary?.images || 0;
+  const chapters = summary?.chapters || 0;
   const rules = summary?.rules || null;
+  const line = (key, show, label) => (show ? { key, label } : null);
 
-  const imageLine = { key: 'images', label: `${plural(images, 'portrait or scene background', 'portraits and scene backgrounds')}` };
+  const imageLine = { key: 'images', label: plural(images, 'portrait or scene background', 'portraits and scene backgrounds') };
   const valuesLine = { key: 'values', label: "Each character's current HP, Mana, level and XP" };
+  const chaptersLine = { key: 'chapters', label: `${plural(chapters, 'background chapter', 'background chapters')} from the Writing Desk` };
+  const placement = [summary?.equipped ? plural(summary.equipped, 'item worn', 'items worn') : null, summary?.placed ? plural(summary.placed, 'item lying in a place', 'items lying in places') : null].filter(Boolean).join(' and ');
   const inside = [
-    { key: 'sheets', label: `${plural(count, 'sheet', 'sheets')}, with lore and data` },
-    summary?.links ? { key: 'links', label: `${plural(summary.links, 'link', 'links')} between them` } : null,
-    summary?.knowledge ? { key: 'knowledge', label: `${plural(summary.knowledge, 'Knowledge entry', 'Knowledge entries')} you wrote, with what each one may read` } : null,
+    { key: 'sheets', label: `${plural(count, 'sheet', 'sheets')}, with lore, data and what each one hides from readers` },
+    line('links', summary?.links, `${plural(summary?.links || 0, 'link', 'links')} between them: relationships, memberships, inventories and places`),
     { key: 'calendar', label: summary?.calendarName ? <>The calendar, <b className="font-semibold text-text-primary">{summary.calendarName}</b></> : 'The calendar' },
-    rules ? { key: 'rules', label: `Roleplay rules: ${describeRules(rules)}` } : null,
+    line('rules', rules, rules ? `Roleplay rules: ${describeRules(rules)}` : ''),
+    line('templates', summary?.templates || summary?.fields, `${plural(summary?.templates || 0, 'entity template', 'entity templates')} with ${plural(summary?.fields || 0, 'custom field', 'custom fields')}`),
+    line('knowledge', summary?.knowledge, `${plural(summary?.knowledge || 0, 'Knowledge entry', 'Knowledge entries')} you wrote, with what each one may read`),
+    line('facts', summary?.facts, `${plural(summary?.facts || 0, 'Fact', 'Facts')} you wrote about the world`),
+    line('occurrences', summary?.occurrences, `${plural(summary?.occurrences || 0, 'event occurrence', 'event occurrences')} you recorded, with the memories they give`),
+    line('texts', summary?.texts, `${plural(summary?.texts || 0, 'page', 'pages')} written inside items`),
+    line('placement', placement, placement),
+    chapters > 0 && includeChapters ? chaptersLine : null,
     images > 0 && includeImages ? imageLine : null,
     rules && includeCurrentValues ? valuesLine : null,
   ].filter(Boolean);
   const stays = [
+    chapters > 0 && !includeChapters ? chaptersLine : null,
     images > 0 && !includeImages ? imageLine : null,
     rules && !includeCurrentValues ? valuesLine : null,
-    { key: 'facts', label: 'Facts and custom entity templates' },
-    { key: 'chapters', label: 'Links to Writing Desk chapters' },
-    { key: 'scene', label: 'The scene and Narrative State' },
+    { key: 'play', label: 'The story as played: the scene, the clock and what the Narrative State recorded' },
+    { key: 'chat', label: 'Chats, memory, profiles and the other Writing Desk chapters' },
     summary?.pendingReview ? { key: 'review', label: `${plural(summary.pendingReview, 'entity', 'entities')} waiting for review` } : null,
   ].filter(Boolean);
 
@@ -62,6 +73,9 @@ export default function ExportWorldbuildModal({ workspaceId, workspaceName = nul
           {images > 0 && (
             <OptionRow checked={includeImages} onChange={setIncludeImages} title="Include images" description={`${plural(images, 'image', 'images')}, ${megabytes(summary.imageBytes)}. Leave them out for a smaller file.`} />
           )}
+          {chapters > 0 && (
+            <OptionRow checked={includeChapters} onChange={setIncludeChapters} title="Include background chapters" description={`${plural(chapters, 'chapter', 'chapters')} that sheets use as their background. They land in a Background chapters folder.`} />
+          )}
           {rules && (
             <OptionRow checked={includeCurrentValues} onChange={setIncludeCurrentValues} title="Include each character's current values" description="HP, Mana, level, XP and attributes as they are now. Leave it off to share a fresh world; turn it on to hand over a campaign." />
           )}
@@ -74,7 +88,7 @@ export default function ExportWorldbuildModal({ workspaceId, workspaceName = nul
       <div className="flex items-center gap-2 border-t border-border-subtle px-5 py-3.5">
         <FileName name="worldbuild.klwb" />
         <Button variant="subtle" onClick={onClose}>Cancel</Button>
-        <Button icon={Download} onClick={() => onConfirm({ includeImages: images > 0 && includeImages, includeCurrentValues: Boolean(rules) && includeCurrentValues })}>Export</Button>
+        <Button icon={Download} onClick={() => onConfirm({ includeImages: images > 0 && includeImages, includeCurrentValues: Boolean(rules) && includeCurrentValues, includeChapters: chapters > 0 && includeChapters })}>Export</Button>
       </div>
     </Modal>
   );

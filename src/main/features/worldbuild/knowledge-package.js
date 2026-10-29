@@ -108,24 +108,28 @@ function importAuthoredKnowledge({ db, worldbuildData, workspaceId, knowledge, i
       if (ownerId && targetId && linkId && STRUCTURAL_SOURCES.has(row.sourceType)) exclude.run(workspaceId, ownerId, targetId, row.sourceType, linkId, Date.now());
     }
 
-    for (const entry of Array.isArray(knowledge.entries) ? knowledge.entries : []) {
-      const subjectId = idMap.get(entry?.subjectRef);
-      const kind = entry?.kind;
-      if (!subjectId || !['knowledge', 'belief', 'memory'].includes(kind)) { skipped++; continue; }
-      const entryId = crypto.randomUUID();
-      const fields = kind === 'memory'
-        ? { summary: entry.summary, category: entry.category, accessibility: entry.accessibility, occurredOn: entry.occurredOn }
-        : {
-          aboutId: idMap.get(entry.aboutRef), statement: entry.statement, category: entry.category, confidence: entry.confidence,
-          acquisition: entry.acquisition, accessibility: entry.accessibility,
-          informantIds: (entry.informantRefs || []).map(ref => idMap.get(ref)).filter(Boolean),
-        };
-      if (kind !== 'memory' && !fields.aboutId) { skipped++; continue; }
-      if (attempt(() => worldbuildData.saveSubjectEntry({ workspaceId, subjectId, kind, entry: { ...fields, entryId } }))) {
-        entryIdMap.set(entry.ref, entryId);
-        entriesAdded++;
+    // One transaction for the whole list: committing each entry on its own costs seconds on a big world.
+    const writeEntries = db.transaction(() => {
+      for (const entry of Array.isArray(knowledge.entries) ? knowledge.entries : []) {
+        const subjectId = idMap.get(entry?.subjectRef);
+        const kind = entry?.kind;
+        if (!subjectId || !['knowledge', 'belief', 'memory'].includes(kind)) { skipped++; continue; }
+        const entryId = crypto.randomUUID();
+        const fields = kind === 'memory'
+          ? { summary: entry.summary, category: entry.category, accessibility: entry.accessibility, occurredOn: entry.occurredOn }
+          : {
+            aboutId: idMap.get(entry.aboutRef), statement: entry.statement, category: entry.category, confidence: entry.confidence,
+            acquisition: entry.acquisition, accessibility: entry.accessibility,
+            informantIds: (entry.informantRefs || []).map(ref => idMap.get(ref)).filter(Boolean),
+          };
+        if (kind !== 'memory' && !fields.aboutId) { skipped++; continue; }
+        if (attempt(() => worldbuildData.writeSubjectEntry({ workspaceId, subjectId, kind, entry: { ...fields, entryId } }))) {
+          entryIdMap.set(entry.ref, entryId);
+          entriesAdded++;
+        }
       }
-    }
+    });
+    writeEntries();
 
     // Cards that follow from links are built first, so their access can be set on them.
     worldbuildData.reconcileKnowledge(workspaceId);
@@ -167,4 +171,39 @@ function importAuthoredKnowledge({ db, worldbuildData, workspaceId, knowledge, i
   return { knowledgeAdded: entriesAdded, knowledgeSkipped: skipped };
 }
 
-module.exports = { exportAuthoredKnowledge, importAuthoredKnowledge };
+// Facts the author wrote travel; facts kept by another record or written in play are rebuilt there.
+function exportAuthoredFacts({ worldbuildData, workspaceId, entityIds }) {
+  const ids = new Set(entityIds);
+  const entries = worldbuildData.listWorldFacts(workspaceId)
+    .filter(fact => fact.source === 'manual' && !fact.managed)
+    .map(fact => ({
+      ref: fact.id,
+      title: fact.title,
+      statement: fact.statement,
+      relatedRefs: (fact.relatedEntityIds || []).filter(id => ids.has(id)),
+    }));
+  return { version: 1, entries };
+}
+
+function importAuthoredFacts({ worldbuildData, workspaceId, facts, idMap }) {
+  let factsAdded = 0, factsSkipped = 0;
+  if (!facts || facts.version !== 1) return { factsAdded, factsSkipped };
+  for (const fact of Array.isArray(facts.entries) ? facts.entries : []) {
+    const title = String(fact?.title || '').trim();
+    const statement = String(fact?.statement || '').trim();
+    if (!title || !statement) { factsSkipped++; continue; }
+    try {
+      worldbuildData.saveWorldFact({
+        workspaceId,
+        entry: { title, statement, relatedEntityIds: (fact.relatedRefs || []).map(ref => idMap.get(ref)).filter(Boolean) },
+      });
+      factsAdded++;
+    } catch (error) {
+      console.warn('[import-worldbuild] skipped a Fact:', error.message);
+      factsSkipped++;
+    }
+  }
+  return { factsAdded, factsSkipped };
+}
+
+module.exports = { exportAuthoredKnowledge, importAuthoredKnowledge, exportAuthoredFacts, importAuthoredFacts };

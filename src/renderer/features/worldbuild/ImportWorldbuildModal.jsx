@@ -5,6 +5,23 @@ import Button from '../../components/ui/Button';
 import { RadioCard, ToneTile, TypeStrip, megabytes } from '../../components/modals/ModalParts';
 
 const plural = (count, one, many) => `${count} ${count === 1 ? one : many}`;
+
+// Everything a package carries besides its sheets, as one line each, so nothing arrives unannounced.
+function packageParts(p) {
+  const parts = [
+    [p.links, `${plural(p.links, 'link', 'links')} between them: relationships, memberships, inventories and places`],
+    [p.templates || p.fields, `${plural(p.templates || 0, 'entity template', 'entity templates')} with ${plural(p.fields || 0, 'custom field', 'custom fields')}, added beside yours`],
+    [p.knowledge, `${plural(p.knowledge, 'Knowledge entry', 'Knowledge entries')} written for these characters`],
+    [p.facts, `${plural(p.facts, 'Fact', 'Facts')} about the world`],
+    [p.occurrences, `${plural(p.occurrences, 'event occurrence', 'event occurrences')}, with the memories they give`],
+    [p.texts, `${plural(p.texts, 'page', 'pages')} written inside items`],
+    [p.chapters, `${plural(p.chapters, 'background chapter', 'background chapters')}, in a Background chapters folder`],
+    [p.equipped, plural(p.equipped, 'item worn', 'items worn')],
+    [p.placed, plural(p.placed, 'item lying in a place', 'items lying in places')],
+    [p.images, `${plural(p.images, 'image', 'images')} with their sheets`],
+  ];
+  return parts.filter(([count]) => count > 0).map(([, label]) => label);
+}
 const PROGRESSION = { levels: 'Levels', off: 'No progression' };
 
 // Each rule chip says where it ends up: kept from this world, taken from the package, new, or removed.
@@ -131,15 +148,14 @@ export default function ImportWorldbuildModal({ inspected, workspaceName = null,
             <Eye className="h-4 w-4 shrink-0 text-status-info" aria-hidden="true" />
             <p className="text-[0.8125rem] leading-relaxed text-text-secondary"><b className="font-semibold text-text-primary">{plural(inspected.entities, 'new entity', 'new entities')}, for review.</b> Nothing changes your world until you accept or dismiss each one in the sidebar.</p>
           </div>
-          {(inspected.links > 0 || inspected.images > 0) && (
-            <div className="flex items-center gap-3 px-4 py-3">
-              {inspected.images > 0 ? <ImageIcon className="h-4 w-4 shrink-0 text-text-muted" aria-hidden="true" /> : <Link className="h-4 w-4 shrink-0 text-text-muted" aria-hidden="true" />}
-              <p className="text-[0.8125rem] leading-relaxed text-text-secondary">
-                {inspected.links > 0 && <><b className="font-semibold text-text-primary">{plural(inspected.links, 'link', 'links')}</b> between them</>}
-                {inspected.links > 0 && inspected.images > 0 && ', and '}
-                {inspected.images > 0 && <><b className="font-semibold text-text-primary">{plural(inspected.images, 'image', 'images')}</b> with their sheets</>}.
-              </p>
-            </div>
+          {packageParts(inspected).length > 0 && (
+            <ul className="space-y-1.5 px-4 py-3">
+              {packageParts(inspected).map(part => (
+                <li key={part} className="flex items-start gap-2.5 text-[0.8125rem] leading-relaxed text-text-secondary">
+                  <Check className="mt-1 h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden="true" />{part}
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       </div>
@@ -250,6 +266,27 @@ export function ImportWorldbuildDone({ inspected, result, rulesMode, onClose, on
   const calendarLine = result.calendarImported
     ? `Calendar: you now use ${inspected.calendar?.packageName || 'the package\'s'}.`
     : inspected.calendar && !inspected.calendar.same ? `Calendar: you kept ${inspected.calendar.currentName}.` : null;
+  const count = (value, one, many) => (value > 0 ? plural(value, one, many) : null);
+  const landed = [
+    count(result.factsAdded, 'Fact about the world', 'Facts about the world'),
+    count(result.occurrencesAdded, 'event occurrence, with its memories', 'event occurrences, with their memories'),
+    count(result.textsAdded, 'page written inside an item', 'pages written inside items'),
+    count(result.chaptersAdded, 'background chapter, in the Background chapters folder', 'background chapters, in the Background chapters folder'),
+    result.fieldsAdded > 0 || result.templatesAdded > 0
+      ? `${plural(result.fieldsAdded || 0, 'custom field', 'custom fields')} and ${plural(result.templatesAdded || 0, 'template', 'templates')} added beside yours`
+      : null,
+    count(result.equippedAdded, 'item worn', 'items worn'),
+    count(result.placedAdded, 'item lying in a place', 'items lying in places'),
+    count(result.imagesAdded, 'image', 'images'),
+    rulesLine,
+    calendarLine,
+  ].filter(Boolean);
+  const missed = [
+    result.fieldsKept > 0 ? `${plural(result.fieldsKept, 'custom field', 'custom fields')} you already had stayed as they were.` : null,
+    result.knowledgeSkipped > 0 ? `${plural(result.knowledgeSkipped, 'Knowledge piece', 'Knowledge pieces')} did not fit this world and were left out.` : null,
+    result.factsSkipped > 0 ? `${plural(result.factsSkipped, 'Fact', 'Facts')} could not be read and were left out.` : null,
+    result.occurrencesSkipped > 0 ? `${plural(result.occurrencesSkipped, 'occurrence', 'occurrences')} did not fit this world, often a date your calendar does not have, and were left out.` : null,
+  ].filter(Boolean);
   return (
     <Modal onClose={onClose} size="lg" className="!max-w-[36rem]">
       <div className="space-y-3.5 p-5">
@@ -265,12 +302,14 @@ export function ImportWorldbuildDone({ inspected, result, rulesMode, onClose, on
           {stat(result.entitiesAdded ?? inspected.entities, 'new entities', 'var(--theme-status-info)', Plus)}
           {result.linksAdded > 0 && stat(result.linksAdded, 'links', 'var(--theme-text-muted)', Link)}
           {result.knowledgeAdded > 0 && stat(result.knowledgeAdded, 'Knowledge entries', 'var(--theme-text-muted)', BookOpenCheck)}
-          {result.imagesAdded > 0 && stat(result.imagesAdded, 'images', 'var(--theme-text-muted)', ImageIcon)}
         </div>
-        {(rulesLine || calendarLine) && (
+        {(landed.length > 0 || missed.length > 0) && (
           <ul className="space-y-1.5 pt-1">
-            {[rulesLine, calendarLine].filter(Boolean).map(text => (
+            {landed.map(text => (
               <li key={text} className="flex items-center gap-2.5 text-sm leading-relaxed text-text-secondary"><Check className="h-4 w-4 shrink-0 text-status-success" aria-hidden="true" />{text}</li>
+            ))}
+            {missed.map(text => (
+              <li key={text} className="flex items-center gap-2.5 text-sm leading-relaxed text-text-secondary"><Info className="h-4 w-4 shrink-0 text-status-warning" aria-hidden="true" />{text}</li>
             ))}
           </ul>
         )}

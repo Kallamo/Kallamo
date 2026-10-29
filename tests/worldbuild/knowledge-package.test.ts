@@ -4,7 +4,7 @@ import { openEntityStore, type EntityStoreHarness } from './entity-store-harness
 
 const require = createRequire(import.meta.url);
 const { createWorldbuildDataService } = require('../../src/main/features/worldbuild/worldbuild-data.js');
-const { exportAuthoredKnowledge, importAuthoredKnowledge } = require('../../src/main/features/worldbuild/knowledge-package.js');
+const { exportAuthoredKnowledge, importAuthoredKnowledge, exportAuthoredFacts, importAuthoredFacts } = require('../../src/main/features/worldbuild/knowledge-package.js');
 
 let harness: EntityStoreHarness;
 let worldbuild: any;
@@ -88,5 +88,25 @@ describe('authored Knowledge in a Worldbuild package', () => {
     importAuthoredKnowledge({ db, worldbuildData: worldbuild, workspaceId: 'target', knowledge: undefined, idMap, linkIdByEnds });
     const data = JSON.parse((db.prepare('SELECT data FROM entities WHERE id = ?').get(idMap.get(edwin)) as { data: string }).data);
     expect(data.spoilers).toEqual(['age']);
+  });
+});
+
+describe('authored Facts in a Worldbuild package', () => {
+  test('travel with the entities they name, and an entity left out of the package is dropped', () => {
+    const { store } = harness;
+    const well = store.createEntity({ workspaceId: 'source', type: 'Locations', canonicalName: 'The Old Well' }).id;
+    worldbuild.saveWorldFact({ workspaceId: 'source', entry: { title: 'The well never runs dry', statement: 'It has never run dry.', relatedEntityIds: [well, 'not-in-package'] } });
+    worldbuild.saveWorldFact({ workspaceId: 'source', entry: { title: 'The calendar', statement: 'Twelve months of thirty days.' } });
+
+    const facts = JSON.parse(JSON.stringify(exportAuthoredFacts({ worldbuildData: worldbuild, workspaceId: 'source', entityIds: [well] })));
+    expect(facts.entries.map((fact: any) => fact.relatedRefs)).toEqual([[well], []]);
+
+    const copy = store.createEntity({ workspaceId: 'target', type: 'Locations', canonicalName: 'The Old Well' }).id;
+    expect(importAuthoredFacts({ worldbuildData: worldbuild, workspaceId: 'target', facts, idMap: new Map([[well, copy]]) })).toEqual({ factsAdded: 2, factsSkipped: 0 });
+    const landed = worldbuild.listWorldFacts('target');
+    expect(landed.map((fact: any) => [fact.title, fact.statement, fact.relatedEntityIds])).toEqual([
+      ['The well never runs dry', 'It has never run dry.', [copy]],
+      ['The calendar', 'Twelve months of thirty days.', []],
+    ]);
   });
 });
