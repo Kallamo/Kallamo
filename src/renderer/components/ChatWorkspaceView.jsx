@@ -17,6 +17,7 @@ import RoleplayQuickPanel from '../features/roleplay/RoleplayQuickPanel';
 import StoryIntro from '../features/onboarding/StoryIntro';
 import { prepareGenerationSubmission, resolveActiveGenerationTarget } from '../features/chat/generation-target';
 import { holdDeferredFrames, safeParseDebugNotice, safeParseJson } from '../features/chat/diagnostic-format';
+import { estimateMessageTokens } from '../features/chat/message-content';
 import { useArchiveHistory } from '../features/chat/useArchiveHistory';
 import {
   fetchPresentation,
@@ -170,7 +171,9 @@ export default function ChatWorkspaceView() {
       if (processing) next.add(id); else next.delete(id);
       return next;
     });
-  }), [electronAPI]);
+    // The analysis wrote the newest reply's frame; read it now rather than at the next state change.
+    if (!processing && id === activeChat.id) setRoleplayFrameRevision(value => value + 1);
+  }), [electronAPI, activeChat.id]);
 
   const roleplayFrameRequestRef = useRef(null);
   if (!roleplayFrameRequestRef.current) {
@@ -182,10 +185,11 @@ export default function ChatWorkspaceView() {
   useEffect(() => {
     const requestState = roleplayFrameRequestRef.current;
     if (requestState.workspaceId !== activeChat.id || requestState.revision !== roleplayFrameRevision) {
+      // Another workspace starts empty; a new revision keeps the frames on screen until their reread lands.
+      if (requestState.workspaceId !== activeChat.id) setRoleplayFrames({});
       requestState.workspaceId = activeChat.id;
       requestState.revision = roleplayFrameRevision;
       requestState.requestedIds = new Set();
-      setRoleplayFrames({});
     }
     const originIds = activeMessages.filter(message => message.role !== 'user').map(message => message.id);
     if (!originIds.length || !electronAPI.getRoleplayMessageFrames) {
@@ -200,10 +204,12 @@ export default function ChatWorkspaceView() {
     electronAPI.getRoleplayMessageFrames(activeChat.id, missingOriginIds).then(result => {
       const currentRequest = roleplayFrameRequestRef.current;
       if (currentRequest.workspaceId !== requestWorkspaceId || currentRequest.revision !== requestRevision || !result?.success) return;
-      setRoleplayFrames(previous => ({
-        ...previous,
-        ...Object.fromEntries((result.frames || []).map(frame => [frame.originId, frame]))
-      }));
+      setRoleplayFrames(previous => {
+        const next = { ...previous };
+        for (const originId of missingOriginIds) delete next[originId];
+        for (const frame of result.frames || []) next[frame.originId] = frame;
+        return next;
+      });
     }).catch(() => {
       const currentRequest = roleplayFrameRequestRef.current;
       if (currentRequest.workspaceId === requestWorkspaceId && currentRequest.revision === requestRevision) {
@@ -213,8 +219,8 @@ export default function ChatWorkspaceView() {
   }, [activeChat.id, activeMessages, electronAPI, roleplayFrameRevision]);
 
   const heldRoleplayFrames = useMemo(
-    () => holdDeferredFrames(activeMessages, roleplayFrames),
-    [activeMessages, roleplayFrames]
+    () => holdDeferredFrames(activeMessages, roleplayFrames, { analyzing: backgroundNarrativeIds.has(activeChat.id) }),
+    [activeMessages, roleplayFrames, backgroundNarrativeIds, activeChat.id]
   );
 
   const [editingMessageId, setEditingMessageId] = useState(null);
@@ -513,9 +519,7 @@ export default function ChatWorkspaceView() {
       const archiveThreshold = activeChat.archiveThreshold || 60000;
       const activeMsgs = selectActiveMessages(archiveMessages, activeChat.memoryBlocks);
 
-      let tokensUsed = 0;
-      const estimateTokens = (str) => Math.ceil((str || '').length / 4);
-      activeMsgs.forEach(m => { tokensUsed += estimateTokens(m.content); });
+      const tokensUsed = activeMsgs.reduce((total, message) => total + estimateMessageTokens(message.content), 0);
 
       // Only nag when the window would actually have something to offer.
       const archivable = selectArchivableMessages(archiveMessages, activeChat.memoryBlocks);
@@ -710,12 +714,8 @@ export default function ChatWorkspaceView() {
   const lastAiMessage = useMemo(() => activeMessages.findLast(m => m.role === 'ai'), [activeMessages]);
 
   // Active context usage bar (optional, shown at the top of the chat)
-  const ctxTokens = useMemo(() => {
-    let tokens = 0;
-    selectActiveMessages(archiveMessages, activeChat?.memoryBlocks)
-      .forEach(m => { tokens += Math.ceil((m.content || '').length / 4); });
-    return tokens;
-  }, [archiveMessages, activeChat?.memoryBlocks]);
+  const ctxTokens = useMemo(() => selectActiveMessages(archiveMessages, activeChat?.memoryBlocks)
+    .reduce((total, message) => total + estimateMessageTokens(message.content), 0), [archiveMessages, activeChat?.memoryBlocks]);
 
   if (!activeChat) return null;
 
@@ -966,7 +966,7 @@ export default function ChatWorkspaceView() {
     >
       {hasBg && <div style={bgStyle} className="absolute inset-0 z-0" />}
       {hasBg && <div style={backdropStyle} className="absolute inset-0 z-0" />}
-      {roleplayMode && <StoryIntro workspaceId={activeChat.id} workspaceTitle={activeChat.title} visible={isChatVisible} />}
+      {roleplayMode && <StoryIntro workspaceId={activeChat.id} visible={isChatVisible} />}
 
       <div className="flex-1 flex flex-col h-full relative z-10 overflow-hidden">
         {isDragging && (

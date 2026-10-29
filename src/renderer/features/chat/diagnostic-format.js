@@ -194,18 +194,21 @@ export const formatRetrievalDiagnostics = diagnostic => {
   ].join('\n');
 };
 
-// A deferred reply has no frame until Narrative State analyzes it, so it holds the previous
-// turn's end point; writing a frame here would block the real one (frames are write-once).
-export const holdDeferredFrames = (messages, frames) => {
+// Until Narrative State analyzes a reply, it shows the previous turn's end point. Frames are
+// write-once, so writing one here would block the real one.
+export const holdDeferredFrames = (messages, frames, { analyzing = false } = {}) => {
   const held = {};
   let lastEnd = null;
+  const newestReply = analyzing ? [...messages].reverse().find(message => message.role !== 'user') : null;
   for (const message of messages) {
     if (message.role === 'user') continue;
     const frame = frames[message.id];
     if (frame?.end) {
       lastEnd = frame.end;
     } else if (lastEnd && safeParseDebugNotice(message.debugNotice)?.narrativeState?.status === 'deferred') {
-      held[message.id] = { originId: message.id, start: lastEnd, end: lastEnd, advance: null, pending: true };
+      held[message.id] = { originId: message.id, start: lastEnd, end: lastEnd, advance: null, pending: 'deferred' };
+    } else if (lastEnd && message === newestReply) {
+      held[message.id] = { originId: message.id, start: lastEnd, end: lastEnd, advance: null, pending: 'analyzing' };
     }
   }
   return held;

@@ -26,22 +26,69 @@ export function SpeakerLabel({ name, color, children }) {
   );
 }
 
+const CLOCK_COUNT_MS = 700;
+const reducedMotion = () => typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+const minuteOfDay = point => (point?.position?.hour ?? 0) * 60 + (point?.position?.minute ?? 0);
+const clockLabel = minutes => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+
+// A small advance counts up to the new time, so the clock is seen moving rather than replaced.
+function CountingClock({ from, to }) {
+  const [minutes, setMinutes] = useState(from);
+  useEffect(() => {
+    if (reducedMotion() || to <= from) { setMinutes(to); return undefined; }
+    let frameId = 0;
+    const started = performance.now();
+    const step = now => {
+      const progress = Math.min(1, (now - started) / CLOCK_COUNT_MS);
+      const eased = 1 - (1 - progress) ** 3;
+      setMinutes(Math.round(from + (to - from) * eased));
+      if (progress < 1) frameId = requestAnimationFrame(step);
+    };
+    frameId = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(frameId);
+  }, [from, to]);
+  return clockLabel(minutes);
+}
+
+// The header stands from the moment the reply lands. While Narrative State reads it, it holds the
+// previous turn's place and time; when the analysis settles it, the change plays once.
 function RoleplayMessageFrame({ frame }) {
+  const analyzing = frame?.pending === 'analyzing';
+  const wasAnalyzing = useRef(false);
+  const [settled, setSettled] = useState(false);
+  useEffect(() => {
+    if (analyzing) { wasAnalyzing.current = true; setSettled(false); return; }
+    if (frame?.end && !frame.pending && wasAnalyzing.current) {
+      wasAnalyzing.current = false;
+      setSettled(true);
+    }
+  }, [analyzing, frame]);
   if (!frame?.end) return null;
   const locationChanged = frame.start?.locationId !== frame.end?.locationId
     || frame.start?.locationName !== frame.end?.locationName;
   const timeChanged = shouldShowTimeTransition(frame);
   const weekday = formatFrameWeekday(frame.end);
+  const reveal = settled ? 'inline-block animate-in fade-in slide-in-from-left-1 duration-500 motion-reduce:animate-none' : '';
+  const countClock = settled && !timeChanged && sameFrameDate(frame.start, frame.end) && minuteOfDay(frame.end) > minuteOfDay(frame.start);
   return (
     <div className="mb-3.5 flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 border-b border-tint/[0.07] pb-3 text-xs text-text-muted select-none">
       <span className="flex min-w-0 items-center gap-2">
         <MapPin aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-entity-location" />
-        <span className="min-w-0 truncate font-medium text-text-secondary">
+        <span className={`min-w-0 truncate font-medium text-text-secondary transition-opacity duration-300 ${analyzing ? 'opacity-60' : ''}`}>
           {locationChanged
-            ? <>{frame.start?.locationName || 'Unknown location'}<span className="px-1.5 text-text-disabled">→</span>{frame.end.locationName || 'Unknown location'}</>
+            ? <>{frame.start?.locationName || 'Unknown location'}<span className={reveal}><span className="px-1.5 text-text-disabled">→</span>{frame.end.locationName || 'Unknown location'}</span></>
             : frame.end.locationName || 'No current location'}
         </span>
-        {frame.pending && (
+        {analyzing && (
+          <span
+            data-tooltip="Place and time settle once Narrative State has read this reply."
+            className="inline-flex h-5 shrink-0 items-center gap-1.5 rounded-full bg-tint/[0.06] px-2 text-[0.6875rem] font-medium text-text-muted animate-in fade-in duration-300"
+          >
+            <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse motion-reduce:animate-none" />
+            Updating
+          </span>
+        )}
+        {frame.pending === 'deferred' && (
           <span
             data-tooltip="Place and time for this reply update when the story continues."
             className="inline-flex h-5 shrink-0 items-center gap-1.5 rounded-full bg-tint/[0.06] px-2 text-[0.6875rem] font-medium text-text-muted"
@@ -51,15 +98,21 @@ function RoleplayMessageFrame({ frame }) {
           </span>
         )}
       </span>
-      <span className="flex shrink-0 items-center gap-3.5">
+      <span className={`flex shrink-0 items-center gap-3.5 transition-opacity duration-300 ${analyzing ? 'opacity-60' : ''}`}>
         <span className="inline-flex items-center gap-1.5">
           <CalendarDays aria-hidden="true" className="h-3.5 w-3.5 text-status-info" />
-          {sameFrameDate(frame.start, frame.end) ? formatFrameDate(frame.end) : `${formatFrameDate(frame.start)} → ${formatFrameDate(frame.end)}`}
+          {sameFrameDate(frame.start, frame.end)
+            ? formatFrameDate(frame.end)
+            : <>{formatFrameDate(frame.start)}<span className={reveal}><span className="px-1 text-text-disabled">→</span>{formatFrameDate(frame.end)}</span></>}
         </span>
         <span className="inline-flex items-center gap-1.5">
-          <Clock3 aria-hidden="true" className={`h-3.5 w-3.5 ${daylightFor(frame.end.position?.hour).text}`} />
+          <Clock3 aria-hidden="true" className={`h-3.5 w-3.5 transition-colors duration-500 ${daylightFor(frame.end.position?.hour).text}`} />
           <span className="font-mono text-text-secondary">
-            {timeChanged ? <>{formatFrameTime(frame.start)}<span className="px-1 text-text-disabled">→</span>{formatFrameTime(frame.end)}</> : formatFrameTime(frame.end)}
+            {timeChanged
+              ? <>{formatFrameTime(frame.start)}<span className={reveal}><span className="px-1 text-text-disabled">→</span>{formatFrameTime(frame.end)}</span></>
+              : countClock
+                ? <CountingClock from={minuteOfDay(frame.start)} to={minuteOfDay(frame.end)} />
+                : formatFrameTime(frame.end)}
           </span>
           {weekday && <span>{weekday}</span>}
         </span>
