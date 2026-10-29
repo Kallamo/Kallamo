@@ -78,7 +78,7 @@ The two segments only tell the request layer where the reusable half ends.
 
 - **`system`**: at the end of the system prompt. Only the head can be reused, because the tail
   precedes the history and rewrites it every turn.
-- **`turn`**: behind the history, in front of the user's message. This is the only arrangement where
+- **`turn`** (the default): behind the history, in front of the user's message. This is the only arrangement where
   the history itself becomes a reusable prefix, so only here is a history marker placed. Automatic
   routes gain from it the same way, without the marker.
 

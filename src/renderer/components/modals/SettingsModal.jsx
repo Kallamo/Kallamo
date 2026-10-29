@@ -160,7 +160,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [archiveSummarization, setArchiveSummarization] = useState(settings.advanced.archiveSummarization !== false);
   const [streamingEnabled, setStreamingEnabled] = useState(settings.advanced.streaming !== false);
   const [promptCache, setPromptCache] = useState(settings.advanced.promptCache !== false);
-  const [promptCacheContextPlacement, setPromptCacheContextPlacement] = useState(settings.advanced.promptCacheContextPlacement === 'turn' ? 'turn' : 'system');
+  const [promptCacheContextPlacement, setPromptCacheContextPlacement] = useState(settings.advanced.promptCacheContextPlacement === 'system' ? 'system' : 'turn');
 
   // Models pre-defined on the selected System AI connection (drives the Model dropdown).
   const systemProfileModels = (() => {
@@ -988,8 +988,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         {promptCache && (
           <div className="mx-[1.125rem] mb-3.5 border-l-2 border-tint/[0.08] pl-4">
             <p className="caption mb-0.5">Where retrieved context, the clock and attachments go</p>
-            <SettingsRadio checked={promptCacheContextPlacement === 'system'} onSelect={() => updateSetting('advanced', 'promptCacheContextPlacement', 'system')} label="In the system prompt" description="Where it has always been." />
-            <SettingsRadio checked={promptCacheContextPlacement === 'turn'} onSelect={() => updateSetting('advanced', 'promptCacheContextPlacement', 'turn')} label="Next to your message" description="The history gets cached too, a bigger saving on long chats. The model reads context in a new place, so compare on one workspace first." />
+            <SettingsRadio checked={promptCacheContextPlacement === 'system'} onSelect={() => updateSetting('advanced', 'promptCacheContextPlacement', 'system')} label="In the system prompt" description="Use this if a model follows the context better there." />
+            <SettingsRadio checked={promptCacheContextPlacement === 'turn'} onSelect={() => updateSetting('advanced', 'promptCacheContextPlacement', 'turn')} label="Next to your message" description="Recommended. The history is cached too, so long chats cost less." />
           </div>
         )}
       </SettingsGroup>

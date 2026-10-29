@@ -425,9 +425,9 @@ function recentTurnGaps(chatId) {
 // 'turn' puts the volatile context behind the history, the only layout where the history can be cached.
 function getContextPlacement() {
     try {
-        return readAdvancedSettings().promptCacheContextPlacement === 'turn' ? 'turn' : 'system';
+        return readAdvancedSettings().promptCacheContextPlacement === 'system' ? 'system' : 'turn';
     } catch (e) {
-        return 'system';
+        return 'turn';
     }
 }
 
