@@ -2,7 +2,7 @@
 
 All notable changes to Kallamo are documented in this file. Version numbers reflect the change for the people using Kallamo. From 2.0.0, a major release brings a feature that changes what Kallamo is, a minor release adds features on top of it, and a patch release only fixes. Before 2.0.0, minor releases were named milestones and patch releases also refined.
 
-## [2.0.0] - Unreleased
+## [2.0.0] - 2026-10-28
 
 Roleplay Mode and a world that remembers. The story's state, what each character knows and when things happened are kept as records the AI reads from the right point of view, Worldbuild grows into the rulebook of the world, and the whole app is redesigned around them. New installs start with Evenwell, a guided roleplay story.
 
@@ -11,6 +11,9 @@ Roleplay Mode and a world that remembers. The story's state, what each character
 #### Getting started
 - **Evenwell**: new installs get a sample roleplay world, a village at the edge of an old forest, with a cast to choose from and an opening scene for each playable character. A first visit introduces what the Narrative State does and the world, then asks who to play, or lets you make your own character. Evenwell can be restored from the empty home. Each playable card shows how the character looks, the opening arrives as if it were being written, with the roleplay header from the first message, and the village trades in copper, silver and gold coins. Its Narrative State starts on Automatic, so clear changes apply as you play and only secrets, beliefs and ruptures wait for you.
 - **Step-by-step guide**: a guide walks through adding a connection, choosing the models for Kallamo's AI roles and giving a profile its model, pointing at each control in turn. Worldbuild has its own tour on the first visit.
+- The Writing Desk and Memory tours show examples from the Lighthouse sample while they run, and nothing they show is saved or sent. First-visit guides wait until Kallamo knows whether you have already seen them.
+- What's new opens the 2.0 line with an overview of the new app, for updates and new installs alike. Every later update shows its own notes.
+- Facts, Knowledge, recent turns and story events that come with a bundled story show Kallamo as their origin instead of Written by you, and still edit and export like anything you wrote.
 - Pressing Begin on a story whose narrator has no model says what is missing: with no connection yet it offers the guide or Settings, and with a connection it offers to link the narrator to a model there and then. You can always open the story without a model to look around.
 - The setup panel on the launch screen goes away for good once any profile can reply.
 - With no workspaces, the home creates one in place, with a cover and profiles, and can restore the sample stories.
@@ -44,7 +47,8 @@ Roleplay Mode and a world that remembers. The story's state, what each character
 - Knowledge covers structural connections too, such as who leads a faction or who owns an item, and each one reads as its own kind of connection.
 
 #### Worldbuild
-- **Spoilers**: an eye beside every field, list row, alias, skill, custom field and Knowledge statement hides it from whoever reads the sheet until they click it, and text written between || and || hides part of any written text. The AI still reads everything, Update entities keeps hidden text hidden, and exported packages carry what is hidden.
+- **Spoilers**: an eye beside every field, list row, alias, skill, custom field and Knowledge statement hides it from whoever reads the sheet until they click it, and text written between || and || hides part of any written text. The AI still reads everything, Update entities keeps hidden text hidden, and exported packages carry what is hidden. A hidden spoiler is a solid bar the size of its words and stays open until the sheet is opened again, and in the editor, clicking or starting to delete a spoiler opens it.
+- A character with a birth date shows the age reached on the story's current date, and the chat context uses it. Setting a birthday replaces the stored age, and clearing it gives that age back.
 - **Texts inside the story**: a Writing Desk chapter can be marked as written inside an item, such as a journal, a letter or a notice, with an optional author. An item's sheet lists its pages in reading order, adds new ones and opens them in the Writing Desk. The AI reads them only when the item is named and within reach of the scene, as what the author claims rather than as fact, and they stay out of story search, Update entities and background chapters.
 - **Rules page**: Resources, Progression, Skills and Time costs live on their own page in Worldbuild. Exports carry the rules, optionally with each character's current values, and an import asks what to do when they differ.
 - **Portraits and scene backgrounds**: characters can have portraits and places framed scene backgrounds, both carried in exported packages.
@@ -61,11 +65,12 @@ Roleplay Mode and a world that remembers. The story's state, what each character
 - Update entities can suggest a size for a location from the kind of place your story names. The first Update entities run after this update reads every location's passages again, so it takes longer and costs more than usual.
 - The scene context names where the scene is and the places around it, for example "Crow Tavern (place), within Porto Velho (area), within Norvania (region)".
 - A place introduced during roleplay comes with a suggested size and a suggested parent location, both shown on the proposal. Approving it adds the location under that parent. A suggestion whose parent no longer exists adds the location without one.
+- Exported packages carry every part of a world, and the export shows what goes in the file and what stays out. Large worlds import much faster.
 - Exported packages include the Knowledge you wrote, with who knows what and how, and importing one recreates it in the new world. What the story recorded during play stays behind.
 - Importing a package shows what it holds before anything is written, and lets you keep your calendar or take the package's. Dates that do not fit the new calendar move to the nearest valid day or can be cleared.
 
 #### Retrieval, cost and safety
-- **Prompt Cache**: the stable part of each prompt is kept identical between turns, so providers that reuse a repeated prefix bill less for it. Anthropic, Claude on AWS Bedrock, and Claude and Gemini through OpenRouter are asked for that caching explicitly, and OpenAI, Gemini, other OpenRouter models and local servers reuse the prefix on their own. On OpenAI and OpenRouter each workspace sends its own cache key, so its turns reach the same cache. The cache lifetime follows the pace of the conversation, and the token panel shows what the provider read from and wrote to its cache for the reply, agentic retrieval and Narrative State, each on its own. Retrieved Context Position can move retrieved context from the system prompt to the turn, which lets the history be cached as well.
+- **Prompt Cache**: the stable part of each prompt is kept identical between turns, so providers that reuse a repeated prefix bill less for it. Anthropic, Claude on AWS Bedrock, and Claude and Gemini through OpenRouter are asked for that caching explicitly, and OpenAI, Gemini, other OpenRouter models and local servers reuse the prefix on their own. On OpenAI and OpenRouter each workspace sends its own cache key, so its turns reach the same cache. The cache lifetime follows the pace of the conversation, and the token panel shows what the provider read from and wrote to its cache for the reply, agentic retrieval and Narrative State, each on its own. Retrieved context goes next to your message, which lets the history be cached as well, and Settings can move it back into the system prompt.
 - Retrieval settings have a Worldbuild Entity Limit, the number of entities that reach the context as complete dossiers, a Worldbuild Breadth, how far connections are followed to find them, and a Workspace Documents Top-K.
 - With token or RAG diagnostics on, Writing Desk suggestions, analyses and AI notes show what each request cost, call by call, and what retrieval sent.
 - Before an update changes your data, Kallamo saves a verified copy of it. It keeps the last three copies, plus the one taken when you moved to a new version line, so a run of updates cannot remove your only copy of the data from the previous version. If the copy cannot be saved, the update does not touch your data, and when the disk is full Kallamo says how much space to free.
@@ -82,7 +87,7 @@ Roleplay Mode and a world that remembers. The story's state, what each character
 - **Settings, Workspaces and the Library**: Settings is a full-screen page, the Library is a list with details beside it, and Workspaces has new cards with the latest story as a banner. Small dialogs share one frame, and exports show what goes in the file and what stays out.
 - In a roleplay, regenerating, editing or switching to another reply first undoes the story state of the reply it replaces, so the new reply is written from the state before it. Narrative State analyzes the reply you keep once, when the story continues or when you choose Update now, instead of once for every alternative you try. A replacement interrupted by closing the app is undone on the next start.
 - Reverting the chat, deleting a message or replacing a reply also removes what those turns wrote to the story: records, proposals, scene changes and inventory moves. What earlier removed turns left behind is cleaned up once on startup.
-- Narrative State reads the full perspective only of the characters present, and for characters only mentioned, just what touches the turn, and only the items within reach, so each update is smaller. Its stable part comes first, so a provider can cache it between turns.
+- Narrative State reads the full perspective only of the characters present, and for characters only mentioned, just what touches the turn, and only the items within reach, so each update costs about a third of what it did. Its stable part comes first, so a provider can cache it between turns.
 - In a roleplay, agentic retrieval researches only what lies outside the scene. A message that stays among the people and the place already in the context uses the ordinary search, the planner is told which sheets the scene already carries, and a research turn that adds nothing ends the research.
 - The writer gets each lookup's three best passages, a one-line mention for entities only named in passing, and known relationships once and only when they touch the turn. Every provider receives the expected reply shape in its own form, with a retry without it when a provider refuses it.
 - Update entities reads the passage before a section of a list-shaped document, sends only the skills that matter to the entity, and cannot replace a written text with a much shorter one.
@@ -113,6 +118,7 @@ Roleplay Mode and a world that remembers. The story's state, what each character
 - Choosing a new workspace background and then cancelling keeps the old image.
 - Menus and popovers near the edge of the window stay fully visible.
 - Number fields can be cleared and typed again.
+- Switching a connection's provider starts the form clean.
 - The Plan every message and Native tool calling switches are disabled when the Retrieval Planner is off.
 - The workspace menu on the dashboard stays open when clicked.
 - Row actions that appear on hover also appear when the row has keyboard focus.
