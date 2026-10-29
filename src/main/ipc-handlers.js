@@ -27,9 +27,10 @@ const {
 const { selectActiveMessages, selectArchivableMessages, coverageStats } = require('./features/chat/archive-coverage');
 const { registerWorkspaceStateIpc } = require('./features/workspace-state/workspace-state');
 const { createWorldbuildDataService } = require('./features/worldbuild/worldbuild-data');
-const { exportAuthoredKnowledge, importAuthoredKnowledge } = require('./features/worldbuild/knowledge-package');
+const { exportAuthoredKnowledge, importAuthoredKnowledge, exportAuthoredFacts, importAuthoredFacts } = require('./features/worldbuild/knowledge-package');
 const entitiesStore = require('./entities');
 const inWorldTexts = require('./features/worldbuild/in-world-texts');
+const packageParts = require('./features/worldbuild/package-parts');
 const { chunkText, extractTextFromFile, extractDocxHtml, vectorizeChunks, insertChunksToDb, deleteChunksFromDb, searchKnowledgeBase, searchChatKnowledgeBase, searchChatMemories, RAG_MODEL_ID, RAG_MODEL_DIM, generateEmbeddingVector, countTokens } = require('./rag-service');
 const { normalizeMaxApiPayload } = require('./features/llm/payload-budget');
 
@@ -44,6 +45,7 @@ const chatsDir = path.join(dataDir, 'ChatHistory');
 const worldIndexJobs = new Map();
 const { createEntityImages } = require('./features/worldbuild/entity-images');
 const { purgeWorkspace } = require('./features/workspace/workspace-ownership');
+const { purgeDeadTurns } = require('./features/narrative/turn-ownership');
 const { purgeDocuments, purgeFolder } = require('./features/workspace/document-ownership');
 const { applyKnowledgeFileChanges, carryIndexState, parseFiles, ragIndexSignature } = require('./features/chat/knowledge-files');
 const entityImages = createEntityImages({ db, dataDir, nativeImage });
@@ -3064,11 +3066,22 @@ ipcMain.handle('worldbuild-export-summary', async (event, { workspaceId } = {}) 
     for (const entity of data.entities) typeCounts[entity.type] = (typeCounts[entity.type] || 0) + 1;
     const pendingReview = db.prepare("SELECT COUNT(*) AS count FROM entities WHERE workspaceId = ? AND status = 'proposed'").get(workspaceId)?.count || 0;
     const knowledge = exportAuthoredKnowledge({ db, worldbuildData, workspaceId, entityIds: data.entities.map(entity => entity.ref) });
-    const texts = inWorldTexts.exportItemTexts(db, workspaceId, data.entities.map(entity => entity.ref));
+    const refs = data.entities.map(entity => entity.ref);
+    const facts = exportAuthoredFacts({ worldbuildData, workspaceId, entityIds: refs });
+    const texts = inWorldTexts.exportItemTexts(db, workspaceId, refs);
+    const templates = packageParts.exportTemplates(db, workspaceId);
+    const placement = packageParts.exportPlacement(db, workspaceId, refs);
     return {
       success: true,
       entities: data.entities.length,
       knowledge: knowledge.entries.length,
+      facts: facts.entries.length,
+      templates: templates.templates.length,
+      fields: templates.fields.length,
+      occurrences: packageParts.exportOccurrences(db, workspaceId, refs).entries.length,
+      chapters: packageParts.exportChapters(db, workspaceId, refs).entries.length,
+      equipped: placement.equipment.length,
+      placed: placement.placed.length,
       texts: texts.length,
       typeCounts,
       links: data.links.length,
@@ -3081,12 +3094,17 @@ ipcMain.handle('worldbuild-export-summary', async (event, { workspaceId } = {}) 
   } catch (e) { return { success: false, error: e.message }; }
 });
 
-ipcMain.handle('export-worldbuild', async (event, { workspaceId, includeImages = true, includeCurrentValues = false } = {}) => {
+ipcMain.handle('export-worldbuild', async (event, { workspaceId, includeImages = true, includeCurrentValues = false, includeChapters = true } = {}) => {
   try {
     const win = BrowserWindow.fromWebContents(event.sender);
     const data = entitiesStore.exportWorldbuild(workspaceId);
     data.calendar = getCalendarService().getCalendar(db, workspaceId);
     data.knowledge = exportAuthoredKnowledge({ db, worldbuildData, workspaceId, entityIds: data.entities.map(entity => entity.ref) });
+    data.facts = exportAuthoredFacts({ worldbuildData, workspaceId, entityIds: data.entities.map(entity => entity.ref) });
+    data.templates = packageParts.exportTemplates(db, workspaceId);
+    data.occurrences = packageParts.exportOccurrences(db, workspaceId, data.entities.map(entity => entity.ref));
+    data.placement = packageParts.exportPlacement(db, workspaceId, data.entities.map(entity => entity.ref));
+    if (includeChapters) data.chapters = packageParts.exportChapters(db, workspaceId, data.entities.map(entity => entity.ref));
     data.texts = inWorldTexts.exportItemTexts(db, workspaceId, data.entities.map(entity => entity.ref));
     const packager = getRulesPackager();
     if (packager.hasRules(workspaceId)) {
@@ -3176,6 +3194,15 @@ ipcMain.handle('inspect-worldbuild-package', async (event, { workspaceId } = {})
       entities,
       typeCounts,
       links: Array.isArray(payload?.links) ? payload.links.length : 0,
+      knowledge: Array.isArray(payload?.knowledge?.entries) ? payload.knowledge.entries.length : 0,
+      facts: Array.isArray(payload?.facts?.entries) ? payload.facts.entries.length : 0,
+      texts: Array.isArray(payload?.texts) ? payload.texts.length : 0,
+      templates: Array.isArray(payload?.templates?.templates) ? payload.templates.templates.length : 0,
+      fields: Array.isArray(payload?.templates?.fields) ? payload.templates.fields.length : 0,
+      occurrences: Array.isArray(payload?.occurrences?.entries) ? payload.occurrences.entries.length : 0,
+      chapters: Array.isArray(payload?.chapters?.entries) ? payload.chapters.entries.length : 0,
+      equipped: Array.isArray(payload?.placement?.equipment) ? payload.placement.equipment.length : 0,
+      placed: Array.isArray(payload?.placement?.placed) ? payload.placement.placed.length : 0,
       images: Array.isArray(payload?.images) ? payload.images.length : 0,
       calendar,
       rules,
@@ -3248,12 +3275,24 @@ function importWorldbuildPayload(workspaceId, filePath, payload, { rulesMode = '
   }
   // After the rules, so a statement can name anything the package brought.
   const knowledgeResult = importAuthoredKnowledge({ db, worldbuildData, workspaceId, knowledge: payload.knowledge, idMap, linkIdByEnds });
-  const textResult = inWorldTexts.importItemTexts(db, workspaceId, payload.texts, idMap, {
+  const factResult = importAuthoredFacts({ worldbuildData, workspaceId, facts: payload.facts, idMap });
+  const templateResult = packageParts.importTemplates({ db, worldbuildData, workspaceId, templates: payload.templates, idMap });
+  const { EventOccurrenceService } = require('../../dist-main/main/features/worldbuild/event-occurrences');
+  const occurrenceResult = packageParts.importOccurrences({
+    db, service: new EventOccurrenceService(db, getCalendarService(), { includeProposed: true }), workspaceId, occurrences: payload.occurrences, idMap
+  });
+  const placementResult = packageParts.importPlacement({ db, workspaceId, placement: payload.placement, idMap });
+  const writing = {
     createFolder: insertFolder,
     createDocument: ({ workspaceId: ws, folderId, title, content }) => insertDocumentWithDefaults({ workspaceId: ws, folderId, title, content })
-  });
+  };
+  const textResult = inWorldTexts.importItemTexts(db, workspaceId, payload.texts, idMap, writing);
+  const chapterResult = packageParts.importChapters({ db, workspaceId, chapters: payload.chapters, idMap, ...writing });
   refreshNameTagsFor(workspaceId);
-  return { success: true, ...res, ...knowledgeResult, ...textResult, imagesAdded, calendarImported, calendarConflict, rulesImported };
+  return {
+    success: true, ...res, ...knowledgeResult, ...factResult, ...templateResult, ...occurrenceResult, ...placementResult,
+    ...textResult, ...chapterResult, imagesAdded, calendarImported, calendarConflict, rulesImported
+  };
 }
 
 ipcMain.handle('get-entity-links', async (event, { id, direction, relType } = {}) => {
@@ -3476,7 +3515,16 @@ function getEvenwellOnboarding() {
       roleplay: getRoleplaySystem,
       calendar: getCalendarService(),
       setExperienceMode: (workspaceId, mode) => setWorkspaceExperienceMode(db, workspaceId, mode),
-      purgeWorkspace
+      purgeWorkspace,
+      setBackground: (workspaceId, packagePath, file) => {
+        const entry = new AdmZip(packagePath).getEntry(file);
+        if (!entry) return;
+        const chatDir = path.join(chatsDir, workspaceId);
+        fs.mkdirSync(chatDir, { recursive: true });
+        const destination = path.join(chatDir, `bg_image_${Date.now()}${path.extname(file).toLowerCase()}`);
+        fs.writeFileSync(destination, entry.getData());
+        db.prepare('UPDATE chats SET backgroundImage = ? WHERE id = ?').run(destination, workspaceId);
+      }
     });
   }
   return evenwellOnboarding;
@@ -4712,6 +4760,7 @@ ipcMain.handle('delete-message', async (event, messageId, deleteAttachedFilesFro
       getNarrativeEntitySystem().invalidateOrigin(narrativeOrigin.chatId, messageId, 'deleted');
       db.prepare('DELETE FROM roleplay_message_frames WHERE workspace_id = ? AND origin_id = ?')
         .run(narrativeOrigin.chatId, messageId);
+      purgeDeadTurns(db, narrativeOrigin.chatId);
     }
     if (deleteAttachedFilesFromMemory) {
       const msgObj = db.prepare('SELECT chatId, attachedFiles FROM messages WHERE id = ?').get(messageId);
@@ -4787,6 +4836,8 @@ ipcMain.handle('revert-chat-to-message', async (event, { chatId, messageId }) =>
         }
       });
       transaction(toDelete.map(m => m.id));
+      // The story state is already back where it was; what the removed turns wrote goes now.
+      purgeDeadTurns(db, chatId);
       syncSummarizedIndex(db, chatId);
     }
     return { success: true };
@@ -5327,16 +5378,21 @@ ipcMain.handle('set-ui-flag', async (event, key) => {
 
 // --- WHAT'S NEW ---
 // Fresh installs see the overview once; updates see each version's notes.
+const whatsNewLine = version => String(parseInt(version, 10));
+
 ipcMain.handle('get-whats-new-state', async () => {
   const { app } = require('electron');
   try {
     const current = app.getVersion();
     const lastSeenRow = db.prepare("SELECT value FROM settings WHERE key = 'lastSeenVersion'").get();
-    const globalSeenRow = db.prepare("SELECT value FROM settings WHERE key = 'hasSeenGlobalWhatsNew'").get();
+    const globalSeenRow = db.prepare("SELECT value FROM settings WHERE key = 'globalWhatsNewSeenLine'").get();
     const lastSeen = lastSeenRow ? lastSeenRow.value : null;
-    const hasSeenGlobal = globalSeenRow?.value === '1';
 
-    if (db.isFreshInstall && !hasSeenGlobal) {
+    // The overview of a major line greets everyone on its first release (x.0.0, betas included) and new
+    // installs after it; every later update of the line shows its own notes.
+    const line = whatsNewLine(current);
+    const firstOfLine = /^\d+\.0\.0(?:-|$)/.test(current);
+    if (globalSeenRow?.value !== line && (db.isFreshInstall || firstOfLine)) {
       return { show: true, type: 'global', version: current };
     }
 
@@ -5354,7 +5410,7 @@ ipcMain.handle('mark-whats-new-seen', async (event, { type } = {}) => {
     const saveSetting = db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)");
 
     if (type === 'global') {
-      saveSetting.run('hasSeenGlobalWhatsNew', '1');
+      saveSetting.run('globalWhatsNewSeenLine', whatsNewLine(current));
     }
 
     saveSetting.run('lastSeenVersion', current);
@@ -6462,6 +6518,13 @@ app.whenReady().then(() => {
     if (restored) console.log(`[Narrative State] Restored ${restored} interrupted reply replacement(s).`);
   } catch (error) {
     console.error('[Narrative State] Could not restore interrupted reply replacements:', error);
+  }
+  // Dead turns whose rows are still there, including any analyzed after they died.
+  try {
+    const purged = purgeDeadTurns(db);
+    if (purged.turns) console.log(`[Narrative State] Removed what ${purged.turns} dead turn(s) left behind.`);
+  } catch (error) {
+    console.error('[Narrative State] Could not clean up dead turns:', error);
   }
 
   // One-time orphan + FTS cleanup (v1)
