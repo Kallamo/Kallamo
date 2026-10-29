@@ -5,7 +5,7 @@ import ContourCover from './ContourCover';
 import RoleplayChip from './RoleplayChip';
 import { displayDescription, isExampleWorkspace, leadImage, plural, timeAgo } from './workspaceFormat';
 
-// The most recent workspace as a full-width banner: its cover, its latest reply, and a way straight back in.
+// The most recent workspace as a full-width banner: its cover, what it is, and a way straight back in.
 export default function ContinueHero({ chat, onOpen, onBegin }) {
   // A picture that fails to load steps down: the scene's place, then the cover, then none.
   const [failed, setFailed] = useState(0);
@@ -16,7 +16,6 @@ export default function ContinueHero({ chat, onOpen, onBegin }) {
   const scene = roleplay ? chat.roleplayScene : null;
   const example = isExampleWorkspace(chat);
   const description = displayDescription(chat);
-  const reply = chat.lastReply;
   // An example story nobody has played yet starts from the beginning, which may need a model first.
   const unstarted = example && roleplay && !chat.messageCount;
   const stats = [
@@ -43,7 +42,7 @@ export default function ContinueHero({ chat, onOpen, onBegin }) {
           {example && <HeroChip>Example</HeroChip>}
           {roleplay && <RoleplayChip />}
         </div>
-        <h2 className="min-w-0 truncate pb-1 text-[3.5rem] font-extrabold leading-[1.05] tracking-[-0.03em] text-text-primary">{chat.title}</h2>
+        <h2 className="line-clamp-2 min-w-0 shrink-0 break-words pb-1 text-[3.5rem] font-extrabold leading-[1.1] tracking-[-0.03em] text-text-primary">{chat.title}</h2>
         {scene && (scene.locationName || scene.time) && (
           <div className="flex flex-wrap items-center gap-2">
             {scene.locationName && (
@@ -61,16 +60,7 @@ export default function ContinueHero({ chat, onOpen, onBegin }) {
             )}
           </div>
         )}
-        {description && <p className="line-clamp-2 max-w-[36rem] text-sm leading-relaxed text-text-secondary">{description}</p>}
-        {reply?.excerpt && (
-          <div className="flex max-w-[36rem] flex-col gap-1.5">
-            <span className="inline-flex items-center gap-2 text-xs font-semibold text-text-secondary">
-              <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: reply.aiColor || 'var(--theme-text-muted)' }} />
-              {reply.aiName || 'AI'}
-            </span>
-            <p className="line-clamp-2 text-sm leading-relaxed text-text-muted">{reply.excerpt}</p>
-          </div>
-        )}
+        {description && <p className="line-clamp-4 max-w-[40rem] shrink-0 text-sm leading-relaxed text-text-secondary">{description}</p>}
         <span className="flex-1" />
         <div className="flex flex-wrap items-center gap-2.5">
           <button

@@ -5,7 +5,7 @@ import {
 import { useApp } from '../../context/AppContext';
 import Modal from '../../components/ui/Modal';
 import Button from '../../components/ui/Button';
-import ContourCover from '../workspaces/ContourCover';
+import wellPainting from '../../../assets/whats-new-banner.jpg';
 import { useTour } from './GuidedTour';
 import { beginStory, setStoryStage } from './storyActions';
 
@@ -13,7 +13,7 @@ const ICONS = { knife: Slice, coins: Coins, book: BookOpen, shield: Shield, guit
 const PAGES = ['intro', 'world', 'pick'];
 
 // The first visit to a seeded story: what the Narrative State does, the world, then who to play.
-export default function StoryIntro({ workspaceId, workspaceTitle, visible }) {
+export default function StoryIntro({ workspaceId, visible }) {
   const app = useApp();
   const { electronAPI, setActiveWorkspaceView } = app;
   const { startTour } = useTour();
@@ -38,10 +38,32 @@ export default function StoryIntro({ workspaceId, workspaceTitle, visible }) {
     return () => { active = false; window.removeEventListener('onboarding-story-change', onChange); };
   }, [workspaceId, electronAPI, apply]);
 
+  // Back on the chat, a character made in Worldbuild since the last read is ready to play.
+  // Only the cast refreshes; whichever page is open stays as it is.
+  useEffect(() => {
+    if (!visible) return undefined;
+    let active = true;
+    electronAPI.getOnboardingStory?.(workspaceId).then(result => { if (active && result?.success) setStory(result.story); });
+    return () => { active = false; };
+  }, [visible, workspaceId, electronAPI]);
+
   if (!story || story.stage === 'playing' || !visible) return null;
 
   const options = [...story.cast, { ...story.newcomer, newcomer: true }];
   const current = options[Math.min(pick, options.length - 1)];
+
+  // The newest character the player made, once they went to make their own.
+  const ownCharacter = story.stage === 'own-character' ? [...story.cast].reverse().find(member => member.own) : null;
+
+  const playAs = async member => {
+    if (starting) return;
+    setStarting(true);
+    try {
+      if (await beginStory(app, workspaceId, member.entityId)) setPage(null);
+    } finally {
+      setStarting(false);
+    }
+  };
 
   const choose = async () => {
     if (starting) return;
@@ -53,13 +75,31 @@ export default function StoryIntro({ workspaceId, workspaceTitle, visible }) {
       setTimeout(() => startTour('own-character', { workspaceId }), 350);
       return;
     }
-    setStarting(true);
-    try {
-      if (await beginStory(app, workspaceId, current.entityId)) setPage(null);
-    } finally {
-      setStarting(false);
-    }
+    await playAs(current);
   };
+
+  if (!page && ownCharacter) {
+    return (
+      <div className="absolute left-1/2 top-28 z-20 flex -translate-x-1/2 items-center gap-2">
+        <button
+          type="button"
+          disabled={starting}
+          onClick={() => playAs(ownCharacter)}
+          className="inline-flex h-10 items-center gap-2 whitespace-nowrap rounded-xl bg-accent/90 px-4 text-sm font-semibold text-on-accent shadow-[0_0.375rem_1.125rem_-0.5rem] shadow-accent/50 transition-colors hover:bg-accent disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        >
+          <User className="h-4 w-4" aria-hidden="true" />
+          Play as {ownCharacter.short || ownCharacter.name}
+        </button>
+        <button
+          type="button"
+          onClick={() => setPage('pick')}
+          className="inline-flex h-10 items-center whitespace-nowrap rounded-xl border border-border-default bg-surface-panel/85 px-4 text-sm font-semibold text-text-secondary backdrop-blur-sm transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        >
+          Choose someone else
+        </button>
+      </div>
+    );
+  }
 
   if (!page) {
     return (
@@ -108,7 +148,8 @@ export default function StoryIntro({ workspaceId, workspaceTitle, visible }) {
       {page === 'world' && (
         <>
           <div className="relative h-[7.5rem] overflow-hidden">
-            <ContourCover title={workspaceTitle} />
+            {/* The What's New painting; anchored high, like there, so the well stays in frame. */}
+            <img src={wellPainting} alt="" className="absolute inset-0 h-full w-full object-cover object-[center_15%]" />
             <div aria-hidden="true" className="absolute inset-0 bg-gradient-to-r from-scrim/85 via-scrim/45 to-scrim/10" />
             <div aria-hidden="true" className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-b from-transparent to-surface-canvas" />
             <div className="absolute bottom-3.5 left-8 flex flex-wrap gap-2">
@@ -179,6 +220,12 @@ export default function StoryIntro({ workspaceId, workspaceTitle, visible }) {
                 <span className="ml-auto self-start text-xs font-semibold tabular-nums text-text-subtle">{pick + 1} of {options.length}</span>
               </div>
               {current.intro && <p className="text-sm leading-relaxed text-text-secondary">{current.intro}</p>}
+              {current.look && (
+                <div className="flex flex-col gap-1 border-t border-tint/[0.08] pt-3.5">
+                  <span className="text-xs font-semibold text-text-muted">Looks</span>
+                  <span className="text-[0.8125rem] leading-relaxed text-text-secondary">{current.look}</span>
+                </div>
+              )}
               <div className="flex flex-col gap-1 border-t border-tint/[0.08] pt-3.5">
                 <span className="text-xs font-semibold text-text-muted">At the start</span>
                 <span className="text-[0.8125rem] leading-relaxed text-text-secondary">{current.start}</span>

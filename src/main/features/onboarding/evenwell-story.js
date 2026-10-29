@@ -8,16 +8,24 @@ const WORKSPACE = {
 };
 
 const LOCATION = 'The Last Lantern';
+const VILLAGE = 'Evenwell';
+const TEXTS_FOLDER = 'In-world texts - SPOILERS';
 const CLOCK = { eraId: 'yc', year: 62, month: 10, day: 15, hour: 19, minute: 0 };
 
 // Items that wait somewhere in the world rather than in anyone's hands.
-const PLACEMENTS = [{ item: 'The Torn Pages', location: "Harrow's Last Camp" }];
+const PLACEMENTS = [
+  { item: 'The Torn Pages', location: "Harrow's Last Camp" },
+  { item: 'Gold Crown', location: 'The Counting House', quantity: 12 },
+  { item: 'Silver Mark', location: "King's Gate", quantity: 4 },
+  { item: 'Copper Penny', location: "King's Gate", quantity: 30 },
+  { item: 'Copper Penny', location: 'The Greenstone Shrine', quantity: 11 },
+];
 
 // Everyone in the common room when the story opens.
 const IN_ROOM = ['Edwin Hale', 'Rue', 'Wren Hale', 'Mina', 'Jasper', 'Odris', 'Florian Merriwether', 'Rhona Dunmore', 'Dace Morrow'];
 
 const GM_PROFILE = {
-  name: 'Narrator - Universal GM',
+  name: 'Evenwell GM',
   description: '(Example) Narrates the Evenwell roleplay and plays everyone in it except you.',
   color: '#a78bfa',
   systemPrompt: `# Role
@@ -26,9 +34,11 @@ You are the game master of an interactive story. You narrate the world and play 
 
 # The story
 
-Evenwell is a village on the edge of Elderwake Forest, in the young kingdom of Ordane. Magic was never gone from this world; people stopped looking. Old carvings sit in walls and wells and everyone calls them decoration. Ordinary people still have small gifts they call luck or a knack, never magic. The real troubles are human: taxes, hunger, a crown road cut through the forest, friends who drifted apart.
+Evenwell is a village on the edge of Elderwake Forest, in the young kingdom of Ordane. Magic was never gone from this world; people stopped looking. Old carvings sit in walls and wells and everyone calls them decoration. Everyone carries a little of it without knowing. It never shows as spells; it leaks, faintly, into what a person loves or does well. A musician who plays from the heart moves a room more than they should, and a good shot seems never to miss. People call it talent, luck or a knack, never magic. The real troubles are human: taxes, hunger, a crown road cut through the forest, friends who drifted apart.
 
 - Tone: grounded folk fantasy. Warm and lived-in in quiet moments, tense and plain in danger. Wonder arrives quietly and is easy to explain away.
+- Skills are ordinary abilities. Each sheet notes where that person's little magic shows. When they do it with their whole heart, let it go a little better than it should, and keep it easy to explain away. Where it shows can shift as they change, or as anyone begins to understand it. Awakened Touch, using magic on purpose, is held by nobody at the start. It comes only when someone knowingly reaches for magic and it answers, and it grows very slowly.
+- Money is coins people carry: copper pennies, silver marks and gold crowns, ten to one. Use the price list, move coins through the inventory when someone pays, and never conjure coins nobody has. Most people in Evenwell count in pennies.
 - Prose: concrete and unhurried. Strong verbs, specific detail, no purple prose, no stacked metaphors.
 - Rhythm: short and direct when things are tense, slower when a moment needs room.
 
@@ -68,7 +78,7 @@ Every turn you receive a structured context. Each section has one job.
 
 # Writing rules
 
-- Use real names, not invented epithets.
+- Call people by name once the player's character knows it; until then describe them by what the player can see, and keep that description consistent. Never invent epithets.
 - No recaps at the start of a reply. Continue the scene.
 - Show feelings through behaviour, not labels.
 - Avoid stock phrases and cliches.
@@ -78,7 +88,7 @@ Every turn you receive a structured context. Each section has one job.
 
 # Language
 
-Write in the language the player writes in, unless the story sets another. Never translate names of people, places or things.
+Write in the language the player writes in, unless the story sets another. Keep the names of people, places with a name of their own (Evenwell, Elderwake, Crownmoor) and unique items exactly as written. Names built from ordinary words, such as the King's Road, the Silent Mile, the Last Lantern or the Harvest Festival, and everyday terms like coins, titles and trades, read naturally in the player's language. Once you translate one, keep that translation for the rest of the story.
 
 # Perspective
 
@@ -108,7 +118,7 @@ const WORLD = {
   ],
   placesLabel: 'Places in and around the village',
   places: [
-    { name: 'The Old Well', text: 'It has not run dry in living memory, not even in the worst summers.' },
+    { name: 'The Old Well', text: 'Left behind at the old edge of the village, it has never run dry, not even in the worst summers.' },
     { name: 'The Greenstone Shrine', text: 'Older than the village, with an antlered figure carved at its centre.' },
     { name: 'The Old Fold', text: "A ring of stones too large to move. The shepherds say wolves won't go inside." },
     { name: 'Elderwake Forest', text: 'Hunters keep to its edge. Children are told never to follow the lights between the trees.' },
@@ -182,13 +192,13 @@ The road gave you something, and then it brought you here.
 
 You are Jasper, eighteen, son of a merchant family in a trading town of Ordane. Your father measured a good year in bolts of wool sold, and he meant for you to keep his books after him. You can still total a column faster than anyone in that house. You did it for years with one of your grandfather's old books open under the ledger: ruined cities, beasts in the deep woods, roads that ended on the maps where the mapmaker lost his nerve. Your father took the books away more than once. You always knew where he put them.
 
-Odris grew up across the lane from your family's warehouse. You learned your letters at the same table and your first fights in the same alley, and when you were twelve he hauled you out of the millrace after you went in after a book you had dropped. He grew into the steady one: apprenticed to a joiner, a bench of his own, a life already laid out in front of him. He thinks the stories in your books are only stories. When you told him you were leaving, he said nothing at all, and the next morning he was at the town gate with a pack on his shoulder. He has walked every mile of the King's Road beside you since, and not once has he claimed to believe.
+Odris grew up across the lane from your family's warehouse. You learned your letters at the same table and your first fights in the same alley, and when you were twelve he hauled you out of the millrace after you went in after a book you had dropped. He grew into the steady one: apprenticed to a carpenter, a bench of his own, a life already laid out in front of him. He thinks the stories in your books are only stories. When you told him you were leaving, he said nothing at all, and the next morning he was at the town gate with a pack on his shoulder. He has walked every mile of the King's Road beside you since, and not once has he claimed to believe.
 
 This afternoon, on the loneliest stretch of that road, beside an overturned cart on the Silent Mile, you pulled a journal out of the mud. Something heavy was wrapped in its cover: a grey ring, too large for your finger, which is where it is now. You have read exactly one line of the journal. On the first page, in faded ink, a name, Harrow Venn, and beneath it the name of a village. The rest of the pages are stuck together with damp, and you wanted a fire and a lamp before you risked tearing them apart. Evenwell was the next village on the road. Every book on your grandfather's shelf was written by someone long dead, about places nobody could find. This one has a man's name in it, and the place was close enough to reach before supper.
 
 The Last Lantern is warm and loud and smells of stew and wet wool. You and Odris have the corner table by the window, the journal closed between your bowls, its cover still dark with water.
 
-Around you, Evenwell drinks to a festival five days away. A broad innkeeper works the taps with a cloth over his shoulder. A barmaid with cropped dark hair moves through the crowd without wasting a step. A young man with straw-coloured hair clears tables and keeps stopping to talk, and a girl in a grey shawl waits for him on the bench by the hearth. Soldiers from the toll gate hold the end of the bar. A minstrel tunes a battered lute in the corner. By the door, a woman in worn crown armour sits alone with a cup she hasn't touched.
+Around you, Evenwell drinks to a festival five days away. A broad innkeeper works the taps with a cloth over his shoulder. A barmaid with cropped dark hair moves through the crowd without wasting a step. A young man with dark brown hair clears tables and keeps stopping to talk, and a girl in a grey shawl waits for him on the bench by the hearth. Soldiers from the toll gate hold the end of the bar. A minstrel tunes a battered lute in the corner. By the door, a woman in worn crown armour sits alone with a cup she hasn't touched.
 
 Odris has his back to the wall, where he can see the door. His stew is going cold. He looks at the journal, then at you, and lets a long breath out through his nose.
 
@@ -200,9 +210,9 @@ Odris has his back to the wall, where he can see the door. His stew is going col
     start: 'Beside Jasper with his back to the wall, watching the door and the dark window.',
     opening: `${PROLOGUE}
 
-The road you meant to take was a short one: from your father's house to the joiner's yard, and back again, for the rest of your life.
+The road you meant to take was a short one: from your father's house to the carpenter's yard, and back again, for the rest of your life.
 
-You are Odris, eighteen. A month ago you had a bench at the joiner's with your name cut into the end of it, a half-made chair you were proud of, and a future nobody needed to explain to you. Across the lane lived Jasper, the merchant's son, who kept his father's ledgers with an old book hidden under them and talked about ruined cities like places he had already been. You learned your letters beside him. When you were twelve you went into the millrace after him because he had gone in after a book. He has been going in after something ever since, and you have been standing on the bank with the rope.
+You are Odris, eighteen. A month ago you had a bench at the carpenter's with your name cut into the end of it, a half-made chair you were proud of, and a future nobody needed to explain to you. Across the lane lived Jasper, the merchant's son, who kept his father's ledgers with an old book hidden under them and talked about ruined cities like places he had already been. You learned your letters beside him. When you were twelve you went into the millrace after him because he had gone in after a book. He has been going in after something ever since, and you have been standing on the bank with the rope.
 
 When he told you he was leaving, you didn't argue. You left the chair half-made, packed that night, and were waiting at the town gate before he was. You don't believe in his books. You believe he would walk off a cliff after a good story if nobody held his collar.
 
@@ -291,11 +301,11 @@ You are ${name}, and your road is your own. Where it began, what you left at the
 
 The road ends its last mile at King's Gate, where a bored soldier waves you through without looking at your face. Evenwell's lights are the first you have seen in a while. Five days to the harvest festival, the soldier says, as if that explains the noise.
 
-The noise is the Last Lantern. You push through its door into heat, smoke, wet wool and stew. A broad innkeeper with a cloth over his shoulder is pouring for three soldiers at the bar. A young man with straw-coloured hair is clearing tables, and a girl in a grey shawl waits for him by the hearth with a slate on her knee. A minstrel in a patched fine coat is tuning an old lute. At the table by the window, two young travellers sit over a closed book, talking low. By the door, a hard-faced woman in worn crown armour sits alone with a cup she isn't drinking.
+The noise is the Last Lantern. You push through its door into heat, smoke, wet wool and stew. A broad innkeeper with a cloth over his shoulder is pouring for three soldiers at the bar. A young man with dark brown hair is clearing tables, and a girl in a grey shawl waits for him by the hearth with a slate on her knee. A minstrel in a patched fine coat is tuning an old lute. At the table by the window, two young travellers sit over a closed book, talking low. By the door, a hard-faced woman in worn crown armour sits alone with a cup she isn't drinking.
 
 A barmaid with cropped dark hair cuts across your path with four cups balanced on one arm, sizes you up in the time it takes to set them down, and stops.
 
 "Stool at the end of the bar if you don't mind soldiers, corner by the stairs if you do," she says, her eyes already on the next empty cup. "Stew's hot, ale's cold, and there's one room left upstairs. What'll it be?"`;
 }
 
-module.exports = { STORY_ID, WORKSPACE, LOCATION, CLOCK, IN_ROOM, PLACEMENTS, GM_PROFILE, INTRO, WORLD, NEWCOMER, NEWCOMER_COMPANION, CAST, newcomerOpening };
+module.exports = { STORY_ID, WORKSPACE, LOCATION, VILLAGE, TEXTS_FOLDER, CLOCK, IN_ROOM, PLACEMENTS, GM_PROFILE, INTRO, WORLD, NEWCOMER, NEWCOMER_COMPANION, CAST, newcomerOpening };

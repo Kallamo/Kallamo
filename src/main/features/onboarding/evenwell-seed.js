@@ -1,6 +1,8 @@
 const path = require('path');
 const crypto = require('crypto');
 const story = require('./evenwell-story');
+const { TEXTS_FOLDER } = require('../worldbuild/in-world-texts');
+const SEEDED_BY = require('../../../shared/seed-provenance.json');
 
 const PACKAGE_PATH = path.join(__dirname, '..', '..', '..', 'assets', 'onboarding', 'evenwell.klwb');
 const SEEDED_KEY = 'onboarding_evenwell_seeded';
@@ -11,7 +13,7 @@ const newId = prefix => `${prefix}_${Date.now()}_${crypto.randomBytes(4).toStrin
 
 // Seeds the Evenwell roleplay and runs its first scene. The world comes from the bundled
 // package through the same import as a user's package, so the seed cannot drift from it.
-function createEvenwellOnboarding({ db, readPackage, importPayload, roleplay, calendar, setExperienceMode, purgeWorkspace }) {
+function createEvenwellOnboarding({ db, readPackage, importPayload, roleplay, calendar, setExperienceMode, purgeWorkspace, setBackground = () => {} }) {
   const readState = workspaceId => {
     const row = db.prepare('SELECT valueJson FROM workspace_ui_state WHERE workspaceId = ? AND scope = ?').get(workspaceId, SCOPE);
     try { return row ? JSON.parse(row.valueJson) : null; } catch { return null; }
@@ -35,7 +37,7 @@ function createEvenwellOnboarding({ db, readPackage, importPayload, roleplay, ca
         id, name, description, color, apiProfileId, model, temperature, maxTokens,
         systemPrompt, knowledgeFiles, manualMode, manualJson, isAgentic, agenticPrompt, agenticMaxTurns,
         resultChannel, contextWindow, last_modified, syncToCloud
-      ) VALUES (?, ?, ?, ?, NULL, NULL, 0.8, 2048, ?, '[]', 0, '', 1, '', 3, 'replacement', 8192, ?, 0)
+      ) VALUES (?, ?, ?, ?, NULL, NULL, 0.8, 6000, ?, '[]', 0, '', 1, '', 3, 'replacement', 8192, ?, 0)
     `).run(id, story.GM_PROFILE.name, story.GM_PROFILE.description, story.GM_PROFILE.color, story.GM_PROFILE.systemPrompt, now);
     return id;
   }
@@ -54,12 +56,23 @@ function createEvenwellOnboarding({ db, readPackage, importPayload, roleplay, ca
       `).run(workspaceId, story.WORKSPACE.title, story.WORKSPACE.description, recent ? now : 0, JSON.stringify([profileId]));
       setExperienceMode(workspaceId, 'roleplay');
 
-      const result = importPayload(workspaceId, PACKAGE_PATH, readPackage(PACKAGE_PATH), { rulesMode: 'replace', confirmed: true });
+      const payload = readPackage(PACKAGE_PATH);
+      const result = importPayload(workspaceId, PACKAGE_PATH, payload, { rulesMode: 'replace', confirmed: true });
       if (!result?.success) throw new Error(result?.error || 'The Evenwell package did not import.');
+
+      // The painting of the village on Evenwell's sheet is also the workspace's backdrop.
+      const villageRef = (payload.entities || []).find(entity => entity.type === 'Locations' && entity.canonicalName === story.VILLAGE)?.ref;
+      const painting = (payload.images || []).find(image => image.kind === 'background' && image.ref === villageRef);
+      if (painting) {
+        try { setBackground(workspaceId, PACKAGE_PATH, painting.file); }
+        catch (error) { console.warn('[Onboarding] The Evenwell backdrop was not set:', error.message); }
+      }
 
       const locationId = entityIdsByName(workspaceId, 'Locations').get(story.LOCATION);
       if (!locationId) throw new Error(`The package has no ${story.LOCATION}.`);
       const system = roleplay();
+      // A first story is easier to follow when clear changes apply; secrets and beliefs still wait.
+      system.saveSettings(workspaceId, { defaultUpdatePolicy: 'automatic' });
       system.saveScene(workspaceId, { locationId, participantIds: [], nearbyIds: [] });
       const items = entityIdsByName(workspaceId, 'Items');
       const places = entityIdsByName(workspaceId, 'Locations');
@@ -67,9 +80,14 @@ function createEvenwellOnboarding({ db, readPackage, importPayload, roleplay, ca
         const itemId = items.get(placement.item);
         const placeId = places.get(placement.location);
         if (!itemId || !placeId) continue;
-        system.proposeInventoryChange({ id: `onboarding-${itemId}`, workspaceId, patch: { itemId, locationId: placeId, quantity: 1 }, source: 'manual', provenanceId: 'onboarding' });
+        system.proposeInventoryChange({ id: `onboarding-${itemId}-${placeId}`, workspaceId, patch: { itemId, locationId: placeId, quantity: placement.quantity || 1 }, source: 'manual', provenanceId: SEEDED_BY.provenanceId });
       }
       calendar.saveRoleplayClock(db, workspaceId, story.CLOCK);
+      // The texts read as spoilers if opened before they turn up in play.
+      db.prepare('UPDATE folders SET name = ? WHERE workspaceId = ? AND name = ? AND parentId IS NULL').run(story.TEXTS_FOLDER, workspaceId, TEXTS_FOLDER);
+      // What the package wrote stays authored, so it edits and exports like any entry, but reads as Kallamo's.
+      db.prepare("UPDATE narrative_events SET provenance_interpreter_id = ? WHERE workspace_id = ? AND provenance_interpreter = 'user' AND provenance_interpreter_id IS NULL")
+        .run(SEEDED_BY.interpreterId, workspaceId);
       writeState(workspaceId, { story: story.STORY_ID, stage: 'intro', profileId });
       return workspaceId;
     } catch (error) {
@@ -98,17 +116,24 @@ function createEvenwellOnboarding({ db, readPackage, importPayload, roleplay, ca
     if (state?.story !== story.STORY_ID) return null;
     const ids = entityIdsByName(workspaceId, 'Characters');
     const settings = roleplay().getSettings(workspaceId);
-    const created = db.prepare("SELECT id, canonicalName, lore, data FROM entities WHERE workspaceId = ? AND type = 'Characters' AND status != 'proposed' ORDER BY createdAt")
+    const rows = db.prepare("SELECT id, canonicalName, lore, data FROM entities WHERE workspaceId = ? AND type = 'Characters' AND status != 'proposed' ORDER BY createdAt")
       .all(workspaceId)
-      .filter(row => !isPackaged(row.canonicalName))
       .map(row => {
         let data = {};
         try { data = JSON.parse(row.data || '{}'); } catch { data = {}; }
-        const about = String(data.personality || data.appearance || row.lore || '').replace(/\|\|[\s\S]*?\|\|/g, '').trim();
+        return { ...row, data };
+      });
+    // The card shows the sheet's opening line of appearance, so edits in the Worldbuild show up here.
+    const lookOf = data => String(data.appearance || '').replace(/\|\|[\s\S]*?\|\|/g, '').trim().match(/^[\s\S]*?[.!?](?=\s|$)/)?.[0] || '';
+    const lookById = new Map(rows.map(row => [row.id, lookOf(row.data)]));
+    const created = rows
+      .filter(row => !isPackaged(row.canonicalName))
+      .map(({ id, canonicalName, lore, data }) => {
+        const about = String(data.personality || lore || '').replace(/\|\|[\s\S]*?\|\|/g, '').trim();
         return {
-          name: row.canonicalName, short: row.canonicalName.split(/\s+/)[0], age: data.age ? String(data.age) : '', role: 'Your character', icon: 'user',
+          name: canonicalName, short: canonicalName.split(/\s+/)[0], age: data.age ? String(data.age) : '', role: 'Your character', icon: 'user',
           intro: about.length > 260 ? `${about.slice(0, 260).replace(/\s+\S*$/, '')}…` : about,
-          start: story.NEWCOMER.start, entityId: row.id,
+          look: lookById.get(id), start: story.NEWCOMER.start, entityId: id, own: true,
         };
       });
     return {
@@ -122,7 +147,7 @@ function createEvenwellOnboarding({ db, readPackage, importPayload, roleplay, ca
       cast: [
         ...story.CAST
           .filter(member => ids.has(member.name))
-          .map(({ opening, companion, ...member }) => ({ ...member, entityId: ids.get(member.name) })),
+          .map(({ opening, companion, ...member }) => ({ ...member, entityId: ids.get(member.name), look: lookById.get(ids.get(member.name)) || '' })),
         ...created,
       ],
     };
@@ -171,6 +196,9 @@ function createEvenwellOnboarding({ db, readPackage, importPayload, roleplay, ca
         VALUES (@id, @chatId, @role, @content, @aiName, @aiColor, @debugNotice, @attachedFiles, @createdAt)
       `).run(message);
       db.prepare('UPDATE chats SET updatedAt = ? WHERE id = ?').run(now, workspaceId);
+      // The opening shows the place and hour above it, like every reply after it.
+      const locationId = entityIdsByName(workspaceId, 'Locations').get(story.LOCATION) || null;
+      calendar.applyRoleplayTurnFrame(db, { workspaceId, originId: message.id, startLocationId: locationId, endLocationId: locationId, timeAdvance: null });
       writeState(workspaceId, { ...state, stage: 'playing' });
     })();
     return { message, story: getStory(workspaceId) };
