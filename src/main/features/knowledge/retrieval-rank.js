@@ -59,7 +59,7 @@ function containsWord(queryLower, term) {
   }
 }
 
-// Matches the whole value or any token of 4+ letters, skipping particles like "de".
+// Matches the whole value or any token of 4+ letters, skipping particles like "of".
 function queryMentions(queryLower, needleLower) {
   if (!needleLower || needleLower.length < 2) return false;
   if (containsWord(queryLower, needleLower)) return true;

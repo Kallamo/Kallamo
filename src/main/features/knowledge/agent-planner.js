@@ -3,8 +3,8 @@
 
 const { buildNameIndex, findLiteralMentions } = require('../world-index/literal-mentions');
 
-// Short tokens are the particles every language repeats ("de", "the"), and they are already
-// below the FTS term floor, so dropping them makes "o fogo do dragao" and "dragao fogo" one query.
+// Short tokens are the particles every language repeats ("of", "the"), and they are already
+// below the FTS term floor, so dropping them makes "the fire of the dragon" and "dragon fire" one query.
 const QUERY_TERM_MIN_LENGTH = 3;
 
 // Entities listed for the agent. Past this the prompt costs more than it steers.
@@ -77,10 +77,17 @@ function countWords(text) {
 
 // Deterministic gate in front of the planner. Skipping costs at most the multi-hop reach,
 // never the context itself: the caller still runs the deterministic retrieval.
-function shouldRunPlanner(input, { entityMentions = 0, force = false } = {}) {
+function shouldRunPlanner(input, { entityMentions = 0, force = false, scene = null } = {}) {
   const text = String(input || '').trim();
   if (force) return { plan: true, reason: 'planner forced in settings' };
   if (!text) return { plan: false, reason: 'empty message' };
+  // Dialogue nearly always has a question and a dozen words, so in a roleplay shape says nothing;
+  // research pays only outside the scene, whose sheets and perspectives are already in context.
+  if (scene) {
+    if (scene.outside > 0) return { plan: true, reason: `names ${scene.outside} entity(ies) outside the scene` };
+    if (scene.bystanders > 0) return { plan: true, reason: `brings ${scene.bystanders} nearby character(s) into the scene` };
+    return { plan: false, reason: 'stays inside the scene, whose sheets and perspectives are already in context' };
+  }
   if (entityMentions > 0) return { plan: true, reason: `names ${entityMentions} known entity(ies)` };
   if (QUESTION_MARK.test(text)) return { plan: true, reason: 'asks a question' };
   const words = countWords(text);
@@ -89,6 +96,14 @@ function shouldRunPlanner(input, { entityMentions = 0, force = false } = {}) {
     return { plan: true, reason: `substantial message (${words} words, ${text.length} chars)` };
   }
   return { plan: false, reason: `continuation (${words} words, no name, no question)` };
+}
+
+// A turn whose calls all found their target and still added nothing leaves only a repeat or a
+// finish. An empty result does not count, since the empty-result directive asks for another angle.
+function turnAddedNothing(turn) {
+  const calls = Array.isArray(turn?.calls) ? turn.calls : [];
+  return calls.length > 0 && Number(turn.newItems) === 0
+    && calls.every(call => call.status === 'repeat' || call.status === 'in-context' || (call.status === 'ran' && call.hits > 0));
 }
 
 function entityMentionIds(text, entities) {
@@ -149,6 +164,7 @@ module.exports = {
   queryKey,
   countWords,
   shouldRunPlanner,
+  turnAddedNothing,
   entityMentionIds,
   orderKnownEntities,
   worldMapBlock,

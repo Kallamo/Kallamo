@@ -16,8 +16,10 @@ const { ROLE_IDS, readAdvancedSettings, resolveAiEngineRole } = require('./featu
 const { formatActiveHistory, planActiveHistory, selectActiveHistory } = require('./features/chat/history-window');
 const { cacheTtlForPace } = require('./features/llm/prompt-cache');
 const { deferredNarrativeState, findPendingNarrativeTurn, replacedReplyIds } = require('./features/chat/narrative-turns');
+const { purgeDeadTurns } = require('./features/narrative/turn-ownership');
 const { parseEntityUpdateObject } = require('./features/worldbuild/entity-update-json');
 const {
+    addCacheUsage,
     buildEstimatedUsage,
     createMessageDiagnostics,
     mergeNarrativeStateDiagnostics
@@ -54,6 +56,7 @@ const { findByReference } = require('../../dist-main/main/features/narrative/rul
 const { missingSpoilers } = require('../../dist-main/shared/spoilers');
 const {
     compactNarrativeManifest,
+    resolveSceneCast,
     extractNarrativeSignals,
     groupKnowledgeCardRows,
     hasEpistemicDomain,
@@ -93,6 +96,7 @@ const {
     plannerWindowShape,
     downgradeUntilFits,
     shouldRunPlanner,
+    turnAddedNothing,
     entityMentionIds,
     worldMapBlock,
     formatCoverage
@@ -451,6 +455,12 @@ function runNarrativeStateInBackground(chatId, webContents, task) {
         .then(task)
         .catch(error => console.error('[Narrative State] Background update failed:', error))
         .finally(() => {
+            // A reply reverted while it was being read is analyzed into a dead turn; clear it at once.
+            try {
+                purgeDeadTurns(db, chatId);
+            } catch (error) {
+                console.error('[Narrative State] Could not clean up dead turns:', error);
+            }
             if (narrativeStateRuns.get(chatId) !== run) return;
             narrativeStateRuns.delete(chatId);
             sendNarrativeStateStatus(webContents, chatId, false);
@@ -718,7 +728,8 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
         // carries a different stable prefix.
         const historyCacheScopeId = promptCacheEnabled ? chatId : null;
         // What the provider actually billed, as opposed to what was estimated.
-        const measuredCache = { read: 0, write: 0, uncachedInput: 0 };
+        const measuredCache = {};
+        const measuredAgenticCache = {};
 
         for (let i = 0; i < steps.length; i++) {
             if (currentRun.isCancelled) {
@@ -954,6 +965,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             const plannerGate = plannerAvailable
                 ? resolvePlannerGate(chatId, messageContent || currentInput, {
                     includeChatContext,
+                    roleplay: isRoleplayWorkspace,
                     force: String(debugSettings.agenticGate || 'auto') === 'always'
                 })
                 : { plan: false, reason: 'profile is not agentic, or no Retrieval Planner is configured' };
@@ -978,6 +990,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     userRequest: messageContent,
                     knownEntities: plannerGate.entities,
                     mentionedIds: plannerGate.mentionedIds,
+                    sceneContext: plannerGate.sceneContext,
                     readItemIds: new Set(textReadings.map(reading => reading.itemId)),
                     toolProtocol: String(debugSettings.agenticToolProtocol || 'auto') === 'text' ? 'text' : 'auto'
                 });
@@ -1056,6 +1069,13 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                         formatContextBundleDebug(planned)
                     ].filter(Boolean).join('\n\n');
                     agenticInputTokens = agenticResult.agenticInputTokens || 0;
+                    for (const key of ['read', 'write', 'longWrite', 'uncachedInput']) {
+                        measuredAgenticCache[key] = (measuredAgenticCache[key] || 0) + (agenticResult.agenticCache?.[key] || 0);
+                    }
+                    if (agenticResult.agenticCache?.mode) {
+                        const mode = agenticResult.agenticCache.mode;
+                        measuredAgenticCache.mode = !measuredAgenticCache.mode || measuredAgenticCache.mode === mode ? mode : 'mixed';
+                    }
                     agenticOutputTokens = agenticResult.agenticOutputTokens || 0;
                     agenticTrace = {
                         turns: agenticResult.trace || [],
@@ -1239,12 +1259,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                             volatile: volatileSystemSegment,
                             ttl: cacheTtl
                         } : null,
-                        onUsage: (metadata) => {
-                            if (!metadata) return;
-                            measuredCache.read += metadata.cacheReadTokens || 0;
-                            measuredCache.write += metadata.cacheWriteTokens || 0;
-                            measuredCache.uncachedInput += metadata.uncachedInputTokens || 0;
-                        }
+                        onUsage: (metadata) => addCacheUsage(measuredCache, metadata)
                     };
 
                     // Only the final, user-facing generation streams; intermediate
@@ -1470,11 +1485,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     output: totalOutputTokens,
                     agenticInput: totalAgenticInputTokens,
                     agenticOutput: totalAgenticOutputTokens,
-                    cache: {
-                        read: measuredCache.read,
-                        write: measuredCache.write,
-                        uncachedInput: measuredCache.uncachedInput
-                    }
+                    cache: { main: measuredCache, agentic: measuredAgenticCache }
                 })
             });
 
@@ -1497,6 +1508,12 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             if (turnReplacementId) {
                 narrativeEntitySystem().completeTurnReplacement(chatId, turnReplacementId);
                 turnReplacementId = null;
+                // The replaced turns can no longer come back, so what they wrote goes.
+                try {
+                    purgeDeadTurns(db, chatId);
+                } catch (error) {
+                    console.error('[Narrative State] Could not clean up replaced turns:', error);
+                }
             }
             if (lastNarrativeContextRequestId) {
                 try {
@@ -1686,15 +1703,48 @@ function getRoleExecutor(roleId, profile = null) {
     return resolveAiEngineRole(roleId, { profile });
 }
 
+// The sheets and perspectives the roleplay context carries before any research. The places the
+// scene sits within are named there too, so they count as inside it.
+function roleplaySceneContext(chatId) {
+    try {
+        const { RoleplaySystem } = require('../../dist-main/main/features/narrative/roleplay-system');
+        const roleplay = new RoleplaySystem(db);
+        const scene = roleplay.getScene(chatId);
+        if (!scene) return null;
+        const playerId = roleplay.getSettings(chatId)?.playerEntityId || null;
+        const perspectiveIds = new Set([playerId, ...(scene.participantIds || [])].filter(Boolean));
+        const bystanderIds = new Set([...(scene.possibleObserverIds || []), ...(scene.nearbyIds || [])].filter(id => !perspectiveIds.has(id)));
+        const placeIds = new Set();
+        for (let id = scene.locationId; id && !placeIds.has(id);) {
+            placeIds.add(id);
+            id = db.prepare("SELECT toId FROM entity_links WHERE workspaceId = ? AND fromId = ? AND relType = 'inside' LIMIT 1").get(chatId, id)?.toId;
+        }
+        return {
+            perspectiveIds,
+            bystanderIds,
+            sheetIds: new Set([...perspectiveIds, ...bystanderIds, scene.locationId].filter(Boolean)),
+            insideIds: new Set([...perspectiveIds, ...bystanderIds, ...placeIds, ...(scene.objectIds || [])])
+        };
+    } catch (error) {
+        console.warn('[Agentic RAG] Scene context unavailable:', error.message);
+        return null;
+    }
+}
+
 // Can only downgrade to the deterministic path, which still fills the context.
-function resolvePlannerGate(chatId, request, { includeChatContext = true, force = false } = {}) {
+function resolvePlannerGate(chatId, request, { includeChatContext = true, force = false, roleplay = false } = {}) {
     let entities = [];
     try {
         entities = includeChatContext ? entitiesStore.listEntities({ workspaceId: chatId }) : [];
     } catch (e) { entities = []; }
     const mentionedIds = entityMentionIds(request, entities);
-    const decision = shouldRunPlanner(request, { entityMentions: mentionedIds.size, force });
-    return { ...decision, entities, mentionedIds };
+    const sceneContext = roleplay && includeChatContext ? roleplaySceneContext(chatId) : null;
+    const scene = sceneContext ? {
+        outside: [...mentionedIds].filter(id => !sceneContext.insideIds.has(id)).length,
+        bystanders: [...mentionedIds].filter(id => sceneContext.bystanderIds.has(id)).length
+    } : null;
+    const decision = shouldRunPlanner(request, { entityMentions: mentionedIds.size, force, scene });
+    return { ...decision, entities, mentionedIds, sceneContext };
 }
 
 function isChatArchiveSummarizationEnabled() {
@@ -2433,7 +2483,9 @@ function shouldProcessNarrativeIdentityUpdate(update, updatePolicy) {
     return update?.identityEstablished === true && Number(update.confidence) >= 0.9;
 }
 
-async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, userMessage, narrativeResponse }) {
+async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, userMessage, narrativeResponse: storedResponse }) {
+    // The narrator's reasoning holds plans and guesses, not events, so the analysis reads only the narration.
+    const narrativeResponse = stripReasoning(storedResponse);
     const { getWorkspaceExperienceMode } = require('../../dist-main/main/features/narrative/mode-orchestration');
     if (getWorkspaceExperienceMode(db, workspaceId) !== 'roleplay') {
         return { changes: [], diagnostics: null };
@@ -2610,9 +2662,8 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         ...(scene?.participantIds || []),
         ...(scene?.possibleObserverIds || [])
     ].filter(id => id !== roleplaySettings.playerEntityId));
+    // What rarely changes comes first, so a provider that reuses a repeated prefix keeps more of it.
     const triagePayloadValue = {
-        currentScene: compactNarrativeScene(scene, roleplaySettings.playerEntityId),
-        currentTime: startClock,
         calendar: {
             name: calendar.name,
             hoursPerDay: calendar.hoursPerDay,
@@ -2628,6 +2679,8 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         skills: skillsContext ? {
             characterIds: skillsContext.ids
         } : undefined,
+        currentScene: compactNarrativeScene(scene, roleplaySettings.playerEntityId),
+        currentTime: startClock,
         candidateSignals: narrativeSignals,
         characterStances: characterStances.length ? characterStances : undefined,
         userMessage,
@@ -2638,7 +2691,8 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     const narrativeTelemetry = {
         structuredFallbacks: 0,
         structuredFallbackStages: [],
-        structuredOutputMode: 'schema'
+        structuredOutputMode: 'schema',
+        cache: {}
     };
     let triageRepairCount = 0;
     let deepRepairCount = 0;
@@ -2650,7 +2704,8 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         apiProfileId: role.executor.apiProfileId,
         model: role.executor.model,
         systemPrompt: triageSystemPrompt,
-        chatHistory: [], newPrompt: triagePayload, temperature: 0, maxTokens: 2560, maxPayloadTokens: narrativePayloadTokens, manualMode: false, manualJson: null
+        chatHistory: [], newPrompt: triagePayload, temperature: 0, maxTokens: 2560, maxPayloadTokens: narrativePayloadTokens, manualMode: false, manualJson: null,
+        cacheScope: `${workspaceId}::narrative-triage`
     }, NARRATIVE_TRIAGE_SCHEMA, 'Narrative State triage', narrativeTelemetry);
     const triagePrimaryOutputTokens = estimateTokens(triageResponse);
     let triage = safeParseObject(triageResponse);
@@ -2689,6 +2744,24 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             locationId: scene?.locationId || null
         });
     }
+    // Who joined or left the conversation, from this triage and the previous turn's.
+    const castSignals = triage ? {
+        playerId: roleplaySettings.playerEntityId,
+        ...turnCastSignals(triage, actorIds),
+        previous: previousTurnCastSignals(workspaceId, provenanceId, actorIds)
+    } : null;
+    const proposeCastChange = () => {
+        if (!castSignals || !scene) return null;
+        const patch = resolveSceneCast({ scene, ...castSignals });
+        if (!Object.keys(patch).length) return null;
+        try {
+            const change = roleplay.proposeSceneChange({ id: `${provenanceId}:scene`, workspaceId, patch, source: 'ai', provenanceId });
+            return { kind: 'scene', changeId: change.id, ...change };
+        } catch (error) {
+            console.warn('[Roleplay State] Ignored the conversation change:', error.message);
+            return null;
+        }
+    };
     // Where and when the turn ended, for the "last time" a character comes back to.
     const settleSceneMemory = () => {
         try {
@@ -2702,10 +2775,24 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             console.warn('[Scene Memory] Could not record where the turn ended:', error.message);
         }
     };
-    const routing = resolveNarrativeRouting({ triage, signals: narrativeSignals });
+    // Items someone in the scene carries or that lie where it happens: the ones a turn can hand over.
+    const sceneHolderIds = [roleplaySettings.playerEntityId, ...(scene?.participantIds || []), ...(scene?.possibleObserverIds || []), ...(scene?.nearbyIds || [])].filter(Boolean);
+    const reachableItemIds = new Set(scene?.objectIds || []);
+    if (sceneHolderIds.length) {
+        db.prepare(`
+            SELECT fromId FROM entity_links
+            WHERE workspaceId = ? AND relType IN ('owned_by', 'carried_by') AND toId IN (${sceneHolderIds.map(() => '?').join(',')})
+        `).all(workspaceId, ...sceneHolderIds).forEach(link => reachableItemIds.add(link.fromId));
+    }
+    if (scene?.locationId) {
+        db.prepare('SELECT item_id FROM roleplay_location_inventory WHERE workspace_id = ? AND location_id = ?')
+            .all(workspaceId, scene.locationId).forEach(row => reachableItemIds.add(row.item_id));
+    }
+    const routing = resolveNarrativeRouting({ triage, signals: narrativeSignals, hasResourceDefinitions: definitions.length > 0, reachableItemIds });
     const forceDeepAnalysis = routing.forceDeepAnalysis;
     if (!triage?.consequential && !forceDeepAnalysis) {
         const timeFrame = recordTimeFrame(triage?.timeAdvance);
+        const castChange = proposeCastChange();
         settleSceneMemory();
         const triageInputTokens = estimateTokens(triageSystemPrompt) + estimateTokens(triagePayload);
         const triageOutputTokens = triagePrimaryOutputTokens;
@@ -2713,7 +2800,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         narrativeState.finishJob(workspaceId, provenanceId, 'skipped', { inputTokens: triageInputTokens, outputTokens: triageOutputTokens });
         narrativeState.recordMetric({ workspaceId, originId: provenanceId, triageInputTokens, triageOutputTokens, deepInputTokens: 0, deepOutputTokens: 0, deepAnalysis: false, proposalCount: 0, elapsedMs, recordedAt: Date.now() });
         return {
-            changes: timeFrame.advance ? [{ kind: 'time', frame: timeFrame }] : [],
+            changes: [...(timeFrame.advance ? [{ kind: 'time', frame: timeFrame }] : []), ...(castChange ? [castChange] : [])],
             diagnostics: {
                 status: 'skipped',
                 manifest: preTurnManifest ? {
@@ -2732,7 +2819,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
                     structuredFallbackStages: narrativeTelemetry.structuredFallbackStages,
                     structuredOutputMode: narrativeTelemetry.structuredOutputMode
                 },
-                usage: { triageInput: triageInputTokens, triageOutput: triageOutputTokens, repairInput: repairInputTokens, repairOutput: repairOutputTokens },
+                usage: { triageInput: triageInputTokens, triageOutput: triageOutputTokens, repairInput: repairInputTokens, repairOutput: repairOutputTokens, cache: narrativeTelemetry.cache },
                 elapsedMs
             }
         };
@@ -2783,6 +2870,23 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         presentIds: triagePresentIds
     });
     const holderIds = new Set([...holders.present, ...holders.mentioned]);
+    // What the turn concerns, by the triage. The player, the scene's participants and anyone who spoke
+    // are read in full; the rest of the room, background actions included, only on these topics.
+    const triageAboutIds = Array.isArray(triage?.aboutIds) ? triage.aboutIds.filter(id => allowedEntityIds.has(id)) : null;
+    const speakerIds = (Array.isArray(triage?.sceneMemory) ? triage.sceneMemory : [])
+        .flatMap(update => (update.heard || []).map(line => line.fromId))
+        .filter(Boolean);
+    const fullHolderIds = new Set([
+        roleplaySettings.playerEntityId,
+        ...(scene?.participantIds || []),
+        ...speakerIds
+    ].filter(Boolean));
+    const topicIds = triageAboutIds ? new Set([
+        ...triageAboutIds,
+        ...fullHolderIds,
+        scene?.locationId,
+        ...narrativeSignals.mentionedEntityIds
+    ].filter(Boolean)) : null;
     const focusIds = new Set([
         roleplaySettings.playerEntityId,
         ...(scene?.participantIds || []),
@@ -2810,7 +2914,9 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         holderIds: holders.present,
         mentionedHolderIds: holders.mentioned,
         targetIds,
-        focusIds
+        focusIds,
+        topicIds,
+        fullHolderIds
     }) : { records: [], candidates: 0 };
     const currentPerspectiveState = perspectiveSelection.records;
     const knowledgeCardRows = shouldAnalyzeEpistemicState && perceiverIds.size && targetIds.size ? db.prepare(`
@@ -2841,8 +2947,13 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         ...witnessIds
     ].filter(id => actorIds.has(id)));
     const relevantItemIds = new Set(narrativeSignals.mentionedItemIds);
+    // With the triage's topics, whole inventories only for who acts or is involved; anyone else
+    // in the scene shows only the items the turn names.
+    const inventoryHolderIds = topicIds
+        ? new Set([...fullHolderIds, ...(triageAboutIds || [])].filter(id => actorIds.has(id)))
+        : relevantHolderIds;
     const currentInventoryState = shouldAnalyzeInventory
-        ? loadNarrativeInventoryState(workspaceId, relevantHolderIds, relevantItemIds)
+        ? loadNarrativeInventoryState(workspaceId, inventoryHolderIds, relevantItemIds, relevantHolderIds)
         : [];
     const currentLocationInventoryState = shouldAnalyzeInventory
         ? loadNarrativeLocationInventoryState(workspaceId, scene?.locationId, relevantItemIds)
@@ -2862,18 +2973,9 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     const newCharacterProfile = selectedDomains.includes('entity')
         ? describeNewCharacterProfile(progression, skillSystem, workspaceId)
         : null;
+    // What rarely changes comes first (rules, then the places around), so a provider that reuses a
+    // repeated prefix keeps more of it; the turn itself comes last.
     const payloadValue = {
-        routing: {
-            selectedDomains,
-            mode: routing.mode,
-            requiresFullAnalysis: routing.requiresFullAnalysis,
-            candidateSignals: narrativeSignals.signals
-        },
-        currentScene: compactNarrativeScene(scene, roleplaySettings.playerEntityId),
-        preTurnContext: scopedManifest || undefined,
-        availableEntities: selectedDomains.includes('entity')
-            ? relevantEntities
-            : relevantEntities.map(entity => compactEntities.find(candidate => candidate.id === entity.id)),
         availableResources: shouldAnalyzeResources
             ? definitions.map(({ name, description, minimum, maximum, unit, lowestEffect, updatePolicy, aiChangesMaximum, maximumRule }) => ({
                 name,
@@ -2886,7 +2988,6 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
                 updatePolicy
             }))
             : undefined,
-        currentResourceStates: shouldAnalyzeResources ? currentResourceStates : undefined,
         newCharacterProfile: newCharacterProfile || undefined,
         progression: shouldAnalyzeResources && progressionContext
             ? describeNarrativeProgression(progression, workspaceId, progressionContext)
@@ -2894,13 +2995,25 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         skills: shouldAnalyzeResources && skillsContext
             ? describeNarrativeSkills(skillSystem, workspaceId, skillsContext)
             : undefined,
-        currentInventoryState: shouldAnalyzeInventory ? currentInventoryState : undefined,
-        currentLocationInventoryState: shouldAnalyzeInventory ? currentLocationInventoryState : undefined,
         reachableLocationIds: shouldAnalyzeScene ? [...reachableLocationIds] : undefined,
         // A move outside the reachable set is rejected anyway, so links beyond it only cost tokens.
         locationLinks: shouldAnalyzeScene
             ? locationLinks.filter(link => reachableLocationIds.has(link.fromId) && reachableLocationIds.has(link.toId))
             : undefined,
+        routing: {
+            selectedDomains,
+            mode: routing.mode,
+            requiresFullAnalysis: routing.requiresFullAnalysis,
+            candidateSignals: narrativeSignals.signals
+        },
+        currentScene: compactNarrativeScene(scene, roleplaySettings.playerEntityId),
+        preTurnContext: scopedManifest || undefined,
+        availableEntities: selectedDomains.includes('entity')
+            ? relevantEntities
+            : relevantEntities.map(entity => compactEntities.find(candidate => candidate.id === entity.id)),
+        currentResourceStates: shouldAnalyzeResources ? currentResourceStates : undefined,
+        currentInventoryState: shouldAnalyzeInventory ? currentInventoryState : undefined,
+        currentLocationInventoryState: shouldAnalyzeInventory ? currentLocationInventoryState : undefined,
         currentPerspectiveState: shouldAnalyzeEpistemicState ? currentPerspectiveState : undefined,
         currentKnowledgeCards: shouldAnalyzeEpistemicState ? currentKnowledgeCards : undefined,
         currentRelationshipState: shouldAnalyzeEpistemicState ? currentRelationshipState.rows : undefined,
@@ -2941,7 +3054,8 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         maxTokens: stateOutputBudget,
         payloadLimit: narrativeLimit,
         manualMode: false,
-        manualJson: null
+        manualJson: null,
+        cacheScope: `${workspaceId}::narrative-analysis`
     }, NARRATIVE_STATE_SCHEMA, 'Narrative State analysis', narrativeTelemetry);
     const deepPrimaryOutputTokens = estimateTokens(response);
     let parsed = safeParseObject(response);
@@ -3015,7 +3129,18 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     }
     const resolveReference = value => referenceIds.get(value) || value;
     const resolved = resolveNarrativeEntityReferences(routedResult, resolveReference);
-    const scenePatch = buildNarrativeScenePatch(scene, resolved.scenePatch, narrativeIntroductions, narrativeSignals);
+    const scenePatch = buildNarrativeScenePatch(scene, resolved.scenePatch, narrativeIntroductions, narrativeSignals, {
+        triageMarkedScene: Array.isArray(triage?.types) && triage.types.includes('scene')
+    });
+    // The analysis may have moved people already; the conversation rules apply to the cast it left.
+    if (castSignals && scene && !Object.hasOwn(scenePatch, 'locationId')) {
+        const cast = {
+            participantIds: scenePatch.participantIds ?? scene.participantIds,
+            possibleObserverIds: scenePatch.possibleObserverIds ?? scene.possibleObserverIds,
+            nearbyIds: scenePatch.nearbyIds ?? scene.nearbyIds
+        };
+        Object.assign(scenePatch, resolveSceneCast({ scene: cast, ...castSignals }));
+    }
     const resolvedEvents = ensureEncounterRelationshipOperations(
         workspaceId,
         resolved.events,
@@ -3251,7 +3376,8 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
                 triage: measureNarrativeContextSections(triagePayloadValue, triageSystemPrompt),
                 analysis: measureNarrativeContextSections(payloadValue, narrativeStateSystemPrompt),
                 analysisScope: shouldAnalyzeEpistemicState ? {
-                    holders: { present: holders.present.size, mentioned: holders.mentioned.size },
+                    holders: { present: holders.present.size, mentioned: holders.mentioned.size, readInFull: topicIds ? [...holders.present].filter(id => fullHolderIds.has(id)).length : holders.present.size },
+                    topics: topicIds ? topicIds.size : null,
                     perspectiveRecords: { sent: currentPerspectiveState.length, candidates: perspectiveSelection.candidates },
                     relationships: { sent: currentRelationshipState.rows.length, candidates: currentRelationshipState.candidates }
                 } : undefined
@@ -3297,7 +3423,8 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
                 deepInput: deepInputTokens,
                 deepOutput: deepOutputTokens,
                 repairInput: repairInputTokens,
-                repairOutput: repairOutputTokens
+                repairOutput: repairOutputTokens,
+                cache: narrativeTelemetry.cache
             },
             elapsedMs
         }
@@ -3406,6 +3533,33 @@ function recordCharacterSceneMemory({ sceneMemory, normalizeSceneMemoryUpdates, 
     return updates;
 }
 
+// What this turn's triage saw of the conversation: who was heard speaking and who the turn involved.
+function turnCastSignals(triage, actorIds) {
+    const speakerIds = (Array.isArray(triage?.sceneMemory) ? triage.sceneMemory : [])
+        .flatMap(update => (update.heard || []).map(line => line.fromId))
+        .filter(id => id && actorIds.has(id));
+    const aboutIds = Array.isArray(triage?.aboutIds) ? triage.aboutIds.filter(id => actorIds.has(id)) : [];
+    return { speakerIds, involvedIds: [...new Set([...speakerIds, ...aboutIds])] };
+}
+
+// The previous reply's triage, kept in its diagnostics. Without it nobody steps back.
+function previousTurnCastSignals(workspaceId, originId, actorIds) {
+    try {
+        const current = db.prepare("SELECT createdAt FROM messages WHERE id = ? AND chatId = ?").get(originId, workspaceId);
+        if (!current) return null;
+        const previous = db.prepare(`
+            SELECT debugNotice FROM messages
+            WHERE chatId = ? AND role = 'ai' AND createdAt < ?
+            ORDER BY createdAt DESC LIMIT 1
+        `).get(workspaceId, current.createdAt);
+        const triage = safeParseObject(previous?.debugNotice)?.narrativeState?.triage;
+        if (!triage || !Array.isArray(triage.aboutIds)) return null;
+        return { involvedIds: turnCastSignals(triage, actorIds).involvedIds };
+    } catch (error) {
+        return null;
+    }
+}
+
 function compactNarrativeScene(scene, playerEntityId = null) {
     if (!scene) return null;
     return {
@@ -3508,18 +3662,21 @@ function loadNarrativeRelationshipState(workspaceId, holders, focusIds, playerEn
     };
 }
 
-function loadNarrativeInventoryState(workspaceId, holderIds, itemIds) {
+// Everything the holders carry, and a mentioned item only in the hands of someone in the scene:
+// a common item named in passing must not bring in every holder of it in the world.
+function loadNarrativeInventoryState(workspaceId, holderIds, itemIds, sceneHolderIds = holderIds) {
     const holders = [...holderIds];
     const items = [...itemIds];
+    const sceneHolders = [...sceneHolderIds];
     const conditions = [];
     const parameters = [workspaceId];
     if (holders.length) {
         conditions.push(`links.toId IN (${holders.map(() => '?').join(',')})`);
         parameters.push(...holders);
     }
-    if (items.length) {
-        conditions.push(`links.fromId IN (${items.map(() => '?').join(',')})`);
-        parameters.push(...items);
+    if (items.length && sceneHolders.length) {
+        conditions.push(`(links.fromId IN (${items.map(() => '?').join(',')}) AND links.toId IN (${sceneHolders.map(() => '?').join(',')}))`);
+        parameters.push(...items, ...sceneHolders);
     }
     if (!conditions.length) return [];
     const rows = db.prepare(`
@@ -3607,18 +3764,18 @@ function loadNarrativeLocationInventoryState(workspaceId, locationId, itemIds) {
 }
 
 const NARRATIVE_TRIAGE_SYSTEM_PROMPT = `You route Roleplay turns to durable-state analyzers and estimate elapsed narrative time. Inspect the user action, final narrative, current time, calendar, time matrix, compact scene, named entities, and locally extracted candidate signals. Candidate signals are hints, not conclusions.
-Return JSON only with {"consequential":boolean,"types":["entity","scene","resource","inventory","awareness","knowledge","belief","memory","relationship","fact"],"entityIds":["existing-id"],"presentIds":["existing-id"],"confidence":0.0,"evidence":["short verbatim excerpt"],"requiresFullAnalysis":boolean,"reason":"brief","timeAdvance":null,"sceneMemory":[]}. entityIds lists every supplied entity the turn involves or is about, including one that is discussed or implied without being present. presentIds lists the supplied Characters and Creatures physically in the scene when the turn ends, including anyone who arrived during it and excluding anyone only mentioned, remembered or written to.
+Return JSON only with {"consequential":boolean,"types":["entity","scene","resource","inventory","awareness","knowledge","belief","memory","relationship","fact"],"entityIds":["existing-id"],"presentIds":["existing-id"],"aboutIds":["existing-id"],"confidence":0.0,"evidence":["short verbatim excerpt"],"requiresFullAnalysis":boolean,"reason":"brief","timeAdvance":null,"sceneMemory":[]}. entityIds lists every supplied entity the turn involves or is about, including one that is discussed or implied without being present. presentIds lists the supplied Characters and Creatures physically in the scene when the turn ends, including anyone who arrived during it and excluding anyone only mentioned, remembered or written to. Everyone in currentScene who has not left stays in presentIds, whether or not they speak or are mentioned this turn. aboutIds is a separate list and never narrows presentIds, which still holds everyone physically in the scene. aboutIds lists the supplied entities this turn concerns: anyone who speaks, acts or is spoken to, and every person, place, item, group or event that is discussed, asked about, revealed or implied, even when it is only described and never named. A person who is only in the background of this turn stays in presentIds and out of aboutIds.
 Always evaluate elapsed time, even when no other durable domain is consequential. For an in-world action, timeAdvance is {"actionType":"short_snake_case","basis":"explicit|matrix","duration":{"years":0,"months":0,"days":0,"hours":0,"minutes":0},"targetPosition":null,"confidence":0.0,"evidence":"short verbatim excerpt","statedSpan":null}. When the final narrative establishes an absolute ending date or time, set basis to "explicit", copy the complete resulting calendar position into targetPosition, and also return the calculated duration. Use null for out-of-character instructions, corrections, hypothetical actions, or when no in-world time passed. A skip of days, months or years is returned in the same duration object and is accepted only when the turn says so in words: an estimate on its own is held to a week. Whenever the user message or the narrative states a span of time, also return statedSpan as {"excerpt":"the exact words that state it, copied verbatim","amount":3,"unit":"minutes|hours|days|weeks|months|years|decades","asserts":"now|framing|history"}: "now" when that time passes in this turn, "framing" when it only frames a scene (a flashback or a setting), "history" when it recounts the world's past. Otherwise statedSpan is null. Never translate or paraphrase the excerpt. Travel always costs time: when the turn completes a journey between places, timeAdvance is never null, and its duration must match the distance actually crossed rather than the length of the passage describing it. Walking somewhere is usually described in two lines and still takes as long as the walk takes, so read the duration off the timeMatrix category the journey belongs to and never below that category's minimumMinutes.
 An explicit final position or duration in the narrative wins over the matrix. Reconcile every clock reference with currentTime; do not describe a turn as reaching a later time while returning null or a conflicting duration. Otherwise choose a reasonable value within the supplied matrix: Micro for dialogue lines, combat rounds, lockpicking, and quick scans; Local for same-district walking, wound care, and careful room inspection; Transit for cross-district travel, crowds, minor repairs, and setting camp; Macro for crafting, deep study, rest, and inter-city travel; Timeskip for supported downtime, recovery, waiting, long-distance travel, or another transition spanning one or more calendar days. Do not advance hours during line-by-line dialogue. Do not use a tiny advance for substantial travel. A jump of one day or more must be explicitly supported by the final narrative or by a completed action whose duration is covered by the configured Timeskip range. Return calendar units directly instead of assuming a 24-hour day.
-Mark inventory for explicit pickup, drop, transfer, gift, theft, loss, consumption, equip, unequip, drawing, sheathing, or quantity change. Mark scene for explicit arrival, departure, movement, participation, observer, nearby, object, or location change. Mark epistemic domains only for information actually communicated, perceived, discovered, remembered, believed, or relationally consequential. Mark relationship for a first demonstrated encounter or interaction that must initialize a directional relationship, even when its initial value is 0, and for an event that materially and durably changes an existing value. Direct conversation is mutual interaction. Listening or overhearing is interaction only from the aware listener toward the speaker unless the speaker also perceives the listener. Mere co-presence is not interaction. Ordinary politeness, irritation, banter, compliance, disagreement, or passing mood does not change an existing value. Mark resource for an actual value change, not a price mention or hypothetical. When progression is supplied, also mark resource for an outcome that earns experience, or training that changes an attribute, for one of progression.characterIds. When skills is supplied, also mark resource when one of skills.characterIds clearly learns a skill or reaches a milestone in one. A concrete edition of a supplied recurring Event is consequential when it actually takes place, even if the tradition itself is already known.
-A newly introduced persistent named character, stably identifiable individual creature, named location, or narratively important unique item is consequential even without an existing ID. An unnamed person distinguished only by appearance, ancestry, clothing, age, expression, or scene position may be routed as a sparse entity candidate, but is not yet a Worldbuild identity. Mark false for crowds, atmosphere, repetition, casual dialogue, hypotheticals, offers not completed, item mentions without possession changes, and events without durable consequences. Presence alone never grants awareness or knowledge. Set requiresFullAnalysis only when four or more domains interact or the consequence cannot be safely isolated.
+Mark inventory for explicit pickup, drop, transfer, gift, payment, purchase, sale, trade, tip, loan, theft, loss, consumption, equip, unequip, drawing, sheathing, or quantity change. Money is coins, which are items: paying, spending or receiving money is inventory, never resource. Judge every domain by what happens, in whatever language the turn is written, never by keywords. Mark scene for explicit arrival, departure, movement, participation, observer, nearby, object, or location change, including someone joining or leaving the conversation, stepping away within the place, or leaving the place. Mark epistemic domains only for information actually communicated, perceived, discovered, remembered, believed, or relationally consequential. Mark relationship for a first demonstrated encounter or interaction that must initialize a directional relationship, even when its initial value is 0, and for an event that materially and durably changes an existing value. Direct conversation is mutual interaction. Listening or overhearing is interaction only from the aware listener toward the speaker unless the speaker also perceives the listener. Mere co-presence is not interaction. Ordinary politeness, irritation, banter, compliance, disagreement, or passing mood does not change an existing value. Mark resource for an actual value change, not a price mention or hypothetical. When progression is supplied, also mark resource for an outcome that earns experience, or training that changes an attribute, for one of progression.characterIds. When skills is supplied, also mark resource when one of skills.characterIds clearly learns a skill or reaches a milestone in one. A concrete edition of a supplied recurring Event is consequential when it actually takes place, even if the tradition itself is already known.
+A newly introduced persistent named character, stably identifiable individual creature, named location, or narratively important unique item is consequential even without an existing ID. An unnamed person distinguished only by appearance, ancestry, clothing, age, expression, or scene position may be routed as a sparse entity candidate, but is not yet a Worldbuild identity. Mark entity only for someone or something absent from availableEntities, or for a new name, nickname or title of an existing one. Someone learning, hearing or using the name already on an existing sheet is awareness or knowledge, never entity. Mark false for crowds, atmosphere, repetition, casual dialogue, hypotheticals, offers not completed, item mentions without possession changes, and events without durable consequences. Presence alone never grants awareness or knowledge. Set requiresFullAnalysis only when four or more domains interact or the consequence cannot be safely isolated.
 sceneMemory is short-lived working memory, separate from every durable domain above, and is filled even when consequential is false. For each Character or Creature in presentIds other than currentScene.playerEntityId who took in something new this turn, return {"entityId":"id","perceived":["..."],"heard":[{"fromId":"speaker id or empty string","text":"..."}],"stance":"..."}. perceived lists what that character directly saw or heard happen in front of them, a few words each, with names, numbers and objects exactly as they appeared to that character. heard lists what was said to them or within their hearing, as the speaker's claim and never as the truth, keeping the speaker's own figures and wording; fromId is the speaker's supplied id, or an empty string when the speaker has none. A character who arrived during the turn records only what happened after arriving. Never record another character's thoughts, narration they could not perceive, or anything only the narrator knows: if the narration counts ten crates but the character was only told eight, they heard eight. stance is one short line on what they want right now and how they regard the player character, written only when it is new or differs from characterStances, otherwise an empty string. Skip characters with nothing new, and return [] when nobody qualifies.`;
 const NARRATIVE_REPAIR_SYSTEM_PROMPT = 'Repair the supplied response into one valid JSON object that follows the required schema. Preserve supported values. Return JSON only.';
 
 const NARRATIVE_FULL_STATE_SYSTEM_PROMPT = `You are Kallamo's Narrative State interpreter. Never write narrative prose. Extract only explicit, durable consequences from the supplied user message and narrative response. Use only supplied entity IDs and resource keys.
 Return JSON only with {"newEntities":[],"identityUpdates":[],"resourceChanges":[],"scenePatch":{},"inventoryChanges":[],"events":[]}.
 The user message is the player character's chosen action. The narrative response contains world and NPC consequences. Never infer a player choice, line, intention, emotion, memory, or private thought that the user did not supply.
-preTurnContext is the exact compact epistemic manifest used for generation. Use its separate subject assessments to decide who could acquire information this turn. "undetermined" is not ignorance. "derived" and "evidence-candidate" are not automatically canon. currentKnowledgeCards contains Awareness and known-field coverage at the start of the turn.
+preTurnContext is the compact epistemic manifest used for generation. Each entry in preTurnContext.subjects lists, for one subject, the targets under their state: confirmed, derived, candidates (with evidence) and deepened. Use it to decide who could acquire information this turn. A subject and target pair not listed is undetermined, and undetermined is not ignorance. derived targets and candidates are not automatically canon. currentKnowledgeCards contains Awareness and known-field coverage at the start of the turn.
 When the final narrative clearly introduces a persistent Character, individual Creature, named Location, or narratively important Item that is absent from availableEntities, add {"referenceId":"new:stable-local-key","name":"canonical name or concise sparse label","type":"Characters|Creatures|Locations|Items","aliases":[],"description":"only explicit introduction facts","excerpt":"short verbatim evidence","confidence":0.0,"decision":"new|ambiguous|conflicting","identityEstablished":true|false,"reason":"brief","itemNature":"unique|type","scenePresence":"participant|observer|nearby|absent","size":"region|area|place|spot"}. Use its referenceId everywhere else in this response. For Locations, size is region when wider than a scene, area when it holds many places, place when a scene happens there, and spot for a room or enclosed space inside a place. For Characters and individual Creatures, set scenePresence to participant only when directly engaged in the action or conversation, observer only when explicitly able to witness or listen, nearby only when physically present in the broader location, and absent for recollections, reports, or offscreen mentions. Scene presence is independent from a location change. Set identityEstablished true only when a proper name, stable title, number, designation, unmistakable continuity identity, or explicit registration establishes who the individual is. Appearance, ancestry, clothing, age, expression, or scene position alone never establishes identity. An individually described but anonymous person may be retained with a concise sparse label and identityEstablished false; it remains reviewable and must not become a Worldbuild entity automatically. Characters and individual Creatures may be created automatically only when identityEstablished is true and the identity is unequivocal. Locations and Items are reviewable. Do not create generic crowds, ordinary item mentions, transformations, disguises, or duplicates. Mark ambiguous identity or possible duplication as ambiguous. Mark an invention that contradicts supplied canon as conflicting.
 When the narrative establishes that an existing Character or individual Creature has a newly revealed proper name, corrected name, nickname, title, designation, or alternate spelling, add {"referenceId":"identity:stable-local-key","entityId":"existing-id","canonicalName":"new primary name or empty string","aliases":["new alternate name"],"excerpt":"short verbatim evidence","confidence":0.0,"identityEstablished":true|false,"reason":"brief"} to identityUpdates. Use canonicalName only when the text clearly replaces a provisional, descriptive, or incorrect primary label. Put nicknames, titles, alternate spellings, and additional forms in aliases. The previous canonical name is retained automatically as an alias after a rename. Never remove aliases, change an entity ID or type, or update a Location or Item through identityUpdates. Require explicit same-person evidence such as self-identification, direct naming, registration, or unmistakable continuity. Proximity, pronouns, appearance, ancestry, clothing, age, expression, and scene position are insufficient. If the target identity is uncertain, return no identity update.
 Scene patch may contain locationId, participantIds, possibleObserverIds, nearbyIds, and objectIds. Participants are directly involved, possible observers can witness the scene, and nearby entities are present in the broader location without necessarily witnessing it. Update these arrays when an existing or newly introduced character enters, leaves, joins, observes, or moves nearby, even if locationId does not change. When inventory also changes, keep objectIds consistent with unique items explicitly dropped, picked up, consumed, destroyed, or removed. Change location only after movement is completed in the user action or final narrative and use only reachableLocationIds; intention, preparation, a destination plan, an open door, or a visible route is not a completed location change. Never jump to an unrelated branch of the location hierarchy. reachableLocationIds already spans the whole surrounding region, so a completed journey across a city, district, or road belongs here and must not be downgraded to an epistemic record instead. A scene patch is applied whole or not at all: if the destination is not in reachableLocationIds, the participant and object arrays are discarded with it, so return the arrays that match the location you actually set. Presence is not ownership. A possible observer is only a candidate and does not automatically observe or learn.
@@ -3646,7 +3803,7 @@ For an item type transfer return {"itemId":"id","fromHolderId":"id-or-null","fro
 For equipment only return {"itemId":"id","holderId":"id","equipped":boolean}. Apply these same rules to every Character and individual Creature in currentInventoryState, including currentScene.playerEntityId. Inventory is possession without active use. Equipped is reserved for active use, such as wielding, holding in use, or wearing. A belt, sheath, scabbard, holster, bag, pocket, or ordinary inventory is not equipped. Determine the final state after the entire turn. Drawing, wielding, wearing, or putting on a carried item normally equips it. Sheathing, stowing, taking off, putting away, or placing it on a belt normally unequips it without changing holder. If an item is used first and then put away later in the same message, return equipped:false. A transfer from an equipped holder includes equipped:false; equipping by the recipient uses equipped:true.
 Do not mutate inventory from seeing, discussing, pricing, offering, requesting, touching, or temporary use unless possession, placement, quantity, or equipped state explicitly changes. Never invent an item ID.`;
 
-const NARRATIVE_EPISTEMIC_SCOPED_PROMPT = `EPISTEMIC DOMAINS: preTurnContext is the scoped epistemic manifest used for generation. "undetermined" is not ignorance. "derived" and "evidence-candidate" are not automatically canon. currentKnowledgeCards groups Awareness and known fields by card. currentPerspectiveState holds the current knowledge, beliefs and memories of whoever could perceive this turn (subjectId is the holder), about anyone, plus facts about the entities involved.
+const NARRATIVE_EPISTEMIC_SCOPED_PROMPT = `EPISTEMIC DOMAINS: preTurnContext is the scoped epistemic manifest used for generation; each entry in preTurnContext.subjects lists one subject's targets under their state (confirmed, derived, candidates with evidence, deepened). A pair not listed is undetermined, and undetermined is not ignorance. derived targets and candidates are not automatically canon. currentKnowledgeCards groups Awareness and known fields by card. currentPerspectiveState holds the current knowledge, beliefs and memories of whoever could perceive this turn (subjectId is the holder), about anyone, plus facts about the entities involved.
 Each event contains type, description, a short verbatim excerpt, participantIds, confidence from 0 to 1, and operations. Event type must be exactly one of movement, possession-transfer, revelation, deception, discovery, relationship-change, or custom. Use custom when no narrower allowed type fits. When a concrete edition of a supplied recurring Worldbuild Event actually happens, also return worldbuildEventId, occurrenceTitle, worldDate, and participants with roles plus Faction audience. Do not link plans, recollections, comparisons, or passing mentions as new occurrences. Allowed operations:
 {"type":"fact","proposition":{"subjectId":"id","predicate":"stable-key","object":any},"category":"knowledge-category","confidence":0.0}
 {"type":"awareness","subjectId":"id","targetId":"id","confidence":0.0}
@@ -3801,7 +3958,23 @@ function buildNarrativeStateSystemPrompt(domains, languageInstruction = '', with
     return sections.join('\n\n');
 }
 
-async function sendNarrativeJson(params, schema, label, telemetry) {
+// Both calls open with a fixed system prompt, so it is offered for caching on every route; what the
+// provider reports counts for the Narrative State stage.
+async function sendNarrativeJson(requestParams, schema, label, telemetry) {
+    const { cacheScope, ...request } = requestParams;
+    const workspaceId = String(cacheScope || '').split('::')[0];
+    const params = {
+        ...request,
+        promptCache: cacheScope && isPromptCacheEnabled() ? {
+            policy: 'conversation',
+            placement: 'system',
+            scopeId: cacheScope,
+            stable: request.systemPrompt,
+            volatile: '',
+            ttl: cacheTtlForPace(recentTurnGaps(workspaceId))
+        } : null,
+        onUsage: metadata => { if (telemetry) addCacheUsage(telemetry.cache, metadata); }
+    };
     const capabilityBase = `${params.apiProfileId || 'profile'}\u0000${params.model || 'model'}`;
     const schemaKind = schema === NARRATIVE_TRIAGE_SCHEMA ? 'triage' : schema === NARRATIVE_STATE_SCHEMA ? 'state' : 'other';
     const globalCapabilityKey = `${capabilityBase}\u0000all`;
@@ -4034,7 +4207,7 @@ function inferNarrativeEquipmentState(text, itemName) {
     return unequipIndex > equipIndex;
 }
 
-function buildNarrativeScenePatch(currentScene, rawPatch, introductions, narrativeSignals = {}) {
+function buildNarrativeScenePatch(currentScene, rawPatch, introductions, narrativeSignals = {}, { triageMarkedScene = false } = {}) {
     const patch = {};
     const source = rawPatch && typeof rawPatch === 'object' && !Array.isArray(rawPatch) ? rawPatch : {};
     if (Object.hasOwn(source, 'locationId') && (source.locationId === null || typeof source.locationId === 'string')) {
@@ -4063,7 +4236,8 @@ function buildNarrativeScenePatch(currentScene, rawPatch, introductions, narrati
     const hasCompletedMovement = (narrativeSignals.signals || []).some(signal =>
         signal.domain === 'scene' && signal.action === 'movement'
     );
-    if (Object.hasOwn(patch, 'locationId') && !hasCompletedMovement) delete patch.locationId;
+    // The movement words are English; a triage that marked the scene judged a completed move in any language.
+    if (Object.hasOwn(patch, 'locationId') && !hasCompletedMovement && !triageMarkedScene) delete patch.locationId;
     for (const key of ['participantIds', 'possibleObserverIds', 'nearbyIds', 'objectIds']) {
         if (Object.hasOwn(patch, key) && sameIdSet(patch[key], currentScene?.[key] ?? [])) delete patch[key];
     }
@@ -5821,6 +5995,15 @@ async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory 
         }
     }
     const offeredTools = toolNamesFor({ roleplay: isRoleplay });
+    // The roleplay context already holds these; research is for what lies outside them.
+    const sceneContext = isRoleplay ? options.sceneContext || null : null;
+    const nameOf = id => { try { return entitiesStore.getEntity(id)?.canonicalName || null; } catch (e) { return null; } };
+    const sceneSheetNames = sceneContext ? [...sceneContext.sheetIds].map(nameOf).filter(Boolean) : [];
+    const scenePerspectiveNames = sceneContext ? [...sceneContext.perspectiveIds].map(nameOf).filter(Boolean) : [];
+    const inContextLine = sceneSheetNames.length
+        ? `- ALREADY IN THE WRITER'S CONTEXT: the Worldbuild sheets of ${sceneSheetNames.join(', ')}, and what ${scenePerspectiveNames.join(' and ') || 'the player'} know. Do not fetch them again. Spend calls on what lies outside: absent people, other places, items, events, rumours, the story so far, and what someone nearby knows (inspect_subject_knowledge). lookup_entity on someone in the scene is only for their past in this story; their sheet will not be repeated.
+`
+        : '';
 
     // What the research is for. A workflow step feeds the previous step's prose as its input,
     // and ranking passages against generated prose buries the request the user actually made.
@@ -5990,7 +6173,7 @@ CRITICAL DIRECTIVES FOR COST & EFFICIENCY OPTIMIZATION:
 - AN EMPTY RESULT IS NOT AN ANSWER: a tool that returns nothing only proves those words were not a match. Before concluding that something is unknown, try one different angle: another wording, another tool, or lookup_entity on a name involved. Say that the answer is missing only once that second angle has also come back empty.
 - NO REPETITIVE QUERIES: Do not run search queries with identical or very similar terms that you have already executed. Do not read the same file twice. A repeat is refused and still costs you a turn.
 - RELEVANCY ONLY: Only query for concepts directly related to the user's prompt. Do not fetch unrelated files or memories.
-${isRoleplay ? `- PERSPECTIVE: lookup_entity returns what the narrator knows. Use inspect_subject_knowledge for what one character knows about another.
+${isRoleplay ? `${inContextLine}- PERSPECTIVE: lookup_entity returns what the narrator knows. Use inspect_subject_knowledge for what one character knows about another.
 - CONTROLLED NARRATIVE ENRICHMENT: When the prompt asks the narrator to reveal, distinguish, or choose an undefined detail and a Worldbuild category can supply plausible options, call explore_worldbuild_options before finishing. Also retrieve scene, location, faction, or character canon needed to constrain the choice. Treat the palette as possibilities only. Do not use it for an already established fact, force variety, or assume every option fits the scene.
 ` : ''}`;
 
@@ -6012,6 +6195,8 @@ ${isRoleplay ? `- PERSPECTIVE: lookup_entity returns what the narrator knows. Us
 
     let finishResponse = '';
     let agenticRagInputTokens = 0;
+    // What the provider billed from cache across the research turns.
+    const agenticCache = {};
     let agenticRagOutputTokens = 0;
     const trajectory = {
         anchorQuery,
@@ -6063,6 +6248,7 @@ ${isRoleplay ? `- PERSPECTIVE: lookup_entity returns what the narrator knows. Us
 
         const firstHandle = handleSeq + 1;
         let hits = 0;
+        let status = 'ran';
 
         if (call.name === 'search_kb') {
             const rawProfileResults = await searchKnowledgeBase(call.arg, profile.id, { k: toolK });
@@ -6177,7 +6363,18 @@ ${isRoleplay ? `- PERSPECTIVE: lookup_entity returns what the narrator knows. Us
             const edgesByEntity = new Map();
             let anyLore = false;
             let dossierCalendar = null;
-            try { dossierCalendar = require('./features/worldbuild/calendar-service').getCalendar(db, chatId); } catch (e) { }
+            let dossierClock = null;
+            try {
+                const calendarService = require('./features/worldbuild/calendar-service');
+                dossierCalendar = calendarService.getCalendar(db, chatId);
+                if (registryEntity?.data?.birthDate) dossierClock = calendarService.getRoleplayClock(db, chatId);
+            } catch (e) { }
+            // With a birth date the age is read off the story clock, never a stored snapshot.
+            const dossierData = data => {
+                if (!data?.birthDate || !dossierCalendar) return data;
+                const { derivedAge } = require('./features/worldbuild/calendar-service');
+                return { ...data, age: derivedAge(dossierCalendar, dossierClock, data) };
+            };
             try {
                 for (const eid of entityIds) {
                     const ent = entitiesStore.getEntity(eid);
@@ -6192,9 +6389,11 @@ ${isRoleplay ? `- PERSPECTIVE: lookup_entity returns what the narrator knows. Us
                 }
             } catch (e) { }
 
-            if (registryEntity) {
+            // A sheet the scene already carries is not sent twice; the entity's past in the story still is.
+            const sheetInContext = Boolean(registryEntity && sceneContext?.sheetIds.has(registryEntity.id));
+            if (registryEntity && !sheetInContext) {
                 const factParts = [];
-                const details = entityDataFacts(registryEntity.data);
+                const details = entityDataFacts(dossierData(registryEntity.data));
                 if (details) factParts.push(`Details: ${details}`);
                 const desc = registryEntity.data && (registryEntity.data.description || registryEntity.data.content);
                 if (desc && String(desc).trim()) factParts.push(`Description: ${String(desc).trim()}`);
@@ -6215,20 +6414,24 @@ ${isRoleplay ? `- PERSPECTIVE: lookup_entity returns what the narrator knows. Us
             if (registryEntity) {
                 coveredEntities.add(registryEntity.canonicalName);
                 if (includeChatContext) retrievalLedger.recordEntity(chatId, registryEntity.canonicalName);
+                if (sheetInContext) {
+                    pushNote(`Tool [lookup_entity] for "${call.arg}": the sheet of ${registryEntity.canonicalName} is already in the writer's context.`);
+                }
                 let head = `Worldbuild entity ${registryEntity.canonicalName} (${registryEntity.type})`;
-                const headDetails = entityDataFacts(registryEntity.data);
+                const headDetails = entityDataFacts(dossierData(registryEntity.data));
                 if (headDetails) head += ` [${headDetails}]`;
                 const headDesc = registryEntity.data && (registryEntity.data.description || registryEntity.data.content);
                 if (headDesc && String(headDesc).trim()) head += ` — ${String(headDesc).trim()}`;
                 if (registryEntity.lore && String(registryEntity.lore).trim()) head += `: ${registryEntity.lore}`;
-                pushResult({ source: registryEntity.canonicalName, full: head, meta: `lookup_entity "${call.arg}"` });
+                if (!sheetInContext) pushResult({ source: registryEntity.canonicalName, full: head, meta: `lookup_entity "${call.arg}"` });
             }
             entityChunks.forEach((r, index) => pushResult({
                 id: r.id, source: r.source, full: r.text,
                 preview: index < AGENT_FULL_RESULTS_PER_CALL ? 'full' : 'digest',
                 meta: `lookup_entity "${call.arg}"`
             }));
-            hits = entityChunks.length + (registryEntity ? 1 : 0);
+            hits = entityChunks.length + (registryEntity && !sheetInContext ? 1 : 0);
+            if (sheetInContext && !entityChunks.length) status = 'in-context';
             if (entityChunkTotal > entityChunks.length) {
                 pushNote(`Tool [lookup_entity] for "${call.arg}": showing the ${entityChunks.length} passages most relevant to the request out of ${entityChunkTotal} tagged. Use search_memories with specific terms to reach others.`);
             }
@@ -6425,7 +6628,7 @@ ${isRoleplay ? `- PERSPECTIVE: lookup_entity returns what the narrator knows. Us
         if (includeChatContext && call.name !== 'expand' && !EPISTEMIC_TOOLS[call.name] && call.name !== 'explore_worldbuild_options') {
             retrievalLedger.recordQuery(chatId, { key, tool: call.name, query: call.arg, hits });
         }
-        return { tool: call.name, arg: call.arg, hits, status: 'ran' };
+        return { tool: call.name, arg: call.arg, hits, status };
     };
 
     const createCollector = () => {
@@ -6570,7 +6773,8 @@ ${isRoleplay ? `- PERSPECTIVE: lookup_entity returns what the narrator knows. Us
             manualJson: '',
             abortSignal: run?.controller?.signal,
             // The last turn reads the transcript back but writes nothing: no later turn would read it.
-            promptCache: { policy: 'transcript', ...(currentTurn >= maxTurns ? { final: true } : {}) }
+            promptCache: { policy: 'transcript', scopeId: `${chatId}::retrieval-planner`, ...(currentTurn >= maxTurns ? { final: true } : {}) },
+            onUsage: metadata => addCacheUsage(agenticCache, metadata)
         };
         if (protocol === 'native') {
             return sendAgentRequest({ ...request, conversation: renderNativeConversation(), tools: toolDefinitions });
@@ -6790,6 +6994,15 @@ ${isRoleplay ? `- PERSPECTIVE: lookup_entity returns what the narrator knows. Us
                 downgraded: false
             });
 
+            if (turnAddedNothing(turnRecord)) {
+                finished = true;
+                finishResponse = '';
+                turnRecord.finished = true;
+                trajectory.autoFinished = `turn ${currentTurn} added nothing new`;
+                console.log(`[Agentic RAG] Finishing after turn ${currentTurn}: it added nothing new.`);
+                break;
+            }
+
             currentTurn++;
 
         } catch (err) {
@@ -6899,6 +7112,7 @@ ${isRoleplay ? `- PERSPECTIVE: lookup_entity returns what the narrator knows. Us
         contextSections: Object.values(sections),
         agenticInputTokens: agenticRagInputTokens,
         agenticOutputTokens: agenticRagOutputTokens,
+        agenticCache,
         degraded: loopDegraded,
         trajectory,
         trace: trajectory.turns.map(({ newIds, ...turn }) => turn),

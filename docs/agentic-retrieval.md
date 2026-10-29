@@ -38,6 +38,21 @@ whether a message deserves research. In order:
 | The same, 24 characters, in a script written without spaces | plan |
 | Anything else | skip |
 
+**In a roleplay the shape says nothing**: a player's message is dialogue, so it nearly always has a
+question and a dozen words. The roleplay context already carries the sheets of everyone in the
+scene and of its place, and what the player and the participants know, so the gate asks a different
+question there:
+
+| Condition (roleplay) | Decision |
+|---|---|
+| The override is on | plan |
+| The message names a known entity outside the scene (the place the scene sits within counts as inside) | plan |
+| The message names a character who is only nearby, whose perspective the context does not carry | plan |
+| Anything else | skip: it stays inside the scene |
+
+A wrong skip costs the same here as anywhere: the deterministic search still runs on the message,
+so a rumour or a place written in other words is still found by meaning.
+
 The gate reads the **user's own message**, never the input of a workflow step: from step two on
 that input is generated prose, which says nothing about whether the conversation needs research.
 
@@ -70,8 +85,8 @@ not evidence against them.
 ## The repeat guard
 
 `queryKey(tool, query)` normalizes a query to its content terms, lower case, order insensitive,
-dropping terms under three characters (the same floor the FTS index uses). "O fogo do Dragão"
-and "dragão, FOGO" are one query.
+dropping terms under three characters (the same floor the FTS index uses). "The fire of the Dragon"
+and "dragon, FIRE" are one query.
 
 - **Inside the loop**: a repeat never reaches the database. The planner is told the query already
   ran, with how many results it had and which handles carry them.
@@ -88,6 +103,23 @@ was measured on.
 It composes with the in-loop coverage ledger rather than duplicating it: the in-loop one is the
 truth inside a single loop and feeds `COVERED SO FAR`; the cross-turn one only seeds the repeat
 guard and never hides a result.
+
+## What the scene already holds
+
+In a roleplay the planner is told which sheets and perspectives the writer's context already
+carries, and to spend its calls on what lies outside them: absent people, other places, items,
+events, rumours, the story so far, and what someone nearby knows. A `lookup_entity` on someone in
+the scene still returns their past in the story (tagged passages and relations) but not the sheet
+again; with nothing else to return, it counts as `in-context`.
+
+## A turn that adds nothing ends the loop
+
+`turnAddedNothing` (`features/knowledge/agent-planner.js`) ends the loop after a turn whose calls
+all found their target and still added nothing: repeats, results already gathered, sheets the scene
+carries. The next turn could only repeat or finish, and finishing would cost a full read of the
+transcript. A call that came back empty does not count, since the empty-result directive wants a
+second angle first. Nothing is cited, so nothing is demoted; the reason is recorded as
+`autoFinished` on the trajectory.
 
 ## What the planner is asked for
 
@@ -200,19 +232,25 @@ keep it stable on every provider:
 - an earlier turn collapses to its digest only when the planner's window requires it, because a
   rewrite invalidates prefix reuse from that point on for every provider.
 
-Claude needs to be asked, and the form depends on where it runs (per the Anthropic documentation):
+Most routes reuse the transcript on their own (OpenAI, Gemini, OpenRouter's automatic models, local
+servers). The routes that need a marker get one, in the form each accepts:
 
 - **Anthropic's own endpoint:** top-level `cache_control: {type: "ephemeral"}`, which places the
   mark on the last block of every request.
 - **Claude on AWS Bedrock:** Kallamo calls InvokeModel, which rejects the top-level field. The
   request instead carries an explicit `cache_control` on the last block of the last message,
   moved forward each turn.
+- **Claude and Gemini on OpenRouter:** `cache_control` on the last text content part. Tool results
+  carry none, so the mark lands on the nearest earlier text.
 - **A custom Anthropic base URL:** neither form, since a proxy may not accept them.
 
-A prefix below the model's minimum cacheable length simply does not cache, with no error. Turn 1 writes the cache (`written to cache` in the
-panel) and later turns read it (`read from cache`).
+On OpenAI's and OpenRouter's own endpoints the transcript also carries a hashed `prompt_cache_key`
+per workspace: OpenAI routes the repeated prefix to the same cache, and OpenRouter keeps the loop on
+the same upstream provider (see [prompt-cache.md](prompt-cache.md#cache-key)).
 
-Whether and how much other providers reuse a prefix is theirs to decide and is not assumed here.
-The trajectory records what each provider reports for every turn (input tokens and tokens read
-from cache, where the provider reports them), so the effect is read from the provider instead of
-estimated.
+A prefix below the model's minimum cacheable length simply does not cache, with no error (the
+minimums per model are in [prompt-cache.md](prompt-cache.md#shortest-prefix)). Turn 1 writes the
+cache and later turns read it.
+
+What each provider reports for every turn is recorded and summed into the message's token panel as
+the agentic retrieval stage, so the effect is read from the provider instead of estimated.
