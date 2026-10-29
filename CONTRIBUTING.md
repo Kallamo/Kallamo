@@ -36,7 +36,7 @@ You don't need to write code to make a difference:
 - **Test the app** and report what breaks or feels rough.
 - **Report bugs** with clear reproduction steps.
 - **Suggest features** or improvements.
-- **Improve documentation** (README, `docs/`, this file, code comments).
+- **Improve documentation** (README, the design notes in `docs/`, this file, code comments).
 - **Translate** the interface into other languages.
 - **Write code** to fix bugs or add features.
 - **Share your AI Profiles and Workflows** with the community on [Discord](https://discord.com/invite/CE4C9JRS9H).
@@ -147,7 +147,8 @@ The CLA exists to keep the project's licensing clear and to protect both you and
   - Do not narrate history ("used to", "now", "this fixes", "previously"). That belongs in the commit message.
   - Do not describe callers, consumers, or what the signature and names already show.
   - Do not restate the code in prose. If a comment keeps growing, the explanation belongs in the commit or in `docs/`.
-- **Respect the architecture.** The Electron main process (`src/main/`), the secure IPC bridge (`src/preload.js`), and the React renderer (`src/renderer/`) are separated for a reason. Keep that boundary intact. See [docs/architecture.md](docs/architecture.md) for the full picture.
+- **Respect the architecture.** The Electron main process (`src/main/`), the secure IPC bridge (`src/preload.js`), and the React renderer (`src/renderer/`) are separated for a reason. Keep that boundary intact. The [System Architecture](README.md#system-architecture) and [Project Structure](README.md#project-structure) sections of the README map where each part lives.
+- **Read the design notes before changing their area.** [Narrative State](docs/narrative-state.md), [Prompt Caching](docs/prompt-cache.md) and [Agentic Retrieval](docs/agentic-retrieval.md) record the rules those systems must keep. How the app is used is documented at [kallamo.com/docs](https://kallamo.com/docs/).
 - **Test before you push.** Run `npm test`, and verify the affected feature in the app as well: the suite covers core logic, not the interface.
 
 ---
