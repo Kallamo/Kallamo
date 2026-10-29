@@ -224,40 +224,39 @@ export default function ProfileModal({ profile, preset, starters = null, onClose
               <span className="caption">Custom JSON</span>
               <Toggle checked={manualMode} onChange={setManualMode} ariaLabel="Custom JSON" />
             </div>
-            {!manualMode ? (
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <div className="mb-1.5 flex justify-between">
-                    <label htmlFor="profile-temperature" className="text-sm font-medium text-text-secondary">Temperature</label>
-                    <span className="text-sm tabular-nums text-text-primary">{temperature}</span>
-                  </div>
-                  <input
-                    id="profile-temperature"
-                    type="range"
-                    min="0"
-                    max="2"
-                    step="0.1"
-                    value={temperature}
-                    onChange={e => setTemperature(parseFloat(e.target.value))}
-                    className="mt-2 w-full cursor-pointer accent-text-secondary"
-                  />
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <div className="mb-1.5 flex justify-between">
+                  <label htmlFor="profile-temperature" className="text-sm font-medium text-text-secondary">Temperature</label>
+                  <span className="text-sm tabular-nums text-text-primary">{temperature}</span>
                 </div>
-                <div>
-                  <label htmlFor="profile-max-tokens" className="mb-1.5 block text-sm font-medium text-text-secondary">Max reply tokens</label>
-                  <NumberInput
-                    id="profile-max-tokens"
-                    value={maxTokens}
-                    onChange={setMaxTokens}
-                    min={64}
-                    max={200000}
-                    step={256}
-                    className="min-h-9 w-full rounded-control border border-border-default bg-surface-input px-3 text-sm tabular-nums text-text-secondary focus:border-accent focus:outline-none"
-                  />
-                </div>
+                <input
+                  id="profile-temperature"
+                  type="range"
+                  min="0"
+                  max="2"
+                  step="0.1"
+                  value={temperature}
+                  onChange={e => setTemperature(parseFloat(e.target.value))}
+                  className="mt-2 w-full cursor-pointer accent-text-secondary"
+                />
               </div>
-            ) : (
+              <div>
+                <label htmlFor="profile-max-tokens" className="mb-1.5 block text-sm font-medium text-text-secondary">Max reply tokens</label>
+                <NumberInput
+                  id="profile-max-tokens"
+                  value={maxTokens}
+                  onChange={setMaxTokens}
+                  min={64}
+                  max={200000}
+                  step={256}
+                  className="min-h-9 w-full rounded-control border border-border-default bg-surface-input px-3 text-sm tabular-nums text-text-secondary focus:border-accent focus:outline-none"
+                />
+              </div>
+            </div>
+            {manualMode && (
               <Textarea
-                hint="Raw JSON properties added to the API request."
+                hint="Raw JSON properties added to the API request. A key set here replaces the value above."
                 value={manualJson}
                 onChange={e => setManualJson(e.target.value)}
                 rows={4}

@@ -453,6 +453,24 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     setShowAddApiForm(true);
   };
 
+  // Every field below belongs to one provider, so switching starts the form clean.
+  const selectProvider = (value) => {
+    if (value === apiProvider) return;
+    setApiProvider(value);
+    setApiBaseUrl('');
+    setShowBaseUrl(value === 'Local');
+    setApiKey('');
+    setShowApiKey(false);
+    setGcpProjectId('');
+    setGcpRegion('us-central1');
+    setGcpServiceAccount('');
+    setAwsAccessKeyId('');
+    setAwsSecretAccessKey('');
+    setAwsRegion('us-east-1');
+    setModelsList([]);
+    setNewModelName('');
+  };
+
   const handleAddModel = () => {
     if (!newModelName.trim()) return;
     if (modelsList.includes(newModelName.trim())) return;
@@ -467,7 +485,10 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const handleSaveApi = async () => {
     if (!apiName.trim()) return;
 
-    const normalizedBaseUrl = apiBaseUrl.trim();
+    const isVertex = apiProvider === 'Vertex AI';
+    const isBedrock = apiProvider === 'AWS Bedrock';
+    // Vertex and Bedrock have no Base URL or API key fields, so nothing hidden is saved or checked.
+    const normalizedBaseUrl = isVertex || isBedrock ? '' : apiBaseUrl.trim();
     if (apiProvider === 'Local' && !normalizedBaseUrl) {
       showToast('Local API connections require a Base URL.', 'error');
       return;
@@ -483,21 +504,18 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     }
 
     const targetId = editingApiId || 'api_' + Math.random().toString(36).substr(2, 9);
-    const customConfigObj = {
-      gcpProjectId: gcpProjectId.trim(),
-      gcpRegion: gcpRegion.trim(),
-      gcpServiceAccount: gcpServiceAccount.trim(),
-      awsAccessKeyId: awsAccessKeyId.trim(),
-      awsSecretAccessKey: awsSecretAccessKey.trim(),
-      awsRegion: awsRegion.trim()
-    };
+    const customConfigObj = isVertex
+      ? { gcpProjectId: gcpProjectId.trim(), gcpRegion: gcpRegion.trim(), gcpServiceAccount: gcpServiceAccount.trim() }
+      : isBedrock
+        ? { awsAccessKeyId: awsAccessKeyId.trim(), awsSecretAccessKey: awsSecretAccessKey.trim(), awsRegion: awsRegion.trim() }
+        : {};
 
     const apiObject = {
       id: targetId,
       name: apiName.trim(),
       provider: apiProvider,
       baseUrl: normalizedBaseUrl,
-      apiKey: apiKey.trim(),
+      apiKey: isVertex || isBedrock ? '' : apiKey.trim(),
       customConfig: JSON.stringify(customConfigObj),
       models: JSON.stringify(modelsList),
       // The request limit lives in each workspace, not on the connection.
@@ -729,7 +747,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                 type="button"
                 role="radio"
                 aria-checked={selected}
-                onClick={() => { setApiProvider(p.value); if (p.value === 'Local') setShowBaseUrl(true); }}
+                onClick={() => selectProvider(p.value)}
                 className={`flex min-w-0 items-center gap-2.5 rounded-[0.625rem] border px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${selected ? 'border-accent/55 bg-accent/[0.05]' : 'border-tint/[0.08] hover:border-tint/[0.16]'}`}
               >
                 <ProviderMark provider={p.value} size="sm" />
