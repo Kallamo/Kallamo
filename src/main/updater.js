@@ -155,17 +155,25 @@ function attachWindow(win) {
   setInterval(checkInBackground, RECHECK_INTERVAL_MS).unref?.();
 }
 
-// Lightweight semver comparison (returns 1 if a > b, -1 if a < b, 0 if equal)
+// Lightweight semver comparison (returns 1 if a > b, -1 if a < b, 0 if equal).
+// A release outranks its own pre-releases, so 2.0.0 is newer than 2.0.0-beta.1.
 function compareSemver(a, b) {
-  const pa = a.replace(/^v/, '').split('.').map(Number);
-  const pb = b.replace(/^v/, '').split('.').map(Number);
+  const parse = version => {
+    const [core, pre = null] = String(version).replace(/^v/, '').split('-', 2);
+    return { core: core.split('.').map(part => Number(part) || 0), pre };
+  };
+  const pa = parse(a);
+  const pb = parse(b);
   for (let i = 0; i < 3; i++) {
-    const na = pa[i] || 0;
-    const nb = pb[i] || 0;
+    const na = pa.core[i] || 0;
+    const nb = pb.core[i] || 0;
     if (na > nb) return 1;
     if (na < nb) return -1;
   }
-  return 0;
+  if (pa.pre === pb.pre) return 0;
+  if (pa.pre === null) return 1;
+  if (pb.pre === null) return -1;
+  return pa.pre.localeCompare(pb.pre, 'en', { numeric: true }) > 0 ? 1 : -1;
 }
 
 ipcMain.on('install-update', () => {
