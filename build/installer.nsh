@@ -7,7 +7,7 @@
 
 !ifndef BUILD_UNINSTALLER
   !define MUI_WELCOMEPAGE_TITLE "Welcome to Kallamo Setup"
-  !define MUI_WELCOMEPAGE_TEXT "Kallamo is a place to write stories with AI: a chat, a world it keeps straight, and a desk for your chapters.$\r$\n$\r$\nYour stories stay on this computer. Click Next to continue."
+  !define MUI_WELCOMEPAGE_TEXT "Kallamo is a local-first studio for roleplay and long-form writing.$\r$\n$\r$\nYour stories stay on this computer. Click Next to continue."
   !define MUI_FINISHPAGE_TITLE "Kallamo is ready"
   !define MUI_FINISHPAGE_TEXT "Kallamo has been installed on your computer. From now on it updates itself when it opens."
 !endif
