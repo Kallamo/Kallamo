@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { createWorldbuildKnowledgeService } = require('./knowledge-service');
+const SEEDED_BY = require('../../../shared/seed-provenance.json');
 const {
   normalizeKnowledgeCategory,
   normalizeMemoryCategory,
@@ -162,7 +163,7 @@ function createWorldbuildDataService(db) {
     const rows = db.prepare(`
       SELECT records.rowid AS record_order, records.record_type, records.record_id,
         records.payload_json, records.source_event_id, records.applied_at,
-        events.narrative_sequence, events.narrative_timestamp, events.provenance_interpreter,
+        events.narrative_sequence, events.narrative_timestamp, events.provenance_interpreter, events.provenance_interpreter_id,
         occurrences.occurrence_id, occurrences.event_entity_id, occurrences.title AS occurrence_title
       FROM narrative_records AS records
       JOIN narrative_events AS events
@@ -358,7 +359,8 @@ function createWorldbuildDataService(db) {
     if (current?.managed) throw new Error('This entry belongs to an Event occurrence. Open the event to change it.');
   }
 
-  function saveSubjectEntry(payload) {
+  // A bulk import writes hundreds of entries and reads none of them back, so it skips the projection.
+  function writeSubjectEntry(payload) {
     const { workspaceId, subjectId, kind, entry, existingId } = payload || {};
     requireEntryKind(kind);
     const current = existingId ? getSubjectRecord(workspaceId, subjectId, kind, existingId) : null;
@@ -392,7 +394,11 @@ function createWorldbuildDataService(db) {
       }
       persistManualEvent({ workspaceId, subjectId, eventId, evidenceId, createdAt, operations, action: current ? 'updated' : 'added' });
     })();
-    return getSubjectKnowledge(workspaceId, subjectId);
+  }
+
+  function saveSubjectEntry(payload) {
+    writeSubjectEntry(payload);
+    return getSubjectKnowledge(payload?.workspaceId, payload?.subjectId);
   }
 
   function deleteSubjectEntry(payload) {
@@ -417,7 +423,7 @@ function createWorldbuildDataService(db) {
     const rows = db.prepare(`
       SELECT records.record_id, records.payload_json, records.source_event_id,
         records.applied_at, events.narrative_sequence, events.narrative_timestamp,
-        events.provenance_interpreter
+        events.provenance_interpreter, events.provenance_interpreter_id
       FROM narrative_records records
       JOIN narrative_events events
         ON events.workspace_id = records.workspace_id
@@ -454,6 +460,7 @@ function createWorldbuildDataService(db) {
           relatedEntityIds: normalizeIds(payload.relatedEntityIds?.length ? payload.relatedEntityIds : legacyAboutId ? [legacyAboutId] : []),
           sourceEventId: row.source_event_id,
           source: row.provenance_interpreter === 'user' ? 'manual' : 'narrative',
+          ...(row.provenance_interpreter_id === SEEDED_BY.interpreterId ? { by: 'kallamo' } : {}),
           position: {
             sequence: row.narrative_sequence,
             ...(row.narrative_timestamp ? { timestamp: row.narrative_timestamp } : {}),
@@ -664,6 +671,7 @@ function createWorldbuildDataService(db) {
     listReviewCounts,
     listPendingReviewIds,
     listWorldFacts,
+    writeSubjectEntry,
     saveWorldFact,
     deleteWorldFact,
     saveSubjectEntry,
@@ -847,7 +855,9 @@ function entryOrigin(row) {
       title: row.occurrence_title || '',
     };
   }
-  return { kind: row.provenance_interpreter === 'user' ? 'authored' : 'narrative' };
+  if (row.provenance_interpreter !== 'user') return { kind: 'narrative' };
+  // Written by the bundled story rather than the person; still authored, so it edits and exports the same.
+  return row.provenance_interpreter_id === SEEDED_BY.interpreterId ? { kind: 'authored', by: 'kallamo' } : { kind: 'authored' };
 }
 
 function toEntry(row, payload, resolveEntityName) {

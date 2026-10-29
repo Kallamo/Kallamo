@@ -13,6 +13,7 @@ import {
 } from './RoleplayPanelParts';
 import { describeSkillChange, kindOf, skillChangeItems, startingProfileText } from './changeKinds';
 import { describeSpanCheck } from '../chat/frame-format';
+import SEEDED_BY from '../../../shared/seed-provenance.json';
 
 const EMPTY_SCENE = {
   locationId: null,
@@ -556,6 +557,7 @@ function TransferEditor({ transfer, setTransfer, item, actors, locations, curren
 
 
 function turnTitle(turn) {
+  if (turn.seeded) return SEEDED_BY.label;
   if (turn.manual) return 'You';
   return turn.frame ? `Turn ${turn.turnNumber}` : 'Recent change';
 }
@@ -666,10 +668,12 @@ function groupRecentTurns(configuration) {
   const turnBefore = time => frames.reduce((latest, frame) => (frame.createdAt <= time ? frame.originId : latest), 'start');
   const add = (originId, change) => {
     if (!originId) return;
-    const key = change.source === 'manual' ? `manual:after:${turnBefore(change.createdAt || 0)}` : originId;
+    // The bundled story's own setup gathers under Kallamo, apart from the player's edits.
+    const seeded = originId === SEEDED_BY.provenanceId;
+    const key = seeded ? originId : change.source === 'manual' ? `manual:after:${turnBefore(change.createdAt || 0)}` : originId;
     let turn = turns.get(key);
     if (!turn) {
-      turn = { key, originId, frame: null, turnNumber: null, manual: change.source === 'manual', createdAt: change.createdAt || 0, changes: [] };
+      turn = { key, originId, frame: null, turnNumber: null, manual: change.source === 'manual', seeded, createdAt: change.createdAt || 0, changes: [] };
       turns.set(key, turn);
     }
     turn.createdAt = Math.max(turn.createdAt || 0, change.createdAt || 0);

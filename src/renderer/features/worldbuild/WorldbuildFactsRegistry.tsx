@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRef } from 'react';
-import { BookCheck, Lock, MoreHorizontal, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
+import { BookCheck, Lock, MoreHorizontal, Package, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
+import SEEDED_BY from '../../../shared/seed-provenance.json';
 import Menu, { MenuItem, MenuSeparator } from '../../components/ui/Menu';
 import IconButton from '../../components/ui/IconButton';
 import { meta } from './worldbuildConfig';
@@ -262,7 +263,9 @@ function FactCard({ fact, names, types, onEdit, onDelete }: {
     ? { label: 'From an event', icon: Lock, tone: 'text-entity-event' }
     : fact.source === 'narrative'
       ? { label: 'From the story', icon: AiGlyph, tone: 'text-entity-event' }
-      : { label: 'Written by you', icon: Pencil, tone: 'text-text-subtle' };
+      : fact.by === 'kallamo'
+        ? { label: SEEDED_BY.label, icon: Package, tone: 'text-text-subtle' }
+        : { label: 'Written by you', icon: Pencil, tone: 'text-text-subtle' };
   const OriginIcon = origin.icon;
   return (
     <article className="py-4">

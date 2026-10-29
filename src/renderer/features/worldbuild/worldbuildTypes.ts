@@ -16,6 +16,8 @@ export type WorldbuildKnowledgeEntryKind = KnowledgeEntryKind;
 /** Where an entry came from, in the same terms the Facts registry uses. */
 export interface WorldbuildEntryOrigin {
   kind: 'authored' | 'narrative' | 'occurrence';
+  /** Set when the bundled story wrote it rather than the person. */
+  by?: 'kallamo';
   occurrenceId?: string;
   eventEntityId?: string;
   title?: string;
@@ -112,6 +114,8 @@ export interface WorldbuildFact {
   relatedEntityIds: string[];
   sourceEventId: string;
   source: 'manual' | 'narrative';
+  /** Set when the bundled story wrote it rather than the person. */
+  by?: 'kallamo';
   position: { sequence: number; timestamp?: string };
   appliedAt: string;
 }

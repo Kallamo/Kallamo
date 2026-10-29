@@ -1,7 +1,7 @@
 import { Fragment, type KeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpenCheck, Brain, Check, ChevronDown, Eye, EyeOff, Lightbulb, Link2, Lock, LockKeyhole,
-  Pencil, Plus, Search, Trash2, Users, UserMinus, X, Ear, Info, MoreHorizontal,
+  Pencil, Plus, Search, Trash2, Users, UserMinus, X, Ear, Info, MoreHorizontal, Package,
 } from 'lucide-react';
 import Menu, { MenuItem } from '../../components/ui/Menu';
 import IconButton from '../../components/ui/IconButton';
@@ -13,6 +13,7 @@ import SearchableSelect from '../../components/ui/SearchableSelect';
 import WorldDateInput, { formatWorldDate, type WorldDateValue } from './WorldDateInput';
 import { SpoilerCover, SpoilerMenuItem, SpoilerText, SpoilerTextArea } from './Spoilers';
 import { locationSizeOf } from '../../../shared/location-sizes';
+import SEEDED_BY from '../../../shared/seed-provenance.json';
 
 // A statement or memory is hidden from readers under its own id on the owner's sheet.
 const entryKey = (entry: { id: string; entryId?: string } | null | undefined) => (entry ? `knowledge:${entry.entryId || entry.id}` : null);
@@ -66,6 +67,7 @@ const ENTRY_ORIGINS: Record<'authored' | 'narrative' | 'occurrence', { label: st
   narrative: { label: 'From the narrative state', icon: AiGlyph, tone: 'text-text-muted' },
   authored: { label: 'Written by you', icon: Pencil, tone: 'text-text-muted' },
 };
+const SEEDED_ORIGIN = { label: SEEDED_BY.label, icon: Package, tone: 'text-text-muted' };
 const NATIVE_FIELDS: Record<string, Array<{ key: string; label: string }>> = {
   Characters: [{ key: 'status', label: 'Status' }, { key: 'age', label: 'Age' }, { key: 'appearance', label: 'Appearance' }, { key: 'personality', label: 'Personality' }],
   Creatures: [{ key: 'status', label: 'Status' }, { key: 'disposition', label: 'Disposition' }, { key: 'nature', label: 'Nature' }, { key: 'abundance', label: 'Abundance' }, { key: 'threat', label: 'Threat' }, { key: 'abilities', label: 'Abilities' }, { key: 'appearance', label: 'Appearance' }, { key: 'personality', label: 'Personality' }],
@@ -1696,7 +1698,7 @@ function Statement({ entry, entities = [], calendar = null, onEdit, onDelete, on
   const memoryState = entry.kind === 'memory' ? MEMORY_STATES[entry.accessibility] : null;
   const MemoryIcon = memoryState?.icon;
   const label = memoryState?.label || (entry.kind === 'belief' ? 'Believed' : 'Known');
-  const origin = ENTRY_ORIGINS[entry.origin?.kind ?? 'authored'] ?? ENTRY_ORIGINS.authored;
+  const origin = entry.origin?.by === 'kallamo' ? SEEDED_ORIGIN : ENTRY_ORIGINS[entry.origin?.kind ?? 'authored'] ?? ENTRY_ORIGINS.authored;
   const OriginIcon = origin.icon;
   const occurrenceTitle = entry.origin?.kind === 'occurrence' ? entry.origin.title : '';
   const categoryLabel = entryCategoryLabel(entry.category);

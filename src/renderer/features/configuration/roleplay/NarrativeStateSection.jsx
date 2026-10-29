@@ -4,6 +4,7 @@ import Button from '../../../components/ui/Button';
 import { ConfigSection, ChoiceCard, Help, formatSigned } from '../ConfigParts';
 import { describeSkillChange, entityChangeLabel, kindOf, narrativeEventLabel, startingProfileText } from '../../roleplay/changeKinds';
 import { locationSizeLabel } from '../../../../shared/location-sizes';
+import SEEDED_BY from '../../../../shared/seed-provenance.json';
 
 const POLICIES = [
   { value: 'manual', title: 'Manual', description: 'The AI never changes the record. Only you do.' },
@@ -214,10 +215,15 @@ export function describeChange(item, names) {
   }
   if (item.kind === 'narrative') {
     const event = item.record.proposal.changeSet.event;
+    // What the bundled story wrote is signed by Kallamo, beside whoever it is about.
+    const seeded = item.record.proposal.provenance?.interpreterId === SEEDED_BY.interpreterId;
+    const about = (event.participants || []).map(participant => names.get(participant.entityId)).filter(Boolean);
     return {
       label: narrativeEventLabel(item.record),
       title: event.description,
-      who: (event.participants || []).map(participant => name(participant.entityId)).join(', ')
+      who: seeded
+        ? [SEEDED_BY.label, ...about].join(' · ')
+        : (event.participants || []).map(participant => name(participant.entityId)).join(', ')
     };
   }
   if (item.kind === 'scene') {
