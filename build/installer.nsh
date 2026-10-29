@@ -10,7 +10,24 @@
   !define MUI_WELCOMEPAGE_TEXT "Kallamo is a local-first studio for roleplay and long-form writing.$\r$\n$\r$\nYour stories stay on this computer. Click Next to continue."
   !define MUI_FINISHPAGE_TITLE "Kallamo is ready"
   !define MUI_FINISHPAGE_TEXT "Kallamo has been installed on your computer. From now on it updates itself when it opens."
-  !define MUI_FINISHPAGE_SHOWFUNCTION KallamoFinishShow
+!endif
+
+; The assisted installer's own finish page, with a show function to colour the run checkbox.
+; A show function applies to the next page declared, so it is defined here, right before it.
+!macro customFinishPage
+  !ifndef HIDE_RUN_AFTER_FINISH
+    Function StartApp
+      ${if} ${isUpdated}
+        StrCpy $1 "--updated"
+      ${else}
+        StrCpy $1 ""
+      ${endif}
+      ${StdUtils.ExecShellAsUser} $0 "$launchLink" "open" "$1"
+    FunctionEnd
+
+    !define MUI_FINISHPAGE_RUN
+    !define MUI_FINISHPAGE_RUN_FUNCTION "StartApp"
+  !endif
 
   ; A themed checkbox ignores control colours, so its theme is dropped first.
   ; The run checkbox is the finish page's only button.
@@ -20,7 +37,10 @@
     System::Call 'uxtheme::SetWindowTheme(p r1, w " ", w " ")'
     SetCtlColors $1 EEF2F5 011419
   FunctionEnd
-!endif
+
+  !define MUI_PAGE_CUSTOMFUNCTION_SHOW KallamoFinishShow
+  !insertmacro MUI_PAGE_FINISH
+!macroend
 
 ; The assisted installer has no welcome page unless one is asked for.
 !macro customWelcomePage
