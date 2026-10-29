@@ -14,6 +14,7 @@ describe('Narrative State structured output schemas', () => {
       types: ['knowledge'],
       entityIds: ['corwin'],
       presentIds: ['corwin'],
+      aboutIds: ['corwin'],
       confidence: 0.9,
       evidence: ['Corwin heard a new concept.'],
       requiresFullAnalysis: false,
@@ -40,7 +41,7 @@ describe('Narrative State structured output schemas', () => {
   test('scene memory lines name their speaker and nothing else', () => {
     const validate = new Ajv().compile(NARRATIVE_TRIAGE_SCHEMA);
     const turn = {
-      consequential: false, types: [], entityIds: [], presentIds: ['guard'], confidence: 1, evidence: [],
+      consequential: false, types: [], entityIds: [], presentIds: ['guard'], aboutIds: [], confidence: 1, evidence: [],
       requiresFullAnalysis: false, reason: 'dialogue', timeAdvance: null
     };
 

@@ -3,21 +3,26 @@
 const OPEN_TAG = '<scene_plan>';
 const CLOSE_TAG = '</scene_plan>';
 const PLAN_BLOCK = /<scene_plan>([\s\S]*?)<\/scene_plan>/i;
+const PLAN_BLOCKS = /<scene_plan>[\s\S]*?<\/scene_plan>\s*/gi;
 const UNCLOSED_PLAN = /<scene_plan>([\s\S]*)$/i;
+const LEADING_REASONING = /^\s*<think>[\s\S]*?<\/think>/i;
 
+// Reasoning stays as the model wrote it; a plan drafted inside it is not the one that counts.
 function extractScenePlan(text) {
     const value = String(text ?? '');
-    const closed = PLAN_BLOCK.exec(value);
+    const reasoning = LEADING_REASONING.exec(value)?.[0] || '';
+    const reply = value.slice(reasoning.length);
+    const closed = PLAN_BLOCK.exec(reply);
     if (closed) {
         return {
             plan: closed[1].trim(),
-            text: (value.slice(0, closed.index) + value.slice(closed.index + closed[0].length).replace(/^\s+/, '')).trim()
+            text: (reasoning + reply.replace(PLAN_BLOCKS, '')).trim()
         };
     }
     // A plan the model never closed swallowed the reply; what remains is still not narration.
-    const open = UNCLOSED_PLAN.exec(value);
-    if (open) return { plan: open[1].trim(), text: value.slice(0, open.index).trim() };
-    return { plan: '', text: value };
+    const open = UNCLOSED_PLAN.exec(reply);
+    if (open) return { plan: open[1].trim(), text: (reasoning + reply.slice(0, open.index)).trim() };
+    return { plan: PLAN_BLOCK.exec(reasoning)?.[1].trim() || '', text: value };
 }
 
 /**

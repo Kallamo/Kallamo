@@ -141,7 +141,7 @@ export class NarrativeStateSystem {
     const participants = unique(input.event.participantIds).filter(id => input.allowedEntityIds.has(id));
     if (!participants.length) return { skipped: 'no-valid-participants' };
 
-    const decision = input.forceReview || input.updatePolicy === 'review' || (input.updatePolicy !== 'automatic' && requiresReview(input.event))
+    const decision = input.forceReview || input.updatePolicy === 'review' || requiresReview(input.event)
       ? 'review'
       : 'automatic';
     const existing = this.ledger.get(input.workspaceId, eventId);

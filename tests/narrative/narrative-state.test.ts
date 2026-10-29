@@ -339,6 +339,16 @@ describe('Narrative State runtime', () => {
     expect(secret.decision).toBe('review');
   });
 
+  test('the automatic policy still holds a secret for review', () => {
+    const secret = system.createEvent({ ...input('automatic-secret', {
+      type: 'revelation', description: 'Elias learns the guild ledger is forged.', excerpt: 'The ledger is a forgery.',
+      participantIds: ['elias'], confidence: 0.98,
+      operations: [{ type: 'knowledge', subjectId: 'elias', proposition: { subjectId: 'guild', predicate: 'forged-ledger', object: 'The guild ledger has been forged for years.' }, category: 'secret', acquisition: 'participant', confidence: 0.98 }]
+    }), updatePolicy: 'automatic' });
+
+    expect(secret.decision).toBe('review');
+  });
+
   function input(originId: string, event: ExtractedNarrativeEvent) {
     return { workspaceId: 'workspace-one', originId, interpreterId: 'system-model', event, allowedEntityIds: allowed };
   }

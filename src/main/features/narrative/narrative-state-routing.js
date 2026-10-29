@@ -180,12 +180,26 @@ function extractNarrativeSignals({ userMessage, narrativeResponse, entities = []
   };
 }
 
-function resolveNarrativeRouting({ triage, signals }) {
+function resolveNarrativeRouting({ triage, signals, hasResourceDefinitions = true, reachableItemIds = [] }) {
   const triageDomains = unique(
     (Array.isArray(triage?.types) ? triage.types : []).filter(type => NARRATIVE_DOMAINS.includes(type))
   );
   const selectedDomains = new Set(triage?.consequential ? triageDomains : []);
   const forceReasons = [];
+
+  // Meaning-based checks, so they hold in any language. A quantity that changes in a world without
+  // resources can only be an item, like coins paid; resource stays for skills and progression.
+  if (selectedDomains.has('resource') && !hasResourceDefinitions && !selectedDomains.has('inventory')) {
+    selectedDomains.add('inventory');
+    forceReasons.push('resource-without-definitions');
+  }
+  // A turn about an item within reach may hand it over, whatever words it uses.
+  const reachable = new Set(reachableItemIds);
+  const triageItems = [...(Array.isArray(triage?.entityIds) ? triage.entityIds : []), ...(Array.isArray(triage?.aboutIds) ? triage.aboutIds : [])];
+  if (triage?.consequential && !selectedDomains.has('inventory') && triageItems.some(id => reachable.has(id))) {
+    selectedDomains.add('inventory');
+    forceReasons.push('item-in-reach');
+  }
 
   for (const domain of signals.strongDomains || []) {
     if (!MECHANICAL_DOMAINS.has(domain) || selectedDomains.has(domain)) continue;
@@ -242,26 +256,76 @@ function resolveNarrativeRouting({ triage, signals }) {
   };
 }
 
+const MANIFEST_EVIDENCE_CHARS = 240;
+
+/**
+ * Grouped by subject, with each target under its state. An undetermined pair says nothing the
+ * absence of the pair does not, and source ids name records the analysis cannot read, so both stay out.
+ */
 function compactNarrativeManifest(manifest, subjectIds, targetIds) {
   if (!manifest) return null;
   const subjects = new Set(subjectIds);
   const targets = new Set(targetIds);
-  const assessments = (manifest.assessments || []).filter(assessment =>
-    subjects.has(assessment.subjectId) && targets.has(assessment.targetId)
-  );
-  const deepenedPairs = (manifest.deepenedPairs || []).filter(pair =>
-    subjects.has(pair.subjectId) && targets.has(pair.targetId)
-  );
+  const bySubject = new Map();
+  const entryFor = subjectId => {
+    if (!bySubject.has(subjectId)) bySubject.set(subjectId, { subjectId });
+    return bySubject.get(subjectId);
+  };
+  const add = (entry, key, value) => { (entry[key] ||= []).push(value); };
+  for (const assessment of manifest.assessments || []) {
+    if (!subjects.has(assessment.subjectId) || !targets.has(assessment.targetId)) continue;
+    if (assessment.state === 'undetermined') continue;
+    const entry = entryFor(assessment.subjectId);
+    if (assessment.state === 'evidence-candidate') {
+      const evidence = String(assessment.evidence || '').trim().slice(0, MANIFEST_EVIDENCE_CHARS);
+      add(entry, 'candidates', evidence ? { targetId: assessment.targetId, evidence } : { targetId: assessment.targetId });
+    } else {
+      add(entry, assessment.state || 'confirmed', assessment.targetId);
+    }
+  }
+  for (const pair of manifest.deepenedPairs || []) {
+    if (subjects.has(pair.subjectId) && targets.has(pair.targetId)) add(entryFor(pair.subjectId), 'deepened', pair.targetId);
+  }
   return {
-    requestId: manifest.requestId,
-    sequence: manifest.sequence,
     sceneId: manifest.sceneId,
     playerSubjectId: manifest.playerSubjectId,
     subjectIds: (manifest.subjectIds || []).filter(subjectId => subjects.has(subjectId)),
     targetIds: (manifest.targetIds || []).filter(targetId => targets.has(targetId)),
-    assessments,
-    deepenedPairs,
+    subjects: [...bySubject.values()],
   };
+}
+
+/**
+ * Speakers join the participants; a participant left out for two turns steps back to nearby. Never
+ * removes anyone from the place (see docs/narrative-state.md). Returns only the arrays that change.
+ * @param {{ scene: any, playerId?: string|null, speakerIds?: Iterable<string>, involvedIds?: Iterable<string>,
+ *   previous?: { involvedIds?: Iterable<string> }|null }} input
+ */
+function resolveSceneCast({ scene, playerId = null, speakerIds = [], involvedIds = [], previous = null }) {
+  if (!scene) return {};
+  const keep = id => id && id !== playerId;
+  const participants = (scene.participantIds || []).filter(keep);
+  const observers = (scene.possibleObserverIds || []).filter(keep);
+  const nearby = (scene.nearbyIds || []).filter(keep);
+  const speakers = new Set(speakerIds);
+  const involved = new Set([...involvedIds, ...speakers]);
+  const previousInvolved = previous?.involvedIds ? new Set(previous.involvedIds) : null;
+
+  const idle = id => previousInvolved && !involved.has(id) && !previousInvolved.has(id);
+
+  const nextParticipants = [];
+  const nextObservers = [];
+  const nextNearby = [];
+  for (const id of participants) (idle(id) ? nextNearby : nextParticipants).push(id);
+  for (const id of observers) (speakers.has(id) ? nextParticipants : nextObservers).push(id);
+  for (const id of nearby) (speakers.has(id) ? nextParticipants : nextNearby).push(id);
+
+  const same = (a, b) => a.length === b.length && a.every(id => b.includes(id));
+  const patch = {};
+  if (!same(nextParticipants, participants)) patch.participantIds = [...new Set(nextParticipants)];
+  if (!same(nextObservers, observers)) patch.possibleObserverIds = [...new Set(nextObservers)];
+  if (!same(nextNearby, nearby)) patch.nearbyIds = [...new Set(nextNearby)];
+  return patch;
 }
 
 const HOLDER_RECORD_TYPES = new Set(['knowledge', 'belief', 'memory']);
@@ -280,14 +344,18 @@ function resolveAnalysisHolders({ candidateIds, sceneIds, presentIds }) {
 /**
  * Knowledge, beliefs and memories only change for someone who perceived the turn, so they are kept
  * by holder; facts by what they are about. Relationships have their own baseline.
+ * With topicIds, a present holder outside fullHolderIds keeps only records about those topics, the
+ * only ones a turn can change; without them every present holder is read in full.
  * @param {Array<{ type: string, subjectId: string | null, value: any }>} rows
- * @param {{ holderIds: Iterable<string>, mentionedHolderIds?: Iterable<string>, targetIds: Iterable<string>, focusIds: Iterable<string>, limit?: number }} options
+ * @param {{ holderIds: Iterable<string>, mentionedHolderIds?: Iterable<string>, targetIds: Iterable<string>, focusIds: Iterable<string>, topicIds?: Iterable<string> | null, fullHolderIds?: Iterable<string>, limit?: number }} options
  */
-function selectPerspectiveRecords(rows, { holderIds, mentionedHolderIds = [], targetIds, focusIds, limit = 120 }) {
+function selectPerspectiveRecords(rows, { holderIds, mentionedHolderIds = [], targetIds, focusIds, topicIds = null, fullHolderIds = [], limit = 120 }) {
   const holders = new Set(holderIds);
   const mentionedHolders = new Set(mentionedHolderIds);
   const targets = new Set(targetIds);
   const focus = new Set(focusIds);
+  const topics = topicIds ? new Set(topicIds) : null;
+  const fullHolders = new Set(fullHolderIds);
   const active = (rows || []).filter(row => row.type !== 'relationship'
     && (row.value?.status === undefined || row.value.status === 'active'));
   const superseded = new Set(active.map(row => row.value.supersedesMemoryId).filter(Boolean));
@@ -297,15 +365,17 @@ function selectPerspectiveRecords(rows, { holderIds, mentionedHolderIds = [], ta
     if (row.type === 'memory' && superseded.has(value.id)) continue;
     const about = [value.proposition?.subjectId, value.entityId, ...(value.relatedEntityIds || [])].filter(Boolean);
     const inFocus = about.some(id => focus.has(id));
+    const onTopic = Boolean(topics) && about.some(id => topics.has(id));
     if (HOLDER_RECORD_TYPES.has(row.type)) {
       if (!holders.has(row.subjectId) && !(inFocus && mentionedHolders.has(row.subjectId))) continue;
-    } else if (!inFocus && !about.some(id => targets.has(id))) {
+      if (topics && holders.has(row.subjectId) && !fullHolders.has(row.subjectId) && !onTopic) continue;
+    } else if (!inFocus && !onTopic && !about.some(id => targets.has(id))) {
       continue;
     }
-    scored.push({ row, inFocus });
+    scored.push({ row, inFocus, onTopic });
   }
   // Rows arrive newest first, and a stable sort keeps that order inside each group.
-  scored.sort((a, b) => Number(b.inFocus) - Number(a.inFocus));
+  scored.sort((a, b) => Number(b.onTopic) - Number(a.onTopic) || Number(b.inFocus) - Number(a.inFocus));
   return {
     records: scored.slice(0, limit).map(({ row }) => compactPerspectiveRecord(row)),
     candidates: scored.length,
@@ -360,5 +430,6 @@ module.exports = {
   hasEpistemicDomain,
   resolveAnalysisHolders,
   resolveNarrativeRouting,
+  resolveSceneCast,
   selectPerspectiveRecords,
 };

@@ -16,6 +16,17 @@ describe('extracting the scene plan', () => {
     expect(extractScenePlan('Rain falls.')).toEqual({ plan: '', text: 'Rain falls.' });
   });
 
+  test('a plan drafted in the reasoning never shields the one in the reply', () => {
+    const draft = `<think>Draft:\n<scene_plan>Rue | knows: draft</scene_plan>\nNow write it.</think>`;
+    expect(extractScenePlan(`${draft}<scene_plan>\nRue | sabe: final\n</scene_plan>\n\nA mulher dá de ombros.`))
+      .toEqual({ plan: 'Rue | sabe: final', text: `${draft}A mulher dá de ombros.` });
+    expect(extractScenePlan(`${draft}A mulher dá de ombros.`)).toEqual({ plan: 'Rue | knows: draft', text: `${draft}A mulher dá de ombros.` });
+  });
+
+  test('a second plan in the reply is dropped too', () => {
+    expect(extractScenePlan(`<scene_plan>one</scene_plan>Rain.\n<scene_plan>two</scene_plan>\nMore rain.`)).toEqual({ plan: 'one', text: 'Rain.\nMore rain.' });
+  });
+
   test('an unclosed plan never leaks into the reply', () => {
     expect(extractScenePlan(`<scene_plan>${PLAN}`)).toEqual({ plan: PLAN, text: '' });
   });

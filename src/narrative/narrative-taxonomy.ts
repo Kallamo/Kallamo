@@ -1,12 +1,5 @@
-/**
- * The vocabulary a durable record has to name itself with.
- *
- * A blocklist of predicate names cannot hold: the interpreter renames the predicate and the
- * same transcript of a scene walks straight through. A closed list of categories inverts
- * that. Every record has to declare what kind of thing it is, the list is enforced by the
- * response schema, and the transient categories exist on purpose so momentary detail has a
- * legal place to be classified into and can then be dropped by name instead of by guesswork.
- */
+// The closed vocabulary a model-written record must declare. Transient values exist so momentary
+// detail has somewhere honest to go and is dropped by name. See docs/narrative-state.md.
 
 export const DURABLE_KNOWLEDGE_CATEGORIES = [
   'world-lore',
@@ -95,12 +88,7 @@ const DURABLE_MEMORY_SET = new Set<string>(DURABLE_MEMORY_CATEGORIES);
 const CAUSE_SET = new Set<string>(RELATIONSHIP_CAUSES);
 const DURABLE_CAUSE_SET = new Set<string>(DURABLE_RELATIONSHIP_CAUSES);
 
-/**
- * Only these describe a subject to itself in a way worth storing. A character keeping their
- * own secret, their own true identity, or their own plan is real perspective. "What Alistair
- * knows about Alistair", written in the third person, is a world fact wearing a knowledge
- * record and belongs in the canon layer instead.
- */
+/** A subject's own secret, identity or plan is perspective; anything else about itself is a world fact. */
 const SELF_REFERENTIAL_CATEGORIES = new Set<string>(['secret', 'identity', 'intent']);
 
 function slug(value: unknown): string {
@@ -143,11 +131,7 @@ export function allowsSelfReference(category: unknown): boolean {
   return SELF_REFERENTIAL_CATEGORIES.has(slug(category));
 }
 
-/**
- * A second belt behind the category gate. A category can be misdeclared; these predicate
- * names describe a moment the scene already carries and never a durable statement, so a
- * record wearing one is dropped whatever it calls itself.
- */
+/** Backs up a misdeclared category: these predicates only ever describe the live scene. */
 const SCENE_STATE_PREDICATES = new Set([
   'current-location', 'current-position', 'current-place', 'current-activity',
   'current-action', 'current-scene', 'current-state', 'current-mood', 'current-emotion',
@@ -170,11 +154,7 @@ const IDENTIFIER_PATTERNS = [
   /^[a-z][a-z0-9]*_[a-z0-9]{6,}$/i
 ];
 
-/**
- * A record whose content is an opaque key teaches the model nothing and reads as a run of
- * characters in the prompt. The pipeline resolves entity references by name where it can, so
- * anything still shaped like a raw key at this point is extraction debris.
- */
+/** Names are resolved before this runs, so anything still shaped like a raw key is debris. */
 export function looksLikeIdentifier(value: unknown): boolean {
   if (typeof value !== 'string') return false;
   const candidate = value.trim();
@@ -182,11 +162,7 @@ export function looksLikeIdentifier(value: unknown): boolean {
   return IDENTIFIER_PATTERNS.some(pattern => pattern.test(candidate));
 }
 
-/**
- * What two stored statements have to share to count as the same statement. Predicates drift
- * between turns while the sentence stays identical, so the sentence is the key and the
- * predicate is not part of it.
- */
+/** The sentence is the key: predicates drift between turns while the sentence stays the same. */
 export function statementKey(value: unknown): string {
   if (value === null || value === undefined) return '';
   const text = typeof value === 'string' ? value : JSON.stringify(value);
@@ -199,9 +175,8 @@ export function statementKey(value: unknown): string {
 }
 
 /**
- * Predicates that carry no meaning of their own. With one of these the object has to be the
- * whole statement, so a lone word under it is an empty record; under a specific predicate the
- * same word is a value, which is why "gate-code: Dawnfall" is a complete claim.
+ * Under these the object has to be the whole statement. Under a specific predicate one word is a
+ * value, as in "gate-code: Dawnfall".
  */
 const GENERIC_PREDICATES = new Set([
   'worldbuild-statement', 'statement', 'note', 'fact', 'info', 'information',
@@ -221,13 +196,8 @@ export function isProseStatement(value: unknown): boolean {
 }
 
 /**
- * What makes two propositions the same claim.
- *
- * A statement written as prose is identified by its sentence alone: the interpreter renames
- * the predicate between turns while the sentence stays word for word, and keying on the
- * predicate let the same observation be stored once per wording. A structured value is the
- * opposite case, because there the predicate carries the claim and the object is only its
- * value, so "has-hidden-route: true" and "is-hostile: true" must stay apart.
+ * Prose is identified by its sentence, since the predicate drifts. A structured value keeps the
+ * predicate, which carries the claim: "has-hidden-route: true" and "is-hostile: true" differ.
  */
 export function propositionIdentity(subjectId: unknown, predicate: unknown, object: unknown): string {
   const about = String(subjectId ?? '');

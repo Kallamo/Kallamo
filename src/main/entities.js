@@ -577,7 +577,6 @@ function exportWorldbuild(workspaceId) {
 }
 
 // No de-dupe by name: a same-named entity is not assumed to be the same one.
-// Everything lands as `proposed` for the user to review.
 // A user's package lands as proposals to review; a package the app ships lands confirmed.
 function importWorldbuild(workspaceId, payload, { confirmed = false } = {}) {
   if (!payload || payload.kallamoWorldbuild !== 1 || !Array.isArray(payload.entities)) {
