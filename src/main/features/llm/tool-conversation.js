@@ -9,18 +9,36 @@ function normalize(provider) {
   return String(provider || '').toLowerCase();
 }
 
+// Families that predate chat messages on Bedrock and still read one flat prompt string.
+const BEDROCK_PROMPT_MODELS = /mistral-7b|mixtral|mistral-large-2402|mistral-small-2402|amazon\.|cohere\./;
+
+// Bedrock passes each request through in its model's own format. Newer families (Kimi,
+// DeepSeek, Qwen, gpt-oss, current Mistral) read OpenAI chat messages, so that is the default.
+function bedrockFormat(model) {
+  const id = String(model || '').toLowerCase();
+  if (id.includes('claude')) return 'anthropic';
+  if (id.includes('meta') || id.includes('llama')) return 'llama';
+  if (BEDROCK_PROMPT_MODELS.test(id)) return 'prompt';
+  return 'openai';
+}
+
 function isBedrockClaude(provider, model) {
-  return normalize(provider) === 'aws bedrock' && String(model || '').toLowerCase().includes('claude');
+  return normalize(provider) === 'aws bedrock' && bedrockFormat(model) === 'anthropic';
 }
 
 function usesAnthropicFormat(provider, model) {
   return normalize(provider) === 'anthropic' || isBedrockClaude(provider, model);
 }
 
-// Bedrock's other model families take one flat prompt string, which has no place for tools.
+function usesOpenAiFormat(provider, model) {
+  const p = normalize(provider);
+  return OPENAI_COMPATIBLE.has(p) || (p === 'aws bedrock' && bedrockFormat(model) === 'openai');
+}
+
+// Bedrock's flat-prompt families have no place for tools.
 function supportsNativeTools(provider, model) {
   const p = normalize(provider);
-  return OPENAI_COMPATIBLE.has(p) || GOOGLE.has(p) || usesAnthropicFormat(p, model);
+  return usesOpenAiFormat(p, model) || GOOGLE.has(p) || usesAnthropicFormat(p, model);
 }
 
 function renderOpenAi(conversation) {
@@ -108,7 +126,7 @@ function renderGoogle(conversation) {
 function renderTools(provider, model, tools) {
   if (!Array.isArray(tools) || !tools.length) return null;
   const p = normalize(provider);
-  if (OPENAI_COMPATIBLE.has(p)) {
+  if (usesOpenAiFormat(p, model)) {
     return tools.map(tool => ({ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters } }));
   }
   if (usesAnthropicFormat(p, model)) {
@@ -125,7 +143,7 @@ function applyConversation(body, provider, model, { systemPrompt = '', conversat
   const p = normalize(provider);
   const next = { ...body };
   const renderedTools = renderTools(p, model, tools);
-  if (OPENAI_COMPATIBLE.has(p)) {
+  if (usesOpenAiFormat(p, model)) {
     next.messages = [{ role: 'system', content: systemPrompt }, ...renderOpenAi(conversation)];
   } else if (usesAnthropicFormat(p, model)) {
     next.messages = renderAnthropic(conversation);
@@ -150,9 +168,10 @@ function parseArguments(value) {
   }
 }
 
+// Bedrock replies in its model's format, so the reply's own shape tells which one it is.
 function readToolReply(provider, data) {
   const p = normalize(provider);
-  if (OPENAI_COMPATIBLE.has(p)) {
+  if (OPENAI_COMPATIBLE.has(p) || (p === 'aws bedrock' && Array.isArray(data?.choices))) {
     const message = data?.choices?.[0]?.message || {};
     const toolCalls = (Array.isArray(message.tool_calls) ? message.tool_calls : [])
       .map(call => ({ id: call?.id || null, name: call?.function?.name || '', args: parseArguments(call?.function?.arguments) }))
@@ -177,11 +196,10 @@ function readToolReply(provider, data) {
   return { toolCalls: [], raw: null, rawFormat: null };
 }
 
-// Bedrock's InvokeModel takes explicit cache breakpoints only, moved to the last block each turn.
-// Every message is sent as blocks, so a turn serializes the same with or without the mark.
-// Marks the message `fromEnd` places from the end (1 is the last one), so a request can read a
-// prefix an earlier request wrote without writing its own.
+// Every message goes as blocks, so a turn serializes the same with or without the mark.
+// `fromEnd` > 1 reads a prefix an earlier request wrote without writing one.
 function applyCacheBreakpoint(body, provider, model, fromEnd = 1) {
+  if (normalize(provider) === 'openrouter') return markOpenRouterMessage(body, fromEnd);
   if (!usesAnthropicFormat(provider, model) || !Array.isArray(body?.messages)) return body;
   const index = body.messages.length - fromEnd;
   if (index < 0) return body;
@@ -194,6 +212,26 @@ function applyCacheBreakpoint(body, provider, model, fromEnd = 1) {
   content[content.length - 1] = { ...content[content.length - 1], cache_control: { type: 'ephemeral' } };
   messages[index] = { ...target, content };
   return { ...body, messages };
+}
+
+// OpenRouter reads a marker on a text content part. Tool results and tool-call turns carry no text
+// part, so the mark lands on the nearest earlier message that does.
+function markOpenRouterMessage(body, fromEnd) {
+  if (!Array.isArray(body?.messages)) return body;
+  const messages = [...body.messages];
+  for (let index = messages.length - fromEnd; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!['user', 'system', 'assistant'].includes(message?.role)) continue;
+    const parts = typeof message.content === 'string'
+      ? (message.content ? [{ type: 'text', text: message.content }] : [])
+      : (Array.isArray(message.content) ? [...message.content] : []);
+    const last = parts.map(part => part?.type).lastIndexOf('text');
+    if (last < 0) continue;
+    parts[last] = { ...parts[last], cache_control: { type: 'ephemeral' } };
+    messages[index] = { ...message, content: parts };
+    return { ...body, messages };
+  }
+  return body;
 }
 
 // The transcript as plain messages, so the payload budget measures what is actually sent.
@@ -214,6 +252,7 @@ function flattenConversation(conversation, tools = null) {
 }
 
 module.exports = {
+  bedrockFormat,
   supportsNativeTools,
   applyConversation,
   applyCacheBreakpoint,

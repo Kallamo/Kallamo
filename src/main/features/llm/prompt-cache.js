@@ -1,26 +1,12 @@
 'use strict';
 
-// Prompt caching is a prefix match: a provider reuses the leading tokens of a
-// request only while those bytes are identical to an earlier one. Kallamo's
-// payload is therefore split into a stable head (profile instructions, narration
-// policy, constant knowledge) and a volatile tail (clock, retrieval,
-// attachments), and this module decides where a breakpoint may be placed.
-//
-// The economics behind every rule here: a cache write costs about 1.25x the
-// normal input price and a read about 0.1x, so a marked prefix pays for itself
-// as soon as two requests reuse it inside the provider's TTL. A breakpoint on
-// content that changes every turn is a pure 25% surcharge, which is why the
-// volatile tail is never marked, why one-shot utility calls never opt in, and
-// why a scope that keeps missing is put on cooldown.
+// Where a cache breakpoint may go, and when one pays. The reasoning is in docs/prompt-cache.md.
 
 const PROMPT_CACHE_CONTRACT = Object.freeze({
-    // Anthropic silently declines to cache a prefix under its per-model minimum
-    // (1024 tokens on the smallest tier). An ignored breakpoint is free, so this
-    // floor only exists to avoid spending a breakpoint slot on nothing.
+    // The usual floor; cacheMinimumTokens knows the models that ask for more or less. A prefix
+    // under the floor is sent uncached without an error, so a wrong guess only wastes a marker.
     minimumPrefixTokens: 1024,
-    // A read renews an entry, so turns that start closer together than this keep
-    // the five-minute entry warm on their own. The margin covers the generation
-    // itself: an entry's lifetime runs from the start of the request that wrote it.
+    // Under five minutes: an entry's lifetime runs from the start of the request that wrote it.
     shortTtlPaceMs: 4 * 60 * 1000,
     // Past this pace even the hour-long entry has usually expired by the next turn.
     longTtlPaceMs: 55 * 60 * 1000,
@@ -28,22 +14,15 @@ const PROMPT_CACHE_CONTRACT = Object.freeze({
     sessionBreakMs: 2 * 60 * 60 * 1000,
     // Recent in-session gaps that set the pace; their median ignores one long pause.
     paceSampleTurns: 5,
-    // Consecutive marked requests that returned no read before the scope is put
-    // on cooldown. Two reuses already beat the write surcharge, so the bar for
-    // giving up is deliberately high.
+    // Two reuses already beat the write surcharge, so giving up takes several misses.
     missesBeforeCooldown: 3,
     // Requests skipped before probing the cache again after a cooldown.
     cooldownRequests: 6,
-    // Share of the history budget released when the anchored window stops
-    // fitting. Trimming once by this much keeps the next several turns
-    // byte-identical instead of dropping one message per turn and missing every
-    // time.
+    // Released at once when the anchored window stops fitting, so the next turns stay byte-identical.
     reanchorHeadroomRatio: 0.2
 });
 
-// Cheap gate-only estimate. The real tokenizer already runs once per request in
-// payload-budget; re-encoding a full history here would double that cost for a
-// threshold check whose only failure mode is an ignored breakpoint.
+// A rough count is enough: a wrong guess only costs an ignored breakpoint.
 function roughTokens(text) {
     if (!text) return 0;
     return Math.ceil(String(text).length / 4);
@@ -53,36 +32,44 @@ function normalizeProvider(provider) {
     return String(provider || '').trim().toLowerCase();
 }
 
-// Which wire shape carries a breakpoint for this provider and model.
-// - 'anthropic': native `system` block array plus content blocks on messages.
-// - 'openai-parts': OpenAI-compatible content parts, which OpenRouter forwards
-//   to Anthropic-backed models. Every other model it serves caches
-//   automatically and ignores the field, so the model id is checked first.
-// - 'bedrock': Claude on AWS Bedrock, which takes explicit breakpoints on the same
-//   blocks but never the automatic top-level field.
+const isClaude = model => /claude|anthropic/.test(String(model || '').toLowerCase());
+const isGemini = model => /gemini|google\//.test(String(model || '').toLowerCase());
+
+// Where Kallamo places the markers itself; every other route caches on its own or not at all.
+// Gemini on OpenRouter reads only the last marker. Routes are in docs/prompt-cache.md.
 function cacheStyleFor(provider, model) {
     const normalized = normalizeProvider(provider);
     if (normalized === 'anthropic') return 'anthropic';
-    if (normalized === 'aws bedrock') return String(model || '').toLowerCase().includes('claude') ? 'bedrock' : null;
-    if (normalized === 'openrouter') {
-        const id = String(model || '').toLowerCase();
-        return id.includes('claude') || id.includes('anthropic') ? 'openai-parts' : null;
-    }
+    if (normalized === 'aws bedrock') return isClaude(model) ? 'bedrock' : null;
+    if (normalized === 'openrouter') return isClaude(model) || isGemini(model) ? 'openai-parts' : null;
     return null;
 }
 
-// Providers that cache automatically still reward a stable prefix, so callers
-// use this to decide whether the ordering work is worth doing at all.
-function benefitsFromStablePrefix(provider, model) {
-    if (cacheStyleFor(provider, model)) return true;
-    return ['openai', 'openrouter', 'google ai', 'vertex ai'].includes(normalizeProvider(provider));
+// 'explicit': Kallamo places markers. 'automatic': the provider reuses a stable prefix by itself.
+// Either way the response reports what was read, which is what counts.
+function cacheModeFor(provider, model) {
+    if (cacheStyleFor(provider, model)) return 'explicit';
+    const normalized = normalizeProvider(provider);
+    if (['openai', 'openrouter', 'google ai', 'vertex ai', 'aws bedrock', 'local'].includes(normalized)) return 'automatic';
+    return 'none';
 }
 
-// The entry lifetime that pays off at a conversation's pace. A write costs 1.25x
-// for five minutes and 2x for an hour, a read 0.1x either way, so the hour only
-// pays when turns come too far apart for five minutes yet within the hour.
-// Without enough turns to measure, five minutes is the cheaper bet. null means
-// no lifetime pays and nothing is marked.
+// Shortest prefix each model caches, from the providers' own tables (2026-10). Unknown models get
+// the usual floor.
+function cacheMinimumTokens(provider, model) {
+    const id = String(model || '').toLowerCase();
+    if (isClaude(id)) {
+        if (/(opus|sonnet|haiku|fable|mythos)-5|claude-5/.test(id) && !/sonnet-5(?![-.]5)/.test(id)) return 512;
+        if (/opus-4-[56]|haiku-4-5/.test(id)) return 4096;
+        if (/opus-4-7|haiku-3-5|mythos-preview/.test(id)) return 2048;
+        return 1024;
+    }
+    if (isGemini(id)) return /gemini-2\.5/.test(id) ? 2048 : 4096;
+    return PROMPT_CACHE_CONTRACT.minimumPrefixTokens;
+}
+
+// The hour costs more to write, so it only pays when turns outlast five minutes but not the hour.
+// null means no lifetime pays.
 function cacheTtlForPace(gapsMs) {
     const gaps = (gapsMs || [])
         .filter(gap => Number.isFinite(gap) && gap >= 0 && gap < PROMPT_CACHE_CONTRACT.sessionBreakMs)
@@ -111,9 +98,7 @@ function isLongTtlRefused(apiProfileId, model) {
     return longTtlRefusals.has(longTtlKey(apiProfileId, model));
 }
 
-// Per-conversation cache state. In-memory by design: entries expire on the
-// provider side within minutes, so nothing here is worth persisting across an
-// app restart.
+// In memory on purpose: provider entries expire long before a restart matters.
 const scopes = new Map();
 
 function readScope(scopeId) {
@@ -135,11 +120,8 @@ function resetAllScopes() {
     scopes.clear();
 }
 
-// Decide the breakpoints for one request. `placement` says where the volatile
-// context ends up: 'system' keeps today's composition, 'turn' moves it behind
-// the history so the history itself becomes a reusable prefix.
-// Policy 'conversation' marks a chat; 'transcript' marks the end of a research
-// transcript that only grows, so each planner turn reads the earlier ones back.
+// `placement` 'turn' puts the volatile context behind the history, so only then can the history be cached.
+// Policy 'transcript' marks a research transcript that only grows.
 function planPromptCache({
     provider,
     model,
@@ -157,13 +139,11 @@ function planPromptCache({
 
     if (policy === 'transcript') {
         // The automatic field is Anthropic's own endpoint only; a custom base URL may know neither form.
-        const marks = style === 'bedrock' || (style === 'anthropic' && !baseUrl);
+        const marks = style === 'bedrock' || style === 'openai-parts' || (style === 'anthropic' && !baseUrl);
         return marks ? { ...inert, style, transcriptBreakpoint: true, reason: 'marked' } : { ...inert, reason: 'provider-automatic' };
     }
 
-    // Only conversational traffic opts in. A one-shot utility call (triage,
-    // summarization, tagging) never sees its prefix again, so marking it would
-    // buy a 1.25x write against a read that cannot happen.
+    // A one-shot call never sees its prefix again, so a mark would be a write with no read.
     if (policy !== 'conversation') return { ...inert, reason: 'policy-off' };
     if (!style) return { ...inert, reason: 'provider-automatic' };
     if (ttl === null) return { ...inert, reason: 'pace-too-slow' };
@@ -175,14 +155,13 @@ function planPromptCache({
     }
 
     const stableTokens = roughTokens(stableText);
-    const systemBreakpoint = stableTokens >= PROMPT_CACHE_CONTRACT.minimumPrefixTokens;
+    const minimum = cacheMinimumTokens(provider, model);
+    const systemBreakpoint = stableTokens >= minimum;
 
-    // A history breakpoint only pays off when nothing volatile precedes the
-    // history. While the context still lives in the system prompt, every turn
-    // rewrites the prefix, so the write would be billed and never read.
+    // With the context in the system prompt, every turn rewrites the prefix ahead of the history.
     const historyBreakpoint = placement === 'turn'
         && historyLength > 0
-        && stableTokens + Math.ceil(Math.max(0, historyChars) / 4) >= PROMPT_CACHE_CONTRACT.minimumPrefixTokens;
+        && stableTokens + Math.ceil(Math.max(0, historyChars) / 4) >= minimum;
 
     if (!systemBreakpoint && !historyBreakpoint) {
         return { ...inert, reason: 'prefix-too-short' };
@@ -199,10 +178,7 @@ function planPromptCache({
     };
 }
 
-// Feed the measured result of a marked request back into the scope. A run of
-// writes with no reads means the prefix is not surviving to the next turn
-// (long pauses, a prompt that keeps changing), so marking is paused instead of
-// taxing every request by 25% forever.
+// Writes with no reads mean the prefix does not survive to the next turn, so marking pauses.
 function recordCacheOutcome(scopeId, { cacheReadTokens = 0, cacheWriteTokens = 0, marked = true } = {}) {
     const scope = readScope(scopeId);
     if (!scope) return null;
@@ -232,13 +208,7 @@ function getScopeStats(scopeId) {
     return { reads: scope.reads, writes: scope.writes, cooling: scope.skipsLeft > 0 };
 }
 
-// --- HISTORY WINDOW ANCHORING ---
-//
-// A window that always takes the longest fitting suffix moves its first message
-// whenever the budget shifts, and the budget shifts every turn because the
-// retrieved context varies. That rewrites the message prefix constantly. The
-// anchor pins the first message instead, and lets go only when the pinned window
-// genuinely stops fitting.
+// The history window pins its first message, since retrieval moves the budget every turn.
 
 function readHistoryAnchor(scopeId) {
     const scope = scopes.get(String(scopeId || ''));
@@ -253,7 +223,8 @@ function writeHistoryAnchor(scopeId, anchorId) {
 
 module.exports = {
     PROMPT_CACHE_CONTRACT,
-    benefitsFromStablePrefix,
+    cacheMinimumTokens,
+    cacheModeFor,
     cacheStyleFor,
     cacheTtlForPace,
     getScopeStats,

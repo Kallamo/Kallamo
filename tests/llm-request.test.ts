@@ -268,6 +268,31 @@ describe('reasoning models, provider limits and replies', () => {
     expect(llama.temperature).toBe(0.2);
   });
 
+  test('sends chat messages to Bedrock models that read the OpenAI format', async () => {
+    const database = createDatabase({
+      provider: 'AWS Bedrock',
+      customConfig: { awsAccessKeyId: 'access-key', awsSecretAccessKey: 'secret-key', awsRegion: 'us-east-1' }
+    });
+    const build = async (model: string) => JSON.parse((await buildRequest({
+      apiProfileId: 'api-profile', model, systemPrompt: 'Narrate.', newPrompt: 'Hi', temperature: 0.2, maxTokens: 500
+    }, { database })).requestBodyPayload);
+    for (const model of ['global.moonshotai.kimi-k3', 'deepseek.v3-v1:0', 'qwen.qwen3-32b-v1:0', 'openai.gpt-oss-120b-1:0']) {
+      const body = await build(model);
+      expect(body.messages, model).toEqual([{ role: 'system', content: 'Narrate.' }, { role: 'user', content: 'Hi' }]);
+      expect(body.max_tokens).toBe(500);
+      expect(body.temperature).toBe(0.2);
+      expect(body).not.toHaveProperty('prompt');
+    }
+    expect(await build('mistral.mixtral-8x7b-instruct-v0:1')).toHaveProperty('prompt');
+  });
+
+  test('reads Bedrock replies in the OpenAI format', () => {
+    const reply = { choices: [{ message: { content: 'The tide turns.', reasoning_content: 'plan' }, finish_reason: 'stop' }], usage: { prompt_tokens: 40, completion_tokens: 5 } };
+    expect(parseResponse(reply, 'aws bedrock')).toBe('<think>plan</think>The tide turns.');
+    expect(parseResponse({ content: [{ type: 'text', text: 'Hi' }] }, 'aws bedrock')).toBe('Hi');
+    expect(() => parseResponse({ choices: [{ message: { content: null, refusal: 'No.' } }] }, 'aws bedrock')).toThrow(/declined/);
+  });
+
   test('gives thinking models output headroom within the provider ceiling', () => {
     expect(providerOutputLimit('Google AI', 'gemini-2.5-flash', 2048)).toBe(2048 + 8192);
     expect(providerOutputLimit('Google AI', 'gemini-2.5-pro', 65000)).toBe(65536);

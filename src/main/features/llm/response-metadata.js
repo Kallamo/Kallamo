@@ -3,10 +3,15 @@ const GOOGLE = new Set(['google ai', 'vertex ai']);
 
 const OUTPUT_LIMIT_REASONS = new Set(['length', 'max_tokens', 'max_output_tokens', 'model_length', 'finish_reason_length']);
 
+// Bedrock replies in its model's own format; chat-completions models answer with `choices`.
+function openAiShaped(provider, data) {
+  return String(provider || '').toLowerCase() === 'aws bedrock' && Array.isArray(data?.choices);
+}
+
 // Fields are kept as each provider reports them. `totalInputTokens` is the comparable figure:
 // Anthropic counts cache reads and writes apart from the rest of the input.
 function readUsage(provider, data) {
-  const p = String(provider || '').toLowerCase();
+  const p = openAiShaped(provider, data) ? 'openai' : String(provider || '').toLowerCase();
   const count = value => (value == null || !Number.isFinite(Number(value)) ? null : Number(value));
   if (OPENAI_COMPATIBLE.has(p)) {
     const usage = data?.usage || {};
@@ -15,7 +20,8 @@ function readUsage(provider, data) {
       inputTokens,
       outputTokens: count(usage.completion_tokens),
       cacheReadTokens: count(usage.prompt_tokens_details?.cached_tokens),
-      cacheWriteTokens: null,
+      // Only routes that bill writes report them: OpenRouter's explicit markers, GPT-5.6 and later.
+      cacheWriteTokens: count(usage.prompt_tokens_details?.cache_write_tokens),
       totalInputTokens: inputTokens
     };
   }
@@ -47,7 +53,7 @@ function readUsage(provider, data) {
 }
 
 function getResponseMetadata(data, provider) {
-  const normalizedProvider = String(provider || '').toLowerCase();
+  const normalizedProvider = openAiShaped(provider, data) ? 'openai' : String(provider || '').toLowerCase();
   let finishReason = null;
   let usage = null;
 
@@ -77,12 +83,7 @@ function getResponseMetadata(data, provider) {
     ?? usage?.candidatesTokenCount
     ?? 0
   );
-  // Cache counters, normalized across wire formats. Anthropic reports them
-  // beside input_tokens and excludes them from it; OpenAI reports cached tokens
-  // nested in prompt_tokens_details and already inside prompt_tokens; Google
-  // reports cachedContentTokenCount. inputTokens keeps each provider's own
-  // meaning so existing budget and truncation callers are untouched, and
-  // uncachedInputTokens gives the one number that means the same everywhere.
+  // inputTokens keeps each provider's meaning; uncachedInputTokens is the one comparable everywhere.
   const cacheReadTokens = Number(
     usage?.cache_read_input_tokens
     ?? usage?.cacheReadInputTokens
@@ -94,14 +95,17 @@ function getResponseMetadata(data, provider) {
   const cacheWriteTokens = Number(
     usage?.cache_creation_input_tokens
     ?? usage?.cacheCreationInputTokens
+    ?? usage?.cacheWriteInputTokens
+    ?? usage?.prompt_tokens_details?.cache_write_tokens
+    ?? usage?.input_tokens_details?.cache_write_tokens
     ?? 0
   );
+  // Anthropic splits writes by lifetime; the hour-long one costs twice the input instead of 1.25 times.
+  const longWriteTokens = Number(usage?.cache_creation?.ephemeral_1h_input_tokens ?? 0);
   const safeRead = Number.isFinite(cacheReadTokens) ? Math.max(0, cacheReadTokens) : 0;
   const safeWrite = Number.isFinite(cacheWriteTokens) ? Math.max(0, cacheWriteTokens) : 0;
   const safeInput = Number.isFinite(inputTokens) ? inputTokens : 0;
-  // OpenAI-style providers fold cached tokens into the prompt total; Anthropic
-  // keeps them separate. Subtracting only when they are folded in keeps the
-  // billed-at-full-price figure honest on both.
+  // Anthropic reports cached tokens apart from the input; OpenAI-style providers include them.
   const foldsCacheIntoInput = !['anthropic', 'aws bedrock'].includes(normalizedProvider);
 
   return {
@@ -112,10 +116,11 @@ function getResponseMetadata(data, provider) {
     outputTokens: Number.isFinite(outputTokens) ? outputTokens : 0,
     cacheReadTokens: safeRead,
     cacheWriteTokens: safeWrite,
+    cacheLongWriteTokens: Number.isFinite(longWriteTokens) ? Math.min(safeWrite, Math.max(0, longWriteTokens)) : 0,
     // Comparable across providers: what the payload limit calibration learns from.
     totalInputTokens: readUsage(normalizedProvider, data).totalInputTokens,
     uncachedInputTokens: foldsCacheIntoInput
-      ? Math.max(0, safeInput - safeRead)
+      ? Math.max(0, safeInput - safeRead - safeWrite)
       : safeInput
   };
 }

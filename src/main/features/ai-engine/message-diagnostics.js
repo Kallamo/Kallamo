@@ -14,19 +14,57 @@ function normalizeNarrativeUsage(value = {}) {
   };
 }
 
-// Cache counters come from the provider, not from the local tokenizer, so they
-// are the only measured numbers in an otherwise estimated report. `savedTokens`
-// is what a read spared at full input price; `surchargeTokens` is the ~25% extra
-// a write costs, so a turn that wrote without reading still shows its price.
-function normalizeCacheUsage(value = {}) {
+const CACHE_STAGES = ['main', 'agentic', 'narrativeState'];
+
+// What the provider billed for one stage of a turn. Requests add up; a stage that mixed routes is 'mixed'.
+function addCacheUsage(target, metadata) {
+  if (!target || !metadata) return target;
+  target.read = number(target.read) + number(metadata.cacheReadTokens);
+  target.write = number(target.write) + number(metadata.cacheWriteTokens);
+  target.longWrite = number(target.longWrite) + number(metadata.cacheLongWriteTokens);
+  target.uncachedInput = number(target.uncachedInput) + number(metadata.uncachedInputTokens);
+  const mode = metadata.cacheMode || null;
+  if (mode) target.mode = !target.mode || target.mode === mode ? mode : 'mixed';
+  return target;
+}
+
+// Explicit routes bill a read at a tenth of the input and a write at 1.25 times (twice for an hour).
+// An automatic cache discounts reads by a rate each model sets, so its reads are reported, not priced.
+function priceCacheStage(value = {}) {
   const read = number(value.read);
   const write = number(value.write);
+  const longWrite = Math.min(write, number(value.longWrite));
+  const mode = ['explicit', 'automatic', 'mixed'].includes(value.mode) ? value.mode : 'explicit';
   return {
     read,
     write,
+    longWrite,
     uncachedInput: number(value.uncachedInput),
-    savedTokens: Math.round(read * 0.9),
-    surchargeTokens: Math.round(write * 0.25),
+    mode,
+    savedTokens: mode === 'explicit' ? Math.round(read * 0.9) : null,
+    surchargeTokens: Math.round((write - longWrite) * 0.25 + longWrite)
+  };
+}
+
+// The only measured numbers in an estimated report. A report with one flat count holds the main stage's.
+function normalizeCacheUsage(value = {}) {
+  const staged = value && CACHE_STAGES.some(stage => value[stage] && typeof value[stage] === 'object');
+  const stages = Object.fromEntries(CACHE_STAGES.map(stage => [
+    stage,
+    priceCacheStage(staged ? value[stage] : (stage === 'main' ? value : {}))
+  ]));
+  const list = Object.values(stages);
+  const read = list.reduce((total, stage) => total + stage.read, 0);
+  const write = list.reduce((total, stage) => total + stage.write, 0);
+  return {
+    read,
+    write,
+    uncachedInput: list.reduce((total, stage) => total + stage.uncachedInput, 0),
+    savedTokens: list.reduce((total, stage) => total + (stage.savedTokens || 0), 0),
+    surchargeTokens: list.reduce((total, stage) => total + stage.surchargeTokens, 0),
+    // False when a stage read from an automatic cache, whose discount depends on the model.
+    savingsKnown: list.every(stage => stage.savedTokens !== null || stage.read === 0),
+    stages,
     active: read > 0 || write > 0
   };
 }
@@ -103,12 +141,17 @@ function mergeNarrativeStateDiagnostics(diagnostic, narrativeState) {
     agenticInput: currentUsage.agentic?.input,
     agenticOutput: currentUsage.agentic?.output,
     narrativeState: narrativeState?.usage,
-    cache: currentUsage.cache,
+    // The analysis runs after the reply is saved, so its cache joins the stages already measured.
+    cache: {
+      ...(currentUsage.cache?.stages || { main: currentUsage.cache || {} }),
+      narrativeState: narrativeState?.usage?.cache || {}
+    },
   });
   return next;
 }
 
 module.exports = {
+  addCacheUsage,
   buildEstimatedUsage,
   createMessageDiagnostics,
   mergeNarrativeStateDiagnostics,

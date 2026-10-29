@@ -6,8 +6,8 @@ const { getResponseMetadata } = require('./response-metadata');
 const { openAiResponseFormat, applyBedrockStructuredOutput, claudeCompatibleSchema, geminiResponseSchema } = require('./structured-output');
 const { assertPayloadWithinLimit, estimatePayloadTokens, normalizeMaxApiPayload, safetyMarginFor } = require('./payload-budget');
 const { tokenRatio, recordTokenCount, correctedLimit, useTokenCalibrationStore } = require('./token-calibration');
-const { supportsNativeTools, applyConversation, applyCacheBreakpoint, readToolReply, readUsage, flattenConversation } = require('./tool-conversation');
-const { isLongTtlRefused, markLongTtlRefused, planPromptCache, recordCacheOutcome } = require('./prompt-cache');
+const { bedrockFormat, supportsNativeTools, applyConversation, applyCacheBreakpoint, readToolReply, readUsage, flattenConversation } = require('./tool-conversation');
+const { cacheModeFor, isLongTtlRefused, markLongTtlRefused, planPromptCache, recordCacheOutcome } = require('./prompt-cache');
 const { stripSpoilerMarkers } = require('../../../../dist-main/shared/spoilers');
 
 function getDatabase() {
@@ -72,7 +72,6 @@ function requestedOutputTokens(maxTokens) {
         : DEFAULT_OUTPUT_TOKENS;
 }
 
-// The output limit actually sent to the provider.
 function providerOutputLimit(provider, model, maxTokens) {
     const requested = requestedOutputTokens(maxTokens);
     const normalizedProvider = String(provider || '').toLowerCase();
@@ -211,8 +210,6 @@ async function readHttpErrorMessage(response) {
     }
 }
 
-// --- AUTHENTICATION & SIGNING HELPERS ---
-
 async function getGcpAccessToken(serviceAccountJsonStr) {
     if (!serviceAccountJsonStr) {
         throw new Error("GCP Service Account JSON is empty.");
@@ -251,7 +248,6 @@ async function getGcpAccessToken(serviceAccountJsonStr) {
     return tokenData.access_token;
 }
 
-// AWS SigV4 Signing helper
 function hmac(key, string, encoding) {
     return crypto.createHmac("sha256", key).update(string).digest(encoding);
 }
@@ -305,8 +301,6 @@ function awsSignV4({ accessKeyId, secretAccessKey, region, service, method, path
     headers["Authorization"] = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
 }
 
-// --- RESPONSE PARSING ---
-
 // jsonMode never prepends reasoning: braces inside it break object extraction. A withheld reply
 // throws; an empty one returns '' so callers can tell a spent output budget from a failure.
 function parseResponse(data, provider, jsonMode = false) {
@@ -355,6 +349,7 @@ function parseResponse(data, provider, jsonMode = false) {
             return withReasoning(textOfParts(parts, true), text);
         }
         case 'aws bedrock': {
+            if (Array.isArray(data?.choices) || data?.error) return parseResponse(data, 'openai', jsonMode);
             if (Array.isArray(data?.content)) {
                 return data.content.filter(block => typeof block?.text === 'string').map(block => block.text).join('');
             }
@@ -467,8 +462,6 @@ function parseStreamChunk(obj, provider) {
         return empty;
     }
 }
-
-// --- PROMPT CACHE MARKERS ---
 
 const CACHE_CONTROL = Object.freeze({ type: 'ephemeral' });
 const LONG_CACHE_CONTROL = Object.freeze({ type: 'ephemeral', ttl: '1h' });
@@ -834,7 +827,8 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
                 "host": `bedrock-runtime.${awsRegion}.amazonaws.com`
             };
 
-            if (model.toLowerCase().includes("claude")) {
+            const format = bedrockFormat(model);
+            if (format === 'anthropic') {
                 let bedrockMessages = [...historyForRequest];
                 let userContent = newPrompt;
                 if (attachedImages && attachedImages.length > 0) {
@@ -868,7 +862,24 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
                 };
                 if (!claudeRejectsSampling(model)) requestBody.temperature = temperature ?? 0.7;
                 requestBody = applyBedrockStructuredOutput(requestBody, jsonSchema);
-            } else if (model.toLowerCase().includes("meta") || model.toLowerCase().includes("llama")) {
+            } else if (format === 'openai') {
+                let userContent = newPrompt;
+                if (attachedImages && attachedImages.length > 0) {
+                    const imageNames = attachedImages.map(img => img.name).join(', ');
+                    userContent = `${newPrompt}
+
+[Attached Image(s): ${imageNames}]`;
+                }
+                requestBody = {
+                    messages: [
+                        { role: "system", content: systemPrompt },
+                        ...historyForRequest,
+                        { role: "user", content: userContent }
+                    ],
+                    max_tokens: outputTokens,
+                    temperature: temperature ?? 0.7
+                };
+            } else if (format === 'llama') {
                 let bedrockPrompt = newPrompt;
                 if (attachedImages && attachedImages.length > 0) {
                     const imageNames = attachedImages.map(img => img.name).join(', ');
@@ -919,7 +930,7 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
     // A final turn marks where the previous turn ended instead: it reads that prefix and writes none.
     if (cachePlan.transcriptBreakpoint) {
         const fromEnd = promptCache?.final ? 3 : 1;
-        requestBody = cachePlan.style === 'bedrock' || fromEnd > 1
+        requestBody = cachePlan.style === 'bedrock' || cachePlan.style === 'openai-parts' || fromEnd > 1
             ? applyCacheBreakpoint(requestBody, provider, model, fromEnd)
             : { ...requestBody, cache_control: CACHE_CONTROL };
     }
@@ -936,6 +947,11 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
                 requestBody.stream_options = { include_usage: true };
             }
         }
+    }
+    // Hashed, so no workspace id leaves the app. Only the official endpoints get it, since a
+    // compatible server or proxy may reject it; why it helps is in docs/prompt-cache.md.
+    if (promptCache?.scopeId && isOfficialCacheKeyEndpoint(provider, endpoint)) {
+        requestBody.prompt_cache_key = `kallamo-${crypto.createHash('sha256').update(String(promptCache.scopeId)).digest('hex').slice(0, 32)}`;
     }
 
     if (manualMode && manualJson) {
@@ -992,6 +1008,16 @@ function isOfficialOpenAiEndpoint(endpoint) {
     }
 }
 
+function isOfficialCacheKeyEndpoint(provider, endpoint) {
+    if (provider === 'openai') return isOfficialOpenAiEndpoint(endpoint);
+    if (provider !== 'openrouter') return false;
+    try {
+        return new URL(endpoint).hostname === 'openrouter.ai';
+    } catch {
+        return false;
+    }
+}
+
 async function sendApiRequest(params, dependencies = {}) {
     if (params.jsonSchema && refusedSchemas.has(schemaRefusalKey(params))) {
         params.onStructuredFallback?.({ remembered: true });
@@ -1027,7 +1053,7 @@ async function sendApiRequest(params, dependencies = {}) {
                 marked: Boolean(cachePlan?.systemBreakpoint || cachePlan?.historyBreakpoint)
             });
         }
-        params.onUsage?.(metadata);
+        params.onUsage?.({ ...metadata, cacheMode: cacheModeFor(provider, params.model) });
         if (!params.includeResponseMetadata) return content;
         return { content, ...metadata, learnedTokenRatio };
 
@@ -1070,6 +1096,7 @@ async function sendAgentRequest(params, dependencies = {}) {
     const data = await response.json();
     const content = parseResponse(data, provider);
     const usage = readUsage(provider, data);
+    params.onUsage?.({ ...getResponseMetadata(data, provider), cacheMode: cacheModeFor(provider, params.model) });
     return {
         content,
         ...readToolReply(provider, data),
@@ -1084,8 +1111,6 @@ function nativeToolSupport({ apiProfileId, model }, dependencies = {}) {
     const apiProfile = loadApiProfile(apiProfileId, dependencies);
     return Boolean(apiProfile) && supportsNativeTools(apiProfile.provider, model);
 }
-
-// --- EMBEDDINGS ---
 
 async function getEmbeddings(text, apiProfileId, modelName) {
     const db = getDatabase();

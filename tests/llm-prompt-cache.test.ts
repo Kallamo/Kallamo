@@ -3,8 +3,11 @@ import { beforeEach, describe, expect, test } from 'vitest';
 
 const require = createRequire(import.meta.url);
 const { buildRequest } = require('../src/main/features/llm/llm.service');
+const { applyCacheBreakpoint } = require('../src/main/features/llm/tool-conversation');
 const {
   PROMPT_CACHE_CONTRACT,
+  cacheMinimumTokens,
+  cacheModeFor,
   cacheTtlForPace,
   markLongTtlRefused,
   planPromptCache,
@@ -14,12 +17,12 @@ const {
   writeHistoryAnchor
 } = require('../src/main/features/llm/prompt-cache');
 
-function createDatabase(provider: string) {
+function createDatabase(provider: string, baseUrl = '') {
   const profile = {
     id: 'api-profile',
     provider,
     apiKey: 'encrypted-api-key',
-    baseUrl: '',
+    baseUrl,
     customConfig: null
   };
   return {
@@ -221,7 +224,7 @@ describe('prompt cache request composition', () => {
     expect(body.messages[1].content).toEqual([
       { type: 'text', text: 'Earlier answer', cache_control: { type: 'ephemeral' } }
     ]);
-    // Nothing is lost: the context now reads immediately before the request.
+    // Nothing is lost: the context reads immediately before the request.
     expect(body.messages[2].content).toBe(`${VOLATILE.trim()}\n\nContinue.`);
   });
 
@@ -345,5 +348,69 @@ describe('cache lifetime from the pace of play', () => {
     markLongTtlRefused('api-profile', 'claude-ttl-refused');
     const fallback = JSON.parse((await request('claude-ttl-refused')).requestBodyPayload);
     expect(markers(fallback)).toEqual(['"cache_control":{"type":"ephemeral"}', '"cache_control":{"type":"ephemeral"}']);
+  });
+});
+
+describe('every provider the app offers', () => {
+  test('knows which routes need markers, which cache on their own, and which do not', () => {
+    expect(cacheModeFor('Anthropic', 'claude-sonnet-4-6')).toBe('explicit');
+    expect(cacheModeFor('AWS Bedrock', 'global.anthropic.claude-haiku-4-5-20251001-v1:0')).toBe('explicit');
+    expect(cacheModeFor('OpenRouter', 'anthropic/claude-sonnet-4.5')).toBe('explicit');
+    expect(cacheModeFor('OpenRouter', 'google/gemini-2.5-pro')).toBe('explicit');
+    expect(cacheModeFor('OpenRouter', 'deepseek/deepseek-chat')).toBe('automatic');
+    expect(cacheModeFor('OpenAI', 'gpt-5')).toBe('automatic');
+    expect(cacheModeFor('Google AI', 'gemini-2.5-flash')).toBe('automatic');
+    expect(cacheModeFor('Vertex AI', 'gemini-2.5-pro')).toBe('automatic');
+    expect(cacheModeFor('AWS Bedrock', 'global.moonshotai.kimi-k3')).toBe('automatic');
+    expect(cacheModeFor('Local', 'qwen3-30b-a3b')).toBe('automatic');
+  });
+
+  test('uses each model family its own shortest cacheable prefix', () => {
+    expect(cacheMinimumTokens('Anthropic', 'claude-opus-5-5')).toBe(512);
+    expect(cacheMinimumTokens('Anthropic', 'claude-sonnet-5-5')).toBe(512);
+    expect(cacheMinimumTokens('Anthropic', 'claude-sonnet-5')).toBe(1024);
+    expect(cacheMinimumTokens('Anthropic', 'claude-sonnet-4-6')).toBe(1024);
+    expect(cacheMinimumTokens('AWS Bedrock', 'global.anthropic.claude-haiku-4-5-20251001-v1:0')).toBe(4096);
+    expect(cacheMinimumTokens('AWS Bedrock', 'global.anthropic.claude-opus-4-6-v1')).toBe(4096);
+    expect(cacheMinimumTokens('Anthropic', 'claude-opus-4-7')).toBe(2048);
+    expect(cacheMinimumTokens('Google AI', 'gemini-2.5-flash')).toBe(2048);
+    expect(cacheMinimumTokens('OpenAI', 'gpt-5')).toBe(1024);
+  });
+
+  test('a prefix long enough for one model can be too short for another', () => {
+    const plan = (model: string) => planPromptCache({ provider: 'AWS Bedrock', model, policy: 'conversation', stableText: 'x'.repeat(8000) });
+    expect(plan('global.anthropic.claude-sonnet-4-6')).toMatchObject({ systemBreakpoint: true });
+    expect(plan('global.anthropic.claude-haiku-4-5-20251001-v1:0')).toMatchObject({ systemBreakpoint: false, reason: 'prefix-too-short' });
+  });
+
+  test('a research transcript on OpenRouter is marked on its last text part', () => {
+    expect(planPromptCache({ provider: 'OpenRouter', model: 'anthropic/claude-sonnet-4.5', policy: 'transcript' })).toMatchObject({ transcriptBreakpoint: true });
+    const body = { messages: [
+      { role: 'user', content: 'Find the well.' },
+      { role: 'assistant', content: null, tool_calls: [{ id: 'a' }] },
+      { role: 'tool', content: 'The well never runs dry.' }
+    ] };
+    const marked = applyCacheBreakpoint(body, 'OpenRouter', 'anthropic/claude-sonnet-4.5');
+    expect(marked.messages[0].content).toEqual([{ type: 'text', text: 'Find the well.', cache_control: { type: 'ephemeral' } }]);
+    expect(marked.messages[2]).toEqual(body.messages[2]);
+  });
+
+  test('OpenAI gets a hashed cache key per scope, and compatible servers never see it', async () => {
+    const promptCache = { policy: 'conversation', placement: 'system', scopeId: 'chat::profile', stable: STABLE, volatile: VOLATILE };
+    const official = JSON.parse((await buildRequest({ apiProfileId: 'api-profile', model: 'gpt-5', newPrompt: 'Go.', promptCache }, { database: createDatabase('OpenAI') })).requestBodyPayload);
+    const local = JSON.parse((await buildRequest({ apiProfileId: 'api-profile', model: 'qwen3', newPrompt: 'Go.', promptCache }, { database: createDatabase('Local', 'http://127.0.0.1:1234/v1') })).requestBodyPayload);
+    expect(official.prompt_cache_key).toMatch(/^kallamo-[0-9a-f]{32}$/);
+    expect(official.prompt_cache_key).not.toContain('chat');
+    expect(local.prompt_cache_key).toBeUndefined();
+  });
+
+  test('OpenRouter gets the same key for sticky routing, and a proxy behind a custom URL does not', async () => {
+    const promptCache = { policy: 'conversation', placement: 'system', scopeId: 'chat::profile', stable: STABLE, volatile: VOLATILE };
+    const body = async (baseUrl = '') => JSON.parse((await buildRequest({ apiProfileId: 'api-profile', model: 'deepseek/deepseek-chat', newPrompt: 'Go.', promptCache }, { database: createDatabase('OpenRouter', baseUrl) })).requestBodyPayload);
+    const official = await body();
+    const viaOpenAi = JSON.parse((await buildRequest({ apiProfileId: 'api-profile', model: 'gpt-5', newPrompt: 'Go.', promptCache }, { database: createDatabase('OpenAI') })).requestBodyPayload);
+    expect(official.prompt_cache_key).toBe(viaOpenAi.prompt_cache_key);
+    expect((await body('https://openrouter.ai/api/v1')).prompt_cache_key).toBe(official.prompt_cache_key);
+    expect((await body('https://proxy.example.com/v1')).prompt_cache_key).toBeUndefined();
   });
 });

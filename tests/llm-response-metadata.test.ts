@@ -15,6 +15,7 @@ describe('LLM response metadata', () => {
         outputTokens: 1800,
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
+        cacheLongWriteTokens: 0,
         totalInputTokens: null,
         uncachedInputTokens: 0
       });
@@ -30,6 +31,7 @@ describe('LLM response metadata', () => {
         outputTokens: 0,
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
+        cacheLongWriteTokens: 0,
         totalInputTokens: null,
         uncachedInputTokens: 0
       });
@@ -71,6 +73,20 @@ describe('LLM response metadata', () => {
       cacheReadTokens: 8192,
       uncachedInputTokens: 808
     }));
+  });
+
+  test('reads the writes OpenRouter and newer OpenAI models bill, and keeps them out of the plain input', () => {
+    expect(getResponseMetadata({
+      choices: [{ finish_reason: 'stop' }],
+      usage: { prompt_tokens: 6000, completion_tokens: 90, prompt_tokens_details: { cached_tokens: 3000, cache_write_tokens: 2000 } }
+    }, 'OpenRouter')).toEqual(expect.objectContaining({ cacheReadTokens: 3000, cacheWriteTokens: 2000, uncachedInputTokens: 1000 }));
+  });
+
+  test('separates the hour-long Anthropic writes, which cost twice the input', () => {
+    expect(getResponseMetadata({
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 5000, cache_creation: { ephemeral_1h_input_tokens: 5000, ephemeral_5m_input_tokens: 0 } }
+    }, 'AWS Bedrock')).toEqual(expect.objectContaining({ cacheWriteTokens: 5000, cacheLongWriteTokens: 5000 }));
   });
 
   test('reads Google cached content tokens', () => {

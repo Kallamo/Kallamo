@@ -67,4 +67,25 @@ describe('message diagnostics', () => {
     expect(updated.usage.narrativeState.total).toBe(40);
     expect(original.narrativeState).toBeUndefined();
   });
+
+  test('reports cache per stage and prices only what the provider rates make known', () => {
+    const usage = buildEstimatedUsage({
+      cache: {
+        main: { read: 1000, write: 0, mode: 'automatic' },
+        agentic: { read: 10000, write: 2000, longWrite: 1000, mode: 'explicit' },
+        narrativeState: {}
+      }
+    });
+    expect(usage.cache.stages.agentic).toMatchObject({ savedTokens: 9000, surchargeTokens: 1250 });
+    expect(usage.cache.stages.main.savedTokens).toBeNull();
+    expect(usage.cache).toMatchObject({ read: 11000, write: 2000, savedTokens: 9000, savingsKnown: false, active: true });
+  });
+
+  test('an older report keeps its one count as the main stage, and the Narrative State joins later', () => {
+    const legacy = createMessageDiagnostics({ usage: { cache: { read: 500, write: 100 } } });
+    const merged = mergeNarrativeStateDiagnostics(legacy, { status: 'completed', usage: { cache: { read: 300, write: 0, mode: 'explicit' } } });
+    expect(merged.usage.cache.stages.main).toMatchObject({ read: 500, write: 100 });
+    expect(merged.usage.cache.stages.narrativeState).toMatchObject({ read: 300 });
+    expect(merged.usage.cache.read).toBe(800);
+  });
 });

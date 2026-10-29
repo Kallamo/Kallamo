@@ -141,6 +141,9 @@ const INPUT_PARTS = [
   ['userInput', 'Message', 'bg-accent']
 ];
 
+const CACHE_STAGES = [['main', 'Main generation'], ['agentic', 'Agentic retrieval'], ['narrativeState', 'Narrative state']];
+const CACHE_MODES = { explicit: 'Marked by Kallamo', automatic: 'Cached by the provider', mixed: 'Marked and automatic' };
+
 function TokensView({ debug }) {
   const usage = debug.usage;
   const legacy = debug.tokens || {};
@@ -151,6 +154,9 @@ function TokensView({ debug }) {
   const partsTotal = parts.reduce((sum, part) => sum + part.value, 0) || 1;
   const cache = usage?.cache;
   const cacheNet = cache ? cache.savedTokens - cache.surchargeTokens : 0;
+  // A report with one count holds the main generation's.
+  const cacheStages = cache?.stages || (cache ? { main: cache } : {});
+  const stageCache = key => Number(cacheStages[key]?.read) || 0;
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-3 gap-2">
@@ -176,11 +182,11 @@ function TokensView({ debug }) {
 
       <div>
         <SectionTitle>By stage</SectionTitle>
-        <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-x-6 gap-y-1.5 text-xs tabular-nums">
-          <span className="text-text-subtle">Stage</span><span className="text-right text-text-subtle">Input</span><span className="text-right text-text-subtle">Output</span>
-          <span className="text-text-secondary">Main generation</span><span className="text-right text-text-primary">{fmt(main.input)}</span><span className="text-right text-text-primary">{fmt(main.output)}</span>
-          {(agentic.input || agentic.output) > 0 && <><span className="text-text-secondary">Agentic retrieval</span><span className="text-right text-text-primary">{fmt(agentic.input)}</span><span className="text-right text-text-primary">{fmt(agentic.output)}</span></>}
-          {usage?.narrativeState?.total > 0 && <><span className="text-text-secondary">Narrative state</span><span className="text-right text-text-primary">{fmt(usage.narrativeState.input)}</span><span className="text-right text-text-primary">{fmt(usage.narrativeState.output)}</span></>}
+        <div className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-x-6 gap-y-1.5 text-xs tabular-nums">
+          <span className="text-text-subtle">Stage</span><span className="text-right text-text-subtle">Input</span><span className="text-right text-text-subtle">From cache</span><span className="text-right text-text-subtle">Output</span>
+          <span className="text-text-secondary">Main generation</span><span className="text-right text-text-primary">{fmt(main.input)}</span><span className="text-right text-text-muted">{fmt(stageCache('main'))}</span><span className="text-right text-text-primary">{fmt(main.output)}</span>
+          {(agentic.input || agentic.output) > 0 && <><span className="text-text-secondary">Agentic retrieval</span><span className="text-right text-text-primary">{fmt(agentic.input)}</span><span className="text-right text-text-muted">{fmt(stageCache('agentic'))}</span><span className="text-right text-text-primary">{fmt(agentic.output)}</span></>}
+          {usage?.narrativeState?.total > 0 && <><span className="text-text-secondary">Narrative state</span><span className="text-right text-text-primary">{fmt(usage.narrativeState.input)}</span><span className="text-right text-text-muted">{fmt(stageCache('narrativeState'))}</span><span className="text-right text-text-primary">{fmt(usage.narrativeState.output)}</span></>}
         </div>
       </div>
 
@@ -190,13 +196,20 @@ function TokensView({ debug }) {
             <SectionTitle>Prompt cache</SectionTitle>
             <span className="text-[0.6875rem] text-text-subtle">Reported by the provider</span>
           </div>
-          <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1 text-xs text-text-muted tabular-nums">
-            <span>Read <b className="font-semibold text-text-primary">{fmt(cache.read)}</b></span>
-            <span>Written <b className="font-semibold text-text-primary">{fmt(cache.write)}</b></span>
-            <span className={cacheNet >= 0 ? 'text-status-success' : 'text-status-warning'}>
-              {cacheNet >= 0 ? `Saved ≈ ${fmt(cacheNet)} input tokens` : `Cost ≈ ${fmt(-cacheNet)} extra input tokens this turn`}
-            </span>
+          <div className="space-y-1 text-xs text-text-muted tabular-nums">
+            {CACHE_STAGES.filter(([key]) => (Number(cacheStages[key]?.read) || 0) + (Number(cacheStages[key]?.write) || 0) > 0).map(([key, label]) => (
+              <div key={key} className="flex flex-wrap items-baseline gap-x-5 gap-y-1">
+                <span className="min-w-[8.5rem] text-text-secondary">{label}</span>
+                <span>Read <b className="font-semibold text-text-primary">{fmt(cacheStages[key].read)}</b></span>
+                <span>Written <b className="font-semibold text-text-primary">{fmt(cacheStages[key].write)}</b></span>
+                {cacheStages[key].mode && <span className="text-text-subtle">{CACHE_MODES[cacheStages[key].mode] || ''}</span>}
+              </div>
+            ))}
           </div>
+          <p className={`mt-1.5 text-xs ${cacheNet >= 0 ? 'text-status-success' : 'text-status-warning'}`}>
+            {cacheNet >= 0 ? `Saved ≈ ${fmt(cacheNet)} input tokens` : `Cost ≈ ${fmt(-cacheNet)} extra input tokens this turn`}
+            {cache.savingsKnown === false && <span className="text-text-muted"> · reads from an automatic cache are billed at the model's cached-input rate</span>}
+          </p>
         </div>
       )}
     </div>

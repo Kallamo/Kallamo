@@ -107,7 +107,7 @@ describe('the cached prefix survives turns that change retrieval', () => {
     const db = database('Anthropic');
     const messages = conversation(40);
     const bodies = [];
-    // The retrieval budget moves every turn, which is what used to move the window.
+    // The retrieval budget moves every turn; the window must not.
     for (const [turn, retrieved] of [[0, 'Retrieved: the ledger.'], [1, 'Retrieved: the tide tables and two letters. '.repeat(30)]] as const) {
       const room = turn === 0 ? 9000 : 8600;
       const history = selectActiveHistory(messages.slice(0, 36 + turn * 2), room, 'chat-b').history;

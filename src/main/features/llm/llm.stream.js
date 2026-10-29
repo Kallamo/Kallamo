@@ -1,7 +1,7 @@
 const { fetch: undiciFetch } = require('undici');
 const { buildRequest, parseStreamChunk, sendApiRequest, generationDispatcher, readHttpErrorMessage, learnFromReportedTokens } = require('./llm.service');
 const { getResponseMetadata } = require('./response-metadata');
-const { recordCacheOutcome, markLongTtlRefused } = require('./prompt-cache');
+const { recordCacheOutcome, markLongTtlRefused, cacheModeFor } = require('./prompt-cache');
 
 // Providers with no text-SSE stream fall back to the non-streaming path.
 const STREAM_UNSUPPORTED = new Set(['aws bedrock']);
@@ -51,7 +51,7 @@ async function sendApiRequestStream(params, onDelta, onStreamStart, dependencies
                 marked: Boolean(cachePlan?.systemBreakpoint || cachePlan?.historyBreakpoint)
             });
         }
-        params.onUsage?.(metadata);
+        params.onUsage?.({ ...metadata, cacheMode: cacheModeFor(provider, params.model) });
     };
     // Parity with parseResponse: a jsonMode caller parses the reply as an object,
     // so reasoning is dropped instead of being prepended.
