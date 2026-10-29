@@ -1,11 +1,12 @@
 import React, { createContext, forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { Eye, EyeOff } from 'lucide-react';
-import { EditorContent, NodeViewWrapper, ReactNodeViewRenderer, useEditor } from '@tiptap/react';
-import { Extension, InputRule, Node, PasteRule } from '@tiptap/core';
+import { EditorContent, useEditor } from '@tiptap/react';
+import { Extension } from '@tiptap/core';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import StarterKit from '@tiptap/starter-kit';
-import Popover from '../../components/ui/Popover';
 import { MenuItem } from '../../components/ui/Menu';
-import { hiddenFields, parseSpoilers } from '../../../shared/spoilers';
+import { SPOILER_PATTERN, hiddenFields, parseSpoilers } from '../../../shared/spoilers';
 
 // Spoilers hide Worldbuild facts from the reader only; the AI always reads them. Nothing
 // hidden is shown until the reader clicks it, in the sheet and while editing alike.
@@ -99,15 +100,19 @@ export function SpoilerMenuItem({ field, onDone }) {
 }
 
 
+// Covered like a Discord spoiler: a solid bar over the real words, so it keeps their size and
+// wraps with the line. It stays open until the sheet is opened again.
 function InlineSpoiler({ value }) {
   const [open, setOpen] = useState(false);
-  if (open) return <span className="rounded-sm bg-surface-hover/60 px-0.5 text-text-primary">{value}</span>;
+  const shape = 'rounded-sm px-0.5 [box-decoration-break:clone] [-webkit-box-decoration-break:clone]';
+  if (open) return <span className={`${shape} bg-surface-hover/60`}>{value}</span>;
+  const reveal = (event) => { event.stopPropagation(); setOpen(true); };
   return (
-    <button type="button" onClick={() => setOpen(true)} aria-label="Hidden text. Reveal"
-      className="inline cursor-pointer select-none rounded-sm bg-text-muted/60 px-0.5 align-baseline transition-colors hover:bg-text-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-      {/* Blank of about the same width: the closed text is not in the page to copy or find. */}
-      <span aria-hidden="true">{value.replace(/\S/g, ' ')}</span>
-    </button>
+    <span role="button" tabIndex={0} aria-label="Hidden text. Reveal" onClick={reveal}
+      onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); reveal(event); } }}
+      className={`${shape} cursor-pointer select-none bg-text-subtle text-transparent transition-colors hover:bg-text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}>
+      <span aria-hidden="true">{value}</span>
+    </span>
   );
 }
 
@@ -118,108 +123,73 @@ export function SpoilerText({ text }) {
   ));
 }
 
-// A spoiler span holds one line without markers, so it always writes back as ||text||.
-const cleanSpanText = (text) => String(text || '').replace(/\|/g, '').replace(/\s+/g, ' ').trim();
+// In the editor a spoiler is plain ||text||, so removing a marker makes it normal text at once.
+// A click or a deletion opens it, and it stays open for the rest of the edit.
+const spoilerEditKey = new PluginKey('spoilerEdit');
 
-function SpoilerChip({ node, updateAttributes, deleteNode, editor, getPos }) {
-  const anchorRef = useRef(null);
-  const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState(node.attrs.text);
-  const draftRef = useRef(draft);
-  draftRef.current = draft;
-
-  const close = () => {
-    setOpen(false);
-    const text = cleanSpanText(draftRef.current);
-    if (!text) deleteNode();
-    else if (text !== node.attrs.text) updateAttributes({ text });
-  };
-  const unwrap = () => {
-    setOpen(false);
-    const from = getPos();
-    const text = cleanSpanText(draftRef.current);
-    const chain = editor.chain().focus().deleteRange({ from, to: from + node.nodeSize });
-    (text ? chain.insertContentAt(from, text) : chain).run();
-  };
-
-  return (
-    <NodeViewWrapper as="span" className="inline">
-      <span ref={anchorRef} role="button" tabIndex={0} contentEditable={false} aria-label="Hidden text. Reveal to edit"
-        onClick={() => { setDraft(node.attrs.text); setOpen(true); }}
-        onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setDraft(node.attrs.text); setOpen(true); } }}
-        className="mx-0.5 inline-flex cursor-pointer select-none items-center gap-1 rounded-sm border border-border-default bg-surface-hover/70 px-1.5 align-baseline text-xs font-medium leading-5 text-text-muted hover:text-text-primary">
-        <EyeOff className="h-3 w-3" aria-hidden="true" />Hidden
-      </span>
-      <Popover anchorRef={anchorRef} open={open} onClose={close} matchAnchorWidth={false} scroll={false} className="w-72 border-border-default bg-surface-panel-muted p-3">
-        <div className="space-y-2">
-          <div className="text-xs font-medium text-text-muted">Hidden text</div>
-          <textarea autoFocus rows={3} value={draft} onChange={(event) => setDraft(event.target.value)} aria-label="Hidden text"
-            className="wb-input w-full resize-none rounded-control border border-border-default bg-surface-input/90 px-2.5 py-2 text-sm leading-relaxed text-text-primary focus:border-accent/70 focus:outline-none focus:ring-2 focus:ring-accent/20" />
-          <div className="flex items-center justify-between gap-2">
-            <button type="button" onClick={unwrap} className="rounded text-xs font-semibold text-text-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">Show as normal text</button>
-            <button type="button" onClick={close} className="rounded-md bg-surface-hover px-2.5 py-1 text-xs font-semibold text-text-primary hover:bg-surface-hover/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">Done</button>
-          </div>
-        </div>
-      </Popover>
-    </NodeViewWrapper>
-  );
+function spoilerRanges(doc) {
+  const ranges = [];
+  doc.descendants((node, pos) => {
+    if (!node.isTextblock) return true;
+    for (const match of node.textContent.matchAll(SPOILER_PATTERN)) {
+      const from = pos + 1 + (match.index ?? 0);
+      ranges.push({ from, to: from + match[0].length, text: match[0] });
+    }
+    return false;
+  });
+  return ranges;
 }
 
-const SpoilerNode = Node.create({
-  name: 'spoiler',
-  group: 'inline',
-  inline: true,
-  atom: true,
-  selectable: true,
-  addAttributes() {
-    return { text: { default: '' } };
-  },
-  parseHTML() {
-    return [{ tag: 'span[data-spoiler]', getAttrs: (element) => ({ text: element.textContent || '' }) }];
-  },
-  renderHTML({ node }) {
-    return ['span', { 'data-spoiler': '' }, node.attrs.text];
-  },
-  renderText({ node }) {
-    return `||${node.attrs.text}||`;
-  },
-  addNodeView() {
-    return ReactNodeViewRenderer(SpoilerChip);
-  },
-  // Typing or pasting ||text|| closes it on the spot. The whole match is replaced: the stock
-  // node rules keep the text around a capture group, which would leave the markers behind.
-  addInputRules() {
-    const type = this.type;
-    return [new InputRule({
-      find: /\|\|(?=\S)([^|\n]*?\S)\|\|$/,
-      handler: ({ state, range, match }) => { state.tr.replaceWith(range.from, range.to, type.create({ text: cleanSpanText(match[1]) })); },
-    })];
-  },
-  addPasteRules() {
-    const type = this.type;
-    return [new PasteRule({
-      find: /\|\|(?=\S)([^|\n]*?\S)\|\|/g,
-      handler: ({ state, range, match }) => { state.tr.replaceWith(range.from, range.to, type.create({ text: cleanSpanText(match[1]) })); },
+const touches = (range, selection) => selection.from >= range.from && selection.to <= range.to;
+
+const SpoilerEdit = Extension.create({
+  name: 'spoilerEdit',
+  addProseMirrorPlugins() {
+    return [new Plugin({
+      key: spoilerEditKey,
+      state: {
+        init: () => new Set(),
+        // Opens on a click, or when an edit lands in it, never because the caret starts there.
+        apply: (tr, opened, _old, state) => {
+          const clicked = tr.getMeta(spoilerEditKey);
+          const inside = spoilerRanges(state.doc).filter(range => (clicked ? clicked >= range.from && clicked <= range.to : tr.docChanged && touches(range, state.selection)));
+          if (!inside.some(range => !opened.has(range.text))) return opened;
+          const next = new Set(opened);
+          inside.forEach(range => next.add(range.text));
+          return next;
+        },
+      },
+      props: {
+        handleClick: (view, pos) => {
+          if (spoilerRanges(view.state.doc).some(range => pos >= range.from && pos <= range.to)) view.dispatch(view.state.tr.setMeta(spoilerEditKey, pos));
+          return false;
+        },
+        decorations: (state) => {
+          const opened = spoilerEditKey.getState(state);
+          return DecorationSet.create(state.doc, spoilerRanges(state.doc).map(range => Decoration.inline(range.from, range.to,
+            opened.has(range.text)
+              ? { class: 'rounded-sm bg-text-subtle/25 [box-decoration-break:clone] [-webkit-box-decoration-break:clone]' }
+              : { class: 'cursor-pointer rounded-sm bg-text-subtle text-transparent [box-decoration-break:clone] [-webkit-box-decoration-break:clone]', title: 'Hidden text. Click to reveal' })));
+        },
+      },
     })];
   },
 });
 
+// A spoiler span holds one line without markers, so it always writes back as ||text||.
+const cleanSpanText = (text) => String(text || '').replace(/\|/g, '').replace(/\s+/g, ' ').trim();
+
 function selectedSpanText(state) {
   const { from, to, $from, $to } = state.selection;
   if (from === to || !$from.sameParent($to)) return '';
-  let text = '';
-  state.doc.nodesBetween(from, to, (node, pos) => {
-    if (node.isText) text += node.text.slice(Math.max(0, from - pos), Math.max(0, to - pos));
-    else if (node.type.name === 'spoiler') text += node.attrs.text;
-  });
-  return cleanSpanText(text);
+  return cleanSpanText(state.doc.textBetween(from, to));
 }
 
 function hideSelection(editor) {
   const text = selectedSpanText(editor.state);
   if (!text) return false;
   const { from, to } = editor.state.selection;
-  return editor.chain().focus().insertContentAt({ from, to }, { type: 'spoiler', attrs: { text } }).run();
+  return editor.chain().focus().insertContentAt({ from, to }, `||${text}||`).run();
 }
 
 const SpoilerKeys = Extension.create({
@@ -231,22 +201,13 @@ const SpoilerKeys = Extension.create({
 
 const toDoc = (value) => ({
   type: 'doc',
-  content: String(value || '').split('\n').map(line => {
-    const content = parseSpoilers(line)
-      .filter(segment => segment.value)
-      .map(segment => (segment.type === 'spoiler'
-        ? { type: 'spoiler', attrs: { text: segment.value } }
-        : { type: 'text', text: segment.value }));
-    return content.length ? { type: 'paragraph', content } : { type: 'paragraph' };
-  }),
+  content: String(value || '').split('\n').map(line => (line ? { type: 'paragraph', content: [{ type: 'text', text: line }] } : { type: 'paragraph' })),
 });
 
-const fromDoc = (doc) => (doc.content || []).map(paragraph => (paragraph.content || []).map(node => (
-  node.type === 'spoiler' ? `||${node.attrs?.text || ''}||` : node.type === 'text' ? node.text : ''
-)).join('')).join('\n');
+const fromDoc = (doc) => (doc.content || []).map(paragraph => (paragraph.content || []).map(node => (node.type === 'text' ? node.text : '')).join('')).join('\n');
 
-// Edits plain text the way a textarea does, but a ||spoiler|| stays a closed chip that opens
-// only when clicked. onChange receives a textarea-shaped event.
+// Edits plain text the way a textarea does, but a ||spoiler|| stays covered until the caret
+// goes into it. onChange receives a textarea-shaped event.
 export const SpoilerTextArea = forwardRef(function SpoilerTextArea({ value, onChange, rows = 5, placeholder = '', id, 'aria-label': ariaLabel }, ref) {
   const lastValue = useRef(String(value || ''));
   const onChangeRef = useRef(onChange);
@@ -260,7 +221,7 @@ export const SpoilerTextArea = forwardRef(function SpoilerTextArea({ value, onCh
         hardBreak: false, heading: false, horizontalRule: false, italic: false, listItem: false, listKeymap: false, link: false,
         orderedList: false, strike: false, underline: false, trailingNode: false,
       }),
-      SpoilerNode,
+      SpoilerEdit,
       SpoilerKeys,
     ],
     content: toDoc(value),
@@ -305,7 +266,7 @@ export const SpoilerTextArea = forwardRef(function SpoilerTextArea({ value, onCh
           className="inline-flex items-center gap-1.5 rounded text-xs font-semibold text-text-muted transition-colors hover:text-text-primary disabled:cursor-default disabled:text-text-disabled focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
           <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />Hide selected text
         </button>
-        <span className="caption">Or write ||like this||. Hidden text stays closed until clicked.</span>
+        <span className="caption">Or write ||like this||. Hidden text stays covered until clicked.</span>
       </div>
     </div>
   );

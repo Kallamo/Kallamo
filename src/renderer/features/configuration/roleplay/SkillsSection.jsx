@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, Award, Check, ChevronDown, ChevronRight, CornerDownRight, MoreHorizontal, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Award, Check, ChevronDown, ChevronRight, ChevronUp, CornerDownRight, MoreHorizontal, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
 import Button from '../../../components/ui/Button';
 import ConfirmDialog from '../../../components/ui/ConfirmDialog';
 import IconButton from '../../../components/ui/IconButton';
@@ -12,6 +12,7 @@ import ResizableTextarea from '../../../components/ui/ResizableTextarea';
 
 const NO_PARENT = '__none';
 const MAX_RANKS = 12;
+const COLLAPSED_SKILLS = 5;
 
 const LEARN_WORDING = {
   label: 'Who learns',
@@ -192,6 +193,10 @@ function familiesOf(skills) {
 function SkillList({ skills, proposals, names, onAdd, onEdit, onAddSub, onDelete, onResolve }) {
   const [search, setSearch] = useState('');
   const [openIds, setOpenIds] = useState(() => new Set());
+  const [showAll, setShowAll] = useState(false);
+  // Skills added while the page is open stay in view even when the list is collapsed.
+  const [knownIds] = useState(() => new Set(skills.map(skill => skill.id)));
+  const listRef = useRef(null);
   const query = search.trim().toLowerCase();
   const families = familiesOf(skills);
   const matches = skill => !query || `${skill.name} ${skill.description || ''}`.toLowerCase().includes(query);
@@ -213,8 +218,20 @@ function SkillList({ skills, proposals, names, onAdd, onEdit, onAddSub, onDelete
     const pending = children.some(child => child.status === 'proposed');
     const open = openIds.has(skill.id) || (query ? hitChildren.length > 0 : pending);
     const visibleChildren = !open ? [] : query && !openIds.has(skill.id) ? hitChildren : children;
-    return [{ skill, children: visibleChildren, count: children.length, open, dim: Boolean(query) && !hit }];
+    return [{ skill, children: visibleChildren, count: children.length, open, dim: Boolean(query) && !hit, pending: skill.status === 'proposed' || pending }];
   });
+
+  // Search already narrows the list, so the limit only applies without one. A skill waiting
+  // for review is never hidden by it.
+  const collapsible = !query && shown.length > COLLAPSED_SKILLS;
+  const visible = collapsible && !showAll
+    ? shown.filter((family, index) => index < COLLAPSED_SKILLS || family.pending || !knownIds.has(family.skill.id))
+    : shown;
+  const hiddenCount = shown.filter(family => !visible.includes(family)).reduce((total, family) => total + 1 + family.count, 0);
+  const showFewer = () => {
+    setShowAll(false);
+    requestAnimationFrame(() => listRef.current?.scrollIntoView({ block: 'nearest' }));
+  };
 
   const addButton = <Button variant="ghost" size="sm" icon={Plus} onClick={() => onAdd()}>Add skill</Button>;
   if (!skills.length) {
@@ -251,8 +268,8 @@ function SkillList({ skills, proposals, names, onAdd, onEdit, onAddSub, onDelete
         {addButton}
       </div>
       {shown.length ? (
-        <div className="divide-y divide-border-subtle overflow-hidden rounded-card border border-border-subtle bg-surface-inset">
-          {shown.map(({ skill, children, count, open, dim }) => (
+        <div ref={listRef} className="divide-y divide-border-subtle overflow-hidden rounded-card border border-border-subtle bg-surface-inset">
+          {visible.map(({ skill, children, count, open, dim }) => (
             <div key={skill.id} className="divide-y divide-border-subtle">
               <SkillRow
                 skill={skill}
@@ -284,6 +301,17 @@ function SkillList({ skills, proposals, names, onAdd, onEdit, onAddSub, onDelete
               ))}
             </div>
           ))}
+          {collapsible && (
+            <button
+              type="button"
+              aria-expanded={showAll}
+              onClick={showAll ? showFewer : () => setShowAll(true)}
+              className="flex w-full items-center justify-center gap-1.5 py-2.5 text-xs font-semibold text-text-muted transition-colors hover:bg-tint/[0.04] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+            >
+              {showAll ? <ChevronUp aria-hidden="true" className="h-3.5 w-3.5" /> : <ChevronDown aria-hidden="true" className="h-3.5 w-3.5" />}
+              {showAll ? 'Show fewer' : `Show ${hiddenCount} more ${hiddenCount === 1 ? 'skill' : 'skills'}`}
+            </button>
+          )}
         </div>
       ) : (
         <div className="rounded-card border border-dashed border-border-subtle px-4 py-7 text-center">
