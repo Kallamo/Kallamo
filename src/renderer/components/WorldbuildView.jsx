@@ -13,7 +13,7 @@ import NumberInput from './ui/NumberInput';
 import Checkbox from './ui/Checkbox';
 import Popover from './ui/Popover';
 import Menu, { MenuItem, MenuLabel, MenuSeparator } from './ui/Menu';
-import { useTour } from '../features/onboarding/GuidedTour';
+import { useFirstVisitTour, useTour } from '../features/onboarding/GuidedTour';
 import WorldbuildItemText from '../features/worldbuild/WorldbuildItemText';
 import IconButton from './ui/IconButton';
 import Tooltip from './ui/Tooltip';
@@ -41,6 +41,7 @@ import WorldbuildCalendar from '../features/worldbuild/WorldbuildCalendar';
 import WorldbuildRules from '../features/worldbuild/WorldbuildRules';
 import WorldbuildEventOccurrences from '../features/worldbuild/WorldbuildEventOccurrences';
 import WorldDateInput, { formatWorldDate } from '../features/worldbuild/WorldDateInput';
+import { birthDateForAge, derivedAge } from '../../shared/world-age';
 import { WorldbuildInventory, WorldbuildRelationships } from '../features/worldbuild/WorldbuildAgentCollections';
 import WorldbuildTemplateManager from '../features/worldbuild/WorldbuildTemplateManager';
 import WorldbuildRoleplayResources, { RaceRoleplayDefaults } from '../features/worldbuild/WorldbuildRoleplayResources';
@@ -652,17 +653,9 @@ const registryCache = new Map();
 const viewCache = worldbuildViewCache;
 
 export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFocusHandled, focusSurface, onSurfaceHandled }) {
-  const { showToast, settings, openSettings, uiFlags, setActiveWorkspaceView } = useApp();
-  const { tour, startTour } = useTour();
-  const tourRef = useRef(tour);
-  tourRef.current = tour;
-  // The first visit gets the overview tour, unless another guide is already running here.
-  useEffect(() => {
-    if (uiFlags.worldbuildTourSeen) return undefined;
-    const timer = setTimeout(() => { if (!tourRef.current) startTour('worldbuild'); }, 600);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const { showToast, settings, openSettings, setActiveWorkspaceView } = useApp();
+  const { startTour } = useTour();
+  useFirstVisitTour('worldbuild', 'worldbuildTourSeen');
   // Update Entities always uses System AI, independently of the Tagger executor.
   const hasSystemAi = !!settings?.advanced?.systemApiProfileId && !!settings?.advanced?.systemModelName;
   const workspaceId = chat?.id;
@@ -1178,6 +1171,12 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const startNew = (type, data = {}) => { setOpenCreateSections(new Set()); setSurface('entities'); setShowCreate(false); setEditingSection(null); setCharTab('data'); setSelected(draftFor(type, data)); setRel({}); };
   const patch = (f) => setSelected(p => ({ ...p, ...f }));
   const patchData = (f) => setSelected(p => ({ ...p, data: { ...p.data, ...f } }));
+  // An age and a birth date never live side by side: the birthday replaces the stored age, and
+  // clearing it hands back the age it had reached.
+  const setBirthDate = (birthDate) => setSelected(p => {
+    if (birthDate) return { ...p, data: { ...p.data, birthDate, ...(p.data.birthDate ? {} : { age: '' }) } };
+    return { ...p, data: { ...p.data, birthDate: null, showBirthday: false, age: derivedAge(worldCalendar, worldClock, p.data) || '' } };
+  });
   // What the reader may see is a viewing setting, not content: it is saved the moment the eye
   // is used, so Cancel on a section never brings a secret back into view.
   const selectedRef = useRef(selected);
@@ -1428,8 +1427,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
 
   // Export this workspace's Worldbuild to a portable file; import brings one in as proposals
   // to review, never merging by name.
-  const exportWorld = async (includeImages = true, includeCurrentValues = false) => {
-    const r = await electronAPI.exportWorldbuild(workspaceId, includeImages, includeCurrentValues);
+  const exportWorld = async (options = {}) => {
+    const r = await electronAPI.exportWorldbuild(workspaceId, options);
     if (r?.cancelled) return;
     if (!r?.success) { showToast(`Export failed: ${r?.error || 'unknown error'}`, 'error'); return; }
     const ent = `${r.entities} ${r.entities === 1 ? 'entity' : 'entities'}`;
@@ -1857,10 +1856,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             <Edit label="Disposition" spoiler="disposition"><StateSelect label="Disposition" map={DISPOSITION} value={selected.data.disposition || 'unknown'} onChange={(e) => patchData({ disposition: e.target.value })} /></Edit>
             {isIndividual && <Edit label="Status" spoiler="status"><StateSelect label="Status" map={STATUS} value={selected.data.status || 'unknown'} onChange={(e) => patchData({ status: e.target.value })} /></Edit>}
             {!isIndividual && <Edit label={<>How common <InfoPopover items={ABUNDANCE_HELP} /></>} spoiler="abundance"><ChoiceSelect label="How common" value={selected.data.abundance} onChange={(e) => patchData({ abundance: e.target.value })} options={RARITY} /></Edit>}
-            {isIndividual && worldCalendar && <div className={selected.data.birthDate ? 'sm:col-span-3' : ''}><Edit label="Born" spoiler="birthDate"><WorldDateInput label="Birth date" emptyLabel="Set date" calendar={worldCalendar} value={selected.data.birthDate} onChange={birthDate => patchData({ birthDate })} /></Edit></div>}
+            {isIndividual && worldCalendar && <div className={selected.data.birthDate ? 'sm:col-span-3' : ''}><Edit label="Born" spoiler="birthDate"><WorldDateInput label="Birth date" emptyLabel="Set birthday" calendar={worldCalendar} value={selected.data.birthDate} onChange={birthDate => setBirthDate(birthDate)} /></Edit></div>}
           </div>
           <Edit label="Abilities and traits" spoiler="abilities" hint="Short, concrete powers the AI can use in a scene."><SpoilerTextArea rows={3} placeholder="e.g. flies, breathes fire, immune to steel." value={selected.data.abilities || ''} onChange={(e) => patchData({ abilities: e.target.value })} /></Edit>
-          {isIndividual && worldCalendar && <Checkbox checked={Boolean(selected.data.showBirthday)} onChange={showBirthday => patchData({ showBirthday })} label="Show the birthday on the calendar" />}
+          {isIndividual && worldCalendar && selected.data.birthDate && <Checkbox checked={Boolean(selected.data.showBirthday)} onChange={showBirthday => patchData({ showBirthday })} label="Show the birthday on the calendar" />}
           {isIndividual && selected.data.status === 'deceased' && worldCalendar && <Edit label="Death date" spoiler="deathDate"><WorldDateInput label="Death date" emptyLabel="Set death date" calendar={worldCalendar} value={selected.data.deathDate} onChange={deathDate => patchData({ deathDate })} /></Edit>}
           {isIndividual && selected.data.status === 'missing' && worldCalendar && <Edit label="Disappearance date" spoiler="missingDate"><WorldDateInput label="Disappearance date" emptyLabel="Set disappearance date" calendar={worldCalendar} value={selected.data.missingDate} onChange={missingDate => patchData({ missingDate })} /></Edit>}
           <MultiRelation label="Habitat" spoiler="foundIn" hint="Where it is found or dwells." disabled={unsaved} links={rel.foundIn || []} options={byType.Locations} onAdd={(id) => addMulti('found_in', id)} onRemove={removeLink} />
@@ -1959,7 +1958,9 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
         view: <>
           <FactGrid>
             <ViewField label="Race" spoiler="race" value={rel.isRace?.entity ? <EntityChip entity={rel.isRace.entity} onOpen={openEntityById} /> : null} />
-            <ViewField label="Age" spoiler="age" value={selected.data.age} />
+            <ViewField label="Age" spoiler="age" value={selected.data.birthDate
+              ? (derivedAge(worldCalendar, worldClock, selected.data) && <span data-tooltip="Calculated from the birthday">{derivedAge(worldCalendar, worldClock, selected.data)}</span>)
+              : selected.data.age} />
             <ViewField label="Born" spoiler="birthDate" value={formatWorldDate(worldCalendar, selected.data.birthDate)} />
             {selected.data.status === 'deceased' && <ViewField label="Died" spoiler="deathDate" value={formatWorldDate(worldCalendar, selected.data.deathDate)} />}
             {selected.data.status === 'missing' && <ViewField label="Disappeared" spoiler="missingDate" value={formatWorldDate(worldCalendar, selected.data.missingDate)} />}
@@ -1968,12 +1969,12 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
         edit: <>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <Edit label="Status" spoiler="status"><StateSelect label="Status" map={STATUS} value={selected.data.status || 'unknown'} onChange={(e) => patchData({ status: e.target.value })} /></Edit>
-            <Edit label="Age" spoiler="age"><LInput placeholder="e.g. 34" value={selected.data.age || ''} onChange={(e) => patchData({ age: e.target.value })} /></Edit>
-            {worldCalendar && <div className={selected.data.birthDate ? 'sm:col-span-3' : ''}><Edit label="Born" spoiler="birthDate">
-              <WorldDateInput label="Birth date" emptyLabel="Set date" calendar={worldCalendar} value={selected.data.birthDate} onChange={birthDate => patchData({ birthDate })} />
+            {!(worldCalendar && selected.data.birthDate) && <Edit label="Age" spoiler="age"><LInput placeholder="e.g. 34" value={selected.data.age || ''} onChange={(e) => patchData({ age: e.target.value })} /></Edit>}
+            {worldCalendar && <div className={selected.data.birthDate ? 'sm:col-span-3' : ''}><Edit label="Born" spoiler="birthDate" hint={selected.data.birthDate ? 'The age follows the story date from here.' : undefined}>
+              <WorldDateInput label="Birth date" emptyLabel="Set birthday" calendar={worldCalendar} value={selected.data.birthDate} seedValue={birthDateForAge(worldCalendar, worldClock, selected.data.age)} onChange={birthDate => setBirthDate(birthDate)} />
             </Edit></div>}
           </div>
-          {worldCalendar && <Checkbox checked={Boolean(selected.data.showBirthday)} onChange={showBirthday => patchData({ showBirthday })} label="Show the birthday on the calendar" />}
+          {worldCalendar && selected.data.birthDate && <Checkbox checked={Boolean(selected.data.showBirthday)} onChange={showBirthday => patchData({ showBirthday })} label="Show the birthday on the calendar" />}
           <SingleRelation label="Race" spoiler="race" disabled={unsaved} current={rel.isRace?.entity?.id} options={byType.Races} onSet={(id) => setSingle('is_race', id)} />
           {selected.data.status === 'deceased' && worldCalendar && <Edit label="Death date" spoiler="deathDate"><WorldDateInput label="Death date" emptyLabel="Set death date" calendar={worldCalendar} value={selected.data.deathDate} onChange={deathDate => patchData({ deathDate })} /></Edit>}
           {selected.data.status === 'missing' && worldCalendar && <Edit label="Disappearance date" spoiler="missingDate"><WorldDateInput label="Disappearance date" emptyLabel="Set disappearance date" calendar={worldCalendar} value={selected.data.missingDate} onChange={missingDate => patchData({ missingDate })} /></Edit>}
@@ -2373,7 +2374,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           api={electronAPI}
           entityCount={exportableCount}
           onClose={() => setShowExportModal(false)}
-          onConfirm={({ includeImages, includeCurrentValues }) => { setShowExportModal(false); exportWorld(includeImages, includeCurrentValues); }}
+          onConfirm={options => { setShowExportModal(false); exportWorld(options); }}
         />, document.body)}
       {worldImport && createPortal(
         <ImportWorldbuildModal

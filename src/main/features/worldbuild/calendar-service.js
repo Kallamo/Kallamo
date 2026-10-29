@@ -1,5 +1,6 @@
 const { chunkContainsEvidence, normalizeEvidence } = require('../world-index/evidence-match');
 const { hiddenFields } = require('../../../../dist-main/shared/spoilers');
+const { ageAt, derivedAge } = require('../../../../dist-main/shared/world-age');
 
 const STANDARD_MONTHS = [
   ['January', 31], ['February', 28], ['March', 31], ['April', 30],
@@ -1271,6 +1272,8 @@ module.exports = {
   matrixMinimumMinutes,
   minutesToDuration,
   adoptCalendar,
+  ageAt,
+  derivedAge,
   collectInvalidDates,
   compareDates,
   describeDate,

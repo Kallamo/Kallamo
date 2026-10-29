@@ -31,6 +31,7 @@ import {
 import { canSubjectAccessOccurrence, isFactionOccurrenceMemoryShared } from '../worldbuild/event-occurrences';
 import { sharedKnowledgeCards } from '../worldbuild/knowledge-groups';
 import { describeLocationChain, loadLocationChain } from '../worldbuild/location-graph';
+import { derivedAge } from '../../../shared/world-age';
 import { NarrativeContextManifestRepository, type NarrativeContextManifest } from './context-manifest';
 import { RoleplayContextOrchestrator } from './roleplay-context-orchestrator';
 import { CharacterSceneMemory, formatCharacterMemorySection } from './character-scene-memory';
@@ -516,6 +517,19 @@ export class NarrativeChatContext {
     return new Map(rows.map(row => [row.id, row.canonicalName]));
   }
 
+  // Read straight from the stored rows, like the names below: building a context must not create a calendar or a clock.
+  private getAgeClock(workspaceId: string): { calendar: Record<string, any> | null; clock: Record<string, any> | null } {
+    const read = (table: string, sql: string): Record<string, any> | null => {
+      const exists = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
+      const row = exists ? this.db.prepare(sql).get(workspaceId) as { json: string } | undefined : undefined;
+      try { return row ? JSON.parse(row.json) : null; } catch { return null; }
+    };
+    return {
+      calendar: read('worldbuild_calendars', 'SELECT definition_json AS json FROM worldbuild_calendars WHERE workspace_id = ?'),
+      clock: read('roleplay_time_state', 'SELECT position_json AS json FROM roleplay_time_state WHERE workspace_id = ?')
+    };
+  }
+
   // Read straight from the stored definition: the context only needs names, and must not create one.
   private getCalendarNames(workspaceId: string): CalendarNames | null {
     const exists = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'worldbuild_calendars'").get();
@@ -738,6 +752,12 @@ export class NarrativeChatContext {
         }
         aggregates.set(aggregateKey, aggregate);
       });
+      let ageClock: { calendar: Record<string, any> | null; clock: Record<string, any> | null } | null = null;
+      const ageOf = (data: Record<string, unknown>): unknown => {
+        if (!data.birthDate) return data.age;
+        ageClock ??= this.getAgeClock(workspaceId);
+        return derivedAge(ageClock.calendar, ageClock.clock, data);
+      };
       const knownCandidates = [...aggregates.values()].map(aggregate => {
         const cardIds = [...aggregate.cardIds];
         return this.candidate({
@@ -745,7 +765,7 @@ export class NarrativeChatContext {
           workspaceId,
           sourceType: 'knowledge',
           sourceId: cardIds[0] ?? aggregate.entity.id,
-          content: composeKnownEntity(aggregate.entity, fields, aggregate.fieldKeys, aggregate.knownAs),
+          content: composeKnownEntity(aggregate.entity, fields, aggregate.fieldKeys, aggregate.knownAs, ageOf),
           relevance: 1,
           epistemic: { kind: 'knowledge', subjectId: aggregate.ownerId, accessibility: 'available' },
           provenanceIds: uniqueIds([
@@ -1212,7 +1232,13 @@ function categoryLabel(value: unknown): string | undefined {
   return memory ? MEMORY_CATEGORY_LABELS[memory] : undefined;
 }
 
-function composeKnownEntity(entity: EntityRow, fields: FieldRow[], knownFieldKeys: Set<string>, knownAs: string | null): string {
+function composeKnownEntity(
+  entity: EntityRow,
+  fields: FieldRow[],
+  knownFieldKeys: Set<string>,
+  knownAs: string | null,
+  ageOf: (data: Record<string, unknown>) => unknown = data => data.age
+): string {
   const data = parseObject(entity.data);
   const lines = [`Known identity: ${knownAs || entity.canonicalName}`];
   const definitions = new Map(fields
@@ -1222,7 +1248,7 @@ function composeKnownEntity(entity: EntityRow, fields: FieldRow[], knownFieldKey
     const field = definitions.get(key);
     const value = key.startsWith('customFields.')
       ? (data.customFields as Record<string, unknown> | undefined)?.[key.slice('customFields.'.length)]
-      : data[key];
+      : key === 'age' ? ageOf(data) : data[key];
     if (value === undefined || value === null || value === '') continue;
     lines.push(`${field?.label || nativeFieldLabel(key)}: ${formatNarrativeValue(field ? choiceLabels(field, value) : value)}`);
   }

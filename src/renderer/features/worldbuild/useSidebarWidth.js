@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
-export const DEFAULT_SIDEBAR_WIDTH = 320;
+export const DEFAULT_SIDEBAR_WIDTH = 368;
 const MAX_SIDEBAR_WIDTH = 448;
 const MIN_DETAIL_WIDTH = 672;
 
