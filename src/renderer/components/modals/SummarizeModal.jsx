@@ -6,13 +6,12 @@ import Checkbox from '../ui/Checkbox';
 import Tooltip from '../ui/Tooltip';
 import { ProfileAvatar } from './ProfileModal';
 import { ToneTile } from './ModalParts';
+import { estimateMessageTokens } from '../../features/chat/message-content';
 
 // Each message is exactly one of archive, keep or drop, so the token bar and summary card agree.
 const ARCHIVE = 'archive';
 const KEEP = 'keep';
 const DROP = 'drop';
-
-const estimateTokens = (str) => Math.ceil((str || '').length / 4);
 
 // Archiving runs in three stages and the slow ones are the first and the last.
 // Naming the stage turns a long wait into something the reader can follow.
@@ -105,7 +104,7 @@ export default function SummarizeModal({
     let keepCount = 0;
     let dropCount = 0;
     for (const msg of visibleList) {
-      const tokens = estimateTokens(msg.content);
+      const tokens = estimateMessageTokens(msg.content);
       if (msg.state === ARCHIVE) { archiveTokens += tokens; archiveCount += 1; }
       else if (msg.state === DROP) { dropTokens += tokens; dropCount += 1; }
       else { keepTokens += tokens; keepCount += 1; }

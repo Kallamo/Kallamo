@@ -18,3 +18,8 @@ export function parseMessageContent(content) {
 
   return { thinking: '', response: content };
 }
+
+// What a message costs in the conversation the model reads: reasoning is shown, never sent.
+export function estimateMessageTokens(content) {
+  return Math.ceil(parseMessageContent(String(content || '')).response.length / 4);
+}

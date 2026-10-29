@@ -7,6 +7,7 @@ import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import { Menu, MenuItem, MenuSeparator } from '../../components/ui/Menu';
 import payloadBudgetContract from '../../../shared/payload-budget.json';
 import { selectActiveMessages, selectArchivableMessages, coverageStats } from '../chat/archive-coverage';
+import { estimateMessageTokens } from '../chat/message-content';
 import { ConfigSection, SettingsList, SwitchRow, Track, UnitNumberField, formatNumber } from './ConfigParts';
 
 const SUMMARY_PREVIEW = 4;
@@ -72,7 +73,7 @@ export default function ContextMemorySection({ sectionRef, activeChat, handleSav
   };
 
   const active = selectActiveMessages(archiveMessages, activeChat.memoryBlocks);
-  const tokensUsed = active.reduce((total, message) => total + Math.ceil(String(message.content || '').length / 4), 0);
+  const tokensUsed = active.reduce((total, message) => total + estimateMessageTokens(message.content), 0);
   const stats = coverageStats(archiveMessages, activeChat.memoryBlocks);
   const percentage = Math.min(100, (tokensUsed / Math.max(1, archiveThreshold)) * 100);
   const meterColor = percentage >= 95 ? 'var(--color-status-danger)' : percentage >= 75 ? 'var(--color-status-warning)' : 'var(--app-accent)';
