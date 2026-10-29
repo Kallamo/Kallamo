@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
 const { MIGRATIONS, runDatabaseMigrations } = require('./database/migrations');
+const LIGHTHOUSE = require('../shared/lighthouse-sample.json');
 const { BASE_SCHEMA, TOKEN_CALIBRATION_SCHEMA, WORLD_INDEX_SCHEMA } = require('./database/base-schema');
 const {
   readSchemaAppVersion,
@@ -996,20 +997,13 @@ Rank the problems by how much they break the story, most serious first.
 
   // The example workspace, with the three profiles pre-activated.
   const workspaceId = seedId('chat');
-  const memoryBlocks = [
-    {
-      id: seedId('manual'),
-      title: 'Canon — The Lighthouse',
-      summary: 'The lighthouse on Mourne Cliff has stood abandoned for forty years. Its last keeper, Aldous Finn, vanished without a trace in 1983. The villagers avoid the cliff path after dark.',
-      type: 'manual', strategy: 'constant', profiles: [], keywords: ['lighthouse', 'Aldous Finn', 'Mourne Cliff'], enabled: true,
-    },
-    {
-      id: seedId('manual'),
-      title: 'Canon — Protagonist',
-      summary: 'Mara Finn, 28, is Aldous’s granddaughter. She returns to the village to sell the family property, but the lighthouse and her grandfather’s disappearance pull her in.',
-      type: 'manual', strategy: 'constant', profiles: [], keywords: ['Mara Finn', 'protagonist'], enabled: true,
-    },
-  ];
+  // The texts live in a shared file because the Writing Desk and Memory tours show them too.
+  const memoryBlocks = LIGHTHOUSE.canon.map(note => ({
+    id: seedId('manual'),
+    title: note.title,
+    summary: note.summary,
+    type: 'manual', strategy: 'constant', profiles: [], keywords: note.keywords, enabled: true,
+  }));
 
   // Best-effort: a failed copy leaves the workspace without a background.
   let backgroundImage = '';
@@ -1028,23 +1022,19 @@ Rank the problems by how much they break the story, most serious first.
 
   // The target paragraph must be one unmarked text node: the renderer checks textBetween()
   // before showing the suggestion.
-  const originalText = 'The lighthouse was very old and it was on a cliff. It was very tall and the light at the top did not work anymore because no one had fixed it for a long time.';
-  const proposedText = 'The lighthouse had stood on the cliff for a century, gaunt and weatherbeaten, its lantern long since gone dark. No keeper had climbed those stairs in years.';
+  const { chapter } = LIGHTHOUSE;
+  const originalText = chapter.paragraphs[chapter.suggestion.paragraph];
+  const proposedText = chapter.suggestion.proposed;
 
   const docBlocks = [
-    { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Chapter One — The Lighthouse' }] },
-    { type: 'paragraph', content: [{ type: 'text', text: 'The road to Mourne Cliff ended where the tarmac gave out, and from there it was gravel, then grass, then nothing but the wind. Mara left the car by the rusted gate and walked the rest of the way up, her grandfather’s keys cold in her fist.' }] },
-    { type: 'paragraph', content: [{ type: 'text', text: originalText }] },
-    { type: 'paragraph', content: [{ type: 'text', text: 'She had not seen the place since she was a child. The years had not been kind to it. Gulls wheeled overhead but none of them landed on the rail, and the door at the base hung open a hand’s width, as though someone had left in a hurry and never come back.' }] },
-    { type: 'paragraph', content: [{ type: 'text', text: 'Forty years since anyone had kept the light. Forty years since Aldous Finn had walked up this same path and simply not walked down again. The village had its stories — they always did — but Mara had come for the deed and the sale, not the stories. That was what she told herself, anyway, as she pushed the door the rest of the way open.' }] },
-    { type: 'paragraph', content: [{ type: 'text', text: 'Inside, the stairs spiralled up into the dark, salt-rotted and soft underfoot. On the bottom step, where no rain could have reached it, lay a single page torn from a logbook — and the handwriting on it was her grandfather’s.' }] },
-    { type: 'paragraph', content: [{ type: 'text', text: 'Try it yourself: select any sentence, click "Invoke AI", and pick the Editing profile. Open the Chat tab to keep brainstorming with the AI, or check the Worldbuild tab to see the characters and places behind this scene. (You’ll need to add an API key in Settings before the AI can generate anything new.)' }] },
+    { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: chapter.heading }] },
+    ...chapter.paragraphs.map(text => ({ type: 'paragraph', content: [{ type: 'text', text }] })),
   ];
   const docContent = JSON.stringify({ type: 'doc', content: docBlocks });
 
-  // The weak paragraph (index 2) is the suggestion target. fromPos = total size of
-  // every block before it + 1 to enter its content; toPos spans the text exactly.
-  const targetIndex = 2;
+  // The weak paragraph is the suggestion target (the heading comes first). fromPos = total size
+  // of every block before it + 1 to enter its content; toPos spans the text exactly.
+  const targetIndex = chapter.suggestion.paragraph + 1;
   let fromPos = 1;
   for (let i = 0; i < targetIndex; i++) fromPos += pmNodeSize(docBlocks[i]);
   const toPos = fromPos + originalText.length;
@@ -1063,8 +1053,8 @@ Rank the problems by how much they break the story, most serious first.
       lore: 'The lighthouse’s last keeper. Vanished without a trace in 1983 and was never found. His handwriting survives on a logbook page Mara discovers on the bottom step.' },
     { id: eLighthouse, type: 'Locations', name: 'Mourne Cliff Lighthouse', aliases: ['the lighthouse', 'Mourne Cliff'], data: { size: 'place', loreDocumentIds: [docId] },
       lore: 'A tall, weatherbeaten lighthouse abandoned for forty years, its lantern long dark. The villagers avoid the cliff path after sundown. Setting of Chapter One.' },
-    { id: eLogbook, type: 'Items', name: 'The Keeper’s Logbook', aliases: ['the logbook', 'the journal', 'the torn page'], data: { loreDocumentIds: [docId] },
-      lore: 'Aldous’s keeper’s logbook. A single page, torn loose, is found at the foot of the stairs in his handwriting — dry, though no rain could have reached it.' },
+    { id: eLogbook, type: 'Items', name: LIGHTHOUSE.logbook.name, aliases: ['the logbook', 'the journal', 'the torn page'], data: { loreDocumentIds: [docId] },
+      lore: LIGHTHOUSE.logbook.lore },
   ];
 
   const insertEntity = db.prepare(`
@@ -1109,7 +1099,7 @@ Rank the problems by how much they break the story, most serious first.
       ) VALUES (?, ?, ?, ?, 0, 128000, 60000, 0, ?, '[]', ?, 25, 75, 75, ?, '[]', 0, 0)
     `).run(
       workspaceId,
-      'Example Project — The Lighthouse',
+      'The Lighthouse',
       '(Example) A sample workspace to explore Kallamo. Edit the chapter, continue the chat, or review against canon.',
       now,
       JSON.stringify(profiles.map(p => p.id)),
@@ -1120,7 +1110,7 @@ Rank the problems by how much they break the story, most serious first.
     db.prepare(`
       INSERT INTO documents (id, workspaceId, folderId, title, content, position, createdAt, updatedAt, last_modified)
       VALUES (?, ?, NULL, ?, ?, 0, ?, ?, ?)
-    `).run(docId, workspaceId, 'Chapter One', docContent, now, now, now);
+    `).run(docId, workspaceId, chapter.title, docContent, now, now, now);
 
     db.prepare(`
       INSERT INTO pending_suggestions
@@ -1128,7 +1118,7 @@ Rank the problems by how much they break the story, most serious first.
       VALUES (?, ?, ?, 'replacement', ?, ?, ?, ?, ?, ?, 'ok', ?, ?)
     `).run(
       seedId('psug'), docId, workspaceId, fromPos, toPos, originalText, proposedText,
-      profiles[0].id, 'Tighten this and make it more evocative.', now, now
+      profiles[0].id, chapter.suggestion.prompt, now, now
     );
 
     messages.forEach((m, i) => {

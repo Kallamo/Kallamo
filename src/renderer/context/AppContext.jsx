@@ -60,6 +60,8 @@ export const AppProvider = ({ children }) => {
   // One-time UI hints (coach-marks). Keyed booleans persisted in the settings
   // table; once true, the matching hint never shows again.
   const [uiFlags, setUiFlags] = useState({});
+  // First-visit guides wait for this, so an empty set before the read never counts as "not seen".
+  const [uiFlagsLoaded, setUiFlagsLoaded] = useState(false);
 
   // What's New modal: opens once per version bump (driven by the main process),
   // and can be reopened any time from Settings → About.
@@ -163,6 +165,7 @@ export const AppProvider = ({ children }) => {
 
       const fetchedFlags = await api.getUiFlags();
       setUiFlags(fetchedFlags || {});
+      setUiFlagsLoaded(true);
 
       const whatsNew = await api.getWhatsNewState();
       if (whatsNew?.show) {
@@ -460,7 +463,7 @@ export const AppProvider = ({ children }) => {
       workflows, setWorkflows,
       apiProfiles, setApiProfiles,
       settings, setSettings, handleSaveSettings,
-      uiFlags, dismissHint,
+      uiFlags, uiFlagsLoaded, dismissHint,
       whatsNewOpen, whatsNewType, whatsNewVersion, openWhatsNew, closeWhatsNew,
       activeChatId, activeChat,
       ...chatSession,

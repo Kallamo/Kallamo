@@ -147,7 +147,7 @@ const setup = {
         title: 'AI profiles',
         body: <>
           <P>An AI profile is a voice: a model, a set of rules and a personality. It is what replies to you in a workspace, and one workspace can use several.</P>
-          <P>Profiles marked <b className="font-semibold text-status-setup">Needs a model</b> cannot reply yet. Kallamo comes with a few, including the Narrator that runs the Evenwell story.</P>
+          <P>Profiles marked <b className="font-semibold text-status-setup">Needs a model</b> cannot reply yet. Kallamo comes with a few, including the Evenwell GM, who runs the guided story.</P>
           <P>Select a profile, then press <B>Set up</B>.</P>
         </>,
         missing: 'Open the Library from the launch screen.',
@@ -391,4 +391,179 @@ const worldbuild = {
   ],
 };
 
-export const TOURS = { setup, 'own-character': ownCharacter, worldbuild };
+// The views read the stage to show the tour's example content, so these lists follow the
+// order of the steps below.
+export const WRITING_TOUR_STAGES = ['welcome', 'chapters', 'invoke', 'link', 'review', 'memory', 'panels', 'done'];
+export const MEMORY_TOUR_STAGES = ['welcome', 'always', 'searchable', 'history', 'controls', 'add', 'worldIndex', 'retrieval', 'done'];
+
+// The stage of a running tour, or null when that tour is not the one running.
+export const tourStage = (tour, id) => {
+  const stages = id === 'writing' ? WRITING_TOUR_STAGES : id === 'memory' ? MEMORY_TOUR_STAGES : [];
+  return tour?.id === id ? stages[tour.index] || null : null;
+};
+
+// The middle steps show example content; the first and last show the tab as it is.
+export const showsTourExample = stage => Boolean(stage) && stage !== 'welcome' && stage !== 'done';
+
+const writing = {
+  where: 'Writing Desk',
+  skipLabel: 'Skip tour',
+  steps: () => [
+    {
+      width: '26.25rem', nextLabel: 'Show me around',
+      title: 'This is your Writing Desk',
+      body: <>
+        <P>Write your chapters here. The AI reads them to keep the story straight, and it only touches the text when you ask, on the passage you choose.</P>
+        <P>An example chapter will open to show you around. It is not saved, and it leaves when the tour ends.</P>
+      </>,
+    },
+    {
+      target: 'wd-chapters', placement: 'right', width: '23.75rem',
+      title: 'Your chapters',
+      body: <>
+        <P>Every chapter of this workspace lives here, in folders you can drag to reorder. <B>New chapter</B> starts one, and <B>Import</B>, in the <B>⋯</B> menu, brings in a .docx or .pdf you already have.</P>
+        <List>
+          <li><B>Review</B>: an AI suggestion is waiting for you.</li>
+          <li><B>Read</B>: a new analysis is in.</li>
+          <li>The blue mark: the AI is reading the chapter into its memory.</li>
+        </List>
+      </>,
+    },
+    {
+      target: 'wd-invoke', placement: 'bottom', width: '23.75rem',
+      title: 'Ask the AI about a passage',
+      body: <>
+        <P>Select some text and press <B>Invoke AI</B>. Pick the profile that answers, and what comes back:</P>
+        <List>
+          <li><B>Replace</B> rewrites the selection.</li>
+          <li><B>Insert after</B> continues from it.</li>
+          <li><B>Analyze</B> reads it and keeps the reading in Analyses.</li>
+        </List>
+      </>,
+    },
+    {
+      target: 'wd-link', placement: 'bottom', width: '23.75rem',
+      title: 'Link names to your world',
+      body: <>
+        <P>Select a name and press <B>Link to world</B> to tie it to a Worldbuild sheet, or create one on the spot.</P>
+        <P>A linked name tells the AI exactly who or what the passage is about.</P>
+      </>,
+    },
+    {
+      target: ['wd-suggestion', 'wd-review'], placement: 'left', width: '25rem',
+      title: 'Nothing changes until you choose',
+      body: <>
+        <P>The suggestion appears in the chapter itself: the old text struck through, the new one in green just below it.</P>
+        <P><B>Accept</B> keeps it. <B>Reject</B> puts your text back.</P>
+      </>,
+    },
+    {
+      target: ['wd-memory-menu', 'wd-memory'], placement: 'left', width: '23.75rem',
+      title: 'What the AI remembers',
+      body: <>
+        <P>The AI reads your chapters from its memory, not while you type. This mark says whether that memory has the latest version. The example is never read, so it stays out.</P>
+        <P>After writing, choose <B>Update the AI's memory</B>. It reads only the paragraphs you added or changed.</P>
+      </>,
+    },
+    {
+      target: 'wd-panels', placement: 'bottom', width: '25rem',
+      title: 'Beside the page',
+      body: <List>
+        <li><B>Notes</B>: your reminders for this chapter, and the analyses you keep.</li>
+        <li><B>Analyses</B>: every reading the AI has made of this chapter.</li>
+        <li><B>Directives</B>: rules the AI follows in every request here, like a tone or a spelling.</li>
+      </List>,
+    },
+    {
+      width: '25rem', nextLabel: 'Done', back: false,
+      title: "That's the tour",
+      body: <>
+        <P>The example is gone. Start a chapter, or import a manuscript you already have.</P>
+        <P>You can take this tour again from the lightbulb above the chapter list.</P>
+      </>,
+    },
+  ],
+};
+
+const memory = {
+  where: 'Memory',
+  skipLabel: 'Skip tour',
+  steps: () => [
+    {
+      width: '26.25rem', nextLabel: 'Show me around',
+      title: 'This is what the AI remembers',
+      body: <>
+        <P>Memory holds what the AI knows in this workspace beyond the conversation itself: your notes, your files and the history of the chat.</P>
+        <P>It comes in three kinds, and each reaches the AI differently. A few examples will appear to show them, and leave when the tour ends.</P>
+      </>,
+    },
+    {
+      target: 'mem-always', placement: 'bottom', width: '22.5rem',
+      title: 'Always on',
+      body: <>
+        <P>Sent with every prompt, so the AI never misses it. Keep it for short rules and the facts every scene needs.</P>
+        <P>It takes room in every request: the total on the right shows how much of the context window it uses.</P>
+      </>,
+    },
+    {
+      target: 'mem-searchable', placement: 'top', width: '22.5rem',
+      title: 'Searchable',
+      body: <>
+        <P>Split into chunks and looked up when a prompt is about them. Only the pieces that match are sent, so a long file costs little.</P>
+        <P>Use it for lore, reference and anything you would otherwise paste in.</P>
+      </>,
+    },
+    {
+      target: 'mem-history', placement: 'top', width: '22.5rem',
+      title: 'History',
+      body: <>
+        <P>As the chat grows, older messages are archived and summarized. The AI searches these summaries when the story reaches back to them.</P>
+        <P>There is nothing to manage here: summaries appear on their own.</P>
+      </>,
+    },
+    {
+      target: 'mem-controls', placement: 'bottom', width: '22.5rem',
+      title: 'Each item has its own controls',
+      body: <List>
+        <li><B>Profiles</B> limits it to some of the AI profiles in this workspace.</li>
+        <li>The <B>switch</B> turns it off without deleting it.</li>
+        <li><B>⋯</B> edits it, moves it between Always on and Searchable, or deletes it.</li>
+      </List>,
+    },
+    {
+      target: ['mem-add-menu', 'mem-add'], placement: 'left', width: '22.5rem',
+      title: 'Add to memory',
+      body: <List>
+        <li><B>Write a note</B>: you choose always on or searchable.</li>
+        <li><B>Upload a file</B>: PDF, DOCX, TXT or MD, either way.</li>
+        <li><B>Import KB package</B>: notes and files from another Export.</li>
+      </List>,
+    },
+    {
+      target: 'mem-world-index', placement: 'left', width: '23.75rem',
+      title: 'Tag your memories',
+      body: <>
+        <P><B>World Index</B> tags searchable chunks with the characters, factions and items they mention, so the AI recalls them by name.</P>
+        <P>It reads text that is already searchable and never changes it.</P>
+      </>,
+    },
+    {
+      target: 'mem-retrieval', placement: 'left', width: '23.75rem',
+      title: 'Test what a prompt finds',
+      body: <>
+        <P>Type a prompt and press <B>Run test</B> to see which memories it would pull in, and how closely each one matches.</P>
+        <P>Nothing found? Try the names or places you expect it to find.</P>
+      </>,
+    },
+    {
+      width: '25rem', nextLabel: 'Done', back: false,
+      title: "That's the tour",
+      body: <>
+        <P>The examples are gone. Write a note or upload a file to start, and summaries arrive as the chat grows.</P>
+        <P>You can take this tour again from the lightbulb next to Export.</P>
+      </>,
+    },
+  ],
+};
+
+export const TOURS = { setup, 'own-character': ownCharacter, worldbuild, writing, memory };

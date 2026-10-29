@@ -192,7 +192,7 @@ function ToolbarButton({ active, onClick, label, danger = false, children }) {
   );
 }
 
-function Divider() {
+export function Divider() {
   return <span aria-hidden="true" className="mx-1 h-5 w-px shrink-0 bg-border-subtle" />;
 }
 
@@ -509,7 +509,7 @@ function insertSceneBreak(editor) {
   }).run();
 }
 
-function Toolbar({ editor, pageConfig }) {
+export function Toolbar({ editor, pageConfig }) {
   useToolbarTick(editor);
   if (!editor) return null;
   return (
@@ -622,7 +622,7 @@ function countWords(text) {
 }
 
 // Colour carries the state; the accent stays for interaction only.
-const MEMORY_PILL = {
+export const MEMORY_PILL = {
   busy: { Icon: IndexingGlyph, label: 'Updating memory', cls: 'border-status-info/35 bg-status-info/10 text-status-info' },
   done: { Icon: IndexedGlyph, label: 'In AI memory', cls: 'border-status-success/30 bg-status-success/[0.08] text-status-success' },
   outdated: { Icon: IndexOutdatedGlyph, label: 'Memory out of date', cls: 'border-status-warning/35 bg-status-warning/[0.09] text-status-warning' },
@@ -630,14 +630,35 @@ const MEMORY_PILL = {
   never: { Icon: IndexNeverGlyph, label: 'Not in AI memory', cls: 'border-border-default bg-tint/[0.04] text-text-secondary' },
 };
 
-const MEMORY_NOTES = {
+export const MEMORY_NOTES = {
   outdated: 'You changed this chapter after the AI last read it, so it still remembers the old version.',
   never: "This chapter isn't in the AI's memory yet.",
   done: 'The AI remembers this chapter as it is now.',
 };
 
+// One continuous sheet; page boundaries only exist in export.
+export function sheetStyleFor(pageConfig) {
+  // Text color adapts to the paper so it stays readable on any sheet color.
+  const effectiveBg = pageConfig.sheetColor || '#ffffff';
+  return {
+    backgroundColor: effectiveBg,
+    color: isLightColor(effectiveBg) ? '#1f2328' : '#e5e7eb',
+    fontFamily: pageConfig.defaultFont || undefined,
+    fontSize: `${pageConfig.defaultFontSize || 18}px`,
+    lineHeight: pageConfig.lineHeight || 1.6,
+    width: `${pageConfig.pageWidth || 794}px`,
+    minHeight: `${pageConfig.pageHeight || 1123}px`,
+    paddingTop: `${pageConfig.marginTop ?? 96}px`,
+    paddingRight: `${pageConfig.marginRight ?? 96}px`,
+    paddingBottom: `${pageConfig.marginBottom ?? 96}px`,
+    paddingLeft: `${pageConfig.marginLeft ?? 96}px`,
+    '--wd-para-spacing': `${pageConfig.paragraphSpacing ?? 12}px`,
+    '--wd-indent': `${pageConfig.firstLineIndent ?? 0}px`,
+  };
+}
+
 // The label folds away when the header runs short, leaving the icon, count and tooltip.
-function PanelToggle({ icon: Icon, label, count, active, onClick }) {
+export function PanelToggle({ icon: Icon, label, count, active, onClick }) {
   return (
     <Tooltip content={label} side="bottom">
       <button
@@ -991,6 +1012,29 @@ export default function WritingEditor({
     editor.view.dispatch(editor.state.tr.setMeta(suggestionKey, decos));
   }, [editor, pending]);
 
+  // The blank sheet below the text acts like the editor inside the text column (I-beam, a click
+  // goes to the nearest line); the margins stay inert.
+  const onBlankColumn = (e) => {
+    if (!editor || locked || editor.view.dom.contains(e.target)) return false;
+    const sheet = e.currentTarget.getBoundingClientRect();
+    const pad = getComputedStyle(e.currentTarget);
+    return e.clientX >= sheet.left + parseFloat(pad.paddingLeft)
+      && e.clientX <= sheet.right - parseFloat(pad.paddingRight)
+      && e.clientY >= sheet.top + parseFloat(pad.paddingTop)
+      && e.clientY <= sheet.bottom - parseFloat(pad.paddingBottom);
+  };
+  const updateSheetCursor = (e) => {
+    e.currentTarget.style.cursor = onBlankColumn(e) ? 'text' : '';
+  };
+  const placeCaretFromSheet = (e) => {
+    if (e.button !== 0 || !onBlankColumn(e)) return;
+    e.preventDefault();
+    const last = editor.view.dom.lastElementChild;
+    const lineY = last ? Math.min(e.clientY, last.getBoundingClientRect().bottom - 2) : e.clientY;
+    const hit = editor.view.posAtCoords({ left: e.clientX, top: lineY });
+    editor.chain().focus().setTextSelection(hit ? hit.pos : editor.state.doc.content.size).run();
+  };
+
   const openInvoke = () => {
     if (!editor || locked) return;
     const { from, to } = editor.state.selection;
@@ -1124,31 +1168,7 @@ export default function WritingEditor({
   const profileName = (id) => profiles.find(p => p.id === id)?.name || 'The AI';
   const profileColor = (id) => profiles.find(p => p.id === id)?.color || null;
 
-  // Text color adapts to the paper so it stays readable on any sheet color.
-  const effectiveBg = pageConfig.sheetColor || '#ffffff';
-  const pageW = pageConfig.pageWidth || 794;
-  const pageH = pageConfig.pageHeight || 1123;
-  const mT = pageConfig.marginTop ?? 96;
-  const mB = pageConfig.marginBottom ?? 96;
-  const mL = pageConfig.marginLeft ?? 96;
-  const mR = pageConfig.marginRight ?? 96;
-
-  // One continuous sheet; page boundaries only exist in export.
-  const sheetStyle = {
-    backgroundColor: effectiveBg,
-    color: isLightColor(effectiveBg) ? '#1f2328' : '#e5e7eb',
-    fontFamily: pageConfig.defaultFont || undefined,
-    fontSize: `${pageConfig.defaultFontSize || 18}px`,
-    lineHeight: pageConfig.lineHeight || 1.6,
-    width: `${pageW}px`,
-    minHeight: `${pageH}px`,
-    paddingTop: `${mT}px`,
-    paddingRight: `${mR}px`,
-    paddingBottom: `${mB}px`,
-    paddingLeft: `${mL}px`,
-    '--wd-para-spacing': `${pageConfig.paragraphSpacing ?? 12}px`,
-    '--wd-indent': `${pageConfig.firstLineIndent ?? 0}px`,
-  };
+  const sheetStyle = sheetStyleFor(pageConfig);
 
   const goal = doc.wordGoal || 0;
   const goalPct = goal > 0 ? Math.min(100, Math.round((counts.words / goal) * 100)) : 0;
@@ -1392,6 +1412,8 @@ export default function WritingEditor({
         <div
           className={`relative mx-auto rounded-xl shadow-[0_2rem_4rem_-1.5rem_color-mix(in_srgb,var(--theme-shade)_75%,transparent)] ring-1 ring-shade/30 ${locked ? 'wd-sheet-locked' : ''}`}
           style={sheetStyle}
+          onMouseDown={placeCaretFromSheet}
+          onMouseMove={updateSheetCursor}
         >
           <EditorContent editor={editor} />
 

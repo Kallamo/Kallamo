@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Database, Plus, Trash2, Search, Check, ChevronDown, FileText, Info, X as XIcon, Download, Upload, MapPin, CircleHelp, FileSearch, NotebookPen, Orbit, Pin, Tag, UserRound, UsersRound, Loader2, Pencil, History, ListChecks, RefreshCw, Sparkles } from 'lucide-react';
+import { Database, Plus, Trash2, Search, Check, ChevronDown, FileText, Info, X as XIcon, Download, Upload, MapPin, CircleHelp, FileSearch, NotebookPen, Orbit, Pin, Tag, UserRound, UsersRound, Loader2, Pencil, History, ListChecks, RefreshCw, Sparkles, Lightbulb } from 'lucide-react';
 import { DragonIcon, MoneybagIcon, PennantIcon, StopwatchIcon } from './ui/glyphs';
 
 // Entity type -> icon, mirroring the Worldbuild view so a candidate reads the same here.
@@ -18,7 +18,6 @@ import Checkbox from './ui/Checkbox';
 import Toggle from './ui/Toggle';
 import RenameFilesModal from './ui/RenameFilesModal';
 import Popover from './ui/Popover';
-import CoachMark from './ui/CoachMark';
 import Button from './ui/Button';
 import Modal from './ui/Modal';
 import IconButton from './ui/IconButton';
@@ -32,6 +31,41 @@ import { Menu, MenuItem, MenuNote, MenuSeparator } from './ui/Menu';
 import { formatTokens } from './ui/TokenBadge';
 import MemoryRow from '../features/memory-view/MemoryRow';
 import SummaryLogModal from '../features/memory-view/SummaryLogModal';
+import { useFirstVisitTour, useTour } from '../features/onboarding/GuidedTour';
+import { showsTourExample, tourStage } from '../features/onboarding/tours';
+import ExampleChip from '../features/onboarding/ExampleChip';
+import LIGHTHOUSE from '../../shared/lighthouse-sample.json';
+
+const noop = () => {};
+const roughTokens = text => Math.ceil(String(text).length / 4);
+
+// What the Memory tour shows, drawn from the Lighthouse sample: one kind of memory per section.
+// They exist only in this view while the tour runs; nothing saves, indexes or sends them.
+const TOUR_EXAMPLE_BLOCKS = [
+  ...LIGHTHOUSE.canon.map((note, index) => ({
+    id: `tour-example-canon-${index}`, isExample: true, type: 'snippet', strategy: 'constant', exampleMeta: 'Custom note',
+    title: note.title, summary: note.summary, keywords: note.keywords, tokenCount: roughTokens(note.summary),
+  })),
+  {
+    id: 'tour-example-chapter', isExample: true, type: 'rag_file', exampleMeta: `DOCX · ${LIGHTHOUSE.chapter.paragraphs.length} chunks`,
+    title: `${LIGHTHOUSE.chapter.title}.docx`, source: `${LIGHTHOUSE.chapter.title}.docx`, keywords: ['Mara Finn', 'Mourne Cliff'],
+    chunks: LIGHTHOUSE.chapter.paragraphs.map(text => ({ text })), tokenCount: roughTokens(LIGHTHOUSE.chapter.paragraphs.join(' ')),
+  },
+  {
+    id: 'tour-example-logbook', isExample: true, type: 'snippet', strategy: 'rag_search', exampleMeta: 'Custom note',
+    title: LIGHTHOUSE.logbook.name, summary: LIGHTHOUSE.logbook.lore, keywords: ['Aldous Finn'], tokenCount: roughTokens(LIGHTHOUSE.logbook.lore),
+  },
+  ...LIGHTHOUSE.historyExamples.map((entry, index) => ({
+    id: `tour-example-summary-${index}`, isExample: true, type: 'summarized', exampleMeta: 'Summary',
+    title: entry.title, summary: entry.summary, tokenCount: roughTokens(entry.summary) * 8,
+  })),
+];
+const TOUR_SIM_QUERY = 'Who was the last keeper?';
+const TOUR_SIM_RESULTS = {
+  kbResults: [{ source: `${LIGHTHOUSE.chapter.title}.docx`, score: 0.82, text: LIGHTHOUSE.chapter.paragraphs[3] }],
+  memoryResults: [{ source: LIGHTHOUSE.historyExamples[1].title, score: 0.64, text: LIGHTHOUSE.historyExamples[1].summary }],
+  profileResults: [],
+};
 
 export default function ChatMemoryView({
   chat,
@@ -39,8 +73,11 @@ export default function ChatMemoryView({
   backgroundImage = null,
   hasBackdrop = false
 }) {
-  const { writingProfiles, settings, refreshChats, showToast, uiFlags, dismissHint, openSettings } = useApp();
-  const worldIndexRef = useRef(null);
+  const { writingProfiles, settings, refreshChats, showToast, openSettings } = useApp();
+  const { tour, startTour } = useTour();
+  useFirstVisitTour('memory', 'memoryTourSeen');
+  const memoryStage = tourStage(tour, 'memory');
+  const tourExamples = showsTourExample(memoryStage);
   const [activeFilter, setActiveFilter] = useState('all'); // 'all' | 'always' | 'searchable' | 'history'
   const [searchQuery, setSearchQuery] = useState('');
   const [summaryTokens, setSummaryTokens] = useState({}); // { [blockId]: approxTokenCount } for history-summary blocks
@@ -367,6 +404,13 @@ export default function ChatMemoryView({
   const fileInputRef = useRef(null);
   const [uploadStrategy, setUploadStrategy] = useState('full_context');
   const [addDropdownOpen, setAddDropdownOpen] = useState(false);
+  // The tour's Add step shows the menu open, and closes it again when the step is left.
+  const addStepRef = useRef(false);
+  useEffect(() => {
+    const onAddStep = memoryStage === 'add';
+    if (onAddStep !== addStepRef.current) setAddDropdownOpen(onAddStep);
+    addStepRef.current = onAddStep;
+  }, [memoryStage]);
 
   const [selectedSummaryBlock, setSelectedSummaryBlock] = useState(null);
 
@@ -606,12 +650,14 @@ export default function ChatMemoryView({
     return list;
   }, [blocks]);
 
+  // The tour's examples lead each section, so they are in view while it points at them.
   const combinedBlocks = React.useMemo(() => {
     return [
+      ...(tourExamples ? TOUR_EXAMPLE_BLOCKS : []),
       ...groupedBlocks,
       ...summaryBlocks
     ];
-  }, [groupedBlocks, summaryBlocks]);
+  }, [groupedBlocks, summaryBlocks, tourExamples]);
 
   // Weighed by stored history (counted in the main process), not recap length.
   const summarySignature = summaryBlocks.map(b => b.id).join('|');
@@ -654,13 +700,14 @@ export default function ChatMemoryView({
   }, [combinedBlocks]);
 
   const searchMatches = combinedBlocks.filter(b => {
+    if (b.isExample) return true;
     const query = searchQuery.toLowerCase();
     const titleMatch = (b.title || b.source || '').toLowerCase().includes(query);
     const summaryMatch = (b.summary || b.text || '').toLowerCase().includes(query);
     const chunksMatch = b.type === 'rag_file' && b.chunks.some(c => c.text.toLowerCase().includes(query));
     return titleMatch || summaryMatch || chunksMatch;
   });
-  const filteredBlocks = searchMatches.filter(b => activeFilter === 'all' || blockMode(b) === activeFilter);
+  const filteredBlocks = searchMatches.filter(b => b.isExample || activeFilter === 'all' || blockMode(b) === activeFilter);
   const modeCounts = combinedBlocks.reduce((counts, b) => ({ ...counts, [blockMode(b)]: counts[blockMode(b)] + 1 }), { always: 0, searchable: 0, history: 0 });
 
   const activeProfileIds = chat?.activeProfiles
@@ -1157,7 +1204,45 @@ export default function ChatMemoryView({
     });
   };
 
+  // A tour example looks like any other row, but every control on it is a no-op.
+  const renderExampleRow = (block) => {
+    const mode = blockMode(block);
+    const meta = <span className="inline-flex items-center gap-1.5">{block.exampleMeta}<ExampleChip /></span>;
+    if (mode === 'history') {
+      return <MemoryRow key={block.id} icon={History} tone="history" title={block.title} meta={meta} preview={firstLine(block.summary)} tokens={formatTokens(block.tokenCount)} onOpen={noop} />;
+    }
+    const isNote = block.type === 'snippet';
+    const target = mode === 'always' ? 'searchable' : 'always';
+    return (
+      <MemoryRow
+        key={block.id}
+        icon={isNote ? Pencil : FileText}
+        tone={mode}
+        title={block.title}
+        meta={meta}
+        preview={isNote ? firstLine(block.summary) : null}
+        tokens={formatTokens(block.tokenCount)}
+        tags={(block.keywords || []).map(label => ({ label, variant: 'keyword' }))}
+        onOpen={noop}
+        onToggleEnabled={noop}
+        selectable
+        onToggleSelect={noop}
+        profiles={chatProfiles}
+        profileIds={[]}
+        onToggleProfile={noop}
+        controlsTourId={block.id === TOUR_EXAMPLE_BLOCKS[0].id ? 'mem-controls' : undefined}
+        menuItems={[
+          { icon: isNote ? Pencil : ListChecks, label: isNote ? 'Edit note' : 'View chunks', onSelect: noop },
+          { icon: target === 'always' ? Pin : Search, iconClassName: MODES[target].toneClass, label: `Move to ${MODES[target].title}`, onSelect: noop },
+          'separator',
+          { icon: Trash2, label: isNote ? 'Delete note' : 'Delete file', danger: true, onSelect: noop },
+        ]}
+      />
+    );
+  };
+
   const renderRow = (block) => {
+    if (block.isExample) return renderExampleRow(block);
     const mode = blockMode(block);
     if (block.type === 'summarized') {
       return (
@@ -1275,11 +1360,14 @@ export default function ChatMemoryView({
   };
 
   const sectionLabel = 'text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-text-subtle';
-  const visibleModes = ['always', 'searchable', 'history'].filter(mode => activeFilter === 'all' || activeFilter === mode);
+  const visibleModes = ['always', 'searchable', 'history'].filter(mode => activeFilter === 'all' || tourExamples || activeFilter === mode);
+  const tourRetrieval = memoryStage === 'retrieval';
+  const simIsOpen = simOpen || tourRetrieval;
+  const shownSim = tourRetrieval ? TOUR_SIM_RESULTS : simResults;
   const noteEditor = !editingBlock || editingBlock.type === 'snippet';
   const viewingFile = viewingFileBlock ? (groupedBlocks.find(b => b.type === 'rag_file' && b.source === viewingFileBlock.source) || viewingFileBlock) : null;
   const simProfile = writingProfiles.find(p => p.id === simProfileId);
-  const simHasResults = simResults && (simResults.kbResults.length > 0 || simResults.memoryResults.length > 0 || (simResults.profileResults || []).length > 0);
+  const simHasResults = shownSim && (shownSim.kbResults.length > 0 || shownSim.memoryResults.length > 0 || (shownSim.profileResults || []).length > 0);
   const tagSelectionNoun = tagSelection === 'custom' ? ['note', 'notes'] : ['file', 'files'];
   const selectedTagChunks = tagSelectionBlocks.filter(block => tagSelectionIds.includes(block.id)).reduce((sum, block) => sum + block.chunkIds.length, 0);
 
@@ -1316,13 +1404,14 @@ export default function ChatMemoryView({
                 aria-label="Search memory"
                 containerClassName="w-60"
               />
+              <IconButton icon={Lightbulb} label="Take the tour" onClick={() => startTour('memory')} className="!h-10 !w-10 border border-border-default bg-surface-panel/70" />
               <Button variant="ghost" icon={Download} onClick={handleExportChatKb} title="Export this chat's memory as a KB package">Export</Button>
-              <div ref={addDropdownAnchorRef}>
+              <div ref={addDropdownAnchorRef} data-tour="mem-add">
                 <Button icon={Plus} onClick={() => setAddDropdownOpen(!addDropdownOpen)} aria-expanded={addDropdownOpen} aria-haspopup="menu">
                   Add <ChevronDown className={`h-3.5 w-3.5 transition-transform ${addDropdownOpen ? 'rotate-180' : ''}`} />
                 </Button>
               </div>
-              <Menu anchorRef={addDropdownAnchorRef} open={addDropdownOpen} onClose={() => setAddDropdownOpen(false)} label="Add memory" className="w-80">
+              <Menu anchorRef={addDropdownAnchorRef} open={addDropdownOpen} onClose={() => setAddDropdownOpen(false)} label="Add memory" className="w-80" tourId="mem-add-menu">
                 <MenuItem
                   icon={NotebookPen}
                   label="Write a note"
@@ -1443,10 +1532,10 @@ export default function ChatMemoryView({
               {visibleModes.map(mode => {
                 const items = filteredBlocks.filter(block => blockMode(block) === mode);
                 if (searchQuery && items.length === 0) return null;
-                const open = Boolean(searchQuery) || !collapsedSections[mode];
+                const open = Boolean(searchQuery) || tourExamples || !collapsedSections[mode];
                 return (
+                  <div key={mode} data-tour={`mem-${mode}`}>
                   <CollapsibleSection
-                    key={mode}
                     icon={MODES[mode].icon}
                     title={MODES[mode].title}
                     description={MODES[mode].description}
@@ -1460,6 +1549,7 @@ export default function ChatMemoryView({
                       ? items.map(renderRow)
                       : <p className="border-t border-border-subtle px-4 py-3 text-sm text-text-subtle">{mode === 'history' ? 'Nothing archived yet.' : 'Nothing here yet.'}</p>}
                   </CollapsibleSection>
+                  </div>
                 );
               })}
             </div>
@@ -1475,17 +1565,8 @@ export default function ChatMemoryView({
       </div>
 
       <aside className="glass-rail w-full md:w-80 shrink-0 border-l border-border-subtle flex flex-col gap-8 overflow-y-auto custom-scrollbar px-6 py-7">
-        <section className="flex flex-col gap-2.5">
-          <span ref={worldIndexRef} className={`self-start ${sectionLabel}`}>World index</span>
-          <CoachMark
-            anchorRef={worldIndexRef}
-            open={!uiFlags.memoryWorldIndexSeen}
-            onDismiss={() => dismissHint('memoryWorldIndexSeen')}
-            title="Tag your memories"
-            align="left"
-          >
-            Index a tier to attach dynamic tags (characters, factions, items) to its chunks, so the AI recalls them by name during a chat.
-          </CoachMark>
+        <section data-tour="mem-world-index" className="flex flex-col gap-2.5">
+          <span className={`self-start ${sectionLabel}`}>World index</span>
           <p className="text-sm leading-relaxed text-text-muted">Tags memories by character, faction and item so the AI can recall them by name.</p>
           <div className="mt-1 flex flex-col border-b border-border-subtle">
             {indexTiers.map(t => {
@@ -1538,17 +1619,17 @@ export default function ChatMemoryView({
           </div>
         </section>
 
-        <section className="flex flex-col gap-3">
+        <section data-tour="mem-retrieval" className="flex flex-col gap-3">
           <button
             type="button"
             onClick={() => setSimOpen(open => !open)}
-            aria-expanded={simOpen}
+            aria-expanded={simIsOpen}
             className="flex items-center justify-between rounded cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
             <span className={sectionLabel}>Retrieval test</span>
-            <ChevronDown className={`h-4 w-4 text-text-subtle transition-transform ${simOpen ? '' : '-rotate-90'}`} aria-hidden="true" />
+            <ChevronDown className={`h-4 w-4 text-text-subtle transition-transform ${simIsOpen ? '' : '-rotate-90'}`} aria-hidden="true" />
           </button>
-          {simOpen && (
+          {simIsOpen && (
             <>
               <p className="text-sm leading-relaxed text-text-muted">See which memories a prompt would pull in.</p>
               <label className="flex flex-col gap-1.5 text-xs font-medium text-text-muted">
@@ -1573,15 +1654,16 @@ export default function ChatMemoryView({
               <label className="flex flex-col gap-1.5 text-xs font-medium text-text-muted">
                 Prompt
                 <textarea
-                  value={simQuery}
+                  value={tourRetrieval ? TOUR_SIM_QUERY : simQuery}
+                  readOnly={tourRetrieval}
                   onChange={(e) => setSimQuery(e.target.value)}
                   placeholder="Who is the innkeeper?"
                   className="field-input h-20 resize-none px-3 py-2.5 text-sm select-text"
                 />
               </label>
-              <Button variant="ghost" fullWidth loading={simLoading} disabled={!simQuery.trim()} onClick={handleTestSearch}>Run test</Button>
+              <Button variant="ghost" fullWidth loading={simLoading} disabled={!tourRetrieval && !simQuery.trim()} onClick={tourRetrieval ? undefined : handleTestSearch}>Run test</Button>
 
-              {simResults && !simHasResults && (
+              {shownSim && !simHasResults && (
                 <div className="flex flex-col gap-1 rounded-card border border-dashed border-border-default px-3.5 py-3">
                   <span className="text-sm font-semibold text-text-primary">Nothing found</span>
                   <span className="text-xs leading-relaxed text-text-muted">No memory scored above the threshold for this prompt. Try the names or places you expect it to find.</span>
@@ -1589,25 +1671,25 @@ export default function ChatMemoryView({
               )}
               {simHasResults && (
                 <div className="flex flex-col gap-2.5 select-text">
-                  {simResults.isAgenticApplied && (
+                  {shownSim.isAgenticApplied && (
                     <div className="flex flex-col gap-0.5 rounded-control border border-border-subtle bg-tint/[0.03] px-3 py-2.5">
                       <span className="text-xs text-text-subtle">Searched as</span>
-                      <span className="text-sm text-text-primary">"{simResults.searchQuery}"</span>
+                      <span className="text-sm text-text-primary">"{shownSim.searchQuery}"</span>
                     </div>
                   )}
-                  <span className="mt-1 text-xs font-semibold text-text-secondary">This chat · {simResults.kbResults.length + simResults.memoryResults.length}</span>
-                  {simResults.kbResults.length + simResults.memoryResults.length === 0
+                  <span className="mt-1 text-xs font-semibold text-text-secondary">This chat · {shownSim.kbResults.length + shownSim.memoryResults.length}</span>
+                  {shownSim.kbResults.length + shownSim.memoryResults.length === 0
                     ? <p className="text-xs text-text-subtle">No matching notes or files.</p>
                     : [
-                      ...simResults.kbResults.map((res, i) => resultCard(res, i, 'searchable', FileText)),
-                      ...simResults.memoryResults.map((res, i) => resultCard(res, i, 'history', History)),
+                      ...shownSim.kbResults.map((res, i) => resultCard(res, i, 'searchable', FileText)),
+                      ...shownSim.memoryResults.map((res, i) => resultCard(res, i, 'history', History)),
                     ]}
                   {simProfileId && (
                     <>
-                      <span className="mt-1 text-xs font-semibold text-text-secondary">{simProfile?.name || 'Profile'} memory · {(simResults.profileResults || []).length}</span>
-                      {(simResults.profileResults || []).length === 0
+                      <span className="mt-1 text-xs font-semibold text-text-secondary">{simProfile?.name || 'Profile'} memory · {(shownSim.profileResults || []).length}</span>
+                      {(shownSim.profileResults || []).length === 0
                         ? <p className="text-xs text-text-subtle">Nothing above the threshold.</p>
-                        : simResults.profileResults.map((res, i) => resultCard(res, i, 'profile', UserRound))}
+                        : shownSim.profileResults.map((res, i) => resultCard(res, i, 'profile', UserRound))}
                     </>
                   )}
                 </div>

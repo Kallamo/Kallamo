@@ -7,6 +7,27 @@ import { TOURS } from './tours';
 const TourContext = createContext({ tour: null, startTour: () => {}, endTour: () => {} });
 export const useTour = () => useContext(TourContext);
 
+// Starts a tour on the first visit to its tab in this database, and marks it seen as it starts,
+// so it never comes back on its own. After that only its lightbulb starts it.
+export function useFirstVisitTour(id, flag) {
+  const { uiFlags, uiFlagsLoaded, dismissHint } = useApp();
+  const { tour, startTour } = useTour();
+  const tourRef = useRef(tour);
+  tourRef.current = tour;
+  useEffect(() => {
+    if (!uiFlagsLoaded || uiFlags[flag]) return undefined;
+    const timer = setTimeout(() => {
+      // Another guide running here keeps this one for a later visit.
+      if (tourRef.current) return;
+      dismissHint(flag);
+      startTour(id);
+    }, 600);
+    return () => clearTimeout(timer);
+    // Flags only change by being dismissed, which this run already reads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uiFlagsLoaded]);
+}
+
 const GAP = 18;
 const EDGE = 12;
 const PAD = 6;

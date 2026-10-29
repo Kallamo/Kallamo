@@ -3,7 +3,7 @@ import { Check } from 'lucide-react';
 import Popover from './Popover';
 
 /** The trigger carries aria-haspopup="menu" and aria-expanded; items are real menuitem buttons. */
-export function Menu({ anchorRef, open, onClose, label, align = 'right', className = 'w-64', children }) {
+export function Menu({ anchorRef, open, onClose, label, align = 'right', className = 'w-64', tourId, children }) {
   const listRef = useRef(null);
 
   useEffect(() => {
@@ -33,7 +33,7 @@ export function Menu({ anchorRef, open, onClose, label, align = 'right', classNa
 
   return (
     <Popover anchorRef={anchorRef} open={open} onClose={close} matchAnchorWidth={false} align={align} scroll={false} className={`!p-1.5 ${className}`}>
-      <div ref={listRef} role="menu" aria-label={label} onKeyDown={onKeyDown} className="flex flex-col">
+      <div ref={listRef} role="menu" aria-label={label} data-tour={tourId} onKeyDown={onKeyDown} className="flex flex-col">
         {typeof children === 'function' ? children(close) : children}
       </div>
     </Popover>

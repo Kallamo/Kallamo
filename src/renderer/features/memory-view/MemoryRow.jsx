@@ -33,6 +33,7 @@ export default function MemoryRow({
   profileIds,
   onToggleProfile,
   menuItems,
+  controlsTourId,
 }) {
   const menuAnchorRef = useRef(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -67,26 +68,30 @@ export default function MemoryRow({
         </span>
         {!hasControls && <ChevronRight className="mx-1 h-4 w-4 shrink-0 text-text-subtle" aria-hidden="true" />}
       </button>
-      {profiles && <ProfileScopeButton profiles={profiles} selectedIds={profileIds} onToggle={onToggleProfile} />}
-      {onToggleEnabled && <Toggle checked={enabled} onChange={onToggleEnabled} />}
-      {menuItems && (
-        <>
-          <IconButton
-            ref={menuAnchorRef}
-            icon={MoreHorizontal}
-            label="More actions"
-            size="sm"
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            onClick={() => setMenuOpen(value => !value)}
-            className={menuOpen ? 'bg-surface-hover text-text-primary' : ''}
-          />
-          <Menu anchorRef={menuAnchorRef} open={menuOpen} onClose={() => setMenuOpen(false)} label={`${title} actions`}>
-            {menuItems.map((item, index) => item === 'separator'
-              ? <MenuSeparator key={`separator-${index}`} />
-              : <MenuItem key={item.label} {...item} onSelect={() => { setMenuOpen(false); item.onSelect?.(); }} />)}
-          </Menu>
-        </>
+      {(hasControls || profiles) && (
+        <span data-tour={controlsTourId} className="flex shrink-0 items-center gap-3">
+          {profiles && <ProfileScopeButton profiles={profiles} selectedIds={profileIds} onToggle={onToggleProfile} />}
+          {onToggleEnabled && <Toggle checked={enabled} onChange={onToggleEnabled} />}
+          {menuItems && (
+            <>
+              <IconButton
+                ref={menuAnchorRef}
+                icon={MoreHorizontal}
+                label="More actions"
+                size="sm"
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                onClick={() => setMenuOpen(value => !value)}
+                className={menuOpen ? 'bg-surface-hover text-text-primary' : ''}
+              />
+              <Menu anchorRef={menuAnchorRef} open={menuOpen} onClose={() => setMenuOpen(false)} label={`${title} actions`}>
+                {menuItems.map((item, index) => item === 'separator'
+                  ? <MenuSeparator key={`separator-${index}`} />
+                  : <MenuItem key={item.label} {...item} onSelect={() => { setMenuOpen(false); item.onSelect?.(); }} />)}
+              </Menu>
+            </>
+          )}
+        </span>
       )}
     </div>
   );

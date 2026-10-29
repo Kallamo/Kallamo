@@ -1,0 +1,45 @@
+{
+  "chapter": {
+    "title": "Chapter One",
+    "heading": "Chapter One — The Lighthouse",
+    "paragraphs": [
+      "The road to Mourne Cliff ended where the tarmac gave out, and from there it was gravel, then grass, then nothing but the wind. Mara left the car by the rusted gate and walked the rest of the way up, her grandfather’s keys cold in her fist.",
+      "The lighthouse was very old and it was on a cliff. It was very tall and the light at the top did not work anymore because no one had fixed it for a long time.",
+      "She had not seen the place since she was a child. The years had not been kind to it. Gulls wheeled overhead but none of them landed on the rail, and the door at the base hung open a hand’s width, as though someone had left in a hurry and never come back.",
+      "Forty years since anyone had kept the light. Forty years since Aldous Finn had walked up this same path and simply not walked down again. The village had its stories — they always did — but Mara had come for the deed and the sale, not the stories. That was what she told herself, anyway, as she pushed the door the rest of the way open.",
+      "Inside, the stairs spiralled up into the dark, salt-rotted and soft underfoot. On the bottom step, where no rain could have reached it, lay a single page torn from a logbook — and the handwriting on it was her grandfather’s.",
+      "Try it yourself: select any sentence, click \"Invoke AI\", and pick the Editing profile. Open the Chat tab to keep brainstorming with the AI, or check the Worldbuild tab to see the characters and places behind this scene. (You’ll need to add an API key in Settings before the AI can generate anything new.)"
+    ],
+    "suggestion": {
+      "paragraph": 1,
+      "proposed": "The lighthouse had stood on the cliff for a century, gaunt and weatherbeaten, its lantern long since gone dark. No keeper had climbed those stairs in years.",
+      "prompt": "Tighten this and make it more evocative."
+    }
+  },
+  "canon": [
+    {
+      "title": "Canon — The Lighthouse",
+      "summary": "The lighthouse on Mourne Cliff has stood abandoned for forty years. Its last keeper, Aldous Finn, vanished without a trace in 1983. The villagers avoid the cliff path after dark.",
+      "keywords": ["lighthouse", "Aldous Finn", "Mourne Cliff"]
+    },
+    {
+      "title": "Canon — Protagonist",
+      "summary": "Mara Finn, 28, is Aldous’s granddaughter. She returns to the village to sell the family property, but the lighthouse and her grandfather’s disappearance pull her in.",
+      "keywords": ["Mara Finn", "protagonist"]
+    }
+  ],
+  "historyExamples": [
+    {
+      "title": "Making the opening ominous",
+      "summary": "Brainstorming suggests specifics over adjectives for Mara’s arrival: gulls that won’t land on the rail, salt-rotted stairs, a door already hanging open."
+    },
+    {
+      "title": "What Mara finds inside",
+      "summary": "A torn page from Aldous’s logbook, in his handwriting, on the bottom step where no rain could have reached it. Chapter One ends on her picking it up."
+    }
+  ],
+  "logbook": {
+    "name": "The Keeper’s Logbook",
+    "lore": "Aldous’s keeper’s logbook. A single page, torn loose, is found at the foot of the stairs in his handwriting — dry, though no rain could have reached it."
+  }
+}

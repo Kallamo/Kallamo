@@ -9,7 +9,7 @@ const CODE_THEMES = {
   'tokyo-night-dark': { bg: '#1a1b26', keyword: '#bb9af7', name: '#7dcfff', string: '#9ece6a', number: '#ff9e64', text: '#c0caf5' },
 };
 
-// Always the Example Project, so the preview never depends on what the user has written.
+// Always the Lighthouse sample, so the preview never depends on what the user has written.
 const SAMPLE = {
   image: { src: exampleBackground, position: 'center 50%' },
   prompt: 'Where does the next scene start?',
@@ -63,7 +63,7 @@ export default function AppearancePreview({ layout, fontClass, blur, codeTheme, 
           </div>
         </div>
       </div>
-      <p className="caption mt-2.5">The Example Project, with these settings.</p>
+      <p className="caption mt-2.5">The Lighthouse, with these settings.</p>
       <pre className="mt-3.5 overflow-hidden rounded-xl border border-tint/[0.08] px-3.5 py-3 font-mono text-xs leading-relaxed" style={{ background: theme.bg, color: theme.text }}>
         {n(1)}<span style={{ color: theme.keyword }}>const</span> <span style={{ color: theme.name }}>scene</span> = {'{'}{'\n'}
         {n(2)}  place: <span style={{ color: theme.string }}>"{sample.place}"</span>,{'\n'}

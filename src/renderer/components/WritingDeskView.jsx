@@ -12,9 +12,14 @@ import WritingDirectivesPanel from './WritingDirectivesPanel';
 import WritingNotesPanel from './WritingNotesPanel';
 import WritingAnalysesPanel from './WritingAnalysesPanel';
 import InWorldTextDialog from '../features/worldbuild/InWorldTextDialog';
+import { useFirstVisitTour, useTour } from '../features/onboarding/GuidedTour';
+import { showsTourExample, tourStage } from '../features/onboarding/tours';
+import WritingTourExample from '../features/onboarding/WritingTourExample';
+import ExampleChip from '../features/onboarding/ExampleChip';
+import LIGHTHOUSE from '../../shared/lighthouse-sample.json';
 import {
   Folder, FolderOpen, FolderPlus, Plus, ChevronDown, ChevronLeft, FileText, Trash2, FolderInput,
-  PenLine, Download, FileInput, MoreHorizontal, ScrollText
+  PenLine, Download, FileInput, MoreHorizontal, ScrollText, Lightbulb
 } from 'lucide-react';
 import { AiGlyph, AiNoteGlyph, IndexingGlyph, SuggestionPendingGlyph, WritingGlyph } from './ui/glyphs';
 
@@ -23,6 +28,11 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
   const workspaceId = chat.id;
   const toolbarMode = settings?.interface?.writingToolbar === 'bubble' ? 'bubble' : 'fixed';
   const smartTypography = settings?.interface?.smartTypography ?? true;
+  const { tour, startTour } = useTour();
+  useFirstVisitTour('writing', 'writingTourSeen');
+  // While the tour runs, its example chapter takes the editor's place; the workspace's own
+  // chapters stay in the list but none of them opens.
+  const tourExample = showsTourExample(tourStage(tour, 'writing'));
 
   const [tree, setTree] = useState({ folders: [], documents: [] });
   const [expanded, setExpanded] = useState({});
@@ -36,6 +46,8 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
   const [exportFolderTarget, setExportFolderTarget] = useState(null);
   const [rowMenu, setRowMenu] = useState(null); // { item, view: 'actions' | 'move' }
   const rowMenuAnchorRef = useRef(null);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const moreMenuRef = useRef(null);
   const [dragItem, setDragItem] = useState(null);
   const [dropInfo, setDropInfo] = useState(null); // { id, zone: 'before'|'after'|'inside' }
   const sidebarKey = `wd-sidebar-collapsed-${workspaceId}`;
@@ -581,7 +593,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
 
   const renderDoc = (doc) => {
     const item = { ...doc, type: 'document' };
-    const active = selectedDocId === doc.id;
+    const active = !tourExample && selectedDocId === doc.id;
     return (
       <div
         key={doc.id}
@@ -636,20 +648,25 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
     : [];
   const currentParent = menuItem ? (menuItem.type === 'folder' ? menuItem.parentId || null : menuItem.folderId || null) : null;
   const currentFolder = currentDoc?.folderId ? tree.folders.find(f => f.id === currentDoc.folderId) : null;
-  const showSidebar = !sidebarCollapsed || !currentDoc;
+  const showSidebar = !sidebarCollapsed || !currentDoc || tourExample;
   const isEmpty = tree.folders.length === 0 && tree.documents.length === 0;
 
   return (
     <div className="relative flex flex-1 overflow-hidden select-none">
       {showSidebar && (
-        <aside aria-label="Chapters" className="glass-rail flex w-[21rem] shrink-0 flex-col border-r border-border-subtle">
+        <aside aria-label="Chapters" data-tour="wd-chapters" className="glass-rail flex w-[21rem] shrink-0 flex-col border-r border-border-subtle">
           <div className="flex h-[3.25rem] shrink-0 items-center gap-1 pl-4 pr-3">
             <h2 className="text-[0.9375rem] font-bold text-text-primary">Chapters</h2>
             <span className="text-xs tabular-nums text-text-subtle">{tree.documents.length}</span>
             <span className="flex-1" />
             <Button size="sm" icon={Plus} className="whitespace-nowrap !px-2.5" onClick={() => newDocument(null)}>New chapter</Button>
             <IconButton icon={FolderPlus} label="New folder" size="sm" tooltipSide="bottom" onClick={() => newFolder(null)} />
-            <IconButton icon={FileInput} label="Import .docx or .pdf" size="sm" tooltipSide="bottom" onClick={importDocument} />
+            <IconButton ref={moreMenuRef} icon={MoreHorizontal} label="More chapter actions" size="sm" tooltipSide="bottom" aria-haspopup="menu" aria-expanded={showMoreMenu} onClick={() => setShowMoreMenu(v => !v)} />
+            <Menu anchorRef={moreMenuRef} open={showMoreMenu} onClose={() => setShowMoreMenu(false)} label="Chapter actions" className="w-64">
+              <MenuItem icon={FileInput} label="Import" description="Bring in a .docx or .pdf as a new chapter." onSelect={() => { setShowMoreMenu(false); importDocument(); }} />
+              <MenuSeparator />
+              <MenuItem icon={Lightbulb} label="Take the tour" description="A one-minute look around the Writing Desk." onSelect={() => { setShowMoreMenu(false); startTour('writing'); }} />
+            </Menu>
           </div>
           <div
             className="custom-scrollbar flex flex-1 flex-col overflow-y-auto px-2 pb-2"
@@ -657,10 +674,17 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
             onDrop={onRootDrop}
           >
             <div className="flex flex-col gap-px">
+              {tourExample && (
+                <div aria-current="page" className="relative flex min-h-[1.875rem] items-center gap-2 rounded-md bg-accent/[0.13] py-0.5 pl-2 pr-1 text-sm text-text-primary shadow-[inset_3px_0_0_var(--app-accent)]">
+                  <FileText className="h-4 w-4 shrink-0 text-accent" aria-hidden="true" />
+                  <span className="min-w-0 flex-1 truncate font-semibold">{LIGHTHOUSE.chapter.title}</span>
+                  <ExampleChip />
+                </div>
+              )}
               {childFolders(null).map(renderFolder)}
               {childDocs(null).map(renderDoc)}
             </div>
-            {isEmpty && (
+            {isEmpty && !tourExample && (
               <p className="px-2 py-4 text-sm leading-relaxed text-text-subtle">No chapters yet. Start one above, or import a .docx or .pdf.</p>
             )}
             {/* Fills remaining space so there's always a drop target to send items back to the top level. */}
@@ -678,7 +702,9 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
         </aside>
       )}
 
-      {currentDoc ? (
+      {tourExample ? (
+        <WritingTourExample stage={tourStage(tour, 'writing')} toolbarMode={toolbarMode} />
+      ) : currentDoc ? (
         <div className="flex flex-1 flex-col overflow-hidden">
           <WritingEditor
             key={currentDoc.id}
@@ -730,7 +756,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
         </div>
       )}
 
-      {rightPanel === 'directives' && (
+      {rightPanel === 'directives' && !tourExample && (
         <WritingDirectivesPanel
           workspaceId={workspaceId}
           workspaceTitle={chat.title}
@@ -739,7 +765,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
           onClose={() => togglePanel('directives')}
         />
       )}
-      {rightPanel === 'notes' && currentDoc && (
+      {rightPanel === 'notes' && currentDoc && !tourExample && (
         <WritingNotesPanel
           documentId={currentDoc.id}
           documentTitle={currentDoc.title}
@@ -753,7 +779,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
         />
       )}
 
-      {rightPanel === 'analyses' && currentDoc && (
+      {rightPanel === 'analyses' && currentDoc && !tourExample && (
         <WritingAnalysesPanel
           documentId={currentDoc.id}
           documentTitle={currentDoc.title}
