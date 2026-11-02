@@ -18,13 +18,17 @@ beforeAll(async () => {
     req.on('end', () => {
       const body = raw ? JSON.parse(raw) : {};
       bodies.push(body);
-      const schema = body.output_config || body.generationConfig?.responseSchema;
+      const schema = body.output_config || body.generationConfig?.responseSchema || body.response_format;
       const longCache = raw.includes('"ttl":"1h"');
       const refused = (req.url?.startsWith('/refuse') && schema) || (req.url?.startsWith('/no-long-cache') && longCache);
-      res.writeHead(refused ? 400 : 200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(refused
+      const grammarFailed = req.url?.startsWith('/grammar-fails') && schema;
+      res.writeHead(refused ? 400 : grammarFailed ? 500 : 200, { 'Content-Type': 'application/json' });
+      const openAi = req.url?.includes('/chat/completions');
+      res.end(JSON.stringify(refused || grammarFailed
         ? { error: { message: 'This schema shape is not accepted here.' } }
-        : { content: [{ type: 'text', text: '{"ok":true}' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 3 } }));
+        : openAi
+          ? { choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 3 } }
+          : { content: [{ type: 'text', text: '{"ok":true}' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 3 } }));
     });
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -38,8 +42,8 @@ afterAll(() => {
 
 beforeEach(() => { bodies = []; });
 
-function database(path: string) {
-  const profile = { id: 'conn', provider: 'Anthropic', apiKey: 'key', baseUrl: `${origin}${path}`, customConfig: null, contextWindow: null };
+function database(path: string, provider = 'Anthropic') {
+  const profile = { id: 'conn', provider, apiKey: 'key', baseUrl: `${origin}${path}`, customConfig: null, contextWindow: null };
   return {
     prepare(query: string) {
       if (query.includes('FROM variables')) return { all: () => [] };
@@ -74,6 +78,30 @@ describe('a refused response schema', () => {
     await sendApiRequest({ apiProfileId: 'conn', model: 'claude-accept-test', newPrompt: 'Check.', maxTokens: 100, jsonMode: true, jsonSchema: schema }, { database: db });
     expect(bodies).toHaveLength(1);
     expect(bodies[0].output_config.format.type).toBe('json_schema');
+  });
+});
+
+describe('a local server', () => {
+  test('receives the schema as a response format', async () => {
+    const db = database('/accept/v1', 'Local');
+    await sendApiRequest({ apiProfileId: 'conn', model: 'local-accept', newPrompt: 'Check.', maxTokens: 100, jsonMode: true, jsonSchema: schema }, { database: db });
+    expect(bodies[0].response_format).toEqual({ type: 'json_schema', json_schema: { name: 'kallamo_structured_response', strict: false, schema } });
+  });
+
+  test('that refuses it is asked again with no format at all', async () => {
+    const db = database('/refuse/v1', 'Local');
+    const events: unknown[] = [];
+    const request = { apiProfileId: 'conn', model: 'local-refusal', newPrompt: 'Check.', maxTokens: 100, jsonMode: true, jsonSchema: schema, onStructuredFallback: (event: unknown) => events.push(event) };
+    expect(await sendApiRequest(request, { database: db })).toBe('{"ok":true}');
+    expect(bodies.map(body => Boolean(body.response_format))).toEqual([true, false]);
+    expect(events).toEqual([{ remembered: false, reason: expect.stringContaining('not accepted') }]);
+  });
+
+  test('whose grammar fails with a server error is asked again without the schema', async () => {
+    const db = database('/grammar-fails/v1', 'Local');
+    const request = { apiProfileId: 'conn', model: 'local-grammar', newPrompt: 'Check.', maxTokens: 100, jsonMode: true, jsonSchema: schema };
+    expect(await sendApiRequest(request, { database: db })).toBe('{"ok":true}');
+    expect(bodies.map(body => Boolean(body.response_format))).toEqual([true, false]);
   });
 });
 

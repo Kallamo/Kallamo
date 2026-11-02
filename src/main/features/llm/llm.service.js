@@ -662,7 +662,9 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
             // Reasoning models accept only their default temperature and reject the
             // request otherwise. Manual JSON can still set one explicitly.
             if (!needsMaxCompletionTokens(model)) requestBody.temperature = temperature ?? 0.7;
-            if (jsonMode && provider !== 'local') requestBody.response_format = openAiResponseFormat(jsonSchema);
+            // Local servers turn a schema into a grammar, so the reply cannot leave its shape. Plain
+            // json_object is not accepted by all of them, so a local request without a schema asks for none.
+            if (jsonMode && (provider !== 'local' || jsonSchema)) requestBody.response_format = openAiResponseFormat(jsonSchema);
             if (needsMaxCompletionTokens(model)) {
                 requestBody.max_completion_tokens = outputTokens;
             } else {
@@ -1065,8 +1067,10 @@ async function sendApiRequest(params, dependencies = {}) {
             return sendApiRequest(params, dependencies);
         }
         // Providers word a refused schema differently, so any 400 on a request that carried one is
-        // retried without it. The refusal is remembered only once that retry succeeds.
-        if (error.status === 400 && params.jsonSchema) {
+        // retried without it. A local server may fail the grammar it builds from the schema with a 500
+        // instead. The refusal is remembered only once that retry succeeds.
+        const refusedSchema = error.status === 400 || (provider === 'local' && error.status >= 500);
+        if (refusedSchema && params.jsonSchema) {
             console.warn('[LLM] The provider refused the response schema; retrying without it:', error.message);
             const result = await sendApiRequest({ ...params, jsonSchema: null }, dependencies);
             refusedSchemas.add(schemaRefusalKey(params));
