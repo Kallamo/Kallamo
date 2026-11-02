@@ -496,7 +496,7 @@ function markLastHistoryMessage(messages, control = CACHE_CONTROL) {
     return [...messages.slice(0, -1), { ...last, content }];
 }
 
-async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistory = [], newPrompt = '', temperature, maxTokens, maxPayloadTokens, payloadLimit = null, payloadBreakdown = null, learnTokenCount = false, manualMode, manualJson, attachedImages, stream = false, jsonMode = false, jsonSchema = null, conversation = null, tools = null, promptCache = null, keepSpoilerMarkers = false }, dependencies = {}) {
+async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistory = [], newPrompt = '', temperature, maxTokens, maxPayloadTokens, payloadLimit = null, payloadBreakdown = null, learnTokenCount = false, manualMode, manualJson, attachedImages, stream = false, jsonMode = false, jsonSchema = null, conversation = null, tools = null, promptCache = null, keepSpoilerMarkers = false, onRequest = null }, dependencies = {}) {
     const db = dependencies.database || getDatabase();
     useTokenCalibrationStore(db);
     const resolvePromptVariables = createPromptVariableResolver(db);
@@ -599,6 +599,15 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
         limitSource: limit.source,
         breakdown: payloadBreakdown
     }) || estimatePayloadTokens(measured);
+    // The text as the model reads it: variables filled in, spoiler markers gone, context in its final place.
+    onRequest?.({
+        systemPrompt,
+        chatHistory: measured.chatHistory,
+        newPrompt,
+        attachedImageCount: measured.attachedImageCount,
+        inputTokens: estimate.inputTokens,
+        outputTokens
+    });
     const tokenSample = learnTokenCount && isMeasurableRequest({ attachedImages, manualMode, manualJson, jsonMode, jsonSchema })
         ? {
             parts: { apiProfileId, model, protocol },

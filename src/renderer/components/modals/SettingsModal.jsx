@@ -1224,13 +1224,13 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     <>
       <SettingsHeader title="Diagnostics" description="Extra detail under each reply, for checking what the AI received and what it cost." />
       <SettingsGroup title="Under each reply">
-        <SettingsRow label="Retrieval and context" description="What was found, what made it in, perspective scopes, and the exact context sent.">
+        <SettingsRow label="Retrieval and context" description="What was found, what made it in, perspective scopes, and the full request the model received.">
           <Toggle checked={ragDebug} ariaLabel="Retrieval and context" onChange={value => updateSetting('advanced', 'ragDebug', value)} />
         </SettingsRow>
         <SettingsRow label="Agentic retrieval trace" description="Searches, results, stop reason and cost. Never the model’s private reasoning.">
           <Toggle checked={agenticDebug} ariaLabel="Agentic retrieval trace" onChange={value => updateSetting('advanced', 'agenticDebug', value)} />
         </SettingsRow>
-        <SettingsRow label="Narrative State" description="Triage, deep analysis, proposals, retries and timing for roleplay turns.">
+        <SettingsRow label="Narrative State" description="Triage, deep analysis, proposals, retries and timing for roleplay turns, with each model call as sent and answered.">
           <Toggle checked={narrativeStateDebug} ariaLabel="Narrative State" onChange={value => updateSetting('advanced', 'narrativeStateDebug', value)} />
         </SettingsRow>
         <SettingsRow label="Token usage" description="Estimated tokens for the reply, retrieval and Narrative State, each counted once.">

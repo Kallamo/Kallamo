@@ -209,6 +209,21 @@ function formatContextBundleDebug(planned) {
     return `ROLEPLAY CONTEXT BUNDLE:\n${JSON.stringify(serializeContextBundle(planned), null, 2)}`;
 }
 
+// Every message carries the bundle, and the list of excluded records alone ran to hundreds of
+// kilobytes in a long campaign. Without the retrieval panel on, only how many and why are kept.
+function compactContextBundle(bundle, keepExcluded) {
+    if (!bundle) return bundle;
+    const scopes = bundle.scopes.map(({ items: _items, ...scope }) => scope);
+    if (keepExcluded) return { ...bundle, scopes };
+    const excludedByReason = {};
+    for (const decision of bundle.excluded || []) {
+        const key = `${decision.outcome}:${decision.reason}`;
+        excludedByReason[key] = (excludedByReason[key] || 0) + 1;
+    }
+    const { excluded: _excluded, ...rest } = bundle;
+    return { ...rest, scopes, excludedByReason };
+}
+
 function serializeContextBundle(planned) {
     if (!planned?.bundle) return null;
     const scopes = planned.bundle.scopes.map(scope => ({
@@ -318,9 +333,31 @@ const MEMORY_RETRIEVAL_HEADER = '--- CHAT PERSISTENT SUMMARIZED MEMORIES ---';
 // Retrieved text kept on a message for the debug panels, when those are on.
 const DEBUG_TEXT_LIMIT = 60000;
 
-function capDebugText(text) {
+function capDebugText(text, limit = DEBUG_TEXT_LIMIT) {
     const value = String(text || '');
-    return value.length > DEBUG_TEXT_LIMIT ? `${value.slice(0, DEBUG_TEXT_LIMIT)}\n[...debug text cut]` : value;
+    return value.length > limit ? `${value.slice(0, limit)}\n[...debug text cut]` : value;
+}
+
+// The request as sent is read to find what the model was told, so it keeps far more than the
+// other panels; a long roleplay context alone runs past 100,000 characters.
+const REQUEST_TEXT_LIMIT = 600000;
+
+function recordGenerationRequest(request, { step, profileName, response, elapsedMs, outputTokens }) {
+    return {
+        step,
+        profileName,
+        elapsedMs,
+        inputTokens: request.inputTokens,
+        outputTokens,
+        ...(request.attachedImageCount ? { attachedImages: request.attachedImageCount } : {}),
+        systemPrompt: capDebugText(request.systemPrompt, REQUEST_TEXT_LIMIT),
+        history: (request.chatHistory || []).map(message => ({
+            role: message.role,
+            content: capDebugText(message.content, REQUEST_TEXT_LIMIT)
+        })),
+        newPrompt: capDebugText(request.newPrompt, REQUEST_TEXT_LIMIT),
+        response: capDebugText(response, REQUEST_TEXT_LIMIT)
+    };
 }
 
 // A reply with no visible text is a failure; reporting it as success lets
@@ -701,6 +738,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
         let lastRetrievalFunnel = null;
         let lastGenerationPolicyId = null;
         let lastScenePlan = '';
+        const generationRequests = [];
         let totalProfileKbTokens = 0;
         let totalChatKbTokens = 0;
         let totalChatHistoryTokens = 0;
@@ -1221,6 +1259,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             let stepTruncated = false;
             let stepFinishReason = null;
             let stepLearnedRatio = null;
+            let stepRequest = null;
 
             while (!success) {
                 if (currentRun.isCancelled) {
@@ -1235,6 +1274,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                 });
 
                 try {
+                    const attemptStartedAt = Date.now();
                     const genParams = {
                         apiProfileId: profile.apiProfileId,
                         model: profile.model,
@@ -1262,7 +1302,8 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                             volatile: volatileSystemSegment,
                             ttl: cacheTtl
                         } : null,
-                        onUsage: (metadata) => addCacheUsage(measuredCache, metadata)
+                        onUsage: (metadata) => addCacheUsage(measuredCache, metadata),
+                        onRequest: debugSettings.ragDebug ? (request) => { stepRequest = request; } : null
                     };
 
                     // Only the final, user-facing generation streams; intermediate
@@ -1293,6 +1334,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     }
                     stepOutput = typeof result === 'string' ? result : String(result?.content || '');
                     stepRawOutputTokens = estimateTokens(stepOutput);
+                    const rawStepOutput = stepOutput;
                     if (isRoleplayWorkspace) {
                         const planned = extractScenePlan(stepOutput);
                         stepOutput = planned.text;
@@ -1305,6 +1347,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     stepFinishReason = result?.finishReason ?? null;
                     stepLearnedRatio = result?.learnedTokenRatio ?? null;
                     success = true;
+                    if (stepRequest) generationRequests.push(recordGenerationRequest(stepRequest, { step: i + 1, profileName: profile.name, response: rawStepOutput, elapsedMs: Date.now() - attemptStartedAt, outputTokens: stepRawOutputTokens }));
                 } catch (apiError) {
                     if (apiError.name === 'AbortError' || currentRun.isCancelled) {
                         return { success: false, cancelled: true };
@@ -1444,7 +1487,6 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                         agenticRagContextGathered: capDebugText(lastAgenticRagContextGathered),
                         ...(lastAgenticTrajectory ? { agenticTrajectory: lastAgenticTrajectory } : {})
                     } : {}),
-                    ...(keepRetrievalText ? { standardRagContextGathered: capDebugText(lastStandardRagDebug) } : {}),
                     context: { historySent, historyDropped, retrievalOmitted, agenticDegraded, retrievalPath, retrievalGateReason, payloadLimit: finalPayloadLimit },
                     ...(finalTruncated ? { truncated: true, finishReason: finalFinishReason } : {}),
                     tokens: legacyTokens
@@ -1452,24 +1494,20 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                 generation: {
                     profileName: lastProfileUsed.name,
                     context: {
-                        ...(keepRetrievalText ? { exactText: capDebugText(lastFinalContextText) } : {}),
                         exactTokens: estimateTokens(lastFinalContextText),
                         workflowContextTokens: totalNarrativeContextTokens,
                         manifestRequestId: lastNarrativeContextRequestId
                     },
                     policyId: lastGenerationPolicyId,
                     ...(debugSettings.narrativeStateDebug && lastScenePlan ? { scenePlan: capDebugText(lastScenePlan) } : {}),
+                    ...(generationRequests.length ? { requests: generationRequests } : {}),
                     steps: steps.length
                 },
                 retrieval: {
                     mode: lastRetrievalMode,
-                    ...(keepRetrievalText ? {
-                        retrievedSourcesText: capDebugText(lastRetrievalMode === 'agentic'
-                            ? lastAgenticRagContextGathered
-                            : lastStandardRagDebug),
-                        finalContextText: capDebugText(lastFinalContextText)
-                    } : {}),
-                    bundle: lastContextBundle,
+                    // One copy of the context: the Request tab holds it again, whole, inside the request.
+                    ...(keepRetrievalText ? { finalContextText: capDebugText(lastFinalContextText) } : {}),
+                    bundle: compactContextBundle(lastContextBundle, keepRetrievalText),
                     selection: lastRetrievalFunnel
                 },
                 agentic: lastAgenticTrace ? {
@@ -1531,6 +1569,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             const profileId = lastProfileUsed.id;
             // The reply is already saved; the story state catches up without holding the chat.
             runNarrativeStateInBackground(chatId, webContents, async () => {
+                const modelCalls = debugSettings.narrativeStateDebug ? [] : null;
                 try {
                     // A reply that replaced another waits for the story to continue, so trying alternatives
                     // never bills an analysis per reply.
@@ -1540,11 +1579,12 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                             workspaceId: chatId,
                             provenanceId: aiMsgId,
                             userMessage: messageContent,
-                            narrativeResponse: finalOutput
+                            narrativeResponse: finalOutput,
+                            modelCalls
                         });
                     roleplayChanges = narrativeResult.changes;
                     if (narrativeResult.diagnostics) {
-                        debugObj = mergeNarrativeStateDiagnostics(debugObj, narrativeResult.diagnostics);
+                        debugObj = mergeNarrativeStateDiagnostics(debugObj, narrativeResult.diagnostics, modelCalls);
                     }
                 } catch (error) {
                     console.error('[Roleplay State] System AI update failed:', error);
@@ -1569,7 +1609,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                         error: error.message || 'Narrative State update failed.',
                         usage: {}
                     };
-                    debugObj = mergeNarrativeStateDiagnostics(debugObj, failedNarrativeDiagnostic);
+                    debugObj = mergeNarrativeStateDiagnostics(debugObj, failedNarrativeDiagnostic, modelCalls);
                     try {
                         const { NarrativeStateSystem } = require('../../dist-main/main/features/narrative/narrative-state');
                         new NarrativeStateSystem(db).finishJob(chatId, aiMsgId, 'failed', { error: error.message || 'Narrative State update failed.' });
@@ -2492,7 +2532,7 @@ function shouldProcessNarrativeIdentityUpdate(update, updatePolicy) {
     return update?.identityEstablished === true && Number(update.confidence) >= 0.9;
 }
 
-async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, userMessage, narrativeResponse: storedResponse }) {
+async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, userMessage, narrativeResponse: storedResponse, modelCalls = null }) {
     // The narrator's reasoning holds plans and guesses, not events, so the analysis reads only the narration.
     const narrativeResponse = stripReasoning(storedResponse);
     const { getWorkspaceExperienceMode } = require('../../dist-main/main/features/narrative/mode-orchestration');
@@ -2700,8 +2740,10 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     const narrativeTelemetry = {
         structuredFallbacks: 0,
         structuredFallbackStages: [],
+        structuredFallbackReasons: [],
         structuredOutputMode: 'schema',
-        cache: {}
+        cache: {},
+        calls: modelCalls
     };
     let triageRepairCount = 0;
     let deepRepairCount = 0;
@@ -2826,6 +2868,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
                     deep: 0,
                     structuredFallbacks: narrativeTelemetry.structuredFallbacks,
                     structuredFallbackStages: narrativeTelemetry.structuredFallbackStages,
+                    structuredFallbackReasons: narrativeTelemetry.structuredFallbackReasons,
                     structuredOutputMode: narrativeTelemetry.structuredOutputMode
                 },
                 usage: { triageInput: triageInputTokens, triageOutput: triageOutputTokens, repairInput: repairInputTokens, repairOutput: repairOutputTokens, cache: narrativeTelemetry.cache },
@@ -3408,6 +3451,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
                 deep: deepRepairCount,
                 structuredFallbacks: narrativeTelemetry.structuredFallbacks,
                 structuredFallbackStages: narrativeTelemetry.structuredFallbackStages,
+                structuredFallbackReasons: narrativeTelemetry.structuredFallbackReasons,
                 structuredOutputMode: narrativeTelemetry.structuredOutputMode
             },
             analysis: {
@@ -3504,17 +3548,19 @@ async function reprocessNarrativeStateTurn(workspaceId, originId) {
         ORDER BY createdAt DESC LIMIT 1
     `).get(workspaceId, narrative.createdAt);
     if (!user) throw new Error('User message was not found for this turn.');
+    const modelCalls = readAdvancedSettings().narrativeStateDebug ? [] : null;
     const result = await updateRoleplayStateWithSystemAi({
         workspaceId,
         provenanceId: originId,
         userMessage: user.content,
-        narrativeResponse: narrative.content
+        narrativeResponse: narrative.content,
+        modelCalls
     });
     if (result.diagnostics) {
         const current = db.prepare('SELECT debugNotice FROM messages WHERE id = ? AND chatId = ?')
             .get(originId, workspaceId);
         const parsed = safeParseObject(current?.debugNotice) || {};
-        const updated = mergeNarrativeStateDiagnostics(parsed, result.diagnostics);
+        const updated = mergeNarrativeStateDiagnostics(parsed, result.diagnostics, modelCalls);
         db.prepare('UPDATE messages SET debugNotice = ? WHERE id = ? AND chatId = ?')
             .run(JSON.stringify(updated), originId, workspaceId);
     }
@@ -3979,9 +4025,39 @@ function buildNarrativeStateSystemPrompt(domains, languageInstruction = '', with
     return sections.join('\n\n');
 }
 
+// With Narrative State diagnostics on, every call is kept as sent and as answered, failures included,
+// so a turn that went wrong on a local model can be read back exactly.
+async function sendNarrativeJson(requestParams, schema, label, telemetry) {
+    const legend = telemetry?.calls ? telemetry.labels?.legendFor(requestParams.newPrompt) : null;
+    const startedAt = Date.now();
+    if (telemetry) telemetry.fallbackReason = null;
+    const record = outcome => telemetry?.calls?.push({
+        stage: label,
+        mode: telemetry.structuredOutputMode,
+        elapsedMs: Date.now() - startedAt,
+        ...(telemetry.fallbackReason ? { fallbackReason: telemetry.fallbackReason } : {}),
+        systemPrompt: capDebugText(requestParams.systemPrompt, REQUEST_TEXT_LIMIT),
+        input: capDebugText(requestParams.newPrompt, REQUEST_TEXT_LIMIT),
+        ...(legend?.length ? { legend } : {}),
+        ...outcome
+    });
+    try {
+        const response = await requestNarrativeJson(requestParams, schema, label, telemetry);
+        record({
+            response: capDebugText(response, REQUEST_TEXT_LIMIT),
+            inputTokens: estimateTokens(requestParams.systemPrompt) + estimateTokens(requestParams.newPrompt),
+            outputTokens: estimateTokens(response)
+        });
+        return response;
+    } catch (error) {
+        record({ error: error.message || String(error) });
+        throw error;
+    }
+}
+
 // Both calls open with a fixed system prompt, so it is offered for caching on every route; what the
 // provider reports counts for the Narrative State stage.
-async function sendNarrativeJson(requestParams, schema, label, telemetry) {
+async function requestNarrativeJson(requestParams, schema, label, telemetry) {
     const { cacheScope, ...request } = requestParams;
     const workspaceId = String(cacheScope || '').split('::')[0];
     const params = {
@@ -4002,18 +4078,28 @@ async function sendNarrativeJson(requestParams, schema, label, telemetry) {
     const schemaCapabilityKey = `${capabilityBase}\u0000${schemaKind}`;
     if (narrativeStructuredOutputUnavailable.has(globalCapabilityKey)
         || narrativeStructuredOutputUnavailable.has(schemaCapabilityKey)) {
-        if (telemetry) telemetry.structuredOutputMode = 'prompt-cached';
+        if (telemetry) {
+            telemetry.structuredOutputMode = 'prompt-cached';
+            telemetry.fallbackReason = 'refused earlier in this session';
+        }
         return sendApiRequest({ ...params, jsonMode: false, jsonSchema: null });
     }
-    const onStructuredFallback = ({ remembered }) => {
+    // Why a provider refused the schema is what decides whether the schema or the provider needs fixing.
+    const noteFallback = reason => {
+        telemetry.fallbackReason = String(reason || 'unknown').slice(0, 500);
+        telemetry.structuredFallbackReasons?.push({ stage: label, reason: telemetry.fallbackReason });
+    };
+    const onStructuredFallback = ({ remembered, reason }) => {
         if (!telemetry) return;
         if (remembered) {
             telemetry.structuredOutputMode = 'prompt-cached';
+            telemetry.fallbackReason = 'refused earlier in this session';
             return;
         }
         telemetry.structuredFallbacks += 1;
         telemetry.structuredFallbackStages.push(label);
         telemetry.structuredOutputMode = 'prompt-fallback';
+        noteFallback(reason);
     };
     try {
         return await sendApiRequest({ ...params, jsonMode: true, jsonSchema: schema, onStructuredFallback });
@@ -4030,6 +4116,7 @@ async function sendNarrativeJson(requestParams, schema, label, telemetry) {
             telemetry.structuredFallbacks += 1;
             telemetry.structuredFallbackStages.push(label);
             telemetry.structuredOutputMode = 'prompt-fallback';
+            noteFallback(errorText);
         }
         return sendApiRequest({ ...params, jsonMode: false, jsonSchema: null });
     }

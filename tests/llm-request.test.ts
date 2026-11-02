@@ -344,6 +344,24 @@ describe('agent conversations', () => {
     parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] }
   }];
 
+  test('reports the request as the model reads it: variables filled in, context moved in front of the message', async () => {
+    const database = createDatabase({ provider: 'Local', baseUrl: 'http://localhost:1234/v1', variables: [{ key: 'topic', value: 'the inn' }] });
+    let seen: any = null;
+    await buildRequest({
+      apiProfileId: 'api-profile', model: 'qwen3-8b', systemPrompt: 'Rules.Context about {{topic}}.',
+      chatHistory: [{ role: 'ai', content: 'Earlier reply.' }], newPrompt: 'Go to {{topic}}.', maxTokens: 500,
+      promptCache: { policy: 'conversation', placement: 'turn', scopeId: 'scope', stable: 'Rules.', volatile: 'Context about {{topic}}.' },
+      onRequest: (request: unknown) => { seen = request; }
+    }, { database });
+
+    expect(seen).toMatchObject({
+      systemPrompt: 'Rules.',
+      chatHistory: [{ role: 'assistant', content: 'Earlier reply.' }],
+      newPrompt: 'Context about the inn.\n\nGo to the inn.'
+    });
+    expect(seen.inputTokens).toBeGreaterThan(0);
+  });
+
   test('an OpenAI-compatible request carries the transcript, the tools and resolved variables', async () => {
     const database = createDatabase({ provider: 'Local', baseUrl: 'http://localhost:1234/v1', variables: [{ key: 'topic', value: 'the inn' }] });
     const request = await buildRequest({ apiProfileId: 'api-profile', model: 'qwen3-8b', systemPrompt: 'Be precise.', conversation, tools, maxTokens: 500 }, { database });

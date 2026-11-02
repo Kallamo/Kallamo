@@ -125,11 +125,14 @@ function createMessageDiagnostics({
   };
 }
 
-function mergeNarrativeStateDiagnostics(diagnostic, narrativeState) {
+// The model calls belong to the run that made them: a rerun without them leaves none behind.
+function mergeNarrativeStateDiagnostics(diagnostic, narrativeState, modelCalls = null) {
+  const { narrativeCalls: _previousCalls, ...rest } = diagnostic || {};
   const next = {
-    ...(diagnostic || {}),
+    ...rest,
     version: 2,
     narrativeState,
+    ...(modelCalls?.length ? { narrativeCalls: modelCalls } : {}),
   };
   const currentUsage = next.usage || buildEstimatedUsage();
   next.usage = buildEstimatedUsage({

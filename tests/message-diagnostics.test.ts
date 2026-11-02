@@ -68,6 +68,15 @@ describe('message diagnostics', () => {
     expect(original.narrativeState).toBeUndefined();
   });
 
+  test('keeps the model calls of the run that made them, and drops them on a rerun without any', () => {
+    const calls = [{ stage: 'Narrative State triage', mode: 'schema', systemPrompt: 'S', input: '{}', response: '{"consequential":false}' }];
+    const recorded = mergeNarrativeStateDiagnostics({}, { status: 'skipped', usage: {} }, calls);
+    expect(recorded.narrativeCalls).toEqual(calls);
+
+    const rerun = mergeNarrativeStateDiagnostics(recorded, { status: 'skipped', usage: {} }, null);
+    expect(rerun.narrativeCalls).toBeUndefined();
+  });
+
   test('reports cache per stage and prices only what the provider rates make known', () => {
     const usage = buildEstimatedUsage({
       cache: {

@@ -4,8 +4,13 @@ import { describeSpanCheck, formatFrameTime } from '../frame-format';
 import {
   diagnosticText,
   formatAgenticTrace,
+  formatGenerationRequests,
+  formatHistory,
+  formatLabelLegend,
+  formatNarrativeCalls,
   formatPlannerDecisions,
-  formatRetrievalDiagnostics
+  formatRetrievalDiagnostics,
+  prettyJsonText
 } from '../diagnostic-format';
 
 const fmt = value => (Number(value) || 0).toLocaleString();
@@ -35,12 +40,16 @@ export function diagnosticsFor(debug, flags) {
       && { key: 'agentic', label: 'Agentic trace', copy: formatAgenticTrace(debug) },
     flags.ragDebug && (debug?.retrieval || debug?.standardRagContextGathered)
       && { key: 'retrieval', label: 'Retrieval', copy: formatRetrievalDiagnostics(debug) },
+    flags.ragDebug && debug?.generation?.requests?.length
+      && { key: 'request', label: 'Request', copy: formatGenerationRequests(debug.generation.requests) },
     flags.ragDebug && (debug?.legacyText || debug?.workflowStatus)
       && { key: 'workflow', label: 'Workflow', copy: debug.legacyText || debug.workflowStatus },
     flags.narrativeStateDebug && debug?.generation?.scenePlan
       && { key: 'scene-plan', label: 'Scene plan', copy: debug.generation.scenePlan },
     flags.narrativeStateDebug && debug?.narrativeState
-      && { key: 'narrative', label: 'Narrative state', copy: diagnosticText(debug.narrativeState) }
+      && { key: 'narrative', label: 'Narrative state', copy: diagnosticText(debug.narrativeState) },
+    flags.narrativeStateDebug && debug?.narrativeCalls?.length
+      && { key: 'model-calls', label: 'Model calls', copy: formatNarrativeCalls(debug.narrativeCalls) }
   ].filter(Boolean);
 }
 
@@ -652,6 +661,9 @@ function NarrativeView({ debug, names, copy }) {
           {state.repairs && (state.repairs.triage || state.repairs.deep || state.repairs.structuredFallbacks) > 0 && (
             <p className="mt-1.5 text-xs text-text-muted">Repairs: triage {state.repairs.triage || 0} · analysis {state.repairs.deep || 0} · structured fallbacks {state.repairs.structuredFallbacks || 0}</p>
           )}
+          {(state.repairs?.structuredFallbackReasons || []).map((fallback, index) => (
+            <p key={index} className="mt-1 text-xs text-status-warning select-text">{fallback.stage}: schema refused · {fallback.reason}</p>
+          ))}
         </div>
       )}
 
@@ -663,6 +675,65 @@ function NarrativeView({ debug, names, copy }) {
       )}
 
       <Disclosure title="Raw record">{copy}</Disclosure>
+    </div>
+  );
+}
+
+function RequestView({ requests }) {
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-text-muted">What the model received for this reply, as sent: variables filled in, the retrieved context in place, and the full reply with its hidden scene plan.</p>
+      <ol className="space-y-2">
+        {requests.map(request => (
+          <li key={request.step} className="space-y-1.5 rounded-lg border border-border-subtle bg-surface-canvas/50 p-2.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs font-semibold text-text-primary">{requests.length > 1 ? `Step ${request.step} · ` : ''}{request.profileName}</span>
+              {seconds(request.elapsedMs) && <Chip>{seconds(request.elapsedMs)}</Chip>}
+              {request.inputTokens > 0 && <Chip>{fmt(request.inputTokens)} in{request.outputTokens > 0 ? ` · ${fmt(request.outputTokens)} out` : ''}</Chip>}
+              {request.attachedImages > 0 && <Chip>{request.attachedImages} {request.attachedImages === 1 ? 'image' : 'images'}</Chip>}
+            </div>
+            <Disclosure title="System prompt">{request.systemPrompt || 'None.'}</Disclosure>
+            <Disclosure title={`History · ${(request.history || []).length}`}>{formatHistory(request.history) || 'No history was sent.'}</Disclosure>
+            <Disclosure title="Message">{request.newPrompt}</Disclosure>
+            <Disclosure title="Response">{request.response || 'Empty response.'}</Disclosure>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+// A server can ignore a schema it was sent, so the chip says what Kallamo asked for, not what the model obeyed.
+const CALL_MODES = {
+  schema: 'Schema sent',
+  'prompt-fallback': 'JSON by prompt',
+  'prompt-cached': 'JSON by prompt'
+};
+
+function ModelCallsView({ calls }) {
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-text-muted">What Narrative State sent to the model this turn and what came back, in order. Entities travel as short labels, listed under Labels.</p>
+      <ol className="space-y-2">
+        {calls.map((call, index) => (
+          <li key={index} className="space-y-1.5 rounded-lg border border-border-subtle bg-surface-canvas/50 p-2.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs font-semibold text-text-primary">{index + 1}. {call.stage}</span>
+              {CALL_MODES[call.mode] && <Chip>{CALL_MODES[call.mode]}</Chip>}
+              {seconds(call.elapsedMs) && <Chip>{seconds(call.elapsedMs)}</Chip>}
+              {call.inputTokens > 0 && <Chip>{fmt(call.inputTokens)} in · {fmt(call.outputTokens)} out</Chip>}
+              {call.error && <Chip tone="bg-status-danger/12 text-status-danger">Failed</Chip>}
+            </div>
+            {call.fallbackReason && <p className="text-xs text-status-warning select-text">Schema not used: {call.fallbackReason}</p>}
+            <Disclosure title="System prompt">{call.systemPrompt}</Disclosure>
+            {call.legend?.length > 0 && <Disclosure title={`Labels · ${call.legend.length}`}>{formatLabelLegend(call.legend)}</Disclosure>}
+            <Disclosure title="Input">{prettyJsonText(call.input)}</Disclosure>
+            {call.error
+              ? <p className="rounded-lg border border-status-danger/30 bg-status-danger/10 px-3 py-2 text-xs text-status-danger select-text">{call.error}</p>
+              : <Disclosure title="Response">{prettyJsonText(call.response) || 'Empty response.'}</Disclosure>}
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }
@@ -708,6 +779,8 @@ function DiagnosticsPanel({ debug, items, names, onCopy, copiedKey }) {
         {active.key === 'retrieval' && <RetrievalView debug={debug} copy={active.copy} />}
         {active.key === 'scene-plan' && <ScenePlanView plan={active.copy} />}
         {active.key === 'narrative' && <NarrativeView debug={debug} names={names} copy={active.copy} />}
+        {active.key === 'model-calls' && <ModelCallsView calls={debug.narrativeCalls} />}
+        {active.key === 'request' && <RequestView requests={debug.generation.requests} />}
         {active.key === 'workflow' && (
           <div className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-text-muted select-text">{active.copy}</div>
         )}

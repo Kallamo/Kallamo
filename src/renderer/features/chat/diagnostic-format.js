@@ -34,6 +34,56 @@ export const diagnosticText = value => {
   return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 };
 
+// Payloads and answers are JSON strings; indented they read like the record they are.
+export const prettyJsonText = text => {
+  const value = String(text || '');
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2);
+  } catch {
+    return value;
+  }
+};
+
+const ROLE_NAMES = { user: 'User', assistant: 'Assistant', system: 'System' };
+export const historyRoleName = role => ROLE_NAMES[role] || role;
+
+export const formatHistory = history => (history || [])
+  .map(message => `[${historyRoleName(message.role)}]\n${message.content}`)
+  .join('\n\n');
+
+const callStats = ({ elapsedMs, inputTokens, outputTokens }) => [
+  Number(elapsedMs) > 0 ? `${(elapsedMs / 1000).toFixed(1)} s` : null,
+  Number(inputTokens) > 0 ? `${inputTokens} in / ${outputTokens || 0} out tokens (estimated)` : null
+].filter(Boolean).join(' · ');
+
+export const formatGenerationRequests = requests => (requests || []).map(request => [
+  `=== Step ${request.step}${request.profileName ? ` · ${request.profileName}` : ''} ===`,
+  callStats(request),
+  '--- System prompt ---',
+  request.systemPrompt || '',
+  `--- History (${(request.history || []).length} messages) ---`,
+  formatHistory(request.history),
+  '--- Message ---',
+  request.newPrompt || '',
+  '--- Response ---',
+  request.response || ''
+].join('\n')).join('\n\n');
+
+export const formatLabelLegend = legend => (legend || []).map(entry => `${entry.label} = ${entry.name}`).join('\n');
+
+export const formatNarrativeCalls = calls => (calls || []).map((call, index) => [
+  `=== ${index + 1}. ${call.stage}${call.mode ? ` (${call.mode})` : ''} ===`,
+  callStats(call),
+  ...(call.fallbackReason ? [`Schema not used: ${call.fallbackReason}`] : []),
+  '--- System prompt ---',
+  call.systemPrompt || '',
+  ...(call.legend?.length ? ['--- Labels ---', formatLabelLegend(call.legend)] : []),
+  '--- Input ---',
+  prettyJsonText(call.input),
+  call.error ? '--- Error ---' : '--- Response ---',
+  call.error || prettyJsonText(call.response)
+].join('\n')).join('\n\n');
+
 const formatSelectionFunnel = selection => {
   if (!selection) return 'No selection funnel recorded.';
   const counts = value => Object.entries(value || {})
@@ -105,12 +155,17 @@ export const formatPlannerDecisions = bundle => {
     const scopes = [...scopeIds].map(scopeId => scopeLabels.get(scopeId) || scopeId).join(', ');
     return `- ${decision.candidateId}: ${decision.outcome} (${decision.reason}) [${scopes}]`;
   });
+  // Without the retrieval panel on when the reply was written, only the counts were kept.
+  const excludedCounts = Object.entries(bundle.excludedByReason || {})
+    .sort((left, right) => right[1] - left[1])
+    .map(([key, count]) => `- ${key.replace(':', ' (')}): ${count}`);
   return [
     ...summary,
     ...scopeSummary,
     ...(shared.length ? ['', 'SHARED RECORDS', ...shared] : []),
     ...(exclusive.length ? ['', 'SCOPE-ONLY RECORDS', ...exclusive] : []),
-    ...(excluded.length ? ['', 'EXCLUDED', ...excluded] : [])
+    ...(excluded.length ? ['', 'EXCLUDED', ...excluded] : []),
+    ...(excludedCounts.length ? ['', 'EXCLUDED (counts only)', ...excludedCounts] : [])
   ].join('\n');
 };
 
