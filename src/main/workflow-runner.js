@@ -16,6 +16,7 @@ const { ROLE_IDS, readAdvancedSettings, resolveAiEngineRole } = require('./featu
 const { formatActiveHistory, planActiveHistory, selectActiveHistory } = require('./features/chat/history-window');
 const { cacheTtlForPace } = require('./features/llm/prompt-cache');
 const { refreshLocalContextWindows } = require('./features/llm/local-context-window');
+const { createEntityLabels } = require('./features/ai-engine/entity-labels');
 const { deferredNarrativeState, findPendingNarrativeTurn, replacedReplyIds } = require('./features/chat/narrative-turns');
 const { purgeDeadTurns } = require('./features/narrative/turn-ownership');
 const { parseEntityUpdateObject } = require('./features/worldbuild/entity-update-json');
@@ -1849,6 +1850,16 @@ function cleanErrorMessage(error) {
 }
 
 // The workspace's MAX API Payload, for background calls that have no step budget of their own.
+// Every entity of the workspace, oldest first, so a turn's labels stay the same as the world grows.
+function loadEntityLabels(workspaceId) {
+    try {
+        return createEntityLabels(db.prepare('SELECT id, type, canonicalName FROM entities WHERE workspaceId = ? ORDER BY rowid').all(workspaceId));
+    } catch (error) {
+        console.warn('[Entity labels] Requests keep their IDs:', error.message);
+        return createEntityLabels([]);
+    }
+}
+
 function workspacePayloadTokens(workspaceId) {
     try {
         return normalizeMaxApiPayload(db.prepare('SELECT maxContext FROM chats WHERE id = ?').get(workspaceId)?.maxContext);
@@ -2688,6 +2699,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         } : {})
     }));
     const allowedEntityIds = new Set(allEntities.map(entity => entity.id));
+    const entityLabels = loadEntityLabels(workspaceId);
     const actorIds = new Set(allEntities
         .filter(entity => entity.type === 'Characters' || entity.type === 'Creatures')
         .map(entity => entity.id));
@@ -2712,7 +2724,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         ...(scene?.possibleObserverIds || [])
     ].filter(id => id !== roleplaySettings.playerEntityId));
     // What rarely changes comes first, so a provider that reuses a repeated prefix keeps more of it.
-    const triagePayloadValue = {
+    const triagePayloadValue = entityLabels.encodeValue({
         calendar: {
             name: calendar.name,
             hoursPerDay: calendar.hoursPerDay,
@@ -2734,7 +2746,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         characterStances: characterStances.length ? characterStances : undefined,
         userMessage,
         narrativeResponse
-    };
+    });
     const triagePayload = JSON.stringify(triagePayloadValue);
     const narrativePayloadTokens = workspacePayloadTokens(workspaceId);
     const narrativeTelemetry = {
@@ -2743,7 +2755,8 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         structuredFallbackReasons: [],
         structuredOutputMode: 'schema',
         cache: {},
-        calls: modelCalls
+        calls: modelCalls,
+        labels: entityLabels
     };
     let triageRepairCount = 0;
     let deepRepairCount = 0;
@@ -2759,7 +2772,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         cacheScope: `${workspaceId}::narrative-triage`
     }, NARRATIVE_TRIAGE_SCHEMA, 'Narrative State triage', narrativeTelemetry);
     const triagePrimaryOutputTokens = estimateTokens(triageResponse);
-    let triage = safeParseObject(triageResponse);
+    let triage = safeParseObject(entityLabels.decode(triageResponse));
     if (!triage) {
         triageRepairCount += 1;
         repairInputTokens += estimateTokens(repairSystemPrompt)
@@ -2774,7 +2787,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             languageInstruction: narrativeLanguageInstruction
         });
         repairOutputTokens += estimateTokens(triageResponse);
-        triage = safeParseObject(triageResponse);
+        triage = safeParseObject(entityLabels.decode(triageResponse));
     }
     if (triage) {
         triage.timeAdvance = resolveNarrativeTimeAdvance({
@@ -3027,7 +3040,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         : null;
     // What rarely changes comes first (rules, then the places around), so a provider that reuses a
     // repeated prefix keeps more of it; the turn itself comes last.
-    const payloadValue = {
+    const payloadValue = entityLabels.encodeValue({
         availableResources: shouldAnalyzeResources
             ? definitions.map(({ name, description, minimum, maximum, unit, lowestEffect, updatePolicy, aiChangesMaximum, maximumRule }) => ({
                 name,
@@ -3071,7 +3084,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         currentRelationshipState: shouldAnalyzeEpistemicState ? currentRelationshipState.rows : undefined,
         userMessage,
         narrativeResponse
-    };
+    });
     const narrativeStateSystemPrompt = buildNarrativeStateSystemPrompt(
         selectedDomains,
         narrativeLanguageInstruction,
@@ -3110,7 +3123,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         cacheScope: `${workspaceId}::narrative-analysis`
     }, NARRATIVE_STATE_SCHEMA, 'Narrative State analysis', narrativeTelemetry);
     const deepPrimaryOutputTokens = estimateTokens(response);
-    let parsed = safeParseObject(response);
+    let parsed = safeParseObject(entityLabels.decode(response));
     if (!parsed) {
         deepRepairCount += 1;
         repairInputTokens += estimateTokens(repairSystemPrompt)
@@ -3125,7 +3138,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             languageInstruction: narrativeLanguageInstruction
         });
         repairOutputTokens += estimateTokens(response);
-        parsed = safeParseObject(response);
+        parsed = safeParseObject(entityLabels.decode(response));
     }
     if (!parsed) {
         narrativeState.finishJob(workspaceId, provenanceId, 'failed', { deepAnalysis: true, error: 'Narrative State returned invalid JSON.' });
@@ -5371,15 +5384,22 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
             let inputTokenEstimate = 0;
             let outputTokenEstimate = 0;
             let retryCount = 0;
+            const entityLabels = loadEntityLabels(workspaceId);
             const sendJsonRequest = async (requestParams, schema = jsonSchema) => {
                 // Worldbuild text is rewritten here, so its spoiler markers must reach the model and come back.
-                const params = { maxPayloadTokens: workspacePayloadTokens(workspaceId), keepSpoilerMarkers: true, ...requestParams };
+                const params = {
+                    maxPayloadTokens: workspacePayloadTokens(workspaceId),
+                    keepSpoilerMarkers: true,
+                    ...requestParams,
+                    systemPrompt: entityLabels.encode(requestParams.systemPrompt),
+                    newPrompt: entityLabels.encode(requestParams.newPrompt)
+                };
                 const estimatedInput = estimateTokens(`${params.systemPrompt || ''}\n${params.newPrompt || ''}\n${JSON.stringify(schema || {})}`);
                 try {
                     const result = await sendApiRequest({ ...params, jsonMode: true, jsonSchema: schema, includeResponseMetadata: true });
                     inputTokenEstimate += result.inputTokens || estimatedInput;
                     outputTokenEstimate += result.outputTokens || estimateTokens(result.content);
-                    return result;
+                    return { ...result, content: entityLabels.decode(result.content) };
                 } catch (error) {
                     if (!/response.?format|json.?mode|structured output|output_config.*(unsupported|not supported)|compiled grammar.*too large|tool schemas?.*too large|reduce the number of strict tools/i.test(String(error.message || ''))) throw error;
                     console.warn(`[Enrich] Structured output unavailable for ${ent.canonicalName}; retrying with prompt validation:`, error.message);
@@ -5387,7 +5407,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                     const result = await sendApiRequest({ ...params, jsonMode: false, jsonSchema: null, includeResponseMetadata: true });
                     inputTokenEstimate += result.inputTokens || estimateTokens(`${params.systemPrompt || ''}\n${params.newPrompt || ''}`);
                     outputTokenEstimate += result.outputTokens || estimateTokens(result.content);
-                    return result;
+                    return { ...result, content: entityLabels.decode(result.content) };
                 }
             };
             const requestUpdate = (prompt, tokenBudget = maxTokens) => sendJsonRequest({
