@@ -40,8 +40,9 @@ function leadingWord(form) {
 }
 
 // Groups names by their folded form. A form shared by two entities is ambiguous and
-// never tagged here; the model decides it from context.
-function buildNameIndex(entities) {
+// never tagged here; the model decides it from context. Names of `caseFreeTypes` match in any
+// casing, for callers where a common noun read as a name costs less than a missed one.
+function buildNameIndex(entities, { caseFreeTypes = null } = {}) {
   const byForm = new Map();
   for (const entity of Array.isArray(entities) ? entities : []) {
     if (!entity || !entity.id) continue;
@@ -56,7 +57,9 @@ function buildNameIndex(entities) {
         byForm.set(mapped.text, entry);
       }
       entry.entities.set(entity.id, { entityId: entity.id, type: entity.type });
-      entry.variants.push({ original, upper: mapped.upper, ...nameShape(mapped.text, original) });
+      const shape = nameShape(mapped.text, original);
+      if (caseFreeTypes && caseFreeTypes.has(entity.type)) shape.caseSensitive = false;
+      entry.variants.push({ original, upper: mapped.upper, ...shape });
     }
   }
   const names = [];

@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 import { describe, expect, test } from 'vitest';
 
 const require = createRequire(import.meta.url);
-const { shouldRunPlanner, turnAddedNothing } = require('../src/main/features/knowledge/agent-planner.js');
+const { shouldRunPlanner, turnAddedNothing, entityMentionIds } = require('../src/main/features/knowledge/agent-planner.js');
 
 const dialogue = '— Historiador. Essa é nova? Normalmente é mercador, mercenário ou alguém que não diz o que faz por aqui.';
 
@@ -13,18 +13,39 @@ describe('the planner gate', () => {
   });
 
   test('in a roleplay, dialogue that stays inside the scene is not researched', () => {
-    const decision = shouldRunPlanner(dialogue, { entityMentions: 1, scene: { outside: 0, bystanders: 0 } });
+    const decision = shouldRunPlanner(dialogue, { entityMentions: 1, scene: { outside: [], bystanders: [] } });
     expect(decision).toMatchObject({ plan: false });
     expect(decision.reason).toContain('inside the scene');
   });
 
-  test('in a roleplay, naming something outside the scene or someone nearby is researched', () => {
-    expect(shouldRunPlanner(dialogue, { entityMentions: 1, scene: { outside: 1, bystanders: 0 } }).reason).toContain('outside the scene');
-    expect(shouldRunPlanner(dialogue, { entityMentions: 1, scene: { outside: 0, bystanders: 1 } }).reason).toContain('nearby');
+  test('in a roleplay, naming something outside the scene or someone nearby is researched, and the reason says what', () => {
+    const outside = shouldRunPlanner(dialogue, { entityMentions: 1, scene: { outside: ['Festival do Encaixe'], bystanders: [] } });
+    expect(outside.reason).toBe('names outside the scene: Festival do Encaixe');
+    const nearby = shouldRunPlanner(dialogue, { entityMentions: 1, scene: { outside: [], bystanders: ['Hakan'] } });
+    expect(nearby.reason).toContain('nearby');
+    expect(nearby.reason).toContain('Hakan');
   });
 
   test('the override still forces research in a roleplay', () => {
-    expect(shouldRunPlanner(dialogue, { force: true, scene: { outside: 0, bystanders: 0 } }).plan).toBe(true);
+    expect(shouldRunPlanner(dialogue, { force: true, scene: { outside: [], bystanders: [] } }).plan).toBe(true);
+  });
+});
+
+describe('names the gate recognizes', () => {
+  const entities = [
+    { id: 'festival', type: 'Events', canonicalName: 'Festival do Encaixe', aliases: ['Festival'] },
+    { id: 'order', type: 'Factions', canonicalName: 'Order', aliases: [] }
+  ];
+
+  test('an event named as a common noun counts when its type is case-free', () => {
+    const text = 'Nem se comparava a quantidade de ontem do festival.';
+    expect([...entityMentionIds(text, entities)]).toEqual([]);
+    expect([...entityMentionIds(text, entities, { caseFreeTypes: new Set(['Events']) })]).toEqual(['festival']);
+  });
+
+  test('other types keep requiring the registered casing', () => {
+    const text = 'Ela deu uma order ao festival.';
+    expect([...entityMentionIds(text, entities, { caseFreeTypes: new Set(['Events']) })]).toEqual(['festival']);
   });
 });
 

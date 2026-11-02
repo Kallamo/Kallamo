@@ -83,9 +83,10 @@ function shouldRunPlanner(input, { entityMentions = 0, force = false, scene = nu
   if (!text) return { plan: false, reason: 'empty message' };
   // Dialogue nearly always has a question and a dozen words, so in a roleplay shape says nothing;
   // research pays only outside the scene, whose sheets and perspectives are already in context.
+  // `outside` and `bystanders` are the names the gate matched, so a skipped turn shows what it saw.
   if (scene) {
-    if (scene.outside > 0) return { plan: true, reason: `names ${scene.outside} entity(ies) outside the scene` };
-    if (scene.bystanders > 0) return { plan: true, reason: `brings ${scene.bystanders} nearby character(s) into the scene` };
+    if (scene.outside?.length) return { plan: true, reason: `names outside the scene: ${scene.outside.join(', ')}` };
+    if (scene.bystanders?.length) return { plan: true, reason: `brings nearby character(s) into the scene: ${scene.bystanders.join(', ')}` };
     return { plan: false, reason: 'stays inside the scene, whose sheets and perspectives are already in context' };
   }
   if (entityMentions > 0) return { plan: true, reason: `names ${entityMentions} known entity(ies)` };
@@ -106,11 +107,11 @@ function turnAddedNothing(turn) {
     && calls.every(call => call.status === 'repeat' || call.status === 'in-context' || (call.status === 'ran' && call.hits > 0));
 }
 
-function entityMentionIds(text, entities) {
+function entityMentionIds(text, entities, { caseFreeTypes = null } = {}) {
   const list = Array.isArray(entities) ? entities.filter(entity => entity && entity.id) : [];
   if (!list.length || !String(text || '').trim()) return new Set();
   try {
-    return new Set(findLiteralMentions(text, buildNameIndex(list)).map(mention => mention.entityId));
+    return new Set(findLiteralMentions(text, buildNameIndex(list, { caseFreeTypes })).map(mention => mention.entityId));
   } catch (e) {
     return new Set();
   }

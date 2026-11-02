@@ -1731,17 +1731,23 @@ function roleplaySceneContext(chatId) {
     }
 }
 
+const GATE_CASE_FREE_TYPES = new Set(['Events']);
+
 // Can only downgrade to the deterministic path, which still fills the context.
 function resolvePlannerGate(chatId, request, { includeChatContext = true, force = false, roleplay = false } = {}) {
     let entities = [];
     try {
         entities = includeChatContext ? entitiesStore.listEntities({ workspaceId: chatId }) : [];
     } catch (e) { entities = []; }
-    const mentionedIds = entityMentionIds(request, entities);
+    // Events are spoken of as common nouns ("the festival"), so their names match in any casing;
+    // a false match costs one planner run, a missed one the research.
+    const mentionedIds = entityMentionIds(request, entities, { caseFreeTypes: GATE_CASE_FREE_TYPES });
     const sceneContext = roleplay && includeChatContext ? roleplaySceneContext(chatId) : null;
+    const nameOf = new Map(entities.map(entity => [entity.id, entity.canonicalName]));
+    const names = ids => ids.map(id => nameOf.get(id) || id);
     const scene = sceneContext ? {
-        outside: [...mentionedIds].filter(id => !sceneContext.insideIds.has(id)).length,
-        bystanders: [...mentionedIds].filter(id => sceneContext.bystanderIds.has(id)).length
+        outside: names([...mentionedIds].filter(id => !sceneContext.insideIds.has(id))),
+        bystanders: names([...mentionedIds].filter(id => sceneContext.bystanderIds.has(id)))
     } : null;
     const decision = shouldRunPlanner(request, { entityMentions: mentionedIds.size, force, scene });
     return { ...decision, entities, mentionedIds, sceneContext };
