@@ -124,6 +124,13 @@ export function findReachableLocations(
   return reachable;
 }
 
+/** True when one location contains the other, at any depth: the inn and its room, or the room and its village. */
+export function isNestedLocation(firstId: string, secondId: string, links: LocationLink[]): boolean {
+  if (firstId === secondId) return true;
+  const { parents } = buildGraph(links);
+  return containerChain(firstId, parents).includes(secondId) || containerChain(secondId, parents).includes(firstId);
+}
+
 // With sizes known, "local" means the region around the scene whatever the nesting depth:
 // a room six levels down and a city one level down reach the same enclosing region.
 function regionClimbDepth(originId: string, parents: Map<string, string[]>, sizes: LocationSizes): number | null {

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import {
   describeLocationChain,
   findReachableLocations,
+  isNestedLocation,
   loadLocationChain,
   locationSizesOf,
   proposeLocationParent,
@@ -45,6 +46,19 @@ const SIZES: LocationSizes = new Map([
   ['tavern', 'place'], ['forge', 'place'], ['pier', 'place'],
   ['cellar', 'place'], ['cellar-shelf', 'spot']
 ] as const);
+
+describe('nested locations', () => {
+  test('a location and anything above or below it are nested, at any depth', () => {
+    expect(isNestedLocation('tavern', 'cellar-shelf', LINKS)).toBe(true);
+    expect(isNestedLocation('cellar', 'city', LINKS)).toBe(true);
+    expect(isNestedLocation('tavern', 'tavern', LINKS)).toBe(true);
+  });
+
+  test('neighbours under the same container are not', () => {
+    expect(isNestedLocation('tavern', 'forge', LINKS)).toBe(false);
+    expect(isNestedLocation('cellar', 'pier', LINKS)).toBe(false);
+  });
+});
 
 describe('location sizes', () => {
   test('accept any casing and reject anything outside the scale', () => {
