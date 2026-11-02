@@ -24,6 +24,22 @@ describe('analysis scope', () => {
     expect(records.some(item => item.summary === 'unrelated')).toBe(false);
   });
 
+  test('sends a record stored twice once, and long texts shortened', () => {
+    const long = `${'The night of the ambush. '.repeat(20)}End.`;
+    const rows = [
+      record('fact', null, { status: 'active', proposition: { subjectId: 'kepler', predicate: 'founded', object: 'The Vanguard was founded.' } }),
+      record('fact', null, { status: 'active', proposition: { subjectId: 'kepler', predicate: 'founded', object: 'The Vanguard was founded.' } }),
+      record('memory', 'kepler', { status: 'active', summary: long }),
+    ];
+    const { records, candidates } = selectPerspectiveRecords(rows, { holderIds: ['kepler'], targetIds: ['kepler'], focusIds: [] });
+    expect(candidates).toBe(2);
+    expect(records.filter(item => item.type === 'fact')).toHaveLength(1);
+    const summary = records.find(item => item.type === 'memory')?.summary as string;
+    expect(summary.length).toBeLessThanOrEqual(281);
+    expect(summary.endsWith('…')).toBe(true);
+    expect(long.startsWith(summary.slice(0, -1))).toBe(true);
+  });
+
   test('splits holders into present and mentioned only when the triage says who is present', () => {
     const candidateIds = ['kepler', 'alistair', 'barnaby'];
     const tiers = resolveAnalysisHolders({ candidateIds, sceneIds: ['kepler'], presentIds: ['alistair'] });

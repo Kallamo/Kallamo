@@ -376,10 +376,29 @@ function selectPerspectiveRecords(rows, { holderIds, mentionedHolderIds = [], ta
   }
   // Rows arrive newest first, and a stable sort keeps that order inside each group.
   scored.sort((a, b) => Number(b.onTopic) - Number(a.onTopic) || Number(b.inFocus) - Number(a.inFocus));
+  // The same record can be stored twice, by two events that told it; it is read once.
+  const seen = new Set();
+  const records = [];
+  for (const { row } of scored) {
+    const record = compactPerspectiveRecord(row);
+    const key = JSON.stringify(record);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    records.push(record);
+  }
   return {
-    records: scored.slice(0, limit).map(({ row }) => compactPerspectiveRecord(row)),
-    candidates: scored.length,
+    records: records.slice(0, limit),
+    candidates: records.length,
   };
+}
+
+// Enough to recognise what is already recorded, which is all the analysis reads these for. Whole
+// memories made this the bulk of the analysis input in long campaigns.
+const PERSPECTIVE_TEXT_LIMIT = 280;
+
+function shortenText(text) {
+  if (typeof text !== 'string' || text.length <= PERSPECTIVE_TEXT_LIMIT) return text;
+  return `${text.slice(0, PERSPECTIVE_TEXT_LIMIT).trimEnd()}…`;
 }
 
 // The analysis never refers to a stored record by id, so ids and provenance stay out of the payload.
@@ -387,8 +406,8 @@ function compactPerspectiveRecord({ type, subjectId, value }) {
   return {
     type,
     ...(HOLDER_RECORD_TYPES.has(type) ? { subjectId } : {}),
-    ...(value.proposition ? { proposition: value.proposition } : {}),
-    ...(value.summary ? { summary: value.summary } : {}),
+    ...(value.proposition ? { proposition: { ...value.proposition, ...(typeof value.proposition.object === 'string' ? { object: shortenText(value.proposition.object) } : {}) } } : {}),
+    ...(value.summary ? { summary: shortenText(value.summary) } : {}),
     ...(value.entityId ? { entityId: value.entityId } : {}),
     ...(value.acquisition ? { acquisition: value.acquisition } : {}),
     ...(value.accessibility && value.accessibility !== 'available' ? { accessibility: value.accessibility } : {}),
