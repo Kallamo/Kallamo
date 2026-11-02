@@ -8,6 +8,7 @@ const { assertPayloadWithinLimit, estimatePayloadTokens, normalizeMaxApiPayload,
 const { tokenRatio, recordTokenCount, correctedLimit, useTokenCalibrationStore } = require('./token-calibration');
 const { bedrockFormat, supportsNativeTools, applyConversation, applyCacheBreakpoint, readToolReply, readUsage, flattenConversation } = require('./tool-conversation');
 const { cacheModeFor, isLongTtlRefused, markLongTtlRefused, planPromptCache, recordCacheOutcome } = require('./prompt-cache');
+const { detectedContextWindow } = require('./local-context-window');
 const { stripSpoilerMarkers } = require('../../../../dist-main/shared/spoilers');
 
 function getDatabase() {
@@ -84,10 +85,12 @@ function providerOutputLimit(provider, model, maxTokens) {
     return requested;
 }
 
-// The effective limit is the smaller of the connection window and the workspace limit.
-function connectionContextWindow(apiProfile) {
+// The effective limit is the smaller of the connection window and the workspace limit. A local
+// connection with none set uses the size its server reports.
+function connectionContextWindow(apiProfile, model = null) {
     const value = Number(apiProfile?.contextWindow);
-    return Number.isFinite(value) && value > 0 ? Math.floor(value) : null;
+    if (Number.isFinite(value) && value > 0) return Math.floor(value);
+    return detectedContextWindow(apiProfile?.id, model);
 }
 
 // `configured` is what the user set; `limit` is that number divided by how much more this model
@@ -95,7 +98,7 @@ function connectionContextWindow(apiProfile) {
 // A caller that names no limit gets the default workspace limit, so no request goes unchecked.
 function payloadLimitFor(apiProfile, maxPayloadTokens, { model = null, protocol = 'text' } = {}) {
     const workspace = normalizeMaxApiPayload(maxPayloadTokens);
-    const connection = connectionContextWindow(apiProfile);
+    const connection = connectionContextWindow(apiProfile, model);
     const fromConnection = connection !== null && normalizeMaxApiPayload(connection) < workspace;
     const configured = fromConnection ? normalizeMaxApiPayload(connection) : workspace;
     const ratio = tokenRatio({ apiProfileId: apiProfile?.id, model, protocol });
@@ -600,7 +603,7 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
         ? {
             parts: { apiProfileId, model, protocol },
             inputTokens: estimate.inputTokens,
-            contextWindow: connectionContextWindow(apiProfile),
+            contextWindow: connectionContextWindow(apiProfile, model),
             outputTokens
         }
         : null;

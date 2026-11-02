@@ -33,6 +33,7 @@ const inWorldTexts = require('./features/worldbuild/in-world-texts');
 const packageParts = require('./features/worldbuild/package-parts');
 const { chunkText, extractTextFromFile, extractDocxHtml, vectorizeChunks, insertChunksToDb, deleteChunksFromDb, searchKnowledgeBase, searchChatKnowledgeBase, searchChatMemories, RAG_MODEL_ID, RAG_MODEL_DIM, generateEmbeddingVector, countTokens } = require('./rag-service');
 const { normalizeMaxApiPayload } = require('./features/llm/payload-budget');
+const { detectedContextWindows, refreshContextWindow, refreshLocalContextWindows } = require('./features/llm/local-context-window');
 
 registerWorkspaceStateIpc(ipcMain);
 const worldbuildData = createWorldbuildDataService(db);
@@ -422,13 +423,16 @@ function apiProfileHasCredentials(row) {
 
 ipcMain.handle('get-api-profiles', async () => {
   try {
+    await refreshLocalContextWindows(db);
+    const detected = detectedContextWindows();
     const rows = db.prepare('SELECT * FROM api_profiles').all();
     return rows.map(r => ({
       ...r,
       apiKey: db.decryptApiKey(r.apiKey),
       customConfig: db.decryptApiKey(r.customConfig),
       models: JSON.parse(r.models || '[]'),
-      hasCredentials: apiProfileHasCredentials(r)
+      hasCredentials: apiProfileHasCredentials(r),
+      detectedContextWindow: detected[r.id] || null
     }));
   } catch (e) {
     console.error("Error fetching API profiles:", e);
@@ -463,6 +467,11 @@ ipcMain.handle('save-api-profile', async (event, profile) => {
       typeof profile.models === 'string' ? profile.models : JSON.stringify(profile.models || []),
       normalizeConnectionContextWindow(profile.contextWindow)
     );
+    // A changed address or model may point at a server running with another context size.
+    await refreshContextWindow({
+      ...profile,
+      models: typeof profile.models === 'string' ? profile.models : JSON.stringify(profile.models || [])
+    }, fetch, { force: true }).catch(() => {});
     return { success: true };
   } catch (e) {
     console.error("Error saving API profile:", e);

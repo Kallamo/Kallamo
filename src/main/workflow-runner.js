@@ -15,6 +15,7 @@ const {
 const { ROLE_IDS, readAdvancedSettings, resolveAiEngineRole } = require('./features/ai-engine/role-resolver');
 const { formatActiveHistory, planActiveHistory, selectActiveHistory } = require('./features/chat/history-window');
 const { cacheTtlForPace } = require('./features/llm/prompt-cache');
+const { refreshLocalContextWindows } = require('./features/llm/local-context-window');
 const { deferredNarrativeState, findPendingNarrativeTurn, replacedReplyIds } = require('./features/chat/narrative-turns');
 const { purgeDeadTurns } = require('./features/narrative/turn-ownership');
 const { parseEntityUpdateObject } = require('./features/worldbuild/entity-update-json');
@@ -487,6 +488,8 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
         return { success: false, error: error.message, errorCode: error.code };
     }
     cancelRun(activeRun);
+    // Every budget below is measured against it, so a local server's context size is known first.
+    await refreshLocalContextWindows(db);
 
     const controller = new AbortController();
     const currentRun = {

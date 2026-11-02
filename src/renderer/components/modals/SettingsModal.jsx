@@ -1596,7 +1596,10 @@ function ConnectionRow({ connection, models, users, onEdit, onDuplicate, onAddMo
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-baseline gap-2.5">
           <span className="truncate text-[0.9375rem] font-semibold text-text-primary">{connection.name}</span>
-          <span className="caption shrink-0 truncate">{connection.provider}{connection.baseUrl ? <> · <span className="font-mono">{connection.baseUrl.replace(/^https?:\/\//, '')}</span></> : null}</span>
+          <span className="caption shrink-0 truncate">
+            {connection.provider}{connection.baseUrl ? <> · <span className="font-mono">{connection.baseUrl.replace(/^https?:\/\//, '')}</span></> : null}
+            {connection.detectedContextWindow ? <> · <span data-tooltip="The context size the server reports. Requests are kept within it.">{Math.round(connection.detectedContextWindow / 1024)}k context</span></> : null}
+          </span>
         </div>
         <div className="mt-2 flex min-w-0 items-center gap-1.5">
           {models.length === 0 ? (
