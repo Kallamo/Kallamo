@@ -488,8 +488,8 @@ export class NarrativeChatContext {
     // The surroundings travel with the place, so the narrator knows the tavern is in a port
     // city without having to look the city up.
     const locationChain = loadLocationChain(this.db, workspaceId, scene.locationId);
+    // Names only: the narrator never looks anything up by ID, so one would only cost tokens.
     const lines = [
-      `Scene: ${scene.id}`,
       `Location: ${locationChain.length ? describeLocationChain(locationChain) : scene.locationId ? names.get(scene.locationId) ?? scene.locationId : 'Unspecified'}`,
       `Active participants: ${formatEntityList(scene.participantIds, names)}`,
       `Nearby characters: ${formatEntityList(nearbyIds, names)}. Presence alone does not mean they noticed or learned what happened.`,
@@ -1129,8 +1129,12 @@ function normalizeRecord(
     const proposition = payload.proposition as Record<string, unknown> | undefined;
     const predicate = String(proposition?.predicate ?? '').trim();
     if (!predicate || proposition?.object === undefined) return undefined;
+    // An occurrence is told by its title, summary and dates; its own ID means nothing to the narrator.
+    const object = predicate === 'recorded-occurrence' && proposition.object && typeof proposition.object === 'object'
+      ? withoutOccurrenceId(proposition.object as Record<string, unknown>)
+      : proposition.object;
     return {
-      content: withCategory(payload, `${predicate}: ${formatNarrativeValue(proposition.object, nameById)}`),
+      content: withCategory(payload, `${predicate}: ${formatNarrativeValue(object, nameById)}`),
       epistemic: { kind: 'canon', access: 'public' }
     };
   }
@@ -1311,6 +1315,10 @@ function entityReferencesIn(payload: Record<string, unknown>): string[] {
     .map(value => value.trim());
 }
 
+function withoutOccurrenceId({ occurrenceId: _occurrenceId, ...rest }: Record<string, unknown>): Record<string, unknown> {
+  return rest;
+}
+
 function formatNarrativeValue(value: unknown, nameById: Map<string, string> = new Map()): string {
   if (typeof value !== 'string') return JSON.stringify(value);
   const trimmed = value.trim();
@@ -1486,7 +1494,7 @@ function uniqueIds(values: Array<string | null | undefined>): string[] {
 }
 
 function formatEntityList(ids: string[], names: Map<string, string>): string {
-  return ids.length ? ids.map(id => `${names.get(id) ?? id} [${id}]`).join(', ') : 'None';
+  return ids.length ? ids.map(id => names.get(id) ?? 'Unnamed').join(', ') : 'None';
 }
 
 export function createNarrativeChatContext(

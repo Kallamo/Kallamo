@@ -717,7 +717,8 @@ describe('Narrative chat context integration', () => {
 
     const result = context.plan({ requestId: 'empty-rag', workspaceId: 'workspace-one', query: 'What happens?', tokenBudget: 2000, items: [] });
 
-    expect(result.context).toContain('Scene: scene-empty-rag');
+    expect(result.context).toContain('Active participants: Elias, Tess');
+    expect(result.context).not.toContain('scene-empty-rag');
     expect(result.context).toContain('Title: Oldest friend');
     expect(result.context).toContain('Value: 72');
     expect(result.context).toContain('Description: Elias trusts Tess with his life.');

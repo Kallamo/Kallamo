@@ -322,11 +322,11 @@ function scopeGuidance(scopeId: string, subject?: RoleplayContextSubject): strin
   return 'Use this private section only to drive this actor’s behavior, dialogue, and reactions. Do not reveal private information directly.';
 }
 
+// The narrator reads the state and the evidence; the IDs of the records behind them lead nowhere it can follow.
 function formatAssessment(assessment: EpistemicAssessment, targetNames: Map<string, string>): string {
   const target = targetNames.get(assessment.targetId) ?? assessment.targetId;
-  const source = assessment.sourceIds.length ? `; sources: ${assessment.sourceIds.join(', ')}` : '';
   const evidence = assessment.evidence ? `; evidence: ${assessment.evidence}` : '';
-  return `- ${target}: ${assessment.state}${source}${evidence}`;
+  return `- ${target}: ${assessment.state}${evidence}`;
 }
 
 function findDeepenedPairs(
