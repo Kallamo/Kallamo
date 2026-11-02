@@ -59,7 +59,7 @@ After each roleplay reply, Kallamo reads the turn and writes the story down: the
 - **Shared by belonging.** Factions share with their members, regions and areas with the people who live there.
 - **Only what lasts.** Where someone stands right now stays in the scene. Records are kept for what holds.
 
-## Roleplay with a world that keeps time
+## Roleplay
 
 Turn any workspace into a story you play. Pick your character and set the scene, and a clock keeps time on your world's own calendar.
 
@@ -67,6 +67,17 @@ Turn any workspace into a story you play. Pick your character and set the scene,
 - **Story time.** When the story doesn't say how long something took, the clock moves by the kind of action. Time written in the story always wins.
 - **Rules of the world.** Resources such as health or mana, levels and attributes, and skills with your own rank names.
 - **Review.** Big changes, like a secret coming out, wait for your approval. Regenerating a reply first undoes the state of the one it replaces.
+
+## Make each story look like itself
+
+Give your characters faces, your places their own scenery, and the app the look you like to write in.
+
+- **Portraits.** Characters carry a portrait, shown in Worldbuild and in the roleplay panel.
+- **Scene backgrounds.** Each location can have its own. As your character moves through the world, the chat background changes with the scene, and a place without one uses the background of the place it sits in.
+- **A background per workspace.** A fixed backdrop for the chat, with its own dimming and the transparency of your messages and the AI's.
+- **The interface.** Accent colour, font (Inter, Merriweather or JetBrains Mono), text size, speech bubbles or one continuous page, and background blur.
+
+Portraits and scene backgrounds travel inside an exported world.
 
 ## Your stories stay on your machine
 
@@ -84,7 +95,7 @@ Kallamo opens with **The Lighthouse**, a chapter to edit, and **Evenwell**, a ro
 | macOS | `Kallamo-X.X.X.dmg` | Download each release |
 | Linux | `Kallamo-X.X.X.AppImage` or `kallamo_X.X.X_amd64.deb` | The AppImage updates itself |
 
-**[Get Kallamo for your computer](https://kallamo.com/download/)**, or find every file on the [latest release](https://github.com/Kallamo/Kallamo/releases/latest).
+**[Get Kallamo for your computer](https://kallamo.com/download/)**, or find every file on the [releases page](https://github.com/Kallamo/Kallamo/releases).
 
 ## Documentation
 
