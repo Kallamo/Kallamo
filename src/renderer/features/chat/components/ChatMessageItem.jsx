@@ -252,6 +252,18 @@ function Notice({ children }) {
   );
 }
 
+// Small context windows, common on local models, cut context silently; the reply says what it went without.
+function contextCutNotice(context) {
+  const messages = Number(context?.historyDropped) || 0;
+  const passages = Number(context?.retrievalOmitted) || 0;
+  if (!messages && !passages) return null;
+  const parts = [
+    messages && `${messages} older ${messages === 1 ? 'message' : 'messages'}`,
+    passages && `${passages} retrieved ${passages === 1 ? 'passage' : 'passages'}`
+  ].filter(Boolean);
+  return `Left out to fit the context limit: ${parts.join(' and ')}. Archiving older history or raising the limit gives the AI more to work with.`;
+}
+
 function DroppedChip() {
   return (
     <span className="inline-flex h-6 items-center gap-1.5 rounded-full bg-tint/[0.06] px-2.5 text-xs text-text-muted select-none">
@@ -404,6 +416,7 @@ function AiMessage({ message, isEditing, isLastAi, isTyping, frame, view, action
 
       {debugObj?.truncated && <Notice>The reply stopped at the output limit. Raise Max tokens on the AI profile for longer replies.</Notice>}
       {debugObj?.context?.agenticDegraded && <Notice>Retrieval stopped early after an error. This reply used partial context.</Notice>}
+      {contextCutNotice(debugObj?.context) && <Notice>{contextCutNotice(debugObj.context)}</Notice>}
 
       {!isEditing && (
         <div className={actionRowClass(isLastAi || isDropped)}>
