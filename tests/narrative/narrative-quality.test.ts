@@ -88,13 +88,14 @@ describe('Narrative State quality gate', () => {
     expect(assessExtractedOperation(secret, model).accepted).toBe(true);
   });
 
-  test('refuses a relationship change caused by ordinary courtesy', () => {
-    const courtesy: ExtractedNarrativeOperation = {
+  test('refuses a relationship change caused by mood, and lets ordinary courtesy through to its limits', () => {
+    const mood: ExtractedNarrativeOperation = {
       type: 'relationship', sourceEntityId: 'pip', targetEntityId: 'corwin',
-      dimension: 'overall', value: 60, cause: 'courtesy', impact: 'meaningful'
+      dimension: 'overall', value: 60, cause: 'mood', impact: 'meaningful'
     };
 
-    expect(assessExtractedOperation(courtesy, model)).toEqual({ accepted: false, reason: 'transient-cause' });
+    expect(assessExtractedOperation(mood, model)).toEqual({ accepted: false, reason: 'transient-cause' });
+    expect(assessExtractedOperation({ ...mood, cause: 'courtesy' }, model).accepted).toBe(true);
   });
 
   test('keeps a relationship change with a cause that earns it', () => {

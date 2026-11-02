@@ -2,10 +2,10 @@ import {
   allowsSelfReference,
   isDurableKnowledgeCategory,
   isDurableMemoryCategory,
-  isDurableRelationshipCause,
   isGenericPredicate,
   isSceneStatePredicate,
   looksLikeIdentifier,
+  movesRelationship,
   normalizeKnowledgeCategory,
   normalizeMemoryCategory,
   normalizeRelationshipCause,
@@ -211,7 +211,7 @@ export function assessExtractedOperation(
   const cause = normalizeRelationshipCause(operation.cause);
   if (!context.modelAuthored) return accept({ ...operation, ...(cause ? { cause } : {}) });
   if (!cause) return reject('missing-cause');
-  if (!isDurableRelationshipCause(cause)) return reject('transient-cause');
+  if (!movesRelationship(cause)) return reject('transient-cause');
   if (context.eventConfidence < MIN_RELATIONSHIP_CONFIDENCE) return reject('low-confidence');
   return accept({ ...operation, cause });
 }

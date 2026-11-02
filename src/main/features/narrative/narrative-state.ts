@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3';
 import { NARRATIVE_CONTRACT_VERSION, type NarrativeOperation, type NarrativeProposal, type Proposition, type RelationshipState, type WorldDay } from '../../../narrative/contracts';
 import { validateNarrativeOperation } from '../../../narrative/validation';
 import { propositionIdentity, statementKey } from '../../../narrative/narrative-taxonomy';
+import { isDailyLimited, limitRelationshipChange, type RelationshipImpact, type RelationshipTable } from '../../../narrative/relationship-bands';
 import { NarrativeChangeSetRepository } from '../../../narrative/change-sets';
 import { NarrativeEventLedgerRepository, type NarrativeEventLedgerRecord } from '../../../narrative/ledger';
 import { createWorldbuildKnowledgeService, type WorldbuildKnowledgeService } from '../worldbuild/knowledge-service';
@@ -38,6 +39,21 @@ export interface CreateEventResult {
   skipped?: string;
   /** Operations the quality gate refused, so a turn can explain itself in diagnostics. */
   rejections?: QualityReview['rejections'];
+  /** What each relationship change asked for and where the limits left it. */
+  relationshipNotes?: RelationshipNote[];
+}
+
+export interface RelationshipNote {
+  sourceEntityId: string;
+  targetEntityId: string;
+  cause: string | null;
+  impact: RelationshipImpact;
+  from: number | null;
+  requested: number;
+  /** The value stored, or null when the change did not apply. */
+  applied: number | null;
+  table: RelationshipTable;
+  reason?: 'no-change' | 'first-impression-on-existing' | 'cause-stops-here' | 'daily-limit';
 }
 
 export interface NarrativeStateMetric {
@@ -64,10 +80,15 @@ export interface NarrativeStateJob {
 const AUTO_CONFIDENCE = 0.9;
 const AUTO_MEMORY_SALIENCE = 0.85;
 const MIN_KNOWLEDGE_CONFIDENCE = 0.8;
-const MIN_RELATIONSHIP_VALUE = 5;
-const RELATIONSHIP_IMPACT_LIMITS = { meaningful: 5, significant: 15, drastic: 50 } as const;
-const INITIAL_RELATIONSHIP_LIMITS = { meaningful: 25, significant: 50, drastic: 100 } as const;
 interface RelationshipBaseline { exists: boolean; value: number }
+
+interface RelationshipContext {
+  baseline: (sourceId: string, targetId: string, dimension: string) => RelationshipBaseline;
+  /** The story day of the turn, when it has one; the daily limits count on it. */
+  storyDay: WorldDay | null;
+  causeUsedOn: (sourceId: string, targetId: string, cause: string, day: WorldDay) => boolean;
+  notes: RelationshipNote[];
+}
 
 export class NarrativeStateSystem {
   private readonly ledger: NarrativeEventLedgerRepository;
@@ -106,6 +127,12 @@ export class NarrativeStateSystem {
   }
 
   createEvent(input0: CreateEventInput): CreateEventResult {
+    const notes: RelationshipNote[] = [];
+    const result = this.createEventWithNotes(input0, notes);
+    return notes.length ? { ...result, relationshipNotes: notes } : result;
+  }
+
+  private createEventWithNotes(input0: CreateEventInput, notes: RelationshipNote[]): CreateEventResult {
     if ((input0.provenanceInterpreter ?? 'model') === 'model' && input0.updatePolicy === 'manual') {
       return { skipped: 'manual-policy' };
     }
@@ -129,7 +156,12 @@ export class NarrativeStateSystem {
     const operations = deduplicateAwarenessOperations(buildOperations(
       input,
       fingerprint,
-      (sourceId, targetId, dimension) => this.currentRelationshipBaseline(input.workspaceId, sourceId, targetId, dimension),
+      {
+        baseline: (sourceId, targetId, dimension) => this.currentRelationshipBaseline(input.workspaceId, sourceId, targetId, dimension),
+        storyDay: (input.originType ?? 'chat-message') === 'chat-message' ? this.storyDay(input.workspaceId, input.originId) : null,
+        causeUsedOn: (sourceId, targetId, cause, day) => this.relationshipCauseUsedOn(input.workspaceId, sourceId, targetId, cause, day),
+        notes
+      },
       (subjectId, targetId) => this.hasAwareness(input.workspaceId, subjectId, targetId)
     )
       .map(operation => this.datedMemory(input, operation))
@@ -349,7 +381,12 @@ export class NarrativeStateSystem {
     return Boolean(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table));
   }
 
+  // The Worldbuild link is what the analysis is shown and what a person edits by hand, and every
+  // applied change writes it, so it is the current value. The ledger only answers for dimensions
+  // a link does not carry, newest by when it was applied: imported records arrive out of order.
   private currentRelationshipBaseline(workspaceId: string, sourceId: string, targetId: string, dimension: string): RelationshipBaseline {
+    const linked = this.linkedRelationshipValue(workspaceId, sourceId, targetId);
+    if (dimension.toLowerCase() === 'overall' && linked.value !== null) return { exists: true, value: linked.value };
     const row = this.db.prepare(`
       SELECT records.payload_json FROM narrative_records records
       JOIN narrative_events events
@@ -362,25 +399,50 @@ export class NarrativeStateSystem {
         AND json_extract(records.payload_json, '$.targetEntityId') = ?
         AND lower(json_extract(records.payload_json, '$.dimension')) = lower(?)
         AND COALESCE(lifecycle.status, 'active') = 'active'
-      ORDER BY records.rowid DESC LIMIT 1
+      ORDER BY records.applied_at DESC, records.rowid DESC LIMIT 1
     `).get(workspaceId, sourceId, targetId, dimension) as { payload_json: string } | undefined;
     if (row) {
       const value = Number((JSON.parse(row.payload_json) as { value?: number }).value ?? 0);
       return { exists: true, value: Number.isFinite(value) ? Math.max(-100, Math.min(100, value)) : 0 };
     }
+    return linked.found ? { exists: true, value: linked.value ?? 0 } : { exists: false, value: 0 };
+  }
+
+  private linkedRelationshipValue(workspaceId: string, sourceId: string, targetId: string): { found: boolean; value: number | null } {
     const link = this.db.prepare(`
       SELECT metadata_json FROM entity_links
       WHERE workspaceId = ? AND fromId = ? AND relType = 'related_to' AND toId = ?
       ORDER BY createdAt LIMIT 1
     `).get(workspaceId, sourceId, targetId) as { metadata_json: string | null } | undefined;
-    if (!link) return { exists: false, value: 0 };
-    if (!link.metadata_json) return { exists: true, value: 0 };
+    if (!link) return { found: false, value: null };
     try {
-      const value = Number((JSON.parse(link.metadata_json) as { value?: number }).value);
-      return { exists: true, value: Number.isFinite(value) ? Math.max(-100, Math.min(100, value)) : 0 };
+      const value = Number((JSON.parse(link.metadata_json || '{}') as { value?: number }).value);
+      return { found: true, value: Number.isFinite(value) ? Math.max(-100, Math.min(100, value)) : null };
     } catch {
-      return { exists: true, value: 0 };
+      return { found: true, value: null };
     }
+  }
+
+  /** Whether this cause already moved this pair on this day of the story. */
+  private relationshipCauseUsedOn(workspaceId: string, sourceId: string, targetId: string, cause: string, day: WorldDay): boolean {
+    return Boolean(this.db.prepare(`
+      SELECT 1 FROM narrative_records records
+      JOIN narrative_events events
+        ON events.workspace_id = records.workspace_id AND events.event_id = records.source_event_id
+      LEFT JOIN narrative_event_evidence evidence
+        ON evidence.workspace_id = events.workspace_id AND evidence.event_id = events.event_id AND evidence.ordinal = 0
+      LEFT JOIN narrative_origin_lifecycle lifecycle
+        ON lifecycle.workspace_id = events.workspace_id AND lifecycle.origin_id = evidence.origin_id
+      WHERE records.workspace_id = ? AND records.record_type = 'relationship' AND records.subject_id = ?
+        AND json_extract(records.payload_json, '$.targetEntityId') = ?
+        AND json_extract(records.payload_json, '$.cause') = ?
+        AND json_extract(records.payload_json, '$.occurredOn.eraId') = ?
+        AND json_extract(records.payload_json, '$.occurredOn.year') = ?
+        AND json_extract(records.payload_json, '$.occurredOn.month') = ?
+        AND json_extract(records.payload_json, '$.occurredOn.day') = ?
+        AND COALESCE(lifecycle.status, 'active') = 'active'
+      LIMIT 1
+    `).get(workspaceId, sourceId, targetId, cause, day.eraId, day.year, day.month, day.day));
   }
 
   private hasAwareness(workspaceId: string, subjectId: string, targetId: string): boolean {
@@ -559,7 +621,7 @@ export function isValidNarrativeOperation(operation: NarrativeOperation): boolea
 function buildOperations(
   input: CreateEventInput,
   fingerprint: string,
-  currentRelationshipBaseline: (sourceId: string, targetId: string, dimension: string) => RelationshipBaseline,
+  relationships: RelationshipContext,
   hasAwareness: (subjectId: string, targetId: string) => boolean
 ): NarrativeOperation[] {
   const eventId = `evt_${fingerprint}`;
@@ -656,23 +718,38 @@ function buildOperations(
     if (operation.type === 'memory') return [{ id: `op_${suffix}`, type: 'record-memory', evidenceIds, memory: { id: `memory_${suffix}`, subjectId: operation.subjectId, eventId, summary: operation.summary.trim(), accessibility: operation.accessibility ?? 'available', status: 'active', ...category(operation), relatedEntityIds: unique(operation.relatedEntityIds ?? []).filter(id => input.allowedEntityIds.has(id)), ...(operation.occurredOn ? { occurredOn: operation.occurredOn } : {}) } }];
     const valueOnly = isModelAuthored(input);
     const dimension = valueOnly ? 'overall' : operation.dimension.trim().toLowerCase();
-    const baseline = currentRelationshipBaseline(operation.sourceEntityId, operation.targetEntityId, dimension);
+    const baseline = relationships.baseline(operation.sourceEntityId, operation.targetEntityId, dimension);
     const previousValue = baseline.value;
     const requestedValue = Math.max(-100, Math.min(100, Number(operation.value)));
     if (!Number.isFinite(requestedValue)) return [];
-    if (valueOnly && baseline.exists && Math.abs(requestedValue - previousValue) < MIN_RELATIONSHIP_VALUE) return [];
     const requestedImpact = operation.impact === 'drastic' || operation.impact === 'significant' ? operation.impact : 'meaningful';
-    let impact: keyof typeof RELATIONSHIP_IMPACT_LIMITS = requestedImpact;
+    let impact: RelationshipImpact = requestedImpact;
     if (impact === 'drastic' && input.event.confidence < 0.95) impact = 'significant';
     if (impact === 'significant' && input.event.confidence < 0.9) impact = 'meaningful';
-    const maximumDelta = RELATIONSHIP_IMPACT_LIMITS[impact];
-    const maximumInitialValue = INITIAL_RELATIONSHIP_LIMITS[impact];
-    const delta = Math.sign(requestedValue - previousValue) * Math.min(Math.abs(requestedValue - previousValue), maximumDelta);
-    const value = valueOnly
-      ? baseline.exists
-        ? Math.max(-100, Math.min(100, previousValue + delta))
-        : Math.max(-maximumInitialValue, Math.min(maximumInitialValue, requestedValue))
-      : requestedValue;
+    const cause = operation.cause ? String(operation.cause) : null;
+    const current = baseline.exists ? previousValue : null;
+    // Bands and per-cause ceilings hold the interpreter only; an author's own entry is taken as written.
+    const limited = valueOnly ? limitRelationshipChange({ current, requested: requestedValue, impact, cause }) : null;
+    const note: RelationshipNote = {
+      sourceEntityId: operation.sourceEntityId,
+      targetEntityId: operation.targetEntityId,
+      cause,
+      impact,
+      from: current,
+      requested: requestedValue,
+      applied: limited ? limited.value : requestedValue,
+      table: limited?.table ?? (baseline.exists ? 'deepen' : 'initial'),
+      ...(limited?.refused ? { reason: limited.refused } : {})
+    };
+    const day = relationships.storyDay;
+    if (valueOnly && note.applied !== null && day && cause && isDailyLimited(cause, current)
+      && relationships.causeUsedOn(operation.sourceEntityId, operation.targetEntityId, cause, day)) {
+      note.applied = null;
+      note.reason = 'daily-limit';
+    }
+    if (valueOnly) relationships.notes.push(note);
+    if (note.applied === null) return [];
+    const value = note.applied;
     const alreadyAwareThisEvent = input.event.operations.some(candidate => (
       candidate.type === 'awareness'
       && candidate.subjectId === operation.sourceEntityId
@@ -703,6 +780,8 @@ function buildOperations(
           value,
           previousValue,
           ...(operation.cause ? { cause: operation.cause as RelationshipState['cause'] } : {}),
+          ...(valueOnly && requestedValue !== value ? { requestedValue } : {}),
+          ...(valueOnly && day ? { occurredOn: day } : {}),
           sourceEventId: eventId,
           ...(!valueOnly && operation.title?.trim() ? { title: operation.title.trim() } : {}),
           ...(!valueOnly && operation.description?.trim() ? { description: operation.description.trim() } : {})

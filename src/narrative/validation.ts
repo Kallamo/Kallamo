@@ -283,6 +283,8 @@ function validateRelationshipValue(value: unknown, path: string, issues: Validat
   }
   requireRelationshipValue(relationship, 'value', path, issues);
   if (relationship.previousValue !== undefined) requireRelationshipValue(relationship, 'previousValue', path, issues);
+  if (relationship.requestedValue !== undefined) requireRelationshipValue(relationship, 'requestedValue', path, issues);
+  if (relationship.occurredOn !== undefined) validateWorldDay(relationship.occurredOn, `${path}.occurredOn`, issues);
   if (relationship.description !== undefined && typeof relationship.description !== 'string') {
     addIssue(issues, VALIDATION_ISSUE_CODES.INVALID_TYPE, `${path}.description`, 'Expected a string.');
   }

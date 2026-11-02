@@ -525,6 +525,38 @@ function SceneMemoryList({ updates, names }) {
   );
 }
 
+const RELATIONSHIP_TABLES = { deepen: 'Deepening', wound: 'Wound', reconcile: 'Winning back', initial: 'First value' };
+const RELATIONSHIP_REFUSALS = {
+  'no-change': 'no change',
+  'first-impression-on-existing': 'a first impression after they already met',
+  'cause-stops-here': 'this cause no longer moves them at this level',
+  'daily-limit': 'this cause already moved them today'
+};
+
+// What the analysis asked for, and where the limits left it.
+function RelationshipChanges({ changes, names }) {
+  const name = id => names?.get(id) || 'Unknown';
+  return (
+    <ul className="divide-y divide-border-subtle rounded-lg border border-border-subtle">
+      {changes.map((change, index) => (
+        <li key={index} className="px-3 py-2 text-xs select-text">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <span className="font-semibold text-text-primary">{name(change.sourceEntityId)} → {name(change.targetEntityId)}</span>
+            <span className={`tabular-nums ${change.applied === null ? 'text-status-warning' : 'text-text-secondary'}`}>
+              {change.from ?? 'new'} → {change.applied ?? change.from ?? 'unchanged'}
+              {change.applied !== change.requested && <span className="text-text-subtle"> · asked {change.requested}</span>}
+            </span>
+          </div>
+          <p className="mt-0.5 text-text-muted">
+            {[change.cause, change.impact, RELATIONSHIP_TABLES[change.table]].filter(Boolean).join(' · ')}
+            {change.reason && <span className="text-status-warning"> · {RELATIONSHIP_REFUSALS[change.reason] || change.reason}</span>}
+          </p>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function NarrativeView({ debug, names, copy }) {
   const state = debug.narrativeState;
   if (!state || typeof state !== 'object') return <Disclosure title="Report">{copy}</Disclosure>;
@@ -646,6 +678,13 @@ function NarrativeView({ debug, names, copy }) {
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {(state.relationshipChanges || []).length > 0 && (
+        <div>
+          <SectionTitle>Relationships · {state.relationshipChanges.length}</SectionTitle>
+          <RelationshipChanges changes={state.relationshipChanges} names={names} />
         </div>
       )}
 

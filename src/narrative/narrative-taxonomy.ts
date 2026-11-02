@@ -127,6 +127,16 @@ export function isDurableRelationshipCause(value: unknown): boolean {
   return DURABLE_CAUSE_SET.has(slug(value));
 }
 
+/**
+ * Ordinary closeness: courtesy, banter and working side by side move a relationship a little near
+ * neutral, within limits of their own. Mood, compliance, instruction and presence never move it.
+ */
+const LIGHT_CAUSE_SET = new Set<string>(['courtesy', 'banter', 'routine-cooperation']);
+
+export function movesRelationship(value: unknown): boolean {
+  return DURABLE_CAUSE_SET.has(slug(value)) || LIGHT_CAUSE_SET.has(slug(value));
+}
+
 export function allowsSelfReference(category: unknown): boolean {
   return SELF_REFERENTIAL_CATEGORIES.has(slug(category));
 }

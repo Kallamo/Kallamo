@@ -271,7 +271,7 @@ describe('Narrative State runtime', () => {
       participantIds: ['tess', 'elias'], confidence: 0.98,
       operations: [
         { type: 'knowledge', subjectId: 'elias', proposition: { subjectId: 'tess', predicate: 'training-decision', object: 'Tess is drilling with a stave in the yard right now.' }, category: 'scene-state', acquisition: 'witness', confidence: 0.97 },
-        { type: 'relationship', sourceEntityId: 'tess', targetEntityId: 'elias', dimension: 'overall', value: 60, cause: 'courtesy', impact: 'meaningful' }
+        { type: 'relationship', sourceEntityId: 'tess', targetEntityId: 'elias', dimension: 'overall', value: 60, cause: 'presence', impact: 'meaningful' }
       ]
     }));
 
@@ -303,6 +303,47 @@ describe('Narrative State runtime', () => {
     expect(second).toEqual({ skipped: 'no-valid-operations' });
     expect(db.prepare("SELECT COUNT(*) AS count FROM narrative_records WHERE record_type = 'knowledge'").get())
       .toEqual({ count: 1 });
+  });
+
+  describe('relationship limits', () => {
+    const relationship = (originId: string, value: number, cause: string, impact = 'meaningful') => system.createEvent(input(originId, {
+      type: 'relationship-change', description: `Tess warms to Elias (${originId}).`, excerpt: 'Tess smiles at him.',
+      participantIds: ['tess', 'elias'], confidence: 0.96,
+      operations: [{ type: 'relationship', sourceEntityId: 'tess', targetEntityId: 'elias', dimension: 'overall', value, cause, impact }]
+    }));
+    const linkValue = () => JSON.parse((db.prepare("SELECT metadata_json FROM entity_links WHERE fromId = 'tess' AND toId = 'elias'").get() as { metadata_json: string }).metadata_json).value;
+
+    beforeEach(() => {
+      db.prepare(`INSERT INTO entity_links (id, workspaceId, fromId, relType, toId, label, metadata_json, createdAt)
+        VALUES ('bond', 'workspace-one', 'tess', 'related_to', 'elias', 'Friend', '{"value":88}', 1)`).run();
+      db.prepare(`INSERT INTO roleplay_time_state (workspace_id, position_json, updated_at) VALUES ('workspace-one', ?, 1)`)
+        .run(JSON.stringify({ eraId: 'yc', year: 62, month: 10, day: 15, hour: 19, minute: 0 }));
+    });
+
+    test('starts from the value on the Worldbuild link, which a person may have edited', () => {
+      const result = relationship('affection-one', 95, 'affection', 'significant');
+      expect(result.relationshipNotes).toEqual([expect.objectContaining({ from: 88, requested: 95, applied: 89, table: 'deepen' })]);
+      expect(linkValue()).toBe(89);
+    });
+
+    test('lets sustained trust carry a bond no further than 75', () => {
+      const result = relationship('trust', 95, 'sustained-trust');
+      expect(result.skipped).toBe('no-valid-operations');
+      expect(result.relationshipNotes).toEqual([expect.objectContaining({ applied: null, reason: 'cause-stops-here' })]);
+      expect(linkValue()).toBe(88);
+    });
+
+    test('lets intimacy past 75 move a pair once per day of the story', () => {
+      relationship('affection-first', 95, 'affection');
+      const second = relationship('affection-second', 95, 'affection');
+      expect(second.relationshipNotes).toEqual([expect.objectContaining({ applied: null, reason: 'daily-limit' })]);
+      expect(linkValue()).toBe(89);
+
+      db.prepare("UPDATE roleplay_time_state SET position_json = ? WHERE workspace_id = 'workspace-one'")
+        .run(JSON.stringify({ eraId: 'yc', year: 62, month: 10, day: 16, hour: 9, minute: 0 }));
+      relationship('affection-next-day', 95, 'affection');
+      expect(linkValue()).toBe(90);
+    });
   });
 
   test('writes the category and the cause onto the stored records', () => {

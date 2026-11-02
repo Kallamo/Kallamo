@@ -191,8 +191,12 @@ export interface RelationshipState {
   value: number;
   previousValue?: number;
   description?: string;
-  /** What in the scene actually moved the bar. Courtesy and banter are not causes. */
+  /** What in the scene actually moved the bar. */
   cause?: RelationshipCause;
+  /** What the interpreter asked for, kept when the limits left the bar somewhere else. */
+  requestedValue?: number;
+  /** The story day of the change; some causes move a pair only once a day. */
+  occurredOn?: WorldDay;
   sourceEventId: NarrativeId;
   /** Set only when an entity on either side was deleted, or a merge made both sides one entity. */
   status?: 'retired';
