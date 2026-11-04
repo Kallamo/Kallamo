@@ -47,6 +47,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setWorkspaceExperienceMode: (workspaceId, mode) => ipcRenderer.invoke('set-workspace-experience-mode', { workspaceId, mode }),
   getRoleplayConfiguration: (workspaceId) => ipcRenderer.invoke('get-roleplay-configuration', { workspaceId }),
   getWorldCalendar: (workspaceId) => ipcRenderer.invoke('get-world-calendar', { workspaceId }),
+  listWorldChanges: (workspaceId, limit) => ipcRenderer.invoke('list-world-changes', { workspaceId, limit }),
   saveWorldCalendar: (workspaceId, calendar, resolutions = []) => ipcRenderer.invoke('save-world-calendar', { workspaceId, calendar, resolutions }),
   getWorldCalendarEntries: (workspaceId, year, month, eraId) => ipcRenderer.invoke('get-world-calendar-entries', { workspaceId, year, month, eraId }),
   saveRoleplayClock: (workspaceId, position) => ipcRenderer.invoke('save-roleplay-clock', { workspaceId, position }),

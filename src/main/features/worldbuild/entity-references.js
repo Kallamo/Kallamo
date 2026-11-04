@@ -15,6 +15,7 @@ const ENTITY_REFERENCE_COLUMNS = [
   { table: 'entity_update_origins', column: 'entity_id', merge: 'repoint', delete: 'remove' },
   { table: 'entity_update_origins', column: 'previous_json', merge: 'repoint', delete: 'remove' },
   { table: 'entity_update_origins', column: 'next_json', merge: 'repoint', delete: 'remove' },
+  { table: 'entity_sheet_edits', column: 'entity_id', merge: 'repoint', delete: 'remove' },
   { table: 'narrative_records', column: 'subject_id', merge: 'repoint', delete: 'retire' },
   { table: 'narrative_records', column: 'payload_json', merge: 'repoint', delete: 'retire or unlist' },
   { table: 'narrative_awareness_records', column: 'subject_id', merge: 'repoint', delete: 'revoke' },
@@ -182,6 +183,7 @@ function repointEntityReferences(db, { workspaceId, sourceId, targetId, prefer =
       });
     }
   }
+  if (has('entity_sheet_edits')) db.prepare('UPDATE entity_sheet_edits SET entity_id = ? WHERE workspace_id = ? AND entity_id = ?').run(targetId, workspaceId, sourceId);
 
   if (has('narrative_records')) {
     const rows = db.prepare(`
@@ -454,6 +456,7 @@ function releaseEntityReferences(db, { workspaceId, entityId }) {
         AND (entity_id = ? OR previous_json LIKE ? ESCAPE '\\' OR next_json LIKE ? ESCAPE '\\')
     `).run(workspaceId, entityId, like, like);
   }
+  if (has('entity_sheet_edits')) db.prepare('DELETE FROM entity_sheet_edits WHERE workspace_id = ? AND entity_id = ?').run(workspaceId, entityId);
 
   if (has('narrative_records')) {
     const rows = db.prepare(`

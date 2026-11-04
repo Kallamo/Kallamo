@@ -1547,6 +1547,24 @@ const MIGRATIONS = [
       if (hasTable(db, 'entity_update_evidence')) db.exec('CREATE INDEX IF NOT EXISTS idx_entity_update_evidence_chunk ON entity_update_evidence (chunk_id)');
       if (hasTable(db, 'entity_enrichment_chunks')) db.exec('CREATE INDEX IF NOT EXISTS idx_entity_enrichment_chunks_chunk ON entity_enrichment_chunks (chunkId)');
     }
+  },
+  {
+    // Which parts of a sheet the person edited, for the overview's recent changes. Values are not kept.
+    id: 'entity_sheet_edits_v1',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS entity_sheet_edits (
+          workspace_id TEXT NOT NULL,
+          edit_id TEXT NOT NULL,
+          entity_id TEXT NOT NULL,
+          fields_json TEXT NOT NULL DEFAULT '[]',
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY (workspace_id, edit_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_entity_sheet_edits_time
+          ON entity_sheet_edits (workspace_id, created_at);
+      `);
+    }
   }
 ];
 

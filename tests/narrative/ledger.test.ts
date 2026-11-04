@@ -184,7 +184,8 @@ describe('Narrative Event Ledger SQLite repository', () => {
       { id: 'worldbuild_knowledge_locality_source_v1' },
       { id: 'in_world_texts_v1' },
       { id: 'entity_update_origins_v1' },
-      { id: 'knowledge_chunks_fts_rowid_v1' }
+      { id: 'knowledge_chunks_fts_rowid_v1' },
+      { id: 'entity_sheet_edits_v1' }
     ]);
     expect(db.prepare('PRAGMA table_info(entity_links)').all()).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'metadata_json', type: 'TEXT' })

@@ -30,6 +30,7 @@ const { createWorldbuildDataService } = require('./features/worldbuild/worldbuil
 const { exportAuthoredKnowledge, importAuthoredKnowledge, exportAuthoredFacts, importAuthoredFacts } = require('./features/worldbuild/knowledge-package');
 const entitiesStore = require('./entities');
 const inWorldTexts = require('./features/worldbuild/in-world-texts');
+const worldChanges = require('./features/worldbuild/world-changes');
 const packageParts = require('./features/worldbuild/package-parts');
 const { chunkText, extractTextFromFile, extractDocxHtml, vectorizeChunks, insertChunksToDb, deleteChunksFromDb, searchKnowledgeBase, searchChatKnowledgeBase, searchChatMemories, RAG_MODEL_ID, RAG_MODEL_DIM, generateEmbeddingVector, countTokens } = require('./rag-service');
 const { normalizeMaxApiPayload } = require('./features/llm/payload-budget');
@@ -2922,6 +2923,10 @@ ipcMain.handle('update-entity', async (event, { id, fields }) => {
     const entity = entitiesStore.updateEntityFromEditor(id, fields || {});
     const namesChanged = entity && before && NAME_FIELDS.some(field => JSON.stringify(before[field]) !== JSON.stringify(entity[field]));
     if (namesChanged) refreshNameTagsFor(entity.workspaceId, [id]);
+    // A proposed entity is still being reviewed, not edited.
+    if (entity && before && entity.status !== 'proposed') {
+      worldChanges.recordSheetEdit(db, { workspaceId: entity.workspaceId, entityId: id, parts: worldChanges.editedParts(before, entity) });
+    }
     return { success: true, entity };
   } catch (e) {
     console.error('[update-entity] failed:', e);
@@ -4073,6 +4078,30 @@ ipcMain.handle('get-roleplay-configuration', async (event, { workspaceId } = {})
     };
   } catch (error) {
     return { success: false, error: error.message };
+  }
+});
+
+// Skill, rank and attribute names travel with the rows, so the overview needs no Roleplay setup of its own.
+ipcMain.handle('list-world-changes', async (event, { workspaceId, limit } = {}) => {
+  try {
+    const changes = worldChanges.listWorldChanges(db, workspaceId, { limit });
+    const skills = changes.some(change => change.kind === 'skill') ? getRoleplaySkills() : null;
+    const skillNames = new Map((skills?.listSkills(workspaceId) || []).map(skill => [skill.id, skill.name]));
+    const ranks = skills?.getSettings(workspaceId).config.ranks || [];
+    const traitNames = changes.some(change => change.kind === 'progress' && change.detail.traitId)
+      ? new Map(getRoleplayProgression().listTraits(workspaceId).map(trait => [trait.id, trait.name]))
+      : new Map();
+    return {
+      success: true,
+      changes: changes.map(change => {
+        if (change.kind === 'skill') return { ...change, detail: { ...change.detail, skillName: skillNames.get(change.detail.skillId) || null, ranks } };
+        if (change.kind === 'progress') return { ...change, detail: { ...change.detail, traitName: traitNames.get(change.detail.traitId) || null } };
+        return change;
+      })
+    };
+  } catch (error) {
+    console.error('[list-world-changes] failed:', error);
+    return { success: false, error: error.message, changes: [] };
   }
 });
 

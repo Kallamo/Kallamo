@@ -1,9 +1,15 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, ChevronRight, Globe, History, Plus, ScanEye } from 'lucide-react';
 import Button from '../../components/ui/Button';
 import { AiGlyph } from '../../components/ui/glyphs';
 import { TYPE_ORDER, entityMeta, meta } from './worldbuildConfig';
 import { formatWorldDate } from './WorldDateInput';
+import { kindOf } from '../roleplay/changeKinds';
+import { describeWorldChanges } from './worldChanges';
+
+const RECENT_LIMIT = 8;
+const NEUTRAL_CHIP = 'bg-tint/[0.06] text-text-secondary ring-1 ring-inset ring-border-subtle';
+const SOURCE_TONE = { turn: 'text-entity-event', you: 'text-accent', ai: 'text-status-info' };
 
 const ago = (ms) => {
   if (!ms) return '';
@@ -15,10 +21,21 @@ const ago = (ms) => {
 };
 
 // What a world holds at a glance, with the next thing to review a click away.
-export default function WorldOverview({ workspaceName, entities, typeMeta, calendar, storyDate, counts, onFilter, onReview, onOpen, onCreate }) {
+export default function WorldOverview({ workspaceId, api, workspaceName, entities, typeMeta, calendar, storyDate, counts, onFilter, onReview, onOpen, onCreate }) {
   const confirmed = useMemo(() => entities.filter(entity => entity.status !== 'proposed'), [entities]);
   const recent = useMemo(() => [...confirmed].sort((a, b) => (b.lastModified || b.last_modified || 0) - (a.lastModified || a.last_modified || 0)).slice(0, 5), [confirmed]);
   const waiting = counts.proposed + counts.updates + counts.names;
+  const [rawChanges, setRawChanges] = useState([]);
+  // Read each time the overview shows, and again when the registry changes under it.
+  useEffect(() => {
+    if (!workspaceId || !api?.listWorldChanges) return undefined;
+    let cancelled = false;
+    api.listWorldChanges(workspaceId, RECENT_LIMIT)
+      .then(result => { if (!cancelled && result?.success) setRawChanges(result.changes || []); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [workspaceId, api, entities]);
+  const changes = useMemo(() => describeWorldChanges(rawChanges, entities), [rawChanges, entities]);
 
   if (!entities.length) {
     return (
@@ -57,7 +74,7 @@ export default function WorldOverview({ workspaceName, entities, typeMeta, calen
           );
         })}
       </div>
-      <div className="grid items-start gap-4 md:grid-cols-2">
+      <div className="grid items-start gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1.75fr)]">
         <section data-tour="wb-review" className="ws-card rounded-card border border-border-default bg-surface-panel-muted/60 backdrop-blur-md">
           <header className="flex min-h-11 items-center gap-2.5 border-b border-border-subtle px-4"><AiGlyph className="h-4 w-4 text-text-muted" /><h2 className="text-sm font-semibold text-text-primary">Waiting for review</h2></header>
           <div className="space-y-2 p-4 text-sm">
@@ -69,6 +86,12 @@ export default function WorldOverview({ workspaceName, entities, typeMeta, calen
         </section>
         <section className="ws-card rounded-card border border-border-default bg-surface-panel-muted/60 backdrop-blur-md">
           <header className="flex min-h-11 items-center gap-2.5 border-b border-border-subtle px-4"><History className="h-4 w-4 text-text-muted" /><h2 className="text-sm font-semibold text-text-primary">Recently changed</h2></header>
+          {changes.length > 0 ? (
+            <ul className="px-2 py-1.5">
+              {changes.map(change => <ChangeRow key={change.key} change={change} onOpen={() => onOpen(change.entity)} />)}
+            </ul>
+          ) : (
+          // A world with no recorded changes yet, such as one from before they were kept, lists its latest sheets.
           <div className="divide-y divide-border-subtle px-4 py-1">
             {recent.map(entity => {
               const m = entityMeta(entity);
@@ -85,9 +108,36 @@ export default function WorldOverview({ workspaceName, entities, typeMeta, calen
               );
             })}
           </div>
+          )}
         </section>
       </div>
     </div>
+  );
+}
+
+function ChangeRow({ change, onOpen }) {
+  const m = entityMeta(change.entity);
+  const Icon = m.icon;
+  const chip = change.kind === 'edit' || change.kind === 'update' ? NEUTRAL_CHIP : kindOf(change.kind).chip;
+  return (
+    <li>
+      <button type="button" onClick={onOpen} className="flex w-full items-start gap-3 rounded-lg px-2 py-2.5 text-left transition-colors hover:bg-tint/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+        <span className={`mt-px flex h-7 w-7 shrink-0 items-center justify-center rounded-md border ${m.medallion}`}><Icon className="h-3.5 w-3.5" aria-hidden="true" /></span>
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-sm font-semibold text-text-primary">{change.entity.canonicalName}</span>
+            <span className={`inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-md px-2 text-[0.6875rem] font-semibold ${chip}`}>{change.label}</span>
+          </span>
+          <span className="mt-0.5 block text-[0.8125rem] leading-relaxed text-text-muted">{change.text}</span>
+        </span>
+        <span className="flex shrink-0 flex-col items-end gap-1 pt-px">
+          <span className={`whitespace-nowrap text-xs font-semibold ${SOURCE_TONE[change.source] || 'text-text-muted'}`}>{change.sourceLabel}</span>
+          {change.pending
+            ? <span className="whitespace-nowrap rounded-full bg-status-warning/12 px-2 py-0.5 text-[0.6875rem] font-semibold text-status-warning">To review</span>
+            : <span className="whitespace-nowrap text-xs text-text-subtle">{ago(change.createdAt)}</span>}
+        </span>
+      </button>
+    </li>
   );
 }
 
