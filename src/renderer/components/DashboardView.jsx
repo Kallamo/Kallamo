@@ -9,6 +9,7 @@ import SegmentedControl from './ui/SegmentedControl';
 import EmptyState from './ui/EmptyState';
 import ContinueHero from '../features/workspaces/ContinueHero';
 import WorkspaceCard, { NewWorkspaceTile } from '../features/workspaces/WorkspaceCard';
+import NewStoryModal from '../features/workspaces/NewStoryModal';
 import SetupStrip from '../features/workspaces/SetupStrip';
 import EmptyWorkspaces from '../features/workspaces/EmptyWorkspaces';
 import DiscordButton from '../features/workspaces/DiscordButton';
@@ -41,6 +42,7 @@ export default function DashboardView() {
   const [sort, setSort] = useState('recent');
   const [chatModal, setChatModal] = useState(null); // { chat, draft } while the create/edit dialog is open
   const [chatToDelete, setChatToDelete] = useState(null);
+  const [storySource, setStorySource] = useState(null);
   const [gate, setGate] = useState(null); // { chat, profile } when Begin finds no model to reply
   const [profileToLink, setProfileToLink] = useState(null);
   const { startTour } = useTour();
@@ -154,6 +156,7 @@ export default function DashboardView() {
                   onOpen={begin}
                   onTogglePin={togglePin}
                   onEdit={target => setChatModal({ chat: target })}
+                  onNewStory={setStorySource}
                   onDelete={setChatToDelete}
                 />
               ))}
@@ -198,6 +201,19 @@ export default function DashboardView() {
         />
       )}
       {profileToLink && <ProfileModal profile={profileToLink} onClose={() => setProfileToLink(null)} />}
+      {storySource && (
+        <NewStoryModal
+          chat={storySource}
+          onClose={() => setStorySource(null)}
+          onStarted={async id => {
+            const fresh = await electronAPI.getChats();
+            if (Array.isArray(fresh)) setChats(fresh);
+            setStorySource(null);
+            const created = (Array.isArray(fresh) ? fresh : []).find(chat => chat.id === id);
+            if (created) begin(created);
+          }}
+        />
+      )}
       {chatModal && <ChatModal chat={chatModal.chat} draft={chatModal.draft} onClose={() => setChatModal(null)} />}
       {chatToDelete && (
         <DeleteModal

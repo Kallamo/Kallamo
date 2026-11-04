@@ -6151,8 +6151,16 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                 }
                 const fields = { data: nextData };
                 if (loreChanged) fields.lore = incomingLore;
-                entitiesStore.updateEntity(ent.id, fields);
-                for (const l of proposedLinks) applyProposedLink(ent.id, l, workspaceId);
+                const origin = {
+                    appliedBy: 'automatic',
+                    runId,
+                    evidence: includedEvidence.map(entry => entry.chunk.id),
+                    relatedIds: proposedLinks.map(link => link.targetId),
+                };
+                entitiesStore.withUpdateOrigin(ent.id, origin, () => {
+                    entitiesStore.updateEntity(ent.id, fields);
+                    for (const l of proposedLinks) applyProposedLink(ent.id, l, workspaceId);
+                });
                 updatedIds.add(ent.id);
             } else {
                 // Unresolved review items are preserved.

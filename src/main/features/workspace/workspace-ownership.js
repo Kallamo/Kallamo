@@ -17,6 +17,7 @@ const WORKSPACE_OWNED_COLUMNS = [
   { table: 'entity_redirects', column: 'workspace_id' },
   { table: 'entity_update_runs', column: 'workspace_id' },
   { table: 'entity_update_evidence', column: 'workspace_id' },
+  { table: 'entity_update_origins', column: 'workspace_id' },
   { table: 'workspace_ui_state', column: 'workspaceId' },
   { table: 'workspace_experience_modes', column: 'workspace_id' },
   { table: 'world_index_runs', column: 'chatId' },

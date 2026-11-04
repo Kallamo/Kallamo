@@ -1,12 +1,12 @@
 import React, { useRef, useState } from 'react';
-import { Clock, MapPin, MoreHorizontal, Pencil, Pin, PinOff, Plus, Trash2 } from 'lucide-react';
+import { BookOpen, Clock, MapPin, MoreHorizontal, Pencil, Pin, PinOff, Plus, Trash2 } from 'lucide-react';
 import { Menu, MenuItem, MenuSeparator } from '../../components/ui/Menu';
 import ContourCover from './ContourCover';
 import ProfileAvatars from './ProfileAvatars';
 import RoleplayChip from './RoleplayChip';
 import { leadImage, plural, timeAgo } from './workspaceFormat';
 
-export default function WorkspaceCard({ chat, profiles, onOpen, onTogglePin, onEdit, onDelete }) {
+export default function WorkspaceCard({ chat, profiles, onOpen, onTogglePin, onEdit, onNewStory, onDelete }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuAnchorRef = useRef(null);
   // A picture that fails to load steps down: the scene's place, then the cover, then none.
@@ -81,9 +81,10 @@ export default function WorkspaceCard({ chat, profiles, onOpen, onTogglePin, onE
       >
         <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
       </button>
-      <Menu anchorRef={menuAnchorRef} open={menuOpen} onClose={() => setMenuOpen(false)} label={`${chat.title} options`} className="w-48">
+      <Menu anchorRef={menuAnchorRef} open={menuOpen} onClose={() => setMenuOpen(false)} label={`${chat.title} options`} className="w-60">
         <MenuItem icon={pinned ? PinOff : Pin} label={pinned ? 'Unpin' : 'Pin to top'} onSelect={() => { setMenuOpen(false); onTogglePin(chat); }} />
         <MenuItem icon={Pencil} label="Edit workspace" onSelect={() => { setMenuOpen(false); onEdit(chat); }} />
+        <MenuItem icon={BookOpen} label="New story in this world" description="Same world, played again from the start." onSelect={() => { setMenuOpen(false); onNewStory(chat); }} />
         <MenuSeparator />
         <MenuItem icon={Trash2} label="Delete" danger onSelect={() => { setMenuOpen(false); onDelete(chat); }} />
       </Menu>

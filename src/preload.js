@@ -32,6 +32,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateChatKnowledgeFiles: (chatId, changes) => ipcRenderer.invoke('update-chat-knowledge-files', { chatId, changes }),
   restoreExampleWorkspace: () => ipcRenderer.invoke('restore-example-workspace'),
   restoreEvenwellWorkspace: () => ipcRenderer.invoke('restore-evenwell-workspace'),
+  previewNewStory: (workspaceId) => ipcRenderer.invoke('preview-new-story', { workspaceId }),
+  startNewStory: (workspaceId, title) => ipcRenderer.invoke('start-new-story', { workspaceId, title }),
+  onNewStoryProgress: (callback) => {
+    const listener = (event, data) => callback(data);
+    ipcRenderer.on('new-story-progress', listener);
+    return () => ipcRenderer.off('new-story-progress', listener);
+  },
   getOnboardingStory: (workspaceId) => ipcRenderer.invoke('get-onboarding-story', { workspaceId }),
   setOnboardingStage: (workspaceId, stage) => ipcRenderer.invoke('set-onboarding-stage', { workspaceId, stage }),
   beginOnboardingStory: (workspaceId, entityId) => ipcRenderer.invoke('begin-onboarding-story', { workspaceId, entityId }),

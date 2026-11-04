@@ -150,6 +150,16 @@ describe('the Evenwell onboarding', () => {
     expect(opened.cast.every((member: any) => member.entityId && !member.opening)).toBe(true);
   });
 
+  test('each new copy counts up from the highest one still there', () => {
+    const { onboarding } = createOnboarding();
+    const titleOf = (id: string) => (harness.db.prepare('SELECT title FROM chats WHERE id = ?').get(id) as any).title;
+    const first = onboarding.seed();
+    const second = onboarding.seed();
+    expect([titleOf(first), titleOf(second)]).toEqual(['Evenwell', 'Evenwell 2']);
+    harness.db.prepare('DELETE FROM chats WHERE id = ?').run(first);
+    expect(titleOf(onboarding.seed())).toBe('Evenwell 3');
+  });
+
   test('starting as Jasper puts Odris beside him, the room nearby and the opening in the chat', () => {
     const { onboarding, scenes, frames, settings } = createOnboarding();
     const workspaceId = onboarding.seed();

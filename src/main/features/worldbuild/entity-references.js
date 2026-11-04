@@ -12,6 +12,9 @@ const ENTITY_REFERENCE_COLUMNS = [
   { table: 'entity_enrichment_errors', column: 'entityId', merge: 'remove', delete: 'remove' },
   { table: 'entity_update_evidence', column: 'entity_id', merge: 'repoint', delete: 'remove' },
   { table: 'entity_update_jobs', column: 'entity_id', merge: 'repoint', delete: 'keep history' },
+  { table: 'entity_update_origins', column: 'entity_id', merge: 'repoint', delete: 'remove' },
+  { table: 'entity_update_origins', column: 'previous_json', merge: 'repoint', delete: 'remove' },
+  { table: 'entity_update_origins', column: 'next_json', merge: 'repoint', delete: 'remove' },
   { table: 'narrative_records', column: 'subject_id', merge: 'repoint', delete: 'retire' },
   { table: 'narrative_records', column: 'payload_json', merge: 'repoint', delete: 'retire or unlist' },
   { table: 'narrative_awareness_records', column: 'subject_id', merge: 'repoint', delete: 'revoke' },
@@ -170,6 +173,15 @@ function repointEntityReferences(db, { workspaceId, sourceId, targetId, prefer =
   if (has('entity_enrichment_errors')) db.prepare('DELETE FROM entity_enrichment_errors WHERE entityId = ?').run(sourceId);
   moveUnique('entity_update_evidence', 'entity_id');
   moveUnique('entity_update_jobs', 'entity_id');
+  if (has('entity_update_origins')) {
+    db.prepare('UPDATE entity_update_origins SET entity_id = ? WHERE workspace_id = ? AND entity_id = ?').run(targetId, workspaceId, sourceId);
+    for (const column of ['previous_json', 'next_json']) {
+      rewriteJsonColumn(db, {
+        table: 'entity_update_origins', column,
+        where: `workspace_id = ? AND ${column} LIKE ? ESCAPE '\\'`, params: [workspaceId, like], transform: replace
+      });
+    }
+  }
 
   if (has('narrative_records')) {
     const rows = db.prepare(`
@@ -435,6 +447,13 @@ function releaseEntityReferences(db, { workspaceId, entityId }) {
   if (has('entity_enrichment_chunks')) db.prepare('DELETE FROM entity_enrichment_chunks WHERE entityId = ?').run(entityId);
   if (has('entity_enrichment_errors')) db.prepare('DELETE FROM entity_enrichment_errors WHERE entityId = ?').run(entityId);
   if (has('entity_update_evidence')) db.prepare('DELETE FROM entity_update_evidence WHERE entity_id = ?').run(entityId);
+  // A change to a deleted entity, or to a link that went with it, has nothing left to undo.
+  if (has('entity_update_origins')) {
+    db.prepare(`
+      DELETE FROM entity_update_origins WHERE workspace_id = ?
+        AND (entity_id = ? OR previous_json LIKE ? ESCAPE '\\' OR next_json LIKE ? ESCAPE '\\')
+    `).run(workspaceId, entityId, like, like);
+  }
 
   if (has('narrative_records')) {
     const rows = db.prepare(`

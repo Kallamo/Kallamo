@@ -54,7 +54,7 @@ const STAYS = [
   // Review work in progress on this workspace.
   ...[
     'entity_enrichment_chunks', 'entity_enrichment_errors', 'entity_update_jobs', 'entity_update_runs',
-    'entity_update_evidence', 'entity_redirects',
+    'entity_update_evidence', 'entity_update_origins', 'entity_redirects',
   ].map(table => ({ table, reason: 'review' })),
   // Not part of a world.
   ...[

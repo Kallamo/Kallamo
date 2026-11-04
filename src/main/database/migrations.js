@@ -1482,6 +1482,71 @@ const MIGRATIONS = [
         CREATE INDEX IF NOT EXISTS idx_in_world_texts_item ON in_world_texts (workspace_id, item_id, ordinal);
       `);
     }
+  },
+  {
+    // What each applied Update entities change replaced. A null side means the value or link was absent.
+    id: 'entity_update_origins_v1',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS entity_update_origins (
+          workspace_id TEXT NOT NULL,
+          change_id TEXT NOT NULL,
+          entity_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('field', 'lore', 'link')),
+          target TEXT NOT NULL,
+          previous_json TEXT,
+          next_json TEXT,
+          applied_by TEXT NOT NULL CHECK (applied_by IN ('automatic', 'review')),
+          run_id TEXT,
+          evidence_json TEXT NOT NULL DEFAULT '[]',
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY (workspace_id, change_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_entity_update_origins_entity
+          ON entity_update_origins (workspace_id, entity_id, created_at);
+      `);
+    }
+  },
+  {
+    // FTS5 has no index on its columns, so finding a row by chunkId read the whole keyword index
+    // on every write. Rows now share the chunk's rowid; BEFORE INSERT clears the row a REPLACE drops.
+    id: 'knowledge_chunks_fts_rowid_v1',
+    up: db => {
+      if (!hasTable(db, 'knowledge_chunks') || !hasTable(db, 'knowledge_chunks_fts')) return;
+      const chunkTables = ['chunk_tag_suppressions', 'world_index_chunk_status'].filter(table => hasTable(db, table));
+      db.exec(`
+        DROP TRIGGER IF EXISTS trg_knowledge_chunks_fts_insert;
+        DROP TRIGGER IF EXISTS trg_knowledge_chunks_fts_update;
+        DROP TRIGGER IF EXISTS trg_knowledge_chunks_fts_delete;
+        CREATE TRIGGER trg_knowledge_chunks_fts_replace
+        BEFORE INSERT ON knowledge_chunks
+        FOR EACH ROW BEGIN
+          DELETE FROM knowledge_chunks_fts WHERE rowid IN (SELECT rowid FROM knowledge_chunks WHERE id = NEW.id);
+        END;
+        CREATE TRIGGER trg_knowledge_chunks_fts_insert
+        AFTER INSERT ON knowledge_chunks
+        FOR EACH ROW BEGIN
+          INSERT OR REPLACE INTO knowledge_chunks_fts (rowid, chunkId, text) VALUES (NEW.rowid, NEW.id, NEW.text);
+        END;
+        CREATE TRIGGER trg_knowledge_chunks_fts_update
+        AFTER UPDATE OF id, text ON knowledge_chunks
+        FOR EACH ROW BEGIN
+          DELETE FROM knowledge_chunks_fts WHERE rowid = OLD.rowid;
+          INSERT OR REPLACE INTO knowledge_chunks_fts (rowid, chunkId, text) VALUES (NEW.rowid, NEW.id, NEW.text);
+        END;
+        CREATE TRIGGER trg_knowledge_chunks_fts_delete
+        AFTER DELETE ON knowledge_chunks
+        FOR EACH ROW BEGIN
+          DELETE FROM knowledge_chunks_fts WHERE rowid = OLD.rowid;
+          ${chunkTables.map(table => `DELETE FROM ${table} WHERE chunkId = OLD.id;`).join(' ')}
+        END;
+        DELETE FROM knowledge_chunks_fts;
+        INSERT INTO knowledge_chunks_fts (rowid, chunkId, text) SELECT rowid, id, text FROM knowledge_chunks;
+      `);
+      // The chunk cleanup triggers look these up by chunk alone, which their keys do not lead with.
+      if (hasTable(db, 'entity_update_evidence')) db.exec('CREATE INDEX IF NOT EXISTS idx_entity_update_evidence_chunk ON entity_update_evidence (chunk_id)');
+      if (hasTable(db, 'entity_enrichment_chunks')) db.exec('CREATE INDEX IF NOT EXISTS idx_entity_enrichment_chunks_chunk ON entity_enrichment_chunks (chunkId)');
+    }
   }
 ];
 

@@ -9,6 +9,9 @@ const SEEDED_KEY = 'onboarding_evenwell_seeded';
 const SCOPE = 'onboarding';
 const STAGES = new Set(['intro', 'own-character', 'playing']);
 
+const { nextStoryTitle } = require('../workspace/story-title');
+const { markPending, clearPending } = require('../workspace/pending-workspaces');
+
 const newId = prefix => `${prefix}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
 
 // Seeds the Evenwell roleplay and runs its first scene. The world comes from the bundled
@@ -48,12 +51,16 @@ function createEvenwellOnboarding({ db, readPackage, importPayload, roleplay, ca
     const workspaceId = newId('chat');
     try {
       const profileId = ensureProfile(now);
-      db.prepare(`
-        INSERT INTO chats (
-          id, title, description, updatedAt, isPinned, maxContext, archiveThreshold, summarizedIndex,
-          activeProfiles, activeWorkflows, backgroundImage, backdropOpacity, userBubbleOpacity, aiBubbleOpacity, memoryBlocks, knowledgeFiles, autoSummarize, syncToCloud
-        ) VALUES (?, ?, ?, ?, 0, 128000, 60000, 0, ?, '[]', '', 25, 75, 75, '[]', '[]', 0, 0)
-      `).run(workspaceId, story.WORKSPACE.title, story.WORKSPACE.description, recent ? now : 0, JSON.stringify([profileId]));
+      const title = nextStoryTitle(story.WORKSPACE.title, db.prepare('SELECT title FROM chats').all().map(row => row.title));
+      db.transaction(() => {
+        db.prepare(`
+          INSERT INTO chats (
+            id, title, description, updatedAt, isPinned, maxContext, archiveThreshold, summarizedIndex,
+            activeProfiles, activeWorkflows, backgroundImage, backdropOpacity, userBubbleOpacity, aiBubbleOpacity, memoryBlocks, knowledgeFiles, autoSummarize, syncToCloud
+          ) VALUES (?, ?, ?, ?, 0, 128000, 60000, 0, ?, '[]', '', 25, 75, 75, '[]', '[]', 0, 0)
+        `).run(workspaceId, title, story.WORKSPACE.description, recent ? now : 0, JSON.stringify([profileId]));
+        markPending(db, workspaceId);
+      })();
       setExperienceMode(workspaceId, 'roleplay');
 
       const payload = readPackage(PACKAGE_PATH);
@@ -89,9 +96,10 @@ function createEvenwellOnboarding({ db, readPackage, importPayload, roleplay, ca
       db.prepare("UPDATE narrative_events SET provenance_interpreter_id = ? WHERE workspace_id = ? AND provenance_interpreter = 'user' AND provenance_interpreter_id IS NULL")
         .run(SEEDED_BY.interpreterId, workspaceId);
       writeState(workspaceId, { story: story.STORY_ID, stage: 'intro', profileId });
+      clearPending(db, workspaceId);
       return workspaceId;
     } catch (error) {
-      try { purgeWorkspace(db, workspaceId); } catch { /* the original error matters more */ }
+      try { purgeWorkspace(db, workspaceId); clearPending(db, workspaceId); } catch { /* the original error matters more */ }
       throw error;
     }
   }
@@ -204,7 +212,9 @@ function createEvenwellOnboarding({ db, readPackage, importPayload, roleplay, ca
     return { message, story: getStory(workspaceId) };
   }
 
-  return { seed, seedOnce, getStory, setStage, begin };
+  const isStory = workspaceId => readState(workspaceId)?.story === story.STORY_ID;
+
+  return { seed, seedOnce, getStory, setStage, begin, isStory };
 }
 
 module.exports = { createEvenwellOnboarding };

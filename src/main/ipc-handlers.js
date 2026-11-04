@@ -46,6 +46,7 @@ const chatsDir = path.join(dataDir, 'ChatHistory');
 const worldIndexJobs = new Map();
 const { createEntityImages } = require('./features/worldbuild/entity-images');
 const { purgeWorkspace } = require('./features/workspace/workspace-ownership');
+const { pendingIds: pendingWorkspaceIds, purgeUnfinished: purgeUnfinishedWorkspaces } = require('./features/workspace/pending-workspaces');
 const { purgeDeadTurns } = require('./features/narrative/turn-ownership');
 const { purgeDocuments, purgeFolder } = require('./features/workspace/document-ownership');
 const { applyKnowledgeFileChanges, carryIndexState, parseFiles, ragIndexSignature } = require('./features/chat/knowledge-files');
@@ -3231,22 +3232,49 @@ ipcMain.handle('worldbuild-export-summary', async (event, { workspaceId } = {}) 
   } catch (e) { return { success: false, error: e.message }; }
 });
 
+// `exclude` leaves entities out, with everything that names them.
+function buildWorldbuildPackage(workspaceId, { includeImages = true, includeCurrentValues = false, includeChapters = true, includeTexts = true, exclude = new Set() } = {}) {
+  const data = entitiesStore.exportWorldbuild(workspaceId);
+  if (exclude.size) {
+    data.entities = data.entities.filter(entity => !exclude.has(entity.ref));
+    data.links = data.links.filter(link => !exclude.has(link.fromRef) && !exclude.has(link.toRef));
+  }
+  const refs = data.entities.map(entity => entity.ref);
+  data.calendar = getCalendarService().getCalendar(db, workspaceId);
+  data.knowledge = exportAuthoredKnowledge({ db, worldbuildData, workspaceId, entityIds: refs });
+  data.facts = exportAuthoredFacts({ worldbuildData, workspaceId, entityIds: refs });
+  data.templates = packageParts.exportTemplates(db, workspaceId);
+  data.occurrences = packageParts.exportOccurrences(db, workspaceId, refs);
+  data.placement = packageParts.exportPlacement(db, workspaceId, refs);
+  if (includeChapters) data.chapters = packageParts.exportChapters(db, workspaceId, refs);
+  data.texts = includeTexts ? inWorldTexts.exportItemTexts(db, workspaceId, refs) : [];
+  const packager = getRulesPackager();
+  if (packager.hasRules(workspaceId)) {
+    data.roleplayRules = packager.export(workspaceId, new Set(refs), Boolean(includeCurrentValues), getCalendarService().getTimeMatrix(db, workspaceId));
+  }
+  // Images go in as files under images/; the JSON names them by entity ref, never by a local path.
+  const images = [];
+  if (includeImages) {
+    data.images = [];
+    for (const image of entityImages.listForExport(workspaceId, refs)) {
+      const file = `images/${image.entityId}/${image.kind}${path.extname(image.absolute).toLowerCase()}`;
+      images.push({ file, absolute: image.absolute });
+      data.images.push({ ref: image.entityId, kind: image.kind, file, focus: image.focus });
+    }
+  }
+  const writeZip = (filePath) => {
+    const zip = new AdmZip();
+    for (const image of images) zip.addFile(image.file, fs.readFileSync(image.absolute));
+    zip.addFile('worldbuild.json', Buffer.from(JSON.stringify(data, null, 2), 'utf8'));
+    zip.writeZip(filePath);
+  };
+  return { data, writeZip };
+}
+
 ipcMain.handle('export-worldbuild', async (event, { workspaceId, includeImages = true, includeCurrentValues = false, includeChapters = true } = {}) => {
   try {
     const win = BrowserWindow.fromWebContents(event.sender);
-    const data = entitiesStore.exportWorldbuild(workspaceId);
-    data.calendar = getCalendarService().getCalendar(db, workspaceId);
-    data.knowledge = exportAuthoredKnowledge({ db, worldbuildData, workspaceId, entityIds: data.entities.map(entity => entity.ref) });
-    data.facts = exportAuthoredFacts({ worldbuildData, workspaceId, entityIds: data.entities.map(entity => entity.ref) });
-    data.templates = packageParts.exportTemplates(db, workspaceId);
-    data.occurrences = packageParts.exportOccurrences(db, workspaceId, data.entities.map(entity => entity.ref));
-    data.placement = packageParts.exportPlacement(db, workspaceId, data.entities.map(entity => entity.ref));
-    if (includeChapters) data.chapters = packageParts.exportChapters(db, workspaceId, data.entities.map(entity => entity.ref));
-    data.texts = inWorldTexts.exportItemTexts(db, workspaceId, data.entities.map(entity => entity.ref));
-    const packager = getRulesPackager();
-    if (packager.hasRules(workspaceId)) {
-      data.roleplayRules = packager.export(workspaceId, new Set(data.entities.map(entity => entity.ref)), Boolean(includeCurrentValues), getCalendarService().getTimeMatrix(db, workspaceId));
-    }
+    const { data, writeZip } = buildWorldbuildPackage(workspaceId, { includeImages, includeCurrentValues, includeChapters });
     if (!data.entities.length) return { success: false, error: 'This Worldbuild is empty — nothing to export.' };
     const { filePath, canceled } = await dialog.showSaveDialog(win, {
       title: 'Export Worldbuild Package',
@@ -3254,18 +3282,7 @@ ipcMain.handle('export-worldbuild', async (event, { workspaceId, includeImages =
       filters: [{ name: 'Kallamo Worldbuild Package', extensions: ['klwb'] }],
     });
     if (canceled || !filePath) return { cancelled: true };
-    const zip = new AdmZip();
-    // Images go in as files under images/; the JSON names them by entity ref, never by a local path.
-    if (includeImages) {
-      data.images = [];
-      for (const image of entityImages.listForExport(workspaceId, data.entities.map(entity => entity.ref))) {
-        const file = `images/${image.entityId}/${image.kind}${path.extname(image.absolute).toLowerCase()}`;
-        zip.addFile(file, fs.readFileSync(image.absolute));
-        data.images.push({ ref: image.entityId, kind: image.kind, file, focus: image.focus });
-      }
-    }
-    zip.addFile('worldbuild.json', Buffer.from(JSON.stringify(data, null, 2), 'utf8'));
-    zip.writeZip(filePath);
+    writeZip(filePath);
     return { success: true, filePath, entities: data.entities.length, links: data.links.length };
   } catch (e) {
     console.error('[export-worldbuild] failed:', e);
@@ -3364,7 +3381,8 @@ ipcMain.handle('import-worldbuild', async (event, { workspaceId, filePath, rules
   }
 });
 
-function importWorldbuildPayload(workspaceId, filePath, payload, { rulesMode = 'merge', calendarMode = null, clearDates = [], confirmed = false } = {}) {
+// `withIdMap` also returns the package ref → new entity id map, for callers inside the main process.
+function importWorldbuildPayload(workspaceId, filePath, payload, { rulesMode = 'merge', calendarMode = null, clearDates = [], confirmed = false, withIdMap = false } = {}) {
   const existingEntityCount = db.prepare(
     "SELECT COUNT(*) AS count FROM entities WHERE workspaceId = ? AND status != 'proposed'"
   ).get(workspaceId)?.count || 0;
@@ -3428,7 +3446,8 @@ function importWorldbuildPayload(workspaceId, filePath, payload, { rulesMode = '
   refreshNameTagsFor(workspaceId);
   return {
     success: true, ...res, ...knowledgeResult, ...factResult, ...templateResult, ...occurrenceResult, ...placementResult,
-    ...textResult, ...chapterResult, imagesAdded, calendarImported, calendarConflict, rulesImported
+    ...textResult, ...chapterResult, imagesAdded, calendarImported, calendarConflict, rulesImported,
+    ...(withIdMap ? { idMap } : {})
   };
 }
 
@@ -3685,6 +3704,51 @@ ipcMain.handle('begin-onboarding-story', async (event, { workspaceId, entityId }
   }
 });
 
+let newStoryService = null;
+function getNewStoryService() {
+  if (!newStoryService) {
+    const { createNewStoryService } = require('./features/workspace/new-story');
+    const { setWorkspaceExperienceMode } = require('../../dist-main/main/features/narrative/mode-orchestration');
+    newStoryService = createNewStoryService({
+      db,
+      buildPackage: (workspaceId, { exclude }) => buildWorldbuildPackage(workspaceId, { includeChapters: false, includeTexts: false, exclude }),
+      importPayload: importWorldbuildPayload,
+      roleplay: getRoleplaySystem,
+      setExperienceMode: (workspaceId, mode) => setWorkspaceExperienceMode(db, workspaceId, mode),
+      purgeWorkspace: workspaceId => purgeWorkspace(db, workspaceId),
+      evenwell: getEvenwellOnboarding(),
+      tempPath: name => path.join(os.tmpdir(), name),
+      removeFile: file => fs.rmSync(file, { force: true }),
+      copyBackground: (source, workspaceId) => {
+        if (!fs.existsSync(source)) return;
+        const chatDir = path.join(chatsDir, workspaceId);
+        fs.mkdirSync(chatDir, { recursive: true });
+        const destination = path.join(chatDir, `bg_image_${Date.now()}${path.extname(source).toLowerCase()}`);
+        fs.copyFileSync(source, destination);
+        db.prepare('UPDATE chats SET backgroundImage = ? WHERE id = ?').run(destination, workspaceId);
+      }
+    });
+  }
+  return newStoryService;
+}
+
+ipcMain.handle('preview-new-story', async (event, { workspaceId } = {}) => {
+  try { return { success: true, ...getNewStoryService().preview(workspaceId) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('start-new-story', async (event, { workspaceId, title } = {}) => {
+  try {
+    const onProgress = step => { if (!event.sender.isDestroyed()) event.sender.send('new-story-progress', { workspaceId, step }); };
+    const result = await getNewStoryService().start(workspaceId, { title, onProgress });
+    refreshNameTagsFor(result.id);
+    return { success: true, ...result };
+  } catch (error) {
+    log.error('[Workspaces] Starting a new story failed:', error);
+    return { success: false, error: error.message };
+  }
+});
+
 ipcMain.handle('restore-evenwell-workspace', async () => {
   try {
     return { success: true, id: getEvenwellOnboarding().seed() };
@@ -3713,6 +3777,8 @@ ipcMain.handle('get-chats', async () => {
         (SELECT mode FROM workspace_experience_modes x WHERE x.workspace_id = c.id) as experienceMode
       FROM chats c
     `).all();
+    const building = pendingWorkspaceIds(db);
+    if (building.size) rows.splice(0, rows.length, ...rows.filter(row => !building.has(row.id)));
     // The home screen previews each workspace's latest AI reply.
     const lastReply = db.prepare(`
       SELECT aiName, aiColor, content, createdAt FROM messages
@@ -6649,6 +6715,19 @@ async function autoDownloadEngineIfNeeded() {
 }
 
 app.whenReady().then(() => {
+  // A workspace the app closed on while it was being built is removed whole.
+  try {
+    const removed = purgeUnfinishedWorkspaces(db, {
+      purgeWorkspace: id => purgeWorkspace(db, id),
+      removeFolder: id => fs.rmSync(path.join(chatsDir, id), { recursive: true, force: true }),
+    });
+    if (removed.length) {
+      entityImages.sweep();
+      console.log(`[Workspaces] Removed ${removed.length} unfinished workspace(s).`);
+    }
+  } catch (error) {
+    console.error('[Workspaces] Could not remove unfinished workspaces:', error);
+  }
   // A reply regeneration interrupted by a closed app is undone, so its turn keeps the state it had.
   try {
     const restored = getNarrativeEntitySystem().cancelOpenTurnReplacements();
@@ -6686,7 +6765,7 @@ app.whenReady().then(() => {
 
         // Rebuild FTS from scratch so it exactly mirrors knowledge_chunks (removes dupes + orphans)
         db.prepare('DELETE FROM knowledge_chunks_fts').run();
-        db.prepare('INSERT INTO knowledge_chunks_fts (chunkId, text) SELECT id, text FROM knowledge_chunks').run();
+        db.prepare('INSERT INTO knowledge_chunks_fts (rowid, chunkId, text) SELECT rowid, id, text FROM knowledge_chunks').run();
 
         db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('orphan_cleanup_v1', ?)")
           .run(JSON.stringify({ profOrphans, chatOrphans, ts: Date.now() }));

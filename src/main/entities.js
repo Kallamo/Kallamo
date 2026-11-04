@@ -191,9 +191,94 @@ function mergeEntity(sourceId, targetId, { prefer = 'target' } = {}) {
 // Stable identity for a staged link, so the UI can accept/reject one edge at a time.
 function enrichLinkKey(l) { return `${l.relKey}:${l.targetId}:${l.label || ''}`; }
 
+// The parts of a sheet an Update entities change can touch, with custom fields as their own keys.
+function updateOriginState(entityId, relatedIds = []) {
+  const row = db.prepare('SELECT workspaceId, lore, data FROM entities WHERE id = ?').get(entityId);
+  if (!row) return null;
+  const fields = {};
+  for (const [key, value] of Object.entries(parseJsonObject(row.data))) {
+    if (MAIN_OWNED_DATA_KEYS.includes(key)) continue;
+    if (key === 'customFields' && value && typeof value === 'object' && !Array.isArray(value)) {
+      for (const [custom, customValue] of Object.entries(value)) fields[`customFields.${custom}`] = customValue;
+    } else fields[key] = value;
+  }
+  // A single-valued link set on another entity can drop that entity's own links, so those are watched too.
+  const ids = [...new Set([entityId, ...relatedIds].filter(Boolean))];
+  const list = ids.map(() => '?').join(', ');
+  const links = new Map(db.prepare(`
+    SELECT id, fromId, relType, toId, label, metadata_json AS metadataJson FROM entity_links
+    WHERE fromId IN (${list}) OR toId IN (${list})
+  `).all(...ids, ...ids).map(link => [link.id, {
+    fromId: link.fromId, relType: link.relType, toId: link.toId, label: link.label ?? null, metadata: linkMetadata(link.metadataJson)
+  }]));
+  return { workspaceId: row.workspaceId, fields, lore: row.lore || '', links };
+}
+
+const originValue = (present, value) => (present ? JSON.stringify({ value }) : null);
+
+/**
+ * Applies an Update entities change and keeps what it replaced, so a new story in the same world
+ * can start without it. origin = { appliedBy: 'automatic' | 'review', runId, evidence: chunk ids, relatedIds }.
+ */
+function withUpdateOrigin(entityId, origin, apply) {
+  return db.transaction(() => {
+    const before = updateOriginState(entityId, origin.relatedIds);
+    const result = apply();
+    const after = updateOriginState(entityId, origin.relatedIds);
+    if (!before || !after) return result;
+    const insert = db.prepare(`
+      INSERT INTO entity_update_origins (
+        workspace_id, change_id, entity_id, kind, target, previous_json, next_json, applied_by, run_id, evidence_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const now = Date.now();
+    const evidence = JSON.stringify([...new Set(origin.evidence || [])]);
+    const record = (kind, target, previous, next) => insert.run(
+      after.workspaceId, crypto.randomUUID(), entityId, kind, target, previous, next, origin.appliedBy, origin.runId || null, evidence, now
+    );
+    for (const key of new Set([...Object.keys(before.fields), ...Object.keys(after.fields)])) {
+      const had = Object.hasOwn(before.fields, key);
+      const has = Object.hasOwn(after.fields, key);
+      const previous = originValue(had, before.fields[key]);
+      const next = originValue(has, after.fields[key]);
+      if (previous !== next) record('field', key, previous, next);
+    }
+    if (before.lore !== after.lore) record('lore', 'lore', originValue(true, before.lore), originValue(true, after.lore));
+    for (const linkId of new Set([...before.links.keys(), ...after.links.keys()])) {
+      const previous = before.links.has(linkId) ? JSON.stringify(before.links.get(linkId)) : null;
+      const next = after.links.has(linkId) ? JSON.stringify(after.links.get(linkId)) : null;
+      if (previous !== next) record('link', linkId, previous, next);
+    }
+    return result;
+  })();
+}
+
+// The chunks behind the staged items an accept takes, read before the accept clears them.
+function acceptedEvidenceChunks(pending, accept) {
+  const ids = new Set();
+  const take = proposal => {
+    if (proposal && typeof proposal === 'object' && Array.isArray(proposal.evidence)) proposal.evidence.forEach(id => ids.add(id));
+  };
+  for (const field of Array.isArray(accept.fields) ? accept.fields : []) take(pending.data?.[field]);
+  if (accept.lore) take(pending.lore);
+  const acceptLinks = new Set(Array.isArray(accept.links) ? accept.links : []);
+  for (const link of Array.isArray(pending.links) ? pending.links : []) if (acceptLinks.has(enrichLinkKey(link))) take(link);
+  return [...ids].map(id => pending.evidence?.[id]?.chunkId).filter(Boolean);
+}
+
 // Incremental: only items named in accept/reject leave the pending blob.
 // accept/reject = { fields, lore, links, chapters }.
 function resolveEnrichReview(id, { accept = {}, reject = {} } = {}) {
+  const pending = getEntity(id)?.data?._enrichPending;
+  if (!pending || typeof pending !== 'object') return applyEnrichReview(id, { accept, reject });
+  const acceptLinks = new Set(Array.isArray(accept.links) ? accept.links : []);
+  const relatedIds = (Array.isArray(pending.links) ? pending.links : [])
+    .filter(link => acceptLinks.has(enrichLinkKey(link))).map(link => link.targetId);
+  return withUpdateOrigin(id, { appliedBy: 'review', evidence: acceptedEvidenceChunks(pending, accept), relatedIds },
+    () => applyEnrichReview(id, { accept, reject }));
+}
+
+function applyEnrichReview(id, { accept = {}, reject = {} } = {}) {
   const cur = getEntity(id);
   if (!cur) throw new Error('entity not found');
   const pending = cur.data && cur.data._enrichPending;
@@ -774,6 +859,7 @@ module.exports = {
   deleteEntity,
   mergeEntity,
   resolveEnrichReview,
+  withUpdateOrigin,
   resolveMention,
   findCandidates,
   normalizeName,
