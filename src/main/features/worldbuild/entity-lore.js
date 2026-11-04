@@ -10,7 +10,7 @@ function isEntityLoreShape(value) {
 
 function validateEntityLore(value, currentLore, validEvidenceIds) {
   if (!isEntityLoreShape(value)) return null;
-  const lore = value.lore.value.trim();
+  const lore = tidySpoilerMarkers(value.lore.value);
   const support = value.lore.support.trim();
   const evidence = value.lore.evidence.map(String).filter(id => validEvidenceIds.has(id));
   if (!lore || !support || !evidence.length) return null;
@@ -24,7 +24,7 @@ function validateEntityLore(value, currentLore, validEvidenceIds) {
 // Long entries are extended, not rewritten: a full rewrite stops fitting the output limit.
 function validateEntityLoreAppend(value, currentLore, validEvidenceIds) {
   if (!isEntityLoreShape(value)) return null;
-  const addition = value.lore.value.trim();
+  const addition = tidySpoilerMarkers(value.lore.value);
   const support = value.lore.support.trim();
   const evidence = value.lore.evidence.map(String).filter(id => validEvidenceIds.has(id));
   if (!addition || !support || !evidence.length) return null;
@@ -52,7 +52,18 @@ function loreScope(entityType, skillsInUse) {
 // Spoilers hide text from the person reading the sheet, not from the story.
 const SPOILER_RULE = 'Text written between || and || is a spoiler: it is true and part of the lore, but hidden from the person reading the sheet until they choose to reveal it. ' +
   'Keep every such span exactly as it is, with its || markers and the same words. Never quote, summarize, or paraphrase a spoiler outside its markers. ' +
-  'When a new finding reveals more of something hidden, or would spoil a surprise for someone who has not reached it in the story, write it inside new || markers on a single line. ';
+  'When a new finding reveals more of something hidden, or would spoil a surprise for someone who has not reached it in the story, write it inside new || markers on a single line. ' +
+  'Only a twist, a secret or a reveal is a spoiler; background, history and everyday detail never are. Never use || to separate paragraphs: separate them with a blank line. ';
+
+// A lone or empty pair of markers hides nothing on purpose; it is a separator the model reached for.
+function tidySpoilerMarkers(text) {
+  let value = String(text || '').replace(/\|\|\s*\|\|/g, '');
+  if ((value.match(/\|\|/g) || []).length % 2) {
+    const last = value.lastIndexOf('||');
+    value = value.slice(0, last) + value.slice(last + 2);
+  }
+  return value.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
 
 function buildSpoilerRetryNote(lostSpoilers) {
   return `Your previous answer removed or changed these spoilers. Answer again and keep each one exactly as written here:\n${lostSpoilers.join('\n')}`;
@@ -84,6 +95,7 @@ module.exports = {
   buildSpoilerRetryNote,
   isEntityLoreShape,
   SPOILER_RULE,
+  tidySpoilerMarkers,
   validateEntityLore,
   validateEntityLoreAppend
 };

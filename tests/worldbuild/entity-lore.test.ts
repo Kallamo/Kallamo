@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 import { describe, expect, test } from 'vitest';
 
 const require = createRequire(import.meta.url);
-const { buildLorePrompt, validateEntityLore, validateEntityLoreAppend } = require('../../src/main/features/worldbuild/entity-lore');
+const { buildLorePrompt, tidySpoilerMarkers, validateEntityLore, validateEntityLoreAppend } = require('../../src/main/features/worldbuild/entity-lore');
 const evidence = new Set(['E_1']);
 
 describe('entity lore validation', () => {
@@ -41,6 +41,12 @@ describe('entity lore validation', () => {
     expect(validateEntityLore({
       lore: { value, support: 'The cited records establish his history and relationships.', evidence: ['E_1'] },
     }, '', evidence)).toEqual({ value: value.trim(), support: 'The cited records establish his history and relationships.', evidence: ['E_1'] });
+  });
+
+  test('drops spoiler markers used as separators and keeps real spoilers', () => {
+    expect(tidySpoilerMarkers('The keeper left. ||He never came back.|| It rained. ||')).toBe('The keeper left. ||He never came back.|| It rained.');
+    expect(tidySpoilerMarkers('First paragraph. || || Second.')).toBe('First paragraph.  Second.');
+    expect(tidySpoilerMarkers('Known. ||The heir is a fraud.|| Known again.')).toBe('Known. ||The heir is a fraud.|| Known again.');
   });
 });
 
