@@ -6,7 +6,7 @@ const SEEDED_BY = require('../../../shared/seed-provenance.json');
 // Edits to one sheet this close together read as one edit.
 const EDIT_WINDOW_MS = 10 * 60 * 1000;
 // Sheet settings and bookkeeping, not content.
-const IGNORED_DATA_KEYS = new Set(['spoilers', 'aiPolicy', 'nameReviewDismissed', 'loreDocumentIds', 'proposalEvidence', 'narrativeOrigin', 'needsEnrichment']);
+const IGNORED_DATA_KEYS = new Set(['spoilers', 'aiPolicy', 'nameReviewDismissed', 'loreDocumentIds', 'proposalEvidence', 'narrativeOrigin', 'needsEnrichment', 'alwaysInContext']);
 
 function hasTable(db, name) {
   return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));

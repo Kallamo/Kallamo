@@ -183,7 +183,10 @@ export class NarrativeChatContext {
       ),
       ...(strategy.mode === 'roleplay' ? this.loadRoleplayCandidates(input.workspaceId, entityIds) : [])
     ];
-    const uniqueCandidates = deduplicateCandidates([...retrieved, ...structured]);
+    const uniqueCandidates = withAlwaysInContext(
+      this.loadAlwaysInContextCandidates(input.workspaceId),
+      deduplicateCandidates([...retrieved, ...structured])
+    );
     const candidates = strategy.prepareCandidates(strategy.mode === 'standard'
       ? deduplicateStandardEvidence(uniqueCandidates)
       : uniqueCandidates);
@@ -233,7 +236,7 @@ export class NarrativeChatContext {
     const authorityPerspective: Perspective = { access: 'omniscient' };
     // A full sheet for whoever the turn is about; a one-line mention for an entity that only came
     // along because a retrieved passage or a relation named it.
-    const authorityCandidates = deduplicateCandidates([
+    const authorityCandidates = withAlwaysInContext(this.loadAlwaysInContextCandidates(input.workspaceId), deduplicateCandidates([
       ...this.loadSceneCandidates(input.workspaceId),
       ...this.loadEntityCandidates(input.workspaceId, entityIds.filter(id => focusIds.has(id)), authorityPerspective),
       ...this.loadEntityMentions(input.workspaceId, entityIds.filter(id => !focusIds.has(id))),
@@ -245,7 +248,7 @@ export class NarrativeChatContext {
         authorityPerspective
       ).filter(candidate => candidate.epistemic.kind === 'canon'),
       ...retrieved.filter(candidate => candidate.source.type === 'canon')
-    ]);
+    ]));
     const subjects = uniqueIds([playerId, ...actorIds]).map(subjectId => {
       const perspective: Perspective = { access: 'subjective', focalSubjectId: subjectId };
       return {
@@ -596,6 +599,35 @@ export class NarrativeChatContext {
       focus.add(id);
     });
     return { ids: [...ids], focusIds: [...focus] };
+  }
+
+  /** Systems the user marked to go with every message: world rules, outside retrieval and the entity limit. */
+  private loadAlwaysInContextCandidates(workspaceId: string): ContextCandidate[] {
+    const entities = (this.db.prepare(`
+      SELECT id, type, canonicalName, lore, data, status
+      FROM entities
+      WHERE workspaceId = ? AND type = 'System' AND status != 'proposed'
+      ORDER BY canonicalName
+    `).all(workspaceId) as EntityRow[])
+      .filter(entity => parseObject(entity.data).alwaysInContext === true);
+    if (!entities.length) return [];
+    const fields = this.db.prepare(`
+      SELECT type_id, field_key, label, ai_access, value_type, options_json, ai_guidance
+      FROM worldbuild_field_definitions WHERE workspace_id = ? AND type_id = 'System'
+    `).all(workspaceId) as FieldRow[];
+    return entities.flatMap(entity => {
+      const content = composeEntity(entity, fields);
+      return content ? [this.candidate({
+        id: `entity:${entity.id}`,
+        workspaceId,
+        sourceType: 'canon',
+        sourceId: entity.id,
+        content,
+        relevance: 1,
+        epistemic: { kind: 'canon', access: 'public' },
+        provenanceIds: [entity.id]
+      })] : [];
+    });
   }
 
   private loadEntityMentions(workspaceId: string, entityIds: string[]): ContextCandidate[] {
@@ -1376,7 +1408,7 @@ function composeEntity(entity: EntityRow, fields: FieldRow[]): string {
   if (entity.lore?.trim()) parts.push(entity.lore.trim());
   Object.entries(data)
     .filter(([key, value]) => !key.startsWith('_')
-      && !['description', 'content', 'customFields', 'loreDocumentId', 'loreDocumentIds', 'aiPolicy', 'spoilers'].includes(key)
+      && !['description', 'content', 'customFields', 'loreDocumentId', 'loreDocumentIds', 'aiPolicy', 'spoilers', 'alwaysInContext'].includes(key)
       && value !== undefined && value !== null && value !== '')
     .forEach(([key, value]) => parts.push(`${humanizeKey(key)}: ${formatValue(value)}`));
   const customFields = parseObject(data.customFields);
@@ -1419,6 +1451,15 @@ function composePackageItem(item: ContextPlanResult['package']['items'][number])
   if ('accessibility' in epistemic) details.push(`Accessibility: ${epistemic.accessibility}`);
   if (item.provenanceIds.length) details.push(`Provenance: ${item.provenanceIds.join(', ')}`);
   return `[${details.join(' | ')}]\n${item.content}`;
+}
+
+/**
+ * Pinned Systems lead and replace any copy retrieval found under the same id, so a one-line
+ * mention never stands in for them. The planner's sort is stable, so leading wins budget ties.
+ */
+function withAlwaysInContext(always: ContextCandidate[], rest: ContextCandidate[]): ContextCandidate[] {
+  const ids = new Set(always.map(candidate => candidate.id));
+  return [...always, ...rest.filter(candidate => !ids.has(candidate.id))];
 }
 
 function deduplicateCandidates(candidates: ContextCandidate[]): ContextCandidate[] {

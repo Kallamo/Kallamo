@@ -18,7 +18,7 @@ const summarize = (entity, links) => {
     return passages ? `Proposed · ${passages} ${passages === 1 ? 'passage' : 'passages'}` : 'Proposed';
   }
   const filled = (value) => value !== undefined && value !== null && value !== '' && !(Array.isArray(value) && !value.length);
-  const own = Object.entries(entity.data || {}).filter(([key, value]) => !key.startsWith('_') && key !== 'customFields' && key !== 'loreDocumentIds' && key !== 'aiPolicy' && filled(value)).length;
+  const own = Object.entries(entity.data || {}).filter(([key, value]) => !key.startsWith('_') && key !== 'customFields' && key !== 'loreDocumentIds' && key !== 'aiPolicy' && key !== 'alwaysInContext' && filled(value)).length;
   const custom = Object.values(entity.data?.customFields || {}).filter(filled).length;
   const fields = own + custom + (String(entity.lore || '').trim() ? 1 : 0);
   const parts = [fields ? `${fields} ${fields === 1 ? 'field' : 'fields'}` : 'Nothing filled yet'];

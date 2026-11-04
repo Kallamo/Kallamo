@@ -11,6 +11,7 @@ import { useApp } from '../context/AppContext';
 import Button from './ui/Button';
 import NumberInput from './ui/NumberInput';
 import Checkbox from './ui/Checkbox';
+import Toggle from './ui/Toggle';
 import Popover from './ui/Popover';
 import Menu, { MenuItem, MenuLabel, MenuSeparator } from './ui/Menu';
 import { useFirstVisitTour, useTour } from '../features/onboarding/GuidedTour';
@@ -235,6 +236,28 @@ const FactGrid = ({ children, columns = 3 }) => (
 );
 
 // Long text folds after a few lines, so a sheet reads as a sheet and not as one essay.
+// Above this a System pinned to every message starts to crowd out what retrieval brings.
+const ALWAYS_IN_CONTEXT_WARN_TOKENS = 1500;
+
+const AlwaysInContextControl = ({ checked, content, onChange }) => {
+  const tokens = Math.ceil(String(content || '').length / 4);
+  const large = tokens >= ALWAYS_IN_CONTEXT_WARN_TOKENS;
+  return (
+    <div className="mt-4 border-t border-border-subtle pt-4">
+      <Toggle checked={checked} onChange={onChange} label="Always in the AI's context"
+        description="Off: these rules reach the AI when the story touches them. On: they go with every message." />
+      {checked && tokens > 0 && (
+        <p className={`caption mt-2 flex items-center gap-1.5 ${large ? 'text-status-warning' : ''}`}>
+          {large && <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}
+          {large
+            ? `About ${tokens.toLocaleString()} tokens on every message. Long rules leave less room for the rest of the world; consider keeping only the essentials here.`
+            : `About ${tokens.toLocaleString()} tokens on every message.`}
+        </p>
+      )}
+    </div>
+  );
+};
+
 const Prose = ({ text, empty = 'Not written yet', clamp = true, spoiler }) => {
   const [open, setOpen] = useState(false);
   const value = String(text || '').trim();
@@ -1299,6 +1322,18 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     } catch (e) { showToast(`Could not change AI permission: ${e.message}`, 'error'); }
   };
 
+  // A System sent on every message instead of only when retrieval finds it. Persists like setAiPolicy.
+  const setAlwaysInContext = async (on) => {
+    patchData({ alwaysInContext: on });
+    if (!selected?.id) return;
+    try {
+      const data = { ...(selected.data || {}), alwaysInContext: on };
+      const r = await electronAPI.updateEntity(selected.id, { data });
+      if (!r?.success) { showToast(`Could not change this setting: ${r?.error || 'unknown error'}`, 'error'); return; }
+      await load();
+    } catch (e) { showToast(`Could not change this setting: ${e.message}`, 'error'); }
+  };
+
   // The review stops flagging this entity; its name and tags stay as they are.
   const keepName = async () => {
     if (!selected?.id) return;
@@ -1726,9 +1761,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const sectionsFor = (type) => {
     const S = [];
     if (type === 'System') {
-      S.push({ key: 'concept', spoiler: 'content', title: "Always in the AI's context", quiet: true, icon: AiGlyph, scalar: true, empty: !String(selected.data.content || '').trim(),
-        view: <Prose text={selected.data.content} empty="No rules written yet." />,
-        edit: <Edit label="Content"><SpoilerTextArea rows={10} placeholder="Rules and concepts of this universe the AI should always honor." value={selected.data.content || ''} onChange={(e) => patchData({ content: e.target.value })} /></Edit> });
+      const always = <AlwaysInContextControl checked={selected.data.alwaysInContext === true} content={selected.data.content} onChange={setAlwaysInContext} />;
+      S.push({ key: 'concept', spoiler: 'content', title: 'Rules and concepts', quiet: true, icon: AiGlyph, scalar: true, empty: !String(selected.data.content || '').trim(),
+        view: <><Prose text={selected.data.content} empty="No rules written yet." />{always}</>,
+        edit: <><Edit label="Content"><SpoilerTextArea rows={10} placeholder="Rules and concepts of this universe the AI should honor." value={selected.data.content || ''} onChange={(e) => patchData({ content: e.target.value })} /></Edit>{always}</> });
     }
     if (type === 'Locations') {
       const size = locationSizeOf(selected);

@@ -817,6 +817,52 @@ describe('Narrative chat context integration', () => {
     expect(result.context).toContain('Elias inventory: Healing Potion x3');
   });
 
+  test('sends a System marked always in context even when nothing retrieves it', () => {
+    insertSystem('tide-law', 'Tide Law', 'The sea rises at every full moon.', true);
+    insertSystem('ember-rite', 'Ember Rite', 'Fires are lit only at dusk.', false);
+
+    const result = plan();
+
+    expect(result.context).toContain('The sea rises at every full moon.');
+    expect(result.context).not.toContain('Fires are lit only at dusk.');
+    expect(result.context).not.toContain('Always In Context');
+  });
+
+  test('keeps an always-in-context System ahead of retrieval when the budget is tight', () => {
+    insertSystem('tide-law', 'Tide Law', 'The sea rises at every full moon.', true);
+
+    const result = context.plan({
+      requestId: 'tight', workspaceId: 'workspace-one',
+      query: 'What is happening at the northern gate?', tokenBudget: 20,
+      items: [{
+        id: 'chunk-gate', kind: 'workspace-memory', source: 'Archive',
+        content: 'A tagged archive says everyone knows the gate secret.', relevance: 1
+      }]
+    });
+
+    expect(result.context).toContain('The sea rises at every full moon.');
+    expect(result.context).not.toContain('everyone knows the gate secret');
+  });
+
+  test('sends an always-in-context System in roleplay as the full rule, not a mention', () => {
+    setWorkspaceExperienceMode(db, 'workspace-one', 'roleplay');
+    insertSystem('tide-law', 'Tide Law', 'The sea rises at every full moon.', true);
+    db.prepare('INSERT INTO chunk_tags (chunkId, tag, entity) VALUES (?, ?, ?)').run('chunk-gate', 'Tide Law', 'tide-law');
+
+    const result = plan();
+
+    expect(result.context).toContain('The sea rises at every full moon.');
+  });
+
+  function insertSystem(id: string, name: string, content: string, always: boolean) {
+    db.prepare(`
+      INSERT INTO entities (
+        id, workspaceId, type, canonicalName, aliases, lore, data,
+        status, createdAt, last_modified
+      ) VALUES (?, 'workspace-one', 'System', ?, '[]', '', ?, 'confirmed', 1, 1)
+    `).run(id, name, JSON.stringify(always ? { content, alwaysInContext: true } : { content }));
+  }
+
   function seedWorldbuild() {
     worldbuild.saveFieldDefinition({
       projectId: 'workspace-one', typeId: 'Locations', label: 'Material',
