@@ -1,6 +1,6 @@
 {
   "name": "kallamo",
-  "version": "2.0.0-beta.1",
+  "version": "2.0.0-beta.2",
   "description": "A local-first studio for roleplay and long-form writing.",
   "desktopName": "Kallamo",
   "main": "src/main.js",

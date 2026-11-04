@@ -2114,7 +2114,7 @@ async function summarizeArchiveSegment(transcript, { maxPayloadTokens = null } =
 function allowAiEntityCreation() {
     try {
         const row = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
-        return !!(row && JSON.parse(row.value).allowAiEntityCreation);
+        return !row || JSON.parse(row.value).allowAiEntityCreation !== false;
     } catch (e) { return false; }
 }
 

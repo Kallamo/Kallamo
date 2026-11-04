@@ -1565,6 +1565,19 @@ const MIGRATIONS = [
           ON entity_sheet_edits (workspace_id, created_at);
       `);
     }
+  },
+  {
+    // Saving Settings stored the old default (off) for everyone, so the stored value says nothing about a choice.
+    id: 'propose_unknown_entities_on_v1',
+    up: (db) => {
+      if (!hasTable(db, 'settings')) return;
+      const row = db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get();
+      if (!row) return;
+      let advanced;
+      try { advanced = JSON.parse(row.value); } catch { return; /* unreadable settings fall back to defaults */ }
+      if (!advanced || typeof advanced !== 'object' || advanced.allowAiEntityCreation === true) return;
+      db.prepare("UPDATE settings SET value = ? WHERE key = 'advanced'").run(JSON.stringify({ ...advanced, allowAiEntityCreation: true }));
+    }
   }
 ];
 

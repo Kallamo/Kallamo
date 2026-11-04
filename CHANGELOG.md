@@ -2,6 +2,44 @@
 
 All notable changes to Kallamo are documented in this file. Version numbers reflect the change for the people using Kallamo. From 2.0.0, a major release brings a feature that changes what Kallamo is, a minor release adds features on top of it, and a patch release only fixes. Before 2.0.0, minor releases were named milestones and patch releases also refined.
 
+## [2.0.0-beta.2] - 2026-11-04
+
+Any world brought into Worldbuild in one go, a new story in the same world, events with hours, and leaner Narrative State requests.
+
+### Added
+- **Create with AI**: bring an existing world into Worldbuild in one go. Give it your notes, a story bible, wiki pages or chapters as text, Markdown, Word or PDF, or SillyTavern character cards and lorebooks, and it lists the characters, places, factions and items they describe. Each one can be kept, merged with another or matched to a sheet you already have before anything is written. Update entities then fills the sheets from the source, a card's image becomes the portrait, and the imported text is deleted once every sheet has read it.
+- **New story in the same world**: the workspace menu starts a new story from any workspace. Evenwell starts again from its introduction and character choice, as Evenwell 2, Evenwell 3 and so on. Any other workspace is copied with its Worldbuild, documents, memories and settings, without its chat and without what the story changed. Edits you made by hand stay.
+- **Event schedules**: an event can keep hours or happen at a set time, a recurring event can last several days, and a weekly one can fall on chosen days of the world's week. The calendar shows which day of a longer event each date is and when it starts, and the narrator reads an event's hours against the story clock.
+- **Colored dialogue**: Settings > Appearance can color speech in replies, older ones included, following quotes, dashes or guillemets, in one of five colors or your own.
+- The narrator reads the AI guidance of each custom field it is shown, once per field. Before, only Update entities read it.
+- **Always in the AI's context** on a System: a switch under its rules sends them with every message, ahead of retrieval and outside the entity limit. Off, the rules reach the AI when the story touches them. The switch shows how many tokens the rules add to each message and warns when they grow long.
+- Recently changed on the world overview lists what happened to each entity: items handed over, picked up, dropped, used up or equipped, skills, progress, new or renamed entities, and sheet edits by you or by Update entities.
+- An open sheet shows a breadcrumb back to Your world, and the Worldbuild title returns to the overview.
+- Update entities fills a faction's Relations with other factions and people.
+- Connections to KoboldCpp, llama.cpp, LM Studio and Ollama read the context size the server runs with and keep requests within it, unless the connection sets its own. The connection card shows the size found.
+- Local connections receive the response schema, so servers that turn it into a grammar keep Narrative State replies in shape. A server that refuses it is asked again without it.
+- With Narrative State diagnostics on, a reply lists each triage, analysis and repair call with its time, tokens and why a schema was refused. With Retrieval and context diagnostics on, a Request tab shows the system prompt, history, message and raw reply the narrator received, and a Location section says where the scene ended up and why a move was dropped.
+- A reply says how many older messages and retrieved passages were left out to fit the context limit, and a roleplay turn sent to research names the entities that triggered it.
+
+### Changed
+- A relationship moves easily near neutral and less toward either extreme. Courtesy, banter and working together raise a bond a little up to 75, each once a story day. Sustained trust and debts stop at 75, and affection, confidences and reliance keep it growing past 75 by one point a day. The Narrative State report shows what each change asked for and where it landed.
+- Relationships read from documents use the same scale as play, and one reading moves an existing value at most one band.
+- Update entities reads a long source in full in one run, with up to eight more passes for a sheet with evidence left over. Places, items and species no longer receive personal relationships, and sheets and lore are written in the chosen system language even when the source is in another one.
+- Narrative State requests are smaller. Entities go as short labels instead of IDs, the narrator reads names only, and knowledge, beliefs, memories and facts reach the analysis cut to their opening and without repeats, roughly halving its input in a long campaign.
+- Each message stores one copy of its context, so long conversations take far less space.
+- Writing and deleting passages no longer slows down as the keyword index grows.
+- Propose unknown entities is on by default, so names the Tagger cannot match to an entry are suggested as new Worldbuild entries for you to review.
+- Selected entities stay selected after a bulk action, so another one can follow.
+- The Last Lantern in Evenwell has a common room, kitchen, gallery and six rooms.
+
+### Fixed
+- A System's rules were titled Always in the AI's context, though they reached the AI only when retrieval found them. The section is now Rules and concepts, and the switch above decides.
+- Moving within a place to a room, floor or other part the map does not list keeps the scene in that place instead of moving it to another place nearby. A move to a place neither inside nor around the current one happens only when the turn names it.
+- Reverting past a reply whose Narrative State update failed restores the story state from before it.
+- Update entities no longer hides ordinary text as a spoiler by using || to separate paragraphs.
+- Plain values written by Update entities no longer keep stray quotes.
+- The Run Kallamo checkbox on the installer's last page reads in light text.
+
 ## [2.0.0] - 2026-10-28
 
 Roleplay Mode and a world that remembers. The story's state, what each character knows and when things happened are kept as records the AI reads from the right point of view, Worldbuild grows into the rulebook of the world, and the whole app is redesigned around them. New installs start with Evenwell, a guided roleplay story.

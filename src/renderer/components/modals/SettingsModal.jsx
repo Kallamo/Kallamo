@@ -164,7 +164,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   };
   const [agenticGate, setAgenticGate] = useState(settings.advanced.agenticGate || 'auto');
   const [agenticToolProtocol, setAgenticToolProtocol] = useState(settings.advanced.agenticToolProtocol || 'auto');
-  const [allowAiEntityCreation, setAllowAiEntityCreation] = useState(settings.advanced.allowAiEntityCreation || false);
+  const [allowAiEntityCreation, setAllowAiEntityCreation] = useState(settings.advanced.allowAiEntityCreation !== false);
   const [archiveSummarization, setArchiveSummarization] = useState(settings.advanced.archiveSummarization !== false);
   const [streamingEnabled, setStreamingEnabled] = useState(settings.advanced.streaming !== false);
   const [promptCache, setPromptCache] = useState(settings.advanced.promptCache !== false);
