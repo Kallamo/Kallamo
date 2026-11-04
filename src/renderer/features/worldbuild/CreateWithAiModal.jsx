@@ -122,6 +122,8 @@ function SourcesStep({ electronAPI, sources, setSources, showToast }) {
   };
   const valid = sources.filter(source => !source.error);
   const passageCount = valid.reduce((sum, source) => sum + (source.passages || 0), 0);
+  // The size of the text itself, not what the Tagger will spend: its prompt and reply come on top.
+  const tokenCount = valid.reduce((sum, source) => sum + (source.tokens || 0), 0);
 
   return (
     <div className="custom-scrollbar flex min-h-0 flex-col gap-[1.375rem] overflow-y-auto px-[1.625rem] py-6">
@@ -157,7 +159,7 @@ function SourcesStep({ electronAPI, sources, setSources, showToast }) {
         <div>
           <div className="flex items-baseline justify-between px-1 pb-2.5">
             <p className="text-[0.8125rem] font-semibold text-text-primary">{plural(valid.length, 'source', 'sources')}</p>
-            <p className="text-xs text-text-subtle">{plural(passageCount, 'passage', 'passages')}</p>
+            <p className="text-xs text-text-subtle">{plural(passageCount, 'passage', 'passages')} · about {thousands(tokenCount)} tokens of text</p>
           </div>
           {sources.map(source => <SourceRow key={source.key} source={source} onRemove={() => remove(source.key)} />)}
         </div>
@@ -596,7 +598,6 @@ export default function CreateWithAiModal({ electronAPI, workspaceId, workspaceN
   const untyped = kept.filter(item => !item.type).length;
   const matched = kept.filter(item => item.targetId).length;
   const fillable = estimate ? estimate.sheets : kept.filter(item => item.fill).length;
-  const tokens = valid.reduce((sum, source) => sum + (source.tokens || 0), 0);
   const stepKey = step === 'reading' ? 'sources' : step;
   const subtitle = [workspaceName ? `Into ${workspaceName}` : null, step === 'review' ? `${plural(valid.length, 'source', 'sources')} read` : null].filter(Boolean).join(' · ') || null;
 
@@ -617,9 +618,6 @@ export default function CreateWithAiModal({ electronAPI, workspaceId, workspaceN
       {step === 'estimate' && <EstimateStep items={kept.filter(item => item.fill)} estimate={estimate} />}
 
       <div className="flex shrink-0 items-center justify-end gap-2.5 border-t border-border-subtle px-[1.375rem] py-3.5">
-        {step === 'sources' && valid.length > 0 && (
-          <p className="mr-auto min-w-0 truncate text-[0.8125rem] text-text-muted">The Tagger reads about <span className="font-semibold text-text-primary">{thousands(tokens)} tokens</span> to list names</p>
-        )}
         {step === 'review' && items.length > 0 && (
           <p className={`mr-auto min-w-0 truncate text-[0.8125rem] ${untyped || missingName ? 'text-status-warning' : 'text-text-muted'}`}>
             {untyped ? `Choose a type for ${plural(untyped, 'entry', 'entries')} to continue.`
