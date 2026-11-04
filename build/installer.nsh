@@ -29,17 +29,17 @@
     !define MUI_FINISHPAGE_RUN_FUNCTION "StartApp"
   !endif
 
-  ; A themed checkbox ignores control colours, so its theme is dropped first.
-  ; The run checkbox is the finish page's only button.
-  Function KallamoFinishShow
-    FindWindow $0 "#32770" "" $HWNDPARENT
-    FindWindow $1 "Button" "" $0
-    System::Call 'uxtheme::SetWindowTheme(p r1, w " ", w " ")'
-    SetCtlColors $1 EEF2F5 011419
-  FunctionEnd
-
   !define MUI_PAGE_CUSTOMFUNCTION_SHOW KallamoFinishShow
   !insertmacro MUI_PAGE_FINISH
+
+  ; Defined after the page, which declares $mui.FinishPage.Run. A themed checkbox ignores
+  ; control colours, so its theme is dropped first.
+  Function KallamoFinishShow
+    !ifndef HIDE_RUN_AFTER_FINISH
+      System::Call 'uxtheme::SetWindowTheme(p $mui.FinishPage.Run, w " ", w " ")'
+      SetCtlColors $mui.FinishPage.Run EEF2F5 011419
+    !endif
+  FunctionEnd
 !macroend
 
 ; The assisted installer has no welcome page unless one is asked for.
