@@ -88,6 +88,7 @@ interface FieldRow {
   ai_access: string;
   value_type?: string;
   options_json?: string | null;
+  ai_guidance?: string | null;
 }
 
 interface KnownEntityAggregate {
@@ -685,16 +686,26 @@ export class NarrativeChatContext {
       WHERE workspaceId = ? AND id IN (${placeholders}) AND status != 'proposed'
     `).all(workspaceId, ...entityIds) as EntityRow[];
     const fields = this.db.prepare(`
-      SELECT type_id, field_key, label, ai_access, value_type, options_json
+      SELECT type_id, field_key, label, ai_access, value_type, options_json, ai_guidance
       FROM worldbuild_field_definitions WHERE workspace_id = ?
     `).all(workspaceId) as FieldRow[];
+    const shown = new Map<string, FieldRow>();
+    const note = (entity: EntityRow, knownKeys?: Set<string>) => {
+      if (expansion === 'summary') return;
+      shownCustomFields(entity, fields, knownKeys).forEach(field => shown.set(`${field.type_id}:${field.field_key}`, field));
+    };
+    const withGuidance = (candidates: ContextCandidate[]) => [
+      ...candidates,
+      ...this.fieldGuidanceCandidates(workspaceId, [...shown.values()])
+    ];
     if (perspective.access !== 'omniscient') {
       const ownerIds = perspective.access === 'subjective'
         ? [perspective.focalSubjectId!]
         : perspective.allowedSubjectIds ?? [];
       if (!ownerIds.length) {
-        return entities.flatMap(entity => {
+        return withGuidance(entities.flatMap(entity => {
           const content = expansion === 'summary' ? composeEntitySummary(entity) : composeEntity(entity, fields);
+          if (content) note(entity);
           return content ? [this.candidate({
             id: `entity:${entity.id}`,
             workspaceId,
@@ -705,7 +716,7 @@ export class NarrativeChatContext {
             epistemic: { kind: 'canon', access: 'public' },
             provenanceIds: [entity.id]
           })] : [];
-        });
+        }));
       }
       const ownCards = this.db.prepare(`
         SELECT cards.card_id AS cardId, cards.owner_id AS sourceOwnerId,
@@ -760,6 +771,7 @@ export class NarrativeChatContext {
       };
       const knownCandidates = [...aggregates.values()].map(aggregate => {
         const cardIds = [...aggregate.cardIds];
+        note(aggregate.entity, aggregate.fieldKeys);
         return this.candidate({
           id: `known-entity:${aggregate.ownerId}:${aggregate.entity.id}`,
           workspaceId,
@@ -790,11 +802,12 @@ export class NarrativeChatContext {
           }));
         }
       }
-      return knownCandidates;
+      return withGuidance(knownCandidates);
     }
-    return entities.flatMap(entity => {
+    return withGuidance(entities.flatMap(entity => {
       const content = expansion === 'summary' ? composeEntitySummary(entity) : composeEntity(entity, fields);
       if (!content) return [];
+      note(entity);
       return [this.candidate({
         id: `entity:${entity.id}`,
         workspaceId,
@@ -804,6 +817,25 @@ export class NarrativeChatContext {
         relevance: 1,
         epistemic: { kind: 'canon', access: 'public' },
         provenanceIds: [entity.id]
+      })];
+    }));
+  }
+
+  // A field's guidance goes once, as a canon note, like the skill ranks: not repeated per dossier.
+  private fieldGuidanceCandidates(workspaceId: string, fields: FieldRow[]): ContextCandidate[] {
+    return fields.flatMap(field => {
+      const guidance = field.ai_guidance?.trim();
+      if (!guidance) return [];
+      const id = `field-guidance:${field.type_id}:${field.field_key}`;
+      return [this.candidate({
+        id,
+        workspaceId,
+        sourceType: 'canon',
+        sourceId: id,
+        content: `Field "${field.label}" (${field.type_id}): ${guidance}`,
+        relevance: 1,
+        epistemic: { kind: 'canon', access: 'public' },
+        provenanceIds: [id]
       })];
     });
   }
@@ -1257,6 +1289,17 @@ function composeKnownEntity(
     lines.push(`${field?.label || nativeFieldLabel(key)}: ${formatNarrativeValue(field ? choiceLabels(field, value) : value)}`);
   }
   return lines.join('\n');
+}
+
+// The custom fields a dossier actually shows: visible, filled and, for a subject, known.
+function shownCustomFields(entity: EntityRow, fields: FieldRow[], knownKeys?: Set<string>): FieldRow[] {
+  const customFields = parseObject(parseObject(entity.data).customFields);
+  return fields.filter(field => {
+    if (field.type_id !== entity.type || field.ai_access === 'hidden') return false;
+    if (knownKeys && !knownKeys.has(`customFields.${field.field_key}`)) return false;
+    const value = customFields[field.field_key];
+    return value !== undefined && value !== null && value !== '';
+  });
 }
 
 // A choice field stores opaque option ids; the model reads the label the user chose.

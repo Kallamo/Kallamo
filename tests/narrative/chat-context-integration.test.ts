@@ -204,6 +204,29 @@ describe('Narrative chat context integration', () => {
     expect(dossier.context).not.toContain(legendary);
   });
 
+  test('sends a shown field guidance once, and never for a hidden or empty field', () => {
+    worldbuild.saveFieldDefinition({
+      projectId: 'workspace-one', typeId: 'Locations', label: 'Ward',
+      valueType: 'short-text', position: 3, aiAccess: 'read-only', aiGuidance: 'A ward is an advantage.'
+    });
+    const material = db.prepare("SELECT * FROM worldbuild_field_definitions WHERE field_key = 'material'").get() as Record<string, unknown>;
+    db.prepare("UPDATE worldbuild_field_definitions SET ai_guidance = 'Material sets how hard it is to break.' WHERE field_key = 'material'").run();
+    db.prepare("UPDATE worldbuild_field_definitions SET ai_guidance = 'Never say this code.' WHERE field_key = 'internal-code'").run();
+    expect(material).toBeTruthy();
+
+    const dossier = context.plan({
+      requestId: 'field-guidance',
+      workspaceId: 'workspace-one',
+      query: 'Tell me about the northern road.',
+      tokenBudget: 1000,
+      items: [{ id: 'chunk-gate', kind: 'workspace-text', source: 'Archive', content: 'The northern road passes through the gate.', relevance: 0.9, entityExpansion: 'dossier' }]
+    });
+
+    expect(dossier.context.split('Material sets how hard it is to break.').length - 1).toBe(1);
+    expect(dossier.context).not.toContain('A ward is an advantage.');
+    expect(dossier.context).not.toContain('Never say this code.');
+  });
+
   test('collapses repeated standard-mode memories while preserving their provenance', () => {
     const summary = 'The same patrol crossed the northern gate before dawn.';
     for (const [id, name] of [['elias', 'Elias'], ['tess', 'Tess']]) {
