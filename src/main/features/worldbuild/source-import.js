@@ -329,6 +329,11 @@ function buildCandidates({ passages, mentions = new Map(), existing = [] }) {
 }
 
 // How a passage is named to the fill: whose text it is first, so a sheet never reads another subject's profile as its own.
-const passageSource = passage => [passage.title || passage.fileName, passage.label].filter(Boolean).join(' · ');
+// A card or lorebook passage is its subject's profile, told from that subject's side, so it says so:
+// another sheet reading it must not take the subject's feelings as its own.
+const passageSource = passage => [
+  passage.subject?.name ? `Profile of ${passage.subject.name}` : passage.title || passage.fileName,
+  passage.label,
+].filter(Boolean).join(' · ');
 
 module.exports = { parseSource, splitPassages, splitSections, buildCandidates, readCardFromPng, passageSource };

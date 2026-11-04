@@ -1808,6 +1808,12 @@ function getSystemLanguageInstruction() {
     return `Write all generated natural-language content in ${language}. Never translate or transliterate proper nouns, canonical names, titles used as names, identifiers, JSON keys, enum values, control markers, or verbatim evidence. Keep each of them exactly as supplied.`;
 }
 
+// Imported cards and documents are often in another language; the sheet still follows the one the person chose.
+function getSourceLanguageInstruction() {
+    const language = String(readAdvancedSettings().systemOutputLanguage || 'English').trim() || 'English';
+    return `The evidence may be written in another language. Every value you write (field values, lore, history, sourcePerspective, targetRole, support, and every statement) is still written in ${language}: translate what you take from the evidence instead of copying its language. Names and verbatim quotes stay as written.`;
+}
+
 const { edgeDetail } = require('./features/worldbuild/relation-dossier');
 // Lets the classifier reuse canonical names instead of coining variants.
 function buildEntityVocab(workspaceId, sourceText = '') {
@@ -2487,6 +2493,7 @@ const ENRICH_RELATION_GUIDANCE = {
     'Factions.leader': 'Only an explicitly established current leader. A member, officer, secretary or envoy is not the leader.',
     'Factions.operatesIn': 'Only an established area of operation, base, territory, or sustained activity of the group itself. Where one member works or lives is not the group\'s base.',
     'Factions.members': 'Only explicit membership; the label must state the supported role when available.',
+    'Factions.relationships': 'Only an explicitly established stance of the group as a whole toward another faction or a person: alliance, rivalry, war, patronage, a debt, a feud. targetRole states what TARGET is to SOURCE (Ally, Rival, Patron, Enemy). value and sourcePerspective state how SOURCE as a group regards TARGET, never one member\'s private feeling. Membership and leadership are not relations.',
     'Events.happenedAt': 'Only a location where the event explicitly occurred.',
     'Events.involved': 'Only a character explicitly participating in or materially affected by the event, not merely mentioned nearby.',
 };
@@ -4735,6 +4742,8 @@ const ENRICH_RELATIONS = {
         { key: 'leader',     label: 'Leader',            relType: 'led_by',      targetTypes: ['Characters', 'Creatures'], from: 'self',   single: true },
         { key: 'operatesIn', label: 'Area of operation', relType: 'operates_in', targetType: 'Locations',  from: 'self',   single: false },
         { key: 'members',    label: 'Member',            relType: 'member_of',   targetTypes: ['Characters', 'Creatures'], from: 'target', single: false, labeled: true },
+        // The sheet's Relations: how the group stands toward another group or a person.
+        { key: 'relationships', label: 'Relation', relType: 'related_to', targetTypes: ['Factions', 'Characters', 'Creatures'], from: 'self', single: false, labeled: true, detailed: true },
     ],
     Races: [],
     Events: [
@@ -5332,6 +5341,8 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
     const extraPasses = new Map();
     const passTokens = new Map();
     const runRelationships = new Map();
+    // One direction of one bond is proposed once per run, whichever sheet's passage found it first.
+    const runRelationshipPairs = new Set();
     let stoppedEarly = false;
     let cancelled = false;
     for (let i = 0; i < targets.length; i++) {
@@ -5591,6 +5602,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
         const kinds = ['field', 'link', ...(allowLore ? ['history'] : []), ...(skillContext ? ['skill'] : []), 'fact', 'awareness', 'knowledge', 'belief', 'memory', 'relationship'];
         const systemPrompt =
             getSystemLanguageInstruction() + "\n" +
+            getSourceLanguageInstruction() + "\n" +
             `You maintain a story's world bible. Update the record for one ${ent.type.replace(/s$/, '')} named "${ent.canonicalName}" ` +
             `using the CURRENT RECORD plus ONLY the NEW STORY EVIDENCE provided. Extract supported changes and narrative findings; lore is composed in a separate step from your history findings.\n` +
             `Return one valid JSON object and nothing else. Use {"changes":[]} when nothing should change. Every change uses this fixed shape:\n${responseShape}\n` +
@@ -5619,6 +5631,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
             `- Only link two entities when the text directly establishes that exact relation. A name, title, accent, or appearance in a scene does not establish origin, residence, or membership. Only nest a location inside another when the passages explicitly say one place is physically within the other.\n` +
             `- RELATIONSHIP DIRECTION: SOURCE is always the current record (${ent.canonicalName}); TARGET is the named related entity. targetRole must state what TARGET is to SOURCE (Dorian to Tess: targetRole "Daughter"; Tess to Dorian: targetRole "Father"). value and sourcePerspective describe only how SOURCE feels about and relates to TARGET. Never return TARGET's feelings toward SOURCE. The reciprocal direction belongs exclusively to TARGET's own record.\n` +
             `- Return a relationship only when the evidence shows SOURCE's own attitude, bond, or role toward TARGET. Fighting, meeting, or sharing a scene once is not a relationship. targetRole is a complete short role of one to four words, never a sentence.\n` +
+            `- PERSPECTIVE: a feeling belongs to whoever the text says feels it. A passage labelled "Profile of X", and any passage told from X's point of view, describes X's feelings toward others. When ${ent.canonicalName} is not X, such a passage supports a relationship of ${ent.canonicalName} only where it states ${ent.canonicalName}'s own feeling toward X (as in "${ent.canonicalName} adores X"). An act alone (${ent.canonicalName} helped, saved, trained or fought beside X) is a fact or a memory, never a relationship value, unless the passage also states how ${ent.canonicalName} feels; X's gratitude, love, admiration or fear toward ${ent.canonicalName} is X's relationship, never ${ent.canonicalName}'s, and gives no value or sourcePerspective for ${ent.canonicalName}. Likewise, how X sees a third character is never how ${ent.canonicalName} sees them. When the passage is ${ent.canonicalName}'s own profile or told from ${ent.canonicalName}'s side, it is the main evidence for ${ent.canonicalName}'s bonds: return every relationship of ${ent.canonicalName} it states, including devotion, gratitude, loyalty and protectiveness toward others. In every relationship, sourcePerspective says how ${ent.canonicalName} sees TARGET; never write TARGET's feelings toward ${ent.canonicalName} in it, and set value from ${ent.canonicalName}'s side alone.\n` +
             `- An existing relationship (in Current links and relationships or EXISTING RELATIONSHIPS OF OTHERS) is edited, not rewritten: return its targetRole exactly as it is unless the bond itself changed in kind, such as an ally becoming an enemy; write sourcePerspective as the current perspective carried forward with only what the evidence changes; move score from its current value by what the evidence shows.\n` +
             `- ${RELATIONSHIP_SCALE_GUIDE.replace(/\n/g, '\n  ')}\n` +
             `- Every narrative change must state ownership explicitly. subjectId is the entity whose mind, memory, knowledge, belief, fact, or perspective owns the change. perspectiveOwnerId must equal subjectId for relationships. targetId is the existing entity the statement or relationship is about. Use the IDs from the candidate context, never infer ownership from the current record.\n` +
@@ -5850,13 +5863,43 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
             };
             const earlierRelationships = runRelationships.get(ent.id) || new Map();
             const relationshipKey = change => foldText(change.target || change.targetId || '');
+            // The pair is read by owner and target, so a sheet that proposes someone else's bond with it
+            // meets the one that sheet already proposed.
+            const relationshipPair = change => {
+                const targetId = all.some(entity => entity.id === change.targetId)
+                    ? change.targetId
+                    : (relationshipSpec && resolveRelationTarget(change.target, relationshipSpec, workspaceId)) || '';
+                const target = targetId || relationshipKey(change);
+                return target ? `${change.subjectId || ent.id}\u0000${target}` : '';
+            };
+            // The same pairs the sheets allow: a being relates to beings, and a faction to factions and
+            // beings. A place, item or species neither holds a relationship nor is the target of one.
+            const isBeing = entity => Boolean(entity) && (entity.type === 'Characters'
+                || (entity.type === 'Creatures' && (entity.data?.scope || 'individual') !== 'group'));
+            const canRelate = (owner, target) => Boolean(owner && target) && owner.id !== target.id
+                && (isBeing(owner) ? isBeing(target) : owner.type === 'Factions' && (isBeing(target) || target.type === 'Factions'));
+            const isAllowedBond = change => {
+                const owner = all.find(entity => entity.id === (change.subjectId || ent.id));
+                const name = foldText(change.target || '');
+                const target = all.find(entity => entity.id === change.targetId)
+                    || (name ? all.find(entity => [entity.canonicalName, ...(entity.aliases || [])].some(alias => foldText(alias) === name)) : null);
+                return canRelate(owner, target);
+            };
+            const proposedBefore = change => {
+                const pair = relationshipPair(change);
+                if (!pair) return false;
+                if (runRelationshipPairs.has(pair)) return true;
+                runRelationshipPairs.add(pair);
+                return false;
+            };
             const narrativeChanges = [...parsed.narrative, ...relationshipLinkChanges].filter(change =>
                 !(ent.type === 'Characters' && change.kind === 'fact')
                 && change.support
                 && change.evidence.some(id => validEvidenceIds.has(id))
                 && !isEmptyRelationship(change)
-                // A relationship an earlier pass of this run already proposed is not proposed twice.
-                && !(change.kind === 'relationship' && earlierRelationships.has(relationshipKey(change)))
+                && (change.kind !== 'relationship' || isAllowedBond(change))
+                // A relationship already proposed in this run, by this sheet or another, is not proposed twice.
+                && !(change.kind === 'relationship' && proposedBefore(change))
             );
             for (const change of narrativeChanges) {
                 if (change.kind !== 'relationship' || !relationshipKey(change)) continue;
@@ -5923,7 +5966,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                             .slice(0, 6000);
                         // A long lore is extended instead of rewritten: a full rewrite stops fitting the output limit.
                         const appendLore = loreNeedsAppend(ent.lore, maxTokens);
-                        const loreSystemPrompt = `${getSystemLanguageInstruction()}\n${appendLore
+                        const loreSystemPrompt = `${getSystemLanguageInstruction()}\n${getSourceLanguageInstruction()}\n${appendLore
                             ? 'You extend grounded world-bible lore with new paragraphs from validated findings.'
                             : 'You compose grounded cumulative world-bible lore from validated findings.'} Never invent or collapse an established entity into one event.`;
                         const lorePrompt = (appendLore ? buildLoreAppendPrompt : buildLorePrompt)({

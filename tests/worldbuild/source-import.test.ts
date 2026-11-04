@@ -57,7 +57,7 @@ describe('parseSource', () => {
     const all = parsed.units.map((unit: any) => unit.text).join('\n');
     for (const left of ['Welcome back', 'Never break character', 'Hi']) expect(all).not.toContain(left);
     expect(entry.subject).toMatchObject({ name: 'The Crossroads Inn', aliases: ['the crossroads', 'Crossroads Inn'], type: null });
-    expect(passageSource(entry)).toBe('The Crossroads Inn · entry');
+    expect(passageSource(entry)).toBe('Profile of The Crossroads Inn · entry');
     expect(parsed.entries).toBe(1);
   });
 
@@ -78,7 +78,7 @@ describe('parseSource', () => {
       ['Fears', 'Deep water.'],
     ]);
     expect(parsed.units[0].subject.aliases).toEqual(['Tamsin Hale', 'Old Tam']);
-    expect(passageSource(parsed.units[1])).toBe('Tam · Bio');
+    expect(passageSource(parsed.units[1])).toBe('Profile of Tam · Bio');
   });
 
   test('prefers the V3 chunk and falls back to the V2 one when it is broken', () => {
