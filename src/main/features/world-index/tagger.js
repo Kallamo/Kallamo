@@ -127,6 +127,7 @@ async function runModelTagger({
   languageInstruction = '',
   send,
   onProgress = null,
+  shouldCancel = null,
   concurrency = TAGGER_CONCURRENCY,
   maxTokens = TAGGER_MAX_TOKENS
 }) {
@@ -185,6 +186,12 @@ async function runModelTagger({
   };
 
   const runBatch = async (batch) => {
+    // A stop takes effect between requests; the one already sent still finishes.
+    if (shouldCancel && shouldCancel()) {
+      for (const record of batch) outcomes.set(record.id, { status: 'cancelled', error: null, rejected: 0 });
+      report(batch.length);
+      return;
+    }
     let result;
     try {
       result = await attempt(batch);

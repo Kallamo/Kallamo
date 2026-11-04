@@ -431,6 +431,17 @@ function groupKnowledgeCardRows(rows) {
   return [...cards.values()];
 }
 
+// What happened to the place this turn, so the report can say why the location stayed put.
+function summarizeSceneLocation({ analyzed, fromLocationId = null, rejected = null, change = null }) {
+  if (!analyzed) return { outcome: 'not-analyzed', fromLocationId };
+  if (rejected) {
+    return { outcome: 'rejected', reason: rejected.reason, fromLocationId, locationId: rejected.locationId ?? null };
+  }
+  const locationId = change?.patch?.locationId;
+  if (!locationId) return { outcome: 'kept', fromLocationId };
+  return { outcome: change.status === 'applied' ? 'moved' : 'awaiting-approval', fromLocationId, locationId };
+}
+
 function hasEpistemicDomain(domains) {
   return domains.some(domain => EPISTEMIC_DOMAINS.has(domain));
 }
@@ -451,4 +462,5 @@ module.exports = {
   resolveNarrativeRouting,
   resolveSceneCast,
   selectPerspectiveRecords,
+  summarizeSceneLocation,
 };

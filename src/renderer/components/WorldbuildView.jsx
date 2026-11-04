@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import {
   Plus, Search, BookOpen, Package, Users, EyeOff, 
   Trash2, Save, X, Pencil, Check, Link2, Globe, Tag, ScrollText, Info, Replace,
-  RefreshCw, Upload, Download, ChevronRight, ChevronDown, MoreHorizontal, ListChecks, Loader2, Gem, 
+  RefreshCw, Sparkles, Upload, Download, ChevronRight, ChevronDown, MoreHorizontal, ListChecks, Loader2, Gem, 
   NotebookText, Backpack, Braces, AlertTriangle, LayoutTemplate, BookCheck, CircleHelp, ChevronLeft, UserMinus, Undo2, Crown, AlignLeft, CalendarDays, CalendarRange, Drama, GripVertical, Gamepad2, IdCard, Landmark, Scale, Lightbulb, ListTree, LogOut, MapPinned, Merge, PencilLine, ScanEye, ScanFace, Shield, UserRound, ImagePlus, Image as ImageIcon, Crop, Flag, MapPin, ChevronsDownUp, ChevronsUpDown,
 } from 'lucide-react';
 import { AiGlyph, PolicyOpenGlyph, PolicyReviewGlyph, PolicyLockedGlyph, KnowledgeGlyph, ConnectionsGlyph, OccurrencesGlyph } from './ui/glyphs';
@@ -28,6 +28,7 @@ import SearchableSelect from './ui/SearchableSelect';
 import ConfirmDialog from './ui/ConfirmDialog';
 import ExportWorldbuildModal from './modals/ExportWorldbuildModal';
 import ImportWorldbuildModal, { ImportWorldbuildDone } from '../features/worldbuild/ImportWorldbuildModal';
+import CreateWithAiModal, { CreateWithAiDone } from '../features/worldbuild/CreateWithAiModal';
 import { buildLocationTree } from '../features/worldbuild/locationTree';
 import EntityPickerButton from '../features/worldbuild/EntityPickerButton';
 import { useSidebarWidth } from '../features/worldbuild/useSidebarWidth';
@@ -766,6 +767,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const [playerEntityId, setPlayerEntityId] = useState(null);
   const [worldImport, setWorldImport] = useState(null);
   const [importDone, setImportDone] = useState(null);
+  const [createWithAi, setCreateWithAi] = useState(false);
+  const [createWithAiDone, setCreateWithAiDone] = useState(null);
+  // The fill started from Create with AI, so its update ends in that summary instead of a toast.
+  const createWithAiFillRef = useRef(null);
   const [rulesMeta, setRulesMeta] = useState('');
   // The played character's sheet says so while the workspace is in Roleplay; the Rules tile
   // summarizes the world's rules.
@@ -1330,10 +1335,17 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     setEnrichRunTotal(enrichProgressRef.current?.total || 0);
     setEnriching(false); setEnrichProgress(null); setEnrichStopping(false);
     if (res && res.workspaceId && res.workspaceId !== workspaceId) return;
+    const fromCreateWithAi = createWithAiFillRef.current;
+    createWithAiFillRef.current = null;
     if (res && res.success) {
       await load();
       await loadEnrichErrors();
       if (selected?.id) await refreshSelected(selected.id);
+      if (fromCreateWithAi) {
+        if (res.failed) setShowEnrichErrors(true);
+        setCreateWithAiDone({ summary: fromCreateWithAi, result: res });
+        return;
+      }
       const bits = [`${res.updated} updated`];
       if (res.staged) bits.push(`${res.staged} staged for review`);
       if (res.upToDate) bits.push(`${res.upToDate} with no unprocessed evidence`);
@@ -1398,8 +1410,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     // only surface a failure to even start the run (e.g. one is already in flight).
     try {
       const r = await electronAPI.enrichEntities(workspaceId, { entityIds: Array.isArray(entityIds) ? entityIds : undefined });
-      if (r && r.success === false) { setEnriching(false); showToast(`Update failed: ${r.error || 'unknown error'}`, 'error'); }
-    } catch (e) { setEnriching(false); showToast(`Update failed: ${e.message}`, 'error'); }
+      if (r && r.success === false) { setEnriching(false); createWithAiFillRef.current = null; showToast(`Update failed: ${r.error || 'unknown error'}`, 'error'); }
+    } catch (e) { setEnriching(false); createWithAiFillRef.current = null; showToast(`Update failed: ${e.message}`, 'error'); }
   };
   const stopEnrichment = async () => {
     setEnrichStopping(true);
@@ -2390,6 +2402,31 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           onClose={() => setImportDone(null)}
           onReview={() => { setImportDone(null); setReviewFilter('proposed'); }}
         />, document.body)}
+      {createWithAi && (
+        <CreateWithAiModal
+          electronAPI={electronAPI}
+          workspaceId={workspaceId}
+          workspaceName={chat?.title}
+          hasSystemAi={hasSystemAi}
+          updating={enriching}
+          showToast={showToast}
+          onClose={() => setCreateWithAi(false)}
+          onFill={async (result) => {
+            setCreateWithAi(false);
+            await load();
+            if (!result.fillIds?.length) { setCreateWithAiDone({ summary: result, result: null }); return; }
+            createWithAiFillRef.current = result;
+            await runEnrichment(result.fillIds);
+          }}
+        />
+      )}
+      {createWithAiDone && (
+        <CreateWithAiDone
+          {...createWithAiDone}
+          onClose={() => setCreateWithAiDone(null)}
+          onReview={() => { setCreateWithAiDone(null); setReviewFilter('updates'); }}
+        />
+      )}
       {bulkDialog && (
         <ConfirmDialog
           tone={bulkDialog.tone}
@@ -2483,6 +2520,15 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                   </button>
                 );
               })}
+              <MenuSeparator />
+              <button type="button" role="menuitem" data-tour="wb-create-with-ai" onClick={() => { setShowCreate(false); setCreateWithAi(true); }}
+                className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-surface-hover focus-visible:bg-surface-hover focus-visible:outline-none">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-status-info/30 bg-status-info/15 text-status-info"><Sparkles className="h-3.5 w-3.5" aria-hidden="true" /></span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-semibold text-text-primary">Create with AI</span>
+                  <span className="block truncate text-xs text-text-muted">From cards, lorebooks or notes</span>
+                </span>
+              </button>
             </Menu>
           </div>
           <div role="radiogroup" aria-label="Filter by type" className="flex items-stretch justify-between gap-0.5">

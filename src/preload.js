@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   // --- TITLEBAR CONTROLS ---
@@ -256,6 +256,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (event, data) => callback(data);
     ipcRenderer.on('enrich-entities-complete', listener);
     return () => ipcRenderer.off('enrich-entities-complete', listener);
+  },
+  pickImportSources: () => ipcRenderer.invoke('pick-import-sources'),
+  inspectImportSources: ({ files = [], pasted = null } = {}) => ipcRenderer.invoke('inspect-import-sources', {
+    filePaths: files.map(file => webUtils.getPathForFile(file)).filter(Boolean),
+    pasted,
+  }),
+  discardImportSources: (keys, workspaceId = null) => ipcRenderer.invoke('discard-import-sources', { keys, workspaceId }),
+  discoverImportSources: (workspaceId, keys) => ipcRenderer.invoke('discover-import-sources', { workspaceId, keys }),
+  cancelDiscoverImportSources: (workspaceId) => ipcRenderer.invoke('cancel-discover-import-sources', { workspaceId }),
+  estimateImportFill: (workspaceId, decisions) => ipcRenderer.invoke('estimate-import-fill', { workspaceId, decisions }),
+  applyImportSources: (workspaceId, decisions, keys) => ipcRenderer.invoke('apply-import-sources', { workspaceId, decisions, keys }),
+  onImportSourcesProgress: (callback) => {
+    const listener = (event, data) => callback(data);
+    ipcRenderer.on('import-sources-progress', listener);
+    return () => ipcRenderer.off('import-sources-progress', listener);
   },
   getEntityLinks: (id, direction, relType) => ipcRenderer.invoke('get-entity-links', { id, direction, relType }),
   setEntityLink: (payload) => ipcRenderer.invoke('set-entity-link', payload),

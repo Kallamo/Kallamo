@@ -9,6 +9,8 @@ export interface ModalProps {
   subtitle?: ReactNode;
   /** Replaces the icon, for dialogs that open on a thing with its own medallion. */
   leading?: ReactNode;
+  /** Shown at the right of the header, before the close button. */
+  aside?: ReactNode;
   closeOnOverlay?: boolean;
   closeOnEsc?: boolean;
   showClose?: boolean;

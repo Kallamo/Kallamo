@@ -1,4 +1,5 @@
 const { comparableText, isWeakTextReplacement } = require('./entity-update-contract');
+const { limitToNextBand } = require('../../../../dist-main/narrative/relationship-bands');
 
 function discardEnrichPending(currentData) {
   const pending = currentData?._enrichPending;
@@ -35,12 +36,10 @@ function normalizeRelationshipLabel(value) {
   return normalized || null;
 }
 
-const RELATIONSHIP_STEP = 25;
-const REVERSAL_STEP = 50;
 const REVERSAL_FLOOR = 20;
 
 // An existing relationship is edited from what it already says. Documents are read out of order,
-// so one run moves the score a bounded step, and only a reversal (ally to enemy) may rename it.
+// so one run moves the score at most into the next band, and only a reversal (ally to enemy) may rename it.
 function resolveRelationshipUpdate(current, proposed) {
   const requested = Math.max(-100, Math.min(100, Math.round(Number(proposed.value) || 0)));
   const title = String(proposed.title || '').trim();
@@ -49,9 +48,7 @@ function resolveRelationshipUpdate(current, proposed) {
   const currentValue = Math.round(Number(current.value) || 0);
   const reversal = (currentValue >= REVERSAL_FLOOR && requested <= -REVERSAL_FLOOR)
     || (currentValue <= -REVERSAL_FLOOR && requested >= REVERSAL_FLOOR);
-  const step = reversal ? REVERSAL_STEP : RELATIONSHIP_STEP;
-  const delta = requested - currentValue;
-  const value = currentValue + Math.sign(delta) * Math.min(Math.abs(delta), step);
+  const value = limitToNextBand(currentValue, requested);
   const currentTitle = String(current.title || '').trim();
   const nextTitle = currentTitle && !reversal ? currentTitle : title || currentTitle;
   const currentDescription = String(current.description || '').trim();

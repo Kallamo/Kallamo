@@ -47,6 +47,28 @@ export const prettyJsonText = text => {
 const ROLE_NAMES = { user: 'User', assistant: 'Assistant', system: 'System' };
 export const historyRoleName = role => ROLE_NAMES[role] || role;
 
+const SCENE_REJECTIONS = {
+  'no-completed-movement': to => `the analysis named ${to}, but the move was not judged complete`,
+  'unreachable-location': to => `${to} is outside the current region`,
+  'unnamed-destination': to => `the turn never names ${to}`,
+  'manual-updates': () => 'scene updates are set to manual',
+  'invalid-change': () => 'the scene change could not apply'
+};
+
+// One line on where the scene ended up, readable enough to pass along without the story.
+export const describeSceneLocation = (summary, names) => {
+  if (!summary?.outcome) return null;
+  const place = id => (id ? names?.get(id) || 'an unlisted place' : 'no location');
+  const from = place(summary.fromLocationId);
+  const to = place(summary.locationId);
+  if (summary.outcome === 'not-analyzed') return 'Not checked this turn: triage did not mark the scene';
+  if (summary.outcome === 'kept') return `Kept at ${from}: the analysis reported no move`;
+  if (summary.outcome === 'moved') return `Moved from ${from} to ${to}`;
+  if (summary.outcome === 'awaiting-approval') return `Move to ${to} is waiting for approval`;
+  const why = SCENE_REJECTIONS[summary.reason];
+  return `Stayed at ${from}: ${why ? why(to) : String(summary.reason || 'rejected').replace(/-/g, ' ')}`;
+};
+
 export const formatHistory = history => (history || [])
   .map(message => `[${historyRoleName(message.role)}]\n${message.content}`)
   .join('\n\n');

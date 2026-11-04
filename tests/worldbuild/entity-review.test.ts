@@ -139,14 +139,14 @@ describe('editing an existing relationship', () => {
       .toEqual({ title: 'Rival', value: -30, description: 'Brann resents her.' });
   });
 
-  test('keeps the title and moves the score one bounded step', () => {
+  test('keeps the title and moves the score into the next band only', () => {
     const update = resolveRelationshipUpdate(current, { title: 'Trusted teacher', value: 95, description: `${current.description} After the trial he defends her openly.` });
-    expect(update).toEqual({ title: 'Mentor', value: 85, description: `${current.description} After the trial he defends her openly.` });
+    expect(update).toEqual({ title: 'Mentor', value: 89, description: `${current.description} After the trial he defends her openly.` });
   });
 
-  test('only a reversal may rename the bond, still within a step', () => {
+  test('only a reversal may rename the bond, still one band at a time', () => {
     expect(resolveRelationshipUpdate(current, { title: 'Betrayer', value: -60, description: `${current.description} Then she sold the forge.` }))
-      .toEqual({ title: 'Betrayer', value: 10, description: `${current.description} Then she sold the forge.` });
+      .toEqual({ title: 'Betrayer', value: 0, description: `${current.description} Then she sold the forge.` });
   });
 
   test('keeps the current perspective when the new one drops most of it', () => {

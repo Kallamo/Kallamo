@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Activity, ChevronDown, ChevronRight, ChevronUp, Copy } from 'lucide-react';
 import { describeSpanCheck, formatFrameTime } from '../frame-format';
 import {
+  describeSceneLocation,
   diagnosticText,
   formatAgenticTrace,
   formatGenerationRequests,
@@ -570,11 +571,13 @@ function NarrativeView({ debug, names, copy }) {
   const unnamed = entityIds.length - named.length;
   const frame = state.timeFrame;
   const spanNote = describeSpanCheck(frame?.advance?.spanCheck || triage.timeAdvance?.spanCheck);
+  const sceneLocation = describeSceneLocation(analysis?.sceneLocation, names);
+  const sceneRejected = analysis?.sceneLocation?.outcome === 'rejected';
   const contextUsage = state.contextUsage?.analysis || state.contextUsage?.triage || (state.contextUsage?.sections ? state.contextUsage : null);
   const warnings = [
     ...(analysis?.skippedEventReasons || []).map(reason => `Event skipped: ${humanize(reason)}`),
     ...(analysis?.filteredOperationReasons || []).map(item => `${humanize(item.key.replace(':', ' · '))}${item.count > 1 ? ` ×${item.count}` : ''}`),
-    analysis?.rejectedScenePatch && `Scene change rejected: ${humanize(analysis.rejectedScenePatch)}`,
+    !analysis?.sceneLocation && analysis?.rejectedScenePatch && `Scene change rejected: ${humanize(analysis.rejectedScenePatch)}`,
     spanNote?.warning && spanNote.text,
     analysis?.invalidInventoryChanges > 0 && `${analysis.invalidInventoryChanges} inventory ${analysis.invalidInventoryChanges === 1 ? 'change' : 'changes'} could not apply`
   ].filter(Boolean);
@@ -622,6 +625,13 @@ function NarrativeView({ debug, names, copy }) {
           {(routing.forceReasons || []).length > 0 && <p className="mt-1.5 text-[0.6875rem] text-status-warning">{routing.forceReasons.map(humanize).join(' · ')}</p>}
         </div>
       </div>
+
+      {sceneLocation && (
+        <div>
+          <SectionTitle>Location</SectionTitle>
+          <p className={`text-xs select-text ${sceneRejected ? 'text-status-warning' : 'text-text-secondary'}`}>{sceneLocation}</p>
+        </div>
+      )}
 
       {Array.isArray(triage.sceneMemory) && triage.sceneMemory.length > 0 && (
         <div>

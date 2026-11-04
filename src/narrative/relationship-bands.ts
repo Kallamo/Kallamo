@@ -169,6 +169,42 @@ export function limitRelationshipChange({ current, requested, impact, cause }: R
 }
 
 /**
+ * What each band means, for every prompt that asks for a value, so the same bond gets the same
+ * number from a turn of play and from a document. The edges are the ones the tables move by.
+ */
+export const RELATIONSHIP_SCALE_GUIDE = [
+  'RELATIONSHIP SCALE. A value says how close SOURCE feels to TARGET; the same bond always sits in the same band.',
+  '0: neutral, they only know of each other.',
+  '1 to 49: an ordinary relationship or a good start. -1 to -49: friction, dislike or distrust.',
+  '50 to 74: friendship. -50 to -74: open enmity.',
+  '75 to 89: closeness, such as chosen family or deep trust. -75 to -89: hostility, wanting the other harmed.',
+  '90 to 100: a rare, nearly unconditional bond. -90 to -100: a rare, mortal hatred.',
+  'Use 90 or more, or -90 or less, only when the evidence states a bond or hatred of that depth outright.'
+].join('\n');
+
+/** Bands in order along the scale, from mortal hatred to the rarest bond. */
+const SCALE_BANDS: Array<[number, number]> = [
+  [-100, -90], [-89, -75], [-74, -50], [-49, -1], [0, 49], [50, 74], [75, 89], [90, 100]
+];
+
+function scaleBand(value: number): number {
+  return SCALE_BANDS.findIndex(([low, high]) => value >= low && value <= high);
+}
+
+/**
+ * Documents are read out of order and carry no story time, so one reading moves an existing value
+ * at most into the next band toward what it asks for, never across two.
+ */
+export function limitToNextBand(current: number, requested: number): number {
+  const start = Math.round(clamp(current));
+  const target = Math.round(clamp(requested));
+  const direction = Math.sign(target - start);
+  if (!direction) return start;
+  const reach = SCALE_BANDS[Math.max(0, Math.min(SCALE_BANDS.length - 1, scaleBand(start) + direction))];
+  return direction > 0 ? Math.min(target, reach[1]) : Math.max(target, reach[0]);
+}
+
+/**
  * Whether this cause may still move this pair today: some causes only once per day of the story.
  * `usedToday` says whether the same cause already moved the same pair on the same story day.
  */

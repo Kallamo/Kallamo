@@ -56,6 +56,7 @@ const { NARRATIVE_TRIAGE_SCHEMA, NARRATIVE_STATE_SCHEMA } = require('../../dist-
 const { findReachableLocations, isNestedLocation, locationSizesOf, travelCategory } = require('../../dist-main/main/features/worldbuild/location-graph');
 const { findByReference } = require('../../dist-main/main/features/narrative/rule-keys');
 const { missingSpoilers } = require('../../dist-main/shared/spoilers');
+const { RELATIONSHIP_SCALE_GUIDE } = require('../../dist-main/narrative/relationship-bands');
 const {
     compactNarrativeManifest,
     resolveSceneCast,
@@ -64,7 +65,8 @@ const {
     hasEpistemicDomain,
     resolveAnalysisHolders,
     resolveNarrativeRouting,
-    selectPerspectiveRecords
+    selectPerspectiveRecords,
+    summarizeSceneLocation
 } = require('./features/narrative/narrative-state-routing');
 const { proposalDataForMention } = require('./features/world-index/tagger-response');
 const { runModelTagger } = require('./features/world-index/tagger');
@@ -2474,19 +2476,26 @@ const ENRICH_RELATION_GUIDANCE = {
     'Characters.locations': 'Only a persistent meaningful connection, such as residence, origin, rule, or established base; not presence in one scene.',
     'Characters.relationships': 'Only an explicitly established directional personal relationship. targetRole states what TARGET is to SOURCE. value and sourcePerspective state how SOURCE feels about and relates to TARGET.',
     'Creatures.relationships': 'Only an explicitly established directional personal relationship involving a specific creature. targetRole states what TARGET is to SOURCE. value and sourcePerspective state how SOURCE feels about and relates to TARGET.',
-    'Locations.inside': 'Only explicit physical containment inside another location, never proximity, jurisdiction, association, or travel between places.',
-    'Locations.leader': 'Only explicit ownership, leadership, or governance of the location.',
+    'Locations.inside': 'Only explicit physical containment inside another location, never proximity, jurisdiction, association, or travel between places. SOURCE is the smaller place and TARGET the larger one around it: a nation, region or city is never inside a building or a smaller place.',
+    'Locations.leader': 'Only explicit ownership, leadership, or governance of the location. Working, serving, living, studying or being raised there, or being affiliated with it, is not leadership.',
     'Items.creator': 'Only the explicitly established creator or maker.',
     'Items.owner': 'Only current explicit ownership; use, custody, discovery, or theft alone does not prove ownership.',
     'Items.currentLocation': 'Only the explicit current world location of this unique item. Do not propose it when the item is currently held in an individual inventory.',
     'Items.foundIn': 'For item types only: explicit places where the type is found, produced, or gathered.',
     'Items.soldIn': 'For item types only: explicit places where the type is normally sold.',
     'Creatures.habitat': 'Only an explicitly established natural or habitual location, not a single encounter site.',
-    'Factions.leader': 'Only an explicitly established current leader.',
-    'Factions.operatesIn': 'Only an established area of operation, base, territory, or sustained activity.',
+    'Factions.leader': 'Only an explicitly established current leader. A member, officer, secretary or envoy is not the leader.',
+    'Factions.operatesIn': 'Only an established area of operation, base, territory, or sustained activity of the group itself. Where one member works or lives is not the group\'s base.',
     'Factions.members': 'Only explicit membership; the label must state the supported role when available.',
     'Events.happenedAt': 'Only a location where the event explicitly occurred.',
     'Events.involved': 'Only a character explicitly participating in or materially affected by the event, not merely mentioned nearby.',
+};
+
+const ENRICH_RELATION_DIRECTION = {
+    'Locations.inside': name => `TARGET must be a larger place that physically contains ${name}; if ${name} contains the candidate instead, return nothing.`,
+    'Locations.leader': name => `TARGET must be someone who rules, governs or owns ${name} itself.`,
+    'Factions.operatesIn': name => `TARGET must be a place where ${name} as a group is based or active.`,
+    'Factions.leader': name => `TARGET must be the one who leads ${name}.`,
 };
 
 const ENTITY_ENRICHMENT_SCHEMA_VERSION = 'semantic-v8-field-coverage';
@@ -3198,6 +3207,15 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     const scenePatch = buildNarrativeScenePatch(scene, resolved.scenePatch, narrativeIntroductions, narrativeSignals, {
         triageMarkedScene: Array.isArray(triage?.types) && triage.types.includes('scene')
     });
+    // A destination dropped for lack of a completed move is reported, so the report says why the place stayed.
+    const reportedLocationId = resolved.scenePatch?.locationId;
+    if (reportedLocationId && reportedLocationId !== (scene?.locationId ?? null) && !Object.hasOwn(scenePatch, 'locationId')) {
+        rejectedSceneChange = {
+            reason: 'no-completed-movement',
+            locationId: reportedLocationId,
+            fromLocationId: scene?.locationId ?? null
+        };
+    }
     // The analysis may have moved people already; the conversation rules apply to the cast it left.
     if (castSignals && scene && !Object.hasOwn(scenePatch, 'locationId')) {
         const cast = {
@@ -3347,6 +3365,11 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             });
             changes.push({ kind: 'scene', changeId: change.id, ...change });
         } catch (error) {
+            rejectedSceneChange ??= {
+                reason: roleplaySettings.defaultUpdatePolicy === 'manual' ? 'manual-updates' : 'invalid-change',
+                locationId: scenePatch.locationId ?? null,
+                fromLocationId: scene?.locationId ?? null
+            };
             console.warn('[Roleplay State] Ignored invalid scene change:', error.message);
         }
     }
@@ -3484,6 +3507,12 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
                 generatedContactEvents: generatedContactEventCount,
                 scenePatch: Boolean(routedResult.scenePatch && Object.keys(routedResult.scenePatch).length),
                 rejectedScenePatch: rejectedSceneChange?.reason ?? null,
+                sceneLocation: summarizeSceneLocation({
+                    analyzed: shouldAnalyzeScene,
+                    fromLocationId: scene?.locationId ?? null,
+                    rejected: rejectedSceneChange,
+                    change: changes.find(change => change.kind === 'scene' && change.patch?.locationId)
+                }),
                 overflowEvents: overflowEventCount,
                 filteredOperations: narrativeRejections.length,
                 filteredOperationReasons: summarizeNarrativeRejections(narrativeRejections)
@@ -3914,6 +3943,7 @@ Causes that never move it: mood, compliance, instruction, presence. Omit the ope
 Awareness requires demonstrated interaction, recognition, testimony, discovery, conscious possession, or a relationship. Shared presence is insufficient. Grant knowledge only when the subject actually acquires the exact proposition in this turn. Set acquisition from how they came by it: participant or witness for first-hand perception, reported when someone told them, inferred when they reasoned it out. Reading a written text in the scene counts as being told by its author: use reported, with the author's id in informantIds when the author is known, and record what the text claims as the author's claim, not as fact. Return informantIds only with reported acquisition, naming the supplied ids of whoever told them, and omit the field otherwise. A subject is never their own informant, and never records knowledge about themselves unless the category is secret, identity or intent. Narrator-only information, unnoticed events, private thoughts, vague implication, and contextual availability are not character knowledge. Use belief for rumors, deception, disputed claims, suspicion, and unsupported inference. When a speaker reports observations and a personal theory, listeners gain reported Knowledge of the observations and of the speaker's claim; only the speaker receives the Belief unless a listener explicitly accepts it. Existing Awareness in currentKnowledgeCards is sufficient; do not repeat it only to make knowledge valid. Group knowledge requires explicit collective communication or a shared source. Do not union member knowledge. A Faction that learns through one of its own uses reported acquisition with that member in informantIds. Knowledge held by a Faction is institutional and never becomes a member's own record automatically: when a scene shows a member being told what the group holds, record it for that member with reported acquisition naming who told them.
 A proposition object is a statement in words, never an id and never a bare key. When an object names an entity, use its supplied id; otherwise write plain prose. Scene membership, position and current activity belong to scenePatch alone and never to a fact, knowledge or belief, whatever the predicate is called. A perception shared by everyone present, withheld from nobody, and without later consequence is already carried by the scene and needs no record.
 Relationship changes only the directional numeric bar. Never return a title or description. currentScene.playerEntityId identifies the Player. The Player's feelings are unknowable: never emit a relationship operation whose sourceEntityId is the Player. You may emit Awareness with the Player as subject or target. When an NPC is explicitly presented to the Player, record Player-to-NPC Awareness, NPC-to-Player Awareness, and only the NPC-to-Player directional relationship. Use currentRelationshipState as the baseline and return an absolute value. On a first demonstrated encounter or interaction, initialize the supported non-Player directional relationship and Awareness card with cause first-impression. Direct mutual interaction normally requires both directions. Listening or overhearing requires listener-to-speaker only unless the speaker perceives the listener. Default a new relationship to 0. Prior favorable or adverse information normally supports an initial value within -25 to 25 with meaningful impact. Significant explicit evidence may support up to -50 or 50 with significant impact. Set drastic impact and use values approaching -100 or 100 only for extreme explicit evidence such as established hatred, mortal enmity, absolute devotion, or an equivalent relationship-defining fact. Directions may differ. For an existing relationship, impact is meaningful for an ordinary shift, significant for a major act or a repeated pattern, and drastic only for an event that defines the relationship: betrayal, sacrifice, saving a life, a devastating revelation or an equivalent rupture. The app limits how far each change goes: a bond moves less the nearer it is to 100 or -100, a wound from someone loved costs more, someone deeply disliked is slow to win back, and ordinary closeness stops counting past certain points. Return the value the scene supports and the honest impact; never inflate either to get past a limit.
+${RELATIONSHIP_SCALE_GUIDE}
 Ignore existing knowledge and existing memories when deciding what happened, but never restate something the campaign already holds. A turn that changes nothing durable returns no events at all, and that is a correct answer. Most turns produce at most one or two records, and returning many is a sign the durability test was skipped.`;
 
 const NARRATIVE_SKILLS_PROMPT = `SKILLS: skills.characters are the only characters whose skills change. Report changes as extra items in resourceChanges. Ranks are skills.ranks, lowest first; each character's skills show the rank they hold now.
@@ -4634,11 +4664,13 @@ function loreNeedsAppend(currentLore, outputTokens) {
     return Math.ceil(estimateTokens(lore) * 1.15) + LORE_REWRITE_OVERHEAD_TOKENS > outputTokens;
 }
 
-function entityEnrichmentMaxTokens(entity) {
+// Dense evidence, such as a whole character profile, yields many changes at once, so the
+// allowance grows with the evidence as well as with the lore it may rewrite.
+function entityEnrichmentMaxTokens(entity, evidenceTokens = 0) {
     const currentLoreLength = String(entity.type === 'System' ? entity.data?.content || '' : entity.lore || '').length;
     const minimum = entity.type === 'System' ? 2400 : 1800;
-    const maximum = entity.type === 'System' ? 5000 : 4000;
-    return Math.min(maximum, Math.max(minimum, 1200 + Math.ceil(currentLoreLength / 3.5)));
+    const maximum = 12000;
+    return Math.min(maximum, Math.max(minimum, 1200 + Math.ceil(currentLoreLength / 3.5) + Math.ceil(evidenceTokens * 1.5)));
 }
 
 // Usually the output budget, not formatting: reasoning models spend it thinking. `budget` and
@@ -4997,6 +5029,205 @@ async function loadConstantMemoryChunks(workspaceId) {
     }));
 }
 
+// --- CREATE WITH AI: sources read into candidates, then filled like any entity update ---
+
+// What the last reading found, per workspace, so applying never needs the passages sent back.
+const sourceImportSessions = new Map();
+// Imported passages are deleted when the fill ends, so a sheet keeps reading until none is left.
+const MAX_EXTRA_ENTITY_PASSES = 8;
+
+// Only names and types are read here; nothing is written until the list is applied.
+async function discoverImportSources(workspaceId, sources, { onProgress = null, shouldCancel = null } = {}) {
+    const { buildCandidates } = require('./features/worldbuild/source-import');
+    const passages = [];
+    for (const source of sources || []) {
+        for (const unit of source.units || []) passages.push({ ...unit, id: `p${passages.length + 1}` });
+    }
+    const mentions = new Map();
+    let failedPassages = 0;
+    const tagger = getRoleExecutor(ROLE_IDS.TAGGER);
+    if (tagger.executor && passages.length) {
+        let categories = [];
+        try { categories = db.prepare('SELECT name, description FROM tags WHERE isEntity = 1').all(); } catch (e) { categories = []; }
+        const known = loadWorkspaceEntities(db, workspaceId).filter(entity => entity.status !== 'proposed');
+        const lowercaseWords = collectLowercaseWords(passages.map(passage => passage.text));
+        const { apiProfileId, model } = tagger.executor;
+        const outcome = await runModelTagger({
+            records: passages.map(passage => ({ id: passage.id, text: passage.text })),
+            categories,
+            vocabFor: text => buildEntityVocab(workspaceId, text),
+            languageInstruction: getSystemLanguageInstruction(),
+            send: payload => sendTaggerRequest({ apiProfileId, model, chatHistory: [], manualMode: false, manualJson: null, maxPayloadTokens: workspacePayloadTokens(workspaceId), ...payload }),
+            onProgress,
+            shouldCancel
+        });
+        if (shouldCancel && shouldCancel()) return { cancelled: true };
+        for (const entry of outcome.chunkTags) {
+            const passage = passages[entry.chunkIndex];
+            if (!passage) continue;
+            const list = [];
+            for (const tag of entry.tags) {
+                if (tag.proposalKind !== 'known') {
+                    const verdict = checkProposal({
+                        value: tag.value, surface: tag.surface, type: tag.tag, proposalKind: tag.proposalKind, chunkText: passage.text,
+                        entities: known, siblings: entry.tags.filter(other => other !== tag).map(other => ({ value: other.value, type: other.tag })), lowercaseWords
+                    });
+                    if (!verdict.ok) continue;
+                }
+                list.push({ name: tag.value, type: tag.tag, proposalKind: tag.proposalKind });
+            }
+            mentions.set(passage.id, list);
+        }
+        failedPassages = [...outcome.outcomes.values()].filter(item => item.status !== 'completed').length;
+    } else if (onProgress) {
+        onProgress(passages.length, passages.length);
+    }
+    const candidates = buildCandidates({ passages, mentions, existing: loadWorkspaceEntities(db, workspaceId) });
+    sourceImportSessions.set(workspaceId, { passages, candidates });
+    return {
+        candidates,
+        passages: passages.map(passage => ({ id: passage.id, fileName: passage.fileName, label: passage.label, text: passage.text })),
+        taggerMissing: !tagger.executor,
+        failedPassages
+    };
+}
+
+// targetId adds to that sheet, fill false creates the sheet with its name only, and mergedIds
+// lists the candidates joined into this one.
+function importDecisionsWithPassages(workspaceId, decisions) {
+    const session = sourceImportSessions.get(workspaceId);
+    if (!session) throw new Error('Read the sources again: the list is no longer available.');
+    const byId = new Map(session.candidates.map(candidate => [candidate.id, candidate]));
+    const passages = new Map(session.passages.map(passage => [passage.id, passage]));
+    return (decisions || []).map(decision => {
+        const found = byId.get(decision.id);
+        if (!found) return null;
+        // An entry the person merged into this one brings its passages and portrait along.
+        const merged = (decision.mergedIds || []).map(id => byId.get(id)).filter(item => item && item !== found);
+        const passageIds = [...new Set([found, ...merged].flatMap(item => item.passageIds))];
+        const candidate = { ...found, passageIds, portraitPath: found.portraitPath || merged.find(item => item.portraitPath)?.portraitPath || null };
+        return { ...decision, candidate, passages: passageIds.map(id => passages.get(id)).filter(Boolean) };
+    }).filter(Boolean);
+}
+
+function estimateImportFill(workspaceId, decisions) {
+    const resolved = importDecisionsWithPassages(workspaceId, decisions);
+    // No token estimate here: it cannot be known before the run, so only the real use is shown at the end.
+    const locked = [];
+    let sheets = 0, passages = 0, unfilled = 0, existing = 0;
+    for (const decision of resolved) {
+        if (decision.fill === false) { unfilled++; continue; }
+        const target = decision.targetId ? entitiesStore.getEntity(decision.targetId) : null;
+        if (target && (target.data?.aiPolicy || 'review') === 'locked') { locked.push(target.canonicalName); continue; }
+        sheets++;
+        if (target) existing++;
+        passages += decision.passages.length;
+    }
+    return { sheets, existing, passages, locked, unfilled, model: getSystemAiConfiguration().systemAi?.model || null };
+}
+
+// Imported passages carry no vector: only the fill reads them, never retrieval.
+function applyImportSources(workspaceId, decisions) {
+    const { passageSource } = require('./features/worldbuild/source-import');
+    const resolved = importDecisionsWithPassages(workspaceId, decisions);
+    const entityIds = [];
+    const fillIds = [];
+    const created = [];
+    const portraits = [];
+    let aliasesAdded = 0;
+    const typeCounts = {};
+    const entityFor = new Map();
+    db.transaction(() => {
+        for (const decision of resolved) {
+            const aliases = (decision.aliases || []).map(alias => String(alias || '').trim()).filter(Boolean);
+            const target = decision.targetId ? entitiesStore.getEntity(decision.targetId) : null;
+            let entity;
+            if (target) {
+                const known = new Set([target.canonicalName, ...(target.aliases || [])].map(foldText));
+                const added = [...new Set(aliases)].filter(alias => !known.has(foldText(alias)));
+                if (added.length) entitiesStore.updateEntity(target.id, { aliases: [...(target.aliases || []), ...added] });
+                aliasesAdded += added.length;
+                entity = target;
+            } else {
+                if (!decision.type || !String(decision.name || '').trim()) continue;
+                const data = {
+                    ...(decision.type === 'Items' ? { itemNature: decision.candidate.itemNature === 'type' ? 'type' : 'unique' } : {}),
+                    ...(decision.type === 'Creatures' ? { scope: 'individual' } : {}),
+                };
+                entity = entitiesStore.createEntity({ workspaceId, type: decision.type, canonicalName: decision.name, aliases, data });
+                created.push(entity.id);
+                aliasesAdded += aliases.length;
+            }
+            entityIds.push(entity.id);
+            if (decision.fill !== false) fillIds.push(entity.id);
+            typeCounts[entity.type] = (typeCounts[entity.type] || 0) + 1;
+            entityFor.set(decision.candidate.id, entity);
+            if (decision.candidate.portraitPath) portraits.push({ entityId: entity.id, sourcePath: decision.candidate.portraitPath, replace: !target });
+        }
+
+        const insertChunk = db.prepare(`
+            INSERT INTO knowledge_chunks (id, ownerId, ownerType, source, text, vector, createdAt, tokenCount, content_hash, ordinal)
+            VALUES (?, ?, 'import_source', ?, ?, '[]', ?, ?, ?, ?)
+        `);
+        const insertTag = db.prepare("INSERT OR IGNORE INTO chunk_tags (chunkId, tag, entity, manual, origin) VALUES (?, ?, ?, 0, 'import')");
+        // The same text, from a card and a lorebook or an import not yet cleared, is kept once.
+        const sameText = db.prepare("SELECT id FROM knowledge_chunks WHERE ownerType = 'import_source' AND ownerId = ? AND content_hash = ? LIMIT 1");
+        const chunkFor = new Map();
+        const byHash = new Map();
+        const now = Date.now();
+        for (const decision of resolved) {
+            // A name-only entry is never read by the fill, so its passages are not kept.
+            if (decision.fill === false) continue;
+            const entity = entityFor.get(decision.candidate.id);
+            if (!entity) continue;
+            for (const passage of decision.passages) {
+                if (!chunkFor.has(passage.id)) {
+                    const hash = crypto.createHash('sha256').update(passage.text).digest('hex');
+                    let id = byHash.get(hash) || sameText.get(workspaceId, hash)?.id;
+                    if (!id) {
+                        id = `import_${crypto.randomUUID()}`;
+                        insertChunk.run(id, workspaceId, passageSource(passage), passage.text, now + byHash.size, encode(passage.text).length, hash, byHash.size);
+                    }
+                    byHash.set(hash, id);
+                    chunkFor.set(passage.id, id);
+                }
+                insertTag.run(chunkFor.get(passage.id), entity.type, entity.id);
+            }
+        }
+    })();
+    sourceImportSessions.delete(workspaceId);
+    return { entityIds, fillIds, created, portraits, aliasesAdded, typeCounts };
+}
+
+// Imported files leave nothing behind: a passage goes once every sheet that needed it has read
+// it. Only passages a failed sheet or an unread leftover still needs stay, for the retry.
+function clearImportSources(workspaceId) {
+    if (!workspaceId) return 0;
+    const removed = db.transaction(() => {
+        const changes = db.prepare(`
+            DELETE FROM knowledge_chunks
+            WHERE ownerType = 'import_source' AND ownerId = @workspaceId AND id NOT IN (
+              SELECT chunk_id FROM entity_update_evidence
+              WHERE workspace_id = @workspaceId AND state IN ('discovered', 'queued', 'deferred')
+                AND entity_id IN (SELECT id FROM entities WHERE workspaceId = @workspaceId)
+              UNION
+              SELECT ct.chunkId FROM chunk_tags ct
+              JOIN entity_enrichment_errors er ON er.entityId = ct.entity AND er.workspaceId = @workspaceId AND er.dismissedAt IS NULL
+            )
+        `).run({ workspaceId }).changes;
+        db.prepare(`
+            DELETE FROM entity_update_evidence
+            WHERE workspace_id = ? AND chunk_id LIKE 'import\\_%' ESCAPE '\\' AND chunk_id NOT IN (SELECT id FROM knowledge_chunks)
+        `).run(workspaceId);
+        return changes;
+    })();
+    return removed;
+}
+
+function discardImportSession(workspaceId) {
+    sourceImportSessions.delete(workspaceId);
+}
+
 // aiPolicy: 'open' applies directly, 'review' stages into data._enrichPending without
 // touching live values, 'locked' is skipped. One entity failing never aborts the run.
 async function enrichEntities(workspaceId, progressCallback = null, { entityIds = null, shouldCancel = null } = {}) {
@@ -5031,6 +5262,14 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
         WHERE ownerId = ? AND ownerType IN ('chat_kb', 'chat_memory') AND enabled = 1
         ORDER BY createdAt ASC
     `).all(workspaceId).map(chunk => ({ ...chunk, evidenceSource: 'Memory' }));
+    const importedChunks = db.prepare(`
+        SELECT DISTINCT kc.id, kc.text, kc.source, kc.createdAt, kc.ownerId, kc.ownerType, kc.ordinal,
+          COALESCE(kc.content_hash, '') AS contentHash, 'Imported source' AS evidenceSource, 1 AS isTagged
+        FROM chunk_tags ct
+        JOIN knowledge_chunks kc ON ct.chunkId = kc.id AND kc.ownerType = 'import_source'
+        WHERE ct.entity = ? AND kc.ownerId = ? AND kc.enabled = 1
+        ORDER BY kc.createdAt ASC
+    `);
     const precedingChunk = {
         byOrdinal: db.prepare(`
             SELECT id, text FROM knowledge_chunks
@@ -5081,13 +5320,18 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
         recordEnrichmentError.run(`enrich_error_${crypto.randomUUID()}`, workspaceId, entity.id, entity.canonicalName, entity.type, message, Date.now());
     };
 
-    let updated = 0, staged = 0, upToDate = 0, noEvidence = 0, failed = 0;
+    // Sets, since a sheet read in several passes is still one sheet.
+    const updatedIds = new Set(), stagedIds = new Set();
+    let upToDate = 0, noEvidence = 0, failed = 0;
     let canonicalSuggestionCount = 0, narrativeSuggestionCount = 0, skillSuggestionCount = 0;
     let evidenceUsed = 0, taggedEvidenceRemaining = 0, textMatchesDeferred = 0;
     let emptyFieldsExamined = 0, emptyFieldSuggestions = 0;
     let emptyFieldsWithoutSupport = 0, emptyFieldsAwaitingEvidence = 0;
     let consecutiveStructuredFailures = 0;
     let processedEntities = 0;
+    const extraPasses = new Map();
+    const passTokens = new Map();
+    const runRelationships = new Map();
     let stoppedEarly = false;
     let cancelled = false;
     for (let i = 0; i < targets.length; i++) {
@@ -5119,6 +5363,9 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
         if (progressCallback) progressCallback({ phase: 'enriching', done: i, total: targets.length, name: ent.canonicalName, entityId: ent.id });
         const candidates = new Map();
         for (const chunk of taggedWritingChunks.all(ent.id, workspaceId)) {
+            if (chunk.text) candidates.set(chunk.id, chunk);
+        }
+        for (const chunk of importedChunks.all(ent.id, workspaceId)) {
             if (chunk.text) candidates.set(chunk.id, chunk);
         }
         const taggedMemoryIds = new Set(taggedMemoryChunks.all(ent.id, workspaceId).map(row => row.chunkId));
@@ -5197,8 +5444,16 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
         const fieldLines = [...nativeFieldLines, ...customFieldLines].join('\n');
         const relSpecs = enrichRelationsForEntity(ent);
         const fence = buildItemsFence();
+        // A later pass of this run builds on what the earlier ones staged, or it would replace a
+        // field, the lore or a relationship it never saw. Only the prompt sees them; live data stays.
+        const carried = extraPasses.has(ent.id) && ent.data?._enrichPending && typeof ent.data._enrichPending === 'object'
+            ? ent.data._enrichPending : null;
+        if (carried?.lore?.value) ent.lore = carried.lore.value;
         const currentData = {};
         for (const f of allowed) if (ent.data && ent.data[f] != null) currentData[f] = ent.data[f];
+        for (const [f, proposal] of Object.entries(carried?.data || {})) {
+            if (allowed.includes(f) && proposal?.value != null) currentData[f] = proposal.value;
+        }
         const currentCustomFields = {};
         for (const field of visibleCustomFields) {
             const value = ent.data?.customFields?.[field.key];
@@ -5224,7 +5479,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                     chunk.text
             };
         });
-        const includedEvidence = selectEntityEvidence(evidenceEntries);
+        let includedEvidence = selectEntityEvidence(evidenceEntries);
         const includedIds = new Set(includedEvidence.map(entry => entry.id));
         const skippedTextualEvidence = evidenceEntries.filter(entry => !entry.chunk.isTagged && !includedIds.has(entry.id));
         const pendingTaggedEvidence = evidenceEntries.filter(entry => entry.chunk.isTagged && !includedIds.has(entry.id));
@@ -5253,7 +5508,9 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                 ? `kind "relationship", key "overall", target one candidate, targetRole what TARGET is to SOURCE, score -100 to 100, sourcePerspective how SOURCE sees TARGET`
                 : `kind "link", key "${spec.key}", target one candidate${spec.labeled ? ', targetRole what TARGET is to SOURCE' : ''}`;
             const guidance = ENRICH_RELATION_GUIDANCE[`${ent.type}.${spec.key}`] || 'Only when the exact relation is explicitly established.';
-            relBlocks.push({ spec, names, line: `- ${spec.label}: ${operation}. ${guidance} Candidates: ${names.join(', ')}` });
+            // Stated with this record's name, since a generic rule about direction is the one models skip.
+            const direction = ENRICH_RELATION_DIRECTION[`${ent.type}.${spec.key}`]?.(ent.canonicalName);
+            relBlocks.push({ spec, names, line: `- ${spec.label}: ${operation}.${direction ? ` ${direction}` : ''} ${guidance} Candidates: ${names.join(', ')}` });
             for (const link of existing.values()) {
                 currentLinks.push({
                     field: spec.key,
@@ -5264,6 +5521,10 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                 });
             }
         }
+        for (const link of Array.isArray(carried?.links) ? carried.links : []) {
+            if (link?.targetName) currentLinks.push({ field: link.relKey, source: ent.canonicalName, target: link.targetName, ...(link.label ? { targetRole: link.label } : {}) });
+        }
+        for (const relationship of (runRelationships.get(ent.id) || new Map()).values()) currentLinks.push(relationship);
         let relevantSystems = [];
         if (chunkIds.length) {
             const normalizedEvidence = entitiesStore.normalizeName(evidenceWindow);
@@ -5345,6 +5606,9 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
             `- Never return a change to say that something is absent, unknown, or not established; omit it instead.\n` +
             `- Every change must cite one or more supplied evidence IDs that support that exact change. support restates what the evidence says; never speculate about why a current value differs.\n` +
             `- A preceding passage shown before an evidence block only tells whose section or scene the block belongs to. Use it to decide who a line is about; never cite it.\n` +
+            (includedEvidence.some(entry => entry.chunk.ownerType === 'import_source')
+                ? `- An Imported source block belongs to the subject named first in its label (before the first ·), and the rest of the label names its section. When that subject is not ${ent.canonicalName}, the block is someone else's profile: take from it only what it states about ${ent.canonicalName} itself. That subject's affiliation, workplace, home or origin never makes them the leader, owner or creator of ${ent.canonicalName}, and never places ${ent.canonicalName} inside or outside another place.\n`
+                : '') +
             (playerEntity && playerEntity.id !== ent.id ? `- In roleplay logs, "you" and "your" refer to the player character ${playerEntity.canonicalName} (id ${playerEntity.id}).\n` : '') +
             (playerEntity && playerEntity.id === ent.id ? `- In roleplay logs, "you" and "your" refer to ${ent.canonicalName}, the player character.\n` : '') +
             `- Do not return unchanged fields or unchanged links. An empty changes array is correct when the new evidence changes nothing.\n` +
@@ -5356,6 +5620,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
             `- RELATIONSHIP DIRECTION: SOURCE is always the current record (${ent.canonicalName}); TARGET is the named related entity. targetRole must state what TARGET is to SOURCE (Dorian to Tess: targetRole "Daughter"; Tess to Dorian: targetRole "Father"). value and sourcePerspective describe only how SOURCE feels about and relates to TARGET. Never return TARGET's feelings toward SOURCE. The reciprocal direction belongs exclusively to TARGET's own record.\n` +
             `- Return a relationship only when the evidence shows SOURCE's own attitude, bond, or role toward TARGET. Fighting, meeting, or sharing a scene once is not a relationship. targetRole is a complete short role of one to four words, never a sentence.\n` +
             `- An existing relationship (in Current links and relationships or EXISTING RELATIONSHIPS OF OTHERS) is edited, not rewritten: return its targetRole exactly as it is unless the bond itself changed in kind, such as an ally becoming an enemy; write sourcePerspective as the current perspective carried forward with only what the evidence changes; move score from its current value by what the evidence shows.\n` +
+            `- ${RELATIONSHIP_SCALE_GUIDE.replace(/\n/g, '\n  ')}\n` +
             `- Every narrative change must state ownership explicitly. subjectId is the entity whose mind, memory, knowledge, belief, fact, or perspective owns the change. perspectiveOwnerId must equal subjectId for relationships. targetId is the existing entity the statement or relationship is about. Use the IDs from the candidate context, never infer ownership from the current record.\n` +
             `- Awareness requires evidence that the perspective owner knows the target exists. Documentary extraction alone never grants it.\n` +
             `- For knowledge, belief, and memory, put the statement or summary in value. For knowledge and belief, target must be the exact existing entity the proposition is primarily about, not a location, group, or concept merely mentioned in the sentence.\n` +
@@ -5385,10 +5650,11 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
         const buildUserPrompt = evidence => `${userPromptPrefix}\nNEW STORY EVIDENCE (chronological):\n${evidence}`;
 
         try {
-            const maxTokens = entityEnrichmentMaxTokens(ent);
+            const maxTokens = entityEnrichmentMaxTokens(ent, estimateTokens(evidenceWindow));
             const jsonSchema = buildEntityUpdateSchema();
-            let inputTokenEstimate = 0;
-            let outputTokenEstimate = 0;
+            // A sheet's job row holds every pass of this run, not only the last one.
+            let inputTokenEstimate = passTokens.get(ent.id)?.input || 0;
+            let outputTokenEstimate = passTokens.get(ent.id)?.output || 0;
             let retryCount = 0;
             const entityLabels = loadEntityLabels(workspaceId);
             const sendJsonRequest = async (requestParams, schema = jsonSchema) => {
@@ -5453,8 +5719,17 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                 // Both mean no room was left to write: less evidence and a larger allowance is the only
                 // retry that helps. Anything else is a formatting fault for the repair pass.
                 if (firstFailure.cause === 'budget' || firstFailure.cause === 'empty') {
-                    const reducedEvidence = selectEntityEvidence(evidenceEntries, 2500).map(entry => entry.prompt).join('\n\n');
-                    responseResult = await requestUpdate(buildUserPrompt(reducedEvidence), retryTokens);
+                    // What the smaller request leaves out was never read, so it stays pending for the next pass.
+                    const reduced = selectEntityEvidence(includedEvidence, Math.max(1200, Math.floor(estimateTokens(evidenceWindow) / 2)));
+                    const reducedIds = new Set(reduced.map(entry => entry.id));
+                    const dropped = includedEvidence.filter(entry => !reducedIds.has(entry.id));
+                    if (reduced.length && dropped.length) {
+                        updateState.transition(workspaceId, ent.id, dropped, 'deferred', runId, 'token-budget');
+                        deferredEvidence.push(...dropped);
+                        pendingTaggedEvidence.push(...dropped.filter(entry => entry.chunk.isTagged));
+                        includedEvidence = reduced;
+                    }
+                    responseResult = await requestUpdate(buildUserPrompt(includedEvidence.map(entry => entry.prompt).join('\n\n')), retryTokens);
                 } else {
                     responseResult = await repairUpdate(response, retryTokens);
                 }
@@ -5573,12 +5848,25 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                 // An existing one is edited later, from what it already says.
                 return !(targetId && currentRelationship(ownerId, targetId)) && Math.round(Number(change.score) || 0) === 0;
             };
+            const earlierRelationships = runRelationships.get(ent.id) || new Map();
+            const relationshipKey = change => foldText(change.target || change.targetId || '');
             const narrativeChanges = [...parsed.narrative, ...relationshipLinkChanges].filter(change =>
                 !(ent.type === 'Characters' && change.kind === 'fact')
                 && change.support
                 && change.evidence.some(id => validEvidenceIds.has(id))
                 && !isEmptyRelationship(change)
+                // A relationship an earlier pass of this run already proposed is not proposed twice.
+                && !(change.kind === 'relationship' && earlierRelationships.has(relationshipKey(change)))
             );
+            for (const change of narrativeChanges) {
+                if (change.kind !== 'relationship' || !relationshipKey(change)) continue;
+                earlierRelationships.set(relationshipKey(change), {
+                    field: 'relationships', source: ent.canonicalName, target: change.target || change.targetId,
+                    ...(change.targetRole ? { targetRole: change.targetRole } : {}),
+                    value: Math.round(Number(change.score) || 0), sourcePerspective: change.sourcePerspective || '',
+                });
+            }
+            runRelationships.set(ent.id, earlierRelationships);
 
             const proposedLinks = [];
             const incomingLinks = (parsed.links && typeof parsed.links === 'object') ? parsed.links : {};
@@ -5742,7 +6030,15 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
             const hasCanonicalChange = Object.keys(proposedData).length || loreChanged || proposedLinks.length;
             const hasChange = hasCanonicalChange || narrativeSuggestion?.record || skillChanges.length;
             evidenceUsed += includedEvidence.length;
-            taggedEvidenceRemaining += pendingTaggedEvidence.length;
+            // A sheet with evidence left over gets another pass in this run, so a dense source is read
+            // in full without the person running the update again.
+            const passes = extraPasses.get(ent.id) || 0;
+            if (pendingTaggedEvidence.length && passes < MAX_EXTRA_ENTITY_PASSES) {
+                extraPasses.set(ent.id, passes + 1);
+                targets.push(targets[i]);
+            } else {
+                taggedEvidenceRemaining += pendingTaggedEvidence.length;
+            }
             textMatchesDeferred += skippedTextualEvidence.length;
             const canonicalProposalCount = Object.keys(proposedData).length
                 + proposedLinks.length
@@ -5760,6 +6056,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
             if (deferredEvidence.length) emptyFieldsAwaitingEvidence += emptyFieldsStillOpen;
             else emptyFieldsWithoutSupport += emptyFieldsStillOpen;
             const finishEntity = (actionable) => {
+                passTokens.set(ent.id, { input: inputTokenEstimate, output: outputTokenEstimate });
                 updateState.transition(workspaceId, ent.id, includedEvidence, actionable ? 'actionable' : 'non-actionable', runId, actionable ? 'proposals-created' : 'no-supported-change');
                 updateState.updateJob(runId, ent.id, {
                     status: 'completed',
@@ -5792,7 +6089,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                 continue;
             }
             if (!hasCanonicalChange) {
-                staged++;
+                stagedIds.add(ent.id);
                 finishEntity(true);
                 clearEnrichmentError.run(workspaceId, ent.id);
                 if (loreFailure) rememberFailure(ent, loreFailure);
@@ -5813,7 +6110,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                 if (loreChanged) fields.lore = incomingLore;
                 entitiesStore.updateEntity(ent.id, fields);
                 for (const l of proposedLinks) applyProposedLink(ent.id, l, workspaceId);
-                updated++;
+                updatedIds.add(ent.id);
             } else {
                 // Unresolved review items are preserved.
                 const previous = (ent.data?._enrichPending && typeof ent.data._enrichPending === 'object') ? ent.data._enrichPending : {};
@@ -5836,7 +6133,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                 pending.at = Date.now();
                 const nextData = { ...(ent.data || {}), _enrichPending: pending };
                 entitiesStore.updateEntity(ent.id, { data: nextData });
-                staged++;
+                stagedIds.add(ent.id);
             }
             finishEntity(true);
             clearEnrichmentError.run(workspaceId, ent.id);
@@ -5854,8 +6151,12 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
     if (progressCallback) progressCallback({ phase: 'enriching', done: processedEntities, total: targets.length });
     const runStatus = stoppedEarly || cancelled || failed ? (processedEntities > failed ? 'partial' : 'failed') : 'completed';
     const tokenUsage = updateState.finishRun(runId, runStatus);
+    try { clearImportSources(workspaceId); }
+    catch (error) { console.warn('[Enrich] Imported passages could not be cleared:', error.message); }
+    const updated = updatedIds.size;
+    const staged = [...stagedIds].filter(id => !updatedIds.has(id)).length;
     return {
-        runId, entities: targets.length, processedEntities, updated, staged, upToDate, noEvidence,
+        runId, entities: new Set(targets.map(target => target.id)).size, processedEntities, updated, staged, upToDate, noEvidence,
         failed, failures, evidenceUsed, taggedEvidenceRemaining, textMatchesDeferred,
         canonicalSuggestionCount, narrativeSuggestionCount, skillSuggestionCount, emptyFieldsExamined,
         emptyFieldSuggestions, emptyFieldsWithoutSupport, emptyFieldsAwaitingEvidence,
@@ -7269,6 +7570,11 @@ module.exports = {
     vectorizeDocument,
     retagDocumentChunks,
     enrichEntities,
+    discoverImportSources,
+    estimateImportFill,
+    applyImportSources,
+    clearImportSources,
+    discardImportSession,
     tagChunkRecords,
     applyChunkTags,
     computeDocumentVectorStatus,

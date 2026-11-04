@@ -3028,6 +3028,12 @@ ipcMain.handle('get-entity-enrichment-errors', async (event, { workspaceId } = {
 ipcMain.handle('dismiss-entity-enrichment-error', async (event, { id } = {}) => {
   try {
     db.prepare('UPDATE entity_enrichment_errors SET dismissedAt = ? WHERE id = ?').run(Date.now(), id);
+    // A dismissed sheet will not retry, so the imported passages kept for it can go.
+    const dismissed = db.prepare('SELECT workspaceId, entityId FROM entity_enrichment_errors WHERE id = ?').get(id);
+    if (dismissed) {
+      db.prepare("DELETE FROM entity_update_evidence WHERE workspace_id = ? AND entity_id = ? AND chunk_id LIKE 'import\\_%' ESCAPE '\\'").run(dismissed.workspaceId, dismissed.entityId);
+      require('./workflow-runner').clearImportSources(dismissed.workspaceId);
+    }
     return { success: true };
   } catch (e) {
     return { success: false, error: e.message };
@@ -3060,6 +3066,128 @@ ipcMain.handle('cancel-enrich-entities', async (event, { workspaceId } = {}) => 
   if (!enrichState.running || (workspaceId && enrichState.workspaceId !== workspaceId)) return { success: false };
   enrichState.cancelRequested = true;
   return { success: true };
+});
+
+// --- WORLDBUILD: Create with AI ---
+// Files are parsed when added, so the list can say what each holds before anything is read.
+const importSources = new Map();
+const IMPORT_SOURCE_EXTENSIONS = ['png', 'json', 'txt', 'md', 'markdown', 'docx', 'pdf'];
+
+async function inspectImportSource({ filePath = null, fileName = null, text = null }) {
+  const { parseSource } = require('./features/worldbuild/source-import');
+  const name = fileName || (filePath ? path.basename(filePath) : 'Pasted text');
+  const key = `src_${crypto.randomUUID()}`;
+  try {
+    const extension = name.toLowerCase().split('.').pop();
+    let parsed;
+    if (text != null) parsed = parseSource({ fileName: name, text });
+    else if (['png', 'json'].includes(extension)) parsed = parseSource({ fileName: name, buffer: fs.readFileSync(filePath), filePath });
+    else if (IMPORT_SOURCE_EXTENSIONS.includes(extension)) parsed = parseSource({ fileName: name, text: await extractTextFromFile(filePath) });
+    else throw new Error('Kallamo cannot read this kind of file.');
+    importSources.set(key, parsed);
+    const size = filePath ? fs.statSync(filePath).size : Buffer.byteLength(String(text || ''));
+    const tokens = parsed.units.reduce((sum, unit) => sum + countTokens(unit.text), 0);
+    return { key, fileName: name, kind: parsed.kind, size, tokens, passages: parsed.units.length, entries: parsed.entries || 0, cardName: parsed.name || null, portrait: Boolean(parsed.units[0]?.subject?.portraitPath) };
+  } catch (e) {
+    return { key, fileName: name, error: e.message };
+  }
+}
+
+ipcMain.handle('pick-import-sources', async (event) => {
+  try {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const { filePaths, canceled } = await dialog.showOpenDialog(win, {
+      title: 'Add sources',
+      filters: [{ name: 'Cards, lorebooks and text', extensions: IMPORT_SOURCE_EXTENSIONS }],
+      properties: ['openFile', 'multiSelections'],
+    });
+    if (canceled || !filePaths?.length) return { success: true, sources: [] };
+    return { success: true, sources: await Promise.all(filePaths.map(filePath => inspectImportSource({ filePath }))) };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('inspect-import-sources', async (event, { filePaths = [], pasted = null } = {}) => {
+  try {
+    const sources = await Promise.all((filePaths || []).map(filePath => inspectImportSource({ filePath })));
+    if (pasted?.text) sources.push(await inspectImportSource({ fileName: pasted.name || 'Pasted text', text: pasted.text }));
+    return { success: true, sources };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('discard-import-sources', async (event, { keys = [], workspaceId = null } = {}) => {
+  for (const key of keys || []) importSources.delete(key);
+  if (workspaceId) {
+    const reading = importReadings.get(workspaceId);
+    if (reading) reading.cancelled = true;
+    require('./workflow-runner').discardImportSession(workspaceId);
+  }
+  return { success: true };
+});
+
+// Each reading gets its own flag, so a stop never reaches a reading started after it.
+const importReadings = new Map();
+
+ipcMain.handle('discover-import-sources', async (event, { workspaceId, keys = [] } = {}) => {
+  const wc = event.sender;
+  const reading = { cancelled: false };
+  importReadings.set(workspaceId, reading);
+  try {
+    const sources = (keys || []).map(key => importSources.get(key)).filter(Boolean);
+    if (!sources.length) return { success: false, error: 'Add the sources again: they are no longer available.' };
+    const { discoverImportSources } = require('./workflow-runner');
+    const result = await discoverImportSources(workspaceId, sources, {
+      onProgress: (done, total) => { try { wc.send('import-sources-progress', { workspaceId, done, total }); } catch (e) {} },
+      shouldCancel: () => reading.cancelled
+    });
+    return { success: true, ...result };
+  } catch (e) {
+    console.error('[discover-import-sources] failed:', e);
+    return { success: false, error: e.message };
+  } finally {
+    if (importReadings.get(workspaceId) === reading) importReadings.delete(workspaceId);
+  }
+});
+
+ipcMain.handle('cancel-discover-import-sources', async (event, { workspaceId } = {}) => {
+  const reading = importReadings.get(workspaceId);
+  if (reading) reading.cancelled = true;
+  return { success: Boolean(reading) };
+});
+
+ipcMain.handle('estimate-import-fill', async (event, { workspaceId, decisions = [] } = {}) => {
+  try {
+    const { estimateImportFill } = require('./workflow-runner');
+    return { success: true, ...estimateImportFill(workspaceId, decisions) };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('apply-import-sources', async (event, { workspaceId, decisions = [], keys = [] } = {}) => {
+  try {
+    const { applyImportSources } = require('./workflow-runner');
+    const result = applyImportSources(workspaceId, decisions);
+    // A card's own image becomes the portrait, never replacing one a sheet already has.
+    let portraitsAdded = 0;
+    for (const portrait of result.portraits) {
+      try {
+        if (!portrait.replace && entityImages.getPortrait(workspaceId, portrait.entityId)) continue;
+        entityImages.setPortrait({ workspaceId, entityId: portrait.entityId, sourcePath: portrait.sourcePath });
+        portraitsAdded++;
+      } catch (e) { console.warn('[apply-import-sources] portrait skipped:', e.message); }
+    }
+    for (const key of keys || []) importSources.delete(key);
+    // Nothing to fill means nothing will read the passages.
+    if (!result.fillIds.length) require('./workflow-runner').clearImportSources(workspaceId);
+    return { success: true, entityIds: result.entityIds, fillIds: result.fillIds, created: result.created, aliasesAdded: result.aliasesAdded, typeCounts: result.typeCounts, portraitsAdded };
+  } catch (e) {
+    console.error('[apply-import-sources] failed:', e);
+    return { success: false, error: e.message };
+  }
 });
 
 // What an export would carry, for the dialog to describe before anything is written.

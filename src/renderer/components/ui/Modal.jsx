@@ -25,6 +25,7 @@ export default function Modal({
   iconClassName = 'text-accent',
   subtitle = null,
   leading = null,
+  aside = null,
   closeOnOverlay = true,
   closeOnEsc = true,
   showClose = true,
@@ -128,6 +129,7 @@ export default function Modal({
                 {subtitle && <p className="truncate text-xs text-text-subtle">{subtitle}</p>}
               </div>
             </div>
+            {aside && <div className="ml-auto flex shrink-0 items-center">{aside}</div>}
             {showClose && (
               <button
                 type="button"

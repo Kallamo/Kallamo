@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { isDailyLimited, limitRelationshipChange } from '../../src/narrative/relationship-bands';
+import { isDailyLimited, limitRelationshipChange, limitToNextBand } from '../../src/narrative/relationship-bands';
 
 const change = (current: number | null, requested: number, impact: 'meaningful' | 'significant' | 'drastic' = 'meaningful', cause: string | null = 'revelation') =>
   limitRelationshipChange({ current, requested, impact, cause });
@@ -96,5 +96,24 @@ describe('daily limits', () => {
     expect(isDailyLimited('affection', 80)).toBe(true);
     expect(isDailyLimited('affection', -80)).toBe(true);
     expect(isDailyLimited('rescue', 95)).toBe(false);
+  });
+});
+
+describe('a document moves a relationship one band at a time', () => {
+  test('stops at the far edge of the next band', () => {
+    expect(limitToNextBand(30, 95)).toBe(74);
+    expect(limitToNextBand(60, 95)).toBe(89);
+    expect(limitToNextBand(80, 100)).toBe(100);
+  });
+
+  test('takes a smaller change as asked', () => {
+    expect(limitToNextBand(30, 55)).toBe(55);
+    expect(limitToNextBand(60, 40)).toBe(40);
+  });
+
+  test('crosses neutral into the first negative band and no further', () => {
+    expect(limitToNextBand(30, -80)).toBe(-49);
+    expect(limitToNextBand(60, -60)).toBe(0);
+    expect(limitToNextBand(-60, 80)).toBe(-1);
   });
 });
