@@ -3,10 +3,10 @@ import { createPortal } from 'react-dom';
 import {
   Plus, Search, BookOpen, Package, Users, EyeOff, 
   Trash2, Save, X, Pencil, Check, Link2, Globe, Tag, ScrollText, Info, Replace,
-  RefreshCw, Sparkles, Upload, Download, ChevronRight, ChevronDown, MoreHorizontal, ListChecks, Loader2, Gem, 
+  RefreshCw, Sparkles, Upload, Download, ArrowLeft, ChevronRight, ChevronDown, MoreHorizontal, ListChecks, Loader2, Gem, 
   NotebookText, Backpack, Braces, AlertTriangle, LayoutTemplate, BookCheck, CircleHelp, ChevronLeft, UserMinus, Undo2, Crown, AlignLeft, CalendarDays, CalendarRange, Drama, GripVertical, Gamepad2, IdCard, Landmark, Scale, Lightbulb, ListTree, LogOut, MapPinned, Merge, PencilLine, ScanEye, ScanFace, Shield, UserRound, ImagePlus, Image as ImageIcon, Crop, Flag, MapPin, ChevronsDownUp, ChevronsUpDown,
 } from 'lucide-react';
-import { AiGlyph, PolicyOpenGlyph, PolicyReviewGlyph, PolicyLockedGlyph, KnowledgeGlyph, ConnectionsGlyph, OccurrencesGlyph } from './ui/glyphs';
+import { AiGlyph, PolicyOpenGlyph, PolicyReviewGlyph, PolicyLockedGlyph, KnowledgeGlyph, ConnectionsGlyph, OccurrencesGlyph, WorldbuildGlyph } from './ui/glyphs';
 import { useApp } from '../context/AppContext';
 import Button from './ui/Button';
 import NumberInput from './ui/NumberInput';
@@ -42,6 +42,7 @@ import WorldbuildCalendar from '../features/worldbuild/WorldbuildCalendar';
 import WorldbuildRules from '../features/worldbuild/WorldbuildRules';
 import WorldbuildEventOccurrences from '../features/worldbuild/WorldbuildEventOccurrences';
 import WorldDateInput, { formatWorldDate } from '../features/worldbuild/WorldDateInput';
+import { AddHoursButton, AddLengthButton, HoursInput, LengthInput, WeekdayPicker, defaultHours, onceSummary, recurrenceSummary } from '../features/worldbuild/EventSchedule';
 import { birthDateForAge, derivedAge } from '../../shared/world-age';
 import { WorldbuildInventory, WorldbuildRelationships } from '../features/worldbuild/WorldbuildAgentCollections';
 import WorldbuildTemplateManager from '../features/worldbuild/WorldbuildTemplateManager';
@@ -249,12 +250,10 @@ const Prose = ({ text, empty = 'Not written yet', clamp = true, spoiler }) => {
   );
 };
 
-// How a recurring event is spoken of: "Every 2 years since 5 Frostmoon 1204".
-const recurrenceText = (recurrence, calendar) => {
-  if (!recurrence?.anchorDate) return null;
-  const interval = Math.max(1, Number(recurrence.interval) || 1);
-  const unit = recurrence.unit || 'year';
-  return `${interval === 1 ? `Every ${unit}` : `Every ${interval} ${unit}s`} since ${formatWorldDate(calendar, recurrence.anchorDate)}`;
+// How a recurring event is spoken of in one line: "Every 2 years since 5 Frostmoon 1204".
+const recurrenceText = (data, calendar) => {
+  const summary = recurrenceSummary(data, calendar);
+  return summary ? `${summary.text} since ${summary.since}` : null;
 };
 
 const LongField = ({ label, text, empty = 'Not set', spoiler }) => (
@@ -1173,6 +1172,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     const target = entities.find(item => item.id === entityId);
     if (target) openEntity(target, options);
   };
+  const onOverview = surface === 'entities' && !selected;
+  const showOverview = () => { setSurface('entities'); setSelected(null); setEditingSection(null); };
   const startNew = (type, data = {}) => { setOpenCreateSections(new Set()); setSurface('entities'); setShowCreate(false); setEditingSection(null); setCharTab('data'); setSelected(draftFor(type, data)); setRel({}); };
   const patch = (f) => setSelected(p => ({ ...p, ...f }));
   const patchData = (f) => setSelected(p => ({ ...p, data: { ...p.data, ...f } }));
@@ -1897,37 +1898,74 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     }
     if (type === 'Events') {
       const kindOpts = ['Battle', 'Festival', 'Holiday', 'Disaster', 'Ceremony', 'Discovery'];
+      const recurring = (selected.data.eventNature || 'one-time') === 'recurring';
+      const recurrence = selected.data.recurrence || {};
+      const weekly = (recurrence.unit || 'year') === 'week';
+      const lengthDays = Number(recurrence.durationDays) || 1;
+      const patchRecurrence = (change) => patchData({ recurrence: { ...recurrence, ...change } });
+      const removeLength = () => { const { durationDays: _removed, ...rest } = recurrence; patchData({ recurrence: rest }); };
+      const schedule = recurring ? recurrenceSummary(selected.data, worldCalendar) : null;
+      // Hours sit under the same eye as the dates, since a time on its own says when it happened.
+      const scheduleExtras = worldCalendar && (
+        <>
+          {((recurring && !weekly && lengthDays > 1) || selected.data.hours?.from) && (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+              {recurring && !weekly && lengthDays > 1 && <Edit label="Lasts" spoiler="date"><LengthInput value={lengthDays} onChange={durationDays => patchRecurrence({ durationDays })} onRemove={removeLength} /></Edit>}
+              {selected.data.hours?.from && <div className={recurring && !weekly && lengthDays > 1 ? '' : 'sm:col-span-2 sm:max-w-sm'}>
+                <Edit label="Hours" spoiler="date" hint={!recurring && selected.data.endDate ? 'From is on the first day, Until on the last. Leave Until empty for an open end.' : 'Leave Until empty for a single moment.'}>
+                  <HoursInput calendar={worldCalendar} value={selected.data.hours} onChange={hours => patchData({ hours })} onRemove={() => patchData({ hours: null })} />
+                </Edit>
+              </div>}
+            </div>
+          )}
+          {((recurring && !weekly && lengthDays <= 1) || !selected.data.hours?.from) && (
+            <div className="flex flex-wrap gap-2">
+              {recurring && !weekly && lengthDays <= 1 && <AddLengthButton onClick={() => patchRecurrence({ durationDays: 2 })} />}
+              {!selected.data.hours?.from && <AddHoursButton onClick={() => patchData({ hours: defaultHours(worldCalendar) })} />}
+            </div>
+          )}
+        </>
+      );
       S.push({ key: 'overview', title: 'Overview', icon: Info, scalar: true,
         view: <>
           <FactGrid>
-            <ViewField label="How often" spoiler="eventNature" value={(selected.data.eventNature || 'one-time') === 'recurring' ? 'Recurring' : 'Once'} />
+            <ViewField label="How often" spoiler="eventNature" value={recurring ? 'Recurring' : 'Once'} />
             <ViewField label="Kind" spoiler="kind" value={selected.data.kind} />
-            {(selected.data.eventNature || 'one-time') === 'recurring'
-              ? <ViewField full label="Schedule" spoiler="date" value={recurrenceText(selected.data.recurrence, worldCalendar)} />
-              : <ViewField full label="Date" spoiler="date" value={selected.data.startDate ? `${formatWorldDate(worldCalendar, selected.data.startDate)}${selected.data.endDate ? ` to ${formatWorldDate(worldCalendar, selected.data.endDate)}` : ''}` : null} />}
+            {recurring
+              ? <ViewField full label="Schedule" spoiler="date" value={schedule ? <div>
+                  <div className="text-sm leading-relaxed text-text-primary">{schedule.text}</div>
+                  <div className="mt-0.5 text-xs text-text-subtle">Since {schedule.since}</div>
+                </div> : null} />
+              : <ViewField full label="Date" spoiler="date" value={onceSummary(selected.data, worldCalendar)} />}
             <ViewField full label="Where" spoiler="happenedAt" value={<ChipList onOpen={openEntityById} links={rel.happenedAt} empty="No place set." />} />
             <ViewField full label="Who took part" spoiler="involved" value={<ChipList onOpen={openEntityById} links={rel.involved} empty="No one set." />} />
           </FactGrid>
         </>,
         edit: <>
-          <Edit label="How often" spoiler="eventNature">
-            <SegmentedControl label="How often" value={selected.data.eventNature || 'one-time'} onChange={(eventNature) => patchData({ eventNature })} options={[{ value: 'one-time', label: 'Once' }, { value: 'recurring', label: 'Recurring' }]} />
-          </Edit>
-          <Edit label="Kind" spoiler="kind" hint="Type your own or reuse one."><FreeDatalist value={selected.data.kind} onChange={(e) => patchData({ kind: e.target.value })} options={kindOpts} placeholder="e.g. Battle, Festival, Holiday" /></Edit>
-          {worldCalendar && (selected.data.eventNature || 'one-time') === 'recurring' ? (
+          <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-[auto_minmax(0,1fr)]">
+            <Edit label="How often" spoiler="eventNature">
+              <SegmentedControl label="How often" value={selected.data.eventNature || 'one-time'} onChange={(eventNature) => patchData({ eventNature })} options={[{ value: 'one-time', label: 'Once' }, { value: 'recurring', label: 'Recurring' }]} />
+            </Edit>
+            <Edit label="Kind" spoiler="kind" hint="Type your own or reuse one."><FreeDatalist value={selected.data.kind} onChange={(e) => patchData({ kind: e.target.value })} options={kindOpts} placeholder="e.g. Battle, Festival, Holiday" /></Edit>
+          </div>
+          {worldCalendar && <div className="space-y-5 border-t border-border-subtle pt-5">
+          {recurring ? (
             <>
-              <Edit label="First time" spoiler="date"><WorldDateInput label="First time" emptyLabel="Set the first occurrence" calendar={worldCalendar} value={selected.data.recurrence?.anchorDate} onChange={anchorDate => patchData({ recurrence: { ...(selected.data.recurrence || {}), anchorDate } })} /></Edit>
-              <Edit label="Repeats every" spoiler="date"><div className="grid grid-cols-[7rem_1fr] gap-2"><NumberInput className={FIELD} min={1} value={selected.data.recurrence?.interval || 1} onChange={interval => patchData({ recurrence: { ...(selected.data.recurrence || {}), interval } })} /><SelectMenu ariaLabel="Repeat unit" value={selected.data.recurrence?.unit || 'year'} onChange={unit => patchData({ recurrence: { ...(selected.data.recurrence || {}), unit } })} options={[{ value: 'day', label: 'Days' }, { value: 'week', label: 'Weeks' }, { value: 'month', label: 'Months' }, { value: 'year', label: 'Years' }]} /></div></Edit>
+              <Edit label="First time" spoiler="date"><WorldDateInput label="First time" emptyLabel="Set the first occurrence" calendar={worldCalendar} value={recurrence.anchorDate} onChange={anchorDate => patchRecurrence({ anchorDate })} /></Edit>
+              <Edit label="Repeats every" spoiler="date" hint={weekly && !(recurrence.weekdays || []).length ? 'With no day picked, it falls on the same day as the first time.' : undefined}>
+                <div className="grid grid-cols-[7rem_1fr] gap-2"><NumberInput className={FIELD} min={1} value={recurrence.interval || 1} onChange={interval => patchRecurrence({ interval })} /><SelectMenu ariaLabel="Repeat unit" value={recurrence.unit || 'year'} onChange={unit => patchRecurrence({ unit })} options={[{ value: 'day', label: 'Days' }, { value: 'week', label: 'Weeks' }, { value: 'month', label: 'Months' }, { value: 'year', label: 'Years' }]} /></div>
+                {weekly && <div className="mt-2"><WeekdayPicker calendar={worldCalendar} value={recurrence.weekdays} onChange={weekdays => patchRecurrence({ weekdays })} /></div>}
+              </Edit>
             </>
-          ) : worldCalendar ? (
-            <>
-              <div className={`grid grid-cols-1 gap-3 ${selected.data.startDate || selected.data.endDate ? '' : 'sm:grid-cols-2'}`}>
-                <Edit label="Starts" spoiler="date"><WorldDateInput label="Starts" emptyLabel="Set date" calendar={worldCalendar} value={selected.data.startDate} onChange={startDate => patchData({ startDate })} /></Edit>
-                <Edit label="Ends" spoiler="date" hint="Leave empty for a single day."><WorldDateInput label="Ends" emptyLabel="Add end date" calendar={worldCalendar} value={selected.data.endDate} onChange={endDate => patchData({ endDate })} /></Edit>
-              </div>
-            </>
-          ) : null}
-          {!unsaved && <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          ) : (
+            <div className={`grid grid-cols-1 gap-3 ${selected.data.startDate || selected.data.endDate ? '' : 'sm:grid-cols-2'}`}>
+              <Edit label="Starts" spoiler="date"><WorldDateInput label="Starts" emptyLabel="Set date" calendar={worldCalendar} value={selected.data.startDate} onChange={startDate => patchData({ startDate })} /></Edit>
+              <Edit label="Ends" spoiler="date" hint="Leave empty for a single day."><WorldDateInput label="Ends" emptyLabel="Add end date" calendar={worldCalendar} value={selected.data.endDate} onChange={endDate => patchData({ endDate })} /></Edit>
+            </div>
+          )}
+          {scheduleExtras}
+          </div>}
+          {!unsaved && <div className="grid grid-cols-1 gap-4 border-t border-border-subtle pt-5 sm:grid-cols-2">
             <MultiRelation label="Where" spoiler="happenedAt" disabled={unsaved} links={rel.happenedAt || []} options={byType.Locations} onAdd={(id) => addMulti('happened_at', id)} onRemove={removeLink} />
             <MultiRelation label="Who took part" spoiler="involved" disabled={unsaved} links={rel.involved || []} options={byType.Characters} onAdd={(id) => addMulti('involved', id)} onRemove={removeLink} />
           </div>}
@@ -2142,7 +2180,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const sheetVariantLabel = !selected ? null
     : selected.type === 'Locations' ? (locationSizeLabel(locationSizeOf(selected)) || null)
     : selected.type === 'Events' ? ((selected.data?.eventNature || 'one-time') === 'recurring'
-      ? recurrenceText(selected.data?.recurrence, worldCalendar) || 'Recurring'
+      ? recurrenceText(selected.data, worldCalendar) || 'Recurring'
       : selected.data?.startDate ? formatWorldDate(worldCalendar, selected.data.startDate) : null)
     : null;
   const tabCounts = {
@@ -2483,7 +2521,12 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           className="absolute -right-1 top-0 bottom-0 z-20 hidden w-2 cursor-col-resize transition-colors hover:bg-accent/25 focus-visible:bg-accent/40 focus-visible:outline-none lg:block" />
         <div className="space-y-3 px-3 pb-1 pt-3.5">
           <div className="flex h-8 items-center gap-1">
-            <span className="pl-1 text-[0.9375rem] font-bold text-text-primary">Worldbuild</span>
+            {/* Away from the overview it reads as a button, so there is always a way back. */}
+            <button type="button" onClick={showOverview} aria-current={onOverview ? 'page' : undefined} data-tooltip={onOverview ? undefined : 'Back to Your world'}
+              className={`inline-flex h-8 items-center gap-2 whitespace-nowrap rounded-control border pl-2 pr-2.5 text-[0.9375rem] font-bold text-text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${onOverview ? 'border-transparent hover:bg-surface-hover/60' : 'border-transparent bg-surface-hover/20 hover:bg-surface-hover/50'}`}>
+              <WorldbuildGlyph className={`h-[1.0625rem] w-[1.0625rem] shrink-0 ${onOverview ? 'text-accent' : 'text-text-secondary'}`} aria-hidden="true" />
+              Worldbuild
+            </button>
             <span className="flex-1" />
             <button type="button" data-tour="wb-update" disabled={enriching || entities.length === 0 || !hasSystemAi} onClick={() => runEnrichment()}
               data-tooltip={!hasSystemAi ? 'Choose an API connection and a model for System AI in Settings to update entities' : enriching ? undefined : 'Reads the story again and suggests changes. Locked sheets are skipped.'}
@@ -2690,6 +2733,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           />
         ) : !selected ? (
           <WorldOverview
+            workspaceId={workspaceId}
+            api={electronAPI}
             workspaceName={chat?.name || chat?.title || ''}
             entities={entities}
             typeMeta={typeMeta}
@@ -2707,7 +2752,19 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             onCreate={() => setShowCreate(true)}
           />
         ) : (
-          <div className="mx-auto max-w-3xl space-y-4 p-6" inert={sheetBeingRead || undefined} aria-busy={sheetBeingRead || undefined}>
+          <>
+          {/* Outside the inert sheet, so the way back works while the AI reads it. */}
+          <nav aria-label="Breadcrumb" className="mx-auto flex max-w-3xl min-w-0 items-center gap-1 px-6 pt-4 text-[0.8125rem]">
+            <button type="button" onClick={showOverview}
+              className="-ml-2 inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2 font-medium text-text-muted transition-colors hover:bg-surface-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />Your world
+            </button>
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-text-disabled" aria-hidden="true" />
+            <span className="shrink-0 whitespace-nowrap px-2 text-text-subtle">{typeMeta(selected.type).plural || typeMeta(selected.type).label}</span>
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-text-disabled" aria-hidden="true" />
+            <span aria-current="page" className="min-w-0 truncate px-2 text-text-subtle">{isNew ? `New ${typeMeta(selected.type).label.toLowerCase()}` : selected.canonicalName}</span>
+          </nav>
+          <div className="mx-auto max-w-3xl space-y-4 px-6 pb-6 pt-3" inert={sheetBeingRead || undefined} aria-busy={sheetBeingRead || undefined}>
             <SpoilerScope key={selected.id || 'new'} data={selected.data} onToggle={toggleHidden}>
             {sheetBeingRead && (
               <SheetNotice busy icon={Loader2} title="The AI is reading this sheet" text="It opens for editing again as soon as this entity is done. Other sheets stay editable." />
@@ -2995,6 +3052,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             )}
             </SpoilerScope>
           </div>
+          </>
         )}
       </div>
     </div>

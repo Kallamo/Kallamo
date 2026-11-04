@@ -978,7 +978,7 @@ function buildRoleplayTemporalContext(db, workspaceId) {
     `Current narrative time: ${formatted.time}${formatted.weekday ? ` (${formatted.weekday})` : ''}`,
     ...(clock.season ? [`Current season: ${clock.season.name}${clock.season.description ? ` (${clock.season.description})` : ''}`] : []),
     ...(todayEntries.length
-      ? ['Calendar entries today:', ...todayEntries.map(entry => `- ${entry.title} (${entry.kind})`)]
+      ? ['Calendar entries today:', ...todayEntries.map(entry => describeEntryForNarrator(entry, integer(clock.hour) * 60 + integer(clock.minute)))]
       : ['Calendar entries today: none']),
     `Calendar day length: ${calendar.hoursPerDay} hours`,
     'Time cost matrix:',
@@ -1151,8 +1151,113 @@ function recurrenceMatches(calendar, anchor, recurrence, date) {
     );
     return difference >= 0 && difference % interval === 0 && date.day === anchor.day;
   }
+  const weekdays = unit === 'week' ? recurrenceWeekdays(calendar, recurrence) : [];
+  if (weekdays.length) {
+    const length = calendar.weekdays.length;
+    const dateOrdinal = toOrdinal(calendar, date);
+    if (!weekdays.includes(modulo(dateOrdinal + calendar.epochWeekday, length))) return false;
+    // Weeks are counted from the anchor's week, so "every 2 weeks" keeps the same weeks whichever day is picked.
+    const weekStart = ordinal => ordinal - modulo(ordinal + calendar.epochWeekday, length);
+    return ((weekStart(dateOrdinal) - weekStart(toOrdinal(calendar, anchor))) / length) % interval === 0;
+  }
   const divisor = interval * (unit === 'week' ? calendar.weekdays.length : 1);
   return (toOrdinal(calendar, date) - toOrdinal(calendar, anchor)) % divisor === 0;
+}
+
+// The days of the world's week a weekly event falls on. None picked keeps the anchor's own day,
+// and a day the calendar no longer has is dropped.
+function recurrenceWeekdays(calendar, recurrence) {
+  const length = calendar.weekdays.length;
+  const picked = Array.isArray(recurrence?.weekdays) ? recurrence.weekdays : [];
+  return [...new Set(picked.map(Number).filter(index => Number.isInteger(index) && index >= 0 && index < length))]
+    .sort((left, right) => left - right);
+}
+
+// How many days each occurrence lasts. A weekly event repeats on its own days instead.
+function recurrenceDurationDays(recurrence) {
+  if (recurrence?.unit === 'week') return 1;
+  return Math.min(positiveInteger(recurrence?.durationDays, 1), 366);
+}
+
+// Which day of an occurrence the date is, or null when the event does not run that day.
+// An occurrence that started last month still reaches into this one.
+function recurrenceSpan(calendar, anchor, recurrence, date) {
+  const length = recurrenceDurationDays(recurrence);
+  const ordinal = toOrdinal(calendar, date);
+  for (let offset = 0; offset < length; offset += 1) {
+    const start = offset ? fromOrdinal(calendar, ordinal - offset, date.eraId) : date;
+    if (recurrenceMatches(calendar, anchor, recurrence, start)) return { day: offset + 1, of: length };
+  }
+  return null;
+}
+
+function timeMinutes(calendar, value) {
+  const time = parseObject(value, null);
+  if (!time) return null;
+  const hour = Number(time.hour);
+  const minute = Number(time.minute ?? 0);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
+  if (hour < 0 || hour >= calendar.hoursPerDay || minute < 0 || minute > 59) return null;
+  return hour * 60 + minute;
+}
+
+// An event's hours as minutes of the day. Without `until` the event is a single moment.
+function eventHours(calendar, data) {
+  const hours = parseObject(data?.hours, null);
+  const from = hours ? timeMinutes(calendar, hours.from) : null;
+  if (from == null) return null;
+  return { from, until: timeMinutes(calendar, hours.until) };
+}
+
+// What the hours mean on one day of the event. A recurring event keeps its hours every day; a
+// one-time event opens on its first day and closes on its last, running all day in between.
+function dayWindow(hours, span, recurring) {
+  if (!hours) return null;
+  const single = recurring || span.of === 1;
+  if (hours.until == null && single) return { start: hours.from, end: null, moment: true };
+  if (single) return { start: hours.from, end: hours.until };
+  if (span.day === 1) return { start: hours.from, end: null };
+  if (span.day === span.of && hours.until != null) return { start: null, end: hours.until };
+  return null;
+}
+
+function scheduleDetail(hours, span, recurring) {
+  return {
+    ...(span.of > 1 ? { span } : {}),
+    ...(hours ? { hours, window: dayWindow(hours, span, recurring) } : {})
+  };
+}
+
+function formatMinutes(minutes) {
+  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+}
+
+function formatWait(minutes) {
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return [hours ? `${hours} h` : '', rest ? `${rest} min` : ''].filter(Boolean).join(' ') || 'under a minute';
+}
+
+// The narrator's reading of an event's hours against the story clock.
+function describeWindow(window, now) {
+  if (!window) return 'all day';
+  const { start, end } = window;
+  if (window.moment) return now < start ? `at ${formatMinutes(start)}, in ${formatWait(start - now)}` : `at ${formatMinutes(start)}, already past`;
+  if (start != null && end != null) {
+    const range = `${formatMinutes(start)} to ${formatMinutes(end)}`;
+    if (now < start) return `${range}, starts in ${formatWait(start - now)}`;
+    if (end <= start) return `${range}, under way, ends tomorrow at ${formatMinutes(end)}`;
+    return now < end ? `${range}, under way, ends in ${formatWait(end - now)}` : `${range}, over for today`;
+  }
+  if (start != null) return now < start ? `from ${formatMinutes(start)}, starts in ${formatWait(start - now)}` : `from ${formatMinutes(start)}, under way`;
+  return now < end ? `until ${formatMinutes(end)}, ends in ${formatWait(end - now)}` : `until ${formatMinutes(end)}, over`;
+}
+
+function describeEntryForNarrator(entry, now) {
+  const parts = [entry.kind];
+  if (entry.span) parts.push(`day ${entry.span.day} of ${entry.span.of}`);
+  if (entry.hours) parts.push(describeWindow(entry.window, now));
+  return `- ${entry.title} (${parts.join(', ')})`;
 }
 
 function getCalendarEntries(db, workspaceId, year, month, eraId) {
@@ -1198,15 +1303,23 @@ function getCalendarEntries(db, workspaceId, year, month, eraId) {
           && compareDates(calendar, date, occurrence.startDate) >= 0
           && compareDates(calendar, date, occurrence.endDate) <= 0);
         const nature = data.eventNature === 'recurring' ? 'recurring' : 'one-time';
+        const hours = eventHours(calendar, data);
         if (nature === 'recurring') {
           const anchor = data.recurrence?.anchorDate || data.startDate;
-          if (!hasRecordedOccurrence && anchor && validateDate(calendar, anchor) && recurrenceMatches(calendar, anchor, data.recurrence || {}, date)) {
-            entries.push({ id: `${row.id}:${toOrdinal(calendar, date)}`, entityId: row.id, date, title: row.canonicalName, kind: 'recurring-event', category: data.category || data.eventCategory || null, entityType: row.type, hidden });
+          const span = !hasRecordedOccurrence && anchor && validateDate(calendar, anchor)
+            ? recurrenceSpan(calendar, anchor, data.recurrence || {}, date)
+            : null;
+          if (span) {
+            entries.push({ id: `${row.id}:${toOrdinal(calendar, date)}`, entityId: row.id, date, title: row.canonicalName, kind: 'recurring-event', category: data.category || data.eventCategory || null, entityType: row.type, hidden, ...scheduleDetail(hours, span, true) });
           }
         } else if (!hasRecordedOccurrence && data.startDate && validateDate(calendar, data.startDate)) {
           const endDate = data.endDate && validateDate(calendar, data.endDate) ? data.endDate : data.startDate;
           if (compareDates(calendar, date, data.startDate) >= 0 && compareDates(calendar, date, endDate) <= 0) {
-            entries.push({ id: `${row.id}:${toOrdinal(calendar, date)}`, entityId: row.id, date, title: row.canonicalName, kind: 'event', category: data.category || data.eventCategory || null, entityType: row.type, hidden });
+            const span = {
+              day: compareDates(calendar, date, data.startDate) + 1,
+              of: compareDates(calendar, endDate, data.startDate) + 1
+            };
+            entries.push({ id: `${row.id}:${toOrdinal(calendar, date)}`, entityId: row.id, date, title: row.canonicalName, kind: 'event', category: data.category || data.eventCategory || null, entityType: row.type, hidden, ...scheduleDetail(hours, span, false) });
           }
         }
         continue;

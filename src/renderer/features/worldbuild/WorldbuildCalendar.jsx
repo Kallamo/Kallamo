@@ -62,6 +62,25 @@ function entryVisual(entry) {
   return { color: ENTRY_COLORS[key], label: labels[key] };
 }
 
+const clockText = minutes => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+
+// The short note at the end of a day's chip: which day of a longer event, else when it starts.
+function entryAside(entry) {
+  if (entry.span) return `${entry.span.day}/${entry.span.of}`;
+  return entry.window?.start != null ? clockText(entry.window.start) : '';
+}
+
+function entryDetail(entry) {
+  const parts = [];
+  if (entry.span) parts.push(`day ${entry.span.day} of ${entry.span.of}`);
+  const window = entry.window;
+  if (window?.moment) parts.push(`at ${clockText(window.start)}`);
+  else if (window?.start != null && window?.end != null) parts.push(`${clockText(window.start)} to ${clockText(window.end)}`);
+  else if (window?.start != null) parts.push(`from ${clockText(window.start)}`);
+  else if (window?.end != null) parts.push(`until ${clockText(window.end)}`);
+  return parts.join(', ');
+}
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -324,7 +343,8 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
                       {dayEntries.slice(0, 3).map(entry => {
                         const visual = entryVisual(entry);
                         return <button key={entry.id} type="button" onClick={() => onOpenEntity(entry.entityId)} className="flex w-full items-center gap-1.5 rounded-md border border-border-subtle bg-surface-hover/40 px-1.5 py-1 text-left text-xs font-medium leading-tight text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" data-tooltip={`${visual.label}: ${entry.title}`}>
-                          <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: visual.color }} /><span className="min-w-0 truncate">{entry.title}</span>
+                          <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: visual.color }} /><span className="min-w-0 flex-1 truncate">{entry.title}</span>
+                          {entryAside(entry) && <span className="shrink-0 tabular-nums text-text-subtle">{entryAside(entry)}</span>}
                         </button>;
                       })}
                       {dayEntries.length > 3 && <span className="block px-1 text-xs font-medium text-text-subtle">+{dayEntries.length - 3} more</span>}
@@ -339,7 +359,7 @@ export default function WorldbuildCalendar({ workspaceId, api, showToast, onOpen
                 const visual = entryVisual(entry);
                 return <button key={entry.id} type="button" onClick={() => onOpenEntity(entry.entityId)} className="flex w-full items-center gap-4 px-5 py-3 text-left transition-colors duration-200 ease-standard hover:bg-surface-hover/40">
                   <span className="w-10 font-mono text-sm" style={{ color: visual.color }}>{entry.date.day}</span>
-                  <span className="min-w-0 flex-1 text-sm text-text-secondary">{entry.title}</span>
+                  <span className="min-w-0 flex-1 text-sm text-text-secondary">{entry.title}{entryDetail(entry) && <span className="text-text-subtle"> · {entryDetail(entry)}</span>}</span>
                   <span className="calendar-entry rounded-full px-2 py-0.5 text-xs font-semibold" style={{ '--calendar-entry-color': visual.color }}>{visual.label}</span>
                 </button>;
               })}
