@@ -1627,10 +1627,15 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       else if (action === 'delete') showToast(`Deleted ${result.deleted} entit${result.deleted === 1 ? 'y' : 'ies'}.`, 'success');
       const selectedId = selected?.id;
       if (selectedId && ids.includes(selectedId) && (action === 'delete' || (action === 'reject-proposed' && selected?.status === 'proposed'))) setSelected(null);
-      setSelectedIds(new Set());
       setBulkConfirm(null);
       if (result.skills) window.dispatchEvent(new CustomEvent('roleplay-state-change', { detail: { workspaceId } }));
       await load();
+      // The selection stays for the next action; only entities the action removed leave it.
+      if (action === 'delete') setSelectedIds(new Set());
+      else if (action === 'reject-proposed') {
+        const removed = new Set(entities.filter(entity => ids.includes(entity.id) && entity.status === 'proposed').map(entity => entity.id));
+        setSelectedIds(current => new Set([...current].filter(id => !removed.has(id))));
+      }
       if (action === 'reject-narrative') await loadSubjectReview();
       if (action !== 'delete' && selectedId && ids.includes(selectedId)) {
         const refreshed = await electronAPI.getEntity(selectedId);
