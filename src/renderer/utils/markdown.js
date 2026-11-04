@@ -22,8 +22,42 @@ export function sanitizeUrl(url) {
     return trimmed;
 }
 
-export function parseInlineMarkdown(text) {
+// Dialogue is marked for every marker; the Appearance setting picks which ones get color, in CSS,
+// so changing it never re-parses a message. Runs on escaped text: straight quotes arrive as &quot;.
+const DIALOGUE_QUOTES = [
+    { mark: 'quotes', pattern: /&quot;(?:(?!&quot;).)+?&quot;|“[^“”\n]+”/g },
+    { mark: 'guillemets', pattern: /«[^«»\n]+»/g },
+];
+const DASH_LINE = /^(\s*[—–]\s*)(.*)$/;
+const DASH_BREAK = /(\s[—–](?=\s|$)\s*)/;
+const DASH_PAIR = /((?<=^|\s)[—–][^—–]+[—–](?=\s|[.,;:!?…]|$))/;
+
+const dialogueSpan = (mark, html) => `<span class="dialogue" data-mark="${mark}">${html}</span>`;
+
+const markQuotes = text => DIALOGUE_QUOTES.reduce((out, { mark, pattern }) => out.replace(pattern, match => dialogueSpan(mark, match)), text);
+
+export function markDialogue(text, atLineStart = true) {
+    const line = atLineStart ? DASH_LINE.exec(text) : null;
+    if (line) {
+        // A line opening with a dash is speech; each spaced dash after it switches between
+        // speech and narration, and the end of the line closes whatever is open.
+        const parts = line[2].split(DASH_BREAK);
+        return line[1] + parts.map((part, i) => {
+            if (i % 2) return part;
+            const html = markQuotes(part);
+            return (i / 2) % 2 === 0 && part.trim() ? dialogueSpan('dash', html) : html;
+        }).join('');
+    }
+    // Mid-line, a dash only counts with a closing dash: "hesitated — and left" stays plain.
+    return text.split(DASH_PAIR).map((part, i) => {
+        if (i % 2 === 0) return markQuotes(part);
+        return `${part[0]}${dialogueSpan('dash', markQuotes(part.slice(1, -1)))}${part[part.length - 1]}`;
+    }).join('');
+}
+
+export function parseInlineMarkdown(text, { dialogue = false } = {}) {
     let safeText = escapeHTML(text);
+    if (dialogue) safeText = safeText.split(/(`[^`]*`)/).map((part, i) => (i % 2 ? part : markDialogue(part, i === 0))).join('');
     safeText = safeText.replace(/\*\*(.*?)\*\*/g, '<strong class="text-accent font-bold">$1</strong>');
     safeText = safeText.replace(/\*(.*?)\*/g, '<em class="italic text-gray-300">$1</em>');
     safeText = safeText.replace(/`(.*?)`/g, '<code class="bg-surface-hover text-accent px-1.5 py-0.5 rounded text-xs font-mono border border-gray-700/60" style="display: inline !important; width: auto !important; white-space: normal !important; vertical-align: baseline;">$1</code>');
@@ -31,7 +65,7 @@ export function parseInlineMarkdown(text) {
     return safeText;
 }
 
-export function parseMarkdown(text, lineNumbersEnabled = false) {
+export function parseMarkdown(text, lineNumbersEnabled = false, { dialogue = false } = {}) {
     if (!text) return '';
 
     let codeBlocks = [];
@@ -210,13 +244,13 @@ export function parseMarkdown(text, lineNumbersEnabled = false) {
 
             lines.forEach(line => {
                 let cleanLine = line.replace(/^\s*([\*\-]|\d+\.)\s+/, '');
-                htmlResult.push(`<li class="pl-1 text-sm text-gray-200 leading-relaxed">${parseInlineMarkdown(cleanLine)}</li>`);
+                htmlResult.push(`<li class="pl-1 text-sm text-gray-200 leading-relaxed">${parseInlineMarkdown(cleanLine, { dialogue })}</li>`);
             });
             return;
         }
 
         closeListIfNeeded();
-        let parsedParagraph = lines.map(line => parseInlineMarkdown(line)).join('<br>');
+        let parsedParagraph = lines.map(line => parseInlineMarkdown(line, { dialogue })).join('<br>');
         htmlResult.push(`<p class="mb-3 last:mb-0 leading-relaxed text-sm text-gray-200">${parsedParagraph}</p>`);
     });
 
@@ -230,16 +264,17 @@ export function parseMarkdown(text, lineNumbersEnabled = false) {
 const MARKDOWN_CACHE_LIMIT = 300;
 const markdownCache = new Map();
 
-export function parseMarkdownCached(text) {
+export function parseMarkdownCached(text, { dialogue = false } = {}) {
     if (!text) return '';
-    const cached = markdownCache.get(text);
+    const key = dialogue ? `d\u0000${text}` : text;
+    const cached = markdownCache.get(key);
     if (cached !== undefined) {
-        markdownCache.delete(text);
-        markdownCache.set(text, cached);
+        markdownCache.delete(key);
+        markdownCache.set(key, cached);
         return cached;
     }
-    const html = parseMarkdown(text);
-    markdownCache.set(text, html);
+    const html = parseMarkdown(text, false, { dialogue });
+    markdownCache.set(key, html);
     if (markdownCache.size > MARKDOWN_CACHE_LIMIT) markdownCache.delete(markdownCache.keys().next().value);
     return html;
 }

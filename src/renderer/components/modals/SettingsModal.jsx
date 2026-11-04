@@ -10,6 +10,8 @@ import SegmentedControl from '../ui/SegmentedControl';
 import { GithubIcon, DiscordIcon, RedditIcon } from '../ui/BrandIcons';
 import NumberInput from '../ui/NumberInput';
 import ConfirmDialog from '../ui/ConfirmDialog';
+import ColorPicker from '../ui/ColorPicker';
+import Popover from '../ui/Popover';
 import { Menu, MenuItem, MenuSeparator } from '../ui/Menu';
 import { SettingsHeader, SettingsGroup, SettingsRow, SettingsRadio, IconTile, RunsOnBar, fieldClass } from '../../features/settings/SettingsUi';
 import AppearancePreview, { OptionTile } from '../../features/settings/AppearancePreview';
@@ -109,6 +111,12 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [blurEnabled, setBlurEnabled] = useState(settings.interface.blur ?? true);
   const [writingToolbar, setWritingToolbar] = useState(settings.interface.writingToolbar || 'fixed');
   const [smartTypography, setSmartTypography] = useState(settings.interface.smartTypography ?? true);
+  const [coloredDialogue, setColoredDialogue] = useState(settings.interface.coloredDialogue || false);
+  const [dialogueMarkers, setDialogueMarkers] = useState(settings.interface.dialogueMarkers || ['quotes', 'dash']);
+  const [dialogueColor, setDialogueColor] = useState(settings.interface.dialogueColor || '#F9E29A');
+  const [dialogueCustomColor, setDialogueCustomColor] = useState(settings.interface.dialogueCustomColor || '');
+  const [dialoguePickerOpen, setDialoguePickerOpen] = useState(false);
+  const dialoguePickerRef = useRef(null);
 
   const [chunkSize, setChunkSize] = useState(settings.advanced.chunkSize || 500);
   const initialRetrievalSettings = settings.advanced;
@@ -200,10 +208,13 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   }, [activeTab, electronAPI]);
 
   const colors = ['#FBCB2D', '#ff5f56', '#3b82f6', '#10b981', '#9c27b0'];
+  const DIALOGUE_MARKERS = [{ value: 'quotes', label: '“Quotes”' }, { value: 'dash', label: '— Dash' }, { value: 'guillemets', label: '«Guillemets»' }];
+  // Softer takes on the five accents, so speech reads as color without shouting.
+  const DIALOGUE_COLORS = ['#F9E29A', '#FFA9A4', '#9DC1FA', '#8FDCC0', '#D3A1DD'];
 
   // Keep ref of settings to prevent stale closures in debounce timeout
   const settingsRef = useRef({
-    accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled, writingToolbar, smartTypography, streaming: streamingEnabled,
+    accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled, writingToolbar, smartTypography, coloredDialogue, dialogueMarkers, dialogueColor, dialogueCustomColor, streaming: streamingEnabled,
     chunkSize, similarity, profileKnowledgeTopK, workspaceDocumentsTopK, longTermMemoryTopK, worldbuildEntityLimit, worldbuildBreadth, executionDevice, ragDebug, agenticDebug, tokenDebug, narrativeStateDebug,
     embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage,
     taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName,
@@ -214,7 +225,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
 
   useEffect(() => {
     settingsRef.current = {
-      accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled, writingToolbar, smartTypography, streaming: streamingEnabled,
+      accentColor, fontFamily, fontSize, layout: layoutMode, codeTheme, lineNumbers, blur: blurEnabled, writingToolbar, smartTypography, coloredDialogue, dialogueMarkers, dialogueColor, dialogueCustomColor, streaming: streamingEnabled,
       chunkSize, similarity, profileKnowledgeTopK, workspaceDocumentsTopK, longTermMemoryTopK, worldbuildEntityLimit, worldbuildBreadth, executionDevice, ragDebug, agenticDebug, tokenDebug, narrativeStateDebug,
       embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage,
       taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName,
@@ -222,7 +233,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, agenticGate, agenticToolProtocol, allowAiEntityCreation, archiveSummarization,
       promptCache, promptCacheContextPlacement
     };
-  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, smartTypography, streamingEnabled, chunkSize, similarity, profileKnowledgeTopK, workspaceDocumentsTopK, longTermMemoryTopK, worldbuildEntityLimit, worldbuildBreadth, executionDevice, ragDebug, agenticDebug, tokenDebug, narrativeStateDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage, taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName, narrativeStateMode, narrativeStateApiProfileId, narrativeStateModelName, retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, agenticGate, agenticToolProtocol, allowAiEntityCreation, archiveSummarization, promptCache, promptCacheContextPlacement]);
+  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, smartTypography, coloredDialogue, dialogueMarkers, dialogueColor, dialogueCustomColor, streamingEnabled, chunkSize, similarity, profileKnowledgeTopK, workspaceDocumentsTopK, longTermMemoryTopK, worldbuildEntityLimit, worldbuildBreadth, executionDevice, ragDebug, agenticDebug, tokenDebug, narrativeStateDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage, taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName, narrativeStateMode, narrativeStateApiProfileId, narrativeStateModelName, retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, agenticGate, agenticToolProtocol, allowAiEntityCreation, archiveSummarization, promptCache, promptCacheContextPlacement]);
 
   const updateSetting = async (category, key, value) => {
     if (category === 'interface') {
@@ -235,6 +246,9 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       if (key === 'blur') setBlurEnabled(value);
       if (key === 'writingToolbar') setWritingToolbar(value);
       if (key === 'smartTypography') setSmartTypography(value);
+      if (key === 'coloredDialogue') setColoredDialogue(value);
+      if (key === 'dialogueMarkers') setDialogueMarkers(value);
+      if (key === 'dialogueColor') setDialogueColor(value);
     } else if (category === 'advanced') {
       if (key === 'executionDevice') setExecutionDevice(value);
       if (key === 'ragDebug') setRagDebug(value);
@@ -279,7 +293,11 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         lineNumbers: key === 'lineNumbers' ? value : current.lineNumbers,
         blur: key === 'blur' ? value : current.blur,
         writingToolbar: key === 'writingToolbar' ? value : current.writingToolbar,
-        smartTypography: key === 'smartTypography' ? value : current.smartTypography
+        smartTypography: key === 'smartTypography' ? value : current.smartTypography,
+        coloredDialogue: key === 'coloredDialogue' ? value : current.coloredDialogue,
+        dialogueMarkers: key === 'dialogueMarkers' ? value : current.dialogueMarkers,
+        dialogueColor: key === 'dialogueColor' ? value : current.dialogueColor,
+        dialogueCustomColor: current.dialogueCustomColor
       },
       advanced: {
         ...settings.advanced,
@@ -332,6 +350,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const updateSettingWithDebounce = (key, value) => {
     // Visual state moves at once so the slider stays smooth; the database write waits.
     if (key === 'chunkSize') setChunkSize(value);
+    if (key === 'dialogueColor') setDialogueColor(value);
+    if (key === 'dialogueCustomColor') setDialogueCustomColor(value);
     if (key === 'similarity') setSimilarity(value);
     if (key === 'profileKnowledgeTopK') setProfileKnowledgeTopK(value);
     if (key === 'workspaceDocumentsTopK') setWorkspaceDocumentsTopK(value);
@@ -358,7 +378,11 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
           lineNumbers: current.lineNumbers,
           blur: current.blur,
           writingToolbar: current.writingToolbar,
-          smartTypography: current.smartTypography
+          smartTypography: current.smartTypography,
+          coloredDialogue: current.coloredDialogue,
+          dialogueMarkers: current.dialogueMarkers,
+          dialogueColor: current.dialogueColor,
+          dialogueCustomColor: current.dialogueCustomColor
         },
         advanced: {
           ...settings.advanced,
@@ -1157,6 +1181,64 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
             <SettingsRow label="Line numbers in code">
               <Toggle checked={lineNumbers} ariaLabel="Line numbers in code" onChange={value => updateSetting('interface', 'lineNumbers', value)} />
             </SettingsRow>
+            <SettingsRow label="Colored dialogue" description="Speech in replies gets its own color, in old messages too.">
+              <Toggle checked={coloredDialogue} ariaLabel="Colored dialogue" onChange={value => updateSetting('interface', 'coloredDialogue', value)} />
+            </SettingsRow>
+            {coloredDialogue && (
+              <>
+                <SettingsRow label="Speech marks" description="Quotes count only when closed. A line that starts with a dash is speech until the next dash or the end of the line.">
+                  <div role="group" aria-label="Speech marks" className="flex gap-1.5">
+                    {DIALOGUE_MARKERS.map(({ value, label }) => {
+                      const on = dialogueMarkers.includes(value);
+                      return (
+                        <button
+                          key={value}
+                          type="button"
+                          aria-pressed={on}
+                          onClick={() => updateSetting('interface', 'dialogueMarkers', on ? dialogueMarkers.filter(m => m !== value) : [...dialogueMarkers, value])}
+                          className={`rounded-lg border px-2.5 py-1 text-[0.8125rem] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${on ? 'border-accent/50 bg-accent/15 text-text-primary' : 'border-tint/10 text-text-muted hover:text-text-primary'}`}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </SettingsRow>
+                <SettingsRow label="Dialogue color">
+                  <div className="flex items-center gap-2.5">
+                    {[...DIALOGUE_COLORS, ...(dialogueCustomColor && !DIALOGUE_COLORS.includes(dialogueCustomColor) ? [dialogueCustomColor] : [])].map(c => (
+                      <button
+                        key={c}
+                        type="button"
+                        aria-label={`Dialogue ${c}`}
+                        aria-pressed={dialogueColor === c}
+                        onClick={() => updateSetting('interface', 'dialogueColor', c)}
+                        style={{ backgroundColor: c, boxShadow: dialogueColor === c ? '0 0 0 2px var(--theme-surface-raised), 0 0 0 4px var(--theme-text-primary)' : 'inset 0 0 0 1px color-mix(in srgb, var(--theme-tint) 12%, transparent)' }}
+                        className="h-5 w-5 rounded-full transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                      />
+                    ))}
+                    <button
+                      ref={dialoguePickerRef}
+                      type="button"
+                      aria-label="Custom dialogue color"
+                      aria-haspopup="dialog"
+                      aria-expanded={dialoguePickerOpen}
+                      onClick={() => setDialoguePickerOpen(open => !open)}
+                      className="flex h-5 w-5 items-center justify-center rounded-full border border-dashed border-tint/30 text-text-muted transition-transform hover:scale-110 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                    >
+                      <Plus className="h-3 w-3" />
+                    </button>
+                    <Popover anchorRef={dialoguePickerRef} open={dialoguePickerOpen} onClose={() => setDialoguePickerOpen(false)} align="right" matchAnchorWidth={false} scroll={false} className="w-64 border-border-default bg-surface-panel-muted p-3 shadow-black/60">
+                      <div className="mb-3 text-xs font-semibold text-text-primary">Custom color</div>
+                      <ColorPicker
+                        value={dialogueCustomColor || dialogueColor}
+                        onChange={c => { updateSettingWithDebounce('dialogueCustomColor', c); updateSettingWithDebounce('dialogueColor', c); }}
+                      />
+                    </Popover>
+                  </div>
+                </SettingsRow>
+              </>
+            )}
           </SettingsGroup>
           <SettingsGroup title="Writing Desk">
             <SettingsRow label="Formatting toolbar" description="Fixed at the top, or over the selection.">
@@ -1502,6 +1584,7 @@ const SEARCH_INDEX = [
   { page: 'appearance', label: 'Background blur', keywords: 'glass performance' },
   { page: 'appearance', label: 'Chat layout', keywords: 'bubbles document' },
   { page: 'appearance', label: 'Code theme', keywords: 'syntax highlight line numbers' },
+  { page: 'appearance', label: 'Colored dialogue', keywords: 'speech quotes dash color colour' },
   { page: 'appearance', label: 'Formatting toolbar', keywords: 'writing desk fixed bubble' },
   { page: 'appearance', label: 'Smart typography', keywords: 'quotes dashes ellipsis' },
   { page: 'data', label: 'Back up', keywords: 'backup export' },

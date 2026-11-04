@@ -42,6 +42,14 @@ const api = window.electronAPI || {
   onUpdateOutdated: () => () => { }
 };
 
+// Messages always carry dialogue spans; these root classes decide which markers get color.
+const applyDialogueColor = (iface = {}) => {
+  const root = document.documentElement;
+  const markers = iface.coloredDialogue ? (iface.dialogueMarkers || ['quotes', 'dash']) : [];
+  ['quotes', 'dash', 'guillemets'].forEach(mark => root.classList.toggle(`dialogue-${mark}`, markers.includes(mark)));
+  root.style.setProperty('--dialogue-color', iface.dialogueColor || '#F9E29A');
+};
+
 export const AppProvider = ({ children }) => {
   const [currentView, setCurrentView] = useState('dashboard'); // 'dashboard', 'library', 'chat'
   const [activeWorkspaceView, setActiveWorkspaceView] = useState('chat');
@@ -145,6 +153,7 @@ export const AppProvider = ({ children }) => {
         if (fetchedSettings.interface && fetchedSettings.interface.accentColor) {
           document.documentElement.style.setProperty('--app-accent', fetchedSettings.interface.accentColor);
         }
+        applyDialogueColor(fetchedSettings.interface);
       }
 
       const fetchedChats = await api.getChats();
@@ -359,6 +368,7 @@ export const AppProvider = ({ children }) => {
     if (newSettings.interface && newSettings.interface.accentColor) {
       updateAccentColor(newSettings.interface.accentColor);
     }
+    applyDialogueColor(newSettings.interface);
   };
 
   const handleSaveProfile = async (profile) => {

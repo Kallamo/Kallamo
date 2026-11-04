@@ -780,3 +780,10 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 
 /* Notes and Analyses read as prose: bold is emphasis, not the accent the shared Markdown gives it. */
 .wd-note-body strong { color: var(--theme-text-primary); }
+
+/* Colored dialogue: spans are always in chat messages; the Appearance setting adds a root class per marker. */
+.dialogue-quotes .dialogue[data-mark="quotes"],
+.dialogue-dash .dialogue[data-mark="dash"],
+.dialogue-guillemets .dialogue[data-mark="guillemets"] {
+  color: var(--dialogue-color);
+}
