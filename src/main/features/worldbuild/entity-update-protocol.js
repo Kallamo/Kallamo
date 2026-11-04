@@ -64,11 +64,15 @@ function decodeEntityUpdate(value) {
   return decoded;
 }
 
+// Models told to "encode the value as JSON" often quote plain text too, which would reach the sheet as "\"mountain\"".
 function decodeValue(value) {
   const text = String(value ?? '').trim();
   if (!text) return '';
-  if (!/^(?:true|false|null|-?\d|\[|\{)/.test(text)) return text;
-  try { return JSON.parse(text); } catch { return text; }
+  if (!/^(?:true|false|null|-?\d|\[|\{|")/.test(text)) return text;
+  try {
+    const parsed = JSON.parse(text);
+    return typeof parsed === 'string' ? parsed.trim() : parsed;
+  } catch { return text; }
 }
 
 module.exports = { decodeEntityUpdate, isEntityUpdateShape };

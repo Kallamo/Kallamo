@@ -56,6 +56,18 @@ describe('entity update structured schema', () => {
     expect(decoded.narrative).toEqual([]);
   });
 
+  test('reads a field value sent as a quoted JSON string as plain text', () => {
+    const blank = { ...relationship(''), targetRole: '', sourcePerspective: '', score: 0, targetId: '', subjectId: '', perspectiveOwnerId: '', target: '' };
+    const decoded = decodeEntityUpdate({ changes: [
+      { ...blank, kind: 'field', key: 'locationType', value: '"mountain"' },
+      { ...blank, kind: 'field', key: 'description', value: '"Never again," she said at the gate.' },
+      { ...blank, kind: 'field', key: 'tags', value: '["one","two"]' },
+    ] });
+    expect(decoded.data.locationType.value).toBe('mountain');
+    expect(decoded.data.description.value).toBe('"Never again," she said at the gate.');
+    expect(decoded.data.tags.value).toEqual(['one', 'two']);
+  });
+
   test('keeps lore out of the findings response', () => {
     expect(validate({ changes: [{ ...relationship('Daughter'), kind: 'lore' }] })).toBe(false);
   });
