@@ -111,6 +111,19 @@ describe('replacing a narrative turn', () => {
     expect(count('roleplay_equipment')).toBe(0);
   });
 
+  test('reverting past a reply whose analysis failed restores the state before it', () => {
+    playTurn('reply-a', turnAEffects);
+    expect(state.beginJob(WS, 'reply-b')).toBe('started');
+    entities.captureTurnSnapshot(WS, 'reply-b');
+    db.prepare("UPDATE roleplay_workspace_settings SET location_entity_id = 'dock' WHERE workspace_id = ?").run(WS);
+    state.finishJob(WS, 'reply-b', 'failed', { error: 'Narrative State returned invalid JSON.' });
+
+    expect(entities.invalidateOrigin(WS, 'reply-b', 'deleted')).toEqual({ restored: true });
+    expect(location()).toBe('pier');
+    expect(entities.invalidateOrigin(WS, 'reply-a', 'deleted')).toEqual({ restored: true });
+    expect(location()).toBe('dock');
+  });
+
   test('an edit replaces every later reply, newest first', () => {
     playTurn('reply-a', turnAEffects);
     playTurn('reply-c', () => {

@@ -292,16 +292,17 @@ export class NarrativeEntitySystem {
     const hasSnapshot = Boolean(this.db.prepare(`
       SELECT 1 FROM roleplay_turn_snapshots WHERE workspace_id = ? AND origin_id = ?
     `).get(workspaceId, originId));
+    // The latest turn is the last one that touched the state, whether its analysis finished or failed.
     const latest = this.db.prepare(`
-      SELECT origin_id FROM narrative_state_jobs
-      WHERE workspace_id = ? AND status IN ('completed', 'skipped')
+      SELECT origin_id FROM roleplay_turn_snapshots
+      WHERE workspace_id = ?
         AND NOT EXISTS (
           SELECT 1 FROM narrative_origin_lifecycle lifecycle
-          WHERE lifecycle.workspace_id = narrative_state_jobs.workspace_id
-            AND lifecycle.origin_id = narrative_state_jobs.origin_id
+          WHERE lifecycle.workspace_id = roleplay_turn_snapshots.workspace_id
+            AND lifecycle.origin_id = roleplay_turn_snapshots.origin_id
             AND lifecycle.status != 'active'
         )
-      ORDER BY updated_at DESC LIMIT 1
+      ORDER BY created_at DESC, rowid DESC LIMIT 1
     `).get(workspaceId) as { origin_id: string } | undefined;
     if (hasSnapshot && latest && latest.origin_id !== originId) {
       throw new Error('A narrative turn can only be removed after its later turns have been reverted.');
