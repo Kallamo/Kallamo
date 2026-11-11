@@ -125,7 +125,7 @@ When you open a PR, the [pull request template](.github/pull_request_template.md
 - The **type of change** (bug fix, feature, breaking change, docs, refactor).
 - **How you tested it**, with steps to reproduce.
 - A **checklist** confirming you've self-reviewed, updated docs where needed, and that the change introduces no new warnings.
-- Confirmation that you've **read and agreed to the CLA**.
+- The **CLA check**, which asks you to sign the CLA on your first pull request.
 
 A maintainer will review your PR. Expect questions or change requests. This is normal and part of keeping the project healthy, not a rejection of your work. Please be patient: this is a young project maintained in spare time.
 
@@ -133,7 +133,7 @@ A maintainer will review your PR. Expect questions or change requests. This is n
 
 ## Contributor License Agreement (CLA)
 
-Before any contribution can be merged, you must read and agree to the [Kallamo Contributor License Agreement](CLA.md). You confirm your agreement by checking the CLA box in the pull request template.
+Before any contribution can be merged, you must read and agree to the [Kallamo Contributor License Agreement](CLA.md). On your first pull request, a CLA check comments with a link: sign it with your GitHub account and the check turns green. You sign only once, and the signature covers all your future contributions to every Kallamo project, including Umwelt.
 
 The CLA exists to keep the project's licensing clear and to protect both you and the project. In short: you keep all rights to your original work (the license you grant is non-exclusive), while allowing the project to use, distribute, and potentially relicense it in the future. Crucially, any version already released under the AGPL stays open under the AGPL forever, so no contributor is ever locked in. Please read the [full text](CLA.md) before contributing.
 

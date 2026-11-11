@@ -1,50 +1,112 @@
-# Kallamo Contributor License Agreement (CLA)
+# Kallamo Contributor License Agreement
 
-Thank you for your interest in contributing to Kallamo ("the Project"). This Contributor License Agreement ("Agreement") is between you ("Contributor") and the Project Creator ("Project Owner"). 
+Thank you for your interest in contributing to a Kallamo project. This
+Contributor License Agreement ("Agreement") sets out the terms under which you
+contribute. Please read it before submitting a Contribution.
 
-In order to clarify the intellectual property license granted with contributions from any person or entity, the Project Owner must have a Contributor License Agreement on file that has been accepted by each Contributor. This protects both you and the Project Owner, and ensures that the Kallamo community can safely use the software.
+## 1. Parties
 
-Please read this document carefully before submitting any contributions.
+This Agreement is between you ("Contributor", "you") and **Jonathan Ferreira
+da Conceição**, or any legal entity he designates to hold the Projects'
+intellectual property, including a company he controls or a successor to the
+Projects ("Owner").
 
-## 1. Definitions
+If you contribute on behalf of your employer or another organization, you
+confirm that you are authorized to accept this Agreement on its behalf, or
+that it has waived any rights to your Contribution.
 
-*   **"Contribution"** means any source code, documentation, translations, design assets, suggestions, or other materials submitted by you for inclusion in, or documentation of, the Project.
-*   **"Submitted"** means any form of electronic, verbal, or written communication sent to the Project Owner or its representatives, including but not limited to communication on electronic mailing lists, source code control systems (like GitHub), and issue tracking systems that are managed by, or on behalf of, the Project.
+## 2. Definitions
 
-## 2. Grant of Copyright License
+- **"Projects"** means every software project published under the Kallamo
+  organization (github.com/Kallamo), including the Kallamo app and the Umwelt
+  engine, and any project that succeeds them.
+- **"Contribution"** means any original work of authorship you intentionally
+  submit to a Project: source code, documentation, translations, tests, design
+  assets or other material.
+- **"Submit"** means to send a Contribution through a Project's repositories,
+  pull requests, issue trackers or other channels the Owner manages, for
+  inclusion in a Project. Material you clearly mark as "Not a Contribution" is
+  not submitted.
 
-Subject to the terms and conditions of this Agreement, you hereby grant to the Project Owner and to recipients of software distributed by the Project Owner a perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable copyright license to reproduce, prepare derivative works of, publicly display, publicly perform, sublicense, and distribute your Contributions and such derivative works.
+## 3. Copyright license
 
-Because this license is non-exclusive, you retain all rights, title, and interest in and to your original Contributions and are free to use them for any other purpose outside of this Project.
+You grant the Owner and the recipients of software the Owner distributes a
+perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+license to reproduce, prepare derivative works of, publicly display, publicly
+perform, sublicense and distribute your Contributions and such derivative
+works.
 
-## 3. Grant of Patent License
+The license is non-exclusive: you keep all rights, title and interest in your
+Contributions and may use them for any other purpose.
 
-Subject to the terms and conditions of this Agreement, you hereby grant to the Project Owner and to recipients of software distributed by the Project Owner a perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable (except as stated in this section) patent license to make, have made, use, offer to sell, sell, import, and otherwise transfer the Work, where such license applies only to those patent claims licensable by you that are necessarily infringed by your Contribution(s) alone or by combination of your Contribution(s) with the Work to which such Contribution(s) was submitted.
+## 4. Patent license
 
-## 4. Contributor Warranties
+You grant the Owner and the recipients of software the Owner distributes a
+perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+(except as stated in this section) patent license to make, have made, use,
+offer to sell, sell, import and otherwise transfer the Projects, where the
+license applies only to patent claims licensable by you that are necessarily
+infringed by your Contribution alone or by its combination with the Project
+to which it was submitted. If anyone institutes patent litigation alleging
+that a Project or a Contribution infringes a patent, the patent licenses
+granted to that party under this Agreement end on the date the litigation is
+filed.
+
+## 5. Your representations
 
 You represent that:
-1.  You are legally entitled to grant the licenses set forth in this Agreement.
-2.  Each of your Contributions is your original creation (you own the copyright to the code you are submitting) or you have the explicit permission of the copyright owner to submit it under these terms.
-3.  Your Contributions do not, to the best of your knowledge, infringe any third-party copyrights, patents, or other intellectual property rights.
 
-## 5. Support and Disclaimer
+1. You are legally entitled to grant the licenses above.
+2. Each Contribution is your original creation, or you have the right to
+   submit it under this Agreement. Where a Contribution includes third-party
+   material, you identify it and its license in the submission.
+3. Each Contribution does not, to the best of your knowledge, infringe
+   anyone's copyright, patent or other rights.
+4. You take full responsibility for Contributions made with the help of tools,
+   including code generation and AI assistants: you have reviewed them, you
+   understand them, and the representations in this section apply to them as
+   to any other Contribution.
 
-You are not expected to provide support for your Contributions, except to the extent you desire to do so. You provide your Contributions on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied, including, without limitation, any warranties or conditions of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A PARTICULAR PURPOSE.
+You agree to notify the Owner if you become aware of any fact that makes
+these representations inaccurate.
 
-## 6. Project Owner Rights
+## 6. Disclaimer
 
-You acknowledge and agree that the Project Owner is under no obligation to accept, merge, or use any Contribution you submit. The Project Owner reserves the right to re-license the Project (including your Contributions) under other licenses (including proprietary or dual-licensing models) or transfer ownership of the Project's intellectual property.
+You are not expected to provide support for your Contributions. You provide
+them "AS IS", without warranties or conditions of any kind, express or
+implied, including warranties of title, non-infringement, merchantability or
+fitness for a particular purpose.
 
-### 6.1 Why this right exists
+## 7. Owner's rights
 
-Kallamo is more than its source code: it carries a brand, a design identity, and a long-term vision that the Project Owner has invested in heavily. This clause exists so that the Project can remain sustainable and adapt to future opportunities (such as dual-licensing, partnerships, or a transfer of ownership) without legal ambiguity. It is not intended as a way to take advantage of Contributors, and the Project Owner intends to credit and acknowledge all Contributors.
+The Owner is under no obligation to accept, merge or use any Contribution.
+The Owner may license the Projects, including your Contributions, under
+other licenses, including proprietary and dual-licensing models, and may
+transfer the Projects' intellectual property.
 
-### 6.2 The AGPL guarantee
+### Why this right exists
 
-This re-licensing right applies only to future distributions. Any version of the Project already released under the GNU Affero General Public License (AGPL) remains permanently available under the AGPL. This means:
+The Projects carry a name, a design identity and a long-term direction the
+Owner invests in. This right lets them stay sustainable (for example through
+a commercial license next to the AGPL, partnerships, or moving the Projects to
+a company) without legal ambiguity. It is not meant to take advantage of
+contributors, and the Owner intends to credit every contributor.
 
-*   The released code stays open and can never be retroactively closed.
-*   The community is always free to use, study, modify, and fork any AGPL-released version.
+### The AGPL guarantee
 
-No Contributor is ever locked in: even if the Project Owner re-licenses or transfers the Project in the future, the open AGPL codebase remains available to everyone.
+This right applies only to future distributions. Every version of a Project
+already released under the GNU Affero General Public License stays available
+under it permanently:
+
+- released code stays open and can never be closed retroactively;
+- everyone remains free to use, study, modify and fork any AGPL release.
+
+No contributor is ever locked in: whatever happens to the Projects later, the
+AGPL code already released remains available to everyone.
+
+## 8. Acceptance
+
+You accept this Agreement by signing it through the CLA check on your first
+pull request to a Project. The acceptance covers all your future
+Contributions to every Project, until you withdraw it in writing for
+Contributions you submit afterwards.
