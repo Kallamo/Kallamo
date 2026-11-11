@@ -1,7 +1,7 @@
 <a href="https://kallamo.com"><img src="docs/assets/readme-banner.png" width="100%" alt="Kallamo, a local-first studio for roleplay and long-form writing. v2.0.0 beta for Windows, macOS and Linux, free and open source." /></a>
 
 <p align="center">
-  <a href="https://kallamo.com/download/"><b>Download</b></a>
+  <a href="https://kallamo.com/download/"><b>Download foda</b></a>
   &nbsp;·&nbsp;
   <a href="https://kallamo.com">Website</a>
   &nbsp;·&nbsp;
