@@ -7,6 +7,8 @@ import { admitForCharacter } from '../../src/main/features/narrative/umwelt/stor
 import { traceStoryRecord } from '../../src/main/features/narrative/umwelt/story-insights';
 import { LOCAL_EMBEDDING_SPACE, pendingStoryPage, pendingStoryTexts, searchStory, searchTerms, storeStoryVectors } from '../../src/main/features/narrative/umwelt/story-search';
 import { createNarrativeChatContext } from '../../src/main/features/narrative/chat-context';
+import { setWorkspaceExperienceMode } from '../../src/main/features/narrative/mode-orchestration';
+import { NarrativeSceneRepository } from '../../src/narrative/scenes';
 import { openFullSchemaDatabase, type FullSchemaDatabase } from '../database/full-schema-harness';
 
 const require = createRequire(import.meta.url);
@@ -34,7 +36,7 @@ function authored(eventId: string, operations: any[]) {
   return writeStoryEvent(db, WS, { eventId, description: eventId, participants: [], provenance: { interpreter: 'user', originType: 'world-action', originId: eventId }, operations });
 }
 
-const knowledge = (id: string, subjectId: string, object: string, extra: Record<string, unknown> = {}) => ({
+const knowledge = (id: string, subjectId: string, object: string, extra: Record<string, unknown> = {}): any => ({
   id: `op-${id}`, type: 'grant-knowledge', evidenceIds: [],
   knowledge: { id, entryId: id, subjectId, proposition: { subjectId: 'guild', predicate: 'statement', object }, sourceEventId: id, acquisition: 'witness', confidence: 1, accessibility: 'available', status: 'active', ...extra }
 });
@@ -179,6 +181,38 @@ describe('the narrator search outside roleplay', () => {
 
     expect(ask(basis(1)).context).toContain('The guild pays its spies in silver.');
     expect(ask(basis(5)).context).not.toContain('pays its spies');
+  });
+});
+
+describe('recalling earlier scenes', () => {
+  test('a scene comes back only to the character who witnessed it', () => {
+    writeStoryEvent(db, WS, {
+      eventId: 'bell', description: 'The bell tower collapsed during the storm and buried the market stalls.', participants: ['elias'],
+      provenance: { interpreter: 'user', originType: 'world-action', originId: 'bell' },
+      operations: [knowledge('witnessed', 'elias', 'The mason was paid in copper.', { acquisition: 'witness', sourceEventId: 'bell' })]
+    });
+    for (let index = 0; index < 14; index += 1) authored(`later-${index}`, [knowledge(`entry-${index}`, 'mara', `Entry ${index}.`)]);
+    setWorkspaceExperienceMode(db, WS, 'roleplay');
+    new NarrativeSceneRepository(db).save({
+      id: 'scene', projectId: WS, status: 'active', participantIds: ['elias', 'tess'], possibleObserverIds: [],
+      perspective: { access: 'subjective', focalSubjectId: 'elias' }, position: { sequence: 50 }
+    });
+    const planned = createNarrativeChatContext(db, text => Math.ceil(text.length / 4))
+      .plan({ requestId: 'request', workspaceId: WS, query: 'Does anyone remember the storm and the bell tower?', items: [], tokenBudget: 6000 });
+
+    const scene = 'A scene Elias witnessed earlier in the story: The bell tower collapsed';
+    expect(planned.context).toContain(scene);
+    expect(planned.context).not.toContain('A scene Tess witnessed');
+  });
+
+  test('the latest events are left to the chat history', () => {
+    writeStoryEvent(db, WS, {
+      eventId: 'bell', description: 'The bell tower collapsed during the storm.', participants: ['elias'],
+      provenance: { interpreter: 'user', originType: 'world-action', originId: 'bell' },
+      operations: [knowledge('witnessed', 'elias', 'The mason was paid in copper.', { acquisition: 'witness', sourceEventId: 'bell' })]
+    });
+    expect(searchStory(db, WS, { docType: 'event', text: 'storm bell tower', skipLatestEvents: 12 })).toEqual([]);
+    expect(searchStory(db, WS, { docType: 'event', text: 'storm bell tower' }).map(hit => hit.docId)).toEqual(['bell']);
   });
 });
 

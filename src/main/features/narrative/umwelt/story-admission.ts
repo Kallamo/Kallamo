@@ -8,6 +8,8 @@ export interface AdmissionCandidate {
   id: string;
   /** The story record the candidate was rendered from, when it was rendered from one. */
   recordId?: string;
+  /** A story event recalled as a scene: only someone who witnessed it may remember it. */
+  eventId?: string;
 }
 
 export interface StoryRefusal {
@@ -29,8 +31,9 @@ export function admitForCharacter<T extends AdmissionCandidate>(
   candidates: T[]
 ): { admitted: T[]; refused: StoryRefusal[] } {
   const checked = candidates.filter(candidate => candidate.recordId);
+  const scenes = candidates.filter(candidate => candidate.eventId && !candidate.recordId);
   const world = NarrativeWorld.of(db, workspaceId);
-  if (!world.exists() || !checked.length) return { admitted: candidates, refused: [] };
+  if (!world.exists() || (!checked.length && !scenes.length)) return { admitted: candidates.filter(candidate => !candidate.eventId), refused: [] };
   const reader = new StoryReader(world);
   const timelineId = reader.timelineId();
   const snapshot = reader.snapshot({ timelineId });
@@ -61,5 +64,15 @@ export function admitForCharacter<T extends AdmissionCandidate>(
     }
   }
   const refusedIds = new Set(refused.map(item => item.candidateId));
+  if (scenes.length && world.ensureEntities([subjectId]).has(subjectId)) {
+    const result = world.call<ContextAdmitResult>('context.admit', {
+      holder: subjectId,
+      timelineId,
+      candidates: scenes.map(candidate => ({ id: candidate.id, eventId: candidate.eventId }))
+    });
+    for (const rejection of result.rejected) refusedIds.add(rejection.id);
+  } else {
+    for (const scene of scenes) refusedIds.add(scene.id);
+  }
   return { admitted: candidates.filter(candidate => !refusedIds.has(candidate.id)), refused };
 }

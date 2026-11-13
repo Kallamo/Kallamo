@@ -90,6 +90,9 @@ export interface StorySearchTrace {
 const SEARCHED_GROUPS = 4;
 const OWN_HITS = 5;
 const GROUP_HITS = 3;
+// Scenes recalled per character; the latest events are left to the chat history, which still holds them.
+const RECALLED_SCENES = 3;
+const RECENT_EVENTS = 12;
 
 interface EntityRow {
   id: string;
@@ -350,7 +353,8 @@ export class NarrativeChatContext {
               perspective
             ),
             ...this.loadInventoryCandidates(input.workspaceId, entityIds),
-            ...this.loadRoleplayCandidates(input.workspaceId, entityIds)
+            ...this.loadRoleplayCandidates(input.workspaceId, entityIds),
+            ...this.loadRecalledScenes(input.workspaceId, subjectId, input.query, names.get(subjectId) ?? subjectId)
           ])))
       };
     });
@@ -393,10 +397,33 @@ export class NarrativeChatContext {
     };
   }
 
+  /**
+   * Earlier scenes the request recalls, from the story's events. They are offered to the character
+   * who witnessed them only; the story refuses the rest.
+   */
+  private loadRecalledScenes(workspaceId: string, subjectId: string, query: string, subjectName: string): ContextCandidate[] {
+    const hits = searchStory(this.db, workspaceId, { holderId: null, docType: 'event', text: query, vector: this.queryVector, limit: RECALLED_SCENES * 2, skipLatestEvents: RECENT_EVENTS });
+    return hits.flatMap(hit => {
+      const text = hit.event?.description || hit.event?.title;
+      if (!text) return [];
+      return [this.candidate({
+        id: `scene:${hit.docId}`,
+        workspaceId,
+        sourceType: 'memory',
+        sourceId: hit.docId,
+        content: `A scene ${subjectName} witnessed earlier in the story: ${text}`,
+        relevance: hit.match === 'both' ? 0.88 : 0.86,
+        epistemic: { kind: 'memory', subjectId, accessibility: 'available' },
+        provenanceIds: [hit.docId]
+      })];
+    });
+  }
+
   /** The story confirms each record a character's context draws from; the rest stays out, with its reason. */
   private admitStoryCandidates(workspaceId: string, subjectId: string, refusals: StoryRefusal[], candidates: ContextCandidate[]): ContextCandidate[] {
     const { admitted, refused } = admitForCharacter(this.db, workspaceId, subjectId, candidates.map(candidate => ({
       id: candidate.id,
+      ...(candidate.id.startsWith('scene:') ? { eventId: candidate.source.id } : {}),
       ...(STORY_RECORD_SOURCES.has(candidate.source.type) && candidate.id.startsWith(`${candidate.source.type}:`) ? { recordId: candidate.source.id } : {})
     })));
     refusals.push(...refused);

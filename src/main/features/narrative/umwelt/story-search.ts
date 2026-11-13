@@ -30,6 +30,7 @@ export interface StoryHit {
   score: number;
   similarity?: number;
   terms?: number;
+  event?: { title: string; description: string | null; tick: number };
 }
 
 export interface StorySearchInput {
@@ -38,6 +39,8 @@ export interface StorySearchInput {
   vector?: number[] | null;
   docType?: 'record' | 'event';
   limit?: number;
+  /** Leaves out the latest events of the story, whose scenes the chat history still holds. */
+  skipLatestEvents?: number;
 }
 
 function prepare(world: NarrativeWorld): void {
@@ -111,18 +114,27 @@ export function searchStory(db: Database.Database, workspaceId: string, input: S
   const timelineId = new StoryReader(world).timelineId();
   const filter = { docType, ...(holderId ? { holder: holderId } : {}) };
 
+  const latestTick = input.skipLatestEvents ? new StoryReader(world).timeline(timelineId).maxTick : null;
+  const events = new Map<string, NonNullable<StoryHit['event']>>();
+  const keep = (item: SearchPageResult['items'][number]): boolean => {
+    if (!item.event) return true;
+    if (latestTick !== null && item.event.position.tick > latestTick - (input.skipLatestEvents ?? 0)) return false;
+    events.set(item.docId, { title: item.event.title, description: item.event.description ?? null, tick: item.event.position.tick });
+    return true;
+  };
+
   const semantic: Array<{ docId: string; similarity: number }> = [];
   if (input.vector && input.vector.length === LOCAL_EMBEDDING_SPACE.dimensions) {
     const page = searchPage(world, { semantic: { spaceId: LOCAL_EMBEDDING_SPACE.id, vector: input.vector }, filter, timelineId, page: { limit: SEMANTIC_PAGE } });
     for (const item of page?.items ?? []) {
-      if ((item.score ?? 0) >= SEMANTIC_FLOOR) semantic.push({ docId: item.docId, similarity: item.score ?? 0 });
+      if ((item.score ?? 0) >= SEMANTIC_FLOOR && keep(item)) semantic.push({ docId: item.docId, similarity: item.score ?? 0 });
     }
   }
 
   const termHits = new Map<string, { terms: number; rarity: number }>();
   for (const term of searchTerms(input.text)) {
     const page = searchPage(world, { text: term, filter, timelineId, page: { limit: TERM_PAGE } });
-    const items = page?.items ?? [];
+    const items = (page?.items ?? []).filter(keep);
     for (const item of items) {
       const entry = termHits.get(item.docId) ?? { terms: 0, rarity: 0 };
       entry.terms += 1;
@@ -145,5 +157,6 @@ export function searchStory(db: Database.Database, workspaceId: string, input: S
   text.forEach(([docId, entry], index) => add(docId, index + 1, 'text', { terms: entry.terms }));
   return [...fused.values()]
     .sort((left, right) => right.score - left.score || left.docId.localeCompare(right.docId))
-    .slice(0, input.limit ?? 5);
+    .slice(0, input.limit ?? 5)
+    .map(hit => (events.has(hit.docId) ? { ...hit, event: events.get(hit.docId) } : hit));
 }
