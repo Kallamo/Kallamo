@@ -127,15 +127,50 @@ occurrence wrote which record, so taking a turn back retires exactly what it wro
   Knowledge audiences have already filtered what a group shares.
 - **Checks.** A secret told to someone outside those allowed to hear it, and a telling with no record
   behind it in the teller's own knowledge, are reported under Story checks in the turn diagnostics.
-  They never block the turn: the author decides whether a leak was the point.
+  For a telling, `check.utterance` says what the teller holds instead (the opposite, something they
+  cannot reach, nothing at all) and drops the finding when they hold the same claim in other words;
+  Kallamo's own slot rule says whether canon agrees. They never block the turn: the author decides
+  whether a leak was the point.
 - **Beliefs are read against canon.** A belief in another value of a fact slot reads as
   contradicted; the same value as aligned.
-- **Search by meaning.** With the local embedding engine, the texts a character holds get vectors
-  and the context planner can bring in a record by what it means, not only by the names it shares
-  with the request. A paid embedding API is never used for this.
+- **Search.** See Retrieval from the story below.
 - **Upgrading.** A workspace from an earlier 2.0 beta is replayed into its story file event by event
   on the first start (`narrative_story_import_v1`); turns already removed stay out, and the old
   record tables are dropped once the replay has run.
+
+## Retrieval from the story
+
+The context planner still brings in every record about the entities in focus. The story search adds
+what the request is about without naming it:
+
+- **Who is searched.** In roleplay, each character's own records (5 at most) and those of up to four
+  factions and places they read (3 each); the faction audience rules still decide what reaches them.
+  The narrator's view searches the Facts, in roleplay and outside it.
+- **By words.** The engine joins the words of one text query with AND, so each word of the request
+  (four letters or more, the six longest) is searched on its own, and a record needs two distinct
+  words to count: one common word never decides.
+- **By meaning.** Only with the local embedding model, whose vectors live in the story file. The model
+  scores even unrelated story texts near 0.85, so a match needs 0.875 or more; the floor was measured
+  on a long campaign and belongs to that model. A paid embedding API is never used.
+- **Together.** The two rankings are fused by rank, so a record found both ways ranks first. It still
+  ranks below a record about an entity in focus.
+- **Earlier scenes.** Story events found the same way are offered to each character, and
+  `context.admit` keeps only those the character witnessed. The latest 12 events are left out: the
+  chat history still holds them.
+- **Vectors.** Filled in the background after each analysis and when a turn starts, 16 texts at a
+  time, from where the last run stopped (the engine's resume cursor), so a long backlog never holds
+  up a turn.
+- **One projection per plan.** Every perspective of a turn reads the same projected story; an
+  occurrence's access check reads the memories already loaded instead of the whole story again.
+- **Research tools.** The planner can call `recall_story`, `who_knows`, `compare_knowledge` and
+  `how_they_know`, in every workspace. Their answers stay in the planner's reasoning, like the
+  per-subject tools: the context planner still decides what the writer sees. `who_knows` searches
+  every holder and costs one engine call per word per holder.
+- **Writing Desk.** A rewrite or an analysis also gets the Facts and earlier scenes the passage is
+  about, under Story canon, so prose does not contradict what the story established.
+
+Reading the story as it stood at a scene's own date (a flashback) is not done: retrieval runs before
+the reply, and only the analysis after it knows a scene is set in the past.
 
 ## The story clock
 
