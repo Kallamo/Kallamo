@@ -5697,6 +5697,13 @@ ipcMain.on('respond-to-overflow', (event, { decision, editedText, runId } = {}) 
 });
 
 // --- UTILITIES SYSTEM DIALOGS HANDLERS ---
+// A backup stays one file: the story files ride inside the copy and come back out on restore.
+function packStoryFilesInto(backupPath) {
+  const Database = require('better-sqlite3');
+  const { packWorldFiles } = require('../../dist-main/main/features/narrative/umwelt/world-files');
+  return packWorldFiles(db, backupPath, file => new Database(file));
+}
+
 ipcMain.handle('backup-workspace', async (event) => {
   try {
     const { BrowserWindow } = require('electron');
@@ -5712,6 +5719,7 @@ ipcMain.handle('backup-workspace', async (event) => {
 
     if (filePath) {
       await db.backup(filePath);
+      packStoryFilesInto(filePath);
       return { success: true, filePath };
     }
     return { cancelled: true };
@@ -5782,6 +5790,7 @@ ipcMain.handle('restore-workspace', async (event) => {
     const timestamp = Date.now();
     const safetyBackupPath = path.join(dataDir, `pre-restore-backup-${timestamp}.db`);
     await db.backup(safetyBackupPath);
+    packStoryFilesInto(safetyBackupPath);
 
     try {
       const files = fs.readdirSync(dataDir);

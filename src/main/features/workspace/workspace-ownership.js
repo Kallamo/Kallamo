@@ -1,6 +1,8 @@
 // Every table that holds rows of one workspace, and how deleting the workspace reaches them.
 // Only messages reference chats through a foreign key, so a table missing here keeps its rows
 // after the workspace is gone. The coverage test compares these lists with the live schema.
+// The story itself lives in the workspace's Umwelt file, removed by purgeWorkspace.
+const { NarrativeWorld } = require('../../../../dist-main/main/features/narrative/umwelt/narrative-world');
 
 /** Rows carry the workspace id in this column and are removed with it. */
 const WORKSPACE_OWNED_COLUMNS = [
@@ -121,7 +123,10 @@ function removeWorkspaceChunks(db, workspaceId) {
   `).run({ workspaceId }).changes;
 }
 
-/** Removes the workspace and everything it owns in one transaction. Files on disk are the caller's. */
+/**
+ * Removes the workspace and everything it owns in one transaction, then its story file. Media files
+ * on disk are the caller's.
+ */
 function purgeWorkspace(db, workspaceId) {
   if (!workspaceId) throw new Error('A workspace id is required.');
   let removed = 0;
@@ -135,6 +140,7 @@ function purgeWorkspace(db, workspaceId) {
     }
     removed += db.prepare('DELETE FROM chats WHERE id = ?').run(workspaceId).changes;
   })();
+  if (NarrativeWorld.remove(db, workspaceId)) removed += 1;
   return { removed };
 }
 

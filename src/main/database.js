@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const { MIGRATIONS, runDatabaseMigrations } = require('./database/migrations');
 const LIGHTHOUSE = require('../shared/lighthouse-sample.json');
 const { BASE_SCHEMA, TOKEN_CALIBRATION_SCHEMA, WORLD_INDEX_SCHEMA } = require('./database/base-schema');
+const { removeOrphanWorldFiles, setWorldDirectory, unpackWorldFiles } = require('../../dist-main/main/features/narrative/umwelt/world-files');
 const {
   readSchemaAppVersion,
   writeSchemaAppVersion,
@@ -78,6 +79,8 @@ if (fs.existsSync(oldDbPath) && !fs.existsSync(dbPath)) {
 }
 
 const markerPath = path.join(dataDir, 'RESTORE_PENDING.json');
+// A restored database replaces every story file, whether or not it carries any.
+let restoredFromBackup = false;
 if (fs.existsSync(markerPath)) {
   try {
     const marker = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
@@ -102,6 +105,7 @@ if (fs.existsSync(markerPath)) {
     }
 
     fs.unlinkSync(markerPath);
+    restoredFromBackup = true;
     console.log("[Workspace Restore] Restored database successfully from staged backup.");
   } catch (err) {
     console.error("Failed to restore workspace at boot:", err);
@@ -122,6 +126,7 @@ if (fs.existsSync(markerPath)) {
           const recoverySrc = path.join(dataDir, backups[0].file);
           console.warn(`[Workspace Restore] Restoration failed; attempting recovery using safety snapshot: ${recoverySrc}`);
           fs.copyFileSync(recoverySrc, dbPath);
+          restoredFromBackup = true;
         }
       } catch (recoveryErr) {
         console.error("Fatal: Recovery from pre-restore backup failed:", recoveryErr);
@@ -146,6 +151,15 @@ const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 db.isFreshInstall = isFreshInstall;
+setWorldDirectory(db, path.join(dataDir, 'narrative'));
+if (restoredFromBackup) {
+  try {
+    const count = unpackWorldFiles(db);
+    log.info(`[Workspace Restore] Restored ${count} story file(s) from the backup.`);
+  } catch (error) {
+    log.error('[Workspace Restore] Could not restore the story files:', error);
+  }
+}
 
 const appVersion = app.getVersion();
 const migrationBackupDir = path.join(dataDir, 'backups');
@@ -735,6 +749,14 @@ try {
 
 // Versioned migrations extend the base tables above, so they run once those exist.
 runSchemaStep(() => runDatabaseMigrations(db));
+
+// A story file whose workspace is gone (a delete interrupted by a crash) is removed here.
+try {
+  const orphans = removeOrphanWorldFiles(db, db.prepare('SELECT id FROM chats').all().map(row => row.id));
+  if (orphans) log.info(`[Database] Removed ${orphans} story file(s) of deleted workspaces.`);
+} catch (error) {
+  log.warn('[Database] Could not check the story files:', error);
+}
 
 // Recorded only after both schema layers succeeded; an unrecorded version backs up again next boot.
 try {

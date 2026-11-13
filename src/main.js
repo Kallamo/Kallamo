@@ -358,3 +358,12 @@ app.on('window-all-closed', () => {
     app.quit();
   }
 });
+
+// Shutting each story engine down folds its journal into the file before the app exits.
+app.on('will-quit', () => {
+  try {
+    require('../dist-main/main/features/narrative/umwelt/bridge').getUmweltBridge().dispose();
+  } catch (error) {
+    console.warn('[Narrative State] Could not close the story files:', error.message);
+  }
+});
