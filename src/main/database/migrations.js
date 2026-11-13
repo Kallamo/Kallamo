@@ -1595,6 +1595,17 @@ const MIGRATIONS = [
       CREATE INDEX IF NOT EXISTS idx_narrative_story_records_origin
         ON narrative_story_records (workspace_id, origin_id);
     `)
+  },
+  {
+    // The story moved to each workspace's Umwelt file. What earlier versions applied is replayed
+    // there before its tables go; a failure rolls the drop back and the next start tries again.
+    id: 'narrative_story_import_v1',
+    up: (db) => {
+      const { importLegacyStory, LEGACY_STORY_TABLES } = require('../../../dist-main/main/features/narrative/umwelt/story-import');
+      const report = importLegacyStory(db, message => console.warn(`[Narrative State] ${message}`));
+      if (report.events) console.log(`[Narrative State] Moved ${report.events} event(s) of ${report.workspaces} workspace(s) into their story files.`);
+      for (const table of LEGACY_STORY_TABLES) db.exec(`DROP TABLE IF EXISTS ${table}`);
+    }
   }
 ];
 

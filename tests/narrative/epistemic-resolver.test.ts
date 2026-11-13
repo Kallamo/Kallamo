@@ -9,6 +9,7 @@ import { NarrativeContextManifestRepository } from '../../src/main/features/narr
 import { AgenticEpistemicTools } from '../../src/main/features/narrative/agentic-epistemic-tools';
 import { createWorldbuildKnowledgeService } from '../../src/main/features/worldbuild/knowledge-service.js';
 import { writeStoryEvent } from '../../src/main/features/narrative/umwelt/story-journal';
+import { indexOriginRecords, retireOrigins } from '../../src/main/features/narrative/umwelt/story-lifecycle';
 import { createWorldbuildDataService } from '../../src/main/features/worldbuild/worldbuild-data.js';
 import { openTestDatabase } from '../sqlite-test-database';
 
@@ -262,16 +263,13 @@ describe('roleplay epistemic resolution', () => {
       recordId: 'knowledge-invalidated',
       statement: 'The invalidated response revealed the glass vault.'
     });
-    db.prepare(`
-      INSERT INTO narrative_origin_lifecycle (
-        workspace_id, origin_id, status, replacement_origin_id, updated_at
-      ) VALUES ('workspace-one', 'message-invalidated', 'superseded', 'message-current', 1)
-    `).run();
-
-    const result = new AgenticEpistemicTools(db)
+    const inspect = () => new AgenticEpistemicTools(db)
       .inspectSubjectKnowledge('workspace-one', 'Corwin | Order of Thorns');
+    expect(inspect()).toContain('glass vault');
 
-    expect(result).not.toContain('glass vault');
+    retireOrigins(db, 'workspace-one', ['message-invalidated']);
+
+    expect(inspect()).not.toContain('glass vault');
   });
 
   test('returns only the latest revision of a stable Knowledge entry', () => {
@@ -410,48 +408,18 @@ describe('roleplay epistemic resolution', () => {
     recordId: string;
     statement: string;
   }) {
-    const timestamp = '2026-01-01T00:00:00.000Z';
-    db.prepare(`
-      INSERT INTO narrative_events (
-        workspace_id, event_id, proposal_id, change_set_id, contract_version,
-        event_type, description, narrative_sequence, status, version,
-        operations_json, provenance_interpreter, provenance_schema_version,
-        provenance_created_at
-      ) VALUES (
-        'workspace-one', ?, ?, ?, '1.0', 'custom', 'Narrative Knowledge',
-        1, 'approved', 1, '[]', 'deterministic', '1.0', ?
-      )
-    `).run(input.eventId, `proposal-${input.eventId}`, `change-${input.eventId}`, timestamp);
-    db.prepare(`
-      INSERT INTO narrative_event_evidence (
-        workspace_id, event_id, evidence_id, ordinal, origin_type, origin_id, excerpt
-      ) VALUES ('workspace-one', ?, ?, 0, 'chat-message', ?, ?)
-    `).run(input.eventId, `evidence-${input.eventId}`, input.originId, input.statement);
-    db.prepare(`
-      INSERT INTO narrative_records (
-        workspace_id, record_type, record_id, subject_id, source_event_id,
-        operation_id, payload_json, applied_at
-      ) VALUES ('workspace-one', 'knowledge', ?, 'corwin', ?, ?, ?, ?)
-    `).run(
-      input.recordId,
-      input.eventId,
-      `operation-${input.eventId}`,
-      JSON.stringify({
-        id: input.recordId,
-        entryId: input.recordId,
-        subjectId: 'corwin',
-        proposition: {
-          subjectId: 'order',
-          predicate: 'worldbuild-statement',
-          object: input.statement
-        },
-        sourceEventId: input.eventId,
-        acquisition: 'witness',
-        confidence: 1,
-        accessibility: 'available',
-        status: 'active'
-      }),
-      timestamp
-    );
+    const written = writeStoryEvent(db, 'workspace-one', {
+      eventId: input.eventId, description: 'Narrative Knowledge', participants: ['corwin'],
+      provenance: { interpreter: 'deterministic', originType: 'chat-message', originId: input.originId, excerpt: input.statement },
+      operations: [{
+        id: `operation-${input.eventId}`, type: 'grant-knowledge', evidenceIds: [],
+        knowledge: {
+          id: input.recordId, entryId: input.recordId, subjectId: 'corwin',
+          proposition: { subjectId: 'order', predicate: 'worldbuild-statement', object: input.statement },
+          sourceEventId: input.eventId, acquisition: 'witness', confidence: 1, accessibility: 'available', status: 'active'
+        }
+      } as any]
+    });
+    indexOriginRecords(db, 'workspace-one', input.originId, written.outcome);
   }
 });

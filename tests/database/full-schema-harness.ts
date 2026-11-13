@@ -7,7 +7,7 @@ import { openTestDatabase } from '../sqlite-test-database';
 
 const require = createRequire(import.meta.url);
 const { BASE_SCHEMA, TOKEN_CALIBRATION_SCHEMA, WORLD_INDEX_SCHEMA } = require('../../src/main/database/base-schema.js');
-const { runDatabaseMigrations } = require('../../src/main/database/migrations.js');
+const { MIGRATIONS, runDatabaseMigrations } = require('../../src/main/database/migrations.js');
 
 // Columns database.js still adds with ALTER on boot; a fresh table needs them too.
 const BOOT_COLUMNS = `
@@ -26,8 +26,9 @@ export interface FullSchemaDatabase {
   close(): void;
 }
 
-// A temporary database built the way the app builds one: base tables, then every migration.
-export function openFullSchemaDatabase(): FullSchemaDatabase {
+// A temporary database built the way the app builds one: base tables, then every migration, or
+// every one before `stopBefore` to stand in for a database an earlier version left behind.
+export function openFullSchemaDatabase(options: { stopBefore?: string } = {}): FullSchemaDatabase {
   const directory = mkdtempSync(join(tmpdir(), 'kallamo-full-schema-'));
   const db = openTestDatabase(join(directory, 'app.db'));
   db.pragma('foreign_keys = ON');
@@ -35,7 +36,8 @@ export function openFullSchemaDatabase(): FullSchemaDatabase {
   db.exec(TOKEN_CALIBRATION_SCHEMA);
   db.exec(WORLD_INDEX_SCHEMA);
   db.exec(BOOT_COLUMNS);
-  runDatabaseMigrations(db);
+  const stop = options.stopBefore ? MIGRATIONS.findIndex((migration: { id: string }) => migration.id === options.stopBefore) : -1;
+  runDatabaseMigrations(db, stop >= 0 ? MIGRATIONS.slice(0, stop) : MIGRATIONS);
   return {
     db,
     close() {

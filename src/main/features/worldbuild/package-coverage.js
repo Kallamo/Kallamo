@@ -17,8 +17,7 @@ const PACKAGED = [
   { table: 'worldbuild_known_relationships', by: 'authored Knowledge' },
   { table: 'worldbuild_knowledge_audience_members', by: 'authored Knowledge' },
   { table: 'worldbuild_knowledge_exclusions', by: 'authored Knowledge' },
-  { table: 'narrative_records', by: 'authored Knowledge, Facts and occurrences; play records stay' },
-  { table: 'narrative_events', by: 'rebuilt with the authored records' },
+  { table: 'narrative_events', by: 'rebuilt with the authored Knowledge, Facts and occurrences; play records stay' },
   { table: 'narrative_event_participants', by: 'rebuilt with the authored records' },
   { table: 'narrative_event_evidence', by: 'rebuilt with the authored records' },
   { table: 'in_world_texts', by: 'texts written inside items' },
@@ -43,9 +42,9 @@ const PACKAGED = [
 const STAYS = [
   // The story as played.
   ...[
-    'narrative_awareness_records', 'narrative_scenes', 'narrative_scene_participants', 'narrative_scene_possible_observers',
-    'narrative_state_jobs', 'narrative_state_metrics', 'narrative_state_fingerprints', 'narrative_context_manifests',
-    'narrative_change_set_attempts', 'narrative_operation_reviews', 'narrative_origin_lifecycle', 'narrative_turn_replacements',
+    'narrative_scenes', 'narrative_scene_participants', 'narrative_scene_possible_observers',
+    'narrative_state_jobs', 'narrative_state_metrics', 'narrative_context_manifests',
+    'narrative_operation_reviews', 'narrative_origin_lifecycle', 'narrative_turn_replacements',
     'narrative_story_records',
     'roleplay_workspace_settings', 'roleplay_message_frames', 'roleplay_turn_presence', 'roleplay_turn_snapshots',
     'roleplay_time_state', 'roleplay_time_advances', 'roleplay_character_memory', 'roleplay_scene_changes',

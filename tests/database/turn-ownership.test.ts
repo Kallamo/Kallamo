@@ -82,9 +82,6 @@ describe('purgeDeadTurns', () => {
       for (const { table, column } of TURN_OWNED_COLUMNS) insert(table, { workspace_id: 'ws', [column]: originId, ...parents[table] }, originId);
       insert('narrative_event_evidence', { workspace_id: 'ws', event_id: eventId, origin_id: originId, ordinal: 0 }, originId);
       insert('narrative_event_participants', { workspace_id: 'ws', event_id: eventId }, originId);
-      insert('narrative_records', { workspace_id: 'ws', source_event_id: eventId }, originId);
-      insert('narrative_awareness_records', { workspace_id: 'ws', source_event_id: eventId }, originId);
-      insert('narrative_change_set_attempts', { workspace_id: 'ws', event_id: eventId }, originId);
       insert('narrative_operation_reviews', { workspace_id: 'ws', event_id: eventId }, originId);
       // A card granted only by this turn, and one the Worldbuild grants as well.
       insert('worldbuild_knowledge_cards', { workspace_id: 'ws', card_id: `card-${originId}`, status: 'active' }, originId);

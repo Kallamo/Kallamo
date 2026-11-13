@@ -16,11 +16,6 @@ const ENTITY_REFERENCE_COLUMNS = [
   { table: 'entity_update_origins', column: 'previous_json', merge: 'repoint', delete: 'remove' },
   { table: 'entity_update_origins', column: 'next_json', merge: 'repoint', delete: 'remove' },
   { table: 'entity_sheet_edits', column: 'entity_id', merge: 'repoint', delete: 'remove' },
-  { table: 'narrative_records', column: 'subject_id', merge: 'repoint', delete: 'retire' },
-  { table: 'narrative_records', column: 'payload_json', merge: 'repoint', delete: 'retire or unlist' },
-  { table: 'narrative_awareness_records', column: 'subject_id', merge: 'repoint', delete: 'revoke' },
-  { table: 'narrative_awareness_records', column: 'target_id', merge: 'repoint', delete: 'revoke' },
-  { table: 'narrative_awareness_records', column: 'payload_json', merge: 'repoint', delete: 'revoke' },
   { table: 'narrative_events', column: 'location_id', merge: 'repoint', delete: 'keep history' },
   { table: 'narrative_events', column: 'operations_json', merge: 'repoint proposed', delete: 'reject proposed' },
   { table: 'narrative_event_participants', column: 'entity_id', merge: 'repoint', delete: 'keep history' },
@@ -90,17 +85,6 @@ const IGNORED_ENTITY_REFERENCE_COLUMNS = [
   { table: 'workspace_ui_state', column: 'valueJson', reason: 'A view selection; the view drops an id it cannot find.' },
   { table: 'knowledge_chunks', column: 'ownerId', reason: 'A workspace, a profile or a document owns a chunk, never an entity.' }
 ];
-
-// What each narrative record type uses to stop being current.
-const RETIRED_RECORD_STATUS = {
-  fact: 'retracted',
-  knowledge: 'superseded',
-  belief: 'superseded',
-  memory: 'forgotten',
-  relationship: 'retired',
-  state: 'retired',
-  observation: 'retired'
-};
 
 // The story file is reached through its compiled module, from src and from dist-main alike.
 const storyEntities = () => require(require('path').join(__dirname, '../../../../dist-main/main/features/narrative/umwelt/story-entities'));
@@ -187,39 +171,6 @@ function repointEntityReferences(db, { workspaceId, sourceId, targetId, prefer =
     }
   }
   if (has('entity_sheet_edits')) db.prepare('UPDATE entity_sheet_edits SET entity_id = ? WHERE workspace_id = ? AND entity_id = ?').run(targetId, workspaceId, sourceId);
-
-  if (has('narrative_records')) {
-    const rows = db.prepare(`
-      SELECT rowid AS rid, record_type, subject_id, payload_json FROM narrative_records
-      WHERE workspace_id = ? AND (subject_id = ? OR payload_json LIKE ? ESCAPE '\\')
-    `).all(workspaceId, sourceId, like);
-    const update = db.prepare('UPDATE narrative_records SET subject_id = ?, payload_json = ? WHERE rowid = ?');
-    for (const row of rows) {
-      const payload = replace(parseJson(row.payload_json, {}));
-      const subjectId = row.subject_id === sourceId ? targetId : row.subject_id;
-      // A relationship between the two merged entities is now a relationship with itself.
-      if (row.record_type === 'relationship' && payload.sourceEntityId && payload.sourceEntityId === payload.targetEntityId) {
-        payload.status = RETIRED_RECORD_STATUS.relationship;
-      }
-      update.run(subjectId, JSON.stringify(payload), row.rid);
-    }
-  }
-
-  if (has('narrative_awareness_records')) {
-    const rows = db.prepare(`
-      SELECT rowid AS rid, subject_id, target_id, status, payload_json FROM narrative_awareness_records
-      WHERE workspace_id = ? AND (subject_id = ? OR target_id = ?)
-    `).all(workspaceId, sourceId, sourceId);
-    const update = db.prepare('UPDATE narrative_awareness_records SET subject_id = ?, target_id = ?, status = ?, payload_json = ? WHERE rowid = ?');
-    for (const row of rows) {
-      const subjectId = row.subject_id === sourceId ? targetId : row.subject_id;
-      const awareTargetId = row.target_id === sourceId ? targetId : row.target_id;
-      const payload = replace(parseJson(row.payload_json, {}));
-      const status = subjectId === awareTargetId ? 'revoked' : row.status;
-      if (status !== row.status) payload.status = status;
-      update.run(subjectId, awareTargetId, status, JSON.stringify(payload), row.rid);
-    }
-  }
 
   if (has('narrative_events')) {
     db.prepare('UPDATE narrative_events SET location_id = ? WHERE workspace_id = ? AND location_id = ?').run(targetId, workspaceId, sourceId);
@@ -461,39 +412,6 @@ function releaseEntityReferences(db, { workspaceId, entityId }) {
   }
   if (has('entity_sheet_edits')) db.prepare('DELETE FROM entity_sheet_edits WHERE workspace_id = ? AND entity_id = ?').run(workspaceId, entityId);
 
-  if (has('narrative_records')) {
-    const rows = db.prepare(`
-      SELECT rowid AS rid, record_type, subject_id, payload_json FROM narrative_records
-      WHERE workspace_id = ? AND (subject_id = ? OR payload_json LIKE ? ESCAPE '\\')
-    `).all(workspaceId, entityId, like);
-    const update = db.prepare('UPDATE narrative_records SET payload_json = ? WHERE rowid = ?');
-    for (const row of rows) {
-      const payload = parseJson(row.payload_json, {});
-      const proposition = payload.proposition && typeof payload.proposition === 'object' ? payload.proposition : {};
-      const anchored = [row.subject_id, payload.subjectId, payload.entityId, payload.sourceEntityId, payload.targetEntityId, proposition.subjectId, proposition.object]
-        .includes(entityId);
-      // A record about the deleted entity stops being current; one that only mentions it keeps its content.
-      const next = anchored
-        ? { ...payload, status: RETIRED_RECORD_STATUS[row.record_type] ?? 'retired' }
-        : {
-            ...payload,
-            ...(Array.isArray(payload.relatedEntityIds) ? { relatedEntityIds: payload.relatedEntityIds.filter(id => id !== entityId) } : {}),
-            ...(Array.isArray(payload.informantIds) ? { informantIds: payload.informantIds.filter(id => id !== entityId) } : {})
-          };
-      const serialized = JSON.stringify(next);
-      if (serialized !== row.payload_json) update.run(serialized, row.rid);
-    }
-  }
-
-  if (has('narrative_awareness_records')) {
-    rewriteJsonColumn(db, {
-      table: 'narrative_awareness_records', column: 'payload_json',
-      where: "workspace_id = ? AND (subject_id = ? OR target_id = ?) AND status != 'revoked'", params: [workspaceId, entityId, entityId],
-      transform: payload => ({ ...payload, status: 'revoked' })
-    });
-    db.prepare("UPDATE narrative_awareness_records SET status = 'revoked' WHERE workspace_id = ? AND (subject_id = ? OR target_id = ?)").run(workspaceId, entityId, entityId);
-  }
-
   if (has('narrative_events')) {
     const proposed = db.prepare(`
       SELECT event_id FROM narrative_events
@@ -634,11 +552,7 @@ function countEntityReferences(db, workspaceId, entityIds) {
  */
 function releaseOrphanedEntityReferences(db) {
   if (!hasTable(db, 'entities')) return 0;
-  const retired = "COALESCE(json_extract(payload_json, '$.status'), 'active') NOT IN ('retracted', 'superseded', 'forgotten', 'retired', 'revoked')";
   const candidates = [
-    ['narrative_records', 'subject_id', retired],
-    ['narrative_awareness_records', 'subject_id', "status != 'revoked'"],
-    ['narrative_awareness_records', 'target_id', "status != 'revoked'"],
     ['narrative_scene_participants', 'entity_id'],
     ['narrative_scene_possible_observers', 'entity_id'],
     ['roleplay_scene_objects', 'entity_id'],
@@ -677,7 +591,6 @@ function releaseOrphanedEntityReferences(db) {
 module.exports = {
   ENTITY_REFERENCE_COLUMNS,
   IGNORED_ENTITY_REFERENCE_COLUMNS,
-  RETIRED_RECORD_STATUS,
   countEntityReferences,
   releaseEntityReferences,
   releaseOrphanedEntityReferences,

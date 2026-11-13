@@ -10,7 +10,6 @@ const TURN_OWNED_COLUMNS = [
   { table: 'narrative_context_manifests', column: 'origin_id' },
   { table: 'narrative_state_jobs', column: 'origin_id' },
   { table: 'narrative_state_metrics', column: 'origin_id' },
-  { table: 'narrative_state_fingerprints', column: 'origin_id' },
   { table: 'roleplay_turn_snapshots', column: 'origin_id' },
   { table: 'roleplay_time_advances', column: 'origin_id' },
   { table: 'roleplay_message_frames', column: 'origin_id' },
@@ -31,11 +30,8 @@ const TURN_OWNED_COLUMNS = [
 /** Rows that belong to one of the turn's narrative events. */
 const TURN_OWNED_THROUGH_EVENTS = [
   { table: 'narrative_events', column: 'event_id' },
-  { table: 'narrative_awareness_records', column: 'source_event_id', note: 'no cascade, removed before the events' },
   { table: 'narrative_event_participants', column: 'event_id', note: 'ON DELETE CASCADE' },
   { table: 'narrative_event_evidence', column: 'event_id', note: 'ON DELETE CASCADE; its origin_id names the turn' },
-  { table: 'narrative_records', column: 'source_event_id', note: 'ON DELETE CASCADE' },
-  { table: 'narrative_change_set_attempts', column: 'event_id', note: 'ON DELETE CASCADE' },
   { table: 'narrative_operation_reviews', column: 'event_id', note: 'ON DELETE CASCADE' }
 ];
 
@@ -124,13 +120,7 @@ function purgeTurn(db, workspaceId, originId) {
     `).all(workspaceId, originId) : [];
     removed += releaseKnowledgeSources(db, workspaceId, turnKnowledgeSources(events));
     const deleteEvent = db.prepare('DELETE FROM narrative_events WHERE workspace_id = ? AND event_id = ?');
-    const deleteAwareness = hasTable(db, 'narrative_awareness_records')
-      ? db.prepare('DELETE FROM narrative_awareness_records WHERE workspace_id = ? AND source_event_id = ?')
-      : null;
-    for (const event of events) {
-      if (deleteAwareness) removed += deleteAwareness.run(workspaceId, event.event_id).changes;
-      removed += deleteEvent.run(workspaceId, event.event_id).changes;
-    }
+    for (const event of events) removed += deleteEvent.run(workspaceId, event.event_id).changes;
     for (const { table, column, keep } of TURN_OWNED_COLUMNS) {
       if (!hasTable(db, table)) continue;
       removed += db.prepare(`DELETE FROM ${table} WHERE workspace_id = ? AND ${column} = ?${keep ? ` AND NOT (${keep})` : ''}`)
