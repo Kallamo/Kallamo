@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const path = require('path');
 const { createWorldbuildKnowledgeService } = require('./knowledge-service');
 const SEEDED_BY = require('../../../shared/seed-provenance.json');
 const {
@@ -13,6 +14,8 @@ const FIELD_TYPES = new Set([
 const AI_ACCESS = new Set(['read-write', 'read-only', 'hidden']);
 const ACCESSIBILITY = new Set(['available', 'suppressed', 'inaccessible']);
 const ACQUISITION = new Set(['participant', 'witness', 'reported', 'inferred']);
+
+const storyJournal = () => require(path.join(__dirname, '../../../../dist-main/main/features/narrative/umwelt/story-journal'));
 
 function createWorldbuildDataService(db) {
   const knowledgeCards = createWorldbuildKnowledgeService(db);
@@ -366,6 +369,8 @@ function createWorldbuildDataService(db) {
     const current = existingId ? getSubjectRecord(workspaceId, subjectId, kind, existingId) : null;
     if (existingId && !current) throw new Error('The Knowledge entry no longer exists.');
     requireEditableRecord(current);
+    // The entry and the awareness it grants are deliberate; no open turn may take them with it.
+    storyJournal().confirmStory(db, workspaceId);
     const eventId = crypto.randomUUID();
     const evidenceId = crypto.randomUUID();
     const createdAt = new Date().toISOString();
@@ -650,6 +655,15 @@ function createWorldbuildDataService(db) {
         );
       }
     })();
+    const owner = participantId || subjectId;
+    storyJournal().writeStoryEvent(db, workspaceId, {
+      eventId,
+      description,
+      participants: owner ? [owner] : [],
+      provenance: { interpreter: 'user', originType: 'world-action', originId: owner || workspaceId, excerpt: excerpt || entryExcerpt(operations.at(-1)) },
+      operations,
+      placement: 'main',
+    });
   }
 
   function nextNarrativeSequence(workspaceId) {
@@ -686,6 +700,8 @@ function createWorldbuildDataService(db) {
     removeKnowledgeCard: knowledgeCards.removeCard,
     setKnowledgeAudience: knowledgeCards.setAudience,
     reconcileKnowledge: knowledgeCards.reconcileWorkspace,
+    // A bulk write sends its story commits together, inside the caller's transaction.
+    withStoryBatch: (workspaceId, work) => storyJournal().batchStoryWrites(db, workspaceId, work),
   };
 }
 

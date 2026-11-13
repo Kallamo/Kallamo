@@ -1,4 +1,9 @@
 const crypto = require('crypto');
+const path = require('path');
+
+// The compiled story module, reached the same way from src and from dist-main (both four levels
+// below the root); a computed path keeps the TypeScript build from compiling dist-main as input.
+const storyJournal = () => require(path.join(__dirname, '../../../../dist-main/main/features/narrative/umwelt/story-journal'));
 
 const SOURCE_TYPES = new Set([
   'manual', 'relationship', 'faction-membership', 'inventory',
@@ -678,6 +683,15 @@ function createWorldbuildKnowledgeService(db) {
       workspaceId, awarenessId, ownerId, targetId, status,
       eventId, operationId, JSON.stringify(awareness), createdAt,
     );
+    // A card follows the story it came from, so it is written where the story is read.
+    storyJournal().writeStoryEvent(db, workspaceId, {
+      eventId,
+      description: status === 'active' ? 'Awareness granted.' : 'Awareness revoked.',
+      participants: [ownerId],
+      provenance: { interpreter: 'deterministic', originType: sourceType === 'import' ? 'import' : 'world-action', originId: sourceId },
+      operations: [operation],
+      placement: 'current',
+    });
   }
 
   return {

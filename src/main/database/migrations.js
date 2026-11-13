@@ -1578,6 +1578,23 @@ const MIGRATIONS = [
       if (!advanced || typeof advanced !== 'object' || advanced.allowAiEntityCreation === true) return;
       db.prepare("UPDATE settings SET value = ? WHERE key = 'advanced'").run(JSON.stringify({ ...advanced, allowAiEntityCreation: true }));
     }
+  },
+  {
+    // The story file never deletes; this says which of its records each turn or Worldbuild action
+    // wrote, so removing that origin retires exactly them, revisions included.
+    id: 'narrative_story_records_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS narrative_story_records (
+        workspace_id TEXT NOT NULL,
+        record_id TEXT NOT NULL,
+        origin_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, record_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_narrative_story_records_origin
+        ON narrative_story_records (workspace_id, origin_id);
+    `)
   }
 ];
 

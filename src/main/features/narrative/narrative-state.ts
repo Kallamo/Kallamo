@@ -7,6 +7,7 @@ import { isDailyLimited, limitRelationshipChange, type RelationshipImpact, type 
 import { NarrativeChangeSetRepository } from '../../../narrative/change-sets';
 import { NarrativeEventLedgerRepository, type NarrativeEventLedgerRecord } from '../../../narrative/ledger';
 import { createWorldbuildKnowledgeService, type WorldbuildKnowledgeService } from '../worldbuild/knowledge-service';
+import { writeLedgerRecord } from './umwelt/story-journal';
 import {
   reviewExtractedOperations,
   type ExtractedNarrativeEvent,
@@ -31,6 +32,8 @@ export interface CreateEventInput {
   updatePolicy?: RoleplayUpdatePolicy;
   provenanceInterpreter?: 'model' | 'user';
   excludedRelationshipSourceIds?: Set<string>;
+  /** Where in the world's time the turn happened; read from its frame or the clock when absent. */
+  storyMinute?: number | null;
 }
 
 export interface CreateEventResult {
@@ -180,6 +183,7 @@ export class NarrativeStateSystem {
     if (existing) {
       if (existing.status !== 'proposed' || decision === 'review') return { record: existing, decision };
       const applied = this.changes.apply(input.workspaceId, eventId, { expectedVersion: existing.version, attemptedAt: new Date().toISOString(), attemptId: `apply_${fingerprint}_${existing.version}` });
+      this.writeStory(input.workspaceId, applied, true, input.storyMinute);
       this.syncCanonicalRelationships(input.workspaceId, applied);
       this.syncAwarenessCards(input.workspaceId, applied);
       this.recordFingerprint(input.workspaceId, fingerprint, input.originId, eventId);
@@ -213,6 +217,7 @@ export class NarrativeStateSystem {
     const record = this.ledger.save(proposal);
     if (decision === 'automatic') {
       const applied = this.changes.apply(input.workspaceId, eventId, { expectedVersion: record.version, attemptedAt: new Date().toISOString(), attemptId: `apply_${fingerprint}` });
+      this.writeStory(input.workspaceId, applied, true, input.storyMinute);
       this.syncCanonicalRelationships(input.workspaceId, applied);
       this.syncAwarenessCards(input.workspaceId, applied);
       this.recordFingerprint(input.workspaceId, fingerprint, input.originId, eventId);
@@ -240,6 +245,7 @@ export class NarrativeStateSystem {
     if (!record || record.status !== 'proposed') return record;
     if (decision === 'rejected') return this.ledger.setStatus(workspaceId, eventId, 'rejected', new Date().toISOString());
     const applied = this.changes.apply(workspaceId, eventId, { expectedVersion: record.version, attemptedAt: new Date().toISOString(), attemptId: randomUUID() });
+    this.writeStory(workspaceId, applied, false);
     this.syncCanonicalRelationships(workspaceId, applied);
     this.syncAwarenessCards(workspaceId, applied);
     return applied;
@@ -276,6 +282,7 @@ export class NarrativeStateSystem {
         attemptId: `partial_${eventId}_${record.version}`,
         operationIds: approved,
       });
+      this.writeStory(workspaceId, applied, false);
       this.syncCanonicalRelationships(workspaceId, applied);
       this.syncAwarenessCards(workspaceId, applied);
       return applied;
@@ -599,6 +606,15 @@ export class NarrativeStateSystem {
         }
       }
     })();
+  }
+
+  /** Writes what the journal just applied into the workspace's story file. */
+  private writeStory(workspaceId: string, record: NarrativeEventLedgerRecord, turn: boolean, storyMinute?: number | null): void {
+    writeLedgerRecord(this.db, record, {
+      operationIds: this.appliedOperationIds(workspaceId, record.proposal.changeSet.event.id),
+      turn,
+      ...(storyMinute !== undefined ? { storyMinute } : {})
+    });
   }
 
   private appliedOperationIds(workspaceId: string, eventId: string): Set<string> {

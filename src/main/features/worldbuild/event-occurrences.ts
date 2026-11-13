@@ -4,6 +4,9 @@ import type { NarrativeOperation, WorldDay } from '../../../narrative/contracts'
 import type { NarrativeEventLedgerRecord } from '../../../narrative/ledger';
 import { isValidNarrativeOperation, NarrativeStateSystem, type ExtractedNarrativeEvent } from '../narrative/narrative-state';
 import { RoleplaySystem, type RoleplayInventoryPatch } from '../narrative/roleplay-system';
+import { storyMinute } from '../../../shared/calendar-ordinal';
+import { writeStoryEvent } from '../narrative/umwelt/story-journal';
+import { indexOriginRecords, retireOrigins } from '../narrative/umwelt/story-lifecycle';
 
 interface EventOccurrenceCalendarService {
   getCalendar(db: Database.Database, workspaceId: string): Record<string, any>;
@@ -204,7 +207,8 @@ export class EventOccurrenceService {
         originType: 'world-action',
         promptVersion: 'worldbuild-event-occurrence-v1',
         updatePolicy: 'automatic',
-        provenanceInterpreter: 'user'
+        provenanceInterpreter: 'user',
+        storyMinute: this.storyMinuteOf(workspaceId, startDate)
       });
       if (!result.record) throw new Error(`Could not record the occurrence: ${result.skipped || 'unknown reason'}.`);
       this.applyManualConsequences(workspaceId, occurrenceId, input);
@@ -359,6 +363,20 @@ export class EventOccurrenceService {
         this.updateAppliedRecord(workspaceId, occurrence.narrativeEventId, operation, appliedAt);
       }
 
+      this.writeRevision({
+        workspaceId,
+        narrativeEventId: occurrence.narrativeEventId,
+        originId: occurrence.originId,
+        description: `${title}: ${summary}`,
+        participantIds,
+        locationId: locationIds[0] ?? null,
+        startDate,
+        fact: updatedFactOperation,
+        memories: memoryOperations,
+        removedMemories: existingMemoryOperations.filter(operation => !nextMemoryOperationIds.has(operation.id)),
+        revision: updatedAt
+      });
+
       const updatedOccurrence = this.db.prepare(`
         UPDATE worldbuild_event_occurrences
         SET title = ?, summary = ?, start_date_json = ?, end_date_json = ?,
@@ -397,6 +415,7 @@ export class EventOccurrenceService {
         ON CONFLICT(workspace_id, origin_id) DO UPDATE SET
           status = 'deleted', replacement_origin_id = NULL, updated_at = excluded.updated_at
       `).run(workspaceId, occurrence.originId, updatedAt);
+      retireOrigins(this.db, workspaceId, [occurrence.originId!]);
       return true;
     })();
   }
@@ -512,6 +531,52 @@ export class EventOccurrenceService {
       JSON.stringify(input.locationIds), JSON.stringify(input.relatedEntityIds),
       JSON.stringify(input.consequences), input.source, input.originId, now, now
     );
+  }
+
+  /** The story keeps every version of an occurrence: an edit supersedes its Fact and memories. */
+  private writeRevision(input: {
+    workspaceId: string;
+    narrativeEventId: string;
+    originId: string | null;
+    description: string;
+    participantIds: string[];
+    locationId: string | null;
+    startDate: Record<string, unknown> | null;
+    fact: Extract<NarrativeOperation, { type: 'assert-fact' }>;
+    memories: Array<Extract<NarrativeOperation, { type: 'record-memory' }>>;
+    removedMemories: Array<Extract<NarrativeOperation, { type: 'record-memory' }>>;
+    revision: number;
+  }): void {
+    const version = (id: string) => `${id}@${input.revision}`;
+    const operations: NarrativeOperation[] = [
+      { ...input.fact, id: version(input.fact.id), fact: { ...input.fact.fact, id: version(input.fact.fact.id) } },
+      ...input.memories.map(operation => ({
+        ...operation,
+        id: version(operation.id),
+        memory: { ...operation.memory, id: version(operation.memory.id), entryId: operation.memory.entryId ?? operation.memory.id }
+      })),
+      ...input.removedMemories.map(operation => ({
+        ...operation,
+        id: version(operation.id),
+        memory: { ...operation.memory, id: version(operation.memory.id), entryId: operation.memory.entryId ?? operation.memory.id, status: 'forgotten' as const }
+      }))
+    ];
+    const result = writeStoryEvent(this.db, input.workspaceId, {
+      eventId: version(input.narrativeEventId),
+      description: input.description,
+      participants: input.participantIds,
+      locationId: input.locationId,
+      provenance: { interpreter: 'user', originType: 'world-action', ...(input.originId ? { originId: input.originId } : {}) },
+      operations,
+      storyMinute: this.storyMinuteOf(input.workspaceId, input.startDate)
+    });
+    if (input.originId) indexOriginRecords(this.db, input.workspaceId, input.originId, result.outcome);
+  }
+
+  /** Where an occurrence sits in the world's time: its own date, or the clock when it has none. */
+  private storyMinuteOf(workspaceId: string, date: Record<string, unknown> | null): number | undefined {
+    if (!date) return undefined;
+    return storyMinute(this.calendarService.getCalendar(this.db, workspaceId) as never, date as never) ?? undefined;
   }
 
   private updateAppliedRecord(

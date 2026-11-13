@@ -109,7 +109,7 @@ function importAuthoredKnowledge({ db, worldbuildData, workspaceId, knowledge, i
     }
 
     // One transaction for the whole list: committing each entry on its own costs seconds on a big world.
-    const writeEntries = db.transaction(() => {
+    const writeEntries = db.transaction(() => worldbuildData.withStoryBatch(workspaceId, () => {
       for (const entry of Array.isArray(knowledge.entries) ? knowledge.entries : []) {
         const subjectId = idMap.get(entry?.subjectRef);
         const kind = entry?.kind;
@@ -128,12 +128,12 @@ function importAuthoredKnowledge({ db, worldbuildData, workspaceId, knowledge, i
           entriesAdded++;
         }
       }
-    });
+    }));
     writeEntries();
 
     // Cards that follow from links are built first, so their access can be set on them.
-    worldbuildData.reconcileKnowledge(workspaceId);
-    for (const card of Array.isArray(knowledge.cards) ? knowledge.cards : []) {
+    worldbuildData.withStoryBatch(workspaceId, () => worldbuildData.reconcileKnowledge(workspaceId));
+    worldbuildData.withStoryBatch(workspaceId, () => { for (const card of Array.isArray(knowledge.cards) ? knowledge.cards : []) {
       const ownerId = idMap.get(card?.ownerRef);
       const targetId = idMap.get(card?.targetRef);
       if (!ownerId || !targetId) { skipped++; continue; }
@@ -150,7 +150,7 @@ function importAuthoredKnowledge({ db, worldbuildData, workspaceId, knowledge, i
       if (card.audienceType === 'selected-members') {
         attempt(() => worldbuildData.setKnowledgeAudience({ ...scope, audienceType: 'selected-members', memberIds: (card.audienceRefs || []).map(ref => idMap.get(ref)).filter(Boolean) }));
       }
-    }
+    } });
   }
 
   // Hidden statements follow their new entries; a mark whose entry did not come along is dropped.
@@ -188,7 +188,7 @@ function exportAuthoredFacts({ worldbuildData, workspaceId, entityIds }) {
 function importAuthoredFacts({ worldbuildData, workspaceId, facts, idMap }) {
   let factsAdded = 0, factsSkipped = 0;
   if (!facts || facts.version !== 1) return { factsAdded, factsSkipped };
-  for (const fact of Array.isArray(facts.entries) ? facts.entries : []) {
+  worldbuildData.withStoryBatch(workspaceId, () => { for (const fact of Array.isArray(facts.entries) ? facts.entries : []) {
     const title = String(fact?.title || '').trim();
     const statement = String(fact?.statement || '').trim();
     if (!title || !statement) { factsSkipped++; continue; }
@@ -202,7 +202,7 @@ function importAuthoredFacts({ worldbuildData, workspaceId, facts, idMap }) {
       console.warn('[import-worldbuild] skipped a Fact:', error.message);
       factsSkipped++;
     }
-  }
+  } });
   return { factsAdded, factsSkipped };
 }
 

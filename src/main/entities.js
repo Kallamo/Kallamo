@@ -4,6 +4,10 @@ const crypto = require('crypto');
 const { discardEnrichPending, normalizeRelationshipLabel } = require('./features/worldbuild/entity-review');
 const { foldText } = require('./features/world-index/text-fold');
 const { countEntityReferences, releaseEntityReferences, replaceEntityId, repointEntityReferences } = require('./features/worldbuild/entity-references');
+const path = require('path');
+
+// Story records cannot be repointed; the story file supersedes or ends them once the rows above change.
+const storyEntities = () => require(path.join(__dirname, '../../dist-main/main/features/narrative/umwelt/story-entities'));
 
 function parseJsonArray(raw) {
   if (!raw) return [];
@@ -125,6 +129,7 @@ function deleteEntity(id) {
     if (row) releaseEntityReferences(db, { workspaceId: row.workspaceId, entityId: id });
     db.prepare('DELETE FROM entities WHERE id = ?').run(id); // links + chunk_tags GC via triggers
   })();
+  if (row) storyEntities().retireStoryEntity(db, row.workspaceId, id);
   return { id };
 }
 
@@ -185,6 +190,7 @@ function mergeEntity(sourceId, targetId, { prefer = 'target' } = {}) {
       .run(JSON.stringify(mergedAliases), mergedLore, JSON.stringify(mergedData), Date.now(), targetId);
     db.prepare('DELETE FROM entities WHERE id = ?').run(sourceId);
   })();
+  storyEntities().mergeStoryEntity(db, target.workspaceId, sourceId, targetId);
   return getEntity(targetId);
 }
 

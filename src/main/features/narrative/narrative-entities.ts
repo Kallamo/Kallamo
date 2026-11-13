@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3';
 import { normalizeLocationSize, type LocationSize } from '../../../shared/location-sizes';
 import { loadLocationChain, proposeLocationParent } from '../worldbuild/location-graph';
 import { applyStartingProfile, resolveStartingProfile, type StartingProfile } from './starting-profile';
+import { beginReplacement, cancelReplacement, completeReplacement } from './umwelt/story-lifecycle';
 
 export type NarrativeEntityType = 'Characters' | 'Creatures' | 'Locations' | 'Items';
 export type NarrativeEntityDecision = 'new' | 'ambiguous' | 'conflicting';
@@ -349,12 +350,16 @@ export class NarrativeEntitySystem {
       `).run(workspaceId, replacementId, JSON.stringify(origins), JSON.stringify(restore), Date.now());
       for (const originId of origins) this.invalidateOrigin(workspaceId, originId, 'superseded');
     })();
+    beginReplacement(this.db, workspaceId, replacementId, origins);
     return replacementId;
   }
 
   completeTurnReplacement(workspaceId: string, replacementId: string): void {
+    const row = this.db.prepare('SELECT origin_ids_json FROM narrative_turn_replacements WHERE workspace_id = ? AND replacement_id = ?')
+      .get(workspaceId, replacementId) as { origin_ids_json: string } | undefined;
     this.db.prepare('DELETE FROM narrative_turn_replacements WHERE workspace_id = ? AND replacement_id = ?')
       .run(workspaceId, replacementId);
+    if (row) completeReplacement(this.db, workspaceId, replacementId, parseOrigins(row.origin_ids_json));
   }
 
   cancelTurnReplacement(workspaceId: string, replacementId: string): boolean {
@@ -393,8 +398,10 @@ export class NarrativeEntitySystem {
           WHERE workspace_id = ? AND request_id = ?
         `).run(manifest.status, manifest.updated_at, workspaceId, manifest.request_id);
       }
-      this.completeTurnReplacement(workspaceId, replacementId);
+      this.db.prepare('DELETE FROM narrative_turn_replacements WHERE workspace_id = ? AND replacement_id = ?')
+        .run(workspaceId, replacementId);
     })();
+    cancelReplacement(this.db, workspaceId, replacementId);
     return true;
   }
 
@@ -834,4 +841,13 @@ function uniqueIdentityValues(values: unknown[]): string[] {
 
 function normalizeIdentity(value: string): string {
   return String(value ?? '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function parseOrigins(value: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
 }

@@ -1,5 +1,9 @@
 // Every table that holds what one story turn left behind. A turn is dead once its lifecycle is no longer
 // active and no open replacement can bring it back. The coverage test compares these lists with the schema.
+// The story file never deletes: a dead turn's draft is purged, or its confirmed records are retracted.
+const path = require('path');
+
+const storyLifecycle = () => require(path.join(__dirname, '../../../../dist-main/main/features/narrative/umwelt/story-lifecycle'));
 
 /** Rows carry the turn's message id in this column and go with it. */
 const TURN_OWNED_COLUMNS = [
@@ -13,6 +17,7 @@ const TURN_OWNED_COLUMNS = [
   { table: 'roleplay_turn_presence', column: 'origin_id' },
   { table: 'roleplay_character_memory', column: 'origin_id' },
   { table: 'worldbuild_event_occurrences', column: 'origin_id' },
+  { table: 'narrative_story_records', column: 'origin_id' },
   { table: 'roleplay_scene_changes', column: 'provenance_id' },
   { table: 'roleplay_inventory_changes', column: 'provenance_id' },
   { table: 'roleplay_resource_changes', column: 'provenance_id' },
@@ -108,7 +113,7 @@ function releaseKnowledgeSources(db, workspaceId, sources) {
 
 /** Removes what one dead turn left behind. Its lifecycle row stays as the tombstone. */
 function purgeTurn(db, workspaceId, originId) {
-  let removed = 0;
+  let removed = storyLifecycle().retireOrigins(db, workspaceId, [originId]);
   db.transaction(() => {
     db.pragma('defer_foreign_keys = ON');
     const events = hasTable(db, 'narrative_event_evidence') ? db.prepare(`

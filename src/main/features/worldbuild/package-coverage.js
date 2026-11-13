@@ -46,6 +46,7 @@ const STAYS = [
     'narrative_awareness_records', 'narrative_scenes', 'narrative_scene_participants', 'narrative_scene_possible_observers',
     'narrative_state_jobs', 'narrative_state_metrics', 'narrative_state_fingerprints', 'narrative_context_manifests',
     'narrative_change_set_attempts', 'narrative_operation_reviews', 'narrative_origin_lifecycle', 'narrative_turn_replacements',
+    'narrative_story_records',
     'roleplay_workspace_settings', 'roleplay_message_frames', 'roleplay_turn_presence', 'roleplay_turn_snapshots',
     'roleplay_time_state', 'roleplay_time_advances', 'roleplay_character_memory', 'roleplay_scene_changes',
     'roleplay_scene_nearby', 'roleplay_scene_objects', 'roleplay_entity_changes', 'roleplay_inventory_changes',

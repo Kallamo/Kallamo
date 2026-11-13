@@ -5,6 +5,7 @@ import {
   propositionIdentity,
   statementKey
 } from '../../../narrative/narrative-taxonomy';
+import { retireRecords } from './umwelt/story-lifecycle';
 
 /**
  * Retires stored records the quality gate would refuse today. Nothing is deleted: only the status
@@ -85,6 +86,7 @@ export class NarrativeMaintenance {
     };
     const groups = new Map<string, NarrativeCompactionReport['groups'][number]>();
     const seen = new Set<string>();
+    const retiredIds = { retracted: [] as string[], forgotten: [] as string[] };
     const retire = this.db.prepare(`
       UPDATE narrative_records
       SET payload_json = json_set(payload_json, '$.status', ?)
@@ -116,7 +118,14 @@ export class NarrativeMaintenance {
       const group = groups.get(groupKey);
       if (group) group.count += 1;
       else if (groups.size < GROUP_LIMIT) groups.set(groupKey, { recordType: row.record_type, reason, summary, count: 1 });
-      if (apply) retire.run(RETIRED_STATUS[row.record_type] ?? 'superseded', workspaceId, row.record_type, row.record_id);
+      if (apply) {
+        retire.run(RETIRED_STATUS[row.record_type] ?? 'superseded', workspaceId, row.record_type, row.record_id);
+        (row.record_type === 'memory' ? retiredIds.forgotten : retiredIds.retracted).push(row.record_id);
+      }
+    }
+    if (apply) {
+      retireRecords(this.db, workspaceId, retiredIds.retracted, 'Cleanup: a duplicate, scene state or raw identifier.');
+      retireRecords(this.db, workspaceId, retiredIds.forgotten, 'Cleanup: a repeated memory.', 'forgotten');
     }
     report.groups = [...groups.values()];
     return report;
