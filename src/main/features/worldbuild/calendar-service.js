@@ -1,6 +1,10 @@
 const { chunkContainsEvidence, normalizeEvidence } = require('../world-index/evidence-match');
 const { hiddenFields } = require('../../../../dist-main/shared/spoilers');
 const { ageAt, derivedAge } = require('../../../../dist-main/shared/world-age');
+const {
+  absoluteYearFor, clampDate: clampCalendarDate, daysBeforeYear, daysInMonth, integer, isLeapYear, modulo,
+  positiveInteger, toOrdinal
+} = require('../../../../dist-main/shared/calendar-ordinal');
 
 const STANDARD_MONTHS = [
   ['January', 31], ['February', 28], ['March', 31], ['April', 30],
@@ -91,20 +95,6 @@ function parseObject(value, fallback = {}) {
   } catch {
     return fallback;
   }
-}
-
-function positiveInteger(value, fallback = 1) {
-  const number = Math.floor(Number(value));
-  return Number.isFinite(number) && number > 0 ? number : fallback;
-}
-
-function integer(value, fallback = 0) {
-  const number = Math.trunc(Number(value));
-  return Number.isFinite(number) ? number : fallback;
-}
-
-function modulo(value, divisor) {
-  return ((value % divisor) + divisor) % divisor;
 }
 
 function normalizeCalendar(input) {
@@ -229,31 +219,6 @@ function saveTimeMatrix(db, workspaceId, input) {
   return matrix;
 }
 
-function isLeapYear(calendar, absoluteYear) {
-  if (calendar.leapRule?.type !== 'gregorian') return false;
-  return modulo(absoluteYear, 4) === 0
-    && (modulo(absoluteYear, 100) !== 0 || modulo(absoluteYear, 400) === 0);
-}
-
-function daysInMonth(calendar, absoluteYear, month) {
-  const base = calendar.months[month - 1]?.days || 1;
-  return base + (
-    isLeapYear(calendar, absoluteYear) && calendar.leapRule?.month === month
-      ? calendar.leapRule.extraDays
-      : 0
-  );
-}
-
-function absoluteYearFor(calendar, date) {
-  const era = calendar.eras.find(candidate => candidate.id === date.eraId)
-    || calendar.eras.find(candidate => candidate.id === calendar.defaultEraId)
-    || calendar.eras[0];
-  const year = positiveInteger(date.year, 1);
-  return era.direction === 'backward'
-    ? era.offset - (year - 1)
-    : era.offset + (year - 1);
-}
-
 function displayYearFor(calendar, absoluteYear, preferredEraId) {
   const preferred = calendar.eras.find(era => era.id === preferredEraId);
   const ordered = preferred
@@ -279,33 +244,7 @@ function validateDate(calendar, input) {
 }
 
 function clampDate(calendar, input) {
-  const date = parseObject(input, {});
-  const eraId = calendar.eras.some(era => era.id === date.eraId) ? date.eraId : calendar.defaultEraId;
-  const year = positiveInteger(date.year, 1);
-  const month = Math.max(1, Math.min(calendar.months.length, positiveInteger(date.month, 1)));
-  const absoluteYear = absoluteYearFor(calendar, { eraId, year });
-  const day = Math.max(1, Math.min(daysInMonth(calendar, absoluteYear, month), positiveInteger(date.day, 1)));
-  return { eraId, year, month, day };
-}
-
-function daysBeforeYear(calendar, absoluteYear) {
-  const baseDays = calendar.months.reduce((sum, month) => sum + month.days, 0);
-  if (calendar.leapRule?.type !== 'gregorian') return (absoluteYear - 1) * baseDays;
-  const year = absoluteYear - 1;
-  return year * baseDays
-    + Math.floor(year / 4)
-    - Math.floor(year / 100)
-    + Math.floor(year / 400);
-}
-
-function toOrdinal(calendar, input) {
-  const date = clampDate(calendar, input);
-  const absoluteYear = absoluteYearFor(calendar, date);
-  let ordinal = daysBeforeYear(calendar, absoluteYear);
-  for (let month = 1; month < date.month; month += 1) {
-    ordinal += daysInMonth(calendar, absoluteYear, month);
-  }
-  return ordinal + date.day - 1;
+  return clampCalendarDate(calendar, parseObject(input, {}));
 }
 
 function yearForOrdinal(calendar, ordinal) {
