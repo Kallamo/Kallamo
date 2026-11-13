@@ -36,6 +36,7 @@ import { NarrativeContextManifestRepository, type NarrativeContextManifest } fro
 import { RoleplayContextOrchestrator } from './roleplay-context-orchestrator';
 import { CharacterSceneMemory, formatCharacterMemorySection } from './character-scene-memory';
 import { admitForCharacter, type StoryRefusal } from './umwelt/story-admission';
+import { searchHolderRecords } from './umwelt/story-search';
 import {
   currentNarrativeSequence,
   loadCurrentNarrativeRecords,
@@ -65,6 +66,8 @@ export interface PlanChatContextInput {
   query: string;
   tokenBudget: number;
   items: RetrievedContextItem[];
+  /** The request as a vector of the local embedding model, when it is the one in use. */
+  queryVector?: number[] | null;
 }
 
 export interface PlannedChatContext {
@@ -120,6 +123,7 @@ export class NarrativeChatContext {
   private readonly knowledgeCards: WorldbuildKnowledgeService;
   private readonly epistemicResolver: EpistemicResolver;
   private readonly manifests: NarrativeContextManifestRepository;
+  private queryVector: number[] | null = null;
   private readonly roleplayOrchestrator: RoleplayContextOrchestrator;
   private readonly characterMemory: CharacterSceneMemory;
 
@@ -137,6 +141,7 @@ export class NarrativeChatContext {
   }
 
   plan(input: PlanChatContextInput): PlannedChatContext {
+    this.queryVector = input.queryVector ?? null;
     this.knowledgeCards.reconcileWorkspace(input.workspaceId);
     const strategy = this.resolveStrategy(input.workspaceId);
     const retrievalSettings = this.getRetrievalSettings();
@@ -895,6 +900,10 @@ export class NarrativeChatContext {
     const requiredFactIds = new Set(explicitFactIds);
     const queryTerms = meaningfulTerms(query);
     const sharedCache = new Map<string, Set<string>>();
+    // What the character holds that is close to the request in meaning, though nobody in it is named.
+    const near = perspective.access === 'subjective' && perspective.focalSubjectId && this.queryVector
+      ? searchHolderRecords(this.db, workspaceId, perspective.focalSubjectId, this.queryVector)
+      : new Map<string, number>();
     const rows = loadCurrentNarrativeRecords(this.db, {
       workspaceId,
       recordTypes: ['fact', 'state', 'knowledge', 'belief', 'memory', 'relationship']
@@ -920,7 +929,8 @@ export class NarrativeChatContext {
         || relatedEntityIds.some(id => relevantIds.has(id));
       const isFactRelevant = row.record_type === 'fact'
         && (requiredFactIds.has(row.record_id) || hasMeaningfulOverlap(queryTerms, JSON.stringify(payload)));
-      if ((!includeEntityRecords || !isEntityRelevant) && !isFactRelevant) return [];
+      const isNear = near.has(row.record_id);
+      if ((!includeEntityRecords || !isEntityRelevant) && !isFactRelevant && !isNear) return [];
       if (
         row.record_type === 'fact'
         && (payload.proposition as Record<string, unknown> | undefined)?.predicate === 'recorded-occurrence'
@@ -966,7 +976,7 @@ export class NarrativeChatContext {
         sourceType: row.record_type === 'fact' ? 'canon' : row.record_type,
         sourceId: row.record_id,
         content: `Narrative sequence: ${row.narrative_sequence}\n${normalized.content}`,
-        relevance: requiredFactIds.has(row.record_id) ? 1 : (isEntityRelevant ? 0.95 : 0.85),
+        relevance: requiredFactIds.has(row.record_id) ? 1 : (isEntityRelevant ? 0.95 : isNear ? 0.9 : 0.85),
         position: { sequence: row.narrative_sequence },
         epistemic: normalized.epistemic,
         provenanceIds: [row.source_event_id, row.record_id]

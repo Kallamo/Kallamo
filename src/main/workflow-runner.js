@@ -125,6 +125,7 @@ const {
     searchChatKnowledgeBase,
     searchChatMemories,
     generateEmbeddingVector,
+    generateEmbeddingVectors,
     getWorldVocabulary,
     lookupEntityChunks,
     searchLoreDocuments,
@@ -1062,7 +1063,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     let planned = null;
                     if (planWorkspaceContext) {
                         const narrativeBudget = Math.max(0, retrievalBudget - packed.usedTokens);
-                        planned = planNarrativeContext({
+                        planned = await planNarrativeContext({
                             chatId,
                             query: currentInput,
                             items: toNarrativeItems(narrativeCandidates, retrievalBudget),
@@ -1213,7 +1214,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     else chatKbTokens += sectionTokens;
                 }
                 if (planWorkspaceContext) {
-                    const planned = planNarrativeContext({
+                    const planned = await planNarrativeContext({
                         chatId,
                         query: currentInput,
                         items: narrativeItems.filter(item => selectedItems.has(item)),
@@ -2531,14 +2532,41 @@ function getNarrativeChatContext() {
     return narrativeChatContext;
 }
 
-function planNarrativeContext({ chatId, query, items, tokenBudget }) {
+async function planNarrativeContext({ chatId, query, items, tokenBudget }) {
     return getNarrativeChatContext().plan({
         requestId: crypto.randomUUID(),
         workspaceId: chatId,
         query,
         items,
-        tokenBudget
+        tokenBudget,
+        queryVector: await storyQueryVector(chatId, query)
     });
+}
+
+// The story's own texts get vectors from the local model only, so turning this on never bills a
+// paid embedding API. A failure leaves the request to the name and keyword matching it had before.
+async function storyQueryVector(workspaceId, query) {
+    if ((readAdvancedSettings().embeddingEngine || 'local') !== 'local' || !String(query || '').trim()) return null;
+    try {
+        await refreshStoryVectors(workspaceId);
+        return await generateEmbeddingVector(query, true);
+    } catch (error) {
+        console.warn('[Narrative State] Could not search the story by meaning:', error.message);
+        return null;
+    }
+}
+
+// A few pages per request, so a long backlog is worked off over several turns instead of stalling one.
+async function refreshStoryVectors(workspaceId) {
+    const search = require('../../dist-main/main/features/narrative/umwelt/story-search');
+    let stored = 0;
+    for (let page = 0; page < 4; page += 1) {
+        const pending = search.pendingStoryTexts(db, workspaceId, 32);
+        if (!pending.length) break;
+        const vectors = await generateEmbeddingVectors(pending.map(item => item.text));
+        stored += search.storeStoryVectors(db, workspaceId, pending.map((item, index) => ({ ...item, vector: vectors[index] })));
+    }
+    return stored;
 }
 
 function shouldPlanWorkspaceContext(chatId, includeChatContext) {
