@@ -8,6 +8,7 @@ import { traceStoryRecord } from '../../src/main/features/narrative/umwelt/story
 import { LOCAL_EMBEDDING_SPACE, pendingStoryPage, pendingStoryTexts, searchStory, searchTerms, storeStoryVectors } from '../../src/main/features/narrative/umwelt/story-search';
 import { createNarrativeChatContext } from '../../src/main/features/narrative/chat-context';
 import { AgenticEpistemicTools } from '../../src/main/features/narrative/agentic-epistemic-tools';
+import { storyCanonPassages } from '../../src/main/features/narrative/umwelt/story-text';
 import { setWorkspaceExperienceMode } from '../../src/main/features/narrative/mode-orchestration';
 import { NarrativeSceneRepository } from '../../src/narrative/scenes';
 import { openFullSchemaDatabase, type FullSchemaDatabase } from '../database/full-schema-harness';
@@ -266,6 +267,23 @@ describe('story tools for the research planner', () => {
     expect(answer).toContain('Fact: Guild: The guild was founded in the old harbor.');
     expect(toolNamesFor({ roleplay: false })).toEqual(expect.arrayContaining(['recall_story', 'who_knows', 'compare_knowledge', 'how_they_know']));
     expect(toolNamesFor({ roleplay: false })).not.toContain('inspect_subject_knowledge');
+  });
+});
+
+describe('story canon for the Writing Desk', () => {
+  test('a passage gets the Facts and earlier scenes it is about, Facts first', () => {
+    authored('canon', [{ id: 'op-fact', type: 'assert-fact', evidenceIds: [], fact: { id: 'fact', proposition: { subjectId: 'guild', predicate: 'statement', object: 'The guild was founded in the old harbor.' }, status: 'active', evidenceIds: [] } }]);
+    writeStoryEvent(db, WS, {
+      eventId: 'harbor-fire', description: 'Fire swept the old harbor the night the guild was founded.', participants: [],
+      provenance: { interpreter: 'user', originType: 'world-action', originId: 'harbor-fire' },
+      operations: [knowledge('fire', 'elias', 'Smoke hid the docks.', { acquisition: 'witness', sourceEventId: 'harbor-fire' })]
+    });
+    const passages = storyCanonPassages(db, WS, 'She remembered the old harbor where the guild was founded.');
+    expect(passages.map(item => item.text)).toEqual([
+      'Fact: Guild: The guild was founded in the old harbor.',
+      'Earlier scene: Fire swept the old harbor the night the guild was founded.'
+    ]);
+    expect(storyCanonPassages(db, 'no-story', 'old harbor guild')).toEqual([]);
   });
 });
 

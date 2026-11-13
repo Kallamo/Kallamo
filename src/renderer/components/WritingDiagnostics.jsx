@@ -24,6 +24,7 @@ const SOURCES = {
   memory: 'Memory',
   chapters: 'Other chapters',
   chapter: 'Far parts of this chapter',
+  story: 'Story canon',
   other: 'Other',
 };
 

@@ -6,16 +6,16 @@ import { sharedKnowledgeCards } from '../worldbuild/knowledge-groups';
 import { currentNarrativeSequence, loadCurrentNarrativeRecords } from './narrative-record-projection';
 import type { CompareResult, Record as StoryRecord } from '@kallamo/umwelt' with { 'resolution-mode': 'import' };
 import { NarrativeWorld } from './umwelt/narrative-world';
-import { objectOf, StoryReader } from './umwelt/story-reader';
+import { StoryReader } from './umwelt/story-reader';
 import { searchStory } from './umwelt/story-search';
 import { traceStoryRecord } from './umwelt/story-insights';
+import { storyRecordsById, storyRecordText } from './umwelt/story-text';
 
 // Lines one story tool answer may hold, and characters per line, so a broad question never floods the planner.
 const STORY_TOOL_LINES = 10;
 const STORY_TOOL_TEXT = 240;
 // Searched across every holder, so it reads fewer words of the query than a single search.
 const WHO_KNOWS_TERMS = 3;
-const GENERIC_PREDICATES = new Set(['statement', 'worldbuild-statement']);
 
 interface EntityRow {
   id: string;
@@ -296,40 +296,11 @@ export class AgenticEpistemicTools {
   }
 
   private storyRecords(workspaceId: string, ids: string[]): Map<string, StoryRecord> {
-    const world = NarrativeWorld.of(this.db, workspaceId);
-    const records = new Map<string, StoryRecord>();
-    if (!world.exists()) return records;
-    const timelineId = new StoryReader(world).timelineId();
-    for (const id of new Set(ids)) {
-      try {
-        records.set(id, world.call<StoryRecord>('record', { recordId: id, timelineId }));
-      } catch {
-        // A record retired since the search ran is simply left out.
-      }
-    }
-    return records;
+    return storyRecordsById(this.db, workspaceId, ids);
   }
 
   private recordText(workspaceId: string, record: StoryRecord): string {
-    return clip(this.fullRecordText(workspaceId, record));
-  }
-
-  private fullRecordText(workspaceId: string, record: StoryRecord): string {
-    if (record.kind === 'holding' && record.text) return record.text;
-    if (record.kind !== 'holding' && record.kind !== 'fact') return '';
-    const claim = record.claim;
-    const subject = this.entityName(workspaceId, claim.subject) || claim.subject;
-    const value = objectOf(claim);
-    // An occurrence is stored as a structured value; what reads as text is its title and summary.
-    const object = claim.object.kind === 'entity'
-      ? this.entityName(workspaceId, claim.object.id) || claim.object.id
-      : value && typeof value === 'object'
-        ? [(value as Record<string, unknown>).title, (value as Record<string, unknown>).summary].filter(Boolean).join(': ')
-        : String(value ?? '');
-    const negation = claim.polarity === false ? 'not ' : '';
-    return GENERIC_PREDICATES.has(claim.predicate) || claim.predicate === 'recorded-occurrence'
-      ? `${subject}: ${negation}${object}`
-      : `${subject} ${negation}${claim.predicate}: ${object}`;
+    return clip(storyRecordText(this.db, workspaceId, record));
   }
 
   private acquisitionText(workspaceId: string, record: StoryRecord): string {

@@ -70,9 +70,10 @@ const SECTIONS = {
     workspace: '--- WORKSPACE KNOWLEDGE ---',
     memory: '--- WORKSPACE MEMORY ---',
     chapters: '--- OTHER CHAPTERS ---',
-    chapter: '--- CURRENT CHAPTER (DISTANT PARTS) ---'
+    chapter: '--- CURRENT CHAPTER (DISTANT PARTS) ---',
+    story: '--- STORY CANON (do not contradict) ---'
 };
-const SECTION_ORDER = [SECTIONS.profile, SECTIONS.workspace, SECTIONS.memory, SECTIONS.chapters, SECTIONS.chapter];
+const SECTION_ORDER = [SECTIONS.story, SECTIONS.profile, SECTIONS.workspace, SECTIONS.memory, SECTIONS.chapters, SECTIONS.chapter];
 
 function makeFence() {
     const suffix = crypto.randomBytes(4).toString('hex');
@@ -158,7 +159,7 @@ function loadDirectives(workspaceId) {
 }
 
 // Query = selection + intermediate prompt. Results are budget items, fitted by score.
-async function gatherRag({ profileId, workspaceId, currentDocId, retrievalQuery, threshold }) {
+async function gatherRag({ profileId, workspaceId, currentDocId, retrievalQuery, queryVector, threshold }) {
     const items = [];
     const add = (section, results) => {
         for (const r of results || []) {
@@ -183,6 +184,11 @@ async function gatherRag({ profileId, workspaceId, currentDocId, retrievalQuery,
             // Chapter indexing tags sibling chapters too, so they take the same tag boost.
             add(SECTIONS.chapters, await executeMultiOwnerSearch(retrievalQuery, siblingIds, 'document', threshold, 5, true));
         }
+    } catch (e) { }
+    try {
+        // A vector of another engine has another size, so the story is then searched by its words only.
+        const { storyCanonPassages } = require('../../dist-main/main/features/narrative/umwelt/story-text');
+        add(SECTIONS.story, storyCanonPassages(db, workspaceId, retrievalQuery, queryVector));
     } catch (e) { }
     return items;
 }
@@ -276,7 +282,7 @@ async function runWritingDeskInvocation({
     const chapterTokens = countTokens(contextText);
 
     const ragItems = await gatherRag({
-        profileId: profile.id, workspaceId, currentDocId: documentId, retrievalQuery, threshold
+        profileId: profile.id, workspaceId, currentDocId: documentId, retrievalQuery, queryVector, threshold
     });
     for (const chunk of farChunks) {
         ragItems.push({ section: SECTIONS.chapter, text: chunk.text, tier: 0, score: Number(chunk.fusionScore ?? chunk.score) || 0 });
