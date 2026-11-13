@@ -85,10 +85,38 @@ const ROLEPLAY_TOOLS = [
   }
 ];
 
+// Offered in every workspace. They read the story file as the narrator and inform the planner only.
+const STORY_TOOLS = [
+  {
+    name: 'recall_story',
+    arg: 'query',
+    hint: 'what happened, in a few words',
+    description: 'Searches the story itself by words and meaning: established Facts and earlier scenes. Narrator material: it does not say what any character knows.'
+  },
+  {
+    name: 'who_knows',
+    arg: 'query',
+    hint: 'the statement, in a few words',
+    description: 'Lists the characters, factions and places whose knowledge holds something close to the statement, and how each came to hold it. Use it before a secret comes out, or to find who could tell someone something.'
+  },
+  {
+    name: 'compare_knowledge',
+    arg: 'query',
+    hint: 'name | name',
+    description: 'What one character or group holds that the other does not, and where they disagree. Narrator material for tension and deception: never let a character act on what only the other holds.'
+  },
+  {
+    name: 'how_they_know',
+    arg: 'query',
+    hint: 'name | the statement in a few words',
+    description: 'Traces how someone came to hold a statement, link by link back to whoever saw it first, including who told whom and whether a telling was honest. Narrator material only.'
+  }
+];
+
 // Earlier prompts named the entity lookup differently; both spellings run the same tool.
 const TOOL_ALIASES = { lookup_world_entity: 'lookup_entity' };
 
-const ALL_TOOLS = [...PLANNER_TOOLS, ...ROLEPLAY_TOOLS];
+const ALL_TOOLS = [...PLANNER_TOOLS, ...ROLEPLAY_TOOLS, ...STORY_TOOLS];
 
 // Every name the text parser accepts; whether a tool is offered in this workspace is decided later.
 const TOOL_NAMES = [...ALL_TOOLS.map(tool => tool.name), ...Object.keys(TOOL_ALIASES)];
@@ -101,7 +129,7 @@ function canonicalToolName(name) {
 }
 
 function toolsFor({ roleplay = false } = {}) {
-  return roleplay ? ALL_TOOLS : PLANNER_TOOLS;
+  return roleplay ? ALL_TOOLS : [...PLANNER_TOOLS, ...STORY_TOOLS];
 }
 
 function toolNamesFor(options) {

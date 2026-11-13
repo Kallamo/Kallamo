@@ -7,12 +7,14 @@ import { admitForCharacter } from '../../src/main/features/narrative/umwelt/stor
 import { traceStoryRecord } from '../../src/main/features/narrative/umwelt/story-insights';
 import { LOCAL_EMBEDDING_SPACE, pendingStoryPage, pendingStoryTexts, searchStory, searchTerms, storeStoryVectors } from '../../src/main/features/narrative/umwelt/story-search';
 import { createNarrativeChatContext } from '../../src/main/features/narrative/chat-context';
+import { AgenticEpistemicTools } from '../../src/main/features/narrative/agentic-epistemic-tools';
 import { setWorkspaceExperienceMode } from '../../src/main/features/narrative/mode-orchestration';
 import { NarrativeSceneRepository } from '../../src/narrative/scenes';
 import { openFullSchemaDatabase, type FullSchemaDatabase } from '../database/full-schema-harness';
 
 const require = createRequire(import.meta.url);
 const { createWorldbuildDataService } = require('../../src/main/features/worldbuild/worldbuild-data.js');
+const { toolNamesFor } = require('../../src/main/features/knowledge/planner-tools.js');
 
 const WS = 'ws';
 let harness: FullSchemaDatabase;
@@ -213,6 +215,47 @@ describe('recalling earlier scenes', () => {
     });
     expect(searchStory(db, WS, { docType: 'event', text: 'storm bell tower', skipLatestEvents: 12 })).toEqual([]);
     expect(searchStory(db, WS, { docType: 'event', text: 'storm bell tower' }).map(hit => hit.docId)).toEqual(['bell']);
+  });
+});
+
+describe('story tools for the research planner', () => {
+  const ledgers = { subjectId: 'guild', predicate: 'hidden-ledgers', object: 'under the chapel floor' };
+  function seed() {
+    turn('t1', [
+      { type: 'knowledge', subjectId: 'tess', proposition: ledgers, category: 'history', acquisition: 'witness', confidence: 0.98 },
+      { type: 'knowledge', subjectId: 'elias', proposition: ledgers, category: 'history', acquisition: 'reported', informantIds: ['tess'], confidence: 0.98 },
+      { type: 'knowledge', subjectId: 'tess', proposition: { subjectId: 'guild', predicate: 'meeting-hour', object: 'midnight at the docks' }, category: 'history', acquisition: 'witness', confidence: 0.98 }
+    ]);
+    return new AgenticEpistemicTools(db);
+  }
+
+  test('who knows lists each holder and how they came to hold it', () => {
+    const answer = seed().whoKnows(WS, 'ledgers under the chapel');
+    expect(answer).toContain('Tess knows: Guild: under the chapel floor (witnessed)');
+    expect(answer).toContain('Elias knows: Guild: under the chapel floor (told by Tess)');
+  });
+
+  test('compare shows what only one of two holds', () => {
+    const answer = seed().compareKnowledge(WS, 'Tess | Elias');
+    expect(answer).toContain('Only Tess: Guild: midnight at the docks');
+    expect(answer).not.toContain('Only Elias');
+  });
+
+  test('how they know follows the telling back to the witness', () => {
+    const answer = seed().howTheyKnow(WS, 'Elias | ledgers under the chapel');
+    expect(answer.split('\n')).toEqual([
+      'How Elias holds: Guild: under the chapel floor',
+      'Elias: told-by from Tess (Turn t1.)',
+      'Tess: witnessed (Turn t1.)'
+    ]);
+  });
+
+  test('recall finds Facts and scenes, and the tools are offered outside roleplay too', () => {
+    authored('canon', [{ id: 'op-fact', type: 'assert-fact', evidenceIds: [], fact: { id: 'fact', proposition: { subjectId: 'guild', predicate: 'statement', object: 'The guild was founded in the old harbor.' }, status: 'active', evidenceIds: [] } }]);
+    const answer = new AgenticEpistemicTools(db).recallStory(WS, 'founded old harbor');
+    expect(answer).toContain('Fact: Guild: The guild was founded in the old harbor.');
+    expect(toolNamesFor({ roleplay: false })).toEqual(expect.arrayContaining(['recall_story', 'who_knows', 'compare_knowledge', 'how_they_know']));
+    expect(toolNamesFor({ roleplay: false })).not.toContain('inspect_subject_knowledge');
   });
 });
 

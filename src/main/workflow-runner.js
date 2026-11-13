@@ -329,6 +329,14 @@ const EPISTEMIC_TOOLS = {
     inspect_subject_memories: ['inspectSubjectMemories', 'Subject memory inspection is unavailable outside Roleplay Mode.']
 };
 
+// Story tools, offered in every workspace: tool name -> method. Like the per-subject tools, they inform the planner only.
+const STORY_TOOL_METHODS = {
+    recall_story: 'recallStory',
+    who_knows: 'whoKnows',
+    compare_knowledge: 'compareKnowledge',
+    how_they_know: 'howTheyKnow'
+};
+
 // Passages lookup_entity hands the agent per call.
 const LOOKUP_ENTITY_CHUNK_LIMIT = 12;
 // Of those, the most relevant ones reach the writer on their own; the rest only when the agent
@@ -6521,15 +6529,17 @@ async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory 
     const experienceMode = db.prepare('SELECT mode FROM workspace_experience_modes WHERE workspace_id = ?').get(chatId)?.mode;
     const isRoleplay = experienceMode === 'roleplay';
     let epistemicTools = null;
+    let storyTools = null;
     let awarenessOverview = '';
-    if (isRoleplay) {
-        try {
-            const { AgenticEpistemicTools } = require('../../dist-main/main/features/narrative/agentic-epistemic-tools');
-            epistemicTools = new AgenticEpistemicTools(db);
+    try {
+        const { AgenticEpistemicTools } = require('../../dist-main/main/features/narrative/agentic-epistemic-tools');
+        storyTools = new AgenticEpistemicTools(db);
+        if (isRoleplay) {
+            epistemicTools = storyTools;
             awarenessOverview = epistemicTools.scanSceneAwareness(chatId, currentInput);
-        } catch (error) {
-            console.warn('[Agentic RAG] Awareness scan unavailable:', error.message);
         }
+    } catch (error) {
+        console.warn('[Agentic RAG] Awareness scan unavailable:', error.message);
     }
     const offeredTools = toolNamesFor({ roleplay: isRoleplay });
     // The roleplay context already holds these; research is for what lies outside them.
@@ -7146,6 +7156,15 @@ ${isRoleplay ? `${inContextLine}- PERSPECTIVE: lookup_entity returns what the na
                 : unavailable;
             hits = epistemicTools ? 1 : 0;
             pushNote(text);
+        } else if (STORY_TOOL_METHODS[call.name]) {
+            const vector = call.name === 'compare_knowledge'
+                ? null
+                : await storyQueryVector(chatId, String(call.arg || '').split('|').pop());
+            const text = storyTools
+                ? storyTools[STORY_TOOL_METHODS[call.name]](chatId, call.arg, vector)
+                : 'The story is unavailable right now.';
+            hits = storyTools ? 1 : 0;
+            pushNote(text);
         } else if (call.name === 'expand') {
             // Re-read one previously summarized item's full text into THIS turn only.
             const hit = itemRegistry.get(call.arg) ||
@@ -7162,7 +7181,7 @@ ${isRoleplay ? `${inContextLine}- PERSPECTIVE: lookup_entity returns what the na
         for (let n = firstHandle; n <= handleSeq; n++) handles.push(`R${n}`);
         executedQueries.set(key, { tool: call.name, query: call.arg, hits, handles });
         // Scene records change turn by turn, so an empty answer from them is not remembered.
-        if (includeChatContext && call.name !== 'expand' && !EPISTEMIC_TOOLS[call.name] && call.name !== 'explore_worldbuild_options') {
+        if (includeChatContext && call.name !== 'expand' && !EPISTEMIC_TOOLS[call.name] && !STORY_TOOL_METHODS[call.name] && call.name !== 'explore_worldbuild_options') {
             retrievalLedger.recordQuery(chatId, { key, tool: call.name, query: call.arg, hits });
         }
         return { tool: call.name, arg: call.arg, hits, status };

@@ -41,6 +41,10 @@ export interface StorySearchInput {
   limit?: number;
   /** Leaves out the latest events of the story, whose scenes the chat history still holds. */
   skipLatestEvents?: number;
+  /** Fewer words for a search repeated across many holders. */
+  maxTerms?: number;
+  /** Resolving the timeline costs engine calls, so a run of searches resolves it once. */
+  timelineId?: string;
 }
 
 function prepare(world: NarrativeWorld): void {
@@ -86,9 +90,9 @@ export function storeStoryVectors(db: Database.Database, workspaceId: string, it
 }
 
 /** The words of a request worth searching on their own, longest first: length decides, never a word list. */
-export function searchTerms(text: string): string[] {
+export function searchTerms(text: string, max = MAX_TERMS): string[] {
   const terms = new Set(String(text || '').toLocaleLowerCase().split(/[^\p{L}\p{N}]+/u).filter(term => term.length >= MIN_TERM_LENGTH));
-  return [...terms].sort((left, right) => right.length - left.length || left.localeCompare(right)).slice(0, MAX_TERMS);
+  return [...terms].sort((left, right) => right.length - left.length || left.localeCompare(right)).slice(0, max);
 }
 
 function searchPage(world: NarrativeWorld, payload: Record<string, unknown>): SearchPageResult | null {
@@ -111,7 +115,7 @@ export function searchStory(db: Database.Database, workspaceId: string, input: S
   const holderId = input.holderId ?? null;
   if (holderId && !world.ensureEntities([holderId]).has(holderId)) return [];
   const docType = input.docType ?? 'record';
-  const timelineId = new StoryReader(world).timelineId();
+  const timelineId = input.timelineId ?? new StoryReader(world).timelineId();
   const filter = { docType, ...(holderId ? { holder: holderId } : {}) };
 
   const latestTick = input.skipLatestEvents ? new StoryReader(world).timeline(timelineId).maxTick : null;
@@ -132,7 +136,7 @@ export function searchStory(db: Database.Database, workspaceId: string, input: S
   }
 
   const termHits = new Map<string, { terms: number; rarity: number }>();
-  for (const term of searchTerms(input.text)) {
+  for (const term of searchTerms(input.text, input.maxTerms)) {
     const page = searchPage(world, { text: term, filter, timelineId, page: { limit: TERM_PAGE } });
     const items = (page?.items ?? []).filter(keep);
     for (const item of items) {
