@@ -40,6 +40,9 @@
       "!node_modules/gpt-tokenizer/data/p50k_base.tiktoken",
       "!node_modules/gpt-tokenizer/data/r50k_base.tiktoken"
     ],
+    "asarUnpack": [
+      "node_modules/@kallamo/**/*"
+    ],
     "fileAssociations": [
       {
         "ext": "klp",
@@ -132,6 +135,7 @@
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "@fontsource-variable/merriweather": "^5.2.6",
     "@huggingface/transformers": "^4.2.0",
+    "@kallamo/umwelt": "0.1.0",
     "@tiptap/extension-color": "^3.27.1",
     "@tiptap/extension-font-family": "^3.27.1",
     "@tiptap/extension-table": "^3.27.1",
