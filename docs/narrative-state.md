@@ -1,9 +1,9 @@
 # Narrative State
 
-What the analysis after each roleplay reply is allowed to write down, and how the story clock
-moves. The code lives in `src/narrative/` (contracts, taxonomy, validation) and in
-`src/main/features/narrative/` (routing, quality gate, store, maintenance), with the clock in
-`src/main/features/worldbuild/calendar-service.js`.
+What the analysis after each roleplay reply is allowed to write down, where it is kept, and how the
+story clock moves. The code lives in `src/narrative/` (contracts, taxonomy, validation), in
+`src/main/features/narrative/` (routing, quality gate, store, maintenance) with the story file under
+its `umwelt/` folder, and the clock in `src/main/features/worldbuild/calendar-service.js`.
 
 ## The rule
 
@@ -101,6 +101,42 @@ hold in every language reads the triage instead, which judges by meaning:
 Participants matter beyond the cast list: only their perspectives travel in the writer's context,
 and the retrieval planner's roleplay gate treats everyone else as outside the conversation.
 
+## The story file
+
+What the story holds now (facts, what each character knows, believes and remembers, who knows of
+whom, how they feel about each other) lives in one Umwelt file per workspace,
+`<data>/narrative/<workspace>.umw`, opened through `@kallamo/umwelt` in a worker thread. Kallamo keeps
+the journal beside it: `narrative_events` with their participants, evidence and reviews, because the
+review queue, the turn diagnostics and the deletion of a chat are Kallamo's own. Every applied
+operation is written to both in one step, and `narrative_story_records` notes which turn or
+occurrence wrote which record, so taking a turn back retires exactly what it wrote.
+
+- **Nothing is deleted.** A revision supersedes the record before it; a retirement, a forgotten
+  memory or a revoked awareness is a transition with its reason. Every read sees only what is current
+  at the position asked for, and the trace can still walk the history.
+- **Each turn writes into its own draft** (`turn-<message>`), promoted before the next turn or any
+  other write. Deleting or regenerating the latest turn discards its draft and leaves nothing behind;
+  a turn already confirmed has its records retracted instead. A regeneration that covers confirmed
+  turns writes into a replacement draft and promotes it only when the new reply completes.
+- **Two clocks.** The tick orders writes; the `story` axis holds the world calendar minute of each
+  event, so the Knowledge tab can look back at what someone held by the end of a past day.
+- **Who may know what is the engine's call.** Before a character's context is built,
+  `context.admit` admits their own records and those of the factions they belong to and the places
+  they are local to, and refuses the rest; the refusals show in the turn diagnostics. Group
+  membership grants nothing inside the engine, so Kallamo names those groups itself, after the
+  Knowledge audiences have already filtered what a group shares.
+- **Checks.** A secret told to someone outside those allowed to hear it, and a telling with no record
+  behind it in the teller's own knowledge, are reported under Story checks in the turn diagnostics.
+  They never block the turn: the author decides whether a leak was the point.
+- **Beliefs are read against canon.** A belief in another value of a fact slot reads as
+  contradicted; the same value as aligned.
+- **Search by meaning.** With the local embedding engine, the texts a character holds get vectors
+  and the context planner can bring in a record by what it means, not only by the names it shares
+  with the request. A paid embedding API is never used for this.
+- **Upgrading.** A workspace from an earlier 2.0 beta is replayed into its story file event by event
+  on the first start (`narrative_story_import_v1`); turns already removed stay out, and the old
+  record tables are dropped once the replay has run.
+
 ## The story clock
 
 The interpreter estimates how long each turn took. A wrong estimate goes straight into the campaign
@@ -131,6 +167,6 @@ clock, and a hallucinated "three years" is both catastrophic and invisible. So:
 ## Cleanup
 
 Worlds played before the gate still hold duplicates, scene chatter filed as knowledge and raw-key
-records. Cleanup is previewed and never deletes: a retired record keeps its row, event and evidence,
-and only its status changes to the value each projection already treats as not current. The first
-copy of a statement wins, so the record that established something keeps its place in the sequence.
+records. Cleanup is previewed and never deletes: a retired record stays in the story file's history
+with its event and evidence, and stops being current through a retraction. The first copy of a
+statement wins, so the record that established something keeps its place in the sequence.
