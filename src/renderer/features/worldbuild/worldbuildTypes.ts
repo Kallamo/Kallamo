@@ -56,9 +56,31 @@ export interface WorldbuildKnowledgeEntry {
   factIds?: string[];
 }
 
+/** How a holder came to know something, link by link (the story's trace). */
+export interface WorldDateValueLike { eraId: string; year: number; month: number; day: number }
+
+export interface WorldbuildKnowledgeTrace {
+  status: string | null;
+  truncated: boolean;
+  steps: Array<{
+    recordId: string;
+    holderId: string | null;
+    holderName: string | null;
+    how: string;
+    fromId: string | null;
+    fromName: string | null;
+    intent: string | null;
+    eventId: string;
+    eventDescription: string | null;
+    tick: number;
+  }>;
+}
+
 export interface WorldbuildKnowledgeProjection {
   projectId: string;
   subjectId: string;
+  /** Set when the projection is what the subject held at the end of that world day. */
+  asOf?: WorldDateValueLike | null;
   known: WorldbuildKnowledgeEntry[];
   beliefs: WorldbuildKnowledgeEntry[];
   memories: WorldbuildKnowledgeEntry[];
@@ -170,9 +192,14 @@ export interface WorldbuildApi {
     entity?: WorldbuildEntity;
     error?: string;
   }>;
-  getWorldbuildSubjectKnowledge(workspaceId: string, subjectId: string): Promise<{
+  getWorldbuildSubjectKnowledge(workspaceId: string, subjectId: string, asOf?: WorldDateValueLike | null): Promise<{
     success: boolean;
     projection?: WorldbuildKnowledgeProjection;
+    error?: string;
+  }>;
+  traceWorldbuildSubjectRecord(workspaceId: string, recordId: string): Promise<{
+    success: boolean;
+    trace?: WorldbuildKnowledgeTrace | null;
     error?: string;
   }>;
   saveWorldbuildSubjectEntry(payload: Record<string, unknown>): Promise<{

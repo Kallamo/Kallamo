@@ -1,7 +1,7 @@
 import { Fragment, type KeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpenCheck, Brain, Check, ChevronDown, Eye, EyeOff, Lightbulb, Link2, Lock, LockKeyhole,
-  Pencil, Plus, Search, Trash2, Users, UserMinus, X, Ear, Info, MoreHorizontal, Package,
+  Pencil, Plus, Search, Trash2, Users, UserMinus, X, Ear, Info, MoreHorizontal, Package, Route, History,
 } from 'lucide-react';
 import Menu, { MenuItem } from '../../components/ui/Menu';
 import IconButton from '../../components/ui/IconButton';
@@ -28,7 +28,7 @@ import {
 import type {
   KnowledgeEntryKind, Toast, WorldbuildApi, WorldbuildEntity,
   WorldbuildKnowledgeCard, WorldbuildKnowledgeEntry, WorldbuildKnowledgeProjection,
-  WorldbuildKnownRelationship,
+  WorldbuildKnowledgeTrace, WorldbuildKnownRelationship,
 } from './worldbuildTypes';
 import { meta, TYPE_ORDER } from './worldbuildConfig';
 
@@ -140,6 +140,7 @@ export default function WorldbuildKnowledgeTab({ workspaceId, entity, entities, 
   const currentProjection = projection?.subjectId === entity.id ? projection : null;
   // The Add memory button lives in the shared header; each press asks Memories to open its form.
   const [composeSignal, setComposeSignal] = useState(0);
+  const [lookingBack, setLookingBack] = useState(false);
   // Sharing runs one way. A faction hands each card down to the members it names, and
   // nothing a member learns alone ever climbs back up, so both sides of that rule are
   // read from the same roster: who receives from here, and who this subject receives from.
@@ -325,10 +326,12 @@ export default function WorldbuildKnowledgeTab({ workspaceId, entity, entities, 
         {!isPlace && <SurfaceButton id="memories-surface-tab" controls="memories-surface-panel" active={surface === 'memories'} onClick={() => setSurface('memories')} onKeyDown={event => handleSurfaceKeyDown(event, 'memories')} icon={Brain} label="Memories" count={currentProjection?.memories.length ?? 0} />}
       </div>
       <span className="flex-1" />
+      {calendar && !isPlace && <Button variant="ghost" size="sm" icon={History} aria-pressed={lookingBack} onClick={() => setLookingBack(value => !value)}>Look back</Button>}
       {surface === 'knowledge'
         ? <Button variant="ghost" size="sm" icon={Plus} onClick={() => setAddingCard(true)}>Add subject</Button>
         : <Button variant="ghost" size="sm" icon={Plus} onClick={() => setComposeSignal(value => value + 1)}>Add memory</Button>}
       </div>
+      {lookingBack && calendar && !isPlace && <LookBack key={`look-back:${entity.id}`} workspaceId={workspaceId} owner={entity} entities={entities} api={api} calendar={calendar} clock={clock} onClose={() => setLookingBack(false)} />}
 
       <div id="knowledge-surface-panel" role="tabpanel" aria-labelledby="knowledge-surface-tab" hidden={surface !== 'knowledge'} aria-busy={loading} className="space-y-3">
           <p className="flex gap-2 text-xs leading-relaxed text-text-muted">
@@ -1021,6 +1024,7 @@ function KnowledgeCardModal({ workspaceId, owner, card, entity, entities, roster
                 entities={entities}
                 onEdit={entry.managed ? undefined : () => startEditing(entry)}
                 onDelete={entry.managed ? undefined : () => setDeleting(entry)}
+                onTrace={() => api.traceWorldbuildSubjectRecord(workspaceId, entry.id).then(result => result.trace ?? null)}
               />
             ))}
             {!statements.length && <p className="rounded-card border border-dashed border-border-subtle px-4 py-8 text-center text-xs text-text-subtle">No statements recorded.</p>}
@@ -1655,6 +1659,7 @@ function Memories({ hidden, loading, workspaceId, owner, projection, api, reload
                 onEdit={entry.managed ? undefined : () => startEditing(entry)}
                 onDelete={entry.managed ? undefined : () => setDeleting(entry)}
                 onOpenOrigin={originEventId && onOpenEntity ? () => onOpenEntity(originEventId, { tab: 'occurrences' }) : undefined}
+                onTrace={() => api.traceWorldbuildSubjectRecord(workspaceId, entry.id).then(result => result.trace ?? null)}
               />
             );
           })}
@@ -1689,12 +1694,19 @@ function storyDay(clock: WorldDateValue | null): WorldDateValue | null {
   return { eraId, year, month, day };
 }
 
-function Statement({ entry, entities = [], calendar = null, onEdit, onDelete, onOpenOrigin }: {
+function Statement({ entry, entities = [], calendar = null, onEdit, onDelete, onOpenOrigin, onTrace }: {
   entry: WorldbuildKnowledgeEntry; entities?: WorldbuildEntity[]; calendar?: Record<string, any> | null;
-  onEdit?(): void; onDelete?(): void; onOpenOrigin?(): void;
+  onEdit?(): void; onDelete?(): void; onOpenOrigin?(): void; onTrace?(): Promise<WorldbuildKnowledgeTrace | null>;
 }) {
   const menuRef = useRef<HTMLButtonElement | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [trace, setTrace] = useState<WorldbuildKnowledgeTrace | null>(null);
+  const showTrace = async () => {
+    setMenuOpen(false);
+    if (!onTrace) return;
+    setTrace(await onTrace().catch(() => null));
+  };
+  const canon = entry.kind === 'belief' ? CANON_RELATIONS[entry.relationToCanon ?? 'unknown'] : null;
   const memoryState = entry.kind === 'memory' ? MEMORY_STATES[entry.accessibility] : null;
   const MemoryIcon = memoryState?.icon;
   const label = memoryState?.label || (entry.kind === 'belief' ? 'Believed' : 'Known');
@@ -1731,22 +1743,110 @@ function Statement({ entry, entities = [], calendar = null, onEdit, onDelete, on
               <span className="font-semibold text-text-secondary">{label}</span>
               {categoryLabel && <>{dot}<span className="text-text-muted">{categoryLabel}</span></>}
               {route && RouteIcon && <>{dot}<span className="inline-flex items-center gap-1 text-text-muted"><RouteIcon className="h-3 w-3" aria-hidden="true" />{route.label}{tellers.length ? ` by ${joinNames(tellers)}` : ''}</span></>}
+              {canon && <>{dot}<span className={canon.className}>{canon.label}</span></>}
             </>
           )}
         </div>
         <SpoilerCover field={entryKey(entry)}><p className="whitespace-pre-wrap leading-relaxed text-text-primary"><SpoilerText text={entry.statement || entry.summary} /></p></SpoilerCover>
+        {trace && <TraceChain trace={trace} onClose={() => setTrace(null)} />}
       </div>
       {(
         <>
           <IconButton ref={menuRef} icon={MoreHorizontal} size="sm" label={`${label} entry actions`} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen(value => !value)} />
           <Menu anchorRef={menuRef} open={menuOpen} onClose={() => setMenuOpen(false)} label={`${label} entry actions`} className="w-48" align="right">
             {onEdit && <MenuItem icon={Pencil} label="Edit" onSelect={() => { setMenuOpen(false); onEdit(); }} />}
+            {onTrace && <MenuItem icon={Route} label="How they know" onSelect={showTrace} />}
             <SpoilerMenuItem field={entryKey(entry)} onDone={() => setMenuOpen(false)} />
             {onDelete && <MenuItem icon={Trash2} label="Delete" danger onSelect={() => { setMenuOpen(false); onDelete(); }} />}
           </Menu>
         </>
       )}
     </article>
+  );
+}
+
+// What the story held for one subject at the end of a world day: read-only, from the story axis.
+function LookBack({ workspaceId, owner, entities, api, calendar, clock, onClose }: {
+  workspaceId: string; owner: WorldbuildEntity; entities: WorldbuildEntity[]; api: WorldbuildApi;
+  calendar: Record<string, any>; clock: Record<string, any> | null; onClose(): void;
+}) {
+  const [date, setDate] = useState<WorldDateValue | null>(clock
+    ? { eraId: clock.eraId, year: clock.year, month: clock.month, day: clock.day }
+    : null);
+  const [view, setView] = useState<WorldbuildKnowledgeProjection | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    if (!date) return undefined;
+    let active = true;
+    const day = { eraId: String(date.eraId), year: Number(date.year), month: Number(date.month), day: Number(date.day) };
+    api.getWorldbuildSubjectKnowledge(workspaceId, owner.id, day).then(result => {
+      if (!active) return;
+      if (result.success && result.projection) {
+        setView(result.projection);
+        setError('');
+      } else setError(result.error || 'Could not read that day.');
+    }).catch(cause => { if (active) setError(cause instanceof Error ? cause.message : 'Could not read that day.'); });
+    return () => { active = false; };
+  }, [api, workspaceId, owner.id, date?.eraId, date?.year, date?.month, date?.day]);
+  const entries = view ? [...view.known, ...view.beliefs, ...view.memories] : [];
+  return (
+    <section aria-label="Look back" className="space-y-3 rounded-card border border-border-subtle bg-surface-canvas/30 p-3">
+      <div>
+        <div className="flex items-center gap-2 text-xs font-semibold text-text-secondary">
+          <History className="h-3.5 w-3.5" aria-hidden="true" />
+          <span className="flex-1">Look back</span>
+          <IconButton icon={X} size="sm" label="Close look back" onClick={onClose} />
+        </div>
+        <p className="text-xs leading-relaxed text-text-muted">What {firstName(owner.canonicalName)} knew, believed and remembered by the end of a day of the story.</p>
+      </div>
+      <WorldDateInput className="w-full" calendar={calendar} value={date} onChange={setDate} allowClear={false} label="Day" emptyLabel="Choose a day" />
+      {error && <p className="text-xs text-status-danger">{error}</p>}
+      <div className="custom-scrollbar max-h-[28rem] divide-y divide-border-subtle overflow-y-auto overscroll-contain">
+        {entries.map(entry => <Statement key={entry.id} entry={entry} entities={entities} calendar={calendar} />)}
+        {view && !entries.length && <p className="py-4 text-center text-xs text-text-subtle">Nothing recorded by that day.</p>}
+      </div>
+    </section>
+  );
+}
+
+// Only a belief has a relation to canon worth showing; one canon is silent about says nothing.
+const CANON_RELATIONS: Record<string, { label: string; className: string } | null> = {
+  aligned: { label: 'Matches canon', className: 'text-text-muted' },
+  contradicted: { label: 'Contradicts canon', className: 'font-medium text-status-warning' },
+  unknown: null,
+};
+
+const TRACE_HOW: Record<string, string> = {
+  witnessed: 'saw it',
+  'told-by': 'was told',
+  evidence: 'learned it from what they read or found',
+  inferred: 'worked it out',
+  authored: 'knows it from the start',
+  canon: 'is canon',
+};
+
+// The chain runs from the holder back to whoever first saw it; each line is one link.
+function TraceChain({ trace, onClose }: { trace: WorldbuildKnowledgeTrace; onClose(): void }) {
+  return (
+    <div className="mt-2 rounded-control border border-border-subtle bg-surface-canvas/40 px-3 py-2">
+      <div className="mb-1 flex items-center gap-2 text-xs font-semibold text-text-secondary">
+        <Route className="h-3 w-3" aria-hidden="true" />
+        <span className="flex-1">How they know</span>
+        <IconButton icon={X} size="sm" label="Close how they know" onClick={onClose} />
+      </div>
+      <ol className="space-y-1 text-xs text-text-muted">
+        {trace.steps.map(step => (
+          <li key={step.recordId} className="leading-relaxed">
+            <span className="font-medium text-text-secondary">{step.holderName ?? 'Someone'}</span>{' '}
+            {TRACE_HOW[step.how] ?? step.how}
+            {step.how === 'told-by' && step.fromName ? ` by ${step.fromName}` : ''}
+            {step.intent === 'deceptive' ? ', who lied' : ''}
+            {step.eventDescription ? <span className="text-text-subtle"> · {step.eventDescription}</span> : null}
+          </li>
+        ))}
+      </ol>
+      {trace.truncated && <p className="mt-1 text-xs text-text-subtle">The chain goes further back than shown.</p>}
+    </div>
   );
 }
 

@@ -156,11 +156,28 @@ function createWorldbuildDataService(db) {
     return { typeId, displayName, layout };
   }
 
-  function getSubjectKnowledge(workspaceId, subjectId) {
-    const rows = journalRows(requireText(workspaceId, 'workspaceId'), storyRecords().loadSubjectRecords(db, workspaceId, requireText(subjectId, 'subjectId')));
+  // `asOf` reads what the subject held at the end of that day of the world, on the story axis.
+  function getSubjectKnowledge(workspaceId, subjectId, options = {}) {
+    const at = options.asOf ? storyDayEnd(workspaceId, options.asOf) : undefined;
+    if (options.asOf && !at) throw new Error('That date is not on this world\'s calendar.');
+    const rows = journalRows(requireText(workspaceId, 'workspaceId'), storyRecords().loadSubjectRecords(db, workspaceId, requireText(subjectId, 'subjectId'), at));
     const projection = projectSubjectKnowledge(workspaceId, subjectId, rows, createEntityNameResolver(workspaceId));
     projection.cards = knowledgeCards.listCards(workspaceId, subjectId);
+    projection.asOf = options.asOf || null;
     return projection;
+  }
+
+  function storyDayEnd(workspaceId, date) {
+    const calendar = require('./calendar-service').getCalendar(db, workspaceId);
+    const { storyMinute } = require('../../../../dist-main/shared/calendar-ordinal');
+    const tick = storyMinute(calendar, { ...date, hour: (calendar.hoursPerDay || 24) - 1, minute: (calendar.minutesPerHour || 60) - 1 });
+    return tick === null ? null : { axis: 'story', tick };
+  }
+
+  /** How the subject came to hold a record, link by link. */
+  function traceSubjectRecord(workspaceId, recordId) {
+    const { traceStoryRecord } = require(path.join(__dirname, '../../../../dist-main/main/features/narrative/umwelt/story-insights'));
+    return traceStoryRecord(db, requireText(workspaceId, 'workspaceId'), requireText(recordId, 'recordId'));
   }
 
   // Story records with what the journal knows of the event that wrote them: who wrote it, when, and
@@ -598,6 +615,7 @@ function createWorldbuildDataService(db) {
     listEntityTemplates,
     saveEntityTemplate,
     getSubjectKnowledge,
+    traceSubjectRecord,
     getSubjectReview,
     listReviewCounts,
     listPendingReviewIds,

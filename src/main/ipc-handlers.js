@@ -2775,11 +2775,20 @@ ipcMain.handle('save-worldbuild-entity-template', async (event, template) => {
   }
 });
 
-ipcMain.handle('get-worldbuild-subject-knowledge', async (event, { workspaceId, subjectId } = {}) => {
+ipcMain.handle('get-worldbuild-subject-knowledge', async (event, { workspaceId, subjectId, asOf = null } = {}) => {
   try {
-    return { success: true, projection: worldbuildData.getSubjectKnowledge(workspaceId, subjectId) };
+    return { success: true, projection: worldbuildData.getSubjectKnowledge(workspaceId, subjectId, { asOf }) };
   } catch (e) {
     console.error('[get-worldbuild-subject-knowledge] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('trace-worldbuild-subject-record', async (event, { workspaceId, recordId } = {}) => {
+  try {
+    return { success: true, trace: worldbuildData.traceSubjectRecord(workspaceId, recordId) };
+  } catch (e) {
+    console.error('[trace-worldbuild-subject-record] failed:', e);
     return { success: false, error: e.message };
   }
 });

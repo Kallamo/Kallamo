@@ -1,3 +1,4 @@
+import type { At } from '@kallamo/umwelt' with { 'resolution-mode': 'import' };
 import type Database from 'better-sqlite3';
 import { NarrativeWorld } from './umwelt/narrative-world';
 import { loadStoryRecords, projectStoryRecord, type ProjectedRecordType, type ProjectedRow, type ProjectedStoryRecord } from './umwelt/story-projection';
@@ -47,10 +48,10 @@ export function currentNarrativeSequence(db: Database.Database, workspaceId: str
 }
 
 /** Records one holder keeps, Knowledge-tab observations included. */
-export function loadSubjectRecords(db: Database.Database, workspaceId: string, subjectId: string): ProjectedStoryRecord[] {
+export function loadSubjectRecords(db: Database.Database, workspaceId: string, subjectId: string, at?: At): ProjectedStoryRecord[] {
   const world = NarrativeWorld.of(db, workspaceId);
   if (!world.exists()) return [];
-  return loadStoryRecords(world, { recordTypes: ['observation', 'knowledge', 'belief', 'memory'], subjectIds: [subjectId] });
+  return loadStoryRecords(world, { recordTypes: ['observation', 'knowledge', 'belief', 'memory'], subjectIds: [subjectId], ...(at ? { at } : {}) });
 }
 
 /** Every current Fact of the story. */

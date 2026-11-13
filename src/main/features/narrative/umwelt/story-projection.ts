@@ -1,5 +1,6 @@
 import type { Acquisition, At, Record as StoryRecord } from '@kallamo/umwelt' with { 'resolution-mode': 'import' };
 import type { NarrativeWorld } from './narrative-world';
+import { isGenericPredicate, normalizePredicate, propositionIdentity, statementKey } from '../../../../narrative/narrative-taxonomy';
 import { kindOf, metadataOf, objectOf, StoryReader, type StoryKind } from './story-reader';
 
 export type ProjectedRecordType = 'fact' | 'state' | 'knowledge' | 'belief' | 'memory' | 'relationship' | 'observation';
@@ -154,12 +155,50 @@ export function loadStoryRecords(world: NarrativeWorld, input: LoadStoryRecordsI
     ...snapshot.holdings.map(item => item.record),
     ...(types.has('relationship') ? snapshot.dispositions : [])
   ];
+  const canon = types.has('belief') ? canonSlots(snapshot.facts) : null;
   return records
     .map(projectStoryRecord)
     .filter((item): item is ProjectedStoryRecord => Boolean(item))
     .filter(item => types.has(item.row.record_type))
     .filter(item => !subjects || subjects.has(item.row.subject_id))
+    .map(item => canon && item.row.record_type === 'belief' ? withCanonRelation(item, canon) : item)
     .sort((a, b) => a.row.narrative_sequence - b.row.narrative_sequence || a.record.recordedAt - b.record.recordedAt);
+}
+
+interface CanonSlots { statements: Set<string>; slots: Map<string, Set<string>> }
+
+/** The canon a belief is held against: every Fact by its statement, and by slot under a specific predicate. */
+function canonSlots(facts: StoryRecord[]): CanonSlots {
+  const statements = new Set<string>();
+  const slots = new Map<string, Set<string>>();
+  for (const fact of facts) {
+    if (fact.kind !== 'fact') continue;
+    const object = objectOf(fact.claim);
+    statements.add(propositionIdentity(fact.claim.subject, fact.claim.predicate, object));
+    if (isGenericPredicate(fact.claim.predicate)) continue;
+    const slot = `${fact.claim.subject}\u0000${normalizePredicate(fact.claim.predicate)}`;
+    slots.set(slot, (slots.get(slot) ?? new Set()).add(statementKey(object)));
+  }
+  return { statements, slots };
+}
+
+/**
+ * Canon matches a belief when it states the same, and contradicts it with another value in the same
+ * slot (one subject, one specific predicate). An author's own classification is kept.
+ */
+function withCanonRelation(item: ProjectedStoryRecord, canon: CanonSlots): ProjectedStoryRecord {
+  if (item.record.kind !== 'holding' || metadataOf(item.record).relationToCanon) return item;
+  const { claim } = item.record;
+  const object = objectOf(claim);
+  let relation: 'aligned' | 'contradicted' | 'unknown' = 'unknown';
+  if (canon.statements.has(propositionIdentity(claim.subject, claim.predicate, object))) relation = 'aligned';
+  else if (!isGenericPredicate(claim.predicate)) {
+    const values = canon.slots.get(`${claim.subject}\u0000${normalizePredicate(claim.predicate)}`);
+    if (values?.size) relation = values.has(statementKey(object)) ? 'aligned' : 'contradicted';
+  }
+  if (relation === 'unknown') return item;
+  const payload = { ...item.payload, relationToCanon: relation };
+  return { ...item, payload, row: { ...item.row, payload_json: JSON.stringify(payload) } };
 }
 
 /** Who knows whom, as current awareness records. */
