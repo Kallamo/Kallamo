@@ -5,7 +5,10 @@ import {
   propositionIdentity,
   statementKey
 } from '../../../narrative/narrative-taxonomy';
+import { NarrativeWorld } from './umwelt/narrative-world';
 import { retireRecords } from './umwelt/story-lifecycle';
+import { loadStoryRecords } from './umwelt/story-projection';
+import { metadataOf } from './umwelt/story-reader';
 
 /**
  * Retires stored records the quality gate would refuse today. Nothing is deleted: only the status
@@ -27,22 +30,12 @@ export interface NarrativeCompactionReport {
 }
 
 interface MaintenanceRow {
-  record_type: 'fact' | 'state' | 'observation' | 'knowledge' | 'belief' | 'memory' | 'relationship';
+  record_type: 'fact' | 'knowledge' | 'belief' | 'memory';
   record_id: string;
   subject_id: string | null;
-  payload_json: string;
-  applied_at: string;
-  rowid: number;
   interpreter: string;
   origin_type: string | null;
 }
-
-const RETIRED_STATUS: Record<string, string> = {
-  fact: 'retracted',
-  knowledge: 'superseded',
-  belief: 'superseded',
-  memory: 'forgotten'
-};
 
 const SAMPLE_LIMIT = 12;
 const GROUP_LIMIT = 60;
@@ -59,21 +52,18 @@ export class NarrativeMaintenance {
   }
 
   private run(workspaceId: string, apply: boolean): NarrativeCompactionReport {
-    const rows = this.db.prepare(`
-      SELECT records.record_type, records.record_id, records.subject_id, records.payload_json,
-        records.applied_at, records.rowid AS rowid,
-        events.provenance_interpreter AS interpreter,
-        evidence.origin_type AS origin_type
-      FROM narrative_records AS records
-      JOIN narrative_events AS events
-        ON events.workspace_id = records.workspace_id AND events.event_id = records.source_event_id
-      LEFT JOIN narrative_event_evidence AS evidence
-        ON evidence.workspace_id = events.workspace_id
-        AND evidence.event_id = events.event_id AND evidence.ordinal = 0
-      WHERE records.workspace_id = ?
-        AND records.record_type IN ('fact', 'knowledge', 'belief', 'memory')
-      ORDER BY events.narrative_sequence, records.rowid
-    `).all(workspaceId) as MaintenanceRow[];
+    const world = NarrativeWorld.of(this.db, workspaceId);
+    const records = world.exists() ? loadStoryRecords(world, { recordTypes: ['fact', 'knowledge', 'belief', 'memory'] }) : [];
+    const rows = records.map(({ row, payload, record }) => ({
+      row: {
+        record_type: row.record_type as MaintenanceRow['record_type'],
+        record_id: row.record_id,
+        subject_id: row.subject_id || null,
+        interpreter: (record.provenance.origin as { kind: string }).kind === 'model' ? 'model' : 'user',
+        origin_type: (metadataOf(record).originType as string | undefined) ?? null
+      },
+      payload
+    }));
 
     const report: NarrativeCompactionReport = {
       scanned: rows.length,
@@ -87,16 +77,7 @@ export class NarrativeMaintenance {
     const groups = new Map<string, NarrativeCompactionReport['groups'][number]>();
     const seen = new Set<string>();
     const retiredIds = { retracted: [] as string[], forgotten: [] as string[] };
-    const retire = this.db.prepare(`
-      UPDATE narrative_records
-      SET payload_json = json_set(payload_json, '$.status', ?)
-      WHERE workspace_id = ? AND record_type = ? AND record_id = ?
-    `);
-
-    for (const row of rows) {
-      const payload = parsePayload(row.payload_json);
-      if (!payload) continue;
-      if ((payload.status ?? 'active') !== 'active') continue;
+    for (const { row, payload } of rows) {
       const proposition = objectValue(payload.proposition);
       // Occurrences are owned by the Event occurrence service, which decides when one stops
       // being current. Touching their status here would desynchronize the two.
@@ -118,10 +99,7 @@ export class NarrativeMaintenance {
       const group = groups.get(groupKey);
       if (group) group.count += 1;
       else if (groups.size < GROUP_LIMIT) groups.set(groupKey, { recordType: row.record_type, reason, summary, count: 1 });
-      if (apply) {
-        retire.run(RETIRED_STATUS[row.record_type] ?? 'superseded', workspaceId, row.record_type, row.record_id);
-        (row.record_type === 'memory' ? retiredIds.forgotten : retiredIds.retracted).push(row.record_id);
-      }
+      if (apply) (row.record_type === 'memory' ? retiredIds.forgotten : retiredIds.retracted).push(row.record_id);
     }
     if (apply) {
       retireRecords(this.db, workspaceId, retiredIds.retracted, 'Cleanup: a duplicate, scene state or raw identifier.');
@@ -151,17 +129,6 @@ export class NarrativeMaintenance {
     const key = `${row.record_type}\u0000${row.subject_id ?? ''}\u0000${identity}`;
     if (seen.has(key)) return 'duplicate';
     seen.add(key);
-    return undefined;
-  }
-}
-
-function parsePayload(value: string): Record<string, unknown> | undefined {
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : undefined;
-  } catch {
     return undefined;
   }
 }

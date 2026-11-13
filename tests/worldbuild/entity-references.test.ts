@@ -1,7 +1,10 @@
 import { createRequire } from 'node:module';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { SNAPSHOT_ENTITY_COLUMNS } from '../../src/main/features/narrative/narrative-entities';
-import { projectCurrentNarrativeRecords } from '../../src/main/features/narrative/narrative-record-projection';
+import { loadCurrentNarrativeRecords } from '../../src/main/features/narrative/narrative-record-projection';
+import { NarrativeWorld } from '../../src/main/features/narrative/umwelt/narrative-world';
+import { loadStoryAwareness } from '../../src/main/features/narrative/umwelt/story-projection';
+import { writeStoryEvent } from '../../src/main/features/narrative/umwelt/story-journal';
 import { insertEntity, openEntityStore, type EntityStoreHarness } from './entity-store-harness';
 
 const require = createRequire(import.meta.url);
@@ -58,6 +61,10 @@ describe('the registry of stored entity references', () => {
   });
 });
 
+function story(recordType?: 'fact' | 'knowledge' | 'memory' | 'relationship') {
+  return loadCurrentNarrativeRecords(harness.db, { workspaceId: 'ws', recordTypes: recordType ? [recordType] : ['fact', 'knowledge', 'belief', 'memory', 'relationship'] });
+}
+
 // One workspace with the same entity recorded twice, so a merge has something to carry.
 function seedWorkspace() {
   const { db } = harness;
@@ -69,14 +76,17 @@ function seedWorkspace() {
   run(`INSERT INTO narrative_events VALUES ('ws', 'event-1', 'proposal-1', 'set-1', 'narrative.v1', 'state-change', 'The ferry left.', 'scene-1', 'dock', 1, NULL, 'approved', 1, '[]', 'model', NULL, NULL, 'v1', '2026-09-01T00:00:00.000Z', NULL)`);
   run(`INSERT INTO narrative_event_participants VALUES ('ws', 'event-1', 0, 'nora-copy', 'actor'), ('ws', 'event-1', 1, 'nora', 'actor')`);
   run(`INSERT INTO narrative_event_evidence VALUES ('ws', 'event-1', 'evidence-1', 0, 'chat-message', 'reply-1', 'The ferry left.')`);
-  const record = (type: string, id: string, subject: string, payload: unknown) => run(
-    `INSERT INTO narrative_records VALUES ('ws', ?, ?, ?, 'event-1', ?, ?, '2026-09-01T00:00:00.000Z')`,
-    type, id, subject, `op-${id}`, JSON.stringify(payload));
-  record('fact', 'fact-1', 'nora-copy', { id: 'fact-1', proposition: { subjectId: 'nora-copy', predicate: 'owns', object: 'lantern' }, status: 'active', evidenceIds: ['evidence-1'] });
-  record('knowledge', 'knowledge-1', 'orin', { id: 'knowledge-1', subjectId: 'orin', proposition: { subjectId: 'nora-copy', predicate: 'works-at', object: 'dock' }, sourceEventId: 'event-1', acquisition: 'witness', confidence: 0.9, accessibility: 'available', status: 'active', informantIds: ['nora-copy'] });
-  record('relationship', 'relationship-1', 'nora-copy', { id: 'relationship-1', sourceEntityId: 'nora-copy', targetEntityId: 'nora', dimension: 'trust', value: 40, sourceEventId: 'event-1' });
-  record('memory', 'memory-1', 'orin', { id: 'memory-1', subjectId: 'orin', eventId: 'event-1', summary: 'The crossing.', accessibility: 'available', status: 'active', relatedEntityIds: ['nora-copy', 'dock'] });
-  run(`INSERT INTO narrative_awareness_records VALUES ('ws', 'awareness-1', 'orin', 'nora-copy', 'active', 'event-1', 'op-awareness-1', '{"id":"awareness-1","subjectId":"orin","targetId":"nora-copy","status":"active","sourceEventId":"event-1"}', '2026-09-01T00:00:00.000Z')`);
+  writeStoryEvent(db, 'ws', {
+    eventId: 'event-1', description: 'The ferry left.', participants: ['nora-copy', 'nora'], locationId: 'dock',
+    provenance: { interpreter: 'model', originType: 'chat-message', originId: 'reply-1' },
+    operations: [
+      { id: 'op-fact-1', type: 'assert-fact', evidenceIds: ['evidence-1'], fact: { id: 'fact-1', proposition: { subjectId: 'nora-copy', predicate: 'owns', object: 'lantern' }, status: 'active', evidenceIds: ['evidence-1'] } },
+      { id: 'op-knowledge-1', type: 'grant-knowledge', evidenceIds: [], knowledge: { id: 'knowledge-1', subjectId: 'orin', proposition: { subjectId: 'nora-copy', predicate: 'works-at', object: 'dock' }, sourceEventId: 'event-1', acquisition: 'witness', confidence: 0.9, accessibility: 'available', status: 'active', informantIds: ['nora-copy'] } },
+      { id: 'op-relationship-1', type: 'set-relationship', evidenceIds: [], relationship: { id: 'relationship-1', sourceEntityId: 'nora-copy', targetEntityId: 'nora', dimension: 'trust', value: 40, sourceEventId: 'event-1' } },
+      { id: 'op-memory-1', type: 'record-memory', evidenceIds: [], memory: { id: 'memory-1', subjectId: 'orin', eventId: 'event-1', summary: 'The crossing.', accessibility: 'available', status: 'active', relatedEntityIds: ['nora-copy', 'dock'] } },
+      { id: 'op-awareness-1', type: 'grant-awareness', evidenceIds: [], awareness: { id: 'awareness-1', subjectId: 'orin', targetId: 'nora-copy', status: 'active', sourceEventId: 'event-1' } }
+    ]
+  } as any);
   run(`INSERT INTO narrative_scenes VALUES ('ws', 'scene-1', 'active', 'dock', 'subjective', 'nora-copy', '["nora-copy","orin"]', 1, NULL, NULL, NULL)`);
   run(`INSERT INTO narrative_scene_participants VALUES ('ws', 'scene-1', 0, 'nora-copy'), ('ws', 'scene-1', 1, 'nora')`);
   run(`INSERT INTO roleplay_workspace_settings (workspace_id, player_entity_id, location_entity_id, updated_at) VALUES ('ws', 'nora-copy', 'dock', 1)`);
@@ -101,15 +111,10 @@ describe('merging an entity', () => {
   test('carries narrative records, awareness and scene state onto the survivor', () => {
     harness.store.mergeEntity('nora-copy', 'nora');
 
-    expect(row("SELECT subject_id, payload_json FROM narrative_records WHERE record_id = 'fact-1'"))
-      .toMatchObject({ subject_id: 'nora' });
-    expect(JSON.parse(row("SELECT payload_json AS p FROM narrative_records WHERE record_id = 'fact-1'").p).proposition.subjectId).toBe('nora');
-    expect(JSON.parse(row("SELECT payload_json AS p FROM narrative_records WHERE record_id = 'knowledge-1'").p))
-      .toMatchObject({ proposition: { subjectId: 'nora' }, informantIds: ['nora'] });
-    expect(JSON.parse(row("SELECT payload_json AS p FROM narrative_records WHERE record_id = 'memory-1'").p).relatedEntityIds)
-      .toEqual(['nora', 'dock']);
-    expect(row("SELECT subject_id, target_id, status FROM narrative_awareness_records WHERE awareness_id = 'awareness-1'"))
-      .toEqual({ subject_id: 'orin', target_id: 'nora', status: 'active' });
+    expect(story('fact')[0].payload.proposition).toMatchObject({ subjectId: 'nora' });
+    expect(story('knowledge')[0].payload).toMatchObject({ proposition: { subjectId: 'nora' }, informantIds: ['nora'] });
+    expect(story('memory')[0].payload.relatedEntityIds).toEqual(['nora', 'dock']);
+    expect(loadStoryAwareness(NarrativeWorld.of(harness.db, 'ws')).map(item => [item.subjectId, item.targetId])).toEqual([['orin', 'nora']]);
     expect(row("SELECT focal_subject_id AS focal, allowed_subject_ids_json AS allowed FROM narrative_scenes"))
       .toEqual({ focal: 'nora', allowed: '["nora","orin"]' });
     expect(rows('SELECT entity_id FROM narrative_scene_participants').map(entry => entry.entity_id)).toEqual(['nora']);
@@ -121,8 +126,7 @@ describe('merging an entity', () => {
 
   test('retires a relationship the merge turned into a relationship with itself', () => {
     harness.store.mergeEntity('nora-copy', 'nora');
-    expect(JSON.parse(row("SELECT payload_json AS p FROM narrative_records WHERE record_id = 'relationship-1'").p))
-      .toMatchObject({ sourceEntityId: 'nora', targetEntityId: 'nora', status: 'retired' });
+    expect(story('relationship')).toEqual([]);
   });
 
   test('keeps one row where both sides held one, and the preferred side decides', () => {
@@ -180,17 +184,16 @@ describe('deleting an entity', () => {
 
   test('retires the records about it and keeps the ones that only mention it', () => {
     harness.store.deleteEntity('nora-copy');
-    expect(JSON.parse(row("SELECT payload_json AS p FROM narrative_records WHERE record_id = 'fact-1'").p).status).toBe('retracted');
-    expect(JSON.parse(row("SELECT payload_json AS p FROM narrative_records WHERE record_id = 'knowledge-1'").p).status).toBe('superseded');
-    expect(JSON.parse(row("SELECT payload_json AS p FROM narrative_records WHERE record_id = 'relationship-1'").p).status).toBe('retired');
-    const memory = JSON.parse(row("SELECT payload_json AS p FROM narrative_records WHERE record_id = 'memory-1'").p);
-    expect(memory).toMatchObject({ status: 'active', relatedEntityIds: ['dock'] });
+    expect(story('fact')).toEqual([]);
+    expect(story('knowledge')).toEqual([]);
+    expect(story('relationship')).toEqual([]);
+    expect(story('memory').map(record => record.payload)).toEqual([expect.objectContaining({ summary: 'The crossing.', relatedEntityIds: ['dock'] })]);
   });
 
   test('lets go of scene state, Knowledge cards and awareness', () => {
     harness.store.deleteEntity('nora-copy');
     expect(rows('SELECT * FROM narrative_scene_participants').length).toBe(1);
-    expect(row('SELECT status FROM narrative_awareness_records')).toEqual({ status: 'revoked' });
+    expect(loadStoryAwareness(NarrativeWorld.of(harness.db, 'ws'))).toEqual([]);
     expect(rows('SELECT card_id FROM worldbuild_knowledge_cards')).toEqual([{ card_id: 'card-2' }]);
     expect(rows('SELECT * FROM worldbuild_known_relationships')).toEqual([]);
     expect(rows('SELECT * FROM roleplay_equipment')).toEqual([]);
@@ -228,6 +231,7 @@ describe('deleting an entity', () => {
   test('counts what the confirmation warns about', () => {
     expect(harness.store.summarizeBulkEntities('ws', ['nora-copy']))
       .toMatchObject({ narrativeRecords: 4, knowledgeCards: 1, sceneState: 2 });
+    // The fact, the knowledge and the bond are about it, and someone knows of it; the memory only names it.
   });
 });
 
@@ -237,7 +241,7 @@ describe('references left by earlier versions', () => {
     harness.db.prepare('DELETE FROM entities WHERE id = ?').run('nora-copy');
     expect(releaseOrphanedEntityReferences(harness.db)).toBe(1);
     expect(rows('SELECT * FROM narrative_scene_participants').length).toBe(1);
-    expect(JSON.parse(row("SELECT payload_json AS p FROM narrative_records WHERE record_id = 'fact-1'").p).status).toBe('retracted');
+    expect(story('fact')).toEqual([]);
     expect(releaseOrphanedEntityReferences(harness.db)).toBe(0);
   });
 
@@ -270,7 +274,7 @@ describe('deleting several entities at once', () => {
     expect(result).toMatchObject({ deleted: 2 });
     expect(rows('SELECT * FROM narrative_scene_participants').map(entry => entry.entity_id)).toEqual(['nora']);
     expect(rows('SELECT * FROM worldbuild_knowledge_cards')).toEqual([]);
-    expect(JSON.parse(row("SELECT payload_json AS p FROM narrative_records WHERE record_id = 'memory-1'").p).status).toBe('forgotten');
+    expect(story('memory')).toEqual([]);
   });
 });
 
@@ -278,19 +282,11 @@ describe('what the story reads afterwards', () => {
   beforeEach(seedWorkspace);
 
   // The context prints the name it finds, or the raw id when it finds none.
-  const current = () => {
-    const records = rows(`
-      SELECT records.record_type, records.record_id, records.subject_id, records.payload_json, events.narrative_sequence
-      FROM narrative_records AS records
-      JOIN narrative_events AS events ON events.workspace_id = records.workspace_id AND events.event_id = records.source_event_id
-      ORDER BY events.narrative_sequence, records.rowid
-    `);
-    return projectCurrentNarrativeRecords(records).map(record => record.row.record_id);
-  };
+  const current = () => story().map(record => record.row.record_id.split('~')[0]);
 
   test('a merged entity leaves no record still naming the old id', () => {
     harness.store.mergeEntity('nora-copy', 'nora');
-    const remaining = rows('SELECT payload_json AS p FROM narrative_records').map(entry => entry.p).join(' ');
+    const remaining = story().map(entry => JSON.stringify(entry.payload)).join(' ');
     expect(remaining).not.toContain('nora-copy');
     expect(current()).not.toContain('relationship-1');
   });

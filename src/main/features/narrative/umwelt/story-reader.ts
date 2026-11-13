@@ -58,6 +58,7 @@ export interface ReadOptions {
 
 interface SnapshotCache { key: string; snapshot: StorySnapshot }
 const CACHE = Symbol.for('kallamo.umwelt.snapshot');
+const HOLDERS = Symbol.for('kallamo.umwelt.holders');
 
 /** Every current record of a timeline at one version, read once and reused until the story changes. */
 export interface StorySnapshot {
@@ -140,6 +141,9 @@ export class StoryReader {
 
   /** Entities that can hold knowledge in this story. */
   holders(): string[] {
+    const holder = this.world as unknown as Record<symbol, { revision: number; ids: string[] } | undefined>;
+    const cached = holder[HOLDERS];
+    if (cached && cached.revision === this.world.entityRevision) return cached.ids;
     const ids: string[] = [];
     let cursor: string | undefined;
     do {
@@ -149,6 +153,7 @@ export class StoryReader {
       }
       cursor = page.nextCursor ?? undefined;
     } while (cursor);
+    holder[HOLDERS] = { revision: this.world.entityRevision, ids };
     return ids;
   }
 

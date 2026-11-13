@@ -106,6 +106,18 @@ describe('Worldbuild writes in the story file', () => {
     expect(story()).toEqual([]);
   });
 
+  test('an authored memory is replaced by its edit and forgotten on removal', () => {
+    const data = createWorldbuildDataService(db);
+    data.saveSubjectEntry({ workspaceId: WS, subjectId: 'elias', kind: 'memory', entry: { summary: 'The night the harbor burned.' } });
+    const [first] = story().filter(item => item.row.record_type === 'memory');
+    data.saveSubjectEntry({ workspaceId: WS, subjectId: 'elias', kind: 'memory', existingId: first.payload.id, entry: { summary: 'The night the harbor burned and the bells rang.' } });
+    const memories = story().filter(item => item.row.record_type === 'memory');
+    expect(memories.map(item => item.payload.summary)).toEqual(['The night the harbor burned and the bells rang.']);
+    data.deleteSubjectEntry({ workspaceId: WS, subjectId: 'elias', kind: 'memory', entryId: memories[0].payload.id });
+    expect(story().filter(item => item.row.record_type === 'memory')).toEqual([]);
+    expect(data.getSubjectKnowledge(WS, 'elias').memories).toEqual([]);
+  });
+
   test('a world Fact is revised under its reference and removed with it', () => {
     const data = createWorldbuildDataService(db);
     data.saveWorldFact({ workspaceId: WS, entry: { title: 'Currency', statement: 'Silver crowns are minted in the capital.' } });

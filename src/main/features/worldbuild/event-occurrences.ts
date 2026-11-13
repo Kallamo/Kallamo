@@ -7,6 +7,7 @@ import { RoleplaySystem, type RoleplayInventoryPatch } from '../narrative/rolepl
 import { storyMinute } from '../../../shared/calendar-ordinal';
 import { writeStoryEvent } from '../narrative/umwelt/story-journal';
 import { indexOriginRecords, retireOrigins } from '../narrative/umwelt/story-lifecycle';
+import { journalEventId, loadCurrentNarrativeRecords } from '../narrative/narrative-record-projection';
 
 interface EventOccurrenceCalendarService {
   getCalendar(db: Database.Database, workspaceId: string): Record<string, any>;
@@ -349,20 +350,7 @@ export class EventOccurrenceService {
         insertParticipant.run(workspaceId, occurrence.narrativeEventId, index, entityId, role);
       });
 
-      this.updateAppliedRecord(workspaceId, occurrence.narrativeEventId, updatedFactOperation, appliedAt);
       const nextMemoryOperationIds = new Set(memoryOperations.map(operation => operation.id));
-      for (const operation of existingMemoryOperations) {
-        if (!nextMemoryOperationIds.has(operation.id)) {
-          this.db.prepare(`
-            DELETE FROM narrative_records
-            WHERE workspace_id = ? AND source_event_id = ? AND operation_id = ? AND record_type = 'memory'
-          `).run(workspaceId, occurrence.narrativeEventId, operation.id);
-        }
-      }
-      for (const operation of memoryOperations) {
-        this.updateAppliedRecord(workspaceId, occurrence.narrativeEventId, operation, appliedAt);
-      }
-
       this.writeRevision({
         workspaceId,
         narrativeEventId: occurrence.narrativeEventId,
@@ -579,29 +567,6 @@ export class EventOccurrenceService {
     return storyMinute(this.calendarService.getCalendar(this.db, workspaceId) as never, date as never) ?? undefined;
   }
 
-  private updateAppliedRecord(
-    workspaceId: string,
-    narrativeEventId: string,
-    operation: Extract<NarrativeOperation, { type: 'assert-fact' | 'record-memory' }>,
-    appliedAt: string
-  ): void {
-    const record = operation.type === 'assert-fact'
-      ? { type: 'fact', id: operation.fact.id, subjectId: null, payload: operation.fact }
-      : { type: 'memory', id: operation.memory.id, subjectId: operation.memory.subjectId, payload: operation.memory };
-    this.db.prepare(`
-      INSERT INTO narrative_records (
-        workspace_id, record_type, record_id, subject_id, source_event_id,
-        operation_id, payload_json, applied_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(workspace_id, operation_id) DO UPDATE SET
-        subject_id = excluded.subject_id,
-        payload_json = excluded.payload_json
-    `).run(
-      workspaceId, record.type, record.id, record.subjectId, narrativeEventId,
-      operation.id, JSON.stringify(record.payload), appliedAt
-    );
-  }
-
   private requireEditableOccurrence(workspaceId: string, occurrenceId: string): WorldbuildEventOccurrence {
     const occurrence = this.requireOccurrence(workspaceId, occurrenceId);
     if (occurrence.source !== 'user') throw new Error('Narrative State occurrences are protected history.');
@@ -804,13 +769,13 @@ export function canSubjectAccessOccurrence(
   narrativeEventId: string,
   subjectId: string
 ): boolean {
-  const rows = db.prepare(`
-    SELECT subject_id, payload_json FROM narrative_records
-    WHERE workspace_id = ? AND source_event_id = ? AND record_type = 'memory'
-  `).all(workspaceId, narrativeEventId) as Array<{ subject_id: string; payload_json: string }>;
-  return rows.some(row => {
-    const memory = parseObject(row.payload_json);
-    if ((memory.status ?? 'active') !== 'active' || memory.accessibility !== 'available') return false;
+  // An edited occurrence writes its memories again under a revision of the same event.
+  const rows = loadCurrentNarrativeRecords(db, { workspaceId, recordTypes: ['memory'] })
+    .filter(({ row }) => journalEventId(row.source_event_id) === narrativeEventId)
+    .map(({ row, payload }) => ({ subject_id: row.subject_id, memory: payload }));
+  return rows.some(({ subject_id, memory }) => {
+    const row = { subject_id };
+    if (memory.accessibility !== 'available') return false;
     if (row.subject_id === subjectId) return true;
     return isFactionOccurrenceMemoryShared(db, workspaceId, narrativeEventId, row.subject_id, subjectId);
   });

@@ -14,6 +14,7 @@ import { RoleplaySystem } from '../../src/main/features/narrative/roleplay-syste
 import { NarrativeStateSystem } from '../../src/main/features/narrative/narrative-state';
 import { CharacterSceneMemory } from '../../src/main/features/narrative/character-scene-memory';
 import { createWorldbuildDataService } from '../../src/main/features/worldbuild/worldbuild-data.js';
+import { loadCurrentNarrativeRecords } from '../../src/main/features/narrative/narrative-record-projection';
 import { openTestDatabase } from '../sqlite-test-database';
 
 describe('Narrative chat context integration', () => {
@@ -41,6 +42,14 @@ describe('Narrative chat context integration', () => {
     `);
     context = createNarrativeChatContext(db, text => Math.max(1, Math.ceil(text.length / 4)));
     worldbuild = createWorldbuildDataService(db);
+    // The story only holds records about entities the world has; each entry names its own.
+    const saveSubjectEntry = worldbuild.saveSubjectEntry;
+    worldbuild.saveSubjectEntry = (payload: any) => {
+      declareEntity(payload.subjectId, 'Characters');
+      if (payload.entry?.aboutId) declareEntity(payload.entry.aboutId, 'Items');
+      for (const id of payload.entry?.informantIds ?? []) declareEntity(id, 'Characters');
+      return saveSubjectEntry(payload);
+    };
     seedWorldbuild();
   });
 
@@ -889,6 +898,13 @@ describe('Narrative chat context integration', () => {
       .run('chunk-gate', 'Northern Gate', 'northern-gate');
   }
 
+  function declareEntity(id: string, type: string) {
+    db.prepare(`
+      INSERT OR IGNORE INTO entities (id, workspaceId, type, canonicalName, aliases, lore, data, status, createdAt, last_modified)
+      VALUES (?, 'workspace-one', ?, ?, '[]', '', '{}', 'confirmed', 1, 1)
+    `).run(id, type, id);
+  }
+
   function saveKnowledge(subjectId: string, statement: string, accessibility: string) {
     worldbuild.saveSubjectEntry({
       workspaceId: 'workspace-one', subjectId, kind: 'knowledge',
@@ -913,7 +929,7 @@ describe('Narrative chat context integration', () => {
   function snapshotNarrativeData() {
     return {
       events: db.prepare('SELECT * FROM narrative_events ORDER BY event_id').all(),
-      records: db.prepare('SELECT * FROM narrative_records ORDER BY record_type, record_id').all(),
+      records: loadCurrentNarrativeRecords(db, { workspaceId: 'workspace-one', recordTypes: ['fact', 'knowledge', 'belief', 'memory', 'relationship'] }),
       scenes: db.prepare('SELECT * FROM narrative_scenes ORDER BY scene_id').all()
     };
   }

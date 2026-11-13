@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { runDatabaseMigrations } from '../../src/main/database/migrations.js';
 import { NarrativeMaintenance } from '../../src/main/features/narrative/narrative-maintenance';
 import { loadCurrentNarrativeRecords } from '../../src/main/features/narrative/narrative-record-projection';
+import { NarrativeWorld } from '../../src/main/features/narrative/umwelt/narrative-world';
 import { openTestDatabase } from '../sqlite-test-database';
 
 const WORKSPACE = 'workspace-one';
@@ -27,34 +28,34 @@ describe('Narrative State record hygiene', () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
+  // Written straight to the story file, so a world from before the write-time checks (with
+  // duplicates and scene detail) can be built for the cleanup to find.
   function writeRecord(input: {
     recordType: 'fact' | 'knowledge' | 'belief' | 'memory';
     recordId: string;
     subjectId: string;
-    payload: Record<string, unknown>;
+    payload: Record<string, any>;
     interpreter?: 'model' | 'user';
   }): void {
     sequence += 1;
-    const eventId = `event-${input.recordId}`;
-    db.prepare(`
-      INSERT INTO narrative_events (
-        workspace_id, event_id, proposal_id, change_set_id, contract_version, event_type,
-        description, narrative_sequence, status, version, operations_json,
-        provenance_interpreter, provenance_schema_version, provenance_created_at
-      ) VALUES (?, ?, ?, ?, '1.0', 'custom', 'Turn', ?, 'approved', 1, '[]', ?, '1.0', ?)
-    `).run(WORKSPACE, eventId, `proposal-${input.recordId}`, `changes-${input.recordId}`,
-      sequence, input.interpreter ?? 'model', new Date(sequence * 1000).toISOString());
-    db.prepare(`
-      INSERT INTO narrative_event_evidence
-        (workspace_id, event_id, evidence_id, ordinal, origin_type, origin_id, excerpt)
-      VALUES (?, ?, ?, 0, 'chat-message', ?, '')
-    `).run(WORKSPACE, eventId, `evidence-${input.recordId}`, `origin-${input.recordId}`);
-    db.prepare(`
-      INSERT INTO narrative_records
-        (workspace_id, record_type, record_id, subject_id, source_event_id, operation_id, payload_json, applied_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(WORKSPACE, input.recordType, input.recordId, input.subjectId, eventId,
-      `operation-${input.recordId}`, JSON.stringify(input.payload), new Date(sequence * 1000).toISOString());
+    const world = NarrativeWorld.of(db, WORKSPACE);
+    const about = input.payload.proposition?.subjectId;
+    world.ensureEntities([input.subjectId, ...(about ? [about] : [])]);
+    const provenance = {
+      origin: input.interpreter === 'user' ? { kind: 'human' } : { kind: 'model', model: 'interpreter' },
+      metadata: { k: input.recordType, originType: 'chat-message' }
+    };
+    const claim = (subject: string, predicate: string, value: unknown) => ({ subject, predicate, object: { kind: 'value', value }, polarity: true });
+    const record = input.recordType === 'fact'
+      ? { kind: 'fact', id: input.recordId, claim: claim(about, input.payload.proposition.predicate, input.payload.proposition.object), provenance }
+      : input.recordType === 'memory'
+        ? { kind: 'holding', id: input.recordId, holder: input.subjectId, attitude: 'remembers', claim: claim(input.subjectId, 'memory', input.payload.summary), acquisition: { kind: 'authored' }, text: input.payload.summary, provenance }
+        : { kind: 'holding', id: input.recordId, holder: input.subjectId, attitude: input.recordType === 'belief' ? 'believes' : 'knows', claim: claim(about, input.payload.proposition.predicate, input.payload.proposition.object), acquisition: { kind: 'authored' }, provenance };
+    world.call('commit', {
+      attemptId: input.recordId,
+      event: { id: `event-${input.recordId}`, type: 'custom', title: 'Turn', position: { tick: sequence }, provenance },
+      records: [record]
+    });
   }
 
   function knowledgePayload(id: string, predicate: string, object: unknown, extra: Record<string, unknown> = {}) {
@@ -132,9 +133,10 @@ describe('Narrative State record hygiene', () => {
 
     new NarrativeMaintenance(db).compact(WORKSPACE);
 
-    expect(db.prepare('SELECT COUNT(*) AS count FROM narrative_records').get()).toEqual({ count: 2 });
-    expect(db.prepare('SELECT COUNT(*) AS count FROM narrative_events').get()).toEqual({ count: 2 });
-    expect(db.prepare("SELECT json_extract(payload_json, '$.status') AS status FROM narrative_records WHERE record_id = 'f2'").get())
-      .toEqual({ status: 'retracted' });
+    const world = NarrativeWorld.of(db, WORKSPACE);
+    expect(loadCurrentNarrativeRecords(db, { workspaceId: WORKSPACE, recordTypes: ['fact'] }).map(record => record.row.record_id)).toEqual(['f1']);
+    const trace = world.call<{ status?: string; record: { id: string } }>('trace', { recordId: 'f2' });
+    expect(trace).toMatchObject({ status: 'retracted', record: { id: 'f2' } });
+    expect(world.call<{ items: unknown[] }>('canon', { at: { tick: 2 } }).items).toHaveLength(2);
   });
 });

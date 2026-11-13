@@ -8,6 +8,7 @@ import { EpistemicResolver } from '../../src/main/features/narrative/epistemic-r
 import { NarrativeContextManifestRepository } from '../../src/main/features/narrative/context-manifest';
 import { AgenticEpistemicTools } from '../../src/main/features/narrative/agentic-epistemic-tools';
 import { createWorldbuildKnowledgeService } from '../../src/main/features/worldbuild/knowledge-service.js';
+import { writeStoryEvent } from '../../src/main/features/narrative/umwelt/story-journal';
 import { createWorldbuildDataService } from '../../src/main/features/worldbuild/worldbuild-data.js';
 import { openTestDatabase } from '../sqlite-test-database';
 
@@ -377,52 +378,21 @@ describe('roleplay epistemic resolution', () => {
     expect(result).toContain('Greywatch');
   });
 
-  test('resolves the latest temporal Awareness state across 500 narrative turns', () => {
-    const insertEvent = db.prepare(`
-      INSERT INTO narrative_events (
-        workspace_id, event_id, proposal_id, change_set_id, contract_version,
-        event_type, description, narrative_sequence, status, version,
-        operations_json, provenance_interpreter, provenance_schema_version,
-        provenance_created_at
-      ) VALUES (
-        'workspace-one', ?, ?, ?, '1.0', 'custom', 'Awareness transition',
-        ?, 'approved', 1, '[]', 'deterministic', '1.0', ?
-      )
-    `);
-    const insertAwareness = db.prepare(`
-      INSERT INTO narrative_awareness_records (
-        workspace_id, awareness_id, subject_id, target_id, status,
-        source_event_id, operation_id, payload_json, applied_at
-      ) VALUES ('workspace-one', ?, 'corwin', 'order', ?, ?, ?, '{}', ?)
-    `);
-    db.transaction(() => {
-      for (let sequence = 1; sequence <= 500; sequence += 1) {
-        const eventId = `event-${sequence}`;
-        const timestamp = new Date(2026, 0, 1, 0, 0, sequence).toISOString();
-        insertEvent.run(eventId, `proposal-${sequence}`, `change-${sequence}`, sequence, timestamp);
-        insertAwareness.run(
-          `awareness-${sequence}`,
-          sequence % 2 === 0 ? 'revoked' : 'active',
-          eventId,
-          `operation-${sequence}`,
-          timestamp
-        );
-      }
-    })();
+  test('reads Awareness as it stood at the position asked for', () => {
+    const grant = (eventId: string, status: 'active' | 'revoked') => writeStoryEvent(db, 'workspace-one', {
+      eventId, description: 'Awareness transition.', participants: ['corwin'],
+      provenance: { interpreter: 'deterministic', originType: 'world-action', originId: eventId },
+      operations: [{ id: `operation-${eventId}`, type: 'grant-awareness', evidenceIds: [], awareness: { id: `awareness-${eventId}`, subjectId: 'corwin', targetId: 'order', status, sourceEventId: eventId } }]
+    });
+    for (let turn = 1; turn <= 40; turn += 1) grant(`event-${turn}`, turn % 2 === 0 ? 'revoked' : 'active');
     const resolver = new EpistemicResolver(db);
+    const state = (sequence: number) => resolver.resolve({ workspaceId: 'workspace-one', subjectIds: ['corwin'], targetIds: ['order'], through: { sequence } }).assessments[0].state;
 
-    expect(resolver.resolve({
-      workspaceId: 'workspace-one',
-      subjectIds: ['corwin'],
-      targetIds: ['order'],
-      through: { sequence: 250 }
-    }).assessments[0].state).toBe('explicitly-unaware');
-    expect(resolver.resolve({
-      workspaceId: 'workspace-one',
-      subjectIds: ['corwin'],
-      targetIds: ['order'],
-      through: { sequence: 499 }
-    }).assessments[0].state).toBe('confirmed');
+    expect(state(39)).toBe('confirmed');
+    expect(state(40)).not.toBe('confirmed');
+    db.prepare(`INSERT INTO worldbuild_knowledge_cards (workspace_id, card_id, owner_id, target_id, status, created_at, updated_at)
+      VALUES ('workspace-one', 'card-forgot', 'corwin', 'order', 'forgotten', 1, 1)`).run();
+    expect(state(40)).toBe('explicitly-unaware');
   });
 
   function insertEntity(id: string, type: string, name: string, lore: string) {

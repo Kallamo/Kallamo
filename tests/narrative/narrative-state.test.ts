@@ -5,6 +5,9 @@ import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { runDatabaseMigrations } from '../../src/main/database/migrations.js';
 import { NarrativeStateSystem, type ExtractedNarrativeEvent } from '../../src/main/features/narrative/narrative-state';
+import { loadCurrentNarrativeRecords } from '../../src/main/features/narrative/narrative-record-projection';
+import { NarrativeWorld } from '../../src/main/features/narrative/umwelt/narrative-world';
+import { loadStoryAwareness } from '../../src/main/features/narrative/umwelt/story-projection';
 import { openTestDatabase } from '../sqlite-test-database';
 
 describe('Narrative State runtime', () => {
@@ -43,10 +46,8 @@ describe('Narrative State runtime', () => {
 
     expect(result.decision).toBe('automatic');
     expect(result.record?.status).toBe('approved');
-    expect(db.prepare("SELECT record_type AS type, COUNT(*) AS count FROM narrative_records GROUP BY record_type ORDER BY type").all())
-      .toEqual([{ type: 'knowledge', count: 1 }, { type: 'memory', count: 1 }]);
-    expect(db.prepare('SELECT subject_id, target_id FROM narrative_awareness_records').all())
-      .toEqual([{ subject_id: 'elias', target_id: 'guild' }]);
+    expect(counts()).toEqual([{ type: 'knowledge', count: 1 }, { type: 'memory', count: 1 }]);
+    expect(awareness()).toEqual([{ subject_id: 'elias', target_id: 'guild' }]);
   });
 
   test('persists explicit introduction facts without filling a Worldbuild record', () => {
@@ -62,8 +63,8 @@ describe('Narrative State runtime', () => {
     }));
 
     expect(result.record?.status).toBe('approved');
-    expect(db.prepare("SELECT record_type AS type, json_extract(payload_json, '$.proposition.object') AS value FROM narrative_records").get())
-      .toEqual({ type: 'fact', value: 'A mercenary carrying a broken spear.' });
+    expect(stored().map(({ row, payload }) => ({ type: row.record_type, value: (payload.proposition as { object: unknown }).object })))
+      .toEqual([{ type: 'fact', value: 'A mercenary carrying a broken spear.' }]);
   });
 
   test('keeps beliefs and relationship changes reviewable and applies them atomically', () => {
@@ -78,10 +79,10 @@ describe('Narrative State runtime', () => {
 
     expect(result.decision).toBe('review');
     expect(result.record?.status).toBe('proposed');
-    expect(db.prepare('SELECT COUNT(*) AS count FROM narrative_records').get()).toEqual({ count: 0 });
+    expect(stored()).toHaveLength(0);
     const eventId = result.record!.proposal.changeSet.event.id;
     expect(system.resolveEvent('workspace-one', eventId, 'approved')?.status).toBe('approved');
-    expect(db.prepare('SELECT COUNT(*) AS count FROM narrative_records').get()).toEqual({ count: 2 });
+    expect(stored()).toHaveLength(2);
     const link = db.prepare('SELECT fromId, toId, label, metadata_json FROM entity_links').get() as { fromId: string; toId: string; label: string | null; metadata_json: string };
     expect(link).toMatchObject({ fromId: 'elias', toId: 'guild', label: null });
     const metadata = JSON.parse(link.metadata_json);
@@ -105,8 +106,7 @@ describe('Narrative State runtime', () => {
 
     expect(result.record?.proposal.changeSet.operations.map(operation => operation.type))
       .toEqual(['grant-awareness', 'grant-knowledge']);
-    expect(db.prepare('SELECT subject_id, target_id FROM narrative_awareness_records').all())
-      .toEqual([{ subject_id: 'elias', target_id: 'guild' }]);
+    expect(awareness()).toEqual([{ subject_id: 'elias', target_id: 'guild' }]);
   });
 
   test('never makes a character aware of themselves', () => {
@@ -176,7 +176,7 @@ describe('Narrative State runtime', () => {
     });
 
     expect(resolved?.status).toBe('approved');
-    expect(db.prepare('SELECT record_type AS type FROM narrative_records').all()).toEqual([{ type: 'belief' }]);
+    expect(stored().map(({ row }) => ({ type: row.record_type }))).toEqual([{ type: 'belief' }]);
     expect(db.prepare('SELECT operation_id, decision FROM narrative_operation_reviews ORDER BY operation_id').all())
       .toEqual([
         { operation_id: belief.id, decision: 'approved' },
@@ -223,7 +223,7 @@ describe('Narrative State runtime', () => {
     };
     expect(system.createEvent(input('memory-one', event)).record?.status).toBe('approved');
     expect(system.createEvent(input('memory-two', event))).toEqual({ skipped: 'no-valid-operations' });
-    expect(db.prepare("SELECT COUNT(*) AS count FROM narrative_records WHERE record_type = 'memory'").get()).toEqual({ count: 1 });
+    expect(stored('memory')).toHaveLength(1);
   });
 
   test('dates a turn memory with the story day the turn started on', () => {
@@ -239,8 +239,7 @@ describe('Narrative State runtime', () => {
     system.createEvent(input('unframed-turn', memory('Tess left the city.')));
     system.createEvent({ ...input('lore-update', memory('Elias grew up by the docks.')), originType: 'worldbuild-update' });
 
-    const dates = (db.prepare("SELECT payload_json FROM narrative_records WHERE record_type = 'memory' ORDER BY rowid").all() as Array<{ payload_json: string }>)
-      .map(row => JSON.parse(row.payload_json).occurredOn ?? null);
+    const dates = stored('memory').map(({ payload }) => payload.occurredOn ?? null);
     expect(dates).toEqual([
       { eraId: 'ce', year: 1001, month: 5, day: 19 },
       { eraId: 'ce', year: 1001, month: 5, day: 20 },
@@ -262,7 +261,7 @@ describe('Narrative State runtime', () => {
       expect(system.createEvent(input(`turn-${turn}`, event)).record?.status).toBe('approved');
     }
     expect(system.listEvents('workspace-one')).toHaveLength(500);
-    expect(db.prepare("SELECT COUNT(*) AS count FROM narrative_records WHERE record_type = 'knowledge'").get()).toEqual({ count: 500 });
+    expect(stored('knowledge')).toHaveLength(500);
   }, 35_000);
 
   test('refuses a turn whose only content was the scene, and says why', () => {
@@ -301,8 +300,7 @@ describe('Narrative State runtime', () => {
     }));
 
     expect(second).toEqual({ skipped: 'no-valid-operations' });
-    expect(db.prepare("SELECT COUNT(*) AS count FROM narrative_records WHERE record_type = 'knowledge'").get())
-      .toEqual({ count: 1 });
+    expect(stored('knowledge')).toHaveLength(1);
   });
 
   describe('relationship limits', () => {
@@ -358,10 +356,8 @@ describe('Narrative State runtime', () => {
     const eventId = system.listEvents('workspace-one')[0].proposal.changeSet.event.id;
     system.resolveEvent('workspace-one', eventId, 'approved');
 
-    expect(db.prepare("SELECT json_extract(payload_json, '$.category') AS category FROM narrative_records WHERE record_type = 'knowledge'").get())
-      .toEqual({ category: 'secret' });
-    expect(db.prepare("SELECT json_extract(payload_json, '$.cause') AS cause FROM narrative_records WHERE record_type = 'relationship'").get())
-      .toEqual({ cause: 'revelation' });
+    expect(stored('knowledge').map(({ payload }) => ({ category: payload.category }))).toEqual([{ category: 'secret' }]);
+    expect(stored('relationship').map(({ payload }) => ({ cause: payload.cause }))).toEqual([{ cause: 'revelation' }]);
   });
 
   test('applies ordinary world lore without a queue and holds a secret for review', () => {
@@ -389,6 +385,21 @@ describe('Narrative State runtime', () => {
 
     expect(secret.decision).toBe('review');
   });
+
+  function stored(recordType?: 'fact' | 'knowledge' | 'belief' | 'memory' | 'relationship') {
+    return loadCurrentNarrativeRecords(db, { workspaceId: 'workspace-one', recordTypes: recordType ? [recordType] : ['fact', 'knowledge', 'belief', 'memory', 'relationship'] });
+  }
+
+  function awareness() {
+    const world = NarrativeWorld.of(db, 'workspace-one');
+    return world.exists() ? loadStoryAwareness(world).map(item => ({ subject_id: item.subjectId, target_id: item.targetId })) : [];
+  }
+
+  function counts() {
+    const byType = new Map<string, number>();
+    for (const { row } of stored()) byType.set(row.record_type, (byType.get(row.record_type) ?? 0) + 1);
+    return [...byType].sort(([a], [b]) => a.localeCompare(b)).map(([type, count]) => ({ type, count }));
+  }
 
   function input(originId: string, event: ExtractedNarrativeEvent) {
     return { workspaceId: 'workspace-one', originId, interpreterId: 'system-model', event, allowedEntityIds: allowed };

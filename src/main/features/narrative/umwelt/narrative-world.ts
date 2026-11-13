@@ -34,6 +34,8 @@ export class NarrativeWorld {
   readonly file: string;
   private ready = false;
   private declaredAll = false;
+  /** Grows whenever this world declares entities, so a cached list of them knows when it is stale. */
+  entityRevision = 0;
   private readonly known = new Map<string, StoryEntityType>();
 
   private constructor(readonly db: Database.Database, readonly workspaceId: string) {
@@ -131,9 +133,11 @@ export class NarrativeWorld {
         this.known.set(id, stored.typeId);
       }
       for (const entity of rest) this.known.set(entity.id, entity.typeId);
+      this.entityRevision += 1;
       return;
     }
     for (const entity of entities) this.known.set(entity.id, entity.typeId);
+    this.entityRevision += 1;
   }
 
   private ensureWorld(entities: Array<{ id: string; typeId: StoryEntityType; name: string }>): void {

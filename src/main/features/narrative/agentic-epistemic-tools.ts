@@ -3,7 +3,7 @@ import { EpistemicResolver } from './epistemic-resolver';
 import { RoleplaySystem } from './roleplay-system';
 import { isFactionOccurrenceMemoryShared } from '../worldbuild/event-occurrences';
 import { sharedKnowledgeCards } from '../worldbuild/knowledge-groups';
-import { loadCurrentNarrativeRecords } from './narrative-record-projection';
+import { currentNarrativeSequence, loadCurrentNarrativeRecords } from './narrative-record-projection';
 
 interface EntityRow {
   id: string;
@@ -87,7 +87,6 @@ export class AgenticEpistemicTools {
       workspaceId,
       recordTypes: ['knowledge', 'belief'],
       subjectIds: unique([pair.subject.id, ...cards.map(card => card.sourceOwnerId)]),
-      throughSequence: this.latestSequence(workspaceId)
     }).filter(({ payload }) => {
       const proposition = objectValue(payload.proposition);
       return proposition.subjectId === pair.target.id;
@@ -160,7 +159,6 @@ export class AgenticEpistemicTools {
     const rows = loadCurrentNarrativeRecords(this.db, {
       workspaceId,
       recordTypes: ['memory'],
-      throughSequence: this.latestSequence(workspaceId)
     }).filter(({ row }) => row.subject_id === subject.id || isFactionOccurrenceMemoryShared(
       this.db,
       workspaceId,
@@ -232,11 +230,7 @@ export class AgenticEpistemicTools {
   }
 
   private latestSequence(workspaceId: string): number {
-    const row = this.db.prepare(`
-      SELECT COALESCE(MAX(narrative_sequence), 0) AS sequence
-      FROM narrative_events WHERE workspace_id = ?
-    `).get(workspaceId) as { sequence: number };
-    return row.sequence;
+    return currentNarrativeSequence(this.db, workspaceId);
   }
 }
 

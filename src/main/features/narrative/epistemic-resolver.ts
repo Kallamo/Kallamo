@@ -3,6 +3,8 @@ import type { NarrativePosition } from '../../../narrative/contracts';
 import type { EpistemicAssessment, EpistemicAssessmentState } from '../../../narrative/context-bundle';
 import { createWorldbuildKnowledgeService } from '../worldbuild/knowledge-service';
 import { sharedKnowledgeCards } from '../worldbuild/knowledge-groups';
+import { NarrativeWorld } from './umwelt/narrative-world';
+import { StoryReader } from './umwelt/story-reader';
 
 export interface EpistemicResolutionRequest {
   workspaceId: string;
@@ -63,28 +65,27 @@ export class EpistemicResolver {
   ): Map<string, Omit<AwarenessEvidence, 'subjectId' | 'targetId'>> {
     const subjectPlaceholders = subjectIds.map(() => '?').join(', ');
     const targetPlaceholders = targetIds.map(() => '?').join(', ');
-    const temporalRows = this.db.prepare(`
-      SELECT awareness.subject_id AS subjectId, awareness.target_id AS targetId,
-        awareness.status, awareness.awareness_id AS sourceId,
-        events.narrative_sequence AS sortValue
-      FROM narrative_awareness_records awareness
-      JOIN narrative_events events
-        ON events.workspace_id = awareness.workspace_id
-        AND events.event_id = awareness.source_event_id
-      WHERE awareness.workspace_id = ?
-        AND awareness.subject_id IN (${subjectPlaceholders})
-        AND awareness.target_id IN (${targetPlaceholders})
-        AND events.narrative_sequence <= ?
-      ORDER BY events.narrative_sequence, awareness.rowid
-    `).all(
-      workspaceId, ...subjectIds, ...targetIds, throughSequence
-    ) as Array<{ subjectId: string; targetId: string; status: string; sourceId: string }>;
+    const targets = new Set(targetIds);
     const result = new Map<string, Omit<AwarenessEvidence, 'subjectId' | 'targetId'>>();
-    for (const row of temporalRows) {
-      result.set(pairKey(row.subjectId, row.targetId), {
-        state: row.status === 'active' ? 'confirmed' : 'explicitly-unaware',
-        sourceIds: [row.sourceId]
-      });
+    // A card someone forgot or lost says they no longer know the target; current awareness wins over it.
+    const ended = this.db.prepare(`
+      SELECT owner_id AS subjectId, target_id AS targetId, card_id AS sourceId
+      FROM worldbuild_knowledge_cards
+      WHERE workspace_id = ? AND status IN ('forgotten', 'revoked')
+        AND owner_id IN (${subjectPlaceholders}) AND target_id IN (${targetPlaceholders})
+    `).all(workspaceId, ...subjectIds, ...targetIds) as Array<{ subjectId: string; targetId: string; sourceId: string }>;
+    for (const row of ended) result.set(pairKey(row.subjectId, row.targetId), { state: 'explicitly-unaware', sourceIds: [row.sourceId] });
+    const world = NarrativeWorld.of(this.db, workspaceId);
+    if (world.exists()) {
+      // Awareness as it stood at the position asked for; a later grant is not known yet there.
+      const reader = new StoryReader(world);
+      const known = world.ensureEntities(subjectIds);
+      for (const subjectId of subjectIds.filter(id => known.get(id) === 'agent' || known.get(id) === 'group')) {
+        for (const record of reader.awareness(subjectId, { at: { tick: throughSequence } })) {
+          if (record.kind !== 'awareness' || !targets.has(record.target)) continue;
+          result.set(pairKey(subjectId, record.target), { state: 'confirmed', sourceIds: [record.id] });
+        }
+      }
     }
     const ownRows = this.db.prepare(`
       SELECT cards.owner_id AS subjectId, cards.target_id AS targetId,

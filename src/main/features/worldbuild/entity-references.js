@@ -102,6 +102,9 @@ const RETIRED_RECORD_STATUS = {
   observation: 'retired'
 };
 
+// The story file is reached through its compiled module, from src and from dist-main alike.
+const storyEntities = () => require(require('path').join(__dirname, '../../../../dist-main/main/features/narrative/umwelt/story-entities'));
+
 function hasTable(db, name) {
   return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
 }
@@ -616,18 +619,7 @@ function countEntityReferences(db, workspaceId, entityIds) {
   const list = ids.map(() => '?').join(', ');
   const count = (table, sql, ...params) => (hasTable(db, table) ? db.prepare(sql).get(...params).count : 0);
   return {
-    narrativeRecords: count('narrative_records', `
-      SELECT COUNT(*) AS count FROM narrative_records WHERE workspace_id = ? AND (
-        subject_id IN (${list})
-        OR json_extract(payload_json, '$.proposition.subjectId') IN (${list})
-        OR json_extract(payload_json, '$.entityId') IN (${list})
-        OR json_extract(payload_json, '$.targetEntityId') IN (${list})
-      )
-    `, workspaceId, ...ids, ...ids, ...ids, ...ids)
-      + count('narrative_awareness_records', `
-      SELECT COUNT(*) AS count FROM narrative_awareness_records WHERE workspace_id = ? AND status != 'revoked'
-        AND (subject_id IN (${list}) OR target_id IN (${list}))
-    `, workspaceId, ...ids, ...ids),
+    narrativeRecords: storyEntities().countStoryReferences(db, workspaceId, ids),
     knowledgeCards: count('worldbuild_knowledge_cards', `
       SELECT COUNT(*) AS count FROM worldbuild_knowledge_cards WHERE workspace_id = ? AND (owner_id IN (${list}) OR target_id IN (${list}))
     `, workspaceId, ...ids, ...ids),
@@ -674,7 +666,11 @@ function releaseOrphanedEntityReferences(db) {
     `).all();
     for (const row of rows) orphans.set(JSON.stringify([row.workspace_id, row.id]), { workspaceId: row.workspace_id, entityId: row.id });
   }
-  for (const orphan of orphans.values()) releaseEntityReferences(db, orphan);
+  for (const orphan of storyEntities().orphanedStoryEntities(db)) orphans.set(JSON.stringify([orphan.workspaceId, orphan.entityId]), orphan);
+  for (const orphan of orphans.values()) {
+    releaseEntityReferences(db, orphan);
+    storyEntities().retireStoryEntity(db, orphan.workspaceId, orphan.entityId);
+  }
   return orphans.size;
 }
 

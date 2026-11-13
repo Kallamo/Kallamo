@@ -5,7 +5,6 @@ import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { runDatabaseMigrations } from '../../src/main/database/migrations.js';
 import { NarrativeStateSystem, type ExtractedNarrativeEvent } from '../../src/main/features/narrative/narrative-state';
-import { loadCurrentNarrativeRecords } from '../../src/main/features/narrative/narrative-record-projection';
 import { NarrativeWorld } from '../../src/main/features/narrative/umwelt/narrative-world';
 import { loadStoryAwareness, loadStoryRecords } from '../../src/main/features/narrative/umwelt/story-projection';
 import { StoryReader } from '../../src/main/features/narrative/umwelt/story-reader';
@@ -35,7 +34,7 @@ function normalize(rows: Array<{ row: { record_type: string; record_id: string }
   })).sort((a, b) => a.id.localeCompare(b.id));
 }
 
-describe('Story file and narrative ledger', () => {
+describe('Narrative records in the story file', () => {
   let directory: string;
   let db: Database.Database;
   let system: NarrativeStateSystem;
@@ -93,18 +92,24 @@ describe('Story file and narrative ledger', () => {
     }));
   }
 
-  test('the story file holds the same current records as the ledger', () => {
+  test('holds the current records of a played campaign, each awareness pair once', () => {
     play();
     const world = NarrativeWorld.of(db, WORKSPACE);
-    const legacy = loadCurrentNarrativeRecords(db, { workspaceId: WORKSPACE, recordTypes: [...TYPES] });
-    const story = loadStoryRecords(world, { recordTypes: [...TYPES] });
-    expect(normalize(story)).toEqual(normalize(legacy));
-    // The ledger repeats a pair each scene grants it again; the story keeps it once.
-    const pairs = (rows: string[]) => [...new Set(rows)].sort();
-    expect(pairs(loadStoryAwareness(world).map(item => `${item.subjectId}>${item.targetId}`)))
-      .toEqual(pairs((db.prepare('SELECT subject_id, target_id FROM narrative_awareness_records').all() as Array<{ subject_id: string; target_id: string }>)
-        .map(row => `${row.subject_id}>${row.target_id}`)));
-    expect(loadStoryAwareness(world)).toHaveLength(new Set(loadStoryAwareness(world).map(item => `${item.subjectId}>${item.targetId}`)).size);
+    const story = normalize(loadStoryRecords(world, { recordTypes: [...TYPES] }));
+    expect(story.map(item => [item.type, item.subjectId, (item.proposition as any)?.object ?? item.summary ?? item.value])).toEqual(expect.arrayContaining([
+      ['knowledge', 'tess', 'Dawnfall'],
+      ['knowledge', 'elias', 'Dawnfall'],
+      ['memory', 'elias', 'Tess trusted Elias with the gate code.'],
+      ['fact', null, 'the new harbor'],
+      ['belief', 'elias', 'elias'],
+      ['relationship', 'elias', -25],
+      ['relationship', 'tess', 20]
+    ]));
+    expect(story).toHaveLength(7);
+    expect(story.find(item => item.subjectId === 'elias' && item.type === 'knowledge')).toMatchObject({ acquisition: 'reported', informantIds: ['tess'], category: 'capability' });
+    const pairs = loadStoryAwareness(world).map(item => `${item.subjectId}>${item.targetId}`);
+    expect(pairs).toHaveLength(new Set(pairs).size);
+    expect(pairs).toEqual(expect.arrayContaining(['elias>guild', 'elias>tess']));
   });
 
   test('hearsay keeps the record it was told from, so the chain can be traced', () => {

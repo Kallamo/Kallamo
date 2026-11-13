@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { loadCurrentNarrativeRecords } from '../../src/main/features/narrative/narrative-record-projection';
 import { EventOccurrenceService } from '../../src/main/features/worldbuild/event-occurrences';
 import * as calendarService from '../../src/main/features/worldbuild/calendar-service.js';
 import { openEntityStore, type EntityStoreHarness } from './entity-store-harness';
@@ -72,8 +73,8 @@ describe('a Worldbuild package', () => {
     const importing = new EventOccurrenceService(db, calendarService as never, { includeProposed: true });
     expect(parts.importOccurrences({ db, service: importing, workspaceId: 'target', occurrences, idMap })).toEqual({ occurrencesAdded: 1, occurrencesSkipped: 0 });
 
-    const memories = db.prepare("SELECT subject_id FROM narrative_records WHERE workspace_id = 'target' AND record_type = 'memory'").all() as Array<{ subject_id: string }>;
-    expect(memories.map(row => row.subject_id)).toEqual([idMap.get(wren)]);
+    const memories = loadCurrentNarrativeRecords(db, { workspaceId: 'target', recordTypes: ['memory'] });
+    expect(memories.map(({ row }) => row.subject_id)).toEqual([idMap.get(wren)]);
   });
 
   test('carries background chapters and links them to their sheets again', () => {

@@ -4,6 +4,7 @@ const path = require('path');
 // The compiled story module, reached the same way from src and from dist-main (both four levels
 // below the root); a computed path keeps the TypeScript build from compiling dist-main as input.
 const storyJournal = () => require(path.join(__dirname, '../../../../dist-main/main/features/narrative/umwelt/story-journal'));
+const storyAwareness = () => require(path.join(__dirname, '../../../../dist-main/main/features/narrative/umwelt/story-awareness'));
 
 const SOURCE_TYPES = new Set([
   'manual', 'relationship', 'faction-membership', 'inventory',
@@ -479,22 +480,9 @@ function createWorldbuildKnowledgeService(db) {
       SELECT owner_id, target_id, source_type, source_id
       FROM worldbuild_knowledge_exclusions WHERE workspace_id = ?
     `).all(workspaceId)) keys.add(grantKey(rowGrant(row)));
-    const tracksAwareness = hasTable(db, 'narrative_awareness_records') && hasTable(db, 'narrative_events');
-    const aware = new Set();
-    if (tracksAwareness) {
-      for (const row of cached(`
-        SELECT records.subject_id, records.target_id, records.payload_json
-        FROM narrative_awareness_records records
-        WHERE records.workspace_id = ? AND records.rowid = (
-          SELECT MAX(latest.rowid) FROM narrative_awareness_records latest
-          WHERE latest.workspace_id = records.workspace_id
-            AND latest.subject_id = records.subject_id
-            AND latest.target_id = records.target_id
-        )
-      `).all(workspaceId)) {
-        if (parseObject(row.payload_json).status === 'active') aware.add(pairKey(row.subject_id, row.target_id));
-      }
-    }
+    // Awareness the story holds; without a story file there is none to compare with.
+    const aware = storyAwareness().awarePairs(db, workspaceId);
+    const tracksAwareness = aware !== null;
     for (const row of cached(`
       SELECT cards.owner_id, cards.target_id, sources.source_type, sources.source_id
       FROM worldbuild_knowledge_cards cards
@@ -619,17 +607,10 @@ function createWorldbuildKnowledgeService(db) {
     return card;
   }
 
+  // Awareness lives in the story, where it is read in play; the card is the author's view of it.
   function persistTemporalAwareness({ workspaceId, ownerId, targetId, sourceType, sourceId, status }) {
-    if (!hasTable(db, 'narrative_awareness_records') || !hasTable(db, 'narrative_events')) return;
-    if (status === 'active') {
-      const current = db.prepare(`
-        SELECT payload_json
-        FROM narrative_awareness_records
-        WHERE workspace_id = ? AND subject_id = ? AND target_id = ?
-        ORDER BY rowid DESC LIMIT 1
-      `).get(workspaceId, ownerId, targetId);
-      if (current && parseObject(current.payload_json).status === 'active') return;
-    }
+    if (!hasTable(db, 'narrative_events')) return;
+    if (status === 'active' && storyAwareness().isAware(db, workspaceId, ownerId, targetId)) return;
     const signature = crypto.createHash('sha256')
       .update(JSON.stringify({ workspaceId, ownerId, targetId, sourceType, sourceId, status }))
       .digest('hex').slice(0, 24);
@@ -647,6 +628,7 @@ function createWorldbuildKnowledgeService(db) {
     `).get(workspaceId).value;
     const awareness = { id: awarenessId, subjectId: ownerId, targetId, status, sourceEventId: eventId };
     const operation = { id: operationId, type: 'grant-awareness', evidenceIds: [evidenceId], awareness };
+    const description = status === 'active' ? 'Awareness granted.' : 'Awareness revoked.';
     db.prepare(`
       INSERT INTO narrative_events (
         workspace_id, event_id, proposal_id, change_set_id, contract_version,
@@ -656,8 +638,7 @@ function createWorldbuildKnowledgeService(db) {
       ) VALUES (?, ?, ?, ?, '1.0', 'custom', ?, ?, 'approved', 1, ?, 'deterministic', '1.0', ?, ?)
     `).run(
       workspaceId, eventId, `awareness_proposal_${signature}`, `awareness_change_${signature}`,
-      status === 'active' ? 'Awareness granted.' : 'Awareness revoked.',
-      sequence, JSON.stringify([operation]), createdAt, createdAt,
+      description, sequence, JSON.stringify([operation]), createdAt, createdAt,
     );
     db.prepare(`
       INSERT INTO narrative_event_participants
@@ -674,19 +655,10 @@ function createWorldbuildKnowledgeService(db) {
       sourceId,
       `${sourceType} awareness for ${targetId}`,
     );
-    db.prepare(`
-      INSERT INTO narrative_awareness_records (
-        workspace_id, awareness_id, subject_id, target_id, status,
-        source_event_id, operation_id, payload_json, applied_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      workspaceId, awarenessId, ownerId, targetId, status,
-      eventId, operationId, JSON.stringify(awareness), createdAt,
-    );
     // A card follows the story it came from, so it is written where the story is read.
     storyJournal().writeStoryEvent(db, workspaceId, {
       eventId,
-      description: status === 'active' ? 'Awareness granted.' : 'Awareness revoked.',
+      description,
       participants: [ownerId],
       provenance: { interpreter: 'deterministic', originType: sourceType === 'import' ? 'import' : 'world-action', originId: sourceId },
       operations: [operation],

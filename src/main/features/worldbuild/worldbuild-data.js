@@ -16,6 +16,7 @@ const ACCESSIBILITY = new Set(['available', 'suppressed', 'inaccessible']);
 const ACQUISITION = new Set(['participant', 'witness', 'reported', 'inferred']);
 
 const storyJournal = () => require(path.join(__dirname, '../../../../dist-main/main/features/narrative/umwelt/story-journal'));
+const storyRecords = () => require(path.join(__dirname, '../../../../dist-main/main/features/narrative/narrative-record-projection'));
 
 function createWorldbuildDataService(db) {
   const knowledgeCards = createWorldbuildKnowledgeService(db);
@@ -37,13 +38,6 @@ function createWorldbuildDataService(db) {
       (workspace_id, event_id, evidence_id, ordinal, origin_type, origin_id, excerpt)
     VALUES (?, ?, ?, 0, 'world-action', ?, ?)
   `);
-  const insertRecord = db.prepare(`
-    INSERT INTO narrative_records (
-      workspace_id, record_type, record_id, subject_id, source_event_id,
-      operation_id, payload_json, applied_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-
   function listFieldDefinitions(workspaceId, typeId) {
     const rows = db.prepare(`
       SELECT workspace_id, field_id, type_id, field_key, label, value_type,
@@ -163,34 +157,41 @@ function createWorldbuildDataService(db) {
   }
 
   function getSubjectKnowledge(workspaceId, subjectId) {
-    const rows = db.prepare(`
-      SELECT records.rowid AS record_order, records.record_type, records.record_id,
-        records.payload_json, records.source_event_id, records.applied_at,
-        events.narrative_sequence, events.narrative_timestamp, events.provenance_interpreter, events.provenance_interpreter_id,
-        occurrences.occurrence_id, occurrences.event_entity_id, occurrences.title AS occurrence_title
-      FROM narrative_records AS records
-      JOIN narrative_events AS events
-        ON events.workspace_id = records.workspace_id
-        AND events.event_id = records.source_event_id
-      LEFT JOIN worldbuild_event_occurrences AS occurrences
-        ON occurrences.workspace_id = records.workspace_id
-        AND occurrences.narrative_event_id = records.source_event_id
-      LEFT JOIN narrative_event_evidence AS evidence
-        ON evidence.workspace_id = events.workspace_id
-        AND evidence.event_id = events.event_id
-        AND evidence.ordinal = 0
-      LEFT JOIN narrative_origin_lifecycle AS lifecycle
-        ON lifecycle.workspace_id = events.workspace_id
-        AND lifecycle.origin_id = evidence.origin_id
-      WHERE records.workspace_id = ?
-        AND records.subject_id = ?
-        AND records.record_type IN ('observation', 'knowledge', 'belief', 'memory')
-        AND COALESCE(lifecycle.status, 'active') = 'active'
-      ORDER BY events.narrative_sequence, records.rowid
-    `).all(requireText(workspaceId, 'workspaceId'), requireText(subjectId, 'subjectId'));
+    const rows = journalRows(requireText(workspaceId, 'workspaceId'), storyRecords().loadSubjectRecords(db, workspaceId, requireText(subjectId, 'subjectId')));
     const projection = projectSubjectKnowledge(workspaceId, subjectId, rows, createEntityNameResolver(workspaceId));
     projection.cards = knowledgeCards.listCards(workspaceId, subjectId);
     return projection;
+  }
+
+  // Story records with what the journal knows of the event that wrote them: who wrote it, when, and
+  // the occurrence it belongs to. A record written outside the journal (a merge) reads from its own provenance.
+  function journalRows(workspaceId, records) {
+    if (!records.length) return [];
+    const { journalEventId, interpreterOf } = storyRecords();
+    const ids = [...new Set(records.map(record => journalEventId(record.row.source_event_id)))];
+    const journal = new Map(db.prepare(`
+      SELECT events.event_id, events.narrative_timestamp, events.provenance_interpreter, events.provenance_interpreter_id,
+        COALESCE(events.decided_at, events.provenance_created_at) AS applied_at,
+        occurrences.occurrence_id, occurrences.event_entity_id, occurrences.title AS occurrence_title
+      FROM narrative_events events
+      LEFT JOIN worldbuild_event_occurrences occurrences
+        ON occurrences.workspace_id = events.workspace_id AND occurrences.narrative_event_id = events.event_id
+      WHERE events.workspace_id = ? AND events.event_id IN (${ids.map(() => '?').join(', ')})
+    `).all(workspaceId, ...ids).map(row => [row.event_id, row]));
+    return records.map((record, index) => {
+      const event = journal.get(journalEventId(record.row.source_event_id));
+      return {
+        ...record.row,
+        record_order: index,
+        applied_at: event?.applied_at || null,
+        narrative_timestamp: event?.narrative_timestamp || null,
+        provenance_interpreter: event?.provenance_interpreter || interpreterOf(record),
+        provenance_interpreter_id: event?.provenance_interpreter_id || null,
+        occurrence_id: event?.occurrence_id || null,
+        event_entity_id: event?.event_entity_id || null,
+        occurrence_title: event?.occurrence_title || null,
+      };
+    });
   }
 
   function createEntityNameResolver(workspaceId) {
@@ -334,27 +335,11 @@ function createWorldbuildDataService(db) {
   }
 
   function getSubjectRecord(workspaceId, subjectId, kind, recordId) {
-    const row = db.prepare(`
-      SELECT records.record_id, records.payload_json, occurrences.occurrence_id
-      FROM narrative_records AS records
-      JOIN narrative_events AS events
-        ON events.workspace_id = records.workspace_id
-        AND events.event_id = records.source_event_id
-      LEFT JOIN worldbuild_event_occurrences AS occurrences
-        ON occurrences.workspace_id = records.workspace_id
-        AND occurrences.narrative_event_id = records.source_event_id
-      LEFT JOIN narrative_event_evidence AS evidence
-        ON evidence.workspace_id = events.workspace_id
-        AND evidence.event_id = events.event_id
-        AND evidence.ordinal = 0
-      LEFT JOIN narrative_origin_lifecycle AS lifecycle
-        ON lifecycle.workspace_id = events.workspace_id
-        AND lifecycle.origin_id = evidence.origin_id
-      WHERE records.workspace_id = ? AND records.subject_id = ?
-        AND records.record_type = ? AND records.record_id = ?
-        AND COALESCE(lifecycle.status, 'active') = 'active'
-    `).get(workspaceId, subjectId, kind, recordId);
-    return row ? { id: row.record_id, payload: JSON.parse(row.payload_json), managed: Boolean(row.occurrence_id) } : null;
+    const record = storyRecords().loadSubjectRecords(db, workspaceId, subjectId)
+      .find(item => item.row.record_type === kind && item.row.record_id === recordId);
+    if (!record) return null;
+    const [row] = journalRows(workspaceId, [record]);
+    return { id: record.row.record_id, payload: record.payload, managed: Boolean(row.occurrence_id) };
   }
 
   // Occurrence records are edited in their event: a revision here would shadow its later edits.
@@ -425,84 +410,40 @@ function createWorldbuildDataService(db) {
 
   function listWorldFacts(workspaceId) {
     const projectId = requireText(workspaceId, 'workspaceId');
-    const rows = db.prepare(`
-      SELECT records.record_id, records.payload_json, records.source_event_id,
-        records.applied_at, events.narrative_sequence, events.narrative_timestamp,
-        events.provenance_interpreter, events.provenance_interpreter_id
-      FROM narrative_records records
-      JOIN narrative_events events
-        ON events.workspace_id = records.workspace_id
-        AND events.event_id = records.source_event_id
-      LEFT JOIN narrative_event_evidence evidence
-        ON evidence.workspace_id = events.workspace_id
-        AND evidence.event_id = events.event_id
-        AND evidence.ordinal = 0
-      LEFT JOIN narrative_origin_lifecycle lifecycle
-        ON lifecycle.workspace_id = events.workspace_id
-        AND lifecycle.origin_id = evidence.origin_id
-      WHERE records.workspace_id = ? AND records.record_type = 'fact'
-        AND COALESCE(lifecycle.status, 'active') = 'active'
-      ORDER BY events.narrative_sequence, records.rowid
-    `).all(projectId);
+    const rows = journalRows(projectId, storyRecords().loadStoryFacts(db, projectId));
     const resolveEntityName = createEntityNameResolver(projectId);
     const current = new Map();
     for (const row of rows) {
       const payload = JSON.parse(row.payload_json);
       const referenceId = payload.referenceId || factReferenceId(payload.proposition, row.record_id);
-      const key = referenceId;
-      for (const [existingKey, existing] of current) {
-        if (existing.id === referenceId) current.delete(existingKey);
-      }
-      if (payload.status === 'active') {
-        const legacyAboutId = payload.proposition?.subjectId === projectId ? null : payload.proposition?.subjectId || null;
-        const rendered = renderProposition(payload.proposition, resolveEntityName);
-        current.set(key, {
-          id: referenceId,
-          title: rendered.title,
-          statement: rendered.statement,
-          predicate: String(payload.proposition?.predicate || ''),
-          managed: rendered.managed,
-          relatedEntityIds: normalizeIds(payload.relatedEntityIds?.length ? payload.relatedEntityIds : legacyAboutId ? [legacyAboutId] : []),
-          sourceEventId: row.source_event_id,
-          source: row.provenance_interpreter === 'user' ? 'manual' : 'narrative',
-          ...(row.provenance_interpreter_id === SEEDED_BY.interpreterId ? { by: 'kallamo' } : {}),
-          position: {
-            sequence: row.narrative_sequence,
-            ...(row.narrative_timestamp ? { timestamp: row.narrative_timestamp } : {}),
-          },
-          appliedAt: row.applied_at,
-        });
-      } else {
-        current.delete(key);
-      }
+      const legacyAboutId = payload.proposition?.subjectId === projectId ? null : payload.proposition?.subjectId || null;
+      const rendered = renderProposition(payload.proposition, resolveEntityName);
+      current.set(referenceId, {
+        id: referenceId,
+        title: rendered.title,
+        statement: rendered.statement,
+        predicate: String(payload.proposition?.predicate || ''),
+        managed: rendered.managed,
+        relatedEntityIds: normalizeIds(payload.relatedEntityIds?.length ? payload.relatedEntityIds : legacyAboutId ? [legacyAboutId] : []),
+        sourceEventId: row.source_event_id,
+        source: row.provenance_interpreter === 'user' ? 'manual' : 'narrative',
+        ...(row.provenance_interpreter_id === SEEDED_BY.interpreterId ? { by: 'kallamo' } : {}),
+        position: {
+          sequence: row.narrative_sequence,
+          ...(row.narrative_timestamp ? { timestamp: row.narrative_timestamp } : {}),
+        },
+        appliedAt: row.applied_at,
+      });
     }
     return [...current.values()];
   }
 
   function getWorldFactRecord(workspaceId, factId) {
-    const rows = db.prepare(`
-      SELECT records.record_id, records.payload_json
-      FROM narrative_records AS records
-      JOIN narrative_events AS events
-        ON events.workspace_id = records.workspace_id
-        AND events.event_id = records.source_event_id
-      LEFT JOIN narrative_event_evidence AS evidence
-        ON evidence.workspace_id = events.workspace_id
-        AND evidence.event_id = events.event_id
-        AND evidence.ordinal = 0
-      LEFT JOIN narrative_origin_lifecycle AS lifecycle
-        ON lifecycle.workspace_id = events.workspace_id
-        AND lifecycle.origin_id = evidence.origin_id
-      WHERE records.workspace_id = ? AND records.record_type = 'fact'
-        AND COALESCE(lifecycle.status, 'active') = 'active'
-      ORDER BY records.rowid DESC
-    `).all(requireText(workspaceId, 'workspaceId'));
     const requestedId = requireText(factId, 'factId');
-    for (const row of rows) {
-      const payload = JSON.parse(row.payload_json);
-      const referenceId = payload.referenceId || factReferenceId(payload.proposition, row.record_id);
-      if ((row.record_id === requestedId || referenceId === requestedId) && payload.status === 'active') {
-        return { id: row.record_id, referenceId, payload };
+    for (const record of storyRecords().loadStoryFacts(db, requireText(workspaceId, 'workspaceId')).reverse()) {
+      const referenceId = record.payload.referenceId || factReferenceId(record.payload.proposition, record.row.record_id);
+      if (record.row.record_id === requestedId || referenceId === requestedId) {
+        return { id: record.row.record_id, referenceId, payload: record.payload };
       }
     }
     return null;
@@ -617,22 +558,7 @@ function createWorldbuildDataService(db) {
   }
 
   function currentLedgerRelationship(workspaceId, fromId, toId) {
-    const row = db.prepare(`
-      SELECT records.payload_json FROM narrative_records records
-      JOIN narrative_events events
-        ON events.workspace_id = records.workspace_id AND events.event_id = records.source_event_id
-      LEFT JOIN narrative_event_evidence evidence
-        ON evidence.workspace_id = events.workspace_id AND evidence.event_id = events.event_id AND evidence.ordinal = 0
-      LEFT JOIN narrative_origin_lifecycle lifecycle
-        ON lifecycle.workspace_id = events.workspace_id AND lifecycle.origin_id = evidence.origin_id
-      WHERE records.workspace_id = ? AND records.record_type = 'relationship' AND records.subject_id = ?
-        AND json_extract(records.payload_json, '$.targetEntityId') = ?
-        AND lower(COALESCE(json_extract(records.payload_json, '$.dimension'), 'overall')) = 'overall'
-        AND COALESCE(lifecycle.status, 'active') = 'active'
-      ORDER BY events.narrative_sequence DESC, records.rowid DESC LIMIT 1
-    `).get(workspaceId, fromId, toId);
-    const payload = row ? parseObject(row.payload_json) : null;
-    return payload && payload.status !== 'retired' ? payload : null;
+    return storyRecords().loadStoryRelationship(db, workspaceId, fromId, toId)?.payload || null;
   }
 
   function persistManualEvent({ workspaceId, subjectId, participantId, eventId, evidenceId, createdAt, operations, action, eventDescription, excerpt }) {
@@ -645,15 +571,6 @@ function createWorldbuildDataService(db) {
       );
       insertParticipant.run(workspaceId, eventId, participantId || subjectId);
       insertEvidence.run(workspaceId, eventId, evidenceId, participantId || subjectId, excerpt || entryExcerpt(operations.at(-1)));
-      for (const operation of operations) {
-        const record = operationRecord(operation);
-        insertRecord.run(
-          workspaceId, record.type, record.payload.id,
-          Object.hasOwn(record, 'subjectId') ? record.subjectId : subjectId,
-          eventId,
-          operation.id, JSON.stringify(record.payload), createdAt,
-        );
-      }
     })();
     const owner = participantId || subjectId;
     storyJournal().writeStoryEvent(db, workspaceId, {

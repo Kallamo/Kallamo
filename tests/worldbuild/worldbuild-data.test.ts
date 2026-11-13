@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { NarrativeWorld } from '../../src/main/features/narrative/umwelt/narrative-world';
+import { writeStoryEvent } from '../../src/main/features/narrative/umwelt/story-journal';
 import { runDatabaseMigrations } from '../../src/main/database/migrations.js';
 import { createWorldbuildDataService } from '../../src/main/features/worldbuild/worldbuild-data.js';
 import { NarrativeStateSystem } from '../../src/main/features/narrative/narrative-state';
@@ -185,8 +187,10 @@ describe('Worldbuild runtime data adapter', () => {
       workspaceId: 'workspace-one', subjectId: 'tess', kind: 'knowledge', entryId: revised.known[0].id
     });
     expect(removed.known).toEqual([]);
-    expect(db.prepare("SELECT COUNT(*) AS count FROM narrative_records WHERE record_type = 'knowledge'").get())
-      .toEqual({ count: 3 });
+    // Each version stays in the story's history.
+    const world = NarrativeWorld.of(db, 'workspace-one');
+    expect(world.call<{ status?: string }>('trace', { recordId: added.known[0].id }).status).toBe('superseded');
+    expect(world.call<{ status?: string }>('trace', { recordId: revised.known[0].id }).status).toBe('revoked');
   });
 
   test('revising a Known entry without an entry id replaces it', () => {
@@ -195,24 +199,25 @@ describe('Worldbuild runtime data adapter', () => {
       entry: { aboutId: 'northern-gate', statement: 'The gate is sealed.', acquisition: 'witness', accessibility: 'available' }
     });
     // Older narrative records carry no entryId; their record id is their only handle.
-    const row = db.prepare("SELECT record_id, payload_json FROM narrative_records WHERE record_type = 'knowledge'").get() as { record_id: string; payload_json: string };
-    const legacy = JSON.parse(row.payload_json);
-    delete legacy.entryId;
-    db.prepare('UPDATE narrative_records SET record_id = ?, payload_json = ? WHERE record_id = ?')
-      .run(legacy.id, JSON.stringify(legacy), row.record_id);
-    expect(service.getSubjectKnowledge('workspace-one', 'tess').known).toHaveLength(added.known.length);
+    const legacy = { id: 'legacy-knowledge', subjectId: 'tess', proposition: { subjectId: 'northern-gate', predicate: 'worldbuild-statement', object: 'The gate was once sealed.' }, sourceEventId: 'legacy-event', acquisition: 'witness', confidence: 1, accessibility: 'available', status: 'active' };
+    writeStoryEvent(db, 'workspace-one', {
+      eventId: 'legacy-event', description: 'Imported.', participants: ['tess'],
+      provenance: { interpreter: 'import' }, operations: [{ id: 'legacy-op', type: 'grant-knowledge', evidenceIds: [], knowledge: legacy } as any]
+    });
+    expect(service.getSubjectKnowledge('workspace-one', 'tess').known).toHaveLength(added.known.length + 1);
 
     const revised = service.saveSubjectEntry({
       workspaceId: 'workspace-one', subjectId: 'tess', kind: 'knowledge',
       existingId: legacy.id,
       entry: { aboutId: 'northern-gate', statement: 'The gate has reopened.', acquisition: 'witness', accessibility: 'available' }
     });
-    expect(revised.known).toEqual([expect.objectContaining({ statement: 'The gate has reopened.' })]);
+    expect(revised.known.map((entry: any) => entry.statement).sort()).toEqual(['The gate has reopened.', 'The gate is sealed.']);
 
     const removed = service.deleteSubjectEntry({
-      workspaceId: 'workspace-one', subjectId: 'tess', kind: 'knowledge', entryId: revised.known[0].id
+      workspaceId: 'workspace-one', subjectId: 'tess', kind: 'knowledge',
+      entryId: revised.known.find((entry: any) => entry.statement === 'The gate has reopened.').id
     });
-    expect(removed.known).toEqual([]);
+    expect(removed.known.map((entry: any) => entry.statement)).toEqual(['The gate is sealed.']);
   });
 
   test('replaces and forgets memories without erasing their history', () => {
@@ -233,8 +238,9 @@ describe('Worldbuild runtime data adapter', () => {
       workspaceId: 'workspace-one', subjectId: 'vharos', kind: 'memory', entryId: revised.memories[0].id
     });
     expect(removed.memories).toEqual([]);
-    expect(db.prepare("SELECT COUNT(*) AS count FROM narrative_records WHERE record_type = 'memory'").get())
-      .toEqual({ count: 3 });
+    const world = NarrativeWorld.of(db, 'workspace-one');
+    expect(world.call<{ status?: string }>('trace', { recordId: added.memories[0].id }).status).toBe('superseded');
+    expect(world.call<{ status?: string }>('trace', { recordId: revised.memories[0].id }).status).toBe('forgotten');
   });
 
   test('keeps an optional story day on a memory and drops a half-set one', () => {
@@ -262,9 +268,7 @@ describe('Worldbuild runtime data adapter', () => {
 
     // Adopt the entry's own narrative event as an occurrence, which is the shape the
     // occurrence writer produces: one narrative event carrying the recorded memories.
-    const narrativeEventId = (db.prepare(
-      "SELECT source_event_id AS id FROM narrative_records WHERE record_type = 'memory'"
-    ).get() as { id: string }).id;
+    const narrativeEventId = loadCurrentNarrativeRecords(db, { workspaceId: 'workspace-one', recordTypes: ['memory'] })[0].row.source_event_id;
     db.prepare(`
       INSERT INTO worldbuild_event_occurrences (
         workspace_id, occurrence_id, event_entity_id, narrative_event_id,
@@ -398,8 +402,10 @@ describe('Worldbuild runtime data adapter', () => {
       factId: revised[0].id,
     });
     expect(removed).toEqual([]);
-    expect(db.prepare("SELECT DISTINCT subject_id FROM narrative_records WHERE record_type = 'fact'").all())
-      .toEqual([{ subject_id: null }]);
+    // Facts are canon, held by nobody, and the removed one stays in history.
+    const world = NarrativeWorld.of(db, 'workspace-one');
+    expect(loadCurrentNarrativeRecords(db, { workspaceId: 'workspace-one', recordTypes: ['fact'] })).toEqual([]);
+    expect(world.call<{ items: Array<{ kind: string }> }>('canon', { at: { tick: 1 } }).items.map(item => item.kind)).toEqual(['fact']);
   });
 
   test('keeps stable Fact references on knowledge and beliefs', () => {

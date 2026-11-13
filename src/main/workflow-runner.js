@@ -2975,23 +2975,10 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         ...narrativeSignals.mentionedEntityIds,
         ...triageEntityIds
     ].filter(Boolean));
-    const perspectiveSelection = shouldAnalyzeEpistemicState && holderIds.size + targetIds.size ? selectPerspectiveRecords(db.prepare(`
-        SELECT records.record_type AS type, records.subject_id AS subjectId, records.payload_json AS payload
-        FROM narrative_records records
-        JOIN narrative_events events
-          ON events.workspace_id = records.workspace_id AND events.event_id = records.source_event_id
-        LEFT JOIN narrative_event_evidence evidence
-          ON evidence.workspace_id = events.workspace_id AND evidence.event_id = events.event_id AND evidence.ordinal = 0
-        LEFT JOIN narrative_origin_lifecycle lifecycle
-          ON lifecycle.workspace_id = events.workspace_id AND lifecycle.origin_id = evidence.origin_id
-        WHERE records.workspace_id = ? AND (
-          (records.record_type IN ('knowledge', 'belief', 'memory') AND records.subject_id IN (${[...holderIds].map(() => '?').join(',') || 'NULL'}))
-          OR records.record_type IN ('fact', 'state')
-        )
-          AND COALESCE(lifecycle.status, 'active') = 'active'
-        ORDER BY records.applied_at DESC
-    `).all(workspaceId, ...holderIds)
-        .map(row => ({ type: row.type, subjectId: row.subjectId, value: safeParseObject(row.payload) || {} })), {
+    const perspectiveSelection = shouldAnalyzeEpistemicState && holderIds.size + targetIds.size ? selectPerspectiveRecords(loadNarrativeRecords(workspaceId, ['knowledge', 'belief', 'memory', 'fact', 'state'])
+        .filter(({ row }) => row.record_type === 'fact' || row.record_type === 'state' || holderIds.has(row.subject_id))
+        .reverse()
+        .map(({ row, payload }) => ({ type: row.record_type, subjectId: row.subject_id || null, value: payload })), {
         holderIds: holders.present,
         mentionedHolderIds: holders.mentioned,
         targetIds,
@@ -3579,6 +3566,12 @@ async function analyzePendingNarrativeTurn({ chatId, excludedIds, webContents, c
     } catch (error) {
         console.error('[Narrative State] Could not analyze the kept reply:', error);
     }
+}
+
+/** The current records of a workspace's story, as the narrative projection gives them. */
+function loadNarrativeRecords(workspaceId, recordTypes, subjectIds) {
+    const { loadCurrentNarrativeRecords } = require('../../dist-main/main/features/narrative/narrative-record-projection');
+    return loadCurrentNarrativeRecords(db, { workspaceId, recordTypes, ...(subjectIds ? { subjectIds } : {}) });
 }
 
 function deferNarrativeStateTurn(workspaceId, originId) {
@@ -4777,13 +4770,8 @@ function submitEntityNarrativeSuggestions({ workspaceId, entity, changes, allEnt
     const recordedMemories = new Map();
     const memoriesOf = ownerId => {
         if (!recordedMemories.has(ownerId)) {
-            const rows = db.prepare(`SELECT payload_json FROM narrative_records WHERE workspace_id = ? AND record_type = 'memory' AND subject_id = ?`).all(workspaceId, ownerId);
-            recordedMemories.set(ownerId, rows.flatMap(row => {
-                try {
-                    const memory = JSON.parse(row.payload_json);
-                    return memory?.status === 'active' ? [comparableText(memory.summary)] : [];
-                } catch { return []; }
-            }).filter(Boolean));
+            recordedMemories.set(ownerId, loadNarrativeRecords(workspaceId, ['memory'], [ownerId])
+                .map(({ payload }) => comparableText(payload.summary)).filter(Boolean));
         }
         return recordedMemories.get(ownerId);
     };
@@ -5291,12 +5279,11 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
             ORDER BY createdAt DESC LIMIT 1
         `),
     };
-    const existingMemories = db.prepare(`
-        SELECT payload_json FROM narrative_records
-        WHERE workspace_id = ? AND record_type = 'memory' AND subject_id = ?
-        ORDER BY applied_at DESC
-        LIMIT 40
-    `);
+    // The newest memories first, in the row shape memorySummaries reads.
+    const existingMemories = {
+        all: (ws, entityId) => loadNarrativeRecords(ws, ['memory'], [entityId]).reverse().slice(0, 40)
+            .map(({ row }) => ({ payload_json: row.payload_json }))
+    };
     const { RoleplaySkills } = require('../../dist-main/main/features/narrative/roleplay-skills');
     const skillSystem = new RoleplaySkills(db);
     const playerEntityId = skillSystem.getSettings(workspaceId).playerEntityId;

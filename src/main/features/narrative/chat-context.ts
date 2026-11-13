@@ -36,6 +36,7 @@ import { NarrativeContextManifestRepository, type NarrativeContextManifest } fro
 import { RoleplayContextOrchestrator } from './roleplay-context-orchestrator';
 import { CharacterSceneMemory, formatCharacterMemorySection } from './character-scene-memory';
 import {
+  currentNarrativeSequence,
   loadCurrentNarrativeRecords,
   type NarrativeRecordRow
 } from './narrative-record-projection';
@@ -553,11 +554,7 @@ export class NarrativeChatContext {
   }
 
   private getLatestPosition(workspaceId: string): NarrativePosition {
-    const row = this.db.prepare(`
-      SELECT COALESCE(MAX(narrative_sequence), 0) AS sequence
-      FROM narrative_events WHERE workspace_id = ?
-    `).get(workspaceId) as { sequence: number };
-    return { sequence: row.sequence };
+    return { sequence: currentNarrativeSequence(this.db, workspaceId) };
   }
 
   /** The focus is what a record, the scene, the perspective or the request names; tags alone never make it. */

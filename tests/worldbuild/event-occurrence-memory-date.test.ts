@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { loadCurrentNarrativeRecords } from '../../src/main/features/narrative/narrative-record-projection';
 import { runDatabaseMigrations } from '../../src/main/database/migrations.js';
 import { EventOccurrenceService } from '../../src/main/features/worldbuild/event-occurrences';
 import * as calendarService from '../../src/main/features/worldbuild/calendar-service.js';
@@ -44,8 +45,8 @@ describe('Event occurrence memories', () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
-  const memoryDates = () => (db.prepare("SELECT payload_json FROM narrative_records WHERE record_type = 'memory' ORDER BY rowid").all() as Array<{ payload_json: string }>)
-    .map(row => JSON.parse(row.payload_json).occurredOn ?? null);
+  const memories = () => loadCurrentNarrativeRecords(db, { workspaceId: 'workspace-one', recordTypes: ['memory'] });
+  const memoryDates = () => memories().map(({ payload }) => payload.occurredOn ?? null);
 
   test('dates each remembered memory with the day the occurrence started', () => {
     const participant = { entityId: 'vharos', role: 'Rider', remember: true, memoryAccessibility: 'available' as const, audienceType: 'all-members' as const, selectedMemberIds: [] };
@@ -70,7 +71,7 @@ describe('Event occurrence memories', () => {
       startDate: null, endDate: null, locationIds: [], relatedEntityIds: [],
       participants: people.map(entityId => ({ entityId, role: 'Spectator', remember: true, memoryAccessibility: 'available' as const, audienceType: 'all-members' as const, selectedMemberIds: [] }))
     });
-    const subjects = (db.prepare("SELECT subject_id FROM narrative_records WHERE record_type = 'memory'").all() as Array<{ subject_id: string }>).map(row => row.subject_id);
+    const subjects = memories().map(({ row }) => row.subject_id);
     expect(subjects.sort()).toEqual([...people].sort());
   });
 });

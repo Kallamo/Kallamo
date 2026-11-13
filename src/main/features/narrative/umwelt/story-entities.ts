@@ -117,21 +117,79 @@ export function mergeStoryEntity(db: Database.Database, workspaceId: string, sou
   return transitions.length;
 }
 
-/** Ends everything the story holds about or by a deleted entity; history keeps it. */
+/** Whether a record is about an entity, as opposed to only naming it in passing. */
+function isAbout(record: StoryRecord, id: string): boolean {
+  if (record.kind === 'awareness' || record.kind === 'disposition') return record.holder === id || record.target === id;
+  const object = record.claim.object as { kind: string; id?: string };
+  return record.claim.subject === id || (object.kind === 'entity' && object.id === id) || (record.kind === 'holding' && record.holder === id);
+}
+
+/**
+ * Ends what the story holds about or by a deleted entity, and drops it from records that only name
+ * it in passing (a memory's related entities, a teller); history keeps both.
+ */
 export function retireStoryEntity(db: Database.Database, workspaceId: string, entityId: string): number {
   if (!entityId) return 0;
   const world = NarrativeWorld.of(db, workspaceId);
   if (!world.exists()) return 0;
   const timelineId = new StoryTimelines(world).forMain();
-  const targets = current(world, timelineId).filter(record => mentions(record, entityId)
-    || (metadataOf(record).relatedEntityIds as string[] | undefined)?.includes(entityId));
+  const records: RecordInput[] = [];
+  const transitions: TransitionInput[] = [];
+  for (const record of current(world, timelineId).filter(item => mentions(item, entityId))) {
+    if (isAbout(record, entityId)) {
+      transitions.push({ targetRecordId: record.id, status: 'revoked' });
+      continue;
+    }
+    const metadata = metadataOf(record);
+    const named = ['relatedEntityIds', 'informantIds'].filter(key => Array.isArray(metadata[key]) && (metadata[key] as string[]).includes(entityId));
+    if (!named.length) continue;
+    const id = `${record.id}~${createHash('sha256').update(`${record.id}:-${entityId}`).digest('hex').slice(0, 12)}`;
+    const next = carried(record, '', '', id);
+    if (!next) continue;
+    next.provenance = {
+      ...record.provenance,
+      metadata: Object.fromEntries(Object.entries(metadata).map(([key, value]) => [key, named.includes(key) ? (value as string[]).filter(item => item !== entityId) : value]))
+    };
+    records.push(next);
+    transitions.push({ targetRecordId: record.id, status: 'superseded', supersededBy: id });
+  }
   commit(db, world, timelineId, {
-    attemptId: `retire-entity:${entityId}:${targets.length}`,
+    attemptId: `retire-entity:${entityId}:${transitions.length}`,
     type: 'entity-removed',
     title: 'An entity was removed from the world.',
     participants: [],
-    records: [],
-    transitions: [...new Set(targets.map(record => record.id))].map(id => ({ targetRecordId: id, status: 'revoked' as const }))
+    records,
+    transitions
   });
-  return targets.length;
+  try { world.call('entity.archive', { entityId }); } catch { /* an entity the story never registered has nothing to archive */ }
+  return transitions.length;
+}
+
+/** How many current story records are about these entities, for the warning before they are deleted. */
+export function countStoryReferences(db: Database.Database, workspaceId: string, entityIds: string[]): number {
+  const world = NarrativeWorld.of(db, workspaceId);
+  if (!world.exists() || !entityIds.length) return 0;
+  const reader = new StoryReader(world);
+  return current(world, reader.timelineId()).filter(record => entityIds.some(id => isAbout(record, id))).length;
+}
+
+/** Entities a story still names that the world no longer has. */
+export function orphanedStoryEntities(db: Database.Database): Array<{ workspaceId: string; entityId: string }> {
+  const hasTable = (name: string) => Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
+  if (!hasTable('entities') || !hasTable('chats')) return [];
+  const orphans: Array<{ workspaceId: string; entityId: string }> = [];
+  for (const { id: workspaceId } of db.prepare('SELECT id FROM chats').all() as Array<{ id: string }>) {
+    const world = NarrativeWorld.of(db, workspaceId);
+    if (!world.exists()) continue;
+    const existing = new Set((db.prepare('SELECT id FROM entities WHERE workspaceId = ?').all(workspaceId) as Array<{ id: string }>).map(row => row.id));
+    let cursor: string | undefined;
+    do {
+      const page = world.call<{ items: Array<{ id: string; archived: boolean }>; nextCursor?: string | null }>('entity.list', { page: { limit: 1000, ...(cursor ? { cursor } : {}) } });
+      for (const entity of page.items) {
+        if (!entity.archived && entity.id !== workspaceId && !existing.has(entity.id)) orphans.push({ workspaceId, entityId: entity.id });
+      }
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+  }
+  return orphans;
 }

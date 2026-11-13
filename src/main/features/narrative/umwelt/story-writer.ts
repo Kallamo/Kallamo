@@ -160,7 +160,11 @@ export class StoryWriter {
   }
 
   private add(draft: Draft, operation: NarrativeOperation, input: StoryWrite, event: Provenance, claimed: Set<string>): string | null {
-    const provenance = (metadata: StoryMetadata): Provenance => ({ ...event, metadata: compact({ ...metadata, op: operation.id }) });
+    // What a record needs of its event travels with it: the operation it came from and where that came from.
+    const provenance = (metadata: StoryMetadata): Provenance => ({
+      ...event,
+      metadata: compact({ ...metadata, op: operation.id, originType: input.provenance.originType })
+    });
     switch (operation.type) {
       case 'record-observation': {
         const observation = operation.observation as unknown as Record<string, unknown>;
@@ -233,11 +237,11 @@ export class StoryWriter {
         const memory = operation.memory;
         if (!this.isHolder(memory.subjectId)) return 'not-a-holder';
         // A memory is revised under a stable entry, so an edit replaces it however often it is edited.
-        const sameEntry = memory.entryId
-          ? this.activeOf(memory.subjectId, 'memory', { predicate: 'memory' }).filter(item => item.record.id !== memory.id && metadataOf(item.record).entryId === memory.entryId).map(item => item.record)
+        const entryMatches = memory.entryId
+          ? this.activeOf(memory.subjectId, 'memory', { predicate: 'memory' }).filter(item => item.record.id !== memory.id && sameEntry(item.record, memory.entryId!)).map(item => item.record)
           : [];
         const previous = memory.supersedesMemoryId ? this.findById(memory.subjectId, memory.supersedesMemoryId) : null;
-        const replaced = [...new Map([...(previous ? [previous] : []), ...sameEntry].map(record => [record.id, record])).values()];
+        const replaced = [...new Map([...(previous ? [previous] : []), ...entryMatches].map(record => [record.id, record])).values()];
         const status = memory.status ?? 'active';
         if (status !== 'active') {
           const targets = replaced.length ? replaced : [this.findById(memory.subjectId, memory.id)].filter((record): record is StoryRecord => Boolean(record));
@@ -270,14 +274,19 @@ export class StoryWriter {
         const claim = this.claimOf(proposition);
         const identity = statementIdentityOf(holder, claim);
         const entryId = payload.entryId ? String(payload.entryId) : undefined;
-        const current = this.activeOf(holder, kind, { about: proposition.subjectId });
+        // The interpreter mints a new entry for every record, so only an author's edit revises one by entry.
+        const byEntry = Boolean(entryId) && input.provenance.interpreter !== 'model';
+        const current = this.activeOf(holder, kind, {
+          about: proposition.subjectId,
+          ...(byEntry || isProseStatement(proposition.object) ? {} : { predicate: claim.predicate })
+        });
         const revised = current.filter(item => item.record.id !== payload.id && (
-          (entryId && metadataOf(item.record).entryId === entryId)
+          (byEntry && sameEntry(item.record, entryId!))
           || (item.record.kind === 'holding' && statementIdentityOf(holder, item.record.claim) === identity)
         ));
         if (payload.status !== 'active') {
           const targets = entryId
-            ? current.filter(item => metadataOf(item.record).entryId === entryId)
+            ? current.filter(item => sameEntry(item.record, entryId))
             : current.filter(item => item.record.id === payload.id || (item.record.kind === 'holding' && statementIdentityOf(holder, item.record.claim) === identity)).slice(0, 1);
           if (!targets.length) return 'nothing-to-retire';
           for (const item of targets) draft.end(retirement(item.record.id, payload.status, payload.supersededBy));
@@ -436,6 +445,12 @@ export class StoryWriter {
     if (this.timelineId === 'main') return main.maxTick + 1;
     return Math.max(main.maxTick, this.reader.timeline(this.timelineId).maxTick) + 1;
   }
+}
+
+/** A record written before entries existed is revised under its own id. */
+function sameEntry(record: StoryRecord, entryId: string): boolean {
+  const own = metadataOf(record).entryId;
+  return own ? own === entryId : record.id === entryId;
 }
 
 /** Each recorded occurrence of an event is its own Fact, revised by its occurrence id. */

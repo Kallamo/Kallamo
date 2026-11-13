@@ -2,12 +2,13 @@ import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { NARRATIVE_CONTRACT_VERSION, type NarrativeOperation, type NarrativeProposal, type Proposition, type RelationshipState, type WorldDay } from '../../../narrative/contracts';
 import { validateNarrativeOperation } from '../../../narrative/validation';
-import { propositionIdentity, statementKey } from '../../../narrative/narrative-taxonomy';
+import { isProseStatement, propositionIdentity, statementKey } from '../../../narrative/narrative-taxonomy';
 import { isDailyLimited, limitRelationshipChange, type RelationshipImpact, type RelationshipTable } from '../../../narrative/relationship-bands';
-import { NarrativeChangeSetRepository } from '../../../narrative/change-sets';
 import { NarrativeEventLedgerRepository, type NarrativeEventLedgerRecord } from '../../../narrative/ledger';
 import { createWorldbuildKnowledgeService, type WorldbuildKnowledgeService } from '../worldbuild/knowledge-service';
+import { NarrativeWorld } from './umwelt/narrative-world';
 import { writeLedgerRecord } from './umwelt/story-journal';
+import { kindOf, objectOf, StoryReader } from './umwelt/story-reader';
 import {
   reviewExtractedOperations,
   type ExtractedNarrativeEvent,
@@ -81,6 +82,7 @@ export interface NarrativeStateJob {
 }
 
 const AUTO_CONFIDENCE = 0.9;
+const REFUSED_REASONS = new Set(['not-a-holder', 'unknown-entity', 'unsupported']);
 const AUTO_MEMORY_SALIENCE = 0.85;
 const MIN_KNOWLEDGE_CONFIDENCE = 0.8;
 interface RelationshipBaseline { exists: boolean; value: number }
@@ -95,12 +97,10 @@ interface RelationshipContext {
 
 export class NarrativeStateSystem {
   private readonly ledger: NarrativeEventLedgerRepository;
-  private readonly changes: NarrativeChangeSetRepository;
   private readonly knowledgeCards: WorldbuildKnowledgeService;
 
   constructor(private readonly db: Database.Database) {
     this.ledger = new NarrativeEventLedgerRepository(db);
-    this.changes = new NarrativeChangeSetRepository(db);
     this.knowledgeCards = createWorldbuildKnowledgeService(db);
   }
 
@@ -153,7 +153,7 @@ export class NarrativeStateSystem {
     // Fingerprinting the gated event lets a regeneration that differs only in chatter match.
     const input: CreateEventInput = { ...proposed, event: { ...proposed.event, operations: review.operations } };
     const fingerprint = fingerprintEvent(input.workspaceId, input.originId, input.event);
-    if (this.hasFingerprint(input.workspaceId, fingerprint)) {
+    if (this.ledger.get(input.workspaceId, `evt_${fingerprint}`)) {
       return { skipped: 'duplicate', ...rejected(review) };
     }
     const operations = deduplicateAwarenessOperations(buildOperations(
@@ -179,16 +179,6 @@ export class NarrativeStateSystem {
     const decision = input.forceReview || input.updatePolicy === 'review' || requiresReview(input.event)
       ? 'review'
       : 'automatic';
-    const existing = this.ledger.get(input.workspaceId, eventId);
-    if (existing) {
-      if (existing.status !== 'proposed' || decision === 'review') return { record: existing, decision };
-      const applied = this.changes.apply(input.workspaceId, eventId, { expectedVersion: existing.version, attemptedAt: new Date().toISOString(), attemptId: `apply_${fingerprint}_${existing.version}` });
-      this.writeStory(input.workspaceId, applied, true, input.storyMinute);
-      this.syncCanonicalRelationships(input.workspaceId, applied);
-      this.syncAwarenessCards(input.workspaceId, applied);
-      this.recordFingerprint(input.workspaceId, fingerprint, input.originId, eventId);
-      return { record: applied, decision };
-    }
     const proposal: NarrativeProposal = {
       contractVersion: NARRATIVE_CONTRACT_VERSION,
       id: `proposal_${fingerprint}`,
@@ -214,17 +204,12 @@ export class NarrativeStateSystem {
       evidence: [{ id: evidenceId, originType: input.originType ?? 'chat-message', originId: input.originId, excerpt: input.event.excerpt.trim().slice(0, 500) }],
       provenance: { interpreter: input.provenanceInterpreter ?? 'model', interpreterId: input.interpreterId, promptVersion: input.promptVersion ?? 'narrative-state-v1', schemaVersion: NARRATIVE_CONTRACT_VERSION, createdAt: new Date().toISOString() }
     };
-    const record = this.ledger.save(proposal);
-    if (decision === 'automatic') {
-      const applied = this.changes.apply(input.workspaceId, eventId, { expectedVersion: record.version, attemptedAt: new Date().toISOString(), attemptId: `apply_${fingerprint}` });
-      this.writeStory(input.workspaceId, applied, true, input.storyMinute);
-      this.syncCanonicalRelationships(input.workspaceId, applied);
-      this.syncAwarenessCards(input.workspaceId, applied);
-      this.recordFingerprint(input.workspaceId, fingerprint, input.originId, eventId);
-      return { record: applied, decision };
-    }
-    this.recordFingerprint(input.workspaceId, fingerprint, input.originId, eventId);
-    return { record, decision };
+    // The proposal and its application land together, so a failed story write leaves no orphan proposal.
+    return this.db.transaction((): CreateEventResult => {
+      const record = this.ledger.save(proposal);
+      if (decision === 'automatic') return { record: this.apply(record, null, true, input.storyMinute), decision };
+      return { record, decision };
+    })();
   }
 
   listEvents(workspaceId: string): NarrativeEventLedgerRecord[] {
@@ -244,11 +229,7 @@ export class NarrativeStateSystem {
     const record = this.ledger.get(workspaceId, eventId);
     if (!record || record.status !== 'proposed') return record;
     if (decision === 'rejected') return this.ledger.setStatus(workspaceId, eventId, 'rejected', new Date().toISOString());
-    const applied = this.changes.apply(workspaceId, eventId, { expectedVersion: record.version, attemptedAt: new Date().toISOString(), attemptId: randomUUID() });
-    this.writeStory(workspaceId, applied, false);
-    this.syncCanonicalRelationships(workspaceId, applied);
-    this.syncAwarenessCards(workspaceId, applied);
-    return applied;
+    return this.apply(record, null, false);
   }
 
   resolveEventOperations(
@@ -276,16 +257,7 @@ export class NarrativeStateSystem {
       for (const id of approved) saveDecision.run(workspaceId, eventId, id, 'approved', decidedAt);
       for (const id of rejected) saveDecision.run(workspaceId, eventId, id, 'rejected', decidedAt);
       if (!approved.length) return this.ledger.setStatus(workspaceId, eventId, 'rejected', decidedAt);
-      const applied = this.changes.apply(workspaceId, eventId, {
-        expectedVersion: record.version,
-        attemptedAt: decidedAt,
-        attemptId: `partial_${eventId}_${record.version}`,
-        operationIds: approved,
-      });
-      this.writeStory(workspaceId, applied, false);
-      this.syncCanonicalRelationships(workspaceId, applied);
-      this.syncAwarenessCards(workspaceId, applied);
-      return applied;
+      return this.apply(record, approved, false);
     })();
   }
 
@@ -323,18 +295,6 @@ export class NarrativeStateSystem {
   private nextSequence(workspaceId: string): number {
     const row = this.db.prepare('SELECT MAX(narrative_sequence) AS value FROM narrative_events WHERE workspace_id = ?').get(workspaceId) as { value: number | null };
     return (row.value ?? 0) + 1;
-  }
-
-  private hasFingerprint(workspaceId: string, fingerprint: string): boolean {
-    return Boolean(this.db.prepare('SELECT 1 FROM narrative_state_fingerprints WHERE workspace_id = ? AND fingerprint = ?').get(workspaceId, fingerprint));
-  }
-
-  private recordFingerprint(workspaceId: string, fingerprint: string, originId: string, eventId: string): void {
-    this.db.prepare(`
-      INSERT OR IGNORE INTO narrative_state_fingerprints
-        (workspace_id, fingerprint, origin_id, event_id, created_at)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(workspaceId, fingerprint, originId, eventId, Date.now());
   }
 
   /** Follows merges and drops entities that no longer exist, for both the event and its allowed ids. */
@@ -394,22 +354,13 @@ export class NarrativeStateSystem {
   private currentRelationshipBaseline(workspaceId: string, sourceId: string, targetId: string, dimension: string): RelationshipBaseline {
     const linked = this.linkedRelationshipValue(workspaceId, sourceId, targetId);
     if (dimension.toLowerCase() === 'overall' && linked.value !== null) return { exists: true, value: linked.value };
-    const row = this.db.prepare(`
-      SELECT records.payload_json FROM narrative_records records
-      JOIN narrative_events events
-        ON events.workspace_id = records.workspace_id AND events.event_id = records.source_event_id
-      LEFT JOIN narrative_event_evidence evidence
-        ON evidence.workspace_id = events.workspace_id AND evidence.event_id = events.event_id AND evidence.ordinal = 0
-      LEFT JOIN narrative_origin_lifecycle lifecycle
-        ON lifecycle.workspace_id = events.workspace_id AND lifecycle.origin_id = evidence.origin_id
-      WHERE records.workspace_id = ? AND records.record_type = 'relationship' AND records.subject_id = ?
-        AND json_extract(records.payload_json, '$.targetEntityId') = ?
-        AND lower(json_extract(records.payload_json, '$.dimension')) = lower(?)
-        AND COALESCE(lifecycle.status, 'active') = 'active'
-      ORDER BY records.applied_at DESC, records.rowid DESC LIMIT 1
-    `).get(workspaceId, sourceId, targetId, dimension) as { payload_json: string } | undefined;
-    if (row) {
-      const value = Number((JSON.parse(row.payload_json) as { value?: number }).value ?? 0);
+    const world = NarrativeWorld.of(this.db, workspaceId);
+    const current = world.exists()
+      ? new StoryReader(world).dispositions(sourceId, { target: targetId })
+        .find(record => record.kind === 'disposition' && record.dimension.toLowerCase() === dimension.toLowerCase())
+      : undefined;
+    if (current?.kind === 'disposition') {
+      const value = Number(current.value);
       return { exists: true, value: Number.isFinite(value) ? Math.max(-100, Math.min(100, value)) : 0 };
     }
     return linked.found ? { exists: true, value: linked.value ?? 0 } : { exists: false, value: 0 };
@@ -430,24 +381,29 @@ export class NarrativeStateSystem {
     }
   }
 
-  /** Whether this cause already moved this pair on this day of the story. */
+  /** Whether this cause already moved this pair on this day of the story, read from what the journal applied. */
   private relationshipCauseUsedOn(workspaceId: string, sourceId: string, targetId: string, cause: string, day: WorldDay): boolean {
     return Boolean(this.db.prepare(`
-      SELECT 1 FROM narrative_records records
-      JOIN narrative_events events
-        ON events.workspace_id = records.workspace_id AND events.event_id = records.source_event_id
+      SELECT 1 FROM narrative_events events, json_each(events.operations_json) operation
       LEFT JOIN narrative_event_evidence evidence
         ON evidence.workspace_id = events.workspace_id AND evidence.event_id = events.event_id AND evidence.ordinal = 0
       LEFT JOIN narrative_origin_lifecycle lifecycle
         ON lifecycle.workspace_id = events.workspace_id AND lifecycle.origin_id = evidence.origin_id
-      WHERE records.workspace_id = ? AND records.record_type = 'relationship' AND records.subject_id = ?
-        AND json_extract(records.payload_json, '$.targetEntityId') = ?
-        AND json_extract(records.payload_json, '$.cause') = ?
-        AND json_extract(records.payload_json, '$.occurredOn.eraId') = ?
-        AND json_extract(records.payload_json, '$.occurredOn.year') = ?
-        AND json_extract(records.payload_json, '$.occurredOn.month') = ?
-        AND json_extract(records.payload_json, '$.occurredOn.day') = ?
+      WHERE events.workspace_id = ? AND events.status = 'approved'
+        AND json_extract(operation.value, '$.type') = 'set-relationship'
+        AND json_extract(operation.value, '$.relationship.sourceEntityId') = ?
+        AND json_extract(operation.value, '$.relationship.targetEntityId') = ?
+        AND json_extract(operation.value, '$.relationship.cause') = ?
+        AND json_extract(operation.value, '$.relationship.occurredOn.eraId') = ?
+        AND json_extract(operation.value, '$.relationship.occurredOn.year') = ?
+        AND json_extract(operation.value, '$.relationship.occurredOn.month') = ?
+        AND json_extract(operation.value, '$.relationship.occurredOn.day') = ?
         AND COALESCE(lifecycle.status, 'active') = 'active'
+        AND NOT EXISTS (
+          SELECT 1 FROM narrative_operation_reviews reviews
+          WHERE reviews.workspace_id = events.workspace_id AND reviews.event_id = events.event_id
+            AND reviews.operation_id = json_extract(operation.value, '$.id') AND reviews.decision = 'rejected'
+        )
       LIMIT 1
     `).get(workspaceId, sourceId, targetId, cause, day.eraId, day.year, day.month, day.day));
   }
@@ -458,74 +414,35 @@ export class NarrativeStateSystem {
 
   /** Keyed on the statement, not the predicate or acquisition, which the interpreter rewrites between turns. */
   private isDuplicateOperation(workspaceId: string, operation: NarrativeOperation): boolean {
-    if (operation.type === 'assert-fact') return this.isDuplicateFact(workspaceId, operation.fact.proposition);
-    if (operation.type !== 'record-memory' && operation.type !== 'grant-knowledge' && operation.type !== 'set-belief') return false;
-    const recordType = operation.type === 'record-memory' ? 'memory' : operation.type === 'grant-knowledge' ? 'knowledge' : 'belief';
-    const subjectId = operation.type === 'record-memory'
-      ? operation.memory.subjectId
-      : operation.type === 'grant-knowledge'
-        ? operation.knowledge.subjectId
-        : operation.belief.subjectId;
-    const rows = this.db.prepare(`
-      SELECT records.payload_json
-      FROM narrative_records records
-      JOIN narrative_events events
-        ON events.workspace_id = records.workspace_id AND events.event_id = records.source_event_id
-      LEFT JOIN narrative_event_evidence evidence
-        ON evidence.workspace_id = events.workspace_id AND evidence.event_id = events.event_id AND evidence.ordinal = 0
-      LEFT JOIN narrative_origin_lifecycle lifecycle
-        ON lifecycle.workspace_id = events.workspace_id AND lifecycle.origin_id = evidence.origin_id
-      WHERE records.workspace_id = ? AND records.record_type = ? AND records.subject_id = ?
-        AND COALESCE(lifecycle.status, 'active') = 'active'
-    `).all(workspaceId, recordType, subjectId) as Array<{ payload_json: string }>;
+    const world = NarrativeWorld.of(this.db, workspaceId);
+    if (!world.exists()) return false;
+    const reader = new StoryReader(world);
+    if (operation.type === 'assert-fact') {
+      // Occurrences are left to the occurrence service, which owns their lifecycle.
+      if (normalizeText(operation.fact.proposition.predicate) === 'recorded-occurrence') return false;
+      const key = propositionKey(operation.fact.proposition);
+      return reader.facts({ subject: operation.fact.proposition.subjectId })
+        .some(record => record.kind === 'fact' && propositionIdentity(record.claim.subject, record.claim.predicate, objectOf(record.claim)) === key);
+    }
     if (operation.type === 'record-memory') {
       const summary = statementKey(operation.memory.summary);
-      return rows.some(row => {
-        const memory = JSON.parse(row.payload_json) as { summary?: string; status?: string };
-        return (memory.status ?? 'active') === 'active' && statementKey(memory.summary ?? '') === summary;
-      });
+      return reader.holdings(operation.memory.subjectId, { predicate: 'memory' })
+        .some(item => kindOf(item.record) === 'memory' && item.record.kind === 'holding' && statementKey(item.record.text ?? '') === summary);
     }
-    const proposition = operation.type === 'grant-knowledge' ? operation.knowledge.proposition : operation.belief.proposition;
-    const key = propositionKey(proposition);
-    return rows.some(row => {
-      const record = JSON.parse(row.payload_json) as { proposition?: Proposition; status?: string };
-      return record.status === 'active' && record.proposition !== undefined && propositionKey(record.proposition) === key;
-    });
+    if (operation.type !== 'grant-knowledge' && operation.type !== 'set-belief') return false;
+    const kind = operation.type === 'grant-knowledge' ? 'knowledge' : 'belief';
+    const payload = operation.type === 'grant-knowledge' ? operation.knowledge : operation.belief;
+    const key = propositionKey(payload.proposition);
+    // A structured value keeps its predicate in its identity, so only that predicate can match.
+    const narrowed = isProseStatement(payload.proposition.object) ? {} : { predicate: payload.proposition.predicate };
+    return reader.holdings(payload.subjectId, { about: payload.proposition.subjectId, ...narrowed })
+      .some(item => kindOf(item.record) === kind && item.record.kind === 'holding'
+        && propositionIdentity(item.record.claim.subject, item.record.claim.predicate, objectOf(item.record.claim)) === key);
   }
 
-  /**
-   * Facts are never superseded, so a repeated one would pile up. Occurrences are left to the
-   * occurrence service, which owns their lifecycle.
-   */
-  private isDuplicateFact(workspaceId: string, proposition: Proposition): boolean {
-    if (normalizeText(proposition.predicate) === 'recorded-occurrence') return false;
-    const rows = this.db.prepare(`
-      SELECT records.payload_json
-      FROM narrative_records records
-      JOIN narrative_events events
-        ON events.workspace_id = records.workspace_id AND events.event_id = records.source_event_id
-      LEFT JOIN narrative_event_evidence evidence
-        ON evidence.workspace_id = events.workspace_id AND evidence.event_id = events.event_id AND evidence.ordinal = 0
-      LEFT JOIN narrative_origin_lifecycle lifecycle
-        ON lifecycle.workspace_id = events.workspace_id AND lifecycle.origin_id = evidence.origin_id
-      WHERE records.workspace_id = ? AND records.record_type = 'fact'
-        AND json_valid(records.payload_json)
-        AND json_extract(records.payload_json, '$.proposition.subjectId') = ?
-        AND COALESCE(lifecycle.status, 'active') = 'active'
-    `).all(workspaceId, proposition.subjectId) as Array<{ payload_json: string }>;
-    const key = propositionKey(proposition);
-    return rows.some(row => {
-      const record = JSON.parse(row.payload_json) as { proposition?: Proposition; status?: string };
-      return (record.status ?? 'active') === 'active'
-        && record.proposition !== undefined
-        && propositionKey(record.proposition) === key;
-    });
-  }
-
-  private syncCanonicalRelationships(workspaceId: string, record: NarrativeEventLedgerRecord): void {
+  private syncCanonicalRelationships(workspaceId: string, record: NarrativeEventLedgerRecord, appliedOperationIds: Set<string>): void {
     const hasLinks = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'entity_links'").get();
     if (!hasLinks) return;
-    const appliedOperationIds = this.appliedOperationIds(workspaceId, record.proposal.changeSet.event.id);
     const relationshipValueOnly = record.proposal.provenance.interpreter === 'model'
       && record.proposal.evidence[0]?.originType !== 'worldbuild-update';
     for (const operation of record.proposal.changeSet.operations) {
@@ -552,9 +469,8 @@ export class NarrativeStateSystem {
     }
   }
 
-  private syncAwarenessCards(workspaceId: string, record: NarrativeEventLedgerRecord): void {
+  private syncAwarenessCards(workspaceId: string, record: NarrativeEventLedgerRecord, appliedOperationIds: Set<string>): void {
     const eventId = record.proposal.changeSet.event.id;
-    const appliedOperationIds = this.appliedOperationIds(workspaceId, eventId);
     this.db.transaction(() => {
       for (const operation of record.proposal.changeSet.operations) {
         if (!appliedOperationIds.has(operation.id)) continue;
@@ -608,25 +524,29 @@ export class NarrativeStateSystem {
     })();
   }
 
-  /** Writes what the journal just applied into the workspace's story file. */
-  private writeStory(workspaceId: string, record: NarrativeEventLedgerRecord, turn: boolean, storyMinute?: number | null): void {
-    writeLedgerRecord(this.db, record, {
-      operationIds: this.appliedOperationIds(workspaceId, record.proposal.changeSet.event.id),
+  /**
+   * Writes the approved operations into the story, then marks the journal event approved. A story
+   * write that fails leaves the event proposed, so nothing is half applied.
+   */
+  private apply(record: NarrativeEventLedgerRecord, operationIds: string[] | null, turn: boolean, storyMinute?: number | null): NarrativeEventLedgerRecord {
+    const workspaceId = record.proposal.projectId;
+    const eventId = record.proposal.changeSet.event.id;
+    return this.db.transaction(() => {
+    const result = writeLedgerRecord(this.db, record, {
+      ...(operationIds ? { operationIds } : {}),
       turn,
       ...(storyMinute !== undefined ? { storyMinute } : {})
     });
-  }
-
-  private appliedOperationIds(workspaceId: string, eventId: string): Set<string> {
-    const narrative = this.db.prepare(`
-      SELECT operation_id AS id FROM narrative_records
-      WHERE workspace_id = ? AND source_event_id = ?
-    `).all(workspaceId, eventId) as Array<{ id: string }>;
-    const awareness = this.db.prepare(`
-      SELECT operation_id AS id FROM narrative_awareness_records
-      WHERE workspace_id = ? AND source_event_id = ?
-    `).all(workspaceId, eventId) as Array<{ id: string }>;
-    return new Set([...narrative, ...awareness].map(row => row.id));
+    const approved = this.ledger.setStatus(workspaceId, eventId, 'approved', new Date().toISOString())!;
+    // Operations the story refused (an entity that cannot hold knowledge, one that is gone) sync nothing.
+    const refused = new Set(result.skipped.filter(skip => REFUSED_REASONS.has(skip.reason)).map(skip => skip.operationId));
+    const synced = new Set(record.proposal.changeSet.operations
+      .map(operation => operation.id)
+      .filter(id => (!operationIds || operationIds.includes(id)) && !refused.has(id)));
+    this.syncCanonicalRelationships(workspaceId, approved, synced);
+    this.syncAwarenessCards(workspaceId, approved, synced);
+    return approved;
+    })();
   }
 }
 

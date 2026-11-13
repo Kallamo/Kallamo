@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { NarrativeWorld } from '../../src/main/features/narrative/umwelt/narrative-world';
+import { loadStoryAwareness } from '../../src/main/features/narrative/umwelt/story-projection';
 import { runDatabaseMigrations } from '../../src/main/database/migrations.js';
 import { createWorldbuildKnowledgeService } from '../../src/main/features/worldbuild/knowledge-service.js';
 import { openTestDatabase } from '../sqlite-test-database';
@@ -10,6 +12,10 @@ import { openTestDatabase } from '../sqlite-test-database';
 describe('Worldbuild awareness Knowledge service', () => {
   let directory: string;
   let db: Database.Database;
+  const awareness = () => {
+    const world = NarrativeWorld.of(db, 'workspace-one');
+    return world.exists() ? loadStoryAwareness(world).map(item => [item.subjectId, item.targetId]) : [];
+  };
   let service: ReturnType<typeof createWorldbuildKnowledgeService>;
 
   beforeEach(() => {
@@ -73,8 +79,7 @@ describe('Worldbuild awareness Knowledge service', () => {
     const [card] = service.listCards('workspace-one', 'corwin');
     expect(card.knownFieldKeys).toEqual([]);
     expect(card.sources).toHaveLength(2);
-    expect(db.prepare('SELECT subject_id, target_id, status FROM narrative_awareness_records').all())
-      .toEqual([{ subject_id: 'corwin', target_id: 'ostmark', status: 'active' }]);
+    expect(awareness()).toEqual([['corwin', 'ostmark']]);
   });
 
   test('reading cards writes only the awareness a link is missing', () => {
@@ -186,10 +191,10 @@ describe('Worldbuild awareness Knowledge service', () => {
       'relationship-one', 'workspace-one', 'corwin', 'related_to', 'ostmark', '{}', Date.now(),
     );
     expect(service.listCards('workspace-one', 'corwin')).toHaveLength(1);
+    expect(awareness()).toEqual([['corwin', 'ostmark']]);
     service.removeCard({ workspaceId: 'workspace-one', ownerId: 'corwin', targetId: 'ostmark' });
     expect(service.listCards('workspace-one', 'corwin')).toEqual([]);
-    expect(db.prepare('SELECT status FROM narrative_awareness_records ORDER BY rowid').all())
-      .toEqual([{ status: 'active' }, { status: 'revoked' }]);
+    expect(awareness()).toEqual([]);
   });
 
   test('offers only the subject own side of a related_to pair', () => {
