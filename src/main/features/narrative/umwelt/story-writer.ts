@@ -48,10 +48,19 @@ export interface StoryCommitSink {
   tick?: number;
 }
 
+/** A secret told outside its circle, as the engine reported it. */
+export interface StoryBreach { tellerId: string; hearerId: string; recordId: string }
+
+/** Someone passed on a statement the story never recorded them holding. */
+export interface StoryUnsupportedTelling { tellerId: string; hearerId: string; recordId: string }
+
+export interface StoryChecks { breaches: StoryBreach[]; unsupported: StoryUnsupportedTelling[] }
+
 export interface StoryWriteResult {
   applied: string[];
   skipped: StorySkip[];
   outcome: CommitOutcome | null;
+  checks: StoryChecks;
 }
 
 const PROSE_PREDICATE_TEXT = 220;
@@ -102,6 +111,7 @@ export class StoryWriter {
   private known = new Map<string, StoryEntityType>();
   private readonly holdingsCache: Map<string, unknown>;
   private names = new Map<string, string>();
+  private tellings: Array<{ tellerId: string; hearerId: string; recordId: string; sourced: boolean; secret: boolean }> = [];
 
   constructor(private readonly world: NarrativeWorld, private readonly timelineId: string, private readonly sink?: StoryCommitSink) {
     this.reader = new StoryReader(world);
@@ -124,13 +134,14 @@ export class StoryWriter {
       })
     };
     const draft = new Draft();
+    this.tellings = [];
     const claimed = this.sink?.claimed ?? new Set<string>();
     for (const operation of input.operations) {
       const reason = this.add(draft, operation, input, eventProvenance, claimed);
       if (reason) skipped.push({ operationId: operation.id, reason });
       else applied.push(operation.id);
     }
-    if (!draft.records.length && !draft.transitions.length) return { applied: [], skipped, outcome: null };
+    if (!draft.records.length && !draft.transitions.length) return { applied: [], skipped, outcome: null, checks: { breaches: [], unsupported: [] } };
     const tick = this.nextTick();
     const commit = {
       projectId: STORY_PROJECT,
@@ -150,13 +161,19 @@ export class StoryWriter {
       records: draft.records,
       transitions: draft.transitions
     };
+    const unsupported = this.tellings.filter(telling => !telling.sourced).map(({ tellerId, hearerId, recordId }) => ({ tellerId, hearerId, recordId }));
     if (this.sink) {
       this.sink.push(commit);
-      return { applied, skipped, outcome: null };
+      return { applied, skipped, outcome: null, checks: { breaches: [], unsupported } };
     }
     const outcome = this.world.call<CommitOutcome>('commit', commit);
     StoryReader.invalidate(this.world);
-    return { applied, skipped, outcome };
+    // The engine decides what counts as a breach; it names none individually, so the secret tellings are listed.
+    const breached = (outcome.warnings ?? []).some(warning => warning.code === 'SECRET_BREACH');
+    const breaches = breached
+      ? this.tellings.filter(telling => telling.secret).map(({ tellerId, hearerId, recordId }) => ({ tellerId, hearerId, recordId }))
+      : [];
+    return { applied, skipped, outcome, checks: { breaches, unsupported } };
   }
 
   private add(draft: Draft, operation: NarrativeOperation, input: StoryWrite, event: Provenance, claimed: Set<string>): string | null {
@@ -298,7 +315,9 @@ export class StoryWriter {
           kind: 'holding', id, holder,
           attitude: kind === 'knowledge' ? 'knows' : 'believes',
           claim,
-          acquisition: this.acquisitionOf(kind === 'knowledge' ? payload.acquisition : 'authored', informants, input, identity, proposition.subjectId, draft),
+          acquisition: this.acquisitionOf(kind === 'knowledge' ? payload.acquisition : 'authored', informants, input, identity, proposition.subjectId, draft, { hearerId: holder, recordId: id }),
+          // A secret is kept by its holder; telling it to anyone is reported, never blocked.
+          ...(payload.category === 'secret' ? { secrecy: { sharedWith: [] } } : {}),
           confidence: clamp(payload.confidence), accessibility: accessibility(payload.accessibility),
           text: this.statementText(proposition),
           provenance: provenance({
@@ -370,7 +389,7 @@ export class StoryWriter {
    * How a holder came to know something. Hearsay keeps its teller and, when the teller holds the
    * same statement, the record they told it from, so the chain can be traced back.
    */
-  private acquisitionOf(method: unknown, informants: string[], input: StoryWrite, identity: string, aboutId: string, draft: Draft): Acquisition {
+  private acquisitionOf(method: unknown, informants: string[], input: StoryWrite, identity: string, aboutId: string, draft: Draft, hearing: { hearerId: string; recordId: string }): Acquisition {
     if (method === 'witness' || method === 'participant') return { kind: 'witnessed', eventId: input.eventId };
     if (method === 'inferred') return { kind: 'inferred', fromRecordIds: [], rule: 'narrative-analysis' };
     if (method === 'reported') {
@@ -383,6 +402,8 @@ export class StoryWriter {
       const stored = this.activeOf(teller, 'knowledge', { about: aboutId }).concat(this.activeOf(teller, 'belief', { about: aboutId }))
         .find(item => item.record.kind === 'holding' && said(teller, item.record.claim));
       const sourceRecordId = (pending?.id ?? undefined) || stored?.record.id;
+      const secret = Boolean((pending?.kind === 'holding' && pending.secrecy) || (stored?.record.kind === 'holding' && stored.record.secrecy));
+      this.tellings.push({ tellerId: teller, ...hearing, sourced: Boolean(sourceRecordId), secret });
       return { kind: 'told-by', sourceHolderId: teller, intent: 'unknown', ...(sourceRecordId ? { sourceRecordId } : {}) };
     }
     return { kind: 'authored' };

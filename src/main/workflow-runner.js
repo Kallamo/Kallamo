@@ -257,12 +257,19 @@ function serializeContextBundle(planned) {
         assessments: planned.manifest.assessments,
         deepenedPairs: planned.manifest.deepenedPairs
     } : null;
+    // Records the story refused for a character's context, beside what the planner left out.
+    const refused = (planned.manifest?.refusals || []).map(refusal => ({
+        scopeId: `subject:${refusal.subjectId}`,
+        candidateId: refusal.candidateId,
+        outcome: 'exclude',
+        reason: `story-${refusal.reason}`
+    }));
     return {
         usedTokens: planned.bundle.usedTokens,
         tokenBudget: planned.bundle.tokenBudget,
         composition: planned.bundle.composition || null,
         scopes,
-        excluded,
+        excluded: [...excluded, ...refused],
         manifest
     };
 }
@@ -3161,6 +3168,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     let overflowEventCount = 0;
     const narrativeRejections = [];
     const relationshipNotes = [];
+    const storyChecks = { breaches: [], unsupported: [] };
     let rejectedSceneChange = null;
     db.transaction(() => {
     for (const identityUpdate of routedResult.identityUpdates) {
@@ -3424,6 +3432,8 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
                 }
                 for (const rejection of result.rejections || []) narrativeRejections.push(rejection);
                 for (const note of result.relationshipNotes || []) relationshipNotes.push(note);
+                storyChecks.breaches.push(...(result.storyChecks?.breaches || []));
+                storyChecks.unsupported.push(...(result.storyChecks?.unsupported || []));
             } catch (error) {
                 narrativeSkips.push({
                     description: event.description,
@@ -3513,6 +3523,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             },
             skippedNarrativeEvents: narrativeSkips,
             ...(relationshipNotes.length ? { relationshipChanges: relationshipNotes } : {}),
+            ...(storyChecks.breaches.length || storyChecks.unsupported.length ? { storyChecks } : {}),
             rejectedSceneChange,
             invalidInventoryChanges,
             proposals: changes.map(change => ({

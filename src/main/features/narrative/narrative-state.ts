@@ -8,6 +8,7 @@ import { NarrativeEventLedgerRepository, type NarrativeEventLedgerRecord } from 
 import { createWorldbuildKnowledgeService, type WorldbuildKnowledgeService } from '../worldbuild/knowledge-service';
 import { NarrativeWorld } from './umwelt/narrative-world';
 import { writeLedgerRecord } from './umwelt/story-journal';
+import type { StoryChecks } from './umwelt/story-writer';
 import { kindOf, objectOf, StoryReader } from './umwelt/story-reader';
 import {
   reviewExtractedOperations,
@@ -45,6 +46,8 @@ export interface CreateEventResult {
   rejections?: QualityReview['rejections'];
   /** What each relationship change asked for and where the limits left it. */
   relationshipNotes?: RelationshipNote[];
+  /** Secrets this event spread and tellings the story had no record behind. */
+  storyChecks?: StoryChecks;
 }
 
 export interface RelationshipNote {
@@ -207,8 +210,9 @@ export class NarrativeStateSystem {
     // The proposal and its application land together, so a failed story write leaves no orphan proposal.
     return this.db.transaction((): CreateEventResult => {
       const record = this.ledger.save(proposal);
-      if (decision === 'automatic') return { record: this.apply(record, null, true, input.storyMinute), decision };
-      return { record, decision };
+      if (decision !== 'automatic') return { record, decision };
+      const applied = this.apply(record, null, true, input.storyMinute);
+      return { record: applied.record, decision, ...(hasChecks(applied.checks) ? { storyChecks: applied.checks } : {}) };
     })();
   }
 
@@ -229,7 +233,7 @@ export class NarrativeStateSystem {
     const record = this.ledger.get(workspaceId, eventId);
     if (!record || record.status !== 'proposed') return record;
     if (decision === 'rejected') return this.ledger.setStatus(workspaceId, eventId, 'rejected', new Date().toISOString());
-    return this.apply(record, null, false);
+    return this.apply(record, null, false).record;
   }
 
   resolveEventOperations(
@@ -257,7 +261,7 @@ export class NarrativeStateSystem {
       for (const id of approved) saveDecision.run(workspaceId, eventId, id, 'approved', decidedAt);
       for (const id of rejected) saveDecision.run(workspaceId, eventId, id, 'rejected', decidedAt);
       if (!approved.length) return this.ledger.setStatus(workspaceId, eventId, 'rejected', decidedAt);
-      return this.apply(record, approved, false);
+      return this.apply(record, approved, false).record;
     })();
   }
 
@@ -528,7 +532,7 @@ export class NarrativeStateSystem {
    * Writes the approved operations into the story, then marks the journal event approved. A story
    * write that fails leaves the event proposed, so nothing is half applied.
    */
-  private apply(record: NarrativeEventLedgerRecord, operationIds: string[] | null, turn: boolean, storyMinute?: number | null): NarrativeEventLedgerRecord {
+  private apply(record: NarrativeEventLedgerRecord, operationIds: string[] | null, turn: boolean, storyMinute?: number | null): { record: NarrativeEventLedgerRecord; checks: StoryChecks } {
     const workspaceId = record.proposal.projectId;
     const eventId = record.proposal.changeSet.event.id;
     return this.db.transaction(() => {
@@ -545,7 +549,7 @@ export class NarrativeStateSystem {
       .filter(id => (!operationIds || operationIds.includes(id)) && !refused.has(id)));
     this.syncCanonicalRelationships(workspaceId, approved, synced);
     this.syncAwarenessCards(workspaceId, approved, synced);
-    return approved;
+    return { record: approved, checks: result.checks };
     })();
   }
 }
@@ -796,6 +800,10 @@ function requiresReview(event: ExtractedNarrativeEvent): boolean {
     if (operation.type === 'knowledge' && REVIEWED_KNOWLEDGE_CATEGORIES.has(String(operation.category))) return true;
     return operation.confidence < AUTO_CONFIDENCE;
   });
+}
+
+function hasChecks(checks: StoryChecks): boolean {
+  return checks.breaches.length + checks.unsupported.length > 0;
 }
 
 function fingerprintEvent(workspaceId: string, originId: string, event: ExtractedNarrativeEvent): string {

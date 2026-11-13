@@ -558,6 +558,28 @@ function RelationshipChanges({ changes, names }) {
   );
 }
 
+// What the story file noticed while recording the turn: a secret passed on, or a teller the story
+// has no record of knowing what they told. Both are findings to look at, never refusals.
+function StoryChecks({ checks, names }) {
+  const breaches = checks?.breaches || [];
+  const unsupported = checks?.unsupported || [];
+  if (!breaches.length && !unsupported.length) return null;
+  const name = id => names?.get(id) || 'Someone';
+  return (
+    <div>
+      <SectionTitle>Story checks · {breaches.length + unsupported.length}</SectionTitle>
+      <ul className="space-y-1">
+        {breaches.map((item, index) => (
+          <li key={`breach-${index}`} className="flex gap-2 text-xs text-status-warning"><span aria-hidden="true">•</span><span>{name(item.tellerId)} told {name(item.hearerId)} something {name(item.tellerId)} keeps secret.</span></li>
+        ))}
+        {unsupported.map((item, index) => (
+          <li key={`unsupported-${index}`} className="flex gap-2 text-xs text-text-secondary"><span aria-hidden="true">•</span><span>{name(item.tellerId)} told {name(item.hearerId)} something the story has no record of {name(item.tellerId)} knowing.</span></li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function NarrativeView({ debug, names, copy }) {
   const state = debug.narrativeState;
   if (!state || typeof state !== 'object') return <Disclosure title="Report">{copy}</Disclosure>;
@@ -697,6 +719,8 @@ function NarrativeView({ debug, names, copy }) {
           <RelationshipChanges changes={state.relationshipChanges} names={names} />
         </div>
       )}
+
+      <StoryChecks checks={state.storyChecks} names={names} />
 
       {usageRows.length > 0 && (
         <div>
