@@ -1,5 +1,6 @@
+import { existsSync } from 'node:fs';
 import type Database from 'better-sqlite3';
-import { getUmweltBridge, UmweltRequestError } from './bridge';
+import { getUmweltBridge } from './bridge';
 import { removeWorldFile, worldFile } from './world-files';
 
 /** Every workspace file holds one project; the file itself is the workspace. */
@@ -32,6 +33,7 @@ const worlds: WeakMap<Database.Database, Map<string, NarrativeWorld>> = ((global
 export class NarrativeWorld {
   readonly file: string;
   private ready = false;
+  private declaredAll = false;
   private readonly known = new Map<string, StoryEntityType>();
 
   private constructor(readonly db: Database.Database, readonly workspaceId: string) {
@@ -58,6 +60,11 @@ export class NarrativeWorld {
     return removeWorldFile(db, workspaceId);
   }
 
+  /** Whether the workspace has a story file yet; reads that would only find nothing can skip it. */
+  exists(): boolean {
+    return existsSync(this.file);
+  }
+
   /** One engine operation on this world's project. */
   call<T>(op: string, payload: Record<string, unknown> = {}): T {
     this.prepare();
@@ -72,18 +79,32 @@ export class NarrativeWorld {
 
   /**
    * Registers the Worldbuild entities a write names and returns the ids the engine knows. An id
-   * with no entity in the workspace is left out: the caller drops what refers to it.
+   * with no entity in the workspace is left out: the caller drops what refers to it. `candidates`
+   * are strings that may or may not be entity ids, such as a statement's object.
    */
-  ensureEntities(ids: Iterable<string>): Map<string, StoryEntityType> {
+  ensureEntities(ids: Iterable<string>, candidates: Iterable<string> = []): Map<string, StoryEntityType> {
     this.prepare();
-    const wanted = [...new Set([...ids].filter(id => typeof id === 'string' && id))];
+    const structural = [...new Set([...ids].filter(id => typeof id === 'string' && id))];
+    const wanted = [...new Set([...structural, ...[...candidates].filter(id => typeof id === 'string' && id)])];
     const missing = wanted.filter(id => !this.known.has(id));
-    if (missing.length) {
-      const rows = this.db.prepare(`
-        SELECT id, type, canonicalName FROM entities
-        WHERE workspaceId = ? AND id IN (${missing.map(() => '?').join(', ')})
-      `).all(this.workspaceId, ...missing) as EntityRow[];
+    if (missing.length && !this.hasRegistry()) {
+      // Without the Worldbuild registry there is nothing to resolve against, and the caller's ids stand.
+      const rows = structural.filter(id => !this.known.has(id))
+        .map(id => ({ id, type: id === this.workspaceId ? 'World' : 'Characters', canonicalName: id }));
       if (rows.length) this.declare(rows);
+    } else if (missing.length) {
+      // The first write declares the whole world in one call; later ones only what is new.
+      const rows = (this.declaredAll
+        ? this.db.prepare(`
+          SELECT id, type, canonicalName FROM entities
+          WHERE workspaceId = ? AND id IN (${missing.map(() => '?').join(', ')})
+        `).all(this.workspaceId, ...missing)
+        : this.db.prepare('SELECT id, type, canonicalName FROM entities WHERE workspaceId = ?').all(this.workspaceId)) as EntityRow[];
+      this.declaredAll = true;
+      // World Facts are about the workspace itself, which the story knows as one more entity.
+      if (missing.includes(this.workspaceId)) rows.push({ id: this.workspaceId, type: 'World', canonicalName: 'World' });
+      const undeclared = rows.filter(row => !this.known.has(row.id));
+      if (undeclared.length) this.declare(undeclared);
     }
     return new Map(wanted.filter(id => this.known.has(id)).map(id => [id, this.known.get(id)!]));
   }
@@ -97,9 +118,10 @@ export class NarrativeWorld {
     const entities = rows.map(row => ({ id: row.id, typeId: storyEntityType(row.type), name: row.canonicalName || row.id }));
     try {
       this.ensureWorld(entities);
-    } catch (error) {
+    } catch (cause) {
       // An entity whose Worldbuild type moved to another kind keeps its first one in the story.
-      if (!(error instanceof UmweltRequestError) || error.code !== 'CONFLICT') throw error;
+      const error = cause as { code?: unknown; details?: unknown };
+      if (error?.code !== 'CONFLICT') throw cause;
       const divergent = new Set(((error.details as { divergences?: Array<{ kind: string; id: string }> } | undefined)?.divergences ?? [])
         .filter(item => item.kind === 'entity').map(item => item.id));
       const rest = entities.filter(entity => !divergent.has(entity.id));
@@ -121,6 +143,21 @@ export class NarrativeWorld {
       entities,
       axes: [{ id: STORY_AXIS, label: 'Story time (minutes)' }]
     });
+  }
+
+  /** Display names of Worldbuild entities, for text the story keeps searchable. */
+  names(entityIds: string[]): Map<string, string> {
+    const names = new Map<string, string>();
+    if (!entityIds.length || !this.hasRegistry()) return names;
+    const rows = this.db.prepare(`
+      SELECT id, canonicalName FROM entities WHERE workspaceId = ? AND id IN (${entityIds.map(() => '?').join(', ')})
+    `).all(this.workspaceId, ...entityIds) as Array<{ id: string; canonicalName: string }>;
+    for (const row of rows) names.set(row.id, row.canonicalName);
+    return names;
+  }
+
+  hasRegistry(): boolean {
+    return Boolean(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'entities'").get());
   }
 
   private prepare(): void {
