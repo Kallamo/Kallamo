@@ -1,5 +1,7 @@
 import type Database from 'better-sqlite3';
 import { NarrativeWorld } from './narrative-world';
+import type { Record as StoryRecord } from '@kallamo/umwelt' with { 'resolution-mode': 'import' };
+import { batchOf } from './story-journal';
 import { StoryReader } from './story-reader';
 
 const pair = (holderId: string, targetId: string) => `${holderId}\u0000${targetId}`;
@@ -33,5 +35,15 @@ export function awarePairs(db: Database.Database, workspaceId: string): Set<stri
 export function isAware(db: Database.Database, workspaceId: string, holderId: string, targetId: string): boolean {
   const world = NarrativeWorld.of(db, workspaceId);
   if (!world.exists() || !world.ensureEntities([holderId]).has(holderId)) return false;
-  return new StoryReader(world).awareness(holderId).some(record => record.kind === 'awareness' && record.target === targetId);
+  const batch = batchOf(world);
+  if (!batch) return new StoryReader(world).awareness(holderId).some(record => record.kind === 'awareness' && record.target === targetId);
+  // Inside a bulk write the story is read once per holder, plus what the batch has granted so far.
+  if (batch.claimed.has(`aware\u0000${holderId}\u0000${targetId}`)) return true;
+  const key = `awareness\u0000${holderId}`;
+  let records = batch.reads.get(key) as StoryRecord[] | undefined;
+  if (!records) {
+    records = new StoryReader(world).awareness(holderId, { timelineId: batch.timelineId });
+    batch.reads.set(key, records);
+  }
+  return records.some(record => record.kind === 'awareness' && record.target === targetId);
 }

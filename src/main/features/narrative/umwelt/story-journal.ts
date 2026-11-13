@@ -11,7 +11,8 @@ import { StoryWriter, type StoryCommitSink, type StoryProvenanceInput, type Stor
 interface StoryBatch extends StoryCommitSink { timelineId: string; commits: Array<Record<string, unknown>> }
 const BATCH = Symbol.for('kallamo.umwelt.batch');
 
-function batchOf(world: NarrativeWorld): StoryBatch | undefined {
+/** The bulk write under way in this world, if any; its reads stand for the story until it is sent. */
+export function batchOf(world: NarrativeWorld): StoryBatch | undefined {
   return (world as unknown as Record<symbol, StoryBatch | undefined>)[BATCH];
 }
 
