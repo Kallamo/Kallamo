@@ -7,7 +7,7 @@ import { RoleplaySystem, type RoleplayInventoryPatch } from '../narrative/rolepl
 import { storyMinute } from '../../../shared/calendar-ordinal';
 import { writeStoryEvent } from '../narrative/umwelt/story-journal';
 import { indexOriginRecords, retireOrigins } from '../narrative/umwelt/story-lifecycle';
-import { journalEventId, loadCurrentNarrativeRecords } from '../narrative/narrative-record-projection';
+import { journalEventId, loadCurrentNarrativeRecords, type ProjectedNarrativeRecord } from '../narrative/narrative-record-projection';
 
 interface EventOccurrenceCalendarService {
   getCalendar(db: Database.Database, workspaceId: string): Record<string, any>;
@@ -767,11 +767,12 @@ export function canSubjectAccessOccurrence(
   db: Database.Database,
   workspaceId: string,
   narrativeEventId: string,
-  subjectId: string
+  subjectId: string,
+  records?: ProjectedNarrativeRecord[]
 ): boolean {
   // An edited occurrence writes its memories again under a revision of the same event.
-  const rows = loadCurrentNarrativeRecords(db, { workspaceId, recordTypes: ['memory'] })
-    .filter(({ row }) => journalEventId(row.source_event_id) === narrativeEventId)
+  const rows = (records ?? loadCurrentNarrativeRecords(db, { workspaceId, recordTypes: ['memory'] }))
+    .filter(({ row }) => row.record_type === 'memory' && journalEventId(row.source_event_id) === narrativeEventId)
     .map(({ row, payload }) => ({ subject_id: row.subject_id, memory: payload }));
   return rows.some(({ subject_id, memory }) => {
     const row = { subject_id };

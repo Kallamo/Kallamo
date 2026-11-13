@@ -40,7 +40,8 @@ import { searchHolderRecords } from './umwelt/story-search';
 import {
   currentNarrativeSequence,
   loadCurrentNarrativeRecords,
-  type NarrativeRecordRow
+  type NarrativeRecordRow,
+  type ProjectedNarrativeRecord
 } from './narrative-record-projection';
 
 const { discoverEntityIds } = require('./worldbuild-entity-discovery');
@@ -124,6 +125,8 @@ export class NarrativeChatContext {
   private readonly epistemicResolver: EpistemicResolver;
   private readonly manifests: NarrativeContextManifestRepository;
   private queryVector: number[] | null = null;
+  // Every perspective of one plan reads the same story, so it is projected once per plan.
+  private planRecords: ProjectedNarrativeRecord[] | null = null;
   private readonly roleplayOrchestrator: RoleplayContextOrchestrator;
   private readonly characterMemory: CharacterSceneMemory;
 
@@ -141,6 +144,23 @@ export class NarrativeChatContext {
   }
 
   plan(input: PlanChatContextInput): PlannedChatContext {
+    this.planRecords = null;
+    try {
+      return this.planOnce(input);
+    } finally {
+      this.planRecords = null;
+    }
+  }
+
+  private currentRecords(workspaceId: string): ProjectedNarrativeRecord[] {
+    this.planRecords ??= loadCurrentNarrativeRecords(this.db, {
+      workspaceId,
+      recordTypes: ['fact', 'state', 'knowledge', 'belief', 'memory', 'relationship']
+    });
+    return this.planRecords;
+  }
+
+  private planOnce(input: PlanChatContextInput): PlannedChatContext {
     this.queryVector = input.queryVector ?? null;
     this.knowledgeCards.reconcileWorkspace(input.workspaceId);
     const strategy = this.resolveStrategy(input.workspaceId);
@@ -904,10 +924,7 @@ export class NarrativeChatContext {
     const near = perspective.access === 'subjective' && perspective.focalSubjectId && this.queryVector
       ? searchHolderRecords(this.db, workspaceId, perspective.focalSubjectId, this.queryVector)
       : new Map<string, number>();
-    const rows = loadCurrentNarrativeRecords(this.db, {
-      workspaceId,
-      recordTypes: ['fact', 'state', 'knowledge', 'belief', 'memory', 'relationship']
-    });
+    const rows = this.currentRecords(workspaceId);
     // Tellers and entity-reference objects are named in one read, so no uuid reaches the model.
     const calendar = this.getCalendarNames(workspaceId);
     const informantNames = this.getEntityNames(workspaceId, [...new Set(rows.flatMap(({ row, payload }) => [
@@ -936,7 +953,7 @@ export class NarrativeChatContext {
         && (payload.proposition as Record<string, unknown> | undefined)?.predicate === 'recorded-occurrence'
         && perspective.access === 'subjective'
         && perspective.focalSubjectId
-        && !canSubjectAccessOccurrence(this.db, workspaceId, row.source_event_id, perspective.focalSubjectId)
+        && !canSubjectAccessOccurrence(this.db, workspaceId, row.source_event_id, perspective.focalSubjectId, rows)
       ) return [];
       const normalized = normalizeRecord(row, payload, informantNames, calendar);
       if (!normalized) return [];
@@ -1004,7 +1021,7 @@ export class NarrativeChatContext {
       ? [perspective.focalSubjectId!]
       : perspective.access === 'explicit' ? perspective.allowedSubjectIds ?? [] : []);
     // A relationship the narrative ledger holds is rendered from the ledger; the edge would repeat it.
-    const ledgerPairs = new Set(loadCurrentNarrativeRecords(this.db, { workspaceId, recordTypes: ['relationship'] })
+    const ledgerPairs = new Set(this.currentRecords(workspaceId).filter(({ row }) => row.record_type === 'relationship')
       .map(({ row, payload }) => `${row.subject_id}\u0000${String(payload.targetEntityId ?? '')}`));
     return rows
       .filter(row => row.relType !== 'related_to' || !ledgerPairs.has(`${row.fromId}\u0000${row.toId}`))
