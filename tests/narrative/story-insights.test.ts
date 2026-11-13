@@ -5,7 +5,7 @@ import { loadCurrentNarrativeRecords } from '../../src/main/features/narrative/n
 import { writeStoryEvent } from '../../src/main/features/narrative/umwelt/story-journal';
 import { admitForCharacter } from '../../src/main/features/narrative/umwelt/story-admission';
 import { traceStoryRecord } from '../../src/main/features/narrative/umwelt/story-insights';
-import { LOCAL_EMBEDDING_SPACE, pendingStoryTexts, searchStory, searchTerms, storeStoryVectors } from '../../src/main/features/narrative/umwelt/story-search';
+import { LOCAL_EMBEDDING_SPACE, pendingStoryPage, pendingStoryTexts, searchStory, searchTerms, storeStoryVectors } from '../../src/main/features/narrative/umwelt/story-search';
 import { createNarrativeChatContext } from '../../src/main/features/narrative/chat-context';
 import { openFullSchemaDatabase, type FullSchemaDatabase } from '../database/full-schema-harness';
 
@@ -132,6 +132,36 @@ describe('searching what a character holds by meaning', () => {
 
     const hits = searchStory(db, WS, { holderId: 'elias', text: 'When does the ferry cross the river?', vector: basis(1) });
     expect(hits.map(hit => [hit.docId, hit.match])).toEqual([['k1', 'both'], ['k2', 'text']]);
+  });
+
+  test('events wait for vectors too, and a resume cursor lists only what was written since', () => {
+    const basis = (index: number) => Array.from({ length: LOCAL_EMBEDDING_SPACE.dimensions }, (_, slot) => (slot === index ? 1 : 0.01));
+    authored('lore', [knowledge('k1', 'elias', 'The ferry crosses at dawn.')]);
+    const first = pendingStoryPage(db, WS, { limit: 50 });
+    expect(new Set(first.items.map(item => item.docType))).toEqual(new Set(['record', 'event']));
+    storeStoryVectors(db, WS, first.items.map(item => ({ ...item, vector: basis(1) })));
+    const settled = pendingStoryPage(db, WS, { limit: 50 });
+    expect(settled.items).toEqual([]);
+
+    authored('more', [knowledge('k2', 'elias', 'Lanterns are banned after curfew.')]);
+    const since = pendingStoryPage(db, WS, { limit: 50, cursor: settled.resumeCursor });
+    expect(since.items.map(item => item.docId)).toContain('k2');
+    expect(since.items.map(item => item.docId)).not.toContain('k1');
+  });
+
+  test('paging through pending texts while storing their vectors reaches every one', () => {
+    const basis = (index: number) => Array.from({ length: LOCAL_EMBEDDING_SPACE.dimensions }, (_, slot) => (slot === index ? 1 : 0.01));
+    authored('lore', [knowledge('k1', 'elias', 'One.'), knowledge('k2', 'elias', 'Two.'), knowledge('k3', 'tess', 'Three.')]);
+    let cursor: string | null = null;
+    let pages = 0;
+    do {
+      const page = pendingStoryPage(db, WS, { limit: 1, cursor });
+      storeStoryVectors(db, WS, page.items.map(item => ({ ...item, vector: basis(1) })));
+      cursor = page.nextCursor;
+      pages += 1;
+    } while (cursor && pages < 20);
+    expect(pages).toBeLessThan(20);
+    expect(pendingStoryPage(db, WS, { limit: 50 }).items).toEqual([]);
   });
 
   test('search words are the long ones, longest first', () => {

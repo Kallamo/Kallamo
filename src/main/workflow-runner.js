@@ -1595,6 +1595,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                             modelCalls
                         });
                     roleplayChanges = narrativeResult.changes;
+                    fillStoryVectors(chatId);
                     if (narrativeResult.diagnostics) {
                         debugObj = mergeNarrativeStateDiagnostics(debugObj, narrativeResult.diagnostics, modelCalls);
                     }
@@ -2549,7 +2550,7 @@ async function planNarrativeContext({ chatId, query, items, tokenBudget }) {
 async function storyQueryVector(workspaceId, query) {
     if ((readAdvancedSettings().embeddingEngine || 'local') !== 'local' || !String(query || '').trim()) return null;
     try {
-        await refreshStoryVectors(workspaceId);
+        fillStoryVectors(workspaceId);
         return await generateEmbeddingVector(query, true);
     } catch (error) {
         console.warn('[Narrative State] Could not search the story by meaning:', error.message);
@@ -2557,17 +2558,39 @@ async function storyQueryVector(workspaceId, query) {
     }
 }
 
-// A few pages per request, so a long backlog is worked off over several turns instead of stalling one.
-async function refreshStoryVectors(workspaceId) {
-    const search = require('../../dist-main/main/features/narrative/umwelt/story-search');
-    let stored = 0;
-    for (let page = 0; page < 4; page += 1) {
-        const pending = search.pendingStoryTexts(db, workspaceId, 32);
-        if (!pending.length) break;
-        const vectors = await generateEmbeddingVectors(pending.map(item => item.text));
-        stored += search.storeStoryVectors(db, workspaceId, pending.map((item, index) => ({ ...item, vector: vectors[index] })));
-    }
-    return stored;
+// One background run per workspace, a small page at a time, so a long backlog never holds up a turn.
+// The engine's resume cursor keeps later runs to what was written since.
+const storyVectorRuns = new Map();
+const storyVectorCursors = new Map();
+const STORY_VECTOR_PAGE = 16;
+
+function fillStoryVectors(workspaceId) {
+    if (!workspaceId || (readAdvancedSettings().embeddingEngine || 'local') !== 'local') return null;
+    if (storyVectorRuns.has(workspaceId)) return storyVectorRuns.get(workspaceId);
+    const run = (async () => {
+        const search = require('../../dist-main/main/features/narrative/umwelt/story-search');
+        let stored = 0;
+        let cursor = storyVectorCursors.get(workspaceId) || null;
+        for (;;) {
+            const page = search.pendingStoryPage(db, workspaceId, { limit: STORY_VECTOR_PAGE, cursor });
+            if (page.items.length) {
+                const vectors = await generateEmbeddingVectors(page.items.map(item => item.text));
+                stored += search.storeStoryVectors(db, workspaceId, page.items.map((item, index) => ({ ...item, vector: vectors[index] })));
+            }
+            if (!page.nextCursor) {
+                if (page.resumeCursor) storyVectorCursors.set(workspaceId, page.resumeCursor);
+                break;
+            }
+            cursor = page.nextCursor;
+            await new Promise(resolve => setImmediate(resolve));
+        }
+        return stored;
+    })().catch(error => {
+        console.warn('[Narrative State] Could not prepare the story for search by meaning:', error.message);
+        return 0;
+    }).finally(() => storyVectorRuns.delete(workspaceId));
+    storyVectorRuns.set(workspaceId, run);
+    return run;
 }
 
 function shouldPlanWorkspaceContext(chatId, includeChatContext) {
@@ -3641,6 +3664,7 @@ async function reprocessNarrativeStateTurn(workspaceId, originId) {
         narrativeResponse: narrative.content,
         modelCalls
     });
+    fillStoryVectors(workspaceId);
     if (result.diagnostics) {
         const current = db.prepare('SELECT debugNotice FROM messages WHERE id = ? AND chatId = ?')
             .get(originId, workspaceId);

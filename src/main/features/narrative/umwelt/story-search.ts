@@ -44,18 +44,32 @@ function prepare(world: NarrativeWorld): void {
   world.call('embedding.defineSpace', { space: LOCAL_EMBEDDING_SPACE });
 }
 
-/** Story texts that have no vector yet in the local space, a page at a time. */
-export function pendingStoryTexts(db: Database.Database, workspaceId: string, limit = 32): PendingStoryText[] {
+export interface PendingStoryPage { items: PendingStoryText[]; nextCursor: string | null; resumeCursor: string | null }
+
+/**
+ * Story texts (records and events) that have no vector yet in the local space, a page at a time.
+ * A `resumeCursor` from an earlier listing skips everything already checked.
+ */
+export function pendingStoryPage(db: Database.Database, workspaceId: string, options: { limit?: number; cursor?: string | null; docTypes?: Array<'record' | 'event'> } = {}): PendingStoryPage {
   const world = NarrativeWorld.of(db, workspaceId);
-  if (!world.exists()) return [];
+  if (!world.exists()) return { items: [], nextCursor: null, resumeCursor: null };
   prepare(world);
   const page = world.call<PendingEmbeddingsResult>('embedding.pending', {
     spaceId: LOCAL_EMBEDDING_SPACE.id,
     timelineId: new StoryReader(world).timelineId(),
-    docTypes: ['record'],
-    page: { limit }
+    docTypes: options.docTypes ?? ['record', 'event'],
+    page: { limit: options.limit ?? 16, ...(options.cursor ? { cursor: options.cursor } : {}) }
   });
-  return page.items.map(item => ({ docType: item.docType, docId: item.docId, textHash: item.textHash, text: item.text }));
+  return {
+    items: page.items.map(item => ({ docType: item.docType, docId: item.docId, textHash: item.textHash, text: item.text })),
+    nextCursor: page.nextCursor ?? null,
+    resumeCursor: page.resumeCursor ?? null
+  };
+}
+
+/** Records with no vector yet in the local space. */
+export function pendingStoryTexts(db: Database.Database, workspaceId: string, limit = 32): PendingStoryText[] {
+  return pendingStoryPage(db, workspaceId, { limit, docTypes: ['record'] }).items;
 }
 
 export function storeStoryVectors(db: Database.Database, workspaceId: string, items: Array<PendingStoryText & { vector: number[] }>): number {
