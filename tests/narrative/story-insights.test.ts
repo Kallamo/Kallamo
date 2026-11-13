@@ -90,6 +90,16 @@ describe('story checks on a turn', () => {
   });
 });
 
+describe('why a telling has no record behind it', () => {
+  test('a telling the teller holds nothing behind says so, and says when canon holds another value', () => {
+    authored('canon', [{ id: 'op-fact', type: 'assert-fact', evidenceIds: [], fact: { id: 'fact', proposition: { subjectId: 'guild', predicate: 'founded-in', object: 'the old harbor' }, status: 'active', evidenceIds: [] } }]);
+    const result = turn('t2', [
+      { type: 'knowledge', subjectId: 'mara', proposition: { subjectId: 'guild', predicate: 'founded-in', object: 'the capital' }, category: 'history', acquisition: 'reported', informantIds: ['tess'], confidence: 0.98 }
+    ], ['tess', 'mara']);
+    expect(result.storyChecks?.unsupported).toEqual([expect.objectContaining({ tellerId: 'tess', hearerId: 'mara', verdict: 'unknown', canon: 'contradicted' })]);
+  });
+});
+
 describe('looking back in the world calendar', () => {
   test('the Knowledge tab can read what someone remembered by the end of a past day', () => {
     const data = createWorldbuildDataService(db);

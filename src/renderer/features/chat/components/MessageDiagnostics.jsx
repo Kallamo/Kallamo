@@ -558,6 +558,13 @@ function RelationshipChanges({ changes, names }) {
   );
 }
 
+const TELLING_VERDICTS = {
+  'holds-opposite': (teller, hearer) => `${teller} told ${hearer} the opposite of what ${teller} believes.`,
+  'holds-other-value': (teller, hearer) => `${teller} told ${hearer} something that contradicts what ${teller} knows.`,
+  withheld: (teller, hearer) => `${teller} told ${hearer} something ${teller} holds but cannot reach.`,
+  future: (teller, hearer) => `${teller} told ${hearer} something ${teller} only learns later in the story.`
+};
+
 // What the story file noticed while recording the turn: a secret passed on, or a teller the story
 // has no record of knowing what they told. Both are findings to look at, never refusals.
 function StoryChecks({ checks, names }) {
@@ -573,7 +580,11 @@ function StoryChecks({ checks, names }) {
           <li key={`breach-${index}`} className="flex gap-2 text-xs text-status-warning"><span aria-hidden="true">•</span><span>{name(item.tellerId)} told {name(item.hearerId)} something {name(item.tellerId)} keeps secret.</span></li>
         ))}
         {unsupported.map((item, index) => (
-          <li key={`unsupported-${index}`} className="flex gap-2 text-xs text-text-secondary"><span aria-hidden="true">•</span><span>{name(item.tellerId)} told {name(item.hearerId)} something the story has no record of {name(item.tellerId)} knowing.</span></li>
+          <li key={`unsupported-${index}`} className="flex gap-2 text-xs text-text-secondary"><span aria-hidden="true">•</span><span>
+            {TELLING_VERDICTS[item.verdict]?.(name(item.tellerId), name(item.hearerId))
+              ?? `${name(item.tellerId)} told ${name(item.hearerId)} something the story has no record of ${name(item.tellerId)} knowing.`}
+            {item.canon === 'contradicted' ? ' Canon says otherwise.' : item.canon === 'aligned' ? ' It matches canon.' : ''}
+          </span></li>
         ))}
       </ul>
     </div>

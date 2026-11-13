@@ -1,4 +1,4 @@
-import type { Acquisition, At, Record as StoryRecord } from '@kallamo/umwelt' with { 'resolution-mode': 'import' };
+import type { Acquisition, At, Claim, Record as StoryRecord } from '@kallamo/umwelt' with { 'resolution-mode': 'import' };
 import type { NarrativeWorld } from './narrative-world';
 import { isGenericPredicate, normalizePredicate, propositionIdentity, statementKey } from '../../../../narrative/narrative-taxonomy';
 import { kindOf, metadataOf, objectOf, StoryReader, type StoryKind } from './story-reader';
@@ -165,10 +165,10 @@ export function loadStoryRecords(world: NarrativeWorld, input: LoadStoryRecordsI
     .sort((a, b) => a.row.narrative_sequence - b.row.narrative_sequence || a.record.recordedAt - b.record.recordedAt);
 }
 
-interface CanonSlots { statements: Set<string>; slots: Map<string, Set<string>> }
+export interface CanonSlots { statements: Set<string>; slots: Map<string, Set<string>> }
 
 /** The canon a belief is held against: every Fact by its statement, and by slot under a specific predicate. */
-function canonSlots(facts: StoryRecord[]): CanonSlots {
+export function canonSlots(facts: StoryRecord[]): CanonSlots {
   const statements = new Set<string>();
   const slots = new Map<string, Set<string>>();
   for (const fact of facts) {
@@ -183,19 +183,22 @@ function canonSlots(facts: StoryRecord[]): CanonSlots {
 }
 
 /**
- * Canon matches a belief when it states the same, and contradicts it with another value in the same
- * slot (one subject, one specific predicate). An author's own classification is kept.
+ * Canon matches a claim when it states the same, and contradicts it with another value in the same
+ * slot (one subject, one specific predicate).
  */
+export function canonRelation(claim: Claim, canon: CanonSlots): 'aligned' | 'contradicted' | 'unknown' {
+  const object = objectOf(claim);
+  if (canon.statements.has(propositionIdentity(claim.subject, claim.predicate, object))) return 'aligned';
+  if (isGenericPredicate(claim.predicate)) return 'unknown';
+  const values = canon.slots.get(`${claim.subject}\u0000${normalizePredicate(claim.predicate)}`);
+  if (!values?.size) return 'unknown';
+  return values.has(statementKey(object)) ? 'aligned' : 'contradicted';
+}
+
+/** An author's own classification of a belief is kept. */
 function withCanonRelation(item: ProjectedStoryRecord, canon: CanonSlots): ProjectedStoryRecord {
   if (item.record.kind !== 'holding' || metadataOf(item.record).relationToCanon) return item;
-  const { claim } = item.record;
-  const object = objectOf(claim);
-  let relation: 'aligned' | 'contradicted' | 'unknown' = 'unknown';
-  if (canon.statements.has(propositionIdentity(claim.subject, claim.predicate, object))) relation = 'aligned';
-  else if (!isGenericPredicate(claim.predicate)) {
-    const values = canon.slots.get(`${claim.subject}\u0000${normalizePredicate(claim.predicate)}`);
-    if (values?.size) relation = values.has(statementKey(object)) ? 'aligned' : 'contradicted';
-  }
+  const relation = canonRelation(item.record.claim, canon);
   if (relation === 'unknown') return item;
   const payload = { ...item.payload, relationToCanon: relation };
   return { ...item, payload, row: { ...item.row, payload_json: JSON.stringify(payload) } };

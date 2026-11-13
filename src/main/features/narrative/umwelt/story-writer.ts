@@ -1,5 +1,6 @@
 import type {
   Acquisition,
+  CheckUtteranceResult,
   Claim,
   CommitOutcome,
   HoldingItem,
@@ -14,6 +15,7 @@ import type { NarrativeOperation, Proposition } from '../../../../narrative/cont
 import { isGenericPredicate, isProseStatement, propositionIdentity } from '../../../../narrative/narrative-taxonomy';
 import { STORY_AXIS, STORY_PROJECT, type NarrativeWorld, type StoryEntityType } from './narrative-world';
 import { kindOf, memoryKey, metadataOf, objectOf, statementIdentityOf, StoryReader, type StoryKind, type StoryMetadata } from './story-reader';
+import { canonRelation, canonSlots, type CanonSlots } from './story-projection';
 
 export interface StoryProvenanceInput {
   interpreter: 'model' | 'user' | 'deterministic' | 'import';
@@ -51,8 +53,17 @@ export interface StoryCommitSink {
 /** A secret told outside its circle, as the engine reported it. */
 export interface StoryBreach { tellerId: string; hearerId: string; recordId: string }
 
-/** Someone passed on a statement the story never recorded them holding. */
-export interface StoryUnsupportedTelling { tellerId: string; hearerId: string; recordId: string }
+/**
+ * Someone passed on a statement the story never recorded them holding. `verdict` is the engine's
+ * reading of what the teller holds instead; `canon` is the statement against canon's Facts.
+ */
+export interface StoryUnsupportedTelling {
+  tellerId: string;
+  hearerId: string;
+  recordId: string;
+  verdict?: 'holds-opposite' | 'holds-other-value' | 'withheld' | 'future' | 'unknown';
+  canon?: 'aligned' | 'contradicted';
+}
 
 export interface StoryChecks { breaches: StoryBreach[]; unsupported: StoryUnsupportedTelling[] }
 
@@ -166,6 +177,7 @@ export class StoryWriter {
       this.sink.push(commit);
       return { applied, skipped, outcome: null, checks: { breaches: [], unsupported } };
     }
+    const checked = this.withVerdicts(unsupported, draft);
     const outcome = this.world.call<CommitOutcome>('commit', commit);
     StoryReader.invalidate(this.world);
     // The engine decides what counts as a breach; it names none individually, so the secret tellings are listed.
@@ -173,7 +185,31 @@ export class StoryWriter {
     const breaches = breached
       ? this.tellings.filter(telling => telling.secret).map(({ tellerId, hearerId, recordId }) => ({ tellerId, hearerId, recordId }))
       : [];
-    return { applied, skipped, outcome, checks: { breaches, unsupported } };
+    return { applied, skipped, outcome, checks: { breaches, unsupported: checked } };
+  }
+
+  /**
+   * Asks the engine what each teller holds about what they told. A teller who holds it after all
+   * (the same claim in other words) is dropped; the rest say why the story has no record behind it.
+   */
+  private withVerdicts(tellings: StoryUnsupportedTelling[], draft: Draft): StoryUnsupportedTelling[] {
+    let canon: CanonSlots | null = null;
+    return tellings.flatMap(telling => {
+      const record = draft.records.find(item => item.id === telling.recordId);
+      if (!record || record.kind !== 'holding') return [telling];
+      canon ??= canonSlots(new StoryReader(this.world).snapshot({ timelineId: this.timelineId }).facts);
+      const relation = canonRelation(record.claim as Claim, canon);
+      const withCanon = relation === 'unknown' ? telling : { ...telling, canon: relation };
+      try {
+        const result = this.world.call<CheckUtteranceResult>('check.utterance', { holder: telling.tellerId, claims: [record.claim], timelineId: this.timelineId });
+        const item = result.items[0];
+        if (item?.verdict === 'holds') return [];
+        return [item ? { ...withCanon, verdict: item.verdict } : withCanon];
+      } catch {
+        // The check only explains a finding; without it the telling is still reported.
+        return [withCanon];
+      }
+    });
   }
 
   private add(draft: Draft, operation: NarrativeOperation, input: StoryWrite, event: Provenance, claimed: Set<string>): string | null {
