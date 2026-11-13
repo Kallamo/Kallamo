@@ -1,5 +1,5 @@
-import { NARRATIVE_CONTRACT_VERSION, type NarrativeOperation, type NarrativeProposal } from './contracts';
-import { validateNarrativeProposal } from './validation';
+import { NARRATIVE_CONTRACT_VERSION, type NarrativeOperation, type NarrativeProposal } from '../../src/narrative/contracts';
+import { validateNarrativeProposal } from '../../src/narrative/validation';
 
 const provenance = {
   interpreter: 'model',

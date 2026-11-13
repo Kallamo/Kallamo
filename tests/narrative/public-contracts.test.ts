@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { possessionTransferScenario } from '../../src/narrative/scenarios';
+import { possessionTransferScenario } from './scenarios';
 import {
   VALIDATION_ISSUE_CODES,
   validateEvidenceReference,

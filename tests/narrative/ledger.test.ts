@@ -9,7 +9,7 @@ import {
   NarrativeEventLedgerRepository,
   NarrativeEventLedgerValidationError
 } from '../../src/narrative/ledger';
-import { possessionTransferScenario, secretRevelationScenario } from '../../src/narrative/scenarios';
+import { possessionTransferScenario, secretRevelationScenario } from './scenarios';
 import { openTestDatabase } from '../sqlite-test-database';
 
 describe('Narrative Event Ledger SQLite repository', () => {

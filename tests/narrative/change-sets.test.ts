@@ -9,7 +9,7 @@ import {
   NarrativeChangeSetRepository
 } from '../../src/narrative/change-sets';
 import { NarrativeEventLedgerRepository } from '../../src/narrative/ledger';
-import { possessionTransferScenario, secretRevelationScenario } from '../../src/narrative/scenarios';
+import { possessionTransferScenario, secretRevelationScenario } from './scenarios';
 import { openTestDatabase } from '../sqlite-test-database';
 
 const APPLIED_AT = '2026-07-18T18:00:00.000Z';

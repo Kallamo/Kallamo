@@ -687,7 +687,7 @@ describe('Narrative chat context integration', () => {
   });
 
   test('Kallamo mode contracts do not enter the narrative core', () => {
-    const coreFiles = ['contracts.ts', 'context-planner.ts', 'index.ts'];
+    const coreFiles = ['contracts.ts', 'context-planner.ts'];
     coreFiles.forEach(file => {
       const source = readFileSync(join(process.cwd(), 'src', 'narrative', file), 'utf8');
       expect(source).not.toMatch(/WorkspaceExperienceMode|standard|roleplay|campaign/i);

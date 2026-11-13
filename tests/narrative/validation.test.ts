@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { possessionTransferScenario, secretRevelationScenario } from '../../src/narrative/scenarios';
+import { possessionTransferScenario, secretRevelationScenario } from './scenarios';
 import { VALIDATION_ISSUE_CODES, validateNarrativeProposal } from '../../src/narrative/validation';
 
 describe('narrative proposal validation', () => {
