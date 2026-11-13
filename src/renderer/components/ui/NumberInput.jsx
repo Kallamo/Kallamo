@@ -22,6 +22,7 @@ export default function NumberInput({
   step: stepProp = 1,
   integer = true,
   nullable = false,
+  pad = 0,
   onBlur,
   onKeyDown,
   onFocus,
@@ -31,12 +32,14 @@ export default function NumberInput({
   const min = minProp == null || minProp === '' ? undefined : Number(minProp);
   const max = maxProp == null || maxProp === '' ? undefined : Number(maxProp);
   const step = Number(stepProp) || 1;
-  const [draft, setDraft] = useState(value == null ? '' : String(value));
+  // A clock reads 09:00, so `pad` fills with leading zeros once the number is settled.
+  const show = (n) => (n == null ? '' : String(n).padStart(pad, '0'));
+  const [draft, setDraft] = useState(show(value));
   const focused = useRef(false);
 
   useEffect(() => {
-    if (!focused.current) setDraft(value == null ? '' : String(value));
-  }, [value]);
+    if (!focused.current) setDraft(show(value));
+  }, [value, pad]);
 
   const inRange = (n) => (min == null || n >= min) && (max == null || n <= max);
 
@@ -56,11 +59,11 @@ export default function NumberInput({
   const settle = () => {
     const parsed = parse(draft, integer);
     if (parsed == null) {
-      setDraft(nullable && draft.trim() === '' ? '' : value == null ? '' : String(value));
+      setDraft(nullable && draft.trim() === '' ? '' : show(value));
       return;
     }
     const next = clamp(parsed, min, max);
-    setDraft(String(next));
+    setDraft(show(next));
     if (next !== value) onChange?.(next);
   };
 
@@ -69,7 +72,7 @@ export default function NumberInput({
       event.preventDefault();
       const base = parse(draft, integer) ?? value ?? min ?? 0;
       const next = clamp(base + (event.key === 'ArrowUp' ? step : -step), min, max);
-      setDraft(String(next));
+      setDraft(show(next));
       if (next !== value) onChange?.(next);
     } else if (event.key === 'Enter') {
       settle();

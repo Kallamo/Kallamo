@@ -126,10 +126,10 @@ function TimeSegment({ label, time, nullable, onChange }) {
     <div className={SEGMENT} role="group" aria-label={label}>
       <span className={SEGMENT_LABEL}>{label}</span>
       <div className="flex items-center">
-        <NumberInput className={`${SEGMENT_NUMBER} text-right`} aria-label={`${label} hour`} placeholder="--" min={0} max={time?.max} nullable={nullable}
+        <NumberInput className={`${SEGMENT_NUMBER} text-right`} aria-label={`${label} hour`} placeholder="--" pad={2} min={0} max={time?.max} nullable={nullable}
           value={hour} onChange={next => onChange(next == null ? null : { hour: next, minute: time?.minute ?? 0 })} />
         <span aria-hidden="true" className="text-sm font-semibold text-text-subtle">:</span>
-        <NumberInput className={SEGMENT_NUMBER} aria-label={`${label} minute`} placeholder="--" min={0} max={59} disabled={hour == null}
+        <NumberInput className={SEGMENT_NUMBER} aria-label={`${label} minute`} placeholder="--" pad={2} min={0} max={59} disabled={hour == null}
           value={hour == null ? null : time?.minute ?? 0} onChange={minute => onChange({ hour, minute })} />
       </div>
     </div>
