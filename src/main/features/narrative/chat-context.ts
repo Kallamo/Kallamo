@@ -35,6 +35,7 @@ import { derivedAge } from '../../../shared/world-age';
 import { NarrativeContextManifestRepository, type NarrativeContextManifest } from './context-manifest';
 import { RoleplayContextOrchestrator } from './roleplay-context-orchestrator';
 import { CharacterSceneMemory, formatCharacterMemorySection } from './character-scene-memory';
+import { admitForCharacter, type StoryRefusal } from './umwelt/story-admission';
 import {
   currentNarrativeSequence,
   loadCurrentNarrativeRecords,
@@ -250,13 +251,14 @@ export class NarrativeChatContext {
       ).filter(candidate => candidate.epistemic.kind === 'canon'),
       ...retrieved.filter(candidate => candidate.source.type === 'canon')
     ]));
+    const refusals: StoryRefusal[] = [];
     const subjects = uniqueIds([playerId, ...actorIds]).map(subjectId => {
       const perspective: Perspective = { access: 'subjective', focalSubjectId: subjectId };
       return {
         id: subjectId,
         name: names.get(subjectId) ?? subjectId,
         kind: subjectId === playerId ? 'player' as const : 'actor' as const,
-        candidates: createRoleplayStrategy(perspective, strategy.through, strategy.hasActiveScene)
+        candidates: this.admitStoryCandidates(input.workspaceId, subjectId, refusals, createRoleplayStrategy(perspective, strategy.through, strategy.hasActiveScene)
           .prepareCandidates(deduplicateCandidates([
             ...this.loadEntityCandidates(input.workspaceId, entityIds, perspective),
             // Only bonds that touch the turn's focus: two absent entities' ties rarely shape a scene.
@@ -271,7 +273,7 @@ export class NarrativeChatContext {
             ),
             ...this.loadInventoryCandidates(input.workspaceId, entityIds),
             ...this.loadRoleplayCandidates(input.workspaceId, entityIds)
-          ]))
+          ])))
       };
     });
     // Scene memory is bounded per character and always sent, so the planner gets what it leaves.
@@ -302,7 +304,8 @@ export class NarrativeChatContext {
       subjectIds,
       targetIds,
       assessments,
-      deepenedPairs: orchestrated.deepenedPairs
+      deepenedPairs: orchestrated.deepenedPairs,
+      ...(refusals.length ? { refusals } : {})
     });
     return {
       plan: orchestrated.playerPlan ?? fallbackPlan,
@@ -310,6 +313,17 @@ export class NarrativeChatContext {
       manifest,
       context: [orchestrated.context, memorySection].filter(Boolean).join('\n\n')
     };
+  }
+
+  /** The story confirms each record a character's context draws from; the rest stays out, with its reason. */
+  private admitStoryCandidates(workspaceId: string, subjectId: string, refusals: StoryRefusal[], candidates: ContextCandidate[]): ContextCandidate[] {
+    const { admitted, refused } = admitForCharacter(this.db, workspaceId, subjectId, candidates.map(candidate => ({
+      id: candidate.id,
+      ...(STORY_RECORD_SOURCES.has(candidate.source.type) && candidate.id.startsWith(`${candidate.source.type}:`) ? { recordId: candidate.source.id } : {})
+    })));
+    refusals.push(...refused);
+    const kept = new Set(admitted.map(candidate => candidate.id));
+    return candidates.filter(candidate => kept.has(candidate.id));
   }
 
   private composeCharacterMemory(workspaceId: string, entityIds: string[]): string {
@@ -1177,6 +1191,9 @@ export class NarrativeChatContext {
     };
   }
 }
+
+// Candidates rendered from a story record carry its kind as their source and `<kind>:<record id>` as their id.
+const STORY_RECORD_SOURCES = new Set(['knowledge', 'belief', 'memory', 'relationship']);
 
 function normalizeRecord(
   row: NarrativeRecordRow,

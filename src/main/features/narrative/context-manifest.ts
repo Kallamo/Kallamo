@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import type { EpistemicAssessment } from '../../../narrative/context-bundle';
+import type { StoryRefusal } from './umwelt/story-admission';
 
 export interface NarrativeContextManifest {
   requestId: string;
@@ -12,6 +13,8 @@ export interface NarrativeContextManifest {
   targetIds: string[];
   assessments: EpistemicAssessment[];
   deepenedPairs: Array<{ subjectId: string; targetId: string }>;
+  /** Story records kept out of a character's context, and why. */
+  refusals?: StoryRefusal[];
   status?: 'active' | 'invalidated';
 }
 
@@ -96,6 +99,7 @@ export class NarrativeContextManifestRepository {
       deepenedPairs: Array.isArray(stored.deepenedPairs)
         ? stored.deepenedPairs as Array<{ subjectId: string; targetId: string }>
         : [],
+      ...(Array.isArray(stored.refusals) && stored.refusals.length ? { refusals: stored.refusals as StoryRefusal[] } : {}),
       status: row.status === 'invalidated' ? 'invalidated' : 'active'
     });
   }
@@ -120,7 +124,8 @@ function toStoredManifest(manifest: NarrativeContextManifest): Record<string, un
     subjectIds: manifest.subjectIds,
     targetIds: manifest.targetIds,
     assessments: manifest.assessments,
-    deepenedPairs: manifest.deepenedPairs
+    deepenedPairs: manifest.deepenedPairs,
+    ...(manifest.refusals?.length ? { refusals: manifest.refusals } : {})
   };
 }
 
