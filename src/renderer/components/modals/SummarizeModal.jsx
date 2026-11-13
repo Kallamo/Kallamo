@@ -6,7 +6,7 @@ import Checkbox from '../ui/Checkbox';
 import Tooltip from '../ui/Tooltip';
 import { ProfileAvatar } from './ProfileModal';
 import { ToneTile } from './ModalParts';
-import { estimateMessageTokens } from '../../features/chat/message-content';
+import { estimateMessageTokens, parseMessageContent } from '../../features/chat/message-content';
 
 // Each message is exactly one of archive, keep or drop, so the token bar and summary card agree.
 const ARCHIVE = 'archive';
@@ -241,7 +241,7 @@ export default function SummarizeModal({
                       {isUser ? 'User' : msgObj.aiName || 'AI'}
                       {msgObj.reserved && <span className="ml-1.5 font-normal text-text-subtle">recent</span>}
                     </span>
-                    <p className={`mt-0.5 line-clamp-2 whitespace-pre-wrap text-[0.8125rem] leading-relaxed ${tone}`}>{msgObj.content}</p>
+                    <p className={`mt-0.5 line-clamp-2 whitespace-pre-wrap text-[0.8125rem] leading-relaxed ${tone}`}>{parseMessageContent(msgObj.content).response}</p>
                   </div>
                   <div role="radiogroup" aria-label="What happens to this message" className="inline-flex shrink-0 gap-0.5 rounded-control border border-border-default bg-surface-input p-0.5">
                     {[
