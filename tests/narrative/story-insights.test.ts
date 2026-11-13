@@ -5,7 +5,8 @@ import { loadCurrentNarrativeRecords } from '../../src/main/features/narrative/n
 import { writeStoryEvent } from '../../src/main/features/narrative/umwelt/story-journal';
 import { admitForCharacter } from '../../src/main/features/narrative/umwelt/story-admission';
 import { traceStoryRecord } from '../../src/main/features/narrative/umwelt/story-insights';
-import { LOCAL_EMBEDDING_SPACE, pendingStoryTexts, searchHolderRecords, storeStoryVectors } from '../../src/main/features/narrative/umwelt/story-search';
+import { LOCAL_EMBEDDING_SPACE, pendingStoryTexts, searchStory, searchTerms, storeStoryVectors } from '../../src/main/features/narrative/umwelt/story-search';
+import { createNarrativeChatContext } from '../../src/main/features/narrative/chat-context';
 import { openFullSchemaDatabase, type FullSchemaDatabase } from '../database/full-schema-harness';
 
 const require = createRequire(import.meta.url);
@@ -115,8 +116,39 @@ describe('searching what a character holds by meaning', () => {
     storeStoryVectors(db, WS, pending.map(item => ({ ...item, vector: basis(item.docId === 'k2' ? 2 : 1) })));
     expect(pendingStoryTexts(db, WS)).toEqual([]);
 
-    const hits = searchHolderRecords(db, WS, 'elias', basis(1));
-    expect([...hits.keys()]).toEqual(['k1']);
+    const hits = searchStory(db, WS, { holderId: 'elias', text: '', vector: basis(1) });
+    expect(hits.map(hit => [hit.docId, hit.match])).toEqual([['k1', 'semantic']]);
+  });
+
+  test('a record found by its words and by meaning ranks above one found by either alone', () => {
+    authored('lore', [
+      knowledge('k1', 'elias', 'The ferry crosses the river at dawn.'),
+      knowledge('k2', 'elias', 'The river floods the lower ferry dock in spring.'),
+      knowledge('k3', 'elias', 'Lanterns are banned after curfew.')
+    ]);
+    const basis = (index: number) => Array.from({ length: LOCAL_EMBEDDING_SPACE.dimensions }, (_, slot) => (slot === index ? 1 : 0.01));
+    const pending = pendingStoryTexts(db, WS, 50);
+    storeStoryVectors(db, WS, pending.map(item => ({ ...item, vector: basis({ k2: 2, k3: 3 }[item.docId] ?? 1) })));
+
+    const hits = searchStory(db, WS, { holderId: 'elias', text: 'When does the ferry cross the river?', vector: basis(1) });
+    expect(hits.map(hit => [hit.docId, hit.match])).toEqual([['k1', 'both'], ['k2', 'text']]);
+  });
+
+  test('search words are the long ones, longest first', () => {
+    expect(searchTerms('Who waits on the pier before dawn?')).toEqual(['before', 'waits', 'dawn', 'pier']);
+  });
+});
+
+describe('the narrator search outside roleplay', () => {
+  test('a Fact the request means in other words reaches a standard workspace', () => {
+    authored('canon', [{ id: 'op-fact', type: 'assert-fact', evidenceIds: [], fact: { id: 'fact', proposition: { subjectId: 'guild', predicate: 'statement', object: 'The guild pays its spies in silver.' }, status: 'active', evidenceIds: [] } }]);
+    const basis = (index: number) => Array.from({ length: LOCAL_EMBEDDING_SPACE.dimensions }, (_, slot) => (slot === index ? 1 : 0.01));
+    storeStoryVectors(db, WS, pendingStoryTexts(db, WS, 50).map(item => ({ ...item, vector: basis(item.docId === 'fact' ? 1 : 2) })));
+    const context = createNarrativeChatContext(db, text => Math.ceil(text.length / 4));
+    const ask = (vector: number[]) => context.plan({ requestId: 'request', workspaceId: WS, query: 'Who funds the informants?', items: [], tokenBudget: 4000, queryVector: vector });
+
+    expect(ask(basis(1)).context).toContain('The guild pays its spies in silver.');
+    expect(ask(basis(5)).context).not.toContain('pays its spies');
   });
 });
 

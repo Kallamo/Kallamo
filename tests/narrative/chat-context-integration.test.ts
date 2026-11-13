@@ -872,6 +872,35 @@ describe('Narrative chat context integration', () => {
     `).run(id, name, JSON.stringify(always ? { content, alwaysInContext: true } : { content }));
   }
 
+  test('finds what the faction of a character holds by two words of the request, never by one', () => {
+    setWorkspaceExperienceMode(db, 'workspace-one', 'roleplay');
+    declareEntity('elias', 'Characters');
+    declareEntity('order', 'Factions');
+    declareEntity('ferry', 'Items');
+    db.prepare(`
+      INSERT INTO entity_links (id, workspaceId, fromId, relType, toId, label, metadata_json, createdAt)
+      VALUES ('membership-elias', 'workspace-one', 'elias', 'member_of', 'order', NULL, '{}', 1)
+    `).run();
+    worldbuild.saveSubjectEntry({
+      workspaceId: 'workspace-one', subjectId: 'order', kind: 'knowledge',
+      entry: { aboutId: 'ferry', statement: 'The ferry leaves the eastern pier at dawn.', confidence: 1, acquisition: 'reported', accessibility: 'available' }
+    });
+    new NarrativeSceneRepository(db).save({
+      id: 'scene-one', projectId: 'workspace-one', status: 'active',
+      participantIds: ['elias'], possibleObserverIds: [],
+      perspective: { access: 'subjective', focalSubjectId: 'elias' },
+      position: { sequence: 50 }
+    });
+    const ask = (query: string) => context.plan({ requestId: query, workspaceId: 'workspace-one', query, tokenBudget: 4000, items: [] });
+
+    const twoWords = ask('Who waits on the pier before dawn?');
+    expect(twoWords.context).toContain('The ferry leaves the eastern pier at dawn.');
+    expect(twoWords.storySearch).toEqual(expect.arrayContaining([
+      expect.objectContaining({ scope: 'elias', hits: [expect.objectContaining({ holderId: 'order', match: 'text', terms: 2 })] })
+    ]));
+    expect(ask('Is anyone on the pier?').storySearch).toBeUndefined();
+  });
+
   function seedWorldbuild() {
     worldbuild.saveFieldDefinition({
       projectId: 'workspace-one', typeId: 'Locations', label: 'Material',

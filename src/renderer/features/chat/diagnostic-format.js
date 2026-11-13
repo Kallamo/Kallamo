@@ -181,9 +181,21 @@ export const formatPlannerDecisions = bundle => {
   const excludedCounts = Object.entries(bundle.excludedByReason || {})
     .sort((left, right) => right[1] - left[1])
     .map(([key, count]) => `- ${key.replace(':', ' (')}): ${count}`);
+  const storySearch = (bundle.storySearch || []).flatMap(trace => [
+    trace.scopeName || trace.scope,
+    ...(trace.hits || []).map(hit => {
+      const details = [
+        hit.match,
+        hit.similarity != null ? `similarity ${Number(hit.similarity).toFixed(3)}` : null,
+        hit.terms ? `${hit.terms} words` : null
+      ].filter(Boolean).join(', ');
+      return `- ${hit.docType}:${hit.docId}${hit.holderName ? ` held by ${hit.holderName}` : ''} (${details})`;
+    })
+  ]);
   return [
     ...summary,
     ...scopeSummary,
+    ...(storySearch.length ? ['', 'STORY SEARCH', ...storySearch] : []),
     ...(shared.length ? ['', 'SHARED RECORDS', ...shared] : []),
     ...(exclusive.length ? ['', 'SCOPE-ONLY RECORDS', ...exclusive] : []),
     ...(excluded.length ? ['', 'EXCLUDED', ...excluded] : []),

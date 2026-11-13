@@ -29,14 +29,14 @@ import {
   statementKey
 } from '../../../narrative/narrative-taxonomy';
 import { canSubjectAccessOccurrence, isFactionOccurrenceMemoryShared } from '../worldbuild/event-occurrences';
-import { sharedKnowledgeCards } from '../worldbuild/knowledge-groups';
+import { knowledgeGroupsOf, sharedKnowledgeCards } from '../worldbuild/knowledge-groups';
 import { describeLocationChain, loadLocationChain } from '../worldbuild/location-graph';
 import { derivedAge } from '../../../shared/world-age';
 import { NarrativeContextManifestRepository, type NarrativeContextManifest } from './context-manifest';
 import { RoleplayContextOrchestrator } from './roleplay-context-orchestrator';
 import { CharacterSceneMemory, formatCharacterMemorySection } from './character-scene-memory';
 import { admitForCharacter, type StoryRefusal } from './umwelt/story-admission';
-import { searchHolderRecords } from './umwelt/story-search';
+import { searchStory, type StoryHit } from './umwelt/story-search';
 import {
   currentNarrativeSequence,
   loadCurrentNarrativeRecords,
@@ -76,7 +76,20 @@ export interface PlannedChatContext {
   context: string;
   bundle?: ContextBundleResult;
   manifest?: NarrativeContextManifest;
+  storySearch?: StorySearchTrace[];
 }
+
+/** What the story search found for one perspective, for the turn diagnostics. */
+export interface StorySearchTrace {
+  scope: string;
+  scopeName: string;
+  hits: Array<StoryHit & { holderName: string | null }>;
+}
+
+// Searched groups per character, and records taken from each search.
+const SEARCHED_GROUPS = 4;
+const OWN_HITS = 5;
+const GROUP_HITS = 3;
 
 interface EntityRow {
   id: string;
@@ -127,6 +140,8 @@ export class NarrativeChatContext {
   private queryVector: number[] | null = null;
   // Every perspective of one plan reads the same story, so it is projected once per plan.
   private planRecords: ProjectedNarrativeRecord[] | null = null;
+  private planHits = new Map<string, Map<string, StoryHit>>();
+  private searchTrace: StorySearchTrace[] = [];
   private readonly roleplayOrchestrator: RoleplayContextOrchestrator;
   private readonly characterMemory: CharacterSceneMemory;
 
@@ -145,11 +160,49 @@ export class NarrativeChatContext {
 
   plan(input: PlanChatContextInput): PlannedChatContext {
     this.planRecords = null;
+    this.planHits = new Map();
+    this.searchTrace = [];
     try {
-      return this.planOnce(input);
+      const planned = this.planOnce(input);
+      return this.searchTrace.length ? { ...planned, storySearch: this.searchTrace } : planned;
     } finally {
       this.planRecords = null;
+      this.planHits = new Map();
     }
+  }
+
+  /**
+   * Story records the request is about by its words or meaning, within what the perspective may
+   * read: a character's own records and their groups', or the narrator's Facts.
+   */
+  private storyHits(workspaceId: string, perspective: Perspective, query: string): Map<string, StoryHit> {
+    const subjectId = perspective.access === 'subjective' ? perspective.focalSubjectId : undefined;
+    const scope = subjectId ?? (perspective.access === 'omniscient' ? 'narrator' : null);
+    if (!scope) return new Map();
+    const cached = this.planHits.get(scope);
+    if (cached) return cached;
+    const searches = subjectId
+      ? [
+          { holderId: subjectId, limit: OWN_HITS },
+          ...knowledgeGroupsOf(this.db, workspaceId, subjectId).slice(0, SEARCHED_GROUPS).map(group => ({ holderId: group.id, limit: GROUP_HITS }))
+        ]
+      : [{ holderId: null, limit: OWN_HITS }];
+    const hits = new Map<string, StoryHit>();
+    for (const search of searches) {
+      for (const hit of searchStory(this.db, workspaceId, { holderId: search.holderId, text: query, vector: this.queryVector, limit: search.limit })) {
+        if (!hits.has(hit.docId)) hits.set(hit.docId, hit);
+      }
+    }
+    this.planHits.set(scope, hits);
+    if (hits.size) {
+      const names = this.getEntityNames(workspaceId, [...new Set([...hits.values()].flatMap(hit => hit.holderId ? [hit.holderId] : []).concat(subjectId ? [subjectId] : []))]);
+      this.searchTrace.push({
+        scope,
+        scopeName: subjectId ? names.get(subjectId) ?? subjectId : 'Narrator',
+        hits: [...hits.values()].map(hit => ({ ...hit, holderName: hit.holderId ? names.get(hit.holderId) ?? hit.holderId : null }))
+      });
+    }
+    return hits;
   }
 
   private currentRecords(workspaceId: string): ProjectedNarrativeRecord[] {
@@ -920,10 +973,7 @@ export class NarrativeChatContext {
     const requiredFactIds = new Set(explicitFactIds);
     const queryTerms = meaningfulTerms(query);
     const sharedCache = new Map<string, Set<string>>();
-    // What the character holds that is close to the request in meaning, though nobody in it is named.
-    const near = perspective.access === 'subjective' && perspective.focalSubjectId && this.queryVector
-      ? searchHolderRecords(this.db, workspaceId, perspective.focalSubjectId, this.queryVector)
-      : new Map<string, number>();
+    const hits = this.storyHits(workspaceId, perspective, query);
     const rows = this.currentRecords(workspaceId);
     // Tellers and entity-reference objects are named in one read, so no uuid reaches the model.
     const calendar = this.getCalendarNames(workspaceId);
@@ -946,8 +996,8 @@ export class NarrativeChatContext {
         || relatedEntityIds.some(id => relevantIds.has(id));
       const isFactRelevant = row.record_type === 'fact'
         && (requiredFactIds.has(row.record_id) || hasMeaningfulOverlap(queryTerms, JSON.stringify(payload)));
-      const isNear = near.has(row.record_id);
-      if ((!includeEntityRecords || !isEntityRelevant) && !isFactRelevant && !isNear) return [];
+      const hit = hits.get(row.record_id);
+      if ((!includeEntityRecords || !isEntityRelevant) && !isFactRelevant && !hit) return [];
       if (
         row.record_type === 'fact'
         && (payload.proposition as Record<string, unknown> | undefined)?.predicate === 'recorded-occurrence'
@@ -993,7 +1043,7 @@ export class NarrativeChatContext {
         sourceType: row.record_type === 'fact' ? 'canon' : row.record_type,
         sourceId: row.record_id,
         content: `Narrative sequence: ${row.narrative_sequence}\n${normalized.content}`,
-        relevance: requiredFactIds.has(row.record_id) ? 1 : (isEntityRelevant ? 0.95 : isNear ? 0.9 : 0.85),
+        relevance: requiredFactIds.has(row.record_id) ? 1 : (isEntityRelevant ? 0.95 : hit ? (hit.match === 'both' ? 0.93 : 0.9) : 0.85),
         position: { sequence: row.narrative_sequence },
         epistemic: normalized.epistemic,
         provenanceIds: [row.source_event_id, row.record_id]

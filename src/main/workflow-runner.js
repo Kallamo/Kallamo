@@ -271,7 +271,8 @@ function serializeContextBundle(planned) {
         composition: planned.bundle.composition || null,
         scopes,
         excluded: [...excluded, ...refused],
-        manifest
+        manifest,
+        storySearch: planned.storySearch || []
     };
 }
 

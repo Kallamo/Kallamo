@@ -6,10 +6,39 @@ import { StoryReader } from './story-reader';
 /** The local embedding model the app ships; vectors of another model never share its space. */
 export const LOCAL_EMBEDDING_SPACE = { id: 'local-multilingual-e5-small', dimensions: 384, model: 'Xenova/multilingual-e5-small' } as const;
 
-// Cosine similarity below this says the record is near the request only by accident.
-const MIN_SIMILARITY = 0.8;
+// Measured on a long campaign: this model scores even unrelated story texts near 0.85, while texts
+// about the request's subject start around 0.875.
+const SEMANTIC_FLOOR = 0.875;
+
+// The engine joins the words of one text query with AND, so each word is searched on its own.
+const MAX_TERMS = 6;
+const MIN_TERM_LENGTH = 4;
+const TERM_PAGE = 20;
+const SEMANTIC_PAGE = 10;
 
 export interface PendingStoryText { docType: string; docId: string; textHash: string; text: string }
+
+export type StorySearchMatch = 'text' | 'semantic' | 'both';
+
+export interface StoryHit {
+  docId: string;
+  docType: 'record' | 'event';
+  /** Whose records were searched; null for the narrator's view (Facts and events). */
+  holderId: string | null;
+  match: StorySearchMatch;
+  /** Reciprocal-rank fusion of the two rankings; only comparable within one search. */
+  score: number;
+  similarity?: number;
+  terms?: number;
+}
+
+export interface StorySearchInput {
+  holderId?: string | null;
+  text: string;
+  vector?: number[] | null;
+  docType?: 'record' | 'event';
+  limit?: number;
+}
 
 function prepare(world: NarrativeWorld): void {
   world.call('embedding.defineSpace', { space: LOCAL_EMBEDDING_SPACE });
@@ -39,28 +68,68 @@ export function storeStoryVectors(db: Database.Database, workspaceId: string, it
   return result.stored;
 }
 
-/**
- * Records one holder holds that mean something close to the request, by the local model's
- * vectors. The search stays inside the holder's own records, so it never reaches what they do not know.
- */
-export function searchHolderRecords(db: Database.Database, workspaceId: string, holderId: string, vector: number[], limit = 5): Map<string, number> {
-  const world = NarrativeWorld.of(db, workspaceId);
-  const hits = new Map<string, number>();
-  if (!world.exists() || vector.length !== LOCAL_EMBEDDING_SPACE.dimensions) return hits;
-  if (!world.ensureEntities([holderId]).has(holderId)) return hits;
+/** The words of a request worth searching on their own, longest first: length decides, never a word list. */
+export function searchTerms(text: string): string[] {
+  const terms = new Set(String(text || '').toLocaleLowerCase().split(/[^\p{L}\p{N}]+/u).filter(term => term.length >= MIN_TERM_LENGTH));
+  return [...terms].sort((left, right) => right.length - left.length || left.localeCompare(right)).slice(0, MAX_TERMS);
+}
+
+function searchPage(world: NarrativeWorld, payload: Record<string, unknown>): SearchPageResult | null {
   try {
-    const page = world.call<SearchPageResult>('search', {
-      semantic: { spaceId: LOCAL_EMBEDDING_SPACE.id, vector },
-      filter: { holder: holderId, docType: 'record' },
-      timelineId: new StoryReader(world).timelineId(),
-      page: { limit }
-    });
-    for (const item of page.items) {
-      if ((item.score ?? 0) >= MIN_SIMILARITY) hits.set(item.docId, item.score ?? 0);
-    }
+    return world.call<SearchPageResult>('search', payload);
   } catch (error) {
     // A space with no vectors yet answers nothing useful; the request goes on without it.
-    if ((error as { code?: string })?.code !== 'NOT_FOUND') throw error;
+    if ((error as { code?: string })?.code === 'NOT_FOUND') return null;
+    throw error;
   }
-  return hits;
+}
+
+/**
+ * Story texts close to a request by its words and, with a local vector, by meaning; never outside the
+ * holder's own records. A text match needs two distinct words, so one common word never decides.
+ */
+export function searchStory(db: Database.Database, workspaceId: string, input: StorySearchInput): StoryHit[] {
+  const world = NarrativeWorld.of(db, workspaceId);
+  if (!world.exists()) return [];
+  const holderId = input.holderId ?? null;
+  if (holderId && !world.ensureEntities([holderId]).has(holderId)) return [];
+  const docType = input.docType ?? 'record';
+  const timelineId = new StoryReader(world).timelineId();
+  const filter = { docType, ...(holderId ? { holder: holderId } : {}) };
+
+  const semantic: Array<{ docId: string; similarity: number }> = [];
+  if (input.vector && input.vector.length === LOCAL_EMBEDDING_SPACE.dimensions) {
+    const page = searchPage(world, { semantic: { spaceId: LOCAL_EMBEDDING_SPACE.id, vector: input.vector }, filter, timelineId, page: { limit: SEMANTIC_PAGE } });
+    for (const item of page?.items ?? []) {
+      if ((item.score ?? 0) >= SEMANTIC_FLOOR) semantic.push({ docId: item.docId, similarity: item.score ?? 0 });
+    }
+  }
+
+  const termHits = new Map<string, { terms: number; rarity: number }>();
+  for (const term of searchTerms(input.text)) {
+    const page = searchPage(world, { text: term, filter, timelineId, page: { limit: TERM_PAGE } });
+    const items = page?.items ?? [];
+    for (const item of items) {
+      const entry = termHits.get(item.docId) ?? { terms: 0, rarity: 0 };
+      entry.terms += 1;
+      entry.rarity += 1 / items.length;
+      termHits.set(item.docId, entry);
+    }
+  }
+  const text = [...termHits.entries()]
+    .filter(([, entry]) => entry.terms >= 2)
+    .sort((left, right) => right[1].terms - left[1].terms || right[1].rarity - left[1].rarity || left[0].localeCompare(right[0]));
+
+  const fused = new Map<string, StoryHit>();
+  const add = (docId: string, rank: number, match: 'text' | 'semantic', detail: Partial<StoryHit>) => {
+    const hit = fused.get(docId) ?? { docId, docType, holderId, match, score: 0 };
+    hit.score += 1 / (60 + rank);
+    if (hit.match !== match) hit.match = 'both';
+    fused.set(docId, { ...hit, ...detail });
+  };
+  semantic.forEach((item, index) => add(item.docId, index + 1, 'semantic', { similarity: item.similarity }));
+  text.forEach(([docId, entry], index) => add(docId, index + 1, 'text', { terms: entry.terms }));
+  return [...fused.values()]
+    .sort((left, right) => right.score - left.score || left.docId.localeCompare(right.docId))
+    .slice(0, input.limit ?? 5);
 }
