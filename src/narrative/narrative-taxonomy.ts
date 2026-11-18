@@ -7,6 +7,7 @@ export const DURABLE_KNOWLEDGE_CATEGORIES = [
   'history',
   'secret',
   'capability',
+  'property',
   'intent',
   'bond'
 ] as const;
@@ -223,6 +224,7 @@ export const KNOWLEDGE_CATEGORY_LABELS: Record<KnowledgeCategory, string> = {
   history: 'History',
   secret: 'Secret',
   capability: 'Capability',
+  property: 'Property',
   intent: 'Intent',
   bond: 'Bond',
   'scene-state': 'Scene state',
