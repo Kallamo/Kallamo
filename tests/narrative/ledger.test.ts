@@ -188,7 +188,9 @@ describe('Narrative Event Ledger SQLite repository', () => {
       { id: 'entity_sheet_edits_v1' },
       { id: 'propose_unknown_entities_on_v1' },
       { id: 'narrative_story_records_v1' },
-      { id: 'narrative_story_import_v1' }
+      { id: 'narrative_story_import_v1' },
+      { id: 'narrative_story_jobs_v1' },
+      { id: 'roleplay_entity_creation_policy_v1' }
     ]);
     expect(db.prepare('PRAGMA table_info(entity_links)').all()).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'metadata_json', type: 'TEXT' })

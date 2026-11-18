@@ -193,6 +193,43 @@ describe('Worldbuild runtime data adapter', () => {
     expect(world.call<{ status?: string }>('trace', { recordId: revised.known[0].id }).status).toBe('revoked');
   });
 
+  test('editing an entry changes its words, never how it is held', () => {
+    const passage = { subjectId: 'northern-gate', predicate: 'worldbuild-statement', object: 'A passage runs under the gate.' };
+    writeStoryEvent(db, 'workspace-one', {
+      eventId: 'held-event', description: 'Imported.', participants: ['tess', 'elias'],
+      provenance: { interpreter: 'import' },
+      operations: [
+        { id: 'denied-op', type: 'grant-knowledge', evidenceIds: [], knowledge: { id: 'denied', entryId: 'denied', subjectId: 'tess', proposition: { ...passage, object: 'The gate is sealed for good.' }, sourceEventId: 'held-event', acquisition: 'witness', confidence: 1, accessibility: 'available', status: 'active', negated: true } },
+        { id: 'suspected-op', type: 'set-belief', evidenceIds: [], belief: { id: 'suspected', entryId: 'suspected', subjectId: 'tess', proposition: passage, sourceEventId: 'held-event', confidence: 0.5, relationToCanon: 'unknown', status: 'active', attitude: 'suspects' } },
+        { id: 'second-op', type: 'set-belief', evidenceIds: [], belief: { id: 'second', entryId: 'second', subjectId: 'tess', proposition: passage, sourceEventId: 'held-event', confidence: 0.8, relationToCanon: 'unknown', status: 'active', heldById: 'elias', negated: true } }
+      ] as any
+    });
+    const before = service.getSubjectKnowledge('workspace-one', 'tess');
+    expect(before.known).toEqual([expect.objectContaining({ statement: 'The gate is sealed for good.', negated: true })]);
+    expect(before.beliefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'suspected', attitude: 'suspects', statement: passage.object }),
+      expect.objectContaining({ id: 'second', heldById: 'elias', negated: true, aboutId: 'northern-gate', statement: passage.object })
+    ]));
+    service.saveSubjectEntry({
+      workspaceId: 'workspace-one', subjectId: 'tess', kind: 'knowledge', existingId: 'denied',
+      entry: { aboutId: 'northern-gate', statement: 'The gate is sealed for ever.', acquisition: 'witness', accessibility: 'available' }
+    });
+    service.saveSubjectEntry({
+      workspaceId: 'workspace-one', subjectId: 'tess', kind: 'belief', existingId: 'suspected',
+      entry: { aboutId: 'northern-gate', statement: 'A passage runs under the old gate.', confidence: 0.5 }
+    });
+    const after = service.saveSubjectEntry({
+      workspaceId: 'workspace-one', subjectId: 'tess', kind: 'belief', existingId: 'second',
+      entry: { aboutId: 'northern-gate', statement: 'A passage runs under the north gate.', confidence: 0.8 }
+    });
+    expect(after.known).toEqual([expect.objectContaining({ statement: 'The gate is sealed for ever.', negated: true })]);
+    expect(after.beliefs).toHaveLength(2);
+    expect(after.beliefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ attitude: 'suspects', statement: 'A passage runs under the old gate.' }),
+      expect.objectContaining({ heldById: 'elias', negated: true, statement: 'A passage runs under the north gate.' })
+    ]));
+  });
+
   test('revising a Known entry without an entry id replaces it', () => {
     const added = service.saveSubjectEntry({
       workspaceId: 'workspace-one', subjectId: 'tess', kind: 'knowledge',

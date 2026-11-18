@@ -5,6 +5,7 @@ const ROLE_IDS = Object.freeze({
     TAGGER: 'tagger',
     SUMMARIZER: 'summarizer',
     NARRATIVE_STATE: 'narrativeState',
+    NARRATIVE_STORY: 'narrativeStory',
     RETRIEVAL_PLANNER: 'retrievalPlanner'
 });
 
@@ -56,6 +57,10 @@ function resolveSystemAi(settings) {
 function resolveAiEngineRole(roleId, { profile = null } = {}) {
     const settings = readAdvancedSettings();
     if (roleId === ROLE_IDS.SYSTEM) return resolveSystemAi(settings);
+    // The story pass runs on the Narrative State model unless it was given one of its own.
+    if (roleId === ROLE_IDS.NARRATIVE_STORY && settings.narrativeStoryMode !== 'dedicated') {
+        return { ...resolveAiEngineRole(ROLE_IDS.NARRATIVE_STATE), roleId };
+    }
 
     const mode = String(settings[`${roleId}Mode`] || ROLE_DEFAULTS[roleId] || 'disabled');
     if (mode === 'disabled' || mode === 'off') {
@@ -89,6 +94,7 @@ function roleLabel(roleId) {
     if (roleId === ROLE_IDS.TAGGER) return 'Tagger';
     if (roleId === ROLE_IDS.SUMMARIZER) return 'Summarizer';
     if (roleId === ROLE_IDS.NARRATIVE_STATE) return 'Narrative State';
+    if (roleId === ROLE_IDS.NARRATIVE_STORY) return 'Narrative State story record';
     return 'Retrieval Planner';
 }
 

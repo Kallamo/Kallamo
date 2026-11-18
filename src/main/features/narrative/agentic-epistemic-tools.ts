@@ -115,7 +115,9 @@ export class AgenticEpistemicTools {
       const attribution = row.record_type === 'knowledge' && typeof payload.acquisition === 'string'
         ? ` [${payload.acquisition}${informants.length ? ` by ${informants.join(', ')}` : ''}]`
         : '';
-      return `${row.record_type}: ${formatPayload(payload)}${attribution}`;
+      const stance = payload.negated === true ? 'not so: ' : '';
+      const kind = row.record_type === 'belief' && payload.attitude === 'suspects' ? 'suspicion' : row.record_type;
+      return `${kind}: ${stance}${formatPayload(payload)}${attribution}`;
     });
     return [
       `${pair.subject.canonicalName} -> ${pair.target.canonicalName}: ${assessment?.state ?? 'undetermined'}`,

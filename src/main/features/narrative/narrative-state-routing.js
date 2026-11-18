@@ -207,7 +207,9 @@ function resolveNarrativeRouting({ triage, signals, hasResourceDefinitions = tru
     forceReasons.push(`explicit-${domain}-signal`);
   }
 
-  const hasIntroduction = (signals.signals || []).some(signal => signal.domain === 'entity' && signal.action === 'introduction');
+  // The triage marks a newcomer by meaning, in any language; the English cue is only a backstop.
+  const hasIntroduction = triageDomains.includes('entity')
+    || (signals.signals || []).some(signal => signal.domain === 'entity' && signal.action === 'introduction');
   if (selectedDomains.has('entity') && hasIntroduction) {
     if (!selectedDomains.has('scene')) {
       selectedDomains.add('scene');
@@ -346,10 +348,11 @@ function resolveAnalysisHolders({ candidateIds, sceneIds, presentIds }) {
  * by holder; facts by what they are about. Relationships have their own baseline.
  * With topicIds, a present holder outside fullHolderIds keeps only records about those topics, the
  * only ones a turn can change; without them every present holder is read in full.
- * @param {Array<{ type: string, subjectId: string | null, value: any }>} rows
- * @param {{ holderIds: Iterable<string>, mentionedHolderIds?: Iterable<string>, targetIds: Iterable<string>, focusIds: Iterable<string>, topicIds?: Iterable<string> | null, fullHolderIds?: Iterable<string>, limit?: number }} options
+ * With withRefs, each knowledge, belief and memory sent gets a ref, and refs maps it back to its row.
+ * @param {Array<{ type: string, subjectId: string | null, value: any, interpreter?: string }>} rows
+ * @param {{ holderIds: Iterable<string>, mentionedHolderIds?: Iterable<string>, targetIds: Iterable<string>, focusIds: Iterable<string>, topicIds?: Iterable<string> | null, fullHolderIds?: Iterable<string>, limit?: number, withRefs?: boolean }} options
  */
-function selectPerspectiveRecords(rows, { holderIds, mentionedHolderIds = [], targetIds, focusIds, topicIds = null, fullHolderIds = [], limit = 120 }) {
+function selectPerspectiveRecords(rows, { holderIds, mentionedHolderIds = [], targetIds, focusIds, topicIds = null, fullHolderIds = [], limit = 120, withRefs = false }) {
   const holders = new Set(holderIds);
   const mentionedHolders = new Set(mentionedHolderIds);
   const targets = new Set(targetIds);
@@ -379,17 +382,27 @@ function selectPerspectiveRecords(rows, { holderIds, mentionedHolderIds = [], ta
   // The same record can be stored twice, by two events that told it; it is read once.
   const seen = new Set();
   const records = [];
+  const sources = [];
   for (const { row } of scored) {
     const record = compactPerspectiveRecord(row);
     const key = JSON.stringify(record);
     if (seen.has(key)) continue;
     seen.add(key);
     records.push(record);
+    sources.push(row);
   }
-  return {
-    records: records.slice(0, limit),
-    candidates: records.length,
-  };
+  const sent = records.slice(0, limit);
+  if (!withRefs) return { records: sent, candidates: records.length };
+  const refs = new Map();
+  const referenced = sent.map((record, index) => {
+    const row = sources[index];
+    if (!HOLDER_RECORD_TYPES.has(row.type) || !row.value?.id) return record;
+    // Never shaped like an entity label, which the reply's label decoding would turn into an id.
+    const ref = `#${refs.size + 1}`;
+    refs.set(ref, row);
+    return { ref, ...record };
+  });
+  return { records: referenced, candidates: records.length, refs };
 }
 
 // Enough to recognise what is already recorded, which is all the analysis reads these for. Whole
@@ -401,7 +414,7 @@ function shortenText(text) {
   return `${text.slice(0, PERSPECTIVE_TEXT_LIMIT).trimEnd()}…`;
 }
 
-// The analysis never refers to a stored record by id, so ids and provenance stay out of the payload.
+// Ids and provenance stay out of the payload; a record the analysis may change is named by a ref.
 function compactPerspectiveRecord({ type, subjectId, value }) {
   return {
     type,
@@ -411,6 +424,9 @@ function compactPerspectiveRecord({ type, subjectId, value }) {
     ...(value.entityId ? { entityId: value.entityId } : {}),
     ...(value.acquisition ? { acquisition: value.acquisition } : {}),
     ...(value.accessibility && value.accessibility !== 'available' ? { accessibility: value.accessibility } : {}),
+    ...(value.negated === true ? { negated: true } : {}),
+    ...(value.attitude === 'suspects' ? { attitude: 'suspects' } : {}),
+    ...(value.heldById ? { heldById: value.heldById } : {}),
   };
 }
 

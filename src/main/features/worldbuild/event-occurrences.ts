@@ -836,6 +836,7 @@ function relatedIdsForOperation(operation: ExtractedNarrativeEvent['operations']
   if (operation.type === 'awareness') return [operation.subjectId, operation.targetId];
   if (operation.type === 'knowledge' || operation.type === 'belief') return [operation.subjectId, operation.proposition.subjectId];
   if (operation.type === 'memory') return [operation.subjectId, ...(operation.relatedEntityIds ?? [])];
+  if (operation.type === 'end') return [operation.subjectId];
   return [operation.sourceEntityId, operation.targetEntityId];
 }
 

@@ -5,7 +5,7 @@ import { NarrativeEntitySystem } from '../../src/main/features/narrative/narrati
 import { NarrativeWorld } from '../../src/main/features/narrative/umwelt/narrative-world';
 import { loadStoryRecords } from '../../src/main/features/narrative/umwelt/story-projection';
 import { StoryTimelines } from '../../src/main/features/narrative/umwelt/story-timelines';
-import { mergeStoryEntity, retireStoryEntity } from '../../src/main/features/narrative/umwelt/story-entities';
+import { mergeStoryEntity, renameStoryEntity, retireStoryEntity } from '../../src/main/features/narrative/umwelt/story-entities';
 import { openFullSchemaDatabase, type FullSchemaDatabase } from '../database/full-schema-harness';
 import { storyMinute } from '../../src/shared/calendar-ordinal';
 
@@ -64,6 +64,22 @@ describe('Turn lifecycle in the story file', () => {
     expect(new StoryTimelines(world).turnDraft('t1')).toBeNull();
     expect(story()).toEqual([]);
     expect(world.call<unknown[]>('timeline.list', { status: 'active' }).filter((item: any) => item.kind === 'draft')).toEqual([]);
+  });
+
+  test('a story pass that lands after the next turn began leaves that turn in its own draft', () => {
+    const reply = db.prepare(`INSERT INTO messages (id, chatId, role, content, createdAt) VALUES (?, ?, 'ai', '', ?)`);
+    reply.run('t1', WS, 1);
+    reply.run('t2', WS, 2);
+    turn('t1', [knows('elias', 'Behind the well, under the old stones.')]);
+    turn('t2', [knows('tess', 'The guild hall has two cellars below it.')]);
+    turn('t1', [knows('tess', 'The well is dry since spring.')]);
+
+    expect(new StoryTimelines(NarrativeWorld.of(db, WS)).turnDraft('t2')).toBe('turn-t2');
+    expect(new StoryTimelines(NarrativeWorld.of(db, WS)).turnDraft('t1')).toBeNull();
+    entities.markOrigin(WS, 't2', 'deleted');
+    purgeDeadTurns(db, WS);
+    expect(story().map(item => item.row.subject_id).sort()).toEqual(['elias', 'tess']);
+    expect(story().map(item => JSON.stringify(item.payload)).join(' ')).not.toContain('two cellars');
   });
 
   test('a dead turn that was already confirmed is retracted and stays in history', () => {
@@ -147,6 +163,13 @@ describe('Entities in the story file', () => {
     const records = story();
     expect(records.find(item => item.row.record_type === 'knowledge')?.row.subject_id).toBe('elias');
     expect(records.filter(item => item.row.record_type === 'relationship')).toEqual([]);
+  });
+
+  test('a rename reaches the entity in the story file', () => {
+    turn('t1', [knows('elias', 'Behind the well, under the old stones.')]);
+    expect(renameStoryEntity(db, WS, 'guild', 'Lantern Guild')).toBe(true);
+    expect(NarrativeWorld.of(db, WS).call<{ name: string }>('entity.get', { entityId: 'guild' }).name).toBe('Lantern Guild');
+    expect(renameStoryEntity(db, WS, 'nobody', 'Nobody')).toBe(false);
   });
 
   test('deleting an entity ends what the story holds about it', () => {

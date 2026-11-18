@@ -2,14 +2,14 @@ import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { NARRATIVE_CONTRACT_VERSION, type NarrativeOperation, type NarrativeProposal, type Proposition, type RelationshipState, type WorldDay } from '../../../narrative/contracts';
 import { validateNarrativeOperation } from '../../../narrative/validation';
-import { isProseStatement, propositionIdentity, statementKey } from '../../../narrative/narrative-taxonomy';
+import { isProseStatement, normalizeKnowledgeCategory, propositionIdentity, statementKey } from '../../../narrative/narrative-taxonomy';
 import { isDailyLimited, limitRelationshipChange, type RelationshipImpact, type RelationshipTable } from '../../../narrative/relationship-bands';
 import { NarrativeEventLedgerRepository, type NarrativeEventLedgerRecord } from '../../../narrative/ledger';
 import { createWorldbuildKnowledgeService, type WorldbuildKnowledgeService } from '../worldbuild/knowledge-service';
 import { NarrativeWorld } from './umwelt/narrative-world';
 import { writeLedgerRecord } from './umwelt/story-journal';
-import type { StoryChecks } from './umwelt/story-writer';
-import { kindOf, objectOf, StoryReader } from './umwelt/story-reader';
+import { HOLDS_PREDICATE, type StoryChecks } from './umwelt/story-writer';
+import { kindOf, metadataOf, objectOf, StoryReader } from './umwelt/story-reader';
 import {
   reviewExtractedOperations,
   type ExtractedNarrativeEvent,
@@ -76,6 +76,19 @@ export interface NarrativeStateMetric {
   recordedAt: number;
 }
 
+/** A turn's story pass, queued behind its state pass. */
+export interface NarrativeStoryJob {
+  workspaceId: string;
+  originId: string;
+  status: 'queued' | 'processing' | 'completed' | 'failed' | 'skipped';
+  handoff: Record<string, unknown>;
+  error: string | null;
+  attempts: number;
+}
+
+/** Runs of a story pass before a failed turn waits for a reprocess by hand. */
+export const STORY_PASS_MAX_ATTEMPTS = 3;
+
 export interface NarrativeStateJob {
   workspaceId: string;
   originId: string;
@@ -132,6 +145,71 @@ export class NarrativeStateSystem {
     `).run(status, details.deepAnalysis ? 1 : 0, details.fingerprint ?? null, details.inputTokens ?? 0, details.outputTokens ?? 0, details.error ?? null, Date.now(), workspaceId, originId);
   }
 
+  queueStory(workspaceId: string, originId: string, handoff: Record<string, unknown>): void {
+    const now = Date.now();
+    this.db.prepare(`
+      INSERT INTO narrative_story_jobs (workspace_id, origin_id, status, handoff_json, created_at, updated_at)
+      VALUES (?, ?, 'queued', ?, ?, ?)
+      ON CONFLICT(workspace_id, origin_id) DO UPDATE SET status = 'queued', handoff_json = excluded.handoff_json,
+        attempts = 0, error_message = NULL, updated_at = excluded.updated_at
+      WHERE narrative_story_jobs.status NOT IN ('completed', 'skipped')
+    `).run(workspaceId, originId, JSON.stringify(handoff), now, now);
+  }
+
+  getStory(workspaceId: string, originId: string): NarrativeStoryJob | null {
+    if (!this.hasTable('narrative_story_jobs')) return null;
+    const row = this.db.prepare('SELECT * FROM narrative_story_jobs WHERE workspace_id = ? AND origin_id = ?')
+      .get(workspaceId, originId) as Record<string, unknown> | undefined;
+    return row ? storyJob(row) : null;
+  }
+
+  /**
+   * The oldest story pass still to run. A pass left processing by a closed app runs again, and a
+   * failed one too until it has used its attempts, so a dropped connection does not leave a gap.
+   */
+  nextQueuedStory(workspaceId: string, skippedOriginIds: string[] = []): NarrativeStoryJob | null {
+    if (!this.hasTable('narrative_story_jobs')) return null;
+    const rows = this.db.prepare(`
+      SELECT * FROM narrative_story_jobs
+      WHERE workspace_id = ?
+        AND (status = 'queued' OR (status IN ('processing', 'failed') AND attempts < ?))
+      ORDER BY created_at, origin_id
+    `).all(workspaceId, STORY_PASS_MAX_ATTEMPTS) as Array<Record<string, unknown>>;
+    const skipped = new Set(skippedOriginIds);
+    const row = rows.find(candidate => !skipped.has(String(candidate.origin_id)));
+    return row ? storyJob(row) : null;
+  }
+
+  /** Story passes that used all their attempts: only a reprocess by hand records them now. */
+  listStalledStories(workspaceId: string): NarrativeStoryJob[] {
+    if (!this.hasTable('narrative_story_jobs')) return [];
+    const rows = this.db.prepare(`
+      SELECT * FROM narrative_story_jobs
+      WHERE workspace_id = ? AND status IN ('processing', 'failed') AND attempts >= ?
+      ORDER BY created_at, origin_id
+    `).all(workspaceId, STORY_PASS_MAX_ATTEMPTS) as Array<Record<string, unknown>>;
+    return rows.map(storyJob);
+  }
+
+  beginStory(workspaceId: string, originId: string): void {
+    this.db.prepare("UPDATE narrative_story_jobs SET status = 'processing', attempts = attempts + 1, error_message = NULL, updated_at = ? WHERE workspace_id = ? AND origin_id = ?")
+      .run(Date.now(), workspaceId, originId);
+  }
+
+  finishStory(workspaceId: string, originId: string, status: 'completed' | 'failed' | 'skipped', details: { inputTokens?: number; outputTokens?: number; error?: string } = {}): void {
+    this.db.prepare(`
+      UPDATE narrative_story_jobs SET status = ?, input_tokens = ?, output_tokens = ?, error_message = ?, updated_at = ?
+      WHERE workspace_id = ? AND origin_id = ?
+    `).run(status, details.inputTokens ?? 0, details.outputTokens ?? 0, details.error ?? null, Date.now(), workspaceId, originId);
+  }
+
+  /** Whether the turn still stands: a reply deleted, reverted or replaced has nothing to record. */
+  isOriginActive(workspaceId: string, originId: string): boolean {
+    const row = this.db.prepare('SELECT status FROM narrative_origin_lifecycle WHERE workspace_id = ? AND origin_id = ?')
+      .get(workspaceId, originId) as { status: string } | undefined;
+    return !row || row.status === 'active';
+  }
+
   createEvent(input0: CreateEventInput): CreateEventResult {
     const notes: RelationshipNote[] = [];
     const result = this.createEventWithNotes(input0, notes);
@@ -144,7 +222,7 @@ export class NarrativeStateSystem {
     }
     // An entity merged or deleted while the analysis was running: the ids it names are resolved
     // against the world as it is now, so nothing is written about an entity that is gone.
-    const proposed = this.resolveEntityIdentity(input0);
+    const proposed = this.withParticipatingWitnesses(this.resolveEntityIdentity(input0));
     // Gated before anything is written, so a turn of pure chatter never reaches the ledger.
     const review = reviewExtractedOperations(proposed.event.operations, {
       modelAuthored: isModelAuthored(proposed),
@@ -159,7 +237,7 @@ export class NarrativeStateSystem {
     if (this.ledger.get(input.workspaceId, `evt_${fingerprint}`)) {
       return { skipped: 'duplicate', ...rejected(review) };
     }
-    const operations = deduplicateAwarenessOperations(buildOperations(
+    const operations = deduplicateOperations(buildOperations(
       input,
       fingerprint,
       {
@@ -412,12 +490,47 @@ export class NarrativeStateSystem {
     `).get(workspaceId, sourceId, targetId, cause, day.eraId, day.year, day.month, day.day));
   }
 
+  /**
+   * Something seen first-hand is seen by every participant of the event who was in the scene,
+   * so one the interpreter forgot still holds it. Someone only nearby or observing is left out.
+   */
+  private withParticipatingWitnesses(input: CreateEventInput): CreateEventInput {
+    if (!isModelAuthored(input) || !input.sceneId) return input;
+    const sceneParticipants = new Set((this.db.prepare(`
+      SELECT entity_id AS entityId FROM narrative_scene_participants WHERE workspace_id = ? AND scene_id = ?
+    `).all(input.workspaceId, input.sceneId) as Array<{ entityId: string }>).map(row => row.entityId));
+    const witnesses = unique(input.event.participantIds)
+      .filter(id => sceneParticipants.has(id) && input.allowedEntityIds.has(id));
+    if (witnesses.length < 2) return input;
+    const statement = (operation: Extract<ExtractedNarrativeOperation, { type: 'knowledge' }>) => JSON.stringify([
+      operation.proposition.subjectId, operation.proposition.predicate, operation.proposition.object
+    ]);
+    const held = new Set(input.event.operations.flatMap(operation => (
+      operation.type === 'knowledge' ? [`${operation.subjectId}\u0000${statement(operation)}`] : []
+    )));
+    const additions: ExtractedNarrativeOperation[] = [];
+    for (const operation of input.event.operations) {
+      if (operation.type !== 'knowledge' || (operation.acquisition !== 'participant' && operation.acquisition !== 'witness')) continue;
+      if (!witnesses.includes(operation.subjectId)) continue;
+      for (const witness of witnesses) {
+        const key = `${witness}\u0000${statement(operation)}`;
+        if (held.has(key)) continue;
+        held.add(key);
+        const { entryId: _entryId, supersedesId: _supersedesId, ...rest } = operation as typeof operation & { entryId?: string; supersedesId?: string };
+        additions.push({ ...rest, subjectId: witness });
+      }
+    }
+    return additions.length ? { ...input, event: { ...input.event, operations: [...input.event.operations, ...additions] } } : input;
+  }
+
   private hasAwareness(workspaceId: string, subjectId: string, targetId: string): boolean {
     return this.knowledgeCards.getCard(workspaceId, subjectId, targetId)?.status === 'active';
   }
 
   /** Keyed on the statement, not the predicate or acquisition, which the interpreter rewrites between turns. */
   private isDuplicateOperation(workspaceId: string, operation: NarrativeOperation): boolean {
+    // A correction or an ending is about a record that is there by definition.
+    if (endsOrRevises(operation)) return false;
     const world = NarrativeWorld.of(this.db, workspaceId);
     if (!world.exists()) return false;
     const reader = new StoryReader(world);
@@ -437,10 +550,21 @@ export class NarrativeStateSystem {
     const kind = operation.type === 'grant-knowledge' ? 'knowledge' : 'belief';
     const payload = operation.type === 'grant-knowledge' ? operation.knowledge : operation.belief;
     const key = propositionKey(payload.proposition);
+    // Held the other way round, or as a suspicion instead of a belief, it is a change, not a repeat.
+    const polarity = payload.negated !== true;
+    const suspected = operation.type === 'set-belief' && operation.belief.attitude === 'suspects';
+    const sameStance = (record: { claim: { polarity: boolean }; attitude: string }) =>
+      record.claim.polarity === polarity && (record.attitude === 'suspects') === suspected;
+    const heldById = operation.type === 'set-belief' ? operation.belief.heldById : undefined;
+    if (heldById) {
+      return reader.holdings(payload.subjectId, { about: heldById, predicate: HOLDS_PREDICATE })
+        .some(item => item.record.kind === 'holding' && sameStance(item.record)
+          && propositionKey(heldOf(item.record)) === key);
+    }
     // A structured value keeps its predicate in its identity, so only that predicate can match.
     const narrowed = isProseStatement(payload.proposition.object) ? {} : { predicate: payload.proposition.predicate };
     return reader.holdings(payload.subjectId, { about: payload.proposition.subjectId, ...narrowed })
-      .some(item => kindOf(item.record) === kind && item.record.kind === 'holding'
+      .some(item => kindOf(item.record) === kind && item.record.kind === 'holding' && sameStance(item.record)
         && propositionIdentity(item.record.claim.subject, item.record.claim.predicate, objectOf(item.record.claim)) === key);
   }
 
@@ -508,13 +632,25 @@ export class NarrativeStateSystem {
             });
           }
         } else if (operation.type === 'set-belief') {
+          const sourceId = operation.belief.entryId || operation.belief.id;
           this.knowledgeCards.ensureAwareness({
             workspaceId,
             ownerId: operation.belief.subjectId,
             targetId: operation.belief.proposition.subjectId,
             sourceType: 'statement',
-            sourceId: operation.belief.entryId || operation.belief.id,
+            sourceId,
           });
+          // Whoever told it, and whoever it is thought to be held by, are known to the holder too.
+          for (const otherId of [...(operation.belief.informantIds ?? []), ...(operation.belief.heldById ? [operation.belief.heldById] : [])]) {
+            if (otherId === operation.belief.subjectId) continue;
+            this.knowledgeCards.ensureAwareness({
+              workspaceId,
+              ownerId: operation.belief.subjectId,
+              targetId: otherId,
+              sourceType: 'statement',
+              sourceId: `informant:${sourceId}:${otherId}`,
+            });
+          }
         } else if (operation.type === 'set-relationship') {
           this.knowledgeCards.ensureAwareness({
             workspaceId,
@@ -569,6 +705,7 @@ function buildOperations(
   return input.event.operations.flatMap((operation, index): NarrativeOperation[] => {
     if (!isAllowed(operation, input.allowedEntityIds, input.excludedRelationshipSourceIds)) return [];
     const suffix = `${fingerprint}_${index}`;
+    if (operation.type === 'end') return endOperation(operation, suffix, eventId, evidenceIds);
     if (operation.type === 'fact') return [{
       id: `op_${suffix}`,
       type: 'assert-fact',
@@ -624,7 +761,7 @@ function buildOperations(
             sourceEventId: eventId
           }
         } as const] : []),
-        { id: `op_${suffix}`, type: 'grant-knowledge', evidenceIds, knowledge: { id: `knowledge_${suffix}`, entryId: `entry_${suffix}`, subjectId: operation.subjectId, proposition: operation.proposition, sourceEventId: eventId, acquisition: operation.acquisition, confidence: confidence(operation.confidence), accessibility: operation.accessibility ?? 'available', status: 'active', ...category(operation), ...informants(operation, input.allowedEntityIds) } }
+        { id: `op_${suffix}`, type: 'grant-knowledge', evidenceIds, knowledge: { id: `knowledge_${suffix}`, entryId: operation.entryId ?? `entry_${suffix}`, subjectId: operation.subjectId, proposition: operation.proposition, sourceEventId: eventId, acquisition: operation.acquisition, confidence: confidence(operation.confidence), accessibility: operation.accessibility ?? 'available', status: 'active', ...category(operation), ...informants(operation, input.allowedEntityIds), ...(operation.supersedesId ? { supersedesId: operation.supersedesId } : {}), ...holdingNuance(operation, input.allowedEntityIds) } }
       ];
       return operations.every(isValidNarrativeOperation) ? operations : [];
     }
@@ -651,11 +788,11 @@ function buildOperations(
             sourceEventId: eventId
           }
         } as const] : []),
-        { id: `op_${suffix}`, type: 'set-belief', evidenceIds, belief: { id: `belief_${suffix}`, entryId: `entry_${suffix}`, subjectId: operation.subjectId, proposition: operation.proposition, sourceEventId: eventId, confidence: confidence(operation.confidence), relationToCanon: 'unknown', status: 'active', ...category(operation) } }
+        { id: `op_${suffix}`, type: 'set-belief', evidenceIds, belief: { id: `belief_${suffix}`, entryId: operation.entryId ?? `entry_${suffix}`, subjectId: operation.subjectId, proposition: operation.proposition, sourceEventId: eventId, confidence: confidence(operation.confidence), relationToCanon: 'unknown', status: 'active', ...category(operation), ...(operation.supersedesId ? { supersedesId: operation.supersedesId } : {}), ...holdingNuance(operation, input.allowedEntityIds) } }
       ];
       return operations.every(isValidNarrativeOperation) ? operations : [];
     }
-    if (operation.type === 'memory') return [{ id: `op_${suffix}`, type: 'record-memory', evidenceIds, memory: { id: `memory_${suffix}`, subjectId: operation.subjectId, eventId, summary: operation.summary.trim(), accessibility: operation.accessibility ?? 'available', status: 'active', ...category(operation), relatedEntityIds: unique(operation.relatedEntityIds ?? []).filter(id => input.allowedEntityIds.has(id)), ...(operation.occurredOn ? { occurredOn: operation.occurredOn } : {}) } }];
+    if (operation.type === 'memory') return [{ id: `op_${suffix}`, type: 'record-memory', evidenceIds, memory: { id: `memory_${suffix}`, subjectId: operation.subjectId, eventId, summary: operation.summary.trim(), accessibility: operation.accessibility ?? 'available', status: 'active', ...category(operation), relatedEntityIds: unique(operation.relatedEntityIds ?? []).filter(id => input.allowedEntityIds.has(id)), ...(operation.occurredOn ? { occurredOn: operation.occurredOn } : {}), ...(operation.supersedesMemoryId ? { supersedesMemoryId: operation.supersedesMemoryId } : {}) } }];
     const valueOnly = isModelAuthored(input);
     const dimension = valueOnly ? 'overall' : operation.dimension.trim().toLowerCase();
     const baseline = relationships.baseline(operation.sourceEntityId, operation.targetEntityId, dimension);
@@ -690,13 +827,14 @@ function buildOperations(
     if (valueOnly) relationships.notes.push(note);
     if (note.applied === null) return [];
     const value = note.applied;
-    const alreadyAwareThisEvent = input.event.operations.some(candidate => (
-      candidate.type === 'awareness'
-      && candidate.subjectId === operation.sourceEntityId
-      && candidate.targetId === operation.targetEntityId
-    ));
+    const alreadyAware = hasAwareness(operation.sourceEntityId, operation.targetEntityId)
+      || input.event.operations.some(candidate => (
+        candidate.type === 'awareness'
+        && candidate.subjectId === operation.sourceEntityId
+        && candidate.targetId === operation.targetEntityId
+      ));
     return [
-      ...(!alreadyAwareThisEvent ? [{
+      ...(!alreadyAware ? [{
         id: `op_${suffix}_awareness`,
         type: 'grant-awareness',
         evidenceIds,
@@ -731,6 +869,63 @@ function buildOperations(
   });
 }
 
+/** An ending is written as the record it ends, carrying the status it ends with. */
+function endOperation(
+  operation: Extract<ExtractedNarrativeOperation, { type: 'end' }>,
+  suffix: string,
+  eventId: string,
+  evidenceIds: string[]
+): NarrativeOperation[] {
+  const id = `op_${suffix}`;
+  if (operation.kind === 'memory') {
+    if (operation.status !== 'forgotten') return [];
+    return [{ id, type: 'record-memory', evidenceIds, memory: { id: `memory_${suffix}`, subjectId: operation.subjectId, eventId, summary: String(operation.summary ?? '').trim(), accessibility: 'available', status: 'forgotten', supersedesMemoryId: operation.recordId } }];
+  }
+  if (!operation.proposition) return [];
+  // A record written before entries existed is its own entry.
+  const target = { id: `${operation.kind}_${suffix}`, entryId: operation.entryId ?? operation.recordId };
+  if (operation.kind === 'belief') {
+    if (operation.status !== 'abandoned') return [];
+    return [{ id, type: 'set-belief', evidenceIds, belief: { ...target, subjectId: operation.subjectId, proposition: operation.proposition, sourceEventId: eventId, confidence: 1, relationToCanon: 'unknown', status: 'abandoned' } }];
+  }
+  if (operation.status !== 'forgotten' && operation.status !== 'revoked') return [];
+  return [{ id, type: 'grant-knowledge', evidenceIds, knowledge: { ...target, subjectId: operation.subjectId, proposition: operation.proposition, sourceEventId: eventId, acquisition: operation.acquisition ?? 'witness', confidence: 1, accessibility: 'available', status: operation.status } }];
+}
+
+function endsOrRevises(operation: NarrativeOperation): boolean {
+  if (operation.type === 'record-memory') return (operation.memory.status ?? 'active') !== 'active' || Boolean(operation.memory.supersedesMemoryId);
+  if (operation.type === 'grant-knowledge') return operation.knowledge.status !== 'active' || Boolean(operation.knowledge.supersedesId);
+  if (operation.type === 'set-belief') return operation.belief.status !== 'active' || Boolean(operation.belief.supersedesId);
+  return false;
+}
+
+/**
+ * How a holding was held, told or reasoned, kept only where it means something: a teller's intent
+ * and record with a teller, premises with an inference, a circle with a secret.
+ */
+function holdingNuance(
+  operation: Extract<ExtractedNarrativeOperation, { type: 'knowledge' | 'belief' }>,
+  allowed: Set<string>
+): Record<string, unknown> {
+  const others = (values: string[] | undefined) => unique(values ?? []).filter(id => id !== operation.subjectId && allowed.has(id));
+  const tellers = operation.type === 'knowledge'
+    ? (operation.acquisition === 'reported' ? others(operation.informantIds) : [])
+    : others(operation.informantIds);
+  const inferred = operation.type === 'knowledge' ? operation.acquisition === 'inferred' : !tellers.length;
+  const premises = inferred ? unique(operation.premiseIds ?? []) : [];
+  const circle = operation.type === 'knowledge' && normalizeKnowledgeCategory(operation.category) === 'secret' ? others(operation.sharedWith) : [];
+  return {
+    ...(operation.negated === true ? { negated: true } : {}),
+    ...(tellers.length && (operation.intent === 'honest' || operation.intent === 'deceptive') ? { intent: operation.intent } : {}),
+    ...(tellers.length && operation.sourceRecordId ? { sourceRecordId: operation.sourceRecordId } : {}),
+    ...(premises.length ? { premiseIds: premises } : {}),
+    ...(circle.length ? { sharedWith: circle } : {}),
+    ...(operation.type === 'belief' && tellers.length ? { informantIds: tellers } : {}),
+    ...(operation.type === 'belief' && operation.attitude === 'suspects' ? { attitude: 'suspects' } : {}),
+    ...(operation.type === 'belief' && operation.heldById && operation.heldById !== operation.subjectId && allowed.has(operation.heldById) ? { heldById: operation.heldById } : {})
+  };
+}
+
 /** Only hearsay has a teller, and a subject is never its own; the model is not trusted on either. */
 function informants(
   operation: Extract<ExtractedNarrativeOperation, { type: 'knowledge' }>,
@@ -746,10 +941,20 @@ function informants(
  * One event moves a given bar once. Two adjustments for the same pair would race: only the last
  * survives in the projection while both stay in the store.
  */
-function deduplicateAwarenessOperations(operations: NarrativeOperation[]): NarrativeOperation[] {
+function deduplicateOperations(operations: NarrativeOperation[]): NarrativeOperation[] {
   const awarenessPairs = new Set<string>();
   const relationshipPairs = new Set<string>();
+  const holdings = new Set<string>();
   return operations.filter(operation => {
+    if (operation.type === 'grant-knowledge' || operation.type === 'set-belief') {
+      // The same holder told the same thing twice in one event is one holding.
+      const held = operation.type === 'grant-knowledge' ? operation.knowledge : operation.belief;
+      const { subjectId, predicate, object } = held.proposition as { subjectId: string; predicate: string; object: unknown };
+      const key = JSON.stringify([operation.type, held.subjectId, subjectId, predicate, object]);
+      if (holdings.has(key)) return false;
+      holdings.add(key);
+      return true;
+    }
     if (operation.type === 'set-relationship') {
       const pair = `${operation.relationship.sourceEntityId}\u0000${operation.relationship.targetEntityId}\u0000${operation.relationship.dimension}`;
       if (relationshipPairs.has(pair)) return false;
@@ -777,6 +982,7 @@ function isAllowed(operation: ExtractedNarrativeOperation, allowed: Set<string>,
   if (operation.type === 'fact') return allowed.has(operation.proposition.subjectId) && Boolean(operation.proposition.predicate.trim());
   if (!allowed.has(operation.subjectId)) return false;
   if (operation.type === 'awareness') return allowed.has(operation.targetId);
+  if (operation.type === 'belief' && operation.heldById && !allowed.has(operation.heldById)) return false;
   if (operation.type === 'knowledge' || operation.type === 'belief') return allowed.has(operation.proposition.subjectId) && Boolean(operation.proposition.predicate.trim());
   if (operation.type === 'memory') return operation.salience >= 0.65 && Boolean(operation.summary.trim());
   return true;
@@ -792,14 +998,30 @@ const REVIEWED_RELATIONSHIP_CAUSES = new Set(['betrayal', 'sacrifice', 'cruelty'
 function requiresReview(event: ExtractedNarrativeEvent): boolean {
   if (event.confidence < AUTO_CONFIDENCE) return true;
   return event.operations.some(operation => {
+    // Correcting or ending what a person wrote is theirs to accept.
+    if ('authored' in operation && operation.authored) return true;
+    if (operation.type === 'end') return false;
     if (operation.type === 'belief') return true;
     if (operation.type === 'relationship') {
       return operation.impact === 'drastic' || REVIEWED_RELATIONSHIP_CAUSES.has(String(operation.cause));
     }
     if (operation.type === 'memory') return operation.salience < AUTO_MEMORY_SALIENCE;
     if (operation.type === 'knowledge' && REVIEWED_KNOWLEDGE_CATEGORIES.has(String(operation.category))) return true;
+    // A lie is the narrator's to see; recording one changes what the hearer will act on.
+    if (operation.type === 'knowledge' && operation.intent === 'deceptive') return true;
     return operation.confidence < AUTO_CONFIDENCE;
   });
+}
+
+function storyJob(row: Record<string, unknown>): NarrativeStoryJob {
+  return {
+    workspaceId: String(row.workspace_id),
+    originId: String(row.origin_id),
+    status: String(row.status) as NarrativeStoryJob['status'],
+    handoff: parseJson(String(row.handoff_json ?? '{}')) ?? {},
+    error: row.error_message ? String(row.error_message) : null,
+    attempts: Number(row.attempts) || 0
+  };
 }
 
 function hasChecks(checks: StoryChecks): boolean {
@@ -827,6 +1049,12 @@ function category<T extends string>(operation: ExtractedNarrativeOperation): { c
 
 function propositionKey(proposition: Proposition): string {
   return propositionIdentity(proposition.subjectId, proposition.predicate, proposition.object);
+}
+
+/** What a second-order record says the other holder holds, as the writer kept it. */
+function heldOf(record: Parameters<typeof metadataOf>[0]): Proposition {
+  const held = metadataOf(record).held as Partial<Proposition> | undefined;
+  return { subjectId: String(held?.subjectId ?? ''), predicate: String(held?.predicate ?? ''), object: held?.object ?? null };
 }
 
 function unique(values: string[]): string[] { return [...new Set(values.filter(Boolean))]; }

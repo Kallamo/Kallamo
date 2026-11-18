@@ -39,9 +39,16 @@ export class StoryTimelines {
     return live.sort((a, b) => b.headVersion - a.headVersion)[0].id;
   }
 
-  /** The timeline a turn's analysis writes to: its own draft, after every other turn is settled. */
+  /**
+   * The timeline a turn's analysis writes to: its own draft, after every other turn is settled. A
+   * turn that a later one already follows was confirmed, so it writes to main and leaves the later
+   * turn's draft open for its own regeneration.
+   */
   forTurn(originId: string): string {
     const id = turnTimelineId(originId);
+    if (this.turnDrafts().some(draft => draft.id !== id && this.originAlive(draft.label ?? '') && this.isLater(draft.label ?? '', originId))) {
+      return MAIN_TIMELINE;
+    }
     for (const draft of this.turnDrafts()) {
       if (draft.id !== id) this.settle(draft);
     }
@@ -154,6 +161,15 @@ export class StoryTimelines {
       SELECT status FROM narrative_origin_lifecycle WHERE workspace_id = ? AND origin_id = ?
     `).get(this.world.workspaceId, originId) as { status: string } | undefined;
     return !row || row.status === 'active';
+  }
+
+  private isLater(originId: string, thanOriginId: string): boolean {
+    if (!originId || !thanOriginId || !hasTable(this.world, 'messages')) return false;
+    const createdAt = (id: string) => (this.world.db.prepare('SELECT createdAt FROM messages WHERE id = ? AND chatId = ?')
+      .get(id, this.world.workspaceId) as { createdAt: number } | undefined)?.createdAt;
+    const later = createdAt(originId);
+    const earlier = createdAt(thanOriginId);
+    return later !== undefined && earlier !== undefined && Number(later) > Number(earlier);
   }
 
   private originRestorable(originId: string): boolean {

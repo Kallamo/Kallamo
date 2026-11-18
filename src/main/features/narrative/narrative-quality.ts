@@ -45,8 +45,34 @@ export type ExtractedNarrativeOperation =
     confidence: number;
     accessibility?: 'available' | 'suppressed' | 'inaccessible';
     informantIds?: string[];
+    entryId?: string;
+    supersedesId?: string;
+    /** Set when the record this corrects or ends was written by a person. */
+    authored?: boolean;
+    negated?: boolean;
+    intent?: 'honest' | 'deceptive';
+    sourceRecordId?: string;
+    premiseIds?: string[];
+    sharedWith?: string[];
   }
-  | { type: 'belief'; subjectId: string; proposition: Proposition; category?: string; confidence: number }
+  | {
+    type: 'belief';
+    subjectId: string;
+    proposition: Proposition;
+    category?: string;
+    confidence: number;
+    entryId?: string;
+    supersedesId?: string;
+    authored?: boolean;
+    attitude?: 'believes' | 'suspects';
+    negated?: boolean;
+    informantIds?: string[];
+    intent?: 'honest' | 'deceptive';
+    sourceRecordId?: string;
+    premiseIds?: string[];
+    /** Second order: the subject thinks this holder holds the proposition. */
+    heldById?: string;
+  }
   | {
     type: 'memory';
     subjectId: string;
@@ -57,6 +83,22 @@ export type ExtractedNarrativeOperation =
     relatedEntityIds?: string[];
     /** Set by a caller that already knows the day, such as a dated Event occurrence. */
     occurredOn?: WorldDay;
+    supersedesMemoryId?: string;
+    authored?: boolean;
+  }
+  | {
+    /** A stored record that stops holding, by a ref the story slice resolved. */
+    type: 'end';
+    kind: 'knowledge' | 'belief' | 'memory';
+    subjectId: string;
+    recordId: string;
+    entryId?: string;
+    proposition?: Proposition;
+    summary?: string;
+    acquisition?: 'participant' | 'witness' | 'reported' | 'inferred';
+    status: 'forgotten' | 'revoked' | 'abandoned';
+    reason?: string;
+    authored?: boolean;
   }
   | {
     type: 'relationship';
@@ -109,7 +151,8 @@ export const OPERATION_BUDGET: Record<ExtractedNarrativeOperation['type'], numbe
   belief: 3,
   memory: 3,
   relationship: 4,
-  awareness: 12
+  awareness: 12,
+  end: 4
 };
 
 /** How many events one turn may produce, before anything is written. */
@@ -167,6 +210,11 @@ export function assessExtractedOperation(
     return accept(operation);
   }
 
+  if (operation.type === 'end') {
+    const target = operation.kind === 'memory' ? statementText(operation.summary) : operation.proposition;
+    return operation.recordId && target ? accept(operation) : reject('empty-statement');
+  }
+
   if (operation.type === 'fact') {
     const propositionIssue = assessProposition(operation.proposition, context.modelAuthored);
     if (propositionIssue) return reject(propositionIssue);
@@ -190,6 +238,7 @@ export function assessExtractedOperation(
     if (operation.subjectId === operation.proposition.subjectId && !allowsSelfReference(category)) {
       return reject('self-referential');
     }
+    if (operation.type === 'belief' && operation.heldById === operation.subjectId) return reject('self-referential');
     if (operation.type === 'knowledge' && Number(operation.confidence) < MIN_KNOWLEDGE_CONFIDENCE) {
       return reject('low-confidence');
     }

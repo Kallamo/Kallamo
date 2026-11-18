@@ -18,8 +18,18 @@ export const NARRATIVE_OPERATION_SCHEMA = {
   properties: {
     type: {
       type: 'string',
-      enum: ['fact', 'awareness', 'knowledge', 'belief', 'memory', 'relationship'],
+      enum: ['fact', 'awareness', 'knowledge', 'belief', 'memory', 'relationship', 'revise', 'end'],
     },
+    ref: { type: 'string' },
+    how: { type: 'string', enum: ['forgot', 'abandoned', 'disproved', 'retracted', 'settled'] },
+    reason: { type: 'string' },
+    attitude: { type: 'string', enum: ['knows', 'believes', 'suspects'] },
+    negated: { type: 'boolean' },
+    intent: { type: 'string', enum: ['honest', 'deceptive'] },
+    toldFrom: { type: 'string' },
+    premises: { type: 'array', items: { type: 'string' } },
+    sharedWith: { type: 'array', items: { type: 'string' } },
+    heldById: { type: 'string' },
     subjectId: { type: 'string' },
     targetId: { type: 'string' },
     sourceEntityId: { type: 'string' },
@@ -160,16 +170,26 @@ export const NARRATIVE_TRIAGE_SCHEMA = {
   },
 };
 
-export const NARRATIVE_STATE_SCHEMA = {
+/** The scene pass: what the turn changed in the live state, applied before the next turn. */
+export const NARRATIVE_MECHANICS_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['newEntities', 'identityUpdates', 'resourceChanges', 'scenePatch', 'inventoryChanges', 'events'],
+  required: ['newEntities', 'identityUpdates', 'resourceChanges', 'scenePatch', 'inventoryChanges'],
   properties: {
     newEntities: { type: 'array', items: { type: 'object', additionalProperties: true } },
     identityUpdates: { type: 'array', items: { type: 'object', additionalProperties: true } },
     resourceChanges: { type: 'array', items: { type: 'object', additionalProperties: true } },
     scenePatch: { type: 'object', additionalProperties: true },
     inventoryChanges: { type: 'array', items: { type: 'object', additionalProperties: true } },
+  },
+};
+
+/** The story pass: the events a turn adds to the story, each with its operations. */
+export const NARRATIVE_STORY_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['events'],
+  properties: {
     events: {
       type: 'array',
       items: {

@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import type { Acquisition, Claim, CommitOutcome, Record as StoryRecord, RecordInput, TransitionInput } from '@kallamo/umwelt' with { 'resolution-mode': 'import' };
+import type { Proposition } from '../../../../narrative/contracts';
 import { NarrativeWorld, STORY_AXIS } from './narrative-world';
 import { storyMinuteFor } from './story-clock';
 import { metadataOf, StoryReader } from './story-reader';
 import { StoryTimelines } from './story-timelines';
+import { claimOfProposition, HOLDS_PREDICATE } from './story-writer';
 
 function swap<T>(value: T, from: string, to: string): T {
   if (value === from) return to as T;
@@ -103,6 +105,14 @@ export function mergeStoryEntity(db: Database.Database, workspaceId: string, sou
       continue;
     }
     if (next.kind === 'awareness') awareAlready.add(`${next.holder}>${next.target}`);
+    // A second-order record names the other holder's claim by its key, which changes with its ids.
+    const held = next.kind === 'holding' && next.claim.predicate === HOLDS_PREDICATE
+      ? (next.provenance?.metadata as { held?: Proposition } | undefined)?.held
+      : undefined;
+    if (next.kind === 'holding' && held) {
+      const claim = claimOfProposition(held, entityId => world.typeOf(entityId) !== undefined);
+      next.claim = { ...next.claim, object: { kind: 'value', value: { claimKey: world.raw<{ claimKey: string }>('claim.key', { claim }).claimKey } } };
+    }
     writes.push(next);
     transitions.push({ targetRecordId: record.id, status: 'superseded', supersededBy: id });
   }
@@ -121,13 +131,30 @@ export function mergeStoryEntity(db: Database.Database, workspaceId: string, sou
 function isAbout(record: StoryRecord, id: string): boolean {
   if (record.kind === 'awareness' || record.kind === 'disposition') return record.holder === id || record.target === id;
   const object = record.claim.object as { kind: string; id?: string };
-  return record.claim.subject === id || (object.kind === 'entity' && object.id === id) || (record.kind === 'holding' && record.holder === id);
+  // What someone thinks another holds is about whatever that other's claim is about too.
+  const held = record.kind === 'holding' && record.claim.predicate === HOLDS_PREDICATE
+    && JSON.stringify(metadataOf(record).held ?? null).includes(JSON.stringify(id));
+  return record.claim.subject === id || (object.kind === 'entity' && object.id === id) || (record.kind === 'holding' && record.holder === id) || held;
 }
 
 /**
  * Ends what the story holds about or by a deleted entity, and drops it from records that only name
  * it in passing (a memory's related entities, a teller); history keeps both.
  */
+/** The story file names an entity as it was first declared, so a Worldbuild rename is carried over. */
+export function renameStoryEntity(db: Database.Database, workspaceId: string, entityId: string, name: string): boolean {
+  if (!entityId || !name) return false;
+  const world = NarrativeWorld.of(db, workspaceId);
+  if (!world.exists()) return false;
+  try {
+    world.call('entity.get', { entityId });
+  } catch {
+    return false;
+  }
+  world.call('entity.update', { entityId, name });
+  return true;
+}
+
 export function retireStoryEntity(db: Database.Database, workspaceId: string, entityId: string): number {
   if (!entityId) return 0;
   const world = NarrativeWorld.of(db, workspaceId);

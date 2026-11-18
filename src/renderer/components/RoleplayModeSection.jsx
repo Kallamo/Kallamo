@@ -9,7 +9,7 @@ import NarrativeStateSection from '../features/configuration/roleplay/NarrativeS
 import CleanupDialog from '../features/configuration/roleplay/CleanupDialog';
 import { skillChangeItems } from '../features/roleplay/changeKinds';
 
-const EMPTY_SETTINGS = { playerEntityId: null, locationEntityId: null, activeSceneId: null, scenarioName: '', scenarioSummary: '', defaultUpdatePolicy: 'review' };
+const EMPTY_SETTINGS = { playerEntityId: null, locationEntityId: null, activeSceneId: null, scenarioName: '', scenarioSummary: '', defaultUpdatePolicy: 'review', entityCreation: {} };
 const EMPTY_SCENE = { locationId: null, participantIds: [], possibleObserverIds: [], nearbyIds: [], objectIds: [] };
 const EMPTY_PROGRESSION = { mode: 'off', members: [], progressingIds: [], playerEntityId: null, config: { policy: 'review', xp: { firstGoal: 1000, growth: 'add', growthAmount: 500, maxLevel: null, guidance: '', aiOnlyAdds: true }, attributes: { aiRaises: true, aiLowers: false, guidance: '' } } };
 const JOB_STALE_AFTER = 120000;
@@ -174,10 +174,12 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, regis
     announce();
   };
 
-  const resolve = async (item, decision) => {
+  const resolve = async (item, decision, classification) => {
     const method = api[RESOLVERS[item.kind]];
     if (!method) return;
-    const result = await method(workspaceId, item.id, decision);
+    const result = item.kind === 'entity' && classification
+      ? await method(workspaceId, item.id, decision, classification)
+      : await method(workspaceId, item.id, decision);
     if (!result?.success) {
       showToast(result?.error || 'Could not resolve the change.', 'error');
       return;
@@ -245,6 +247,14 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, regis
       tone: 'warning',
       title: job.status === 'failed' ? 'A turn failed to update' : 'A turn stopped while updating',
       detail: `${job.error ? `${job.error} ` : ''}The record may be behind the chat until this turn is read again.`,
+      action: 'Try again',
+      onFix: () => reprocess(job.originId)
+    })),
+    ...(config?.stalledStoryJobs || []).filter(job => !rereading.has(job.originId)).map(job => ({
+      key: `story:${job.originId}`,
+      tone: 'warning',
+      title: "A turn's story was not recorded",
+      detail: `${job.error ? `${job.error} ` : ''}It failed ${job.attempts} times, so later turns stopped trying. What lasts from it is missing from the story until it is read again.`,
       action: 'Try again',
       onFix: () => reprocess(job.originId)
     })),
@@ -319,6 +329,8 @@ export default function RoleplayModeSection({ workspaceId, api, showToast, regis
             sectionRef={registerSection?.('narrative-state')}
             policy={settings.defaultUpdatePolicy}
             onPolicy={policy => saveSettings({ defaultUpdatePolicy: policy })}
+            creation={settings.entityCreation}
+            onCreation={entityCreation => saveSettings({ entityCreation })}
             pending={pending}
             recent={recent}
             problems={problems}

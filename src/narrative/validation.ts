@@ -107,6 +107,18 @@ function requireRelationshipValue(record: Record<string, unknown>, key: string, 
   }
 }
 
+function optionalBoolean(record: Record<string, unknown>, key: string, path: string, issues: ValidationIssue[]): void {
+  if (record[key] !== undefined && typeof record[key] !== 'boolean') addIssue(issues, VALIDATION_ISSUE_CODES.INVALID_VALUE, `${path}.${key}`, 'Expected a boolean.');
+}
+
+/** How a holding was told, reasoned or shared; every field is optional. */
+function validateHoldingNuance(holding: Record<string, unknown>, path: string, issues: ValidationIssue[]): void {
+  optionalBoolean(holding, 'negated', path, issues);
+  optionalEnum(holding, 'intent', ['honest', 'deceptive'], path, issues);
+  if (holding.sourceRecordId !== undefined) requireString(holding, 'sourceRecordId', path, issues);
+  if (holding.premiseIds !== undefined) requireStringArray(holding, 'premiseIds', path, issues);
+}
+
 function requireEnum(record: Record<string, unknown>, key: string, values: string[], path: string, issues: ValidationIssue[]): void {
   if (!values.includes(String(record[key]))) addIssue(issues, VALIDATION_ISSUE_CODES.INVALID_VALUE, `${path}.${key}`, `Expected one of: ${values.join(', ')}.`);
 }
@@ -217,6 +229,9 @@ function validateKnowledgeValue(value: unknown, path: string, issues: Validation
   optionalEnum(knowledge, 'category', KNOWLEDGE_CATEGORY_VALUES, path, issues);
   if (knowledge.factIds !== undefined) requireStringArray(knowledge, 'factIds', path, issues);
   if (knowledge.informantIds !== undefined) requireStringArray(knowledge, 'informantIds', path, issues);
+  if (knowledge.supersedesId !== undefined) requireString(knowledge, 'supersedesId', path, issues);
+  if (knowledge.sharedWith !== undefined) requireStringArray(knowledge, 'sharedWith', path, issues);
+  validateHoldingNuance(knowledge, path, issues);
 }
 
 function validateAwarenessValue(value: unknown, path: string, issues: ValidationIssue[]): void {
@@ -242,6 +257,11 @@ function validateBeliefValue(value: unknown, path: string, issues: ValidationIss
   requireEnum(belief, 'status', ['active', 'superseded', 'abandoned'], path, issues);
   optionalEnum(belief, 'category', KNOWLEDGE_CATEGORY_VALUES, path, issues);
   if (belief.factIds !== undefined) requireStringArray(belief, 'factIds', path, issues);
+  if (belief.supersedesId !== undefined) requireString(belief, 'supersedesId', path, issues);
+  optionalEnum(belief, 'attitude', ['believes', 'suspects'], path, issues);
+  if (belief.informantIds !== undefined) requireStringArray(belief, 'informantIds', path, issues);
+  if (belief.heldById !== undefined) requireString(belief, 'heldById', path, issues);
+  validateHoldingNuance(belief, path, issues);
 }
 
 function validateNarrativeMemoryValue(value: unknown, path: string, issues: ValidationIssue[]): void {

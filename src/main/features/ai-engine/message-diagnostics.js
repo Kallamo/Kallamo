@@ -9,6 +9,8 @@ function normalizeNarrativeUsage(value = {}) {
     triageOutput: number(value.triageOutput),
     deepInput: number(value.deepInput),
     deepOutput: number(value.deepOutput),
+    storyInput: number(value.storyInput),
+    storyOutput: number(value.storyOutput),
     repairInput: number(value.repairInput),
     repairOutput: number(value.repairOutput),
   };
@@ -87,8 +89,8 @@ function buildEstimatedUsage(value = {}) {
   agentic.total = agentic.input + agentic.output;
 
   const narrativeState = normalizeNarrativeUsage(value.narrativeState);
-  narrativeState.input = narrativeState.triageInput + narrativeState.deepInput + narrativeState.repairInput;
-  narrativeState.output = narrativeState.triageOutput + narrativeState.deepOutput + narrativeState.repairOutput;
+  narrativeState.input = narrativeState.triageInput + narrativeState.deepInput + narrativeState.storyInput + narrativeState.repairInput;
+  narrativeState.output = narrativeState.triageOutput + narrativeState.deepOutput + narrativeState.storyOutput + narrativeState.repairOutput;
   narrativeState.total = narrativeState.input + narrativeState.output;
 
   return {

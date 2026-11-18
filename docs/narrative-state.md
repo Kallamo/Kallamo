@@ -18,7 +18,7 @@ Every record the interpreter writes declares what kind of thing it is, from a fi
 
 | Kind | Durable | Transient (dropped by name) |
 |---|---|---|
-| Knowledge | world-lore, identity, history, secret, capability, intent, bond | scene-state, small-talk |
+| Knowledge | world-lore, identity, history, secret, capability, property, intent, bond | scene-state, small-talk |
 | Memory | formative, bond, loss, trauma, triumph, oath, revelation | routine |
 | Relationship cause | betrayal, sacrifice, rescue, revelation, oath, cruelty, humiliation, forgiveness, shared-loss, sustained-trust, material-debt, first-impression, confidence-shared, affection, rejection, reliance | courtesy, banter, routine-cooperation, mood, compliance, instruction, presence |
 
@@ -32,6 +32,9 @@ Every record the interpreter writes declares what kind of thing it is, from a fi
   reliance) exist so a campaign whose plot is a relationship can name what moved.
 - A self-referential record is kept only for a secret, an identity or an intent. Anything else a
   character "knows about themselves" in the third person is a world fact and belongs in canon.
+- **property** is what a thing is made of, its present condition, or what examining or testing it
+  showed. Without it such findings were filed as capability, and the narrator read an alloy's
+  composition as something the object can do.
 
 **Only the interpreter is held to the taxonomy.** Hand-authored entries, imports and Worldbuild
 updates are deliberate acts by the author, and a world seeded before the taxonomy must not lose
@@ -67,11 +70,130 @@ retirement ends only its own record, never another that happens to say the same 
 Hearsay keeps its teller: knowing who said something is what makes a rumour traceable and a lie
 attributable. A first-hand record has no teller, and a subject is never its own informant.
 
+Polarity stays out of the identity on purpose: learning that something is not so is the same
+statement changing, so it revises the record that held it was. The repeat check does compare
+polarity and attitude, so a denial or a suspicion turned belief is written, not skipped.
+
+Within one event, the same holder given the same statement twice keeps one holding: the interpreter
+sometimes repeats a line it already wrote for that holder.
+
+## Awareness and witnesses
+
+- **Awareness is granted once.** Knowledge, a belief or a relationship about someone grants
+  awareness of them only when the holder is not aware yet. A relationship that moves again never
+  grants it a second time.
+- **First contact between characters.** Two participants who heard each other speak in the turn
+  (the triage's scene memory, `heard`) become aware of each other without a model call. Only the
+  listener becomes aware when the speech went one way. Pairs with the player go through the
+  introduction path, and someone only nearby is left out.
+- **Witnesses.** Something seen first-hand (acquisition participant or witness) is given to every
+  participant of the event who is also a participant of the scene, so one the interpreter forgot
+  still holds it. Nearby characters and observers are never filled in this way: being in the room is
+  not the same as following what happened.
+
 ## What waits for review
 
 A secret, an identity, a belief and a rupture change what characters may say and do, so they wait
-for a person. Ordinary world lore extracted at high confidence does not: queueing it only trains
-the reviewer to approve without reading. What the gate already refused never reaches the queue.
+for a person. So do a lie someone was told, and any correction or ending of a record a person wrote.
+Ordinary world lore extracted at high confidence does not: queueing it only trains the reviewer to
+approve without reading. What the gate already refused never reaches the queue.
+
+## Two passes
+
+The analysis of a reply runs in two passes, because the next turn needs only one of them.
+
+- **The scene pass** runs right after the reply, as before: the triage, then the mechanical domains
+  (time, who is present, the place, resources, progression, inventory, new entities) applied at
+  once. A turn whose triage finds only epistemic domains makes no scene call at all.
+- **The story pass** records what lasts: knowledge, beliefs, memories, facts, relationships and
+  awareness. It is queued in `narrative_story_jobs` with what the scene pass settled (who was present
+  at the start and the end, who arrived or left, who was introduced) and runs right after the scene
+  pass, in the background, oldest turn first, one at a time per chat. The next turn waits for the
+  scene pass only. A story pass that finishes first writes into the turn's own draft, which
+  regenerating or deleting the reply discards; one that finishes after the next turn opened its draft
+  writes to the confirmed story and leaves that draft alone. A regeneration waits for a running story
+  pass before it sets turns aside, and a reply removed mid-pass records nothing. A regenerated reply
+  defers both passes until the player continues. "Update now" on a reply runs both.
+- The story pass reads only the narration, never the narrator's reasoning, and gets the turn state
+  from the scene pass instead of guessing it: someone who left before a line was spoken never hears
+  it. It runs on the Narrative State model unless the AI Engine gives it one of its own.
+- A dropped connection is asked again twice, a few seconds apart, before a narrative call fails; a
+  provider's refusal is not. A failed story pass stays in the queue and runs again with later turns,
+  up to three runs, so a short outage leaves no gap in the story. After that the turn shows in the
+  roleplay panel until it is read again by hand, and its diagnostics say why it failed.
+
+Each pass reports its own status and token use in the turn diagnostics. The context manifest keeps
+every refusal with its reason except the ordinary one, a record held by someone else, which is kept
+only as a count per character: it is refused for everyone on every turn, and listing it made each
+manifest close to a megabyte.
+
+## New things in a scene
+
+A person, creature, race, place or unique item that appears in a scene, or is made, forged, copied,
+split off or transformed into something new, is proposed in the scene pass. Without an entity of its
+own, what the story learns about it is pinned to the nearest existing one: the facts about a replica
+end up on the original.
+
+- **What may be created is the workspace's call**, per kind, in Configuration (Narrative State,
+  What the AI may create): characters, races, specific creatures, species groups, named items,
+  ordinary items, spots, places, areas and regions, each Off, Review or Automatic
+  (`src/shared/entity-creation-policy.ts`). The defaults let a scene make its own people, creatures,
+  named items, rooms and places, ask about species, areas and regions, and leave races and ordinary
+  items alone. Review everything turns every Automatic kind into Review; Manual creates nothing.
+- **Review is provisional, not absent.** A proposal waiting for review is created at once as a
+  proposed entity, so the story pass of the same turn, the scene and the inventory can refer to it.
+  Approving confirms it; rejecting removes it and retires what the story said about it.
+- **Off leaves facts unattached.** Nothing is created, and what the turn says about the thing is
+  never pinned to something else.
+- **One or a kind.** A Creature is one being or a species; an Item is unique or an ordinary kind. The
+  interpreter decides this first and says when the narration leaves it open. A doubt, or a choice
+  that contradicts what it said about the thing (an ordinary item with a name of its own), always
+  waits for the user, who picks the reading on the review card. A doubtful one read as an Off kind
+  still goes to review when its other reading is allowed.
+- **References.** A new character or creature can name its race or species, written as an
+  `is_race` link; a copy names what it was made from (`derivedFromId`), and its facts belong to it.
+  A reference to something that does not exist or is of the wrong kind is dropped.
+- **Places need a home.** A spot or place is created on its own only inside an area or place that
+  already exists; without one it waits for review.
+
+## Changing what is stored
+
+The story pass reads the records of whoever could perceive the turn, and each knowledge, belief
+and memory there carries a ref (`#1`, `#2`...). With a ref it can do what a plain new record cannot:
+
+- **revise** it: the corrected record supersedes the old one under the same entry, so whatever
+  points at the entry survives. A suspicion confirmed becomes a belief or knowledge this way;
+- **end** it, saying how: forgotten, given up, disproved, taken back, or **settled**;
+- name it as **what someone was told from**, or as **the premises** of an inference.
+
+Refs are resolved in Kallamo (`story-refs.js`); ids never pass through the model, and a ref that
+names nothing is dropped and reported. Ending or correcting a record a person wrote waits for review.
+
+**An intent is not permanent.** A plan, condition, refusal, demand or open question that the scene
+carried out, met, answered, dropped or overtook is ended as settled, under every holder that carries
+a ref for it. Without this a refusal the scene already moved past kept reaching the narrator turn
+after turn, and the character kept refusing. A new intent that replaces an old one revises it. A
+memory cannot be settled.
+
+## How something is held
+
+Beyond a statement, a holding can say:
+
+- **suspects**, weaker than believes;
+- **not so** (`negated`): the holder holds that the statement is false;
+- **the teller's intent**, honest or deceptive, as the narration shows it. Umwelt keeps it from the
+  hearer's own reads, so a character never learns from the record that they were lied to; the trace
+  shows it;
+- **heard wrong**: the teller's record is named while the hearer's claim differs from it;
+- **premises**: the records an inference rests on;
+- **a secret's circle** (`sharedWith`): telling anyone outside it is reported as a breach;
+- **second order** (`heldById`): what a character thinks another holds, written as an
+  `umwelt:holds` claim. The engine answers whether that other really holds it.
+
+Every reader shows these in words: the narrator's and the characters' context say "not so" and
+"a suspicion", the Knowledge tab labels the entry, and an edit there changes the words, never how the
+statement is held. A second-order record reads as a sentence about the other holder, so a reader that
+knows nothing of second order still renders it correctly.
 
 ## Routing
 
@@ -93,6 +215,8 @@ hold in every language reads the triage instead, which judges by meaning:
   row steps back to nearby; the earlier turn comes from the previous reply's triage, kept in its
   diagnostics, and without it nobody steps back. These changes join the turn's scene change, so they
   wait for review where the workspace reviews, like any other.
+- **A newcomer** is read from the triage marking the entity domain, which also opens the scene and
+  relationship domains; the English introduction pattern is only a backstop.
 - **Leaving the place** is never read from `presentIds`: the triage tends to list only the people
   talking, and absence from that list would empty the room. A departure is the scene analysis's
   call, from what the narration says; the triage is told to mark the scene when someone leaves the
@@ -134,6 +258,8 @@ occurrence wrote which record, so taking a turn back retires exactly what it wro
 - **Beliefs are read against canon.** A belief in another value of a fact slot reads as
   contradicted; the same value as aligned.
 - **Search.** See Retrieval from the story below.
+- **Names follow Worldbuild.** An entity keeps its first name inside the story file, so a rename
+  in Worldbuild is carried there, and to the names copied into known relationships.
 - **Upgrading.** A workspace from an earlier 2.0 beta is replayed into its story file event by event
   on the first start (`narrative_story_import_v1`); turns already removed stay out, and the old
   record tables are dropped once the replay has run.

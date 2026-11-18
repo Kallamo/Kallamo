@@ -11,6 +11,7 @@ export type NarrativeRecordRow = Omit<ProjectedRow, 'record_type'> & { record_ty
 export interface ProjectedNarrativeRecord {
   row: NarrativeRecordRow;
   payload: Record<string, unknown>;
+  interpreter: ReturnType<typeof interpreterOf>;
 }
 
 export interface LoadCurrentNarrativeRecordsInput {
@@ -27,7 +28,7 @@ export function loadCurrentNarrativeRecords(
   const world = NarrativeWorld.of(db, input.workspaceId);
   if (!world.exists()) return [];
   return loadStoryRecords(world, { recordTypes: input.recordTypes, ...(input.subjectIds ? { subjectIds: input.subjectIds } : {}) })
-    .map(({ row, payload }) => ({ row: row as NarrativeRecordRow, payload }));
+    .map(record => ({ row: record.row as NarrativeRecordRow, payload: record.payload, interpreter: interpreterOf(record) }));
 }
 
 /**

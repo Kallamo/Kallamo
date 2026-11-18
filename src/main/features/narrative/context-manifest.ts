@@ -15,6 +15,8 @@ export interface NarrativeContextManifest {
   deepenedPairs: Array<{ subjectId: string; targetId: string }>;
   /** Story records kept out of a character's context, and why. */
   refusals?: StoryRefusal[];
+  /** How many records each character was refused only because someone else holds them. */
+  notHeldCounts?: Record<string, number>;
   status?: 'active' | 'invalidated';
 }
 
@@ -100,6 +102,7 @@ export class NarrativeContextManifestRepository {
         ? stored.deepenedPairs as Array<{ subjectId: string; targetId: string }>
         : [],
       ...(Array.isArray(stored.refusals) && stored.refusals.length ? { refusals: stored.refusals as StoryRefusal[] } : {}),
+      ...(stored.notHeldCounts && typeof stored.notHeldCounts === 'object' ? { notHeldCounts: stored.notHeldCounts as Record<string, number> } : {}),
       status: row.status === 'invalidated' ? 'invalidated' : 'active'
     });
   }
@@ -125,7 +128,8 @@ function toStoredManifest(manifest: NarrativeContextManifest): Record<string, un
     targetIds: manifest.targetIds,
     assessments: manifest.assessments,
     deepenedPairs: manifest.deepenedPairs,
-    ...(manifest.refusals?.length ? { refusals: manifest.refusals } : {})
+    ...(manifest.refusals?.length ? { refusals: manifest.refusals } : {}),
+    ...(manifest.notHeldCounts && Object.keys(manifest.notHeldCounts).length ? { notHeldCounts: manifest.notHeldCounts } : {})
   };
 }
 

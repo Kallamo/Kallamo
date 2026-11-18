@@ -32,6 +32,12 @@ function methodOf(acquisition: Acquisition | undefined): string {
   return 'reported';
 }
 
+function heldProposition(value: unknown): { subjectId: string; predicate: string; object: unknown } | null {
+  if (!value || typeof value !== 'object') return null;
+  const held = value as Record<string, unknown>;
+  return typeof held.subjectId === 'string' ? { subjectId: held.subjectId, predicate: String(held.predicate ?? 'statement'), object: held.object } : null;
+}
+
 /** A stored record in the shape Kallamo's narrative payloads have always had. */
 export function projectStoryRecord(record: StoryRecord): ProjectedStoryRecord | null {
   const kind = kindOf(record);
@@ -103,12 +109,22 @@ export function projectStoryRecord(record: StoryRecord): ProjectedStoryRecord | 
         status: 'active'
       });
     } else {
-      const proposition = { subjectId: record.claim.subject, predicate: record.claim.predicate, object: objectOf(record.claim) };
+      const held = record.claim.predicate === 'umwelt:holds' ? heldProposition(meta.held) : null;
+      // A second-order record reads as a sentence about the other holder, so a reader that knows
+      // nothing of second order still renders what the holder thinks correctly.
+      const proposition = held
+        ? { subjectId: record.claim.subject, predicate: 'statement', object: record.text ?? '' }
+        : { subjectId: record.claim.subject, predicate: record.claim.predicate, object: objectOf(record.claim) };
       payload = compact({
         ...common,
         entryId: meta.entryId,
         subjectId: record.holder,
         proposition,
+        negated: !held && record.claim.polarity === false ? true : undefined,
+        attitude: record.attitude === 'suspects' ? 'suspects' : undefined,
+        heldById: held ? record.claim.subject : undefined,
+        heldProposition: held ?? undefined,
+        heldNegated: held && record.claim.polarity === false ? true : undefined,
         sourceEventId: record.eventId,
         confidence: record.confidence,
         accessibility: record.accessibility,

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
+import { normalizeEntityCreationPolicy, type EntityCreationPolicy } from '../../../shared/entity-creation-policy';
 import type { Scene } from '../../../narrative/contracts';
 import { NarrativeSceneRepository } from '../../../narrative/scenes';
 import { requireUniqueName, ruleKey } from './rule-keys';
@@ -17,6 +18,7 @@ export interface RoleplaySettings {
   scenarioName: string;
   scenarioSummary: string;
   defaultUpdatePolicy: RoleplayUpdatePolicy;
+  entityCreation: EntityCreationPolicy;
 }
 
 export interface RoleplayResourceDefinition {
@@ -208,7 +210,8 @@ export class RoleplaySystem {
       activeSceneId: String(row?.active_scene_id ?? '') || null,
       scenarioName: String(row?.scenario_name ?? ''),
       scenarioSummary: String(row?.scenario_summary ?? ''),
-      defaultUpdatePolicy: normalizePolicy(row?.default_update_policy)
+      defaultUpdatePolicy: normalizePolicy(row?.default_update_policy),
+      entityCreation: normalizeEntityCreationPolicy(row?.entity_creation_json)
     };
   }
 
@@ -220,8 +223,8 @@ export class RoleplaySystem {
     this.db.prepare(`
       INSERT INTO roleplay_workspace_settings (
         workspace_id, player_entity_id, location_entity_id, active_scene_id,
-        scenario_name, scenario_summary, default_update_policy, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        scenario_name, scenario_summary, default_update_policy, entity_creation_json, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(workspace_id) DO UPDATE SET
         player_entity_id = excluded.player_entity_id,
         location_entity_id = excluded.location_entity_id,
@@ -229,9 +232,11 @@ export class RoleplaySystem {
         scenario_name = excluded.scenario_name,
         scenario_summary = excluded.scenario_summary,
         default_update_policy = excluded.default_update_policy,
+        entity_creation_json = excluded.entity_creation_json,
         updated_at = excluded.updated_at
     `).run(workspaceId, next.playerEntityId, next.locationEntityId, next.activeSceneId,
-      next.scenarioName, next.scenarioSummary, normalizePolicy(next.defaultUpdatePolicy), Date.now());
+      next.scenarioName, next.scenarioSummary, normalizePolicy(next.defaultUpdatePolicy),
+      JSON.stringify(normalizeEntityCreationPolicy(next.entityCreation)), Date.now());
     if (Object.hasOwn(input, 'playerEntityId')) {
       const repository = new NarrativeSceneRepository(this.db);
       const scene = repository.getActive(workspaceId);
@@ -1156,7 +1161,10 @@ export class RoleplaySystem {
 
   private requireEntity(workspaceId: string, id: string): { type: string } {
     const row = this.db.prepare(`
-      SELECT type FROM entities WHERE workspaceId = ? AND id = ? AND status != 'proposed'
+      SELECT type FROM entities WHERE workspaceId = ? AND id = ? AND (status != 'proposed' OR id IN (
+        SELECT entity_id FROM roleplay_entity_changes
+        WHERE workspace_id = entities.workspaceId AND status IN ('pending', 'conflicting') AND created_entity = 1
+      ))
     `).get(workspaceId, id) as { type: string } | undefined;
     if (!row) throw new Error('Confirmed workspace entity was not found.');
     return row;

@@ -146,6 +146,9 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const [narrativeStateMode, setNarrativeStateMode] = useState(settings.advanced.narrativeStateMode || 'inherit-system');
   const [narrativeStateApiProfileId, setNarrativeStateApiProfileId] = useState(settings.advanced.narrativeStateApiProfileId || '');
   const [narrativeStateModelName, setNarrativeStateModelName] = useState(settings.advanced.narrativeStateModelName || '');
+  const [narrativeStoryMode, setNarrativeStoryMode] = useState(settings.advanced.narrativeStoryMode || 'same');
+  const [narrativeStoryApiProfileId, setNarrativeStoryApiProfileId] = useState(settings.advanced.narrativeStoryApiProfileId || '');
+  const [narrativeStoryModelName, setNarrativeStoryModelName] = useState(settings.advanced.narrativeStoryModelName || '');
   const [retrievalPlannerMode, setRetrievalPlannerMode] = useState(settings.advanced.retrievalPlannerMode || 'profile');
   const [retrievalPlannerApiProfileId, setRetrievalPlannerApiProfileId] = useState(settings.advanced.retrievalPlannerApiProfileId || '');
   const [retrievalPlannerModelName, setRetrievalPlannerModelName] = useState(settings.advanced.retrievalPlannerModelName || '');
@@ -156,6 +159,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       [taggerApiProfileId, setTaggerApiProfileId, setTaggerModelName],
       [summarizerApiProfileId, setSummarizerApiProfileId, setSummarizerModelName],
       [narrativeStateApiProfileId, setNarrativeStateApiProfileId, setNarrativeStateModelName],
+      [narrativeStoryApiProfileId, setNarrativeStoryApiProfileId, setNarrativeStoryModelName],
       [retrievalPlannerApiProfileId, setRetrievalPlannerApiProfileId, setRetrievalPlannerModelName],
     ];
     for (const [current, setId, setModel] of roles) {
@@ -218,7 +222,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     chunkSize, similarity, profileKnowledgeTopK, workspaceDocumentsTopK, longTermMemoryTopK, worldbuildEntityLimit, worldbuildBreadth, executionDevice, ragDebug, agenticDebug, tokenDebug, narrativeStateDebug,
     embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage,
     taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName,
-    narrativeStateMode, narrativeStateApiProfileId, narrativeStateModelName,
+    narrativeStateMode, narrativeStateApiProfileId, narrativeStateModelName, narrativeStoryMode, narrativeStoryApiProfileId, narrativeStoryModelName,
     retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, agenticGate, agenticToolProtocol, allowAiEntityCreation, archiveSummarization,
     promptCache, promptCacheContextPlacement
   });
@@ -229,11 +233,11 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       chunkSize, similarity, profileKnowledgeTopK, workspaceDocumentsTopK, longTermMemoryTopK, worldbuildEntityLimit, worldbuildBreadth, executionDevice, ragDebug, agenticDebug, tokenDebug, narrativeStateDebug,
       embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage,
       taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName,
-      narrativeStateMode, narrativeStateApiProfileId, narrativeStateModelName,
+      narrativeStateMode, narrativeStateApiProfileId, narrativeStateModelName, narrativeStoryMode, narrativeStoryApiProfileId, narrativeStoryModelName,
       retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, agenticGate, agenticToolProtocol, allowAiEntityCreation, archiveSummarization,
       promptCache, promptCacheContextPlacement
     };
-  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, smartTypography, coloredDialogue, dialogueMarkers, dialogueColor, dialogueCustomColor, streamingEnabled, chunkSize, similarity, profileKnowledgeTopK, workspaceDocumentsTopK, longTermMemoryTopK, worldbuildEntityLimit, worldbuildBreadth, executionDevice, ragDebug, agenticDebug, tokenDebug, narrativeStateDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage, taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName, narrativeStateMode, narrativeStateApiProfileId, narrativeStateModelName, retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, agenticGate, agenticToolProtocol, allowAiEntityCreation, archiveSummarization, promptCache, promptCacheContextPlacement]);
+  }, [accentColor, fontFamily, fontSize, layoutMode, codeTheme, lineNumbers, blurEnabled, writingToolbar, smartTypography, coloredDialogue, dialogueMarkers, dialogueColor, dialogueCustomColor, streamingEnabled, chunkSize, similarity, profileKnowledgeTopK, workspaceDocumentsTopK, longTermMemoryTopK, worldbuildEntityLimit, worldbuildBreadth, executionDevice, ragDebug, agenticDebug, tokenDebug, narrativeStateDebug, embeddingEngine, embeddingApiProfileId, embeddingModelName, systemApiProfileId, systemModelName, systemOutputLanguage, taggerMode, taggerApiProfileId, taggerModelName, summarizerMode, summarizerApiProfileId, summarizerModelName, narrativeStateMode, narrativeStateApiProfileId, narrativeStateModelName, narrativeStoryMode, narrativeStoryApiProfileId, narrativeStoryModelName, retrievalPlannerMode, retrievalPlannerApiProfileId, retrievalPlannerModelName, agenticGate, agenticToolProtocol, allowAiEntityCreation, archiveSummarization, promptCache, promptCacheContextPlacement]);
 
   const updateSetting = async (category, key, value) => {
     if (category === 'interface') {
@@ -274,6 +278,9 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       if (key === 'narrativeStateMode') setNarrativeStateMode(value);
       if (key === 'narrativeStateApiProfileId') { setNarrativeStateApiProfileId(value); setNarrativeStateModelName(''); }
       if (key === 'narrativeStateModelName') setNarrativeStateModelName(value);
+      if (key === 'narrativeStoryMode') setNarrativeStoryMode(value);
+      if (key === 'narrativeStoryApiProfileId') { setNarrativeStoryApiProfileId(value); setNarrativeStoryModelName(''); }
+      if (key === 'narrativeStoryModelName') setNarrativeStoryModelName(value);
       if (key === 'retrievalPlannerMode') setRetrievalPlannerMode(value);
       if (key === 'retrievalPlannerApiProfileId') { setRetrievalPlannerApiProfileId(value); setRetrievalPlannerModelName(''); }
       if (key === 'retrievalPlannerModelName') setRetrievalPlannerModelName(value);
@@ -334,6 +341,9 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         narrativeStateMode: key === 'narrativeStateMode' ? value : current.narrativeStateMode,
         narrativeStateApiProfileId: key === 'narrativeStateApiProfileId' ? value : current.narrativeStateApiProfileId,
         narrativeStateModelName: key === 'narrativeStateModelName' ? value : (key === 'narrativeStateApiProfileId' ? '' : current.narrativeStateModelName),
+        narrativeStoryMode: key === 'narrativeStoryMode' ? value : current.narrativeStoryMode,
+        narrativeStoryApiProfileId: key === 'narrativeStoryApiProfileId' ? value : current.narrativeStoryApiProfileId,
+        narrativeStoryModelName: key === 'narrativeStoryModelName' ? value : (key === 'narrativeStoryApiProfileId' ? '' : current.narrativeStoryModelName),
         retrievalPlannerMode: key === 'retrievalPlannerMode' ? value : current.retrievalPlannerMode,
         retrievalPlannerApiProfileId: key === 'retrievalPlannerApiProfileId' ? value : current.retrievalPlannerApiProfileId,
         retrievalPlannerModelName: key === 'retrievalPlannerModelName' ? value : (key === 'retrievalPlannerApiProfileId' ? '' : current.retrievalPlannerModelName),
@@ -418,6 +428,9 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
           narrativeStateMode: current.narrativeStateMode,
           narrativeStateApiProfileId: current.narrativeStateApiProfileId,
           narrativeStateModelName: current.narrativeStateModelName,
+          narrativeStoryMode: current.narrativeStoryMode,
+          narrativeStoryApiProfileId: current.narrativeStoryApiProfileId,
+          narrativeStoryModelName: current.narrativeStoryModelName,
           retrievalPlannerMode: current.retrievalPlannerMode,
           retrievalPlannerApiProfileId: current.retrievalPlannerApiProfileId,
           retrievalPlannerModelName: current.retrievalPlannerModelName,
@@ -980,6 +993,24 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
                     <SettingsRow label="Native tool calling" description="Uses the provider’s own tools when it can, the text protocol when it cannot.">
                       <Toggle checked={agenticToolProtocol !== 'text'} disabled={off} ariaLabel="Native tool calling" onChange={checked => updateSetting('advanced', 'agenticToolProtocol', checked ? 'auto' : 'text')} />
                     </SettingsRow>
+                  </RoleOptions>
+                )}
+                {definition.id === 'narrativeState' && (
+                  <RoleOptions disabled={off}>
+                    <SettingsRow label="Story record" description="The second pass, which writes what lasts once the story moves on. A stronger model here improves what is remembered without slowing the next turn.">
+                      <SegmentedControl
+                        label="Story record model"
+                        value={narrativeStoryMode}
+                        disabled={off}
+                        onChange={value => updateSetting('advanced', 'narrativeStoryMode', value)}
+                        options={[{ value: 'same', label: 'Same model' }, { value: 'dedicated', label: 'Own model' }]}
+                      />
+                    </SettingsRow>
+                    {narrativeStoryMode === 'dedicated' && (
+                      <div className="flex min-w-0 items-center rounded-lg border border-tint/[0.08] bg-tint/[0.035]">
+                        {modelBar('Story record', narrativeStoryApiProfileId, narrativeStoryModelName, value => updateSetting('advanced', 'narrativeStoryApiProfileId', value), value => updateSetting('advanced', 'narrativeStoryModelName', value))}
+                      </div>
+                    )}
                   </RoleOptions>
                 )}
                 {definition.id === 'summarizer' && (

@@ -1,7 +1,8 @@
 import Ajv from 'ajv';
 import { describe, expect, test } from 'vitest';
 import {
-  NARRATIVE_STATE_SCHEMA,
+  NARRATIVE_MECHANICS_SCHEMA,
+  NARRATIVE_STORY_SCHEMA,
   NARRATIVE_TRIAGE_SCHEMA
 } from '../../src/main/features/narrative/narrative-state-schema';
 
@@ -50,46 +51,24 @@ describe('Narrative State structured output schemas', () => {
     expect(validate({ ...turn, sceneMemory: [{ entityId: 'guard', perceived: [], heard: [], stance: '', truth: 'six' }] })).toBe(false);
   });
 
-  test('accepts an empty durable state result and a structured event', () => {
-    const validate = new Ajv().compile(NARRATIVE_STATE_SCHEMA);
+  test('the scene pass carries no events, and the story pass only events', () => {
+    const mechanics = new Ajv().compile(NARRATIVE_MECHANICS_SCHEMA);
+    const story = new Ajv().compile(NARRATIVE_STORY_SCHEMA);
+    const scene = { newEntities: [], identityUpdates: [], resourceChanges: [], scenePatch: {}, inventoryChanges: [] };
+    const event = {
+      type: 'revelation',
+      description: 'Tess explains the Aether Weave to Corwin at the forge.',
+      excerpt: 'The weave fails near iron.',
+      participantIds: ['tess', 'corwin'],
+      confidence: 0.95,
+      operations: []
+    };
 
-    expect(validate({
-      newEntities: [],
-      identityUpdates: [],
-      resourceChanges: [],
-      scenePatch: {},
-      inventoryChanges: [],
-      events: []
-    })).toBe(true);
-    expect(validate({
-      newEntities: [],
-      identityUpdates: [],
-      resourceChanges: [],
-      scenePatch: {},
-      inventoryChanges: [],
-      events: [{
-        type: 'revelation',
-        description: 'Tess explains the Aether Weave.',
-        excerpt: 'The weave fails near iron.',
-        participantIds: ['tess', 'corwin'],
-        confidence: 0.95,
-        operations: []
-      }]
-    })).toBe(true);
-    expect(validate({
-      newEntities: [],
-      identityUpdates: [],
-      resourceChanges: [],
-      scenePatch: {},
-      inventoryChanges: [],
-      events: [{
-        type: 'conversation',
-        description: 'Unsupported event type.',
-        excerpt: 'They talk.',
-        participantIds: ['tess', 'corwin'],
-        confidence: 0.95,
-        operations: []
-      }]
-    })).toBe(false);
+    expect(mechanics(scene)).toBe(true);
+    expect(mechanics({ ...scene, events: [event] })).toBe(false);
+    expect(story({ events: [] })).toBe(true);
+    expect(story({ events: [event] })).toBe(true);
+    expect(story({ events: [{ ...event, type: 'conversation' }] })).toBe(false);
+    expect(story({ ...scene, events: [] })).toBe(false);
   });
 });

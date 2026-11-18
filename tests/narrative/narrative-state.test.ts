@@ -136,6 +136,45 @@ describe('Narrative State runtime', () => {
       .toEqual(['grant-awareness', 'set-relationship']);
   });
 
+  test('does not grant Awareness again when an existing relationship moves', () => {
+    const relationshipEvent = (originId: string, value: number) => system.createEvent(input(originId, {
+      type: 'relationship-change', description: 'Tess warms to Elias.', excerpt: 'Tess smiles at Elias.',
+      participantIds: ['tess', 'elias'], confidence: 0.95,
+      operations: [{ type: 'relationship', sourceEntityId: 'tess', targetEntityId: 'elias', dimension: 'overall', value, cause: 'affection', impact: 'meaningful' }]
+    }));
+
+    relationshipEvent('first-warmth', 20);
+    const second = relationshipEvent('second-warmth', 30);
+
+    expect(second.record?.proposal.changeSet.operations.map(operation => operation.type)).toEqual(['set-relationship']);
+    expect(awareness()).toEqual([{ subject_id: 'tess', target_id: 'elias' }]);
+  });
+
+  test('keeps one holding when the interpreter repeats it in an event', () => {
+    const knowledge = { type: 'knowledge' as const, subjectId: 'elias', proposition: { subjectId: 'guild', predicate: 'gate-code', object: 'Dawnfall' }, category: 'capability' as const, acquisition: 'participant' as const, confidence: 0.98 };
+    const result = system.createEvent(input('repeated-holding', {
+      type: 'revelation', description: 'Tess repeats the gate code.', excerpt: 'Dawnfall, again.',
+      participantIds: ['tess', 'elias'], confidence: 0.98,
+      operations: [knowledge, { ...knowledge }]
+    }));
+
+    expect(result.record?.proposal.changeSet.operations.filter(operation => operation.type === 'grant-knowledge')).toHaveLength(1);
+  });
+
+  test('gives first-hand knowledge to every participant in the scene, never to someone only nearby', () => {
+    db.prepare(`INSERT INTO narrative_scenes (workspace_id, scene_id, status, perspective_access, narrative_sequence) VALUES ('workspace-one', 'scene-one', 'active', 'omniscient', 1)`).run();
+    db.prepare(`INSERT INTO narrative_scene_participants (workspace_id, scene_id, ordinal, entity_id) VALUES ('workspace-one', 'scene-one', 0, 'tess'), ('workspace-one', 'scene-one', 1, 'elias')`).run();
+    const result = system.createEvent({ ...input('shared-sight', {
+      type: 'discovery', description: 'Tess and Elias watch the hinge crack.', excerpt: 'The hinge cracks in the cold.',
+      participantIds: ['tess', 'elias', 'guild'], confidence: 0.98,
+      operations: [{ type: 'knowledge', subjectId: 'elias', proposition: { subjectId: 'guild', predicate: 'hinge-state', object: 'cracked' }, category: 'history', acquisition: 'witness', confidence: 0.98 }]
+    }), sceneId: 'scene-one' });
+
+    const holders = (result.record?.proposal.changeSet.operations ?? [])
+      .flatMap(operation => operation.type === 'grant-knowledge' ? [operation.knowledge.subjectId] : []);
+    expect(holders.sort()).toEqual(['elias', 'tess']);
+  });
+
   test('blocks the protagonist relationship perspective without blocking awareness', () => {
     const result = system.createEvent({
       ...input('protagonist-boundary', {

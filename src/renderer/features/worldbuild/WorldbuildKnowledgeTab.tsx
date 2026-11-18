@@ -474,6 +474,7 @@ const CATEGORY_HINTS: Record<DurableKnowledgeCategory, string> = {
   history: 'A past event and what happened in it.',
   secret: 'Concealed information whose exposure would change what people do.',
   capability: 'What a person, item, creature or technique can do.',
+  property: 'What a thing is made of, its present condition, or what examining it showed.',
   intent: 'A plan, promise, threat or goal that outlives the scene.',
   bond: 'What the subject knows about a relationship between others.',
 };
@@ -1709,12 +1710,14 @@ function Statement({ entry, entities = [], calendar = null, onEdit, onDelete, on
   const canon = entry.kind === 'belief' ? CANON_RELATIONS[entry.relationToCanon ?? 'unknown'] : null;
   const memoryState = entry.kind === 'memory' ? MEMORY_STATES[entry.accessibility] : null;
   const MemoryIcon = memoryState?.icon;
-  const label = memoryState?.label || (entry.kind === 'belief' ? 'Believed' : 'Known');
+  const heldBy = entry.heldById ? entities.find(item => item.id === entry.heldById)?.canonicalName || 'someone' : '';
+  const label = memoryState?.label || stanceLabel(entry, heldBy);
   const origin = entry.origin?.by === 'kallamo' ? SEEDED_ORIGIN : ENTRY_ORIGINS[entry.origin?.kind ?? 'authored'] ?? ENTRY_ORIGINS.authored;
   const OriginIcon = origin.icon;
   const occurrenceTitle = entry.origin?.kind === 'occurrence' ? entry.origin.title : '';
   const categoryLabel = entryCategoryLabel(entry.category);
   const route = entry.kind === 'knowledge' && entry.acquisition ? ACQUISITION_META[entry.acquisition] : null;
+  const toldBelief = entry.kind === 'belief' && (entry.informantIds ?? []).length > 0;
   const RouteIcon = route?.icon;
   const tellers = (entry.informantIds ?? [])
     .map(id => entities.find(item => item.id === id)?.canonicalName)
@@ -1743,6 +1746,7 @@ function Statement({ entry, entities = [], calendar = null, onEdit, onDelete, on
               <span className="font-semibold text-text-secondary">{label}</span>
               {categoryLabel && <>{dot}<span className="text-text-muted">{categoryLabel}</span></>}
               {route && RouteIcon && <>{dot}<span className="inline-flex items-center gap-1 text-text-muted"><RouteIcon className="h-3 w-3" aria-hidden="true" />{route.label}{tellers.length ? ` by ${joinNames(tellers)}` : ''}</span></>}
+              {toldBelief && <>{dot}<span className="text-text-muted">Told by {joinNames(tellers)}</span></>}
               {canon && <>{dot}<span className={canon.className}>{canon.label}</span></>}
             </>
           )}
@@ -1763,6 +1767,15 @@ function Statement({ entry, entities = [], calendar = null, onEdit, onDelete, on
       )}
     </article>
   );
+}
+
+function stanceLabel(entry: WorldbuildKnowledgeEntry, heldBy: string): string {
+  if (entry.heldById) return entry.negated ? `Thinks ${heldBy} does not know` : `Thinks ${heldBy} knows`;
+  if (entry.kind === 'belief') {
+    if (entry.attitude === 'suspects') return entry.negated ? 'Suspected untrue' : 'Suspected';
+    return entry.negated ? 'Believed untrue' : 'Believed';
+  }
+  return entry.negated ? 'Known untrue' : 'Known';
 }
 
 // What the story held for one subject at the end of a world day: read-only, from the story axis.

@@ -407,6 +407,17 @@ function RetrievalView({ debug, copy }) {
   );
 }
 
+// The story pass runs after the scene pass, so a reply can show the scene settled and the story still waiting.
+const STORY_STATUS = {
+  queued: 'Waiting to be recorded',
+  processing: 'Being recorded',
+  completed: 'Recorded',
+  'completed-with-warnings': 'Recorded, with warnings',
+  'not-needed': 'Nothing lasting to record',
+  skipped: 'Skipped',
+  failed: 'Failed'
+};
+
 const NARRATIVE_STATUS = {
   completed: { label: 'Completed', tone: 'bg-status-success/12 text-status-success' },
   'completed-with-warnings': { label: 'Completed with warnings', tone: 'bg-status-warning/12 text-status-warning' },
@@ -622,9 +633,11 @@ function NarrativeView({ debug, names, copy }) {
     ['State changes', analysis.resourceChanges],
     ['Filtered out', analysis.filteredOperations]
   ].filter(([, value]) => value != null) : [];
+  const story = state.story && typeof state.story === 'object' ? state.story : null;
   const usageRows = [
     ['Triage', usage.triageInput, usage.triageOutput],
-    ['Analysis', usage.deepInput, usage.deepOutput],
+    [story ? 'Scene analysis' : 'Analysis', usage.deepInput, usage.deepOutput],
+    ['Story record', usage.storyInput, usage.storyOutput],
     ['Repairs', usage.repairInput, usage.repairOutput]
   ].filter(([, input, output]) => (input || 0) + (output || 0) > 0);
 
@@ -658,6 +671,23 @@ function NarrativeView({ debug, names, copy }) {
           {(routing.forceReasons || []).length > 0 && <p className="mt-1.5 text-[0.6875rem] text-status-warning">{routing.forceReasons.map(humanize).join(' · ')}</p>}
         </div>
       </div>
+
+      {story && (
+        <div>
+          <SectionTitle>Story record</SectionTitle>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className={`text-xs ${story.status === 'failed' ? 'text-status-danger' : 'text-text-secondary'}`}>
+              {story.status === 'failed' && story.willRetry ? 'Failed, tries again after the next turn' : STORY_STATUS[story.status] || humanize(story.status || 'unknown')}
+            </span>
+            {(story.domains || []).map(domain => <Chip key={domain} tone={domainTone(domain)}>{humanize(domain)}</Chip>)}
+          </div>
+          {story.status === 'failed' && story.error && (
+            <p className="mt-1.5 text-[0.6875rem] text-text-muted select-text">
+              {story.error}{story.willRetry === false ? ' · Reprocess this turn to record it.' : ''}
+            </p>
+          )}
+        </div>
+      )}
 
       {sceneLocation && (
         <div>

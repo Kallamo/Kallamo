@@ -76,6 +76,9 @@ export interface StoryWriteResult {
 
 const PROSE_PREDICATE_TEXT = 220;
 
+/** The engine's reserved predicate for what one holder thinks another holds. */
+export const HOLDS_PREDICATE = 'umwelt:holds';
+
 function originOf(provenance: StoryProvenanceInput): Origin {
   if (provenance.interpreter === 'model') return { kind: 'model', model: provenance.interpreterId || 'unknown' };
   if (provenance.interpreter === 'user') return provenance.interpreterId ? { kind: 'human', actorId: provenance.interpreterId } : { kind: 'human' };
@@ -324,19 +327,33 @@ export class StoryWriter {
         const proposition = payload.proposition as Proposition;
         if (!this.isHolder(holder)) return 'not-a-holder';
         if (!proposition || !this.known.has(proposition.subjectId)) return 'unknown-entity';
-        const claim = this.claimOf(proposition);
+        const heldById = kind === 'belief' && payload.heldById ? String(payload.heldById) : null;
+        if (heldById && (heldById === holder || !this.isHolder(heldById))) return 'not-a-holder';
+        const negated = payload.negated === true;
+        const stated = this.claimOf(proposition);
+        // Second order names the claim the other holder would hold by its key, which only the engine computes.
+        const claim: Claim = heldById
+          ? { subject: heldById, predicate: HOLDS_PREDICATE, object: { kind: 'value', value: { claimKey: this.claimKey(stated) } }, polarity: !negated }
+          : { ...stated, polarity: !negated };
         const identity = statementIdentityOf(holder, claim);
         const entryId = payload.entryId ? String(payload.entryId) : undefined;
         // The interpreter mints a new entry for every record, so only an author's edit revises one by entry.
         const byEntry = Boolean(entryId) && input.provenance.interpreter !== 'model';
         const current = this.activeOf(holder, kind, {
-          about: proposition.subjectId,
-          ...(byEntry || isProseStatement(proposition.object) ? {} : { predicate: claim.predicate })
+          about: claim.subject,
+          ...(byEntry || (!heldById && isProseStatement(proposition.object)) ? {} : { predicate: claim.predicate })
         });
-        const revised = current.filter(item => item.record.id !== payload.id && (
+        const supersedesId = payload.supersedesId ? String(payload.supersedesId) : null;
+        // A correction may restate the claim about someone else, or turn a suspicion into knowledge,
+        // so what it corrects is looked up among everything the holder holds.
+        const corrected = supersedesId
+          ? [...this.activeOf(holder, 'knowledge'), ...this.activeOf(holder, 'belief')].filter(item => item.record.id === supersedesId)
+          : [];
+        // Identity leaves polarity out: the same statement held the other way round revises the record.
+        const revised = [...corrected, ...current.filter(item => item.record.id !== payload.id && item.record.id !== supersedesId && (
           (byEntry && sameEntry(item.record, entryId!))
           || (item.record.kind === 'holding' && statementIdentityOf(holder, item.record.claim) === identity)
-        ));
+        ))];
         if (payload.status !== 'active') {
           const targets = entryId
             ? current.filter(item => sameEntry(item.record, entryId))
@@ -346,20 +363,28 @@ export class StoryWriter {
           return null;
         }
         const informants = ids(payload.informantIds).filter(id => id !== holder && this.known.has(id));
+        const premises = ids(payload.premiseIds);
+        const method = kind === 'knowledge' ? payload.acquisition : informants.length ? 'reported' : premises.length ? 'inferred' : 'authored';
         const id = String(payload.id);
         draft.records.push({
           kind: 'holding', id, holder,
-          attitude: kind === 'knowledge' ? 'knows' : 'believes',
+          attitude: kind === 'knowledge' ? 'knows' : payload.attitude === 'suspects' ? 'suspects' : 'believes',
           claim,
-          acquisition: this.acquisitionOf(kind === 'knowledge' ? payload.acquisition : 'authored', informants, input, identity, proposition.subjectId, draft, { hearerId: holder, recordId: id }),
-          // A secret is kept by its holder; telling it to anyone is reported, never blocked.
-          ...(payload.category === 'secret' ? { secrecy: { sharedWith: [] } } : {}),
+          acquisition: this.acquisitionOf(method, informants, input, identity, claim.subject, draft, { hearerId: holder, recordId: id }, {
+            premises,
+            intent: payload.intent === 'honest' || payload.intent === 'deceptive' ? payload.intent : 'unknown',
+            sourceRecordId: payload.sourceRecordId ? String(payload.sourceRecordId) : null
+          }),
+          // A secret is kept by its holder; telling it outside its circle is reported, never blocked.
+          ...(payload.category === 'secret' ? { secrecy: { sharedWith: ids(payload.sharedWith).filter(other => other !== holder && this.known.has(other)) } } : {}),
           confidence: clamp(payload.confidence), accessibility: accessibility(payload.accessibility),
-          text: this.statementText(proposition),
+          text: heldById ? this.secondOrderText(heldById, proposition, negated) : negated ? `It is not so that ${this.statementText(proposition)}` : this.statementText(proposition),
           provenance: provenance({
             k: kind, entryId, category: payload.category, factIds: ids(payload.factIds),
-            ...(kind === 'knowledge' ? { method: payload.acquisition, informantIds: informants } : {}),
-            ...(kind === 'belief' && payload.relationToCanon && payload.relationToCanon !== 'unknown' ? { relationToCanon: payload.relationToCanon } : {})
+            ...(kind === 'knowledge' ? { method: payload.acquisition, informantIds: informants } : { informantIds: informants }),
+            ...(kind === 'belief' && payload.relationToCanon && payload.relationToCanon !== 'unknown' ? { relationToCanon: payload.relationToCanon } : {}),
+            // What the other holder is thought to hold, readable without asking the engine for the key.
+            ...(heldById ? { held: { subjectId: proposition.subjectId, predicate: stated.predicate, object: proposition.object } } : {})
           })
         });
         for (const item of revised) draft.end({ targetRecordId: item.record.id, status: 'superseded', supersededBy: id });
@@ -409,40 +434,51 @@ export class StoryWriter {
   }
 
   private claimOf(proposition: Proposition): Claim {
-    const object = proposition.object;
-    const entityId = typeof object === 'string' ? object.trim() : '';
-    return {
-      subject: proposition.subjectId,
-      predicate: String(proposition.predicate || 'statement').slice(0, PROSE_PREDICATE_TEXT),
-      object: entityId && this.known.has(entityId)
-        ? { kind: 'entity', id: entityId }
-        : object === undefined || object === null ? { kind: 'none' } : { kind: 'value', value: object },
-      polarity: true
-    };
+    return claimOfProposition(proposition, id => this.known.has(id));
   }
 
   /**
    * How a holder came to know something. Hearsay keeps its teller and, when the teller holds the
    * same statement, the record they told it from, so the chain can be traced back.
    */
-  private acquisitionOf(method: unknown, informants: string[], input: StoryWrite, identity: string, aboutId: string, draft: Draft, hearing: { hearerId: string; recordId: string }): Acquisition {
+  private acquisitionOf(
+    method: unknown,
+    informants: string[],
+    input: StoryWrite,
+    identity: string,
+    aboutId: string,
+    draft: Draft,
+    hearing: { hearerId: string; recordId: string },
+    told: { premises: string[]; intent: 'honest' | 'deceptive' | 'unknown'; sourceRecordId: string | null }
+  ): Acquisition {
     if (method === 'witness' || method === 'participant') return { kind: 'witnessed', eventId: input.eventId };
-    if (method === 'inferred') return { kind: 'inferred', fromRecordIds: [], rule: 'narrative-analysis' };
+    if (method === 'inferred') return { kind: 'inferred', fromRecordIds: told.premises, rule: 'narrative-analysis' };
     if (method === 'reported') {
       const teller = informants.find(id => this.isHolder(id));
       if (!teller) return { kind: 'evidence', evidenceId: input.eventId };
+      const tellerRecords = (filter: { about?: string }) => this.activeOf(teller, 'knowledge', filter).concat(this.activeOf(teller, 'belief', filter));
+      // Named outright, the teller's record may say something else: the hearer heard it wrong.
+      const named = told.sourceRecordId ? tellerRecords({}).find(item => item.record.id === told.sourceRecordId) : undefined;
       const statement = identity.slice(identity.indexOf('\u0000') + 1);
       const said = (holder: string, claim: Claim) => statementIdentityOf(holder, claim) === `${teller}\u0000${statement}`;
       // The teller may have learned it in this same event, written just before.
-      const pending = draft.records.find(record => record.kind === 'holding' && record.holder === teller && said(record.holder, record.claim));
-      const stored = this.activeOf(teller, 'knowledge', { about: aboutId }).concat(this.activeOf(teller, 'belief', { about: aboutId }))
-        .find(item => item.record.kind === 'holding' && said(teller, item.record.claim));
+      const pending = named ? undefined : draft.records.find(record => record.kind === 'holding' && record.holder === teller && said(record.holder, record.claim));
+      const stored = named ?? tellerRecords({ about: aboutId }).find(item => item.record.kind === 'holding' && said(teller, item.record.claim));
       const sourceRecordId = (pending?.id ?? undefined) || stored?.record.id;
       const secret = Boolean((pending?.kind === 'holding' && pending.secrecy) || (stored?.record.kind === 'holding' && stored.record.secrecy));
       this.tellings.push({ tellerId: teller, ...hearing, sourced: Boolean(sourceRecordId), secret });
-      return { kind: 'told-by', sourceHolderId: teller, intent: 'unknown', ...(sourceRecordId ? { sourceRecordId } : {}) };
+      return { kind: 'told-by', sourceHolderId: teller, intent: told.intent, ...(sourceRecordId ? { sourceRecordId } : {}) };
     }
     return { kind: 'authored' };
+  }
+
+  private claimKey(claim: Claim): string {
+    return this.world.raw<{ claimKey: string }>('claim.key', { claim }).claimKey;
+  }
+
+  private secondOrderText(heldById: string, proposition: Proposition, negated: boolean): string {
+    const other = this.names.get(heldById) || heldById;
+    return `${other} ${negated ? 'does not hold' : 'holds'} that ${this.statementText(proposition)}`;
   }
 
   private statementText(proposition: Proposition): string {
@@ -504,6 +540,20 @@ export class StoryWriter {
   }
 }
 
+/** A proposition as the engine's claim: an object naming a known entity points at it. */
+export function claimOfProposition(proposition: Proposition, isEntity: (id: string) => boolean): Claim {
+  const object = proposition.object;
+  const entityId = typeof object === 'string' ? object.trim() : '';
+  return {
+    subject: proposition.subjectId,
+    predicate: String(proposition.predicate || 'statement').slice(0, PROSE_PREDICATE_TEXT),
+    object: entityId && isEntity(entityId)
+      ? { kind: 'entity', id: entityId }
+      : object === undefined || object === null ? { kind: 'none' } : { kind: 'value', value: object },
+    polarity: true
+  };
+}
+
 /** A record written before entries existed is revised under its own id. */
 function sameEntry(record: StoryRecord, entryId: string): boolean {
   const own = metadataOf(record).entryId;
@@ -543,13 +593,13 @@ function referencedIds(input: StoryWrite): { ids: string[]; candidates: string[]
   const add = (value: unknown) => { if (typeof value === 'string' && value.trim()) found.add(value.trim()); };
   for (const operation of input.operations) {
     const payload = (operation as unknown as Record<string, Record<string, unknown>>)[payloadKey(operation)] ?? {};
-    for (const key of ['subjectId', 'targetId', 'sourceEntityId', 'targetEntityId', 'entityId']) add(payload[key]);
+    for (const key of ['subjectId', 'targetId', 'sourceEntityId', 'targetEntityId', 'entityId', 'heldById']) add(payload[key]);
     const proposition = payload.proposition as Proposition | undefined;
     if (proposition) {
       add(proposition.subjectId);
       if (typeof proposition.object === 'string' && proposition.object.trim().length <= 200) candidates.add(proposition.object.trim());
     }
-    for (const key of ['informantIds', 'relatedEntityIds']) for (const id of ids(payload[key])) found.add(id);
+    for (const key of ['informantIds', 'relatedEntityIds', 'sharedWith']) for (const id of ids(payload[key])) found.add(id);
   }
   return { ids: [...found], candidates: [...candidates] };
 }

@@ -17,6 +17,7 @@ const TURN_OWNED_COLUMNS = [
   { table: 'roleplay_character_memory', column: 'origin_id' },
   { table: 'worldbuild_event_occurrences', column: 'origin_id' },
   { table: 'narrative_story_records', column: 'origin_id' },
+  { table: 'narrative_story_jobs', column: 'origin_id' },
   { table: 'roleplay_scene_changes', column: 'provenance_id' },
   { table: 'roleplay_inventory_changes', column: 'provenance_id' },
   { table: 'roleplay_resource_changes', column: 'provenance_id' },

@@ -143,6 +143,18 @@ export interface Knowledge {
   factIds?: NarrativeId[];
   /** Who passed this on. Reported acquisition only: a first-hand observation has no teller. */
   informantIds?: NarrativeId[];
+  /** The record this one corrects, which ends when this one is written. */
+  supersedesId?: NarrativeId;
+  /** Holds that the proposition is not so. */
+  negated?: boolean;
+  /** Whether whoever told it meant it, as the narration shows; never shown to the holder. */
+  intent?: 'honest' | 'deceptive';
+  /** The teller's own record it was told from; a different proposition means it was heard wrong. */
+  sourceRecordId?: NarrativeId;
+  /** The records an inference rests on. */
+  premiseIds?: NarrativeId[];
+  /** Those a secret may be shared with; telling anyone else is a breach. */
+  sharedWith?: NarrativeId[];
 }
 
 export interface Belief {
@@ -156,6 +168,16 @@ export interface Belief {
   status: 'active' | 'superseded' | 'abandoned';
   category?: KnowledgeCategory;
   factIds?: NarrativeId[];
+  supersedesId?: NarrativeId;
+  /** A suspicion is weaker than a belief. */
+  attitude?: 'believes' | 'suspects';
+  negated?: boolean;
+  informantIds?: NarrativeId[];
+  intent?: 'honest' | 'deceptive';
+  sourceRecordId?: NarrativeId;
+  premiseIds?: NarrativeId[];
+  /** Second order: the subject believes this holder holds the proposition, or with negated, does not. */
+  heldById?: NarrativeId;
 }
 
 export interface NarrativeMemory {

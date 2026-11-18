@@ -48,8 +48,14 @@ export interface WorldbuildKnowledgeEntry {
   category?: string | null;
   /** The story day a memory happened, in the world calendar. Null when nobody set one. */
   occurredOn?: { eraId: string; year: number; month: number; day: number } | null;
-  /** Who passed it on. Only carried by reported Knowledge; first-hand records have none. */
+  /** Who passed it on: reported Knowledge, or a Belief someone told them. */
   informantIds?: string[];
+  /** Held as not so. */
+  negated?: boolean;
+  /** A Belief held only as a suspicion. */
+  attitude?: 'suspects';
+  /** A Belief about what this other holder knows; the statement is what they are thought to hold. */
+  heldById?: string;
   relationToCanon?: 'aligned' | 'contradicted' | 'unknown';
   method?: 'participant' | 'witness' | 'reported' | 'inferred';
   eventId?: string;

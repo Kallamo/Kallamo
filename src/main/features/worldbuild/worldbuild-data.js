@@ -842,23 +842,29 @@ function toEntry(row, payload, resolveEntityName) {
   if (row.record_type === 'memory') {
     return { ...common, kind: 'memory', summary: payload.summary, category: payload.category || null, occurredOn: payload.occurredOn || null };
   }
+  // A second-order entry shows and edits what the other holder is thought to hold.
+  const stated = payload.heldProposition || payload.proposition;
   return {
     ...common,
     kind: row.record_type,
     category: payload.category || null,
-    aboutId: payload.proposition?.subjectId,
-    statement: formatPropositionObject(payload.proposition?.object, resolveEntityName),
+    aboutId: stated?.subjectId,
+    statement: formatPropositionObject(stated?.object, resolveEntityName),
     confidence: payload.confidence,
     factIds: normalizeIds(payload.factIds),
+    ...(payload.negated || payload.heldNegated ? { negated: true } : {}),
+    ...(payload.attitude === 'suspects' ? { attitude: 'suspects' } : {}),
+    ...(payload.heldById ? { heldById: payload.heldById } : {}),
     ...(row.record_type === 'knowledge'
       ? { acquisition: payload.acquisition, informantIds: normalizeIds(payload.informantIds) }
-      : { relationToCanon: payload.relationToCanon }),
+      : { relationToCanon: payload.relationToCanon, informantIds: normalizeIds(payload.informantIds) }),
   };
 }
 
 function buildRevisionOperations(kind, subjectId, entry, current, eventId, evidenceId) {
   const operations = [];
-  if (current && kind !== 'memory' && current.payload.proposition?.subjectId !== entry.aboutId) {
+  const currentAbout = current?.payload.heldProposition?.subjectId ?? current?.payload.proposition?.subjectId;
+  if (current && kind !== 'memory' && currentAbout !== entry.aboutId) {
     operations.push(buildRemovalOperation(kind, current, eventId, evidenceId));
   }
   operations.push(buildActiveOperation(kind, subjectId, entry, current, eventId, evidenceId));
@@ -899,6 +905,9 @@ function buildActiveOperation(kind, subjectId, entry, current, eventId, evidence
   const statement = requireText(entry.statement, 'statement');
   const aboutId = requireText(entry.aboutId || subjectId, 'aboutId');
   const proposition = { subjectId: aboutId, predicate: 'worldbuild-statement', object: statement };
+  // An edit changes the words, never how the statement is held.
+  const held = current?.payload || {};
+  const stance = held.negated || held.heldNegated ? { negated: true } : {};
   if (kind === 'knowledge') {
     const acquisition = ACQUISITION.has(entry.acquisition) ? entry.acquisition : 'reported';
     return {
@@ -916,6 +925,7 @@ function buildActiveOperation(kind, subjectId, entry, current, eventId, evidence
         ...(acquisition === 'reported'
           ? { informantIds: normalizeIds(entry.informantIds).filter(id => id !== subjectId) }
           : {}),
+        ...stance,
       },
     };
   }
@@ -927,6 +937,10 @@ function buildActiveOperation(kind, subjectId, entry, current, eventId, evidence
       confidence: normalizeConfidence(entry.confidence), relationToCanon: 'unknown', status: 'active',
       ...category(normalizeKnowledgeCategory(entry.category)),
       factIds: normalizeIds(entry.factIds),
+      ...stance,
+      ...(held.attitude === 'suspects' ? { attitude: 'suspects' } : {}),
+      ...(held.heldById ? { heldById: held.heldById } : {}),
+      ...(normalizeIds(held.informantIds).length ? { informantIds: normalizeIds(held.informantIds) } : {}),
     },
   };
 }

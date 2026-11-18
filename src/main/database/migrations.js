@@ -1606,6 +1606,38 @@ const MIGRATIONS = [
       if (report.events) console.log(`[Narrative State] Moved ${report.events} event(s) of ${report.workspaces} workspace(s) into their story files.`);
       for (const table of LEGACY_STORY_TABLES) db.exec(`DROP TABLE IF EXISTS ${table}`);
     }
+  },
+  {
+    // The story pass of a turn runs after its state pass, in the turn's own draft of the story.
+    // handoff_json is what the state pass settled: who was present, who left, who was introduced.
+    id: 'narrative_story_jobs_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS narrative_story_jobs (
+        workspace_id TEXT NOT NULL,
+        origin_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'skipped')),
+        handoff_json TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        error_message TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, origin_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_narrative_story_jobs_status
+        ON narrative_story_jobs (workspace_id, status, created_at);
+    `)
+  },
+  {
+    // What the Narrative State may create on its own, per kind of thing. Empty means the defaults.
+    id: 'roleplay_entity_creation_policy_v1',
+    up: (db) => {
+      const columns = db.prepare('PRAGMA table_info(roleplay_workspace_settings)').all().map(column => column.name);
+      if (!columns.includes('entity_creation_json')) {
+        db.exec("ALTER TABLE roleplay_workspace_settings ADD COLUMN entity_creation_json TEXT NOT NULL DEFAULT '{}'");
+      }
+    }
   }
 ];
 

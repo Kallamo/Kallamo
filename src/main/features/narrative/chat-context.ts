@@ -387,7 +387,7 @@ export class NarrativeChatContext {
       targetIds,
       assessments,
       deepenedPairs: orchestrated.deepenedPairs,
-      ...(refusals.length ? { refusals } : {})
+      ...summarizeRefusals(refusals)
     });
     return {
       plan: orchestrated.playerPlan ?? fallbackPlan,
@@ -1359,14 +1359,17 @@ Happened on: ${happenedOn}` : content),
   }
   if (payload.status !== 'active') return undefined;
   const proposition = payload.proposition as Record<string, unknown> | undefined;
-  const content = proposition?.object === undefined || proposition?.object === null
+  const statement = proposition?.object === undefined || proposition?.object === null
     ? ''
     : formatNarrativeValue(proposition.object, nameById).trim();
-  if (!content) return undefined;
+  if (!statement) return undefined;
+  // A denial read as the bare statement makes a character assert the very thing they hold false.
+  const content = payload.negated === true ? `Holds that this is not so: ${statement}` : statement;
   if (row.record_type === 'belief') {
     const relation = payload.relationToCanon;
+    const held = payload.attitude === 'suspects' ? `${content}\nHeld as: a suspicion, not a conviction` : content;
     return {
-      content: withCategory(payload, content),
+      content: withCategory(payload, held),
       epistemic: {
         kind: 'belief',
         subjectId,
@@ -1409,6 +1412,19 @@ function withCategory(payload: Record<string, unknown>, content: string): string
   const label = categoryLabel(payload.category);
   return label ? `${content}
 Kind: ${label}` : content;
+}
+
+// Someone else's record is refused on every turn for everyone, so only its count is kept.
+function summarizeRefusals(refusals: StoryRefusal[]): { refusals?: StoryRefusal[]; notHeldCounts?: Record<string, number> } {
+  const kept = refusals.filter(refusal => refusal.reason !== 'not-held');
+  const notHeldCounts: Record<string, number> = {};
+  for (const refusal of refusals) {
+    if (refusal.reason === 'not-held') notHeldCounts[refusal.subjectId] = (notHeldCounts[refusal.subjectId] ?? 0) + 1;
+  }
+  return {
+    ...(kept.length ? { refusals: kept } : {}),
+    ...(Object.keys(notHeldCounts).length ? { notHeldCounts } : {})
+  };
 }
 
 function categoryLabel(value: unknown): string | undefined {

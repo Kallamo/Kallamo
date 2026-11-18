@@ -4081,6 +4081,8 @@ ipcMain.handle('get-roleplay-configuration', async (event, { workspaceId } = {})
       recentTurnFrames: calendarService.listRecentMessageFrames(db, workspaceId, 50),
       narrativeMetrics: getNarrativeStateSystem().listMetrics(workspaceId, 50),
       narrativeJobs: getNarrativeStateSystem().listJobs(workspaceId, 50),
+      stalledStoryJobs: getNarrativeStateSystem().listStalledStories(workspaceId)
+        .map(job => ({ originId: job.originId, error: job.error, attempts: job.attempts })),
       pendingNarrativeTurn: resolveAiEngineRole(ROLE_IDS.NARRATIVE_STATE).executor
         ? findPendingNarrativeTurn(db, workspaceId)
         : null
@@ -4446,8 +4448,8 @@ ipcMain.handle('resolve-roleplay-inventory-change', async (event, { workspaceId,
   catch (error) { return { success: false, error: error.message }; }
 });
 
-ipcMain.handle('resolve-roleplay-entity-change', async (event, { workspaceId, changeId, decision } = {}) => {
-  try { return { success: true, change: getNarrativeEntitySystem().resolveChange(workspaceId, changeId, decision) }; }
+ipcMain.handle('resolve-roleplay-entity-change', async (event, { workspaceId, changeId, decision, classification } = {}) => {
+  try { return { success: true, change: getNarrativeEntitySystem().resolveChange(workspaceId, changeId, decision, classification) }; }
   catch (error) { return { success: false, error: error.message }; }
 });
 
