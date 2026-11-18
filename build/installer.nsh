@@ -46,3 +46,45 @@
 !macro customWelcomePage
   !insertmacro MUI_PAGE_WELCOME
 !macroend
+
+; Uninstalling keeps the user's data unless they tick the box on the first page.
+; An update runs the old uninstaller silently with --updated, which shows no page and keeps everything.
+!ifdef BUILD_UNINSTALLER
+  Var KallamoDeleteData
+  Var KallamoDeleteDataBox
+
+  !macro customUnWelcomePage
+    !define MUI_PAGE_CUSTOMFUNCTION_SHOW un.KallamoUnWelcomeShow
+    !define MUI_PAGE_CUSTOMFUNCTION_LEAVE un.KallamoUnWelcomeLeave
+    !insertmacro MUI_UNPAGE_WELCOME
+
+    Function un.KallamoUnWelcomeShow
+      ${NSD_CreateCheckbox} 120u 150u 195u 28u "Also delete my Kallamo data (workspaces, profiles, settings and downloaded models)"
+      Pop $KallamoDeleteDataBox
+      ${NSD_SetState} $KallamoDeleteDataBox $KallamoDeleteData
+      ; Same as the run checkbox: a themed checkbox ignores control colours.
+      System::Call 'uxtheme::SetWindowTheme(p $KallamoDeleteDataBox, w " ", w " ")'
+      SetCtlColors $KallamoDeleteDataBox EEF2F5 011419
+    FunctionEnd
+
+    Function un.KallamoUnWelcomeLeave
+      ${NSD_GetState} $KallamoDeleteDataBox $KallamoDeleteData
+    FunctionEnd
+  !macroend
+
+  !macro customUnInstall
+    ${ifNot} ${isUpdated}
+      ${if} $KallamoDeleteData == ${BST_CHECKED}
+        ; The data lives with the user who ran Kallamo, even after an install for all users.
+        ${if} $installMode == "all"
+          SetShellVarContext current
+        ${endif}
+        RMDir /r "$APPDATA\Kallamo"
+        RMDir /r "$LOCALAPPDATA\kallamo-updater"
+        ${if} $installMode == "all"
+          SetShellVarContext all
+        ${endif}
+      ${endif}
+    ${endif}
+  !macroend
+!endif
