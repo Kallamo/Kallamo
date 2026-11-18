@@ -1089,27 +1089,49 @@ async function sendApiRequest(params, dependencies = {}) {
             params.onStructuredFallback?.({ remembered: false, reason: error.message });
             return result;
         }
-        console.error("API Request Failed:", error);
-        throw error;
+        const failure = describeConnectionFailure(error);
+        console.error("API Request Failed:", failure);
+        throw failure;
     }
+}
+
+// undici words every dropped or refused connection as "fetch failed" (or "terminated" mid-body);
+// the reason is only on its cause, so it is carried into the message and marked as a network failure.
+function describeConnectionFailure(error) {
+    if (!(error instanceof TypeError) || !/^(fetch failed|terminated)$/.test(String(error.message))) return error;
+    const cause = error.cause;
+    const detail = cause ? [cause.code, cause.message].filter(Boolean).join(': ') : '';
+    const failure = new Error(detail ? `${error.message} (${detail})` : error.message, cause ? { cause } : undefined);
+    failure.network = true;
+    return failure;
+}
+
+function isConnectionFailure(error) {
+    return Boolean(error?.network);
 }
 
 // Returns provider-reported usage, so the effect of caching is read, never assumed.
 async function sendAgentRequest(params, dependencies = {}) {
     const { endpoint, requestHeaders, requestBodyPayload, provider, tokenSample } = await buildRequest(params, dependencies);
-    const response = await undiciFetch(endpoint, {
-        method: "POST",
-        headers: requestHeaders,
-        body: requestBodyPayload,
-        signal: params.abortSignal,
-        dispatcher: generationDispatcher
-    });
-    if (!response.ok) {
-        const error = new Error(await readHttpErrorMessage(response));
-        error.status = response.status;
-        throw error;
+    let response;
+    let data;
+    try {
+        response = await undiciFetch(endpoint, {
+            method: "POST",
+            headers: requestHeaders,
+            body: requestBodyPayload,
+            signal: params.abortSignal,
+            dispatcher: generationDispatcher
+        });
+        if (!response.ok) {
+            const error = new Error(await readHttpErrorMessage(response));
+            error.status = response.status;
+            throw error;
+        }
+        data = await response.json();
+    } catch (error) {
+        throw describeConnectionFailure(error);
     }
-    const data = await response.json();
     const content = parseResponse(data, provider);
     const usage = readUsage(provider, data);
     params.onUsage?.({ ...getResponseMetadata(data, provider), cacheMode: cacheModeFor(provider, params.model) });
@@ -1212,6 +1234,8 @@ async function getEmbeddings(text, apiProfileId, modelName) {
 module.exports = {
     sendApiRequest,
     sendAgentRequest,
+    describeConnectionFailure,
+    isConnectionFailure,
     nativeToolSupport,
     getEmbeddings,
     buildRequest,
