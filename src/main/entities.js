@@ -99,6 +99,7 @@ function updateEntity(id, fields = {}) {
     SET type = ?, canonicalName = ?, aliases = ?, lore = ?, loreDocumentId = ?, data = ?, status = ?, last_modified = ?
     WHERE id = ?
   `).run(next.type, next.canonicalName, next.aliases, next.lore, next.loreDocumentId, next.data, next.status, Date.now(), id);
+  if (next.canonicalName !== cur.canonicalName && cur.workspaceId) renameCopies(cur.workspaceId, id, next.canonicalName);
   if (next.type === 'Items' && nextData.itemNature === 'unique') {
     const ownedLinks = db.prepare("SELECT id, metadata_json FROM entity_links WHERE fromId = ? AND relType = 'owned_by'").all(id);
     const updateMetadata = db.prepare('UPDATE entity_links SET metadata_json = ? WHERE id = ?');
@@ -121,6 +122,17 @@ function updateEntityFromEditor(id, fields = {}) {
   const incoming = { ...fields.data };
   for (const key of MAIN_OWNED_DATA_KEYS) delete incoming[key];
   return updateEntity(id, { ...fields, data: { ...parseJsonObject(cur.data), ...incoming } });
+}
+
+// Known relationships and the story file keep a copy of the name, so a rename reaches both.
+function renameCopies(workspaceId, id, name) {
+  db.prepare('UPDATE worldbuild_known_relationships SET from_name = ? WHERE workspace_id = ? AND from_id = ?').run(name, workspaceId, id);
+  db.prepare('UPDATE worldbuild_known_relationships SET to_name = ? WHERE workspace_id = ? AND to_id = ?').run(name, workspaceId, id);
+  try {
+    storyEntities().renameStoryEntity(db, workspaceId, id, name);
+  } catch (error) {
+    console.warn('[Narrative State] Story entity keeps its previous name:', error.message);
+  }
 }
 
 function deleteEntity(id) {
