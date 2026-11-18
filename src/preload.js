@@ -94,7 +94,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resolveRoleplaySkillChange: (workspaceId, changeId, decision) => ipcRenderer.invoke('resolve-roleplay-skill-change', { workspaceId, changeId, decision }),
   getRoleplayEntityHistory: (workspaceId, entityId, limit) => ipcRenderer.invoke('get-roleplay-entity-history', { workspaceId, entityId, limit }),
   resolveRoleplayInventoryChange: (workspaceId, changeId, decision) => ipcRenderer.invoke('resolve-roleplay-inventory-change', { workspaceId, changeId, decision }),
-  resolveRoleplayEntityChange: (workspaceId, changeId, decision) => ipcRenderer.invoke('resolve-roleplay-entity-change', { workspaceId, changeId, decision }),
+  resolveRoleplayEntityChange: (workspaceId, changeId, decision, classification) => ipcRenderer.invoke('resolve-roleplay-entity-change', { workspaceId, changeId, decision, classification }),
   resolveNarrativeStateEvent: (workspaceId, eventId, decision) => ipcRenderer.invoke('resolve-narrative-state-event', { workspaceId, eventId, decision }),
   resolveNarrativeStateOperations: (workspaceId, eventId, approvedOperationIds, rejectedOperationIds) =>
     ipcRenderer.invoke('resolve-narrative-state-operations', { workspaceId, eventId, approvedOperationIds, rejectedOperationIds }),

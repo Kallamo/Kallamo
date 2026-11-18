@@ -7,7 +7,7 @@ export const CHANGE_KINDS = {
   resource: { label: 'State', group: 'Resources', chip: 'bg-status-warning/14 text-status-warning', dot: 'bg-status-warning', bullet: 'text-status-warning' },
   progress: { label: 'Progress', group: 'Progression', chip: 'bg-entity-creature/14 text-entity-creature', dot: 'bg-entity-creature', bullet: 'text-entity-creature' },
   skill: { label: 'Skill', group: 'Skills', chip: 'bg-entity-creature/14 text-entity-creature', dot: 'bg-entity-creature', bullet: 'text-entity-creature' },
-  entity: { label: 'Entity', group: 'Characters and places', chip: 'bg-entity-concept/12 text-entity-concept', dot: 'bg-entity-concept', bullet: 'text-entity-concept' },
+  entity: { label: 'Entity', group: 'New in the world', chip: 'bg-entity-concept/12 text-entity-concept', dot: 'bg-entity-concept', bullet: 'text-entity-concept' },
   time: { label: 'Time', group: 'Time', chip: 'bg-status-info/14 text-status-info', dot: 'bg-status-info', bullet: 'text-status-info' }
 };
 
@@ -68,7 +68,7 @@ export function narrativeEventLabel(record) {
   const event = record?.proposal?.changeSet?.event;
   const first = operations[0];
   const status = first?.knowledge?.status || first?.memory?.status || first?.belief?.status;
-  if (status === 'revoked' || status === 'forgotten') return 'Forgot';
+  if (status === 'revoked' || status === 'forgotten' || status === 'abandoned') return 'Forgot';
   return OPERATION_LABELS[first?.type] || EVENT_LABELS[event?.type] || 'Event';
 }
 
@@ -77,6 +77,11 @@ export function entityChangeLabel(change) {
   const identity = change.identityUpdate;
   if (identity?.canonicalName) return 'Renamed';
   if (identity) return 'New alias';
-  const type = change.proposal?.type?.replace(/s$/, '').toLowerCase() || 'entity';
-  return change.status === 'conflicting' ? 'Unclear' : `New ${type}`;
+  if (change.status === 'conflicting') return 'Unclear';
+  const proposal = change.proposal || {};
+  if (proposal.type === 'Locations' && proposal.size) return `New ${proposal.size}`;
+  if (proposal.type === 'Creatures' && proposal.scope === 'group') return 'New species';
+  if (proposal.type === 'Races') return 'New race';
+  const type = proposal.type?.replace(/s$/, '').toLowerCase() || 'entity';
+  return `New ${type}`;
 }

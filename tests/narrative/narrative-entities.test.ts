@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { runDatabaseMigrations } from '../../src/main/database/migrations.js';
 import { NarrativeEntitySystem } from '../../src/main/features/narrative/narrative-entities';
 import { NarrativeContextManifestRepository } from '../../src/main/features/narrative/context-manifest';
+import { DEFAULT_ENTITY_CREATION_POLICY } from '../../src/shared/entity-creation-policy';
 import { openTestDatabase } from '../sqlite-test-database';
 
 describe('Narrative entity identity', () => {
@@ -166,8 +167,8 @@ describe('Narrative entity identity', () => {
       SELECT toId FROM entity_links WHERE fromId = ? AND relType = 'inside'
     `).get(entityId) as { toId: string } | undefined)?.toId;
 
-    test('stays reviewable and is filed inside the scene when it is a spot', () => {
-      const change = system.resolveOrPropose('workspace-one', 'message-one', place({ size: 'Spot' }), { sceneLocationId: 'tavern' });
+    test('stays reviewable under a review policy and is filed inside the scene when it is a spot', () => {
+      const change = system.resolveOrPropose('workspace-one', 'message-one', place({ size: 'Spot' }), { sceneLocationId: 'tavern', policy: { ...DEFAULT_ENTITY_CREATION_POLICY, spots: 'review' } });
 
       expect(change.status).toBe('pending');
       expect(change.proposal).toMatchObject({ size: 'spot', insideId: 'tavern' });
@@ -192,15 +193,88 @@ describe('Narrative entity identity', () => {
       expect(change.proposal.insideId).toBe('tavern');
     });
 
-    test('is created without a container when the suggested one is gone by approval', () => {
+    test('is created on its own inside the scene when it is a spot', () => {
       const change = system.resolveOrPropose('workspace-one', 'message-one', place({ size: 'spot' }), { sceneLocationId: 'tavern' });
-      db.prepare("DELETE FROM entities WHERE id = 'tavern'").run();
 
-      const applied = system.resolveChange('workspace-one', change.id, 'approved');
-      expect(applied.status).toBe('applied');
-      expect(insideOf(applied.entityId)).toBeUndefined();
+      expect(change.status).toBe('applied');
+      expect(insideOf(change.entityId)).toBe('tavern');
+    });
+
+    test('waits for review when a place has nowhere to be filed', () => {
+      const change = system.resolveOrPropose('workspace-one', 'message-one', place({ size: 'place' }));
+
+      expect(change.status).toBe('pending');
+      expect(statusOf(change.entityId)).toBe('proposed');
     });
   });
+
+  describe('the creation policy', () => {
+    const item = (overrides: Record<string, unknown>) => entityProposal({
+      referenceId: 'new:replica', name: 'Replica 04-P', type: 'Items', itemNature: 'unique', ...overrides
+    } as never);
+
+    test('creates a named item on its own and leaves an ordinary one out', () => {
+      const named = system.resolveOrPropose('workspace-one', 'message-one', item({}));
+      const ordinary = system.resolveOrPropose('workspace-one', 'message-one', item({ referenceId: 'new:rope', name: 'rope', itemNature: 'type', identityEstablished: false }));
+
+      expect(named.status).toBe('applied');
+      expect(statusOf(named.entityId)).toBe('confirmed');
+      expect(ordinary).toMatchObject({ status: 'rejected', entityId: null });
+    });
+
+    test('a kind in review enters the story at once as provisional, and approval confirms it', () => {
+      const policy = { ...DEFAULT_ENTITY_CREATION_POLICY, named: 'review' as const };
+      const change = system.resolveOrPropose('workspace-one', 'message-one', item({}), { policy });
+
+      expect(change).toMatchObject({ status: 'pending', createdEntity: true });
+      expect(statusOf(change.entityId)).toBe('proposed');
+      system.markOrigin('workspace-one', 'message-one', 'active');
+      expect(statusOf(change.entityId)).toBe('proposed');
+
+      expect(system.resolveChange('workspace-one', change.id, 'approved')).toMatchObject({ status: 'applied', entityId: change.entityId });
+      expect(statusOf(change.entityId)).toBe('confirmed');
+    });
+
+    test('rejecting a provisional entity removes it', () => {
+      const policy = { ...DEFAULT_ENTITY_CREATION_POLICY, named: 'review' as const };
+      const change = system.resolveOrPropose('workspace-one', 'message-one', item({}), { policy });
+
+      expect(system.resolveChange('workspace-one', change.id, 'rejected').status).toBe('rejected');
+      expect(statusOf(change.entityId)).toBeUndefined();
+    });
+
+    test('a doubt about one thing or a kind waits for the user, whose choice is kept', () => {
+      const change = system.resolveOrPropose('workspace-one', 'message-one', item({ itemNature: 'type' }));
+
+      expect(change.status).toBe('pending');
+      expect(change.proposal.classificationDoubt).toBe(true);
+      const applied = system.resolveChange('workspace-one', change.id, 'approved', { itemNature: 'unique' });
+      expect(applied.proposal).toMatchObject({ itemNature: 'unique', classificationDoubt: false });
+      expect(JSON.parse(String((db.prepare('SELECT data FROM entities WHERE id = ?').get(applied.entityId) as { data: string }).data)).itemNature).toBe('unique');
+    });
+
+    test('a creature joins its species, and a new species stays a group', () => {
+      db.prepare(`INSERT INTO entities VALUES ('wolves', 'workspace-one', 'Creatures', 'Grey wolves', '[]', '', NULL, '{"scope":"group"}', 'confirmed', 1, 1)`).run();
+      const wolf = system.resolveOrPropose('workspace-one', 'message-one', entityProposal({ referenceId: 'new:ash', name: 'Ash', type: 'Creatures', scope: 'individual', groupId: 'wolves' } as never));
+      const species = system.resolveOrPropose('workspace-one', 'message-one', entityProposal({ referenceId: 'new:drakes', name: 'Salt drakes', type: 'Creatures', scope: 'group', scenePresence: 'absent' } as never));
+
+      expect(wolf.status).toBe('applied');
+      expect(db.prepare("SELECT toId FROM entity_links WHERE fromId = ? AND relType = 'is_race'").get(wolf.entityId)).toEqual({ toId: 'wolves' });
+      expect(species.status).toBe('pending');
+      expect(JSON.parse(String((db.prepare('SELECT data FROM entities WHERE id = ?').get(species.entityId) as { data: string }).data)).scope).toBe('group');
+    });
+
+    test('a group or an item reference the model invents is dropped', () => {
+      const change = system.resolveOrPropose('workspace-one', 'message-one', item({ derivedFromId: 'nothing', groupId: 'nobody' }));
+
+      expect(change.proposal).not.toHaveProperty('derivedFromId');
+      expect(change.proposal).not.toHaveProperty('groupId');
+    });
+  });
+
+  function statusOf(entityId: string | null) {
+    return (db.prepare('SELECT status FROM entities WHERE id = ?').get(entityId) as { status: string } | undefined)?.status;
+  }
 
   function entityProposal(overrides: Partial<Parameters<NarrativeEntitySystem['resolveOrPropose']>[2]> = {}) {
     return {

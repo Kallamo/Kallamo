@@ -1,6 +1,8 @@
 import { useState } from 'react';
-import { AlertTriangle, BookMarked, Check, CheckCircle2, Info, Loader2, RefreshCw, Sparkles } from 'lucide-react';
+import { AlertTriangle, BookMarked, Check, CheckCircle2, Info, Loader2, RefreshCw, Sparkles, SquarePlus } from 'lucide-react';
 import Button from '../../../components/ui/Button';
+import SegmentedControl from '../../../components/ui/SegmentedControl';
+import EntityCreationDialog, { describeCreationPolicy } from './EntityCreationDialog';
 import { ConfigSection, ChoiceCard, Help, formatSigned } from '../ConfigParts';
 import { describeSkillChange, entityChangeLabel, kindOf, narrativeEventLabel, startingProfileText } from '../../roleplay/changeKinds';
 import { locationSizeLabel } from '../../../../shared/location-sizes';
@@ -19,10 +21,11 @@ const RECENT_STEP = 5;
  * first, then the rule, then the queue; housekeeping and cost close the section.
  */
 export default function NarrativeStateSection({
-  sectionRef, policy, onPolicy, pending, recent, problems, updating, metrics, names,
+  sectionRef, policy, onPolicy, creation, onCreation, pending, recent, problems, updating, metrics, names,
   onResolve, onResolveMany, onReprocess, onTidy, tidyBusy
 }) {
   const [recentLimit, setRecentLimit] = useState(RECENT_STEP);
+  const [creationOpen, setCreationOpen] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
   const pendingCount = pending.length;
   const status = updating
@@ -83,7 +86,16 @@ export default function NarrativeStateSection({
             ))}
           </div>
           <Help className="mt-2">Resources and Progression can each follow their own rule, set in Worldbuild, Rules.</Help>
+          <div className="mt-4 flex flex-wrap items-center gap-3.5 rounded-card border border-border-subtle bg-surface-inset px-4 py-3.5">
+            <SquarePlus aria-hidden="true" className="h-4.5 w-4.5 shrink-0 text-text-muted" />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[0.8125rem] font-semibold text-text-secondary">What the AI may create</span>
+              <span className="block text-xs leading-relaxed text-text-subtle">{policy === 'manual' ? 'Nothing while changes are Manual.' : describeCreationPolicy(creation, policy)}</span>
+            </span>
+            <Button variant="ghost" size="sm" onClick={() => setCreationOpen(true)}>Choose</Button>
+          </div>
         </div>
+        {creationOpen && <EntityCreationDialog value={creation} updatePolicy={policy} onSave={onCreation} onClose={() => setCreationOpen(false)} />}
 
         <div>
           <div className="mb-3 flex flex-wrap items-center gap-2.5">
@@ -171,9 +183,11 @@ export default function NarrativeStateSection({
 function PendingItem({ item, names, onResolve }) {
   const [busy, setBusy] = useState(false);
   const view = describeChange(item, names);
+  const doubt = classificationChoice(item);
+  const [nature, setNature] = useState(doubt?.value);
   const resolve = async decision => {
     setBusy(true);
-    try { await onResolve(item, decision); } finally { setBusy(false); }
+    try { await onResolve(item, decision, doubt && decision === 'approved' ? { [doubt.field]: nature } : undefined); } finally { setBusy(false); }
   };
   return (
     <div className="flex flex-wrap items-start gap-3.5 border-t border-border-subtle p-3.5 sm:flex-nowrap">
@@ -182,6 +196,13 @@ function PendingItem({ item, names, onResolve }) {
         <p className={`text-[0.8125rem] leading-relaxed text-text-primary ${item.kind === 'narrative' ? 'font-medium' : 'font-semibold'}`}>{view.title}</p>
         {view.detail && <p className="mt-0.5 text-xs leading-relaxed text-text-muted">{view.detail}</p>}
         {view.who && <p className="mt-1 text-xs text-text-subtle">{view.who}</p>}
+        {doubt && (
+          <div className="mt-2.5 flex flex-wrap items-center gap-2.5 rounded-control border border-status-warning/30 bg-status-warning/[0.05] px-3 py-2.5">
+            <AlertTriangle aria-hidden="true" className="h-4 w-4 shrink-0 text-status-warning" />
+            <span className="min-w-[12rem] flex-1 text-xs leading-relaxed text-text-secondary">{doubt.question}</span>
+            <SegmentedControl label="Create as" value={nature} options={doubt.options} onChange={setNature} />
+          </div>
+        )}
       </div>
       <div className="flex shrink-0 gap-1.5">
         <Button variant="subtle" size="sm" disabled={busy} onClick={() => resolve('rejected')}>Reject</Button>
@@ -207,10 +228,16 @@ export function describeChange(item, names) {
     const placement = proposal.type === 'Locations' && (proposal.size || proposal.insideId)
       ? [locationSizeLabel(proposal.size), proposal.insideId ? `inside ${name(proposal.insideId)}` : ''].filter(Boolean).join(' ')
       : '';
+    const provisional = item.status === 'pending' && item.createdEntity && item.entityId;
     return {
       label: entityChangeLabel(item),
       title: proposal.name || 'Unnamed',
-      detail: [placement ? `${placement}.` : '', item.status === 'conflicting' ? `Unclear: ${proposal.reason || proposal.description || ''}` : proposal.description || proposal.reason, startingProfileText(proposal.startingProfile)].filter(Boolean).join(' ')
+      detail: [placement ? `${placement}.` : '', item.status === 'conflicting' ? `Unclear: ${proposal.reason || proposal.description || ''}` : proposal.description || proposal.reason, startingProfileText(proposal.startingProfile)].filter(Boolean).join(' '),
+      who: [
+        proposal.groupId ? `Of ${name(proposal.groupId)}` : '',
+        proposal.derivedFromId ? `Made from ${name(proposal.derivedFromId)}` : '',
+        provisional ? 'In the story since this turn' : ''
+      ].filter(Boolean).join(' · ')
     };
   }
   if (item.kind === 'narrative') {
@@ -269,6 +296,29 @@ export function describeChange(item, names) {
     return { label: item.skillName, title: describeSkillChange(item, name(item.entityId)), detail: item.reason || '' };
   }
   return { label: 'Change', title: 'The record changed.' };
+}
+
+/** When the interpreter was unsure whether it is one thing or a kind, the choice the user makes on approval. */
+function classificationChoice(item) {
+  const proposal = item.kind === 'entity' && !item.identityUpdate ? item.proposal || {} : {};
+  if (!proposal.classificationDoubt) return null;
+  if (proposal.type === 'Items') {
+    return {
+      field: 'itemNature',
+      value: proposal.itemNature || 'unique',
+      question: proposal.itemNature === 'type' ? 'Read as an ordinary item, but the reply may give it a name or an owner of its own.' : 'Read as a named item, but it may be an ordinary kind of thing.',
+      options: [{ value: 'unique', label: 'Named item' }, { value: 'type', label: 'Ordinary item' }]
+    };
+  }
+  if (proposal.type === 'Creatures') {
+    return {
+      field: 'scope',
+      value: proposal.scope || 'individual',
+      question: proposal.scope === 'group' ? 'Read as a species, but the reply may mean one creature in the scene.' : 'Read as one creature, but the reply may mean its whole kind.',
+      options: [{ value: 'individual', label: 'Specific creature' }, { value: 'group', label: 'Species group' }]
+    };
+  }
+  return null;
 }
 
 function describeCast(patch, names) {

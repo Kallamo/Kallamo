@@ -4,8 +4,11 @@ import { normalizeLocationSize, type LocationSize } from '../../../shared/locati
 import { loadLocationChain, proposeLocationParent } from '../worldbuild/location-graph';
 import { applyStartingProfile, resolveStartingProfile, type StartingProfile } from './starting-profile';
 import { beginReplacement, cancelReplacement, completeReplacement } from './umwelt/story-lifecycle';
+import { retireStoryEntity } from './umwelt/story-entities';
+import { creationKindOf, DEFAULT_ENTITY_CREATION_POLICY, type EntityCreationPolicy } from '../../../shared/entity-creation-policy';
 
-export type NarrativeEntityType = 'Characters' | 'Creatures' | 'Locations' | 'Items';
+
+export type NarrativeEntityType = 'Characters' | 'Creatures' | 'Locations' | 'Items' | 'Races';
 export type NarrativeEntityDecision = 'new' | 'ambiguous' | 'conflicting';
 
 export interface NarrativeEntityProposal {
@@ -20,6 +23,14 @@ export interface NarrativeEntityProposal {
   identityEstablished: boolean;
   reason?: string;
   itemNature?: 'unique' | 'type';
+  /** A Creature is one being or a whole species. */
+  scope?: 'individual' | 'group';
+  /** The race or species a new character or creature belongs to, by its existing id. */
+  groupId?: string;
+  /** The existing thing a new one was made from, copied from or split off. */
+  derivedFromId?: string;
+  /** The interpreter was unsure whether this is one thing or a kind; it waits for the user whatever the policy. */
+  classificationDoubt?: boolean;
   scenePresence?: 'participant' | 'observer' | 'nearby' | 'absent';
   size?: LocationSize;
   /** Suggested container for a new Location; the link is written only when the proposal is approved. */
@@ -30,6 +41,13 @@ export interface NarrativeEntityProposal {
 
 export interface NarrativeEntityContext {
   sceneLocationId?: string | null;
+  policy?: EntityCreationPolicy;
+}
+
+/** What the user chose when the interpreter was unsure: one being or a species, a named or an ordinary item. */
+export interface NarrativeEntityClassification {
+  scope?: 'individual' | 'group';
+  itemNature?: 'unique' | 'type';
 }
 
 export interface NarrativeEntityIdentityUpdate {
@@ -69,6 +87,7 @@ interface EntityRow {
 }
 
 const AUTO_TYPES = new Set<NarrativeEntityType>(['Characters', 'Creatures']);
+const SCENE_LOCATION_SIZES = new Set(['spot', 'place']);
 const OPEN_CHANGE_TABLES = ['roleplay_resource_changes', 'roleplay_progress_changes', 'roleplay_skill_changes', 'roleplay_scene_changes', 'roleplay_inventory_changes', 'roleplay_entity_changes'];
 
 type TurnSnapshot = Record<string, Array<Record<string, unknown>> | undefined>;
@@ -114,31 +133,51 @@ export class NarrativeEntitySystem {
     const changeId = `${provenanceId}:entity:${normalized.referenceId}`;
     const previous = this.getChange(workspaceId, changeId);
     if (previous) return previous;
-    const startingProfile = AUTO_TYPES.has(normalized.type) ? resolveStartingProfile(this.db, workspaceId, input.startingProfile) : undefined;
-    const proposal = this.withSuggestedContainer(workspaceId, startingProfile ? { ...normalized, startingProfile } : normalized, context.sceneLocationId);
+    const individual = AUTO_TYPES.has(normalized.type) && normalized.scope !== 'group';
+    const startingProfile = individual ? resolveStartingProfile(this.db, workspaceId, input.startingProfile) : undefined;
+    const proposal = this.withKnownReferences(workspaceId, this.withSuggestedContainer(workspaceId, startingProfile ? { ...normalized, startingProfile } : normalized, context.sceneLocationId));
 
     const match = proposal.identityEstablished
       ? this.findExactMatch(workspaceId, proposal)
       : undefined;
     if (match) return this.saveChange(workspaceId, changeId, match.id, false, proposal, 'applied', provenanceId);
 
-    const canApply = proposal.decision === 'new'
-      && AUTO_TYPES.has(proposal.type)
-      && proposal.identityEstablished
-      && proposal.confidence >= AUTO_CONFIDENCE;
-    if (!canApply) {
-      const status = proposal.decision === 'conflicting' ? 'conflicting' : 'pending';
-      return this.saveChange(workspaceId, changeId, null, false, proposal, status, provenanceId);
+    const policy = context.policy ?? DEFAULT_ENTITY_CREATION_POLICY;
+    const modeOf = (subject: NarrativeEntityProposal) => {
+      const kind = creationKindOf(subject);
+      return kind ? policy[kind] : 'review';
+    };
+    // A doubtful one that would be allowed under its other reading goes to the user rather than away.
+    const mode = modeOf(proposal) === 'off' && proposal.classificationDoubt && modeOf(otherReading(proposal)) !== 'off'
+      ? 'review'
+      : modeOf(proposal);
+    if (mode === 'off') {
+      return this.saveChange(workspaceId, changeId, null, false, { ...proposal, reason: 'The AI does not create this kind of thing in this workspace.' }, 'rejected', provenanceId);
     }
+    const established = proposal.decision === 'new' && proposal.identityEstablished;
+    // A room or a scene's place is only created inside somewhere the world already has.
+    const homeless = proposal.type === 'Locations' && SCENE_LOCATION_SIZES.has(proposal.size ?? 'place') && !proposal.insideId;
+    const canApply = mode === 'auto'
+      && established
+      && proposal.confidence >= AUTO_CONFIDENCE
+      && !proposal.classificationDoubt
+      && !homeless;
 
-    const revived = this.findRevivable(workspaceId, proposal);
-    const entityId = revived?.id ?? randomUUID();
-    if (revived) this.revive(workspaceId, revived.id);
-    else {
-      this.insertEntity(workspaceId, entityId, proposal, provenanceId);
-      applyStartingProfile(this.db, workspaceId, entityId, proposal.startingProfile, provenanceId);
+    if (canApply) {
+      const revived = this.findRevivable(workspaceId, proposal);
+      const entityId = revived?.id ?? randomUUID();
+      if (revived) this.revive(workspaceId, revived.id);
+      else this.createEntity(workspaceId, entityId, proposal, provenanceId, 'confirmed');
+      return this.saveChange(workspaceId, changeId, entityId, true, proposal, 'applied', provenanceId);
     }
-    return this.saveChange(workspaceId, changeId, entityId, true, proposal, 'applied', provenanceId);
+    if (established) {
+      // Provisional: the story can name it from this turn on; approval confirms it, rejection removes it.
+      const entityId = randomUUID();
+      this.createEntity(workspaceId, entityId, proposal, provenanceId, 'proposed');
+      return this.saveChange(workspaceId, changeId, entityId, true, proposal, 'pending', provenanceId);
+    }
+    const status = proposal.decision === 'conflicting' ? 'conflicting' : 'pending';
+    return this.saveChange(workspaceId, changeId, null, false, proposal, status, provenanceId);
   }
 
   resolveIdentityUpdate(
@@ -205,13 +244,27 @@ export class NarrativeEntitySystem {
     `).all(workspaceId) as Array<Record<string, unknown>>).map(hydrateChange);
   }
 
-  resolveChange(workspaceId: string, changeId: string, decision: 'approved' | 'rejected'): NarrativeEntityChange {
+  resolveChange(workspaceId: string, changeId: string, decision: 'approved' | 'rejected', classification: NarrativeEntityClassification = {}): NarrativeEntityChange {
     const change = this.getChange(workspaceId, changeId);
     if (!change) throw new Error('Narrative entity change was not found.');
     if (change.status === 'applied' || change.status === 'rejected') return change;
+    const provisional = this.provisionalEntity(workspaceId, change);
 
     if (decision === 'rejected') {
-      this.updateStatus(workspaceId, changeId, 'rejected', null);
+      if (provisional) this.removeProvisional(workspaceId, provisional);
+      this.updateStatus(workspaceId, changeId, 'rejected', null, Boolean(provisional));
+      return this.getChange(workspaceId, changeId)!;
+    }
+
+    if (provisional) {
+      const proposal = classified(change.proposal, classification);
+      this.db.prepare("UPDATE entities SET status = 'confirmed', data = ?, last_modified = ? WHERE workspaceId = ? AND id = ?")
+        .run(JSON.stringify({ ...parseObject(this.entityData(workspaceId, provisional)), ...natureData(proposal) }), Date.now(), workspaceId, provisional);
+      if (proposal !== change.proposal) this.saveProposal(workspaceId, changeId, proposal);
+      if (proposal.type === 'Characters' || (proposal.type === 'Creatures' && proposal.scope !== 'group')) {
+        applyStartingProfile(this.db, workspaceId, provisional, proposal.startingProfile, change.provenanceId);
+      }
+      this.updateStatus(workspaceId, changeId, 'applied', provisional, true);
       return this.getChange(workspaceId, changeId)!;
     }
 
@@ -221,15 +274,12 @@ export class NarrativeEntitySystem {
       return this.getChange(workspaceId, changeId)!;
     }
 
-    const match = this.findExactMatch(workspaceId, change.proposal);
-    const revived = match ? undefined : this.findRevivable(workspaceId, change.proposal);
+    const proposal = classified(change.proposal, classification);
+    const match = this.findExactMatch(workspaceId, proposal);
+    const revived = match ? undefined : this.findRevivable(workspaceId, proposal);
     const entityId = match?.id ?? revived?.id ?? randomUUID();
     if (revived) this.revive(workspaceId, revived.id);
-    else if (!match) {
-      this.insertEntity(workspaceId, entityId, change.proposal, change.provenanceId);
-      this.fileInsideContainer(workspaceId, entityId, change.proposal);
-      applyStartingProfile(this.db, workspaceId, entityId, change.proposal.startingProfile, change.provenanceId);
-    }
+    else if (!match) this.createEntity(workspaceId, entityId, proposal, change.provenanceId, 'confirmed');
     this.updateStatus(workspaceId, changeId, 'applied', entityId, !match);
     return this.getChange(workspaceId, changeId)!;
   }
@@ -251,6 +301,7 @@ export class NarrativeEntitySystem {
       WHERE workspaceId = ? AND id IN (
         SELECT entity_id FROM roleplay_entity_changes
         WHERE workspace_id = ? AND provenance_id = ? AND entity_id IS NOT NULL AND created_entity = 1
+          AND (? = 'proposed' OR status = 'applied')
       ) AND (? = 'confirmed' OR id NOT IN (
         SELECT changes.entity_id FROM roleplay_entity_changes changes
         LEFT JOIN narrative_origin_lifecycle lifecycle
@@ -258,7 +309,7 @@ export class NarrativeEntitySystem {
         WHERE changes.workspace_id = ? AND changes.provenance_id != ? AND changes.created_entity = 1
           AND changes.entity_id IS NOT NULL AND COALESCE(lifecycle.status, 'active') = 'active'
       ))
-    `).run(entityStatus, Date.now(), workspaceId, workspaceId, originId, entityStatus, workspaceId, originId);
+    `).run(entityStatus, Date.now(), workspaceId, workspaceId, originId, entityStatus, entityStatus, workspaceId, originId);
     this.syncCreatedSkills(workspaceId, originId, status === 'active');
     if (status !== 'active') {
       for (const table of ['roleplay_resource_changes', 'roleplay_progress_changes', 'roleplay_skill_changes', 'roleplay_scene_changes', 'roleplay_inventory_changes']) {
@@ -676,20 +727,79 @@ export class NarrativeEntitySystem {
     `).run(randomUUID(), workspaceId, entityId, container.id, Date.now());
   }
 
-  private insertEntity(workspaceId: string, entityId: string, proposal: NarrativeEntityProposal, provenanceId: string): void {
+  private createEntity(workspaceId: string, entityId: string, proposal: NarrativeEntityProposal, provenanceId: string, status: 'confirmed' | 'proposed'): void {
     const now = Date.now();
     const data = {
-      ...(proposal.type === 'Creatures' ? { scope: 'individual' } : {}),
-      ...(proposal.type === 'Items' ? { itemNature: proposal.itemNature ?? 'unique' } : {}),
+      ...natureData(proposal),
       ...(proposal.type === 'Locations' && proposal.size ? { size: proposal.size } : {}),
+      ...(proposal.derivedFromId ? { derivedFromId: proposal.derivedFromId } : {}),
       narrativeOrigin: { originId: provenanceId, excerpt: proposal.excerpt },
       needsEnrichment: true
     };
     this.db.prepare(`
       INSERT INTO entities
         (id, workspaceId, type, canonicalName, aliases, lore, loreDocumentId, data, status, createdAt, last_modified)
-      VALUES (?, ?, ?, ?, ?, '', NULL, ?, 'confirmed', ?, ?)
-    `).run(entityId, workspaceId, proposal.type, proposal.name, JSON.stringify(proposal.aliases ?? []), JSON.stringify(data), now, now);
+      VALUES (?, ?, ?, ?, ?, '', NULL, ?, ?, ?, ?)
+    `).run(entityId, workspaceId, proposal.type, proposal.name, JSON.stringify(proposal.aliases ?? []), JSON.stringify(data), status, now, now);
+    this.fileInsideContainer(workspaceId, entityId, proposal);
+    const member = proposal.type === 'Characters' || (proposal.type === 'Creatures' && proposal.scope !== 'group');
+    if (proposal.groupId && member) {
+      this.db.prepare(`
+        INSERT INTO entity_links (id, workspaceId, fromId, relType, toId, label, metadata_json, createdAt)
+        VALUES (?, ?, ?, 'is_race', ?, NULL, '{}', ?)
+      `).run(randomUUID(), workspaceId, entityId, proposal.groupId, now);
+    }
+    if (status === 'confirmed' && member) applyStartingProfile(this.db, workspaceId, entityId, proposal.startingProfile, provenanceId);
+  }
+
+  /** The provisional entity a pending change made, while it is still waiting. */
+  private provisionalEntity(workspaceId: string, change: NarrativeEntityChange): string | null {
+    if (!change.createdEntity || !change.entityId || change.identityUpdate) return null;
+    const row = this.db.prepare("SELECT id FROM entities WHERE workspaceId = ? AND id = ? AND status = 'proposed'")
+      .get(workspaceId, change.entityId) as { id: string } | undefined;
+    return row?.id ?? null;
+  }
+
+  // A provisional entity lived one or a few turns: only the scene, inventory and pending changes can name it.
+  private removeProvisional(workspaceId: string, entityId: string): void {
+    const now = Date.now();
+    for (const table of ['narrative_scene_participants', 'narrative_scene_possible_observers', 'roleplay_scene_objects', 'roleplay_scene_nearby']) {
+      if (this.hasTable(table)) this.db.prepare(`DELETE FROM ${table} WHERE workspace_id = ? AND entity_id = ?`).run(workspaceId, entityId);
+    }
+    if (this.hasTable('narrative_scenes')) this.db.prepare('UPDATE narrative_scenes SET location_id = NULL WHERE workspace_id = ? AND location_id = ?').run(workspaceId, entityId);
+    if (this.hasTable('roleplay_equipment')) this.db.prepare('DELETE FROM roleplay_equipment WHERE workspace_id = ? AND (entity_id = ? OR item_id = ?)').run(workspaceId, entityId, entityId);
+    if (this.hasTable('roleplay_location_inventory')) this.db.prepare('DELETE FROM roleplay_location_inventory WHERE workspace_id = ? AND (location_id = ? OR item_id = ?)').run(workspaceId, entityId, entityId);
+    if (this.hasTable('roleplay_resource_values')) this.db.prepare('DELETE FROM roleplay_resource_values WHERE workspace_id = ? AND target_id = ?').run(workspaceId, entityId);
+    for (const table of ['roleplay_resource_changes', 'roleplay_progress_changes', 'roleplay_skill_changes']) {
+      if (this.hasTable(table)) this.db.prepare(`UPDATE ${table} SET status = 'rejected', resolved_at = ? WHERE workspace_id = ? AND entity_id = ? AND status = 'pending'`).run(now, workspaceId, entityId);
+    }
+    this.db.prepare('DELETE FROM entity_links WHERE workspaceId = ? AND (fromId = ? OR toId = ?)').run(workspaceId, entityId, entityId);
+    this.db.prepare('DELETE FROM entities WHERE workspaceId = ? AND id = ?').run(workspaceId, entityId);
+    retireStoryEntity(this.db, workspaceId, entityId);
+  }
+
+  private entityData(workspaceId: string, entityId: string): string | null {
+    return (this.db.prepare('SELECT data FROM entities WHERE workspaceId = ? AND id = ?').get(workspaceId, entityId) as { data: string | null } | undefined)?.data ?? null;
+  }
+
+  private saveProposal(workspaceId: string, changeId: string, proposal: NarrativeEntityProposal): void {
+    this.db.prepare('UPDATE roleplay_entity_changes SET payload_json = ? WHERE workspace_id = ? AND change_id = ?')
+      .run(JSON.stringify(proposal), workspaceId, changeId);
+  }
+
+  /** References the model gave are kept only when they name something real of the right kind. */
+  private withKnownReferences(workspaceId: string, proposal: NarrativeEntityProposal): NarrativeEntityProposal {
+    const lookup = (id: string | undefined) => (id ? this.db.prepare(`
+      SELECT type, data FROM entities WHERE workspaceId = ? AND id = ? AND status != 'proposed'
+    `).get(workspaceId, id) as { type: string; data: string | null } | undefined : undefined);
+    const group = lookup(proposal.groupId);
+    const isGroup = Boolean(group && (group.type === 'Races' || (group.type === 'Creatures' && parseObject(group.data).scope === 'group')));
+    const { groupId: _groupId, derivedFromId: _derivedFromId, ...rest } = proposal;
+    return {
+      ...rest,
+      ...(isGroup ? { groupId: proposal.groupId } : {}),
+      ...(lookup(proposal.derivedFromId) ? { derivedFromId: proposal.derivedFromId } : {})
+    };
   }
 
   private saveChange(
@@ -731,7 +841,8 @@ function normalizeProposal(input: NarrativeEntityProposal): NarrativeEntityPropo
   const referenceId = String(input.referenceId ?? '').trim();
   const name = String(input.name ?? '').trim();
   if (!referenceId || !name) throw new Error('Narrative entity reference and name are required.');
-  if (!['Characters', 'Creatures', 'Locations', 'Items'].includes(input.type)) throw new Error('Narrative entity type is not supported.');
+  if (!['Characters', 'Creatures', 'Locations', 'Items', 'Races'].includes(input.type)) throw new Error('Narrative entity type is not supported.');
+  const text = (value: unknown) => String(value ?? '').trim();
   return {
     referenceId,
     name,
@@ -751,9 +862,48 @@ function normalizeProposal(input: NarrativeEntityProposal): NarrativeEntityPropo
         : {}
     ),
     ...(input.type === 'Items' ? { itemNature: input.itemNature === 'type' ? 'type' : 'unique' } : {}),
+    ...(input.type === 'Creatures' ? { scope: input.scope === 'group' ? 'group' : 'individual' } : {}),
+    ...(text(input.groupId) ? { groupId: text(input.groupId) } : {}),
+    ...(text(input.derivedFromId) ? { derivedFromId: text(input.derivedFromId) } : {}),
+    ...(classificationDoubt(input) ? { classificationDoubt: true } : {}),
     // The container is worked out from the scene, never taken from the model's output.
     ...(input.type === 'Locations' && normalizeLocationSize(input.size) ? { size: normalizeLocationSize(input.size)! } : {})
   };
+}
+
+/**
+ * One being or a kind, a named or an ordinary item: the interpreter's own doubt, or a choice that
+ * contradicts what it said about the thing, sends the proposal to the user.
+ */
+function classificationDoubt(input: NarrativeEntityProposal): boolean {
+  if (input.classificationDoubt === true) return true;
+  if (input.type === 'Items') return (input.itemNature === 'type') === (input.identityEstablished === true);
+  if (input.type === 'Creatures' && input.scope === 'group') {
+    return input.scenePresence === 'participant' && input.identityEstablished !== true;
+  }
+  return false;
+}
+
+function classified(proposal: NarrativeEntityProposal, choice: NarrativeEntityClassification): NarrativeEntityProposal {
+  if (proposal.type === 'Items' && (choice.itemNature === 'unique' || choice.itemNature === 'type') && choice.itemNature !== proposal.itemNature) {
+    return { ...proposal, itemNature: choice.itemNature, classificationDoubt: false };
+  }
+  if (proposal.type === 'Creatures' && (choice.scope === 'individual' || choice.scope === 'group') && choice.scope !== proposal.scope) {
+    return { ...proposal, scope: choice.scope, classificationDoubt: false };
+  }
+  return proposal;
+}
+
+function otherReading(proposal: NarrativeEntityProposal): NarrativeEntityProposal {
+  if (proposal.type === 'Items') return { ...proposal, itemNature: proposal.itemNature === 'type' ? 'unique' : 'type' };
+  if (proposal.type === 'Creatures') return { ...proposal, scope: proposal.scope === 'group' ? 'individual' : 'group' };
+  return proposal;
+}
+
+function natureData(proposal: NarrativeEntityProposal): Record<string, unknown> {
+  if (proposal.type === 'Creatures') return { scope: proposal.scope === 'group' ? 'group' : 'individual' };
+  if (proposal.type === 'Items') return { itemNature: proposal.itemNature ?? 'unique' };
+  return {};
 }
 
 function normalizeIdentityUpdate(input: NarrativeEntityIdentityUpdate): NarrativeEntityIdentityUpdate {
@@ -817,7 +967,7 @@ function parseAliases(value: string): string[] {
   }
 }
 
-function parseObject(value?: string): Record<string, unknown> {
+function parseObject(value?: string | null): Record<string, unknown> {
   try {
     const parsed = JSON.parse(value || '{}');
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
