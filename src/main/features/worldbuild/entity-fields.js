@@ -17,7 +17,7 @@ const ENRICH_ENUMS = {
 // Mirrors what the sheet renders per type: the AI may only fill what the user can see.
 // Relational fields are edges, handled separately.
 const ENRICH_FIELDS = {
-    Characters: ['status', 'age', 'appearance', 'personality'],
+    Characters: ['status', 'gender', 'age', 'appearance', 'personality'],
     Creatures: ['status', 'disposition', 'nature', 'abundance', 'threat', 'abilities', 'appearance', 'personality'],
     Locations: ['locationType', 'size', 'description'],
     Items: ['itemType', 'abundance', 'description'],
@@ -42,6 +42,7 @@ const ENRICH_TYPE_GUIDANCE = {
 // reach the AI as the literal string "undefined", so every enrichable field needs one.
 const ENRICH_FIELD_GUIDANCE = {
     status: 'Current state only. alive requires explicit survival or a current direct action that cannot be posthumous. deceased requires explicit confirmation of death or a canonically defined irreversible equivalent. Surrender, defeat, disappearance, transformation, assimilation, imprisonment, incapacitation, or leaving a role are not death. missing means whereabouts are explicitly unknown; unknown means the evidence cannot establish a state.',
+    gender: 'The gender explicitly stated for this character, or the one shown by the pronouns the text consistently uses for them. Never infer it from a name, appearance, role, or a single ambiguous pronoun.',
     age: 'A literal current age explicitly stated for this character. Never calculate it from dates, elapsed time, appearance, or life stage.',
     appearance: 'The body and stable visible features explicitly attributed to this individual: build, skin, hair, eyes, marks, scars, voice, habitual dress. Weapons, armor and carried gear are equipment, not appearance; techniques, powers and fighting style are abilities; reactions and gestures in one scene are neither. Exclude temporary pose, location, lighting, injuries that immediately resolve, and subjective comparisons.',
     personality: 'Stable temperament, values, habits and contradictions, established by explicit characterization or by the same behavior across more than one scene. Stated likes, dislikes and fears belong here too, unless a custom field holds them. One reaction, one fight, one tactic or one mood is not personality. Techniques, magic and fighting style are abilities, never personality.',
@@ -60,7 +61,7 @@ const ENRICH_FIELD_GUIDANCE = {
 
 // Every scalar the user set must reach retrieval. Order is the order the model reads.
 const DOSSIER_DATA_FIELDS = [
-    ['status', 'status'], ['itemType', 'type'], ['locationType', 'type'], ['size', 'size'],
+    ['status', 'status'], ['gender', 'gender'], ['itemType', 'type'], ['locationType', 'type'], ['size', 'size'],
     ['nature', 'nature'], ['scope', 'kind'], ['disposition', 'disposition'],
     ['rarity', 'abundance'], ['abundance', 'abundance'], ['threat', 'threat'],
     ['age', 'age'], ['role', 'role'], ['abilities', 'abilities'], ['ownership', 'ownership'],

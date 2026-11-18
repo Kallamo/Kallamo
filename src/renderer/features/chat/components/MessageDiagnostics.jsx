@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Activity, ChevronDown, ChevronRight, ChevronUp, Copy } from 'lucide-react';
+import Tooltip from '../../../components/ui/Tooltip';
 import { describeSpanCheck, formatFrameTime } from '../frame-format';
 import {
   describeSceneLocation,
@@ -324,12 +325,41 @@ const kindLabel = kind => KIND_LABELS[kind] || kind;
 function groupSources(list = []) {
   const groups = new Map();
   list.forEach(item => {
-    const key = `${item.source || 'Unknown'}\u0000${item.kind}\u0000${item.reason || ''}`;
-    const group = groups.get(key) || { source: item.source || 'Unknown', kind: item.kind, reason: item.reason, count: 0 };
+    const key = `${item.source || 'Unknown'}\u0000${item.kind}\u0000${item.reason || ''}\u0000${item.origin || ''}`;
+    const group = groups.get(key) || { source: item.source || 'Unknown', kind: item.kind, reason: item.reason, origin: item.origin, count: 0 };
     group.count += 1;
     groups.set(key, group);
   });
   return [...groups.values()];
+}
+
+const ORIGINS = {
+  always: ['Always', 'A System marked to go with every message.'],
+  scene: ['Scene', 'In the current scene.'],
+  location: ['Location', 'Where the scene takes place.'],
+  mentioned: ['Mentioned', 'Its name or an alias was written in the message.'],
+  search: ['Search', 'Found by the retrieval search.'],
+  related: ['Related', 'Linked to an entity that came in for another reason.']
+};
+
+const EXCLUSION_REASONS = {
+  'token-budget-exceeded': 'Over budget',
+  'subject-not-authorized': 'Unknown to the character',
+  inaccessible: 'Unknown to the character',
+  'explicit-inaccessible-access': 'Unknown to the character',
+  'future-context': 'Not yet in the story',
+  suppressed: 'Suppressed'
+};
+const exclusionLabel = reason => EXCLUSION_REASONS[reason] || (String(reason).startsWith('story-') ? 'Unknown to the character' : reason);
+
+// Worldbuild rows carry why they came in; a planner lookup of the same entity is not listed twice.
+function withWorldbuild(sources = [], worldbuild = [], included) {
+  const rows = worldbuild.filter(row => row.included === included);
+  const names = new Set(worldbuild.map(row => `Worldbuild — ${row.name}`));
+  return [
+    ...rows.map(row => ({ source: row.name, kind: 'worldbuild-canon', origin: row.origin, ...(included ? {} : { reason: exclusionLabel(row.reason) }) })),
+    ...sources.filter(item => !(item.kind === 'worldbuild-canon' && names.has(item.source)))
+  ];
 }
 
 const SOURCE_LIMIT = 8;
@@ -345,6 +375,11 @@ function SourceList({ items, excluded = false }) {
           <li key={index} className="flex items-center gap-2 px-3 py-1.5 text-xs">
             <span className="min-w-0 flex-1 truncate text-text-secondary" data-tooltip={item.source}>{item.source}</span>
             {excluded && item.reason && <span className="shrink-0 text-status-warning">{item.reason}</span>}
+            {ORIGINS[item.origin] && (
+              <Tooltip content={ORIGINS[item.origin][1]}>
+                <span className="shrink-0 rounded bg-tint/[0.06] px-1.5 text-[0.6875rem] text-text-secondary">{ORIGINS[item.origin][0]}</span>
+              </Tooltip>
+            )}
             <span className="shrink-0 rounded bg-tint/[0.06] px-1.5 text-[0.6875rem] text-text-muted">{kindLabel(item.kind)}</span>
             {item.count > 1 && <span className="shrink-0 font-semibold text-text-muted tabular-nums">×{item.count}</span>}
           </li>
@@ -363,6 +398,8 @@ function RetrievalView({ debug, copy }) {
   const retrieval = debug.retrieval;
   if (!retrieval) return <Disclosure title="Report">{copy}</Disclosure>;
   const selection = retrieval.selection;
+  const selectedSources = withWorldbuild(selection?.selectedSources, retrieval.worldbuild, true);
+  const excludedSources = withWorldbuild(selection?.excludedSources, retrieval.worldbuild, false);
   const breakdown = value => Object.entries(value || {}).map(([key, count]) => `${kindLabel(key)} ${count}`).join(' · ');
   return (
     <div className="space-y-4">
@@ -372,14 +409,14 @@ function RetrievalView({ debug, copy }) {
         {debug.generation?.profileName && <Chip>Target: {debug.generation.profileName}</Chip>}
       </div>
 
-      {selection && (
+      {(selection || retrieval.worldbuild?.length > 0) && (
         <>
-          <div className="grid grid-cols-3 gap-2">
+          {selection && <div className="grid grid-cols-3 gap-2">
             <Stat label="Discovered" value={fmt(selection.discovered)} sub={breakdown(selection.discoveredByKind)} />
             <Stat label="Selected" value={fmt(selection.selected)} sub={breakdown(selection.selectedByKind)} tone="text-status-success" />
             <Stat label="Excluded" value={fmt(selection.excluded)} sub={breakdown(selection.excludedByReason) || 'None'} tone={selection.excluded ? 'text-status-warning' : 'text-text-primary'} />
-          </div>
-          {selection.evidence && (
+          </div>}
+          {selection?.evidence && (
             <p className="text-xs text-text-muted">
               Evidence: <span className="text-text-secondary">{selection.evidence.status || 'inconclusive'}</span> ({selection.evidence.reason || 'unspecified'})
               {selection.evidence.source && <> · latest from {selection.evidence.source}</>}
@@ -387,12 +424,12 @@ function RetrievalView({ debug, copy }) {
           )}
           <div>
             <SectionTitle>Selected sources</SectionTitle>
-            <SourceList items={groupSources(selection.selectedSources)} />
+            <SourceList items={groupSources(selectedSources)} />
           </div>
-          {selection.excludedSources?.length > 0 && (
+          {excludedSources.length > 0 && (
             <div>
               <SectionTitle>Excluded sources</SectionTitle>
-              <SourceList items={groupSources(selection.excludedSources)} excluded />
+              <SourceList items={groupSources(excludedSources)} excluded />
             </div>
           )}
         </>

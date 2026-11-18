@@ -3,6 +3,7 @@ import { EpistemicResolver } from './epistemic-resolver';
 import { RoleplaySystem } from './roleplay-system';
 import { isFactionOccurrenceMemoryShared } from '../worldbuild/event-occurrences';
 import { sharedKnowledgeCards } from '../worldbuild/knowledge-groups';
+import { relationTitle } from '../../../shared/relation-phrases';
 import { currentNarrativeSequence, loadCurrentNarrativeRecords } from './narrative-record-projection';
 import type { CompareResult, Record as StoryRecord } from '@kallamo/umwelt' with { 'resolution-mode': 'import' };
 import { NarrativeWorld } from './umwelt/narrative-world';
@@ -162,7 +163,7 @@ export class AgenticEpistemicTools {
     return rows.map(row => {
       const metadata = parseObject(row.metadata);
       const description = String(metadata.description ?? '').trim();
-      return `${subject.canonicalName} -> ${String(row.targetName)}: ${String(row.label || row.relType)}${description ? `; ${description}` : ''}`;
+      return `${subject.canonicalName} -> ${String(row.targetName)}: ${relationTitle(String(row.relType), row.label as string | null)}${description ? `; ${description}` : ''}`;
     }).join('\n');
   }
 

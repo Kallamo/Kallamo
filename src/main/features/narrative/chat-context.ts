@@ -32,6 +32,7 @@ import { canSubjectAccessOccurrence, isFactionOccurrenceMemoryShared } from '../
 import { knowledgeGroupsOf, sharedKnowledgeCards } from '../worldbuild/knowledge-groups';
 import { describeLocationChain, loadLocationChain } from '../worldbuild/location-graph';
 import { derivedAge } from '../../../shared/world-age';
+import { relationTitle } from '../../../shared/relation-phrases';
 import { NarrativeContextManifestRepository, type NarrativeContextManifest } from './context-manifest';
 import { RoleplayContextOrchestrator } from './roleplay-context-orchestrator';
 import { CharacterSceneMemory, formatCharacterMemorySection } from './character-scene-memory';
@@ -77,6 +78,16 @@ export interface PlannedChatContext {
   bundle?: ContextBundleResult;
   manifest?: NarrativeContextManifest;
   storySearch?: StorySearchTrace[];
+  /** Why each Worldbuild entity was considered, for the retrieval diagnostics. */
+  entityOrigins?: EntityOrigin[];
+}
+
+export type EntityOriginKind = 'always' | 'scene' | 'location' | 'mentioned' | 'search' | 'related';
+
+export interface EntityOrigin {
+  id: string;
+  name: string;
+  origin: EntityOriginKind;
 }
 
 /** What the story search found for one perspective, for the turn diagnostics. */
@@ -145,6 +156,7 @@ export class NarrativeChatContext {
   private planRecords: ProjectedNarrativeRecord[] | null = null;
   private planHits = new Map<string, Map<string, StoryHit>>();
   private searchTrace: StorySearchTrace[] = [];
+  private planOrigins: EntityOrigin[] | null = null;
   private readonly roleplayOrchestrator: RoleplayContextOrchestrator;
   private readonly characterMemory: CharacterSceneMemory;
 
@@ -165,12 +177,15 @@ export class NarrativeChatContext {
     this.planRecords = null;
     this.planHits = new Map();
     this.searchTrace = [];
+    this.planOrigins = null;
     try {
       const planned = this.planOnce(input);
-      return this.searchTrace.length ? { ...planned, storySearch: this.searchTrace } : planned;
+      const withOrigins = this.planOrigins ? { ...planned, entityOrigins: this.planOrigins } : planned;
+      return this.searchTrace.length ? { ...withOrigins, storySearch: this.searchTrace } : withOrigins;
     } finally {
       this.planRecords = null;
       this.planHits = new Map();
+      this.planOrigins = null;
     }
   }
 
@@ -229,7 +244,7 @@ export class NarrativeChatContext {
       if (item.kind === 'worldbuild-canon' && item.entityIds?.length) return [];
       return [this.toRetrievedCandidate(input.workspaceId, item, linkedChunkIds, strategy.hasActiveScene)];
     });
-    const { ids: seedEntityIds, focusIds } = this.resolveRelevantEntityIds(
+    const { ids: seedEntityIds, focusIds, origins } = this.resolveRelevantEntityIds(
       input.workspaceId,
       input.query,
       input.items,
@@ -266,8 +281,10 @@ export class NarrativeChatContext {
       ),
       ...(strategy.mode === 'roleplay' ? this.loadRoleplayCandidates(input.workspaceId, entityIds) : [])
     ];
+    const alwaysCandidates = this.loadAlwaysInContextCandidates(input.workspaceId);
+    this.planOrigins = this.describeOrigins(input.workspaceId, entityIds, origins, alwaysCandidates);
     const uniqueCandidates = withAlwaysInContext(
-      this.loadAlwaysInContextCandidates(input.workspaceId),
+      alwaysCandidates,
       deduplicateCandidates([...retrieved, ...structured])
     );
     const candidates = strategy.prepareCandidates(strategy.mode === 'standard'
@@ -682,9 +699,11 @@ export class NarrativeChatContext {
     query: string,
     items: RetrievedContextItem[],
     perspective: Perspective
-  ): { ids: string[]; focusIds: string[] } {
+  ): { ids: string[]; focusIds: string[]; origins: Map<string, EntityOriginKind> } {
     const ids = new Set(items.flatMap(item => item.entityIds ?? []));
     const focus = new Set(ids);
+    // Later reasons overwrite earlier ones, so the strongest reason an entity came in is kept.
+    const origins = new Map<string, EntityOriginKind>([...ids].map(id => [id, 'search']));
     const chunkIds = items
       .filter(item => item.entityExpansion !== 'none')
       .map(item => item.id)
@@ -697,24 +716,42 @@ export class NarrativeChatContext {
         JOIN entities AS e ON e.id = ct.entity AND e.workspaceId = ?
         WHERE ct.chunkId IN (${placeholders})
       `).all(workspaceId, ...chunkIds) as Array<{ id: string }>;
-      rows.forEach(row => ids.add(row.id));
+      rows.forEach(row => {
+        ids.add(row.id);
+        if (!origins.has(row.id)) origins.set(row.id, 'search');
+      });
     }
     const scene = this.roleplay.getScene(workspaceId);
+    const add = (origin: EntityOriginKind) => (id: string | undefined) => {
+      if (!id) return;
+      ids.add(id);
+      focus.add(id);
+      origins.set(id, origin);
+    };
+    this.resolveMentionedEntityIds(workspaceId, query).forEach(add('mentioned'));
+    if (scene?.locationId) add('location')(scene.locationId);
     [
       perspective.focalSubjectId,
       ...(perspective.allowedSubjectIds ?? []),
       ...(scene?.participantIds ?? []),
       ...(scene?.possibleObserverIds ?? []),
       ...(scene?.nearbyIds ?? []),
-      ...(scene?.objectIds ?? []),
-      scene?.locationId,
-      ...this.resolveMentionedEntityIds(workspaceId, query)
-    ].forEach(id => {
-      if (!id) return;
-      ids.add(id);
-      focus.add(id);
-    });
-    return { ids: [...ids], focusIds: [...focus] };
+      ...(scene?.objectIds ?? [])
+    ].forEach(add('scene'));
+    return { ids: [...ids], focusIds: [...focus], origins };
+  }
+
+  /** Names each entity the plan considered with why it came in; expansion through links is "related". */
+  private describeOrigins(
+    workspaceId: string,
+    entityIds: string[],
+    origins: Map<string, EntityOriginKind>,
+    alwaysCandidates: ContextCandidate[]
+  ): EntityOrigin[] {
+    const byId = new Map<string, EntityOriginKind>(entityIds.map(id => [id, origins.get(id) ?? 'related']));
+    alwaysCandidates.forEach(candidate => byId.set(candidate.source.id, 'always'));
+    const names = this.getEntityNames(workspaceId, [...byId.keys()]);
+    return [...byId].flatMap(([id, origin]) => names.has(id) ? [{ id, name: names.get(id)!, origin }] : []);
   }
 
   /** Systems the user marked to go with every message: world rules, outside retrieval and the entity limit. */
@@ -1108,7 +1145,7 @@ export class NarrativeChatContext {
       const description = String(metadata.description ?? '').trim();
       const lines = [
         `${row.sourceName} → ${row.targetName}`,
-        `Title: ${row.label || row.relType}`,
+        `Title: ${relationTitle(row.relType, row.label)}`,
         ...(Number.isFinite(value) ? [`Value: ${Math.max(-100, Math.min(100, value))}`] : []),
         ...(description ? [`Description: ${description}`] : [])
       ];
@@ -1500,7 +1537,7 @@ function composeEntitySummary(entity: EntityRow): string {
 
 function nativeFieldLabel(key: string): string {
   const labels: Record<string, string> = {
-    status: 'Status', age: 'Age', appearance: 'Appearance', personality: 'Personality',
+    status: 'Status', gender: 'Gender', age: 'Age', appearance: 'Appearance', personality: 'Personality',
     disposition: 'Disposition', nature: 'Nature', abundance: 'Abundance', threat: 'Threat',
     abilities: 'Abilities', locationType: 'Type', size: 'Size', itemType: 'Type', description: 'Description',
     kind: 'Kind', content: 'Content'

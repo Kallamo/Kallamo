@@ -1069,9 +1069,9 @@ Rank the problems by how much they break the story, most serious first.
   const eLighthouse = seedId('ent');
   const eLogbook = seedId('ent');
   const entities = [
-    { id: eMara, type: 'Characters', name: 'Mara Finn', aliases: ['Mara'], data: { status: 'alive', loreDocumentIds: [docId] },
+    { id: eMara, type: 'Characters', name: 'Mara Finn', aliases: ['Mara'], data: { status: 'alive', gender: 'Female', loreDocumentIds: [docId] },
       lore: 'Aldous Finn’s granddaughter, 28. She returns to Mourne Cliff to settle the family estate and sell the lighthouse, but the open door and the torn logbook page pull her into her grandfather’s disappearance.' },
-    { id: eAldous, type: 'Characters', name: 'Aldous Finn', aliases: ['Aldous', 'the keeper', 'the old keeper'], data: { status: 'missing', loreDocumentIds: [docId] },
+    { id: eAldous, type: 'Characters', name: 'Aldous Finn', aliases: ['Aldous', 'the keeper', 'the old keeper'], data: { status: 'missing', gender: 'Male', loreDocumentIds: [docId] },
       lore: 'The lighthouse’s last keeper. Vanished without a trace in 1983 and was never found. His handwriting survives on a logbook page Mara discovers on the bottom step.' },
     { id: eLighthouse, type: 'Locations', name: 'Mourne Cliff Lighthouse', aliases: ['the lighthouse', 'Mourne Cliff'], data: { size: 'place', loreDocumentIds: [docId] },
       lore: 'A tall, weatherbeaten lighthouse abandoned for forty years, its lantern long dark. The villagers avoid the cliff path after sundown. Setting of Chapter One.' },
@@ -1154,7 +1154,9 @@ Rank the problems by how much they break the story, most serious first.
         JSON.stringify(e.data || {}), now, now
       );
     }
-    insertLink.run(seedId('lnk'), workspaceId, eMara, 'connected_to', eAldous, now);
+    const insertLabeledLink = db.prepare('INSERT INTO entity_links (id, workspaceId, fromId, relType, toId, label, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    insertLabeledLink.run(seedId('lnk'), workspaceId, eMara, 'related_to', eAldous, 'Grandfather', now);
+    insertLabeledLink.run(seedId('lnk'), workspaceId, eAldous, 'works_at', eLighthouse, 'Keeper', now);
     insertLink.run(seedId('lnk'), workspaceId, eLogbook, 'created_by', eAldous, now);
     insertLink.run(seedId('lnk'), workspaceId, eLogbook, 'found_in', eLighthouse, now);
     insertLink.run(seedId('lnk'), workspaceId, eLighthouse, 'led_by', eAldous, now);

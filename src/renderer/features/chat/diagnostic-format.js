@@ -274,6 +274,11 @@ export const formatRetrievalDiagnostics = diagnostic => {
     '',
     'SELECTION FUNNEL',
     formatSelectionFunnel(retrieval.selection),
+    ...(retrieval.worldbuild?.length ? [
+      '',
+      'WORLDBUILD ENTRIES',
+      ...retrieval.worldbuild.map(row => `- ${row.name} [${row.origin}]${row.included ? '' : `: excluded (${row.reason})`}`)
+    ] : []),
     '',
     'PLANNER DECISIONS',
     formatPlannerDecisions(retrieval.bundle),

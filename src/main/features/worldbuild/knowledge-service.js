@@ -13,7 +13,7 @@ const SOURCE_TYPES = new Set([
 // Locations that hold common knowledge for the people local to them.
 const SHARING_SIZES = new Set(['region', 'area']);
 const NATIVE_FIELDS = {
-  Characters: ['status', 'age', 'appearance', 'personality'],
+  Characters: ['status', 'gender', 'age', 'appearance', 'personality'],
   Creatures: ['status', 'disposition', 'nature', 'abundance', 'threat', 'abilities', 'appearance', 'personality'],
   Locations: ['locationType', 'description'],
   Items: ['itemType', 'abundance', 'description'],
@@ -35,6 +35,8 @@ const KNOWABLE_RELATION_TYPES = new Set([
   'sold_in',
   'is_race',
   'connected_to',
+  'lives_in',
+  'works_at',
   'adjacent_to',
   'related_to',
 ]);

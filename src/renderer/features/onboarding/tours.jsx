@@ -81,7 +81,7 @@ const setup = {
         </>,
       },
       {
-        where: 'New connection', target: 'connection-models', placement: 'top', width: '23.75rem', hint: 'Click Create connection',
+        where: 'New connection', target: 'connection-models', placement: 'top', width: '23.75rem', hint: 'Click Save',
         title: 'Add the models you want',
         body: <>
           <P>Type a model's ID exactly as the provider writes it and press Add. Repeat for each model you want to use.</P>
@@ -90,10 +90,10 @@ const setup = {
             <li>OpenAI: <Code>gpt-6-sol</Code></li>
             <li>Google AI: <Code>gemini-4-argon</Code></li>
           </List>
-          <P>Profiles and roles choose from this list later. When you are done, press <B>Create connection</B> at the top.</P>
+          <P>Profiles and roles choose from this list later. When you are done, press <B>Save</B> in the bar at the bottom.</P>
         </>,
         advanceWhen: h => h.seen && !h.exists('provider-grid') && h.exists('connection-row'),
-        requires: () => document.querySelector('[data-tour="create-connection"]')?.disabled === false,
+        requires: () => document.querySelector('[aria-label="Unsaved changes"]')?.dataset.ready === 'true',
         requiresText: 'Give the connection a name and at least one model first.',
         stay: true,
         onNext: h => h.click('create-connection'),
@@ -288,7 +288,8 @@ const ownCharacter = {
         title: 'Where they belong',
         body: <List>
           <li><B>Factions</B>: groups they are part of.</li>
-          <li><B>Local to</B>: where they come from. They know what the locals there know.</li>
+          <li><B>Local knowledge</B>: Regions and Areas they know like a local. They know what everyone there knows.</li>
+          <li><B>Tied to</B>: other places that matter to them, like where they were born.</li>
           <li><B>Relationships</B>: who they know, and how close they are.</li>
         </List>,
         onEnter: h => h.click('wb-tab-connections'),

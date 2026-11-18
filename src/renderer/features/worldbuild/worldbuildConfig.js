@@ -110,10 +110,11 @@ export const ABUNDANCE_HELP = [
   ['Common', 'Found in most places.'],
   ['Abundant', 'Everywhere, effectively unlimited.'],
 ];
+export const GENDERS = ['Female', 'Male', 'Non-binary'];
 export const RELATIONSHIP_LABELS = ['Father', 'Mother', 'Sibling', 'Child', 'Friend', 'Rival', 'Enemy', 'Mentor', 'Ally', 'Lover'];
 
 const FIELD_LABELS = {
-  status: 'Status', age: 'Age', appearance: 'Appearance', personality: 'Personality', role: 'Role', abilities: 'Abilities',
+  status: 'Status', gender: 'Gender', age: 'Age', appearance: 'Appearance', personality: 'Personality', role: 'Role', abilities: 'Abilities',
   disposition: 'Disposition', nature: 'Nature', abundance: 'Abundance', threat: 'Threat', kind: 'Kind',
   description: 'Description', locationType: 'Type', size: 'Size', itemType: 'Type', content: 'Content',
 };

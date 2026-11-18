@@ -231,6 +231,25 @@ function compactContextBundle(bundle, keepExcluded) {
     return { ...rest, scopes, excludedByReason };
 }
 
+// One short row per Worldbuild entity the planner considered: why it came in and, if it did not
+// reach the context, why not. Kept only while the retrieval panel is on.
+function summarizeWorldbuildOrigins(planned) {
+    if (!planned?.entityOrigins?.length) return null;
+    const included = new Set(planned.bundle
+        ? planned.bundle.scopes.flatMap(scope => scope.package.items.map(item => item.candidateId))
+        : (planned.plan?.package?.items || []).map(item => item.candidateId));
+    const decisions = planned.bundle ? planned.bundle.decisions : (planned.plan?.decisions || []);
+    const exclusions = new Map();
+    for (const decision of decisions) {
+        if (decision.outcome !== 'include' && !exclusions.has(decision.candidateId)) exclusions.set(decision.candidateId, decision.reason);
+    }
+    return planned.entityOrigins.flatMap(({ id, name, origin }) => {
+        const candidateId = `entity:${id}`;
+        if (included.has(candidateId)) return [{ name, origin, included: true }];
+        return exclusions.has(candidateId) ? [{ name, origin, included: false, reason: exclusions.get(candidateId) }] : [];
+    });
+}
+
 function serializeContextBundle(planned) {
     if (!planned?.bundle) return null;
     const scopes = planned.bundle.scopes.map(scope => ({
@@ -762,6 +781,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
         let lastNarrativeContextRequestId = null;
         let lastFinalContextText = '';
         let lastContextBundle = null;
+        let lastWorldbuildOrigins = null;
         let lastRetrievalMode = 'standard';
         let lastAgenticTrace = null;
         let lastRetrievalFunnel = null;
@@ -824,6 +844,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             let standardRagDebug = '';
             let narrativeContextRequestId = null;
             let contextBundleDiagnostic = null;
+            let worldbuildOriginsDiagnostic = null;
             let retrievalMode = 'standard';
             let agenticTrace = null;
             let retrievalFunnel = null;
@@ -1089,6 +1110,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                         });
                         if (planned?.manifest?.requestId) narrativeContextRequestId = planned.manifest.requestId;
                         contextBundleDiagnostic = serializeContextBundle(planned);
+                        worldbuildOriginsDiagnostic = summarizeWorldbuildOrigins(planned);
                     }
                     const narrativeTokens = planned?.plan.package.usedTokens || 0;
                     // Stored on the message, so chunk ids are left out and only counts are kept.
@@ -1240,6 +1262,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     });
                     if (planned.manifest?.requestId) narrativeContextRequestId = planned.manifest.requestId;
                     contextBundleDiagnostic = serializeContextBundle(planned);
+                    worldbuildOriginsDiagnostic = summarizeWorldbuildOrigins(planned);
                     if (planned.context) contextBlock += `\n\n${planned.context}\n`;
                     standardRagDebug += `\n${formatContextPlanDebug(planned.plan)}\n`;
                     standardRagDebug += `\n${formatContextBundleDebug(planned)}\n`;
@@ -1471,6 +1494,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             lastNarrativeContextRequestId = narrativeContextRequestId;
             lastFinalContextText = stableContextBlock + contextBlock;
             lastContextBundle = contextBundleDiagnostic;
+            lastWorldbuildOrigins = worldbuildOriginsDiagnostic;
             lastRetrievalMode = retrievalMode;
             lastAgenticTrace = agenticTrace;
             lastRetrievalFunnel = retrievalFunnel;
@@ -1537,6 +1561,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     // One copy of the context: the Request tab holds it again, whole, inside the request.
                     ...(keepRetrievalText ? { finalContextText: capDebugText(lastFinalContextText) } : {}),
                     bundle: compactContextBundle(lastContextBundle, keepRetrievalText),
+                    ...(keepRetrievalText && lastWorldbuildOrigins?.length ? { worldbuild: lastWorldbuildOrigins } : {}),
                     selection: lastRetrievalFunnel
                 },
                 agentic: lastAgenticTrace ? {
@@ -1851,6 +1876,7 @@ function getSourceLanguageInstruction() {
 }
 
 const { edgeDetail } = require('./features/worldbuild/relation-dossier');
+const { relationTitle } = require('../../dist-main/shared/relation-phrases');
 // Lets the classifier reuse canonical names instead of coining variants.
 function buildEntityVocab(workspaceId, sourceText = '') {
     if (!workspaceId) return '';
@@ -2515,7 +2541,9 @@ const ENRICH_RELATION_GUIDANCE = {
     'Characters.race': 'Only an explicitly established ancestry, species, lineage, or people.',
     'Creatures.species': 'Only an explicitly established species or kind this specific being belongs to, never a resemblance or comparison.',
     'Characters.factions': 'Only explicit membership or formal allegiance, not cooperation, employment, sympathy, or proximity.',
-    'Characters.locations': 'Only a persistent meaningful connection, such as residence, origin, rule, or established base; not presence in one scene.',
+    'Characters.livesIn': 'Only where this character explicitly lives now: a home, lodging, or settlement of residence. Not where they were born, work, or are visiting in one scene.',
+    'Characters.worksAt': 'Only an explicit current job or service: the place or faction this character works at or for. Formal membership is a faction, not work.',
+    'Characters.locations': 'Only another persistent meaningful tie to a place that is neither home nor work, such as birthplace, a place they rule or guard, or an established haunt; not presence in one scene.',
     'Characters.relationships': 'Only an explicitly established directional personal relationship. targetRole states what TARGET is to SOURCE. value and sourcePerspective state how SOURCE feels about and relates to TARGET.',
     'Creatures.relationships': 'Only an explicitly established directional personal relationship involving a specific creature. targetRole states what TARGET is to SOURCE. value and sourcePerspective state how SOURCE feels about and relates to TARGET.',
     'Locations.inside': 'Only explicit physical containment inside another location, never proximity, jurisdiction, association, or travel between places. SOURCE is the smaller place and TARGET the larger one around it: a nation, region or city is never inside a building or a smaller place.',
@@ -5288,7 +5316,9 @@ const ENRICH_RELATIONS = {
     Characters: [
         { key: 'race',          label: 'Race',         relType: 'is_race',      targetType: 'Races',      from: 'self',   single: true },
         { key: 'factions',      label: 'Faction',      relType: 'member_of',    targetType: 'Factions',   from: 'self',   single: false },
-        { key: 'locations',     label: 'Location',     relType: 'connected_to', targetType: 'Locations',  from: 'self',   single: false },
+        { key: 'livesIn',       label: 'Lives in',     relType: 'lives_in',     targetType: 'Locations',  from: 'self',   single: true },
+        { key: 'worksAt',       label: 'Works at',     relType: 'works_at',     targetTypes: ['Locations', 'Factions'], from: 'self', single: false },
+        { key: 'locations',     label: 'Tied to',      relType: 'connected_to', targetType: 'Locations',  from: 'self',   single: false },
         { key: 'relationships', label: 'Relationship', relType: 'related_to', targetTypes: ['Characters', 'Creatures'], from: 'self', single: false, labeled: true, detailed: true },
     ],
     Locations: [
@@ -7434,7 +7464,7 @@ ${isRoleplay ? `${inContextLine}- PERSPECTIVE: lookup_entity returns what the na
                     if (!ent) continue;
                     const links = entitiesStore.getLinksFrom(eid) || [];
                     if (links.length) {
-                        const edges = links.map(l => `${l.label || l.relType} → ${l.entity ? l.entity.canonicalName : '?'}${edgeDetail(l, dossierCalendar)}`).join('; ');
+                        const edges = links.map(l => `${relationTitle(l.relType, l.label)} → ${l.entity ? l.entity.canonicalName : '?'}${edgeDetail(l, dossierCalendar)}`).join('; ');
                         relLines.push(`${ent.canonicalName}: ${edges}`);
                         edgesByEntity.set(eid, edges);
                     }

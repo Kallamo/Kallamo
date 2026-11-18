@@ -287,8 +287,8 @@ const BASE_SCHEMA = `
   -- Relations between world nodes, one row per directed edge. relType examples:
   -- inside (Location->Location), created_by / owned_by (Item->Character),
   -- found_in (Item->Location), is_race (Character->Race), member_of
-  -- (Character->Faction), operates_in (Faction->Location), connected_to
-  -- (Character->Location). Derived lists (inventory, members…) are reverse queries.
+  -- (Character->Faction), operates_in (Faction->Location), lives_in /
+  -- works_at / connected_to (Character->Location; works_at also ->Faction). Derived lists (inventory, members…) are reverse queries.
   CREATE TABLE IF NOT EXISTS entity_links (
     id          TEXT PRIMARY KEY,
     workspaceId TEXT,

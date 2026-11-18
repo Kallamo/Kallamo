@@ -863,6 +863,30 @@ describe('Narrative chat context integration', () => {
     expect(result.context).toContain('The sea rises at every full moon.');
   });
 
+  test('records why each Worldbuild entity was considered', () => {
+    setWorkspaceExperienceMode(db, 'workspace-one', 'roleplay');
+    insertSystem('tide-law', 'Tide Law', 'The sea rises at every full moon.', true);
+    declareEntity('elias', 'Characters');
+    declareEntity('harbor', 'Locations');
+    declareEntity('northern', 'Locations');
+    declareEntity('relic', 'Items');
+    db.prepare('INSERT INTO chunk_tags (chunkId, tag, entity) VALUES (?, ?, ?)').run('chunk-gate', 'relic', 'relic');
+    new NarrativeSceneRepository(db).save({
+      id: 'scene-one', projectId: 'workspace-one', status: 'active', locationId: 'harbor',
+      participantIds: ['elias'], possibleObserverIds: [],
+      perspective: { access: 'subjective', focalSubjectId: 'elias' },
+      position: { sequence: 50 }
+    } as any);
+
+    const origins = new Map((plan().entityOrigins ?? []).map(entry => [entry.id, entry.origin]));
+
+    expect(origins.get('tide-law')).toBe('always');
+    expect(origins.get('elias')).toBe('scene');
+    expect(origins.get('harbor')).toBe('location');
+    expect(origins.get('northern')).toBe('mentioned');
+    expect(origins.get('relic')).toBe('search');
+  });
+
   function insertSystem(id: string, name: string, content: string, always: boolean) {
     db.prepare(`
       INSERT INTO entities (

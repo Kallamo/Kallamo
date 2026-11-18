@@ -69,7 +69,7 @@ const ENTRY_ORIGINS: Record<'authored' | 'narrative' | 'occurrence', { label: st
 };
 const SEEDED_ORIGIN = { label: SEEDED_BY.label, icon: Package, tone: 'text-text-muted' };
 const NATIVE_FIELDS: Record<string, Array<{ key: string; label: string }>> = {
-  Characters: [{ key: 'status', label: 'Status' }, { key: 'age', label: 'Age' }, { key: 'appearance', label: 'Appearance' }, { key: 'personality', label: 'Personality' }],
+  Characters: [{ key: 'status', label: 'Status' }, { key: 'gender', label: 'Gender' }, { key: 'age', label: 'Age' }, { key: 'appearance', label: 'Appearance' }, { key: 'personality', label: 'Personality' }],
   Creatures: [{ key: 'status', label: 'Status' }, { key: 'disposition', label: 'Disposition' }, { key: 'nature', label: 'Nature' }, { key: 'abundance', label: 'Abundance' }, { key: 'threat', label: 'Threat' }, { key: 'abilities', label: 'Abilities' }, { key: 'appearance', label: 'Appearance' }, { key: 'personality', label: 'Personality' }],
   Locations: [{ key: 'locationType', label: 'Type' }, { key: 'description', label: 'Description' }],
   Items: [{ key: 'itemType', label: 'Type' }, { key: 'abundance', label: 'Abundance' }, { key: 'description', label: 'Description' }],
@@ -90,7 +90,9 @@ const RELATION_LABELS: Record<string, string> = {
   found_in: 'Found in',
   sold_in: 'Sold in',
   is_race: 'Race / species',
-  connected_to: 'Connected to',
+  connected_to: 'Tied to',
+  lives_in: 'Lives in',
+  works_at: 'Works at',
   adjacent_to: 'Adjacent to',
   related_to: 'Related to',
 };
@@ -109,6 +111,8 @@ const INVERSE_RELATION_LABELS: Record<string, string> = {
   found_in: 'Source of',
   sold_in: 'Sells',
   is_race: 'Includes',
+  lives_in: 'Home of',
+  works_at: 'Employs',
 };
 
 interface Props {

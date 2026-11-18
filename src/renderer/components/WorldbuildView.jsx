@@ -53,7 +53,7 @@ import { describeSkillChange, skillChangeItems } from '../features/roleplay/chan
 import { displayNativeValue, displayProposalValue } from '../features/worldbuild/reviewDisplay';
 import {
   ABUNDANCE_HELP, CREATURE_NATURES, DISPOSITION, entityMeta, fieldLabel, ITEM_TYPES, itemMeta, meta, TYPES,
-  RARITY, RELATIONSHIP_LABELS, STATUS, THREAT, TYPE_ORDER, LOCATION_SIZE_OPTIONS, locationSizeIcon, sortLocationsForPresence,
+  GENDERS, RARITY, RELATIONSHIP_LABELS, STATUS, THREAT, TYPE_ORDER, LOCATION_SIZE_OPTIONS, locationSizeIcon, sortLocationsForPresence,
 } from '../features/worldbuild/worldbuildConfig';
 import { isInvertedNesting, locationSizeGuide, locationSizeLabel, locationSizeOf, locationSizeRank } from '../../shared/location-sizes';
 import SegmentedControl from './ui/SegmentedControl';
@@ -61,6 +61,7 @@ import SelectMenu from './ui/SelectMenu';
 import { normalizeTemplateSections, sheetTabs as sheetTabsFor, tabLabel } from '../features/worldbuild/worldbuildSections';
 import { FieldEye, SpoilerCover, SpoilerRow, SpoilerScope, SpoilerText, SpoilerTextArea } from '../features/worldbuild/Spoilers';
 import { hiddenFields, withFieldHidden } from '../../shared/spoilers';
+import { workspaceCovered } from '../utils/workspaceCovered';
 
 // Frosted dark inputs: their own dark backing guarantees legible text over BOTH
 // light and dark workspace backgrounds, while the blur keeps the background alive.
@@ -759,7 +760,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const searchRef = useRef(null);
   useEffect(() => {
     const onKey = (event) => {
-      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'k') {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'k' && !workspaceCovered()) {
         event.preventDefault();
         searchRef.current?.focus();
         searchRef.current?.select();
@@ -975,6 +976,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     return m;
   }, [entities]);
   // Where a single object can lie: places and spots before the regions that contain them.
+  // A gender typed on one sheet is offered on every other one.
+  const genderOptions = useMemo(() => [...new Set([...GENDERS, ...(byType.Characters || []).map(character => String(character.data?.gender || '').trim()).filter(Boolean)])], [byType.Characters]);
   const sharingLocations = useMemo(() => (byType.Locations || []).filter(location => ['region', 'area'].includes(locationSizeOf(location))), [byType.Locations]);
   const presenceLocations = useMemo(() => sortLocationsForPresence(byType.Locations || []), [byType.Locations]);
   // A species or swarm is not someone a relation can point at: only specific beings own things,
@@ -1141,10 +1144,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       Characters: {
         isRace: ['from', 'is_race'], memberOf: ['from', 'member_of'],
         formerMemberOf: ['from', 'former_member_of'], connectedTo: ['from', 'connected_to'],
-        localTo: ['from', 'local_to'],
+        localTo: ['from', 'local_to'], livesIn: ['from', 'lives_in'], worksAt: ['from', 'works_at'],
       },
     }[ent.type] || {};
-    const singles = new Set(['inside', 'leader', 'createdBy', 'ownedBy', 'locatedIn', 'isRace']);
+    const singles = new Set(['inside', 'leader', 'createdBy', 'ownedBy', 'locatedIn', 'isRace', 'livesIn']);
     const isAgent = ent.type === 'Characters' || (ent.type === 'Creatures' && (ent.data?.scope || 'individual') !== 'group');
     const wantsRelationships = isAgent || ent.type === 'Factions';
     const extras = {
@@ -1249,7 +1252,15 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       const payload = { workspaceId, type: selected.type, canonicalName: selected.canonicalName.trim(), aliases: aliasesArr(selected.aliases), lore: selected.lore, loreDocumentId: ids[0] || null, data, status: accept ? 'confirmed' : selected.status };
       let id = selected.id;
       if (selected.id) { const r = await electronAPI.updateEntity(selected.id, payload); if (!r?.success) throw new Error(r?.error || 'update failed'); patch({ status: payload.status }); }
-      else { const r = await electronAPI.createEntity(payload); if (!r?.success) throw new Error(r?.error || 'create failed'); id = r.entity.id; setSelected(s => ({ ...s, id, status: r.entity.status })); }
+      else {
+        const r = await electronAPI.createEntity(payload); if (!r?.success) throw new Error(r?.error || 'create failed'); id = r.entity.id;
+        const drafts = selected.draftLinks || {};
+        for (const [relType, targets] of Object.entries(drafts)) {
+          for (const toId of targets) await electronAPI.setEntityLink({ workspaceId, fromId: id, relType, toId, single: false });
+        }
+        setSelected(s => ({ ...s, id, status: r.entity.status, draftLinks: undefined }));
+        if (Object.keys(drafts).length) await loadRelations({ ...selected, id });
+      }
       await load();
       await loadEnrichErrors();
       return id;
@@ -1538,6 +1549,20 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     try { const r = await fn(); if (r && r.success === false) { showToast(`Link failed: ${r.error || 'unknown error'}`, 'error'); return false; } await reloadRel(); return true; }
     catch (e) { showToast(`Link failed: ${e.message}`, 'error'); return false; }
   };
+  // Before the first save a link has no entity to start from, so the draft holds its targets
+  // and persist writes them once the entity exists.
+  const draftTargets = (relType) => selected?.draftLinks?.[relType] || [];
+  const setDraftTargets = (relType, targets) => setSelected(p => ({ ...p, draftLinks: { ...(p.draftLinks || {}), [relType]: targets } }));
+  const draftLinksOf = (relType) => draftTargets(relType)
+    .map(id => entities.find(entity => entity.id === id))
+    .filter(Boolean)
+    .map(entity => ({ linkId: `draft:${relType}:${entity.id}`, entity }));
+  const singleProps = (relType, current) => unsaved
+    ? { current: draftTargets(relType)[0], onSet: (id) => setDraftTargets(relType, id ? [id] : []) }
+    : { current, onSet: (id) => setSingle(relType, id) };
+  const multiProps = (relType, links) => unsaved
+    ? { links: draftLinksOf(relType), onAdd: (id) => setDraftTargets(relType, [...draftTargets(relType), id]), onRemove: (linkId) => setDraftTargets(relType, draftTargets(relType).filter(id => `draft:${relType}:${id}` !== linkId)) }
+    : { links, onAdd: (id) => addMulti(relType, id), onRemove: removeLink };
   const setSingle = async (relType, toId) => { if (!selected?.id) return; await linkOp(() => electronAPI.setEntityLink({ workspaceId, fromId: selected.id, relType, toId, single: true })); };
   const addMulti = async (relType, toId, fromSelected = true) => { if (!selected?.id) return; await linkOp(() => electronAPI.setEntityLink({ workspaceId, fromId: fromSelected ? selected.id : toId, relType, toId: fromSelected ? toId : selected.id, single: false })); };
   // Nesting is stored on the child, so adding a place here writes the child's own link.
@@ -2049,12 +2074,15 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
         view: <>
           <FactGrid>
             <ViewField label="Race" spoiler="race" value={rel.isRace?.entity ? <EntityChip entity={rel.isRace.entity} onOpen={openEntityById} /> : null} />
+            <ViewField label="Gender" spoiler="gender" value={selected.data.gender} />
             <ViewField label="Age" spoiler="age" value={selected.data.birthDate
               ? (derivedAge(worldCalendar, worldClock, selected.data) && <span data-tooltip="Calculated from the birthday">{derivedAge(worldCalendar, worldClock, selected.data)}</span>)
               : selected.data.age} />
             <ViewField label="Born" spoiler="birthDate" value={formatWorldDate(worldCalendar, selected.data.birthDate)} />
             {selected.data.status === 'deceased' && <ViewField label="Died" spoiler="deathDate" value={formatWorldDate(worldCalendar, selected.data.deathDate)} />}
             {selected.data.status === 'missing' && <ViewField label="Disappeared" spoiler="missingDate" value={formatWorldDate(worldCalendar, selected.data.missingDate)} />}
+            <ViewField label="Lives in" spoiler="livesIn" value={rel.livesIn?.entity ? <SpoilerCover field={`link:${rel.livesIn.linkId}`} compact><EntityChip entity={rel.livesIn.entity} onOpen={openEntityById} /></SpoilerCover> : null} />
+            <ViewField label="Works at" spoiler="worksAt" value={(rel.worksAt || []).length ? <ChipList onOpen={openEntityById} links={rel.worksAt} /> : null} />
           </FactGrid>
         </>,
         edit: <>
@@ -2066,7 +2094,18 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             </Edit></div>}
           </div>
           {worldCalendar && selected.data.birthDate && <Checkbox checked={Boolean(selected.data.showBirthday)} onChange={showBirthday => patchData({ showBirthday })} label="Show the birthday on the calendar" />}
-          <SingleRelation label="Race" spoiler="race" disabled={unsaved} current={rel.isRace?.entity?.id} options={byType.Races} onSet={(id) => setSingle('is_race', id)} />
+          <Edit label="Gender" spoiler="gender" hint="Choose from the list, or add your own with pronouns, like Non-binary (She/They). New ones stay in the list."><FreeDatalist value={selected.data.gender} onChange={(e) => patchData({ gender: e.target.value })} options={genderOptions} placeholder="Female, Male, Non-binary, or your own" /></Edit>
+          <SingleRelation label="Race" spoiler="race" options={byType.Races} {...singleProps('is_race', rel.isRace?.entity?.id)} />
+          <SingleRelation label="Lives in" spoiler="livesIn" hint="Where this character lives now. Any place, from a room to a city." options={byType.Locations} {...singleProps('lives_in', rel.livesIn?.entity?.id)} />
+          <MultiRelation label="Works at" spoiler="worksAt" hint="Where or for whom this character works. A place or a faction." options={[...byType.Locations, ...byType.Factions]} {...multiProps('works_at', rel.worksAt || [])} />
+          {!unsaved && (rel.worksAt || []).length > 0 && <Edit label="Job" hint="What they do there, read by the narrator beside the place.">
+            <div className="space-y-1.5">{rel.worksAt.map(link => (
+              <div key={link.linkId} className="flex items-center gap-2">
+                <span className="w-40 shrink-0 truncate text-sm text-text-secondary">{link.entity.canonicalName}</span>
+                <LInput aria-label={`Job at ${link.entity.canonicalName}`} placeholder="e.g. keeper" defaultValue={link.label || ''} onBlur={(e) => { if ((e.target.value.trim() || null) !== (link.label || null)) setRole(link.linkId, e.target.value.trim()); }} />
+              </div>
+            ))}</div>
+          </Edit>}
           {selected.data.status === 'deceased' && worldCalendar && <Edit label="Death date" spoiler="deathDate"><WorldDateInput label="Death date" emptyLabel="Set death date" calendar={worldCalendar} value={selected.data.deathDate} onChange={deathDate => patchData({ deathDate })} /></Edit>}
           {selected.data.status === 'missing' && worldCalendar && <Edit label="Disappearance date" spoiler="missingDate"><WorldDateInput label="Disappearance date" emptyLabel="Set disappearance date" calendar={worldCalendar} value={selected.data.missingDate} onChange={missingDate => patchData({ missingDate })} /></Edit>}
         </> },
@@ -2141,12 +2180,12 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     return {
       key: 'loc', title: 'Places', icon: MapPin, scalar: false, spoiler: 'places', emptyVerb: 'Add', empty: !localTo.length && !tied.length,
       view: <div className="space-y-4">
-        <ViewField label="Local to" spoiler="localTo" empty="Local nowhere yet." value={localTo.length ? <ChipList onOpen={openEntityById} links={localTo} /> : null} />
+        <ViewField label="Local knowledge" spoiler="localTo" empty="Local nowhere yet." value={localTo.length ? <ChipList onOpen={openEntityById} links={localTo} /> : null} />
         {withTies && <ViewField label="Tied to" empty="Tied to no place." value={tied.length ? <ChipList onOpen={openEntityById} links={tied} /> : null} />}
       </div>,
       edit: <>
-        <MultiRelation label="Local to" spoiler="localTo" hint={`Regions and Areas this ${noun} is from. In play they know what everyone there knows.`} disabled={unsaved} links={localTo} options={sharingLocations} onAdd={(id) => addMulti('local_to', id)} onRemove={removeLink} />
-        {withTies && <MultiRelation label="Tied to" hint={`Places this ${noun} is tied to.`} disabled={unsaved} links={tied} options={byType.Locations} onAdd={(id) => addMulti('connected_to', id)} onRemove={removeLink} />}
+        <MultiRelation label="Local knowledge" spoiler="localTo" hint={`Regions and Areas where this ${noun} knows what everyone there knows.`} disabled={unsaved} links={localTo} options={sharingLocations} onAdd={(id) => addMulti('local_to', id)} onRemove={removeLink} />
+        {withTies && <MultiRelation label="Tied to" hint={`Other places that matter to this ${noun}: where they were born, a place they guard, a haunt.`} disabled={unsaved} links={tied} options={byType.Locations} onAdd={(id) => addMulti('connected_to', id)} onRemove={removeLink} />}
       </>,
     };
   };
