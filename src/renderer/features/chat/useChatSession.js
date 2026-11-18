@@ -161,6 +161,28 @@ export function useChatSession({ api, setChats, setCurrentView }) {
     }
   };
 
+  // Pages back only as far as one message, so a search result far in the past can be shown.
+  const loadOlderUntil = async (messageId) => {
+    if (!activeChatId || !hasOlderMessages || !oldestMessageCursor || isLoadingOlderMessages) return;
+    setIsLoadingOlderMessages(true);
+    try {
+      const olderMessages = [];
+      let cursor = oldestMessageCursor;
+      let hasMore = hasOlderMessages;
+      while (hasMore && !olderMessages.some(message => message.id === messageId)) {
+        const page = await api.getChatMessagePage({ chatId: activeChatId, before: cursor });
+        olderMessages.unshift(...page.messages);
+        cursor = page.oldestCursor;
+        hasMore = page.hasMore;
+      }
+      setActiveMessages(previous => [...olderMessages, ...previous]);
+      setHasOlderMessages(hasMore);
+      setOldestMessageCursor(cursor);
+    } finally {
+      setIsLoadingOlderMessages(false);
+    }
+  };
+
   const handleSelectChat = async (chatId) => {
     perfStart('workspace-open');
     setActiveChatId(chatId);
@@ -407,6 +429,7 @@ export function useChatSession({ api, setChats, setCurrentView }) {
     isLoadingOlderMessages,
     loadOlderChatMessages,
     jumpToChatStart,
+    loadOlderUntil,
     handleSelectChat,
     handleCreateChat,
     handleDeleteChat,

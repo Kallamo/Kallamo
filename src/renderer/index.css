@@ -391,6 +391,24 @@ textarea, input, [contenteditable], .ProseMirror {
   to { opacity: 1; }
 }
 
+/* A blocked leave: the unsaved changes bar pulses its edge three times. */
+@keyframes unsaved-flash {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  50% { box-shadow: 0 0 0 2px var(--color-status-danger); }
+}
+
+.unsaved-flash {
+  border-color: var(--color-status-danger);
+  animation: unsaved-flash 0.4s ease-in-out 3;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .unsaved-flash {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--color-status-danger);
+  }
+}
+
 @keyframes live-halo {
   0% { transform: scale(0.85); opacity: 0.5; }
   70% { transform: scale(2.4); opacity: 0; }
@@ -720,6 +738,9 @@ textarea::-webkit-scrollbar-corner { background: transparent; }
 .setting-range:focus-visible { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--app-accent) 40%, transparent); }
 input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 
+/* A reserved gutter keeps the thread centred on the same axis as the composer, overflowing or not. */
+.chat-thread { scrollbar-gutter: stable; }
+
 /* Older chat rows skip layout and paint while far off screen. `auto` makes the browser
    remember each row's real height once shown, so scrolling back does not jump. */
 .chat-message-deferred {
@@ -728,6 +749,15 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 }
 /* Skipped rendering also clips paint, which would cut an open diagnostics report. */
 .chat-message-deferred:has([data-diagnostics-open]) { content-visibility: visible; }
+/* The row holding the current search match renders in full, so it can be measured and centred. */
+.chat-message-deferred[data-find-current] { content-visibility: visible; }
+
+/* Find in chat paints over the rendered text without touching it. */
+::highlight(chat-find) { background-color: color-mix(in srgb, var(--theme-tint) 22%, transparent); }
+::highlight(chat-find-current) {
+  background-color: color-mix(in srgb, var(--app-accent) 55%, transparent);
+  color: var(--theme-text-primary);
+}
 
 /* Settings > Blur off: no element pays for a backdrop filter. A filter that marks state
    rather than decoration opts out with data-keep-backdrop. */

@@ -1,6 +1,6 @@
 import { Suspense, useCallback, useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useApp } from '../context/AppContext';
-import { ArrowDown, ArrowLeft, Paperclip, X, Folder, AlertTriangle, SlidersHorizontal, Trash2, History } from 'lucide-react';
+import { ArrowDown, ArrowLeft, Paperclip, X, Folder, SlidersHorizontal, Trash2, History } from 'lucide-react';
 import { WorkspaceGlyph, WritingGlyph, WorldbuildGlyph, MemoryGlyph } from './ui/glyphs';
 import SummarizeModal from './modals/SummarizeModal';
 import { selectActiveMessages, selectArchivableMessages } from '../features/chat/archive-coverage';
@@ -9,6 +9,8 @@ import ConfirmDialog from './ui/ConfirmDialog';
 import Checkbox from './ui/Checkbox';
 import IconButton from './ui/IconButton';
 import ChatInput from '../features/chat/components/ChatInput';
+import ChatFind from '../features/chat/components/ChatFind';
+import { findInMessages, rangesIn } from '../features/chat/chat-find';
 import ChatMessageItem, { isImage, isVideo } from '../features/chat/components/ChatMessageItem';
 import GenerationBubble from '../features/chat/components/GenerationBubble';
 import ContextMeter from '../features/chat/components/ContextMeter';
@@ -16,7 +18,7 @@ import ReplyTargetPicker from '../features/chat/components/ReplyTargetPicker';
 import RoleplayQuickPanel from '../features/roleplay/RoleplayQuickPanel';
 import StoryIntro from '../features/onboarding/StoryIntro';
 import { prepareGenerationSubmission, resolveActiveGenerationTarget } from '../features/chat/generation-target';
-import { holdDeferredFrames, safeParseDebugNotice, safeParseJson } from '../features/chat/diagnostic-format';
+import { holdDeferredFrames, safeParseJson } from '../features/chat/diagnostic-format';
 import { estimateMessageTokens } from '../features/chat/message-content';
 import { useArchiveHistory } from '../features/chat/useArchiveHistory';
 import {
@@ -48,6 +50,7 @@ export default function ChatWorkspaceView() {
     isLoadingOlderMessages,
     loadOlderChatMessages,
     jumpToChatStart,
+    loadOlderUntil,
     writingProfiles,
     workflows,
     handleSendMessage,
@@ -653,7 +656,8 @@ export default function ChatWorkspaceView() {
     toggleExcluded,
     finishTyping,
     requestDelete: messageId => setConfirmDeleteData({ type: 'delete_msg', messageId }),
-    requestRevert: messageId => setConfirmDeleteData({ type: 'revert_chat', messageId })
+    requestRevert: messageId => setConfirmDeleteData({ type: 'revert_chat', messageId }),
+    requestArchive: () => setSummarizeModalOpen(true)
   }), [copyText, saveUserEdit, saveAiEdit, regenerate, switchAlternative, toggleExcluded, finishTyping]);
 
   const isCurrentRoleplayMode = roleplayWorkspaceId === workspaceId && roleplayMode;
@@ -716,6 +720,110 @@ export default function ChatWorkspaceView() {
   // Active context usage bar (optional, shown at the top of the chat)
   const ctxTokens = useMemo(() => selectActiveMessages(archiveMessages, activeChat?.memoryBlocks)
     .reduce((total, message) => total + estimateMessageTokens(message.content), 0), [archiveMessages, activeChat?.memoryBlocks]);
+
+  // Find in chat searches the whole history, not just the rendered page, and paints its
+  // matches with CSS highlights so the rendered markdown and dialogue colours stay untouched.
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const [findCaseSensitive, setFindCaseSensitive] = useState(false);
+  const [findPosition, setFindPosition] = useState({ key: '', index: 0 });
+  const [findFocusSignal, setFindFocusSignal] = useState(0);
+  const [findLoading, setFindLoading] = useState(false);
+  const findScrolledRef = useRef('');
+  const loadOlderUntilRef = useRef(loadOlderUntil);
+  loadOlderUntilRef.current = loadOlderUntil;
+  const findSource = archiveMessages.length ? archiveMessages : activeMessages;
+  const findMatches = useMemo(
+    () => (findOpen ? findInMessages(findSource.filter(message => message.id !== lastGeneratedMessageId), findQuery, findCaseSensitive) : []),
+    [findOpen, findSource, findQuery, findCaseSensitive, lastGeneratedMessageId]
+  );
+  // A new search starts at the newest match, the one nearest the reader.
+  const findKey = `${findCaseSensitive}:${findQuery}`;
+  const findCurrent = Math.max(0, findPosition.key === findKey
+    ? Math.min(findPosition.index, findMatches.length - 1)
+    : findMatches.length - 1);
+  const findTarget = findMatches[findCurrent];
+
+  useEffect(() => {
+    if (!isChatVisible) return undefined;
+    const onKey = event => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== 'f') return;
+      if (event.target?.closest?.('[role="dialog"], [role="menu"]')) return;
+      event.preventDefault();
+      setFindOpen(true);
+      setFindFocusSignal(value => value + 1);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isChatVisible]);
+
+  const closeFind = () => {
+    setFindOpen(false);
+    findScrolledRef.current = '';
+    messageContainerRef.current?.parentElement?.querySelector('.ws-composer textarea')?.focus();
+  };
+
+  const stepFind = direction => {
+    if (!findMatches.length) return;
+    findScrolledRef.current = '';
+    setFindPosition({ key: findKey, index: (findCurrent + direction + findMatches.length) % findMatches.length });
+  };
+
+  useEffect(() => {
+    const highlights = typeof CSS !== 'undefined' ? CSS.highlights : null;
+    const container = messageContentRef.current;
+    if (!highlights || !container) return undefined;
+    if (!findOpen || !findQuery || !isChatVisible) {
+      highlights.delete('chat-find');
+      highlights.delete('chat-find-current');
+      return undefined;
+    }
+    const all = [];
+    let current = null;
+    container.querySelectorAll('[data-chat-message-id]').forEach(row => {
+      const id = row.dataset.chatMessageId;
+      if (id === lastGeneratedMessageId) return;
+      const ranges = [...row.querySelectorAll('.markdown-content')].flatMap(element => rangesIn(element, findQuery, findCaseSensitive));
+      all.push(...ranges);
+      if (findTarget?.messageId === id) current = ranges[findTarget.occurrence] || null;
+    });
+    highlights.set('chat-find', new Highlight(...all));
+    if (current) highlights.set('chat-find-current', new Highlight(current));
+    else highlights.delete('chat-find-current');
+
+    const key = findTarget ? `${findTarget.messageId}:${findTarget.occurrence}` : '';
+    if (!findTarget || findScrolledRef.current === key) return undefined;
+    const row = [...container.querySelectorAll('[data-chat-message-id]')].find(element => element.dataset.chatMessageId === findTarget.messageId);
+    if (!row) {
+      if (findLoading || findScrolledRef.current === `loading:${key}`) return undefined;
+      findScrolledRef.current = `loading:${key}`;
+      isFollowingLatestRef.current = false;
+      setIsFollowingLatest(false);
+      setFindLoading(true);
+      loadOlderUntilRef.current(findTarget.messageId).finally(() => setFindLoading(false));
+      return undefined;
+    }
+    findScrolledRef.current = key;
+    isFollowingLatestRef.current = false;
+    setIsFollowingLatest(false);
+    container.querySelectorAll('[data-find-current]').forEach(element => element.removeAttribute('data-find-current'));
+    row.setAttribute('data-find-current', '');
+    // Rows that skipped rendering only take their real height once shown, so centre twice.
+    const centre = () => {
+      const scroller = messageContainerRef.current;
+      const rect = (current || row).getBoundingClientRect();
+      const box = scroller.getBoundingClientRect();
+      scroller.scrollTop += (rect.top + rect.bottom) / 2 - (box.top + box.height / 2);
+    };
+    centre();
+    const frame = requestAnimationFrame(() => requestAnimationFrame(centre));
+    return () => cancelAnimationFrame(frame);
+  }, [findOpen, findQuery, findCaseSensitive, findTarget, activeMessages, isChatVisible, lastGeneratedMessageId, findLoading]);
+
+  useEffect(() => () => {
+    CSS.highlights?.delete('chat-find');
+    CSS.highlights?.delete('chat-find-current');
+  }, []);
 
   if (!activeChat) return null;
 
@@ -927,17 +1035,6 @@ export default function ChatWorkspaceView() {
   } : {};
 
   const ctxThreshold = activeChat.archiveThreshold || 60000;
-  // Unarchived messages past the budget are lost from context, so the header says so.
-  // The last reply's count is authoritative; the estimate is only a fallback.
-  const lastContext = lastAiMessage ? safeParseDebugNotice(lastAiMessage.debugNotice)?.context : null;
-  const ctxHistoryCut = lastContext ? Number(lastContext.historyDropped) || 0 : 0;
-  const lastArchiveAt = safeParseJson(activeChat.memoryBlocks, [])
-    .filter(block => block && block.type === 'summarized')
-    .reduce((latest, block) => Math.max(latest, Number(String(block.id || '').match(/^block_(\d+)/)?.[1]) || 0), 0);
-  const ctxPayloadLimit = activeChat.maxContext || 128000;
-  const ctxOverPayload = lastContext
-    ? ctxHistoryCut > 0 && !(lastArchiveAt > (lastAiMessage?.createdAt || 0))
-    : ctxTokens > ctxPayloadLimit;
 
   const generatingColor = writingProfiles.find(profile => profile.name === generationProgress?.profileName)?.color;
   // The player's name for "You as …": the frame after each message records who was played,
@@ -1093,6 +1190,27 @@ export default function ChatWorkspaceView() {
             </div>
           </div>
 
+          {findOpen && (
+            <div className="pointer-events-none absolute left-0 right-2 top-3 z-30 px-6">
+              <div className="mx-auto flex w-full max-w-[55rem] justify-end">
+                <div className="pointer-events-auto max-w-full">
+                  <ChatFind
+                    query={findQuery}
+                    onQueryChange={setFindQuery}
+                    caseSensitive={findCaseSensitive}
+                    onCaseSensitiveChange={setFindCaseSensitive}
+                    current={findCurrent}
+                    total={findMatches.length}
+                    busy={findLoading}
+                    onStep={stepFind}
+                    onClose={closeFind}
+                    focusSignal={findFocusSignal}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
           {hasCompletedResponseBelow && !isFollowingLatest && (
             <button
               type="button"
@@ -1105,9 +1223,10 @@ export default function ChatWorkspaceView() {
           )}
 
           {/* The veil lets the thread fade under the composer without hiding the background. */}
-          <div aria-hidden="true" className={`pointer-events-none absolute inset-x-0 bottom-0 h-32 bg-gradient-to-b from-transparent ${hasBg ? 'to-surface-canvas/80' : 'to-[var(--theme-surface-canvas-deep)]'} to-70%`} />
+          {/* Both overlays stop short of the scrollbar column, so the thumb stays visible and draggable to the end. */}
+          <div aria-hidden="true" className={`pointer-events-none absolute left-0 right-2 bottom-0 h-32 bg-gradient-to-b from-transparent ${hasBg ? 'to-surface-canvas/80' : 'to-[var(--theme-surface-canvas-deep)]'} to-70%`} />
 
-          <div className="absolute inset-x-0 bottom-0 z-20 px-6 pb-5">
+          <div className="absolute left-0 right-2 bottom-0 z-20 px-6 pb-5">
             <div className="mx-auto w-full max-w-[55rem]">
               {pendingFiles.length > 0 && (
                 <div className="flex w-full flex-wrap gap-3 px-1 pb-3 select-none animate-in fade-in slide-in-from-bottom-2 duration-200">
@@ -1163,22 +1282,6 @@ export default function ChatWorkspaceView() {
                     <>
                       <IconButton icon={Paperclip} label="Attach files" size="sm" onClick={() => fileInputRef.current?.click()} />
                       {activeChat.showContextBar === 1 && <ContextMeter tokens={ctxTokens} threshold={ctxThreshold} />}
-                      {/* Past the payload budget the oldest live messages stop being sent at all.
-                          It stays a marker rather than a banner: the state lasts as long as the
-                          history overflows, and a permanent band would only be noise. */}
-                      {ctxOverPayload && (
-                        <button
-                          type="button"
-                          onClick={() => setSummarizeModalOpen(true)}
-                          data-tooltip={ctxHistoryCut > 0
-                            ? `${ctxHistoryCut} older ${ctxHistoryCut === 1 ? 'message was' : 'messages were'} left out of the last reply to fit the payload budget. Archive them to keep them searchable.`
-                            : 'Active history exceeds the payload budget. The oldest messages are being cut. Archive them.'}
-                          className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-status-danger/12 px-2.5 text-xs font-semibold text-status-danger transition-colors hover:bg-status-danger/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-danger/40 cursor-pointer"
-                        >
-                          <AlertTriangle aria-hidden="true" className="h-3.5 w-3.5" />
-                          Over payload limit
-                        </button>
-                      )}
                     </>
                   )}
                   trailing={(

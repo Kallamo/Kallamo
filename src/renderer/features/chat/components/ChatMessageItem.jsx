@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Brain, CalendarDays, ChevronLeft, ChevronRight, Clock3, Copy, Eye, EyeOff, History, MapPin, MoreHorizontal, Paperclip, Pencil, RotateCw, Trash2 } from 'lucide-react';
 import { Menu, MenuItem, MenuSeparator } from '../../../components/ui/Menu';
+import Tooltip from '../../../components/ui/Tooltip';
 import MessageMarkdown from './MessageMarkdown';
 import MessageEditor from './MessageEditor';
 import TypingText from './TypingText';
@@ -253,15 +254,35 @@ function Notice({ children }) {
 }
 
 // Small context windows, common on local models, cut context silently; the reply says what it went without.
-function contextCutNotice(context) {
+export function contextCutDetail(context) {
   const messages = Number(context?.historyDropped) || 0;
   const passages = Number(context?.retrievalOmitted) || 0;
-  if (!messages && !passages) return null;
+  return messages || passages ? { messages, passages } : null;
+}
+
+function ContextCutTag({ cut, onArchive }) {
   const parts = [
-    messages && `${messages} older ${messages === 1 ? 'message' : 'messages'}`,
-    passages && `${passages} retrieved ${passages === 1 ? 'passage' : 'passages'}`
+    cut.messages && `${cut.messages} older ${cut.messages === 1 ? 'message' : 'messages'}`,
+    cut.passages && `${cut.passages} retrieved ${cut.passages === 1 ? 'passage' : 'passages'}`
   ].filter(Boolean);
-  return `Left out to fit the context limit: ${parts.join(' and ')}. Archiving older history or raising the limit gives the AI more to work with.`;
+  const content = (
+    <span className="flex flex-col gap-1.5">
+      <span>Left out of this reply to fit the context limit: {parts.join(' and ')}.</span>
+      <span className="text-text-muted">Archiving older history or raising the limit gives the AI more to work with. Click to archive.</span>
+    </span>
+  );
+  return (
+    <Tooltip content={content}>
+      <button
+        type="button"
+        onClick={onArchive}
+        className="ml-auto inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg bg-status-danger/12 px-2.5 text-xs font-semibold text-status-danger transition-colors hover:bg-status-danger/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-danger/40"
+      >
+        <AlertTriangle aria-hidden="true" className="h-3.5 w-3.5" />
+        Context trimmed
+      </button>
+    </Tooltip>
+  );
 }
 
 function DroppedChip() {
@@ -349,6 +370,7 @@ function AiMessage({ message, isEditing, isLastAi, isTyping, frame, view, action
   const diagnostics = diagnosticsFor(debugObj, flags);
   const alternatives = readAlternativeSwitcher(message.alternatives);
   const isDropped = message.excluded === 1;
+  const contextCut = contextCutDetail(debugObj?.context);
 
   return (
     <div className={`flex flex-col items-start gap-2 ${isDocumentMode || isEditing ? 'w-full' : 'max-w-[86%]'}`}>
@@ -416,28 +438,31 @@ function AiMessage({ message, isEditing, isLastAi, isTyping, frame, view, action
 
       {debugObj?.truncated && <Notice>The reply stopped at the output limit. Raise Max tokens on the AI profile for longer replies.</Notice>}
       {debugObj?.context?.agenticDegraded && <Notice>Retrieval stopped early after an error. This reply used partial context.</Notice>}
-      {contextCutNotice(debugObj?.context) && <Notice>{contextCutNotice(debugObj.context)}</Notice>}
 
       {!isEditing && (
-        <div className={actionRowClass(isLastAi || isDropped)}>
-          {isDropped ? (
-            <button
-              type="button"
-              onClick={() => actions.toggleExcluded(message.id, false)}
-              className="chat-action inline-flex h-7 items-center gap-1.5 rounded-lg border border-border-default px-2.5 text-xs font-semibold text-text-primary transition-colors hover:bg-tint/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            >
-              <Eye aria-hidden="true" className="h-3.5 w-3.5" />
-              Restore to context
-            </button>
-          ) : (
-            <>
-              <ActionButton icon={Copy} label={copiedKey === 'message' ? 'Copied' : 'Copy'} onClick={() => { actions.copyText(response); markCopied('message'); }} />
-              <ActionButton icon={Pencil} label="Edit" onClick={() => actions.startEdit(message.id)} />
-              {isLastAi && <ActionButton icon={RotateCw} label="Regenerate" onClick={() => actions.regenerate(message.id)} />}
-            </>
-          )}
-          {alternatives && <AlternativeSwitcher alternatives={alternatives} onSwitch={index => actions.switchAlternative(message.id, index)} />}
-          <MessageMenu message={message} actions={actions} />
+        <div className="flex w-full items-center gap-2">
+          <div className={`${actionRowClass(isLastAi || isDropped)} min-w-0 flex-1`}>
+            {isDropped ? (
+              <button
+                type="button"
+                onClick={() => actions.toggleExcluded(message.id, false)}
+                className="chat-action inline-flex h-7 items-center gap-1.5 rounded-lg border border-border-default px-2.5 text-xs font-semibold text-text-primary transition-colors hover:bg-tint/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              >
+                <Eye aria-hidden="true" className="h-3.5 w-3.5" />
+                Restore to context
+              </button>
+            ) : (
+              <>
+                <ActionButton icon={Copy} label={copiedKey === 'message' ? 'Copied' : 'Copy'} onClick={() => { actions.copyText(response); markCopied('message'); }} />
+                <ActionButton icon={Pencil} label="Edit" onClick={() => actions.startEdit(message.id)} />
+                {isLastAi && <ActionButton icon={RotateCw} label="Regenerate" onClick={() => actions.regenerate(message.id)} />}
+              </>
+            )}
+            {alternatives && <AlternativeSwitcher alternatives={alternatives} onSwitch={index => actions.switchAlternative(message.id, index)} />}
+            <MessageMenu message={message} actions={actions} />
+          </div>
+          {/* Outside the fading row: an older reply shows its cut without a hover. */}
+          {contextCut && <ContextCutTag cut={contextCut} onArchive={actions.requestArchive} />}
         </div>
       )}
     </div>
