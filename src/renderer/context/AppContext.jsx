@@ -463,9 +463,28 @@ export const AppProvider = ({ children }) => {
 
   const activeChat = chats.find(c => c.id === activeChatId);
 
+  // Opened from a workspace, the Library returns to it; the workspace stays mounted underneath.
+  const [libraryOrigin, setLibraryOrigin] = useState(null); // null | { chatId }
+  // { profileId, focus: 'connection' } for the Library to open on arrival.
+  const [libraryRequest, setLibraryRequest] = useState(null);
+  useEffect(() => {
+    if (currentView !== 'library') setLibraryOrigin(null);
+  }, [currentView]);
+  const openLibrary = (request = null) => {
+    if (currentView === 'chat' && activeChatId) setLibraryOrigin({ chatId: activeChatId });
+    setLibraryRequest(request);
+    setCurrentView('library');
+  };
+  const closeLibrary = () => {
+    const back = libraryOrigin && libraryOrigin.chatId === activeChatId && chats.some(c => c.id === activeChatId);
+    setCurrentView(back ? 'chat' : 'dashboard');
+  };
+  const clearLibraryRequest = () => setLibraryRequest(null);
+
   return (
     <AppContext.Provider value={{
       currentView, setCurrentView,
+      libraryOrigin, libraryRequest, openLibrary, closeLibrary, clearLibraryRequest,
       activeWorkspaceView, setActiveWorkspaceView,
       settingsRequest, openSettings, clearSettingsRequest,
       chats, setChats, dataReady,

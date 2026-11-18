@@ -27,6 +27,7 @@ import { useApp } from '../context/AppContext';
 import { DecorationSet } from '@tiptap/pm/view';
 import { meta as entityTypeMeta, TYPE_ORDER } from '../features/worldbuild/worldbuildConfig';
 import { locationSizeLabel, locationSizeOf } from '../../shared/location-sizes';
+import { workspaceCovered } from '../utils/workspaceCovered';
 import {
   getEditorExtensions, estimatePagesFromWords,
   suggestionKey, buildSuggestionDecorations, suggestionWordDelta,
@@ -813,7 +814,7 @@ export default function WritingEditor({
   // Ctrl/Cmd+F opens Find & Replace and pre-empts the browser's own find bar.
   useEffect(() => {
     const onKey = (e) => {
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F') && !workspaceCovered()) {
         e.preventDefault();
         setShowFind(true);
       }

@@ -1,9 +1,11 @@
 import React from 'react';
-import { Settings } from 'lucide-react';
+import { LibraryBig, Settings } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Logotype } from '../logo';
 
-export default function TitleBar({ onOpenSettings, onPreloadSettings }) {
+const BAR_BUTTON = 'inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors hover:bg-tint/10 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 cursor-pointer';
+
+export default function TitleBar({ onOpenSettings, onPreloadSettings, showLibrary, libraryActive, onOpenLibrary }) {
   const { electronAPI, setCurrentView } = useApp();
 
   return (
@@ -22,6 +24,18 @@ export default function TitleBar({ onOpenSettings, onPreloadSettings }) {
       </div>
 
       <div className="z-10 flex space-x-1 items-center titlebar-nodrag pr-2">
+        {showLibrary && onOpenLibrary && (
+          <button
+            type="button"
+            data-tour="titlebar-library"
+            aria-current={libraryActive ? 'page' : undefined}
+            onClick={onOpenLibrary}
+            className={`${BAR_BUTTON} ${libraryActive ? 'bg-tint/[0.06] text-text-primary' : 'text-text-secondary'}`}
+          >
+            <LibraryBig aria-hidden="true" className={`h-3.5 w-3.5 ${libraryActive ? 'text-accent' : ''}`} />
+            Library
+          </button>
+        )}
         {onOpenSettings && (
           <>
             <button
@@ -30,7 +44,7 @@ export default function TitleBar({ onOpenSettings, onPreloadSettings }) {
               onClick={onOpenSettings}
               onMouseEnter={onPreloadSettings}
               onFocus={onPreloadSettings}
-              className="inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-text-secondary transition-colors hover:bg-tint/10 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 cursor-pointer"
+              className={`${BAR_BUTTON} text-text-secondary`}
             >
               <Settings aria-hidden="true" className="h-3.5 w-3.5" />
               Settings

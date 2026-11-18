@@ -1,4 +1,4 @@
-import React, { Suspense, useState, useEffect } from 'react';
+import React, { Suspense, useState, useEffect, useRef } from 'react';
 import { AppProvider, useApp, useEngineDownloadProgress, useReindexingProgress, useToast } from './context/AppContext';
 import TitleBar from './components/TitleBar';
 import { TourProvider } from './features/onboarding/GuidedTour';
@@ -339,9 +339,19 @@ function MainLayout() {
     whatsNewOpen,
     whatsNewType,
     whatsNewVersion,
-    closeWhatsNew
+    closeWhatsNew,
+    libraryOrigin,
+    openLibrary
   } = useApp();
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  // Set by the open Settings: closes it unless a form there is unsaved.
+  const settingsCloseRef = useRef(null);
+  const settingsOpen = showSettingsModal || Boolean(settingsRequest);
+  const handleOpenLibrary = () => {
+    if (settingsOpen && settingsCloseRef.current && !settingsCloseRef.current()) return;
+    if (currentView !== 'library') openLibrary();
+  };
+  const workspaceUnderLibrary = currentView === 'library' && Boolean(libraryOrigin);
 
   useEffect(() => {
     preloadWhenIdle(idlePreloadOrder);
@@ -443,7 +453,13 @@ function MainLayout() {
 
   return (
     <div className={`flex-1 relative flex flex-col pt-10 overflow-hidden bg-surface-canvas w-full h-full select-none ${fontClass}`}>
-      <TitleBar onOpenSettings={() => setShowSettingsModal(true)} onPreloadSettings={() => SettingsModal.preload()} />
+      <TitleBar
+        onOpenSettings={() => setShowSettingsModal(true)}
+        onPreloadSettings={() => SettingsModal.preload()}
+        showLibrary={currentView === 'chat' || workspaceUnderLibrary}
+        libraryActive={currentView === 'library'}
+        onOpenLibrary={handleOpenLibrary}
+      />
 
       {/* Local AI Engine download: full-screen overlay, or a discreet card when it runs in the background */}
       <EngineDownloadStatus />
@@ -454,11 +470,17 @@ function MainLayout() {
       <main className="flex-1 relative flex flex-col overflow-hidden w-full h-full z-10 -mt-10">
         <Suspense fallback={null}>
           {dataReady && currentView === 'dashboard' && <DashboardView />}
-          {currentView === 'library' && <LibraryView />}
-          {currentView === 'chat' && (
-            <PerfProfiler id="workspace">
-              <ChatWorkspaceView key={activeChatId} />
-            </PerfProfiler>
+          {(currentView === 'chat' || workspaceUnderLibrary) && (
+            <div inert={workspaceUnderLibrary} aria-hidden={workspaceUnderLibrary || undefined} data-workspace-covered={workspaceUnderLibrary || undefined} className={`flex min-h-0 flex-1 flex-col ${workspaceUnderLibrary ? 'invisible' : ''}`}>
+              <PerfProfiler id="workspace">
+                <ChatWorkspaceView key={activeChatId} />
+              </PerfProfiler>
+            </div>
+          )}
+          {currentView === 'library' && (
+            <div className={workspaceUnderLibrary ? 'absolute inset-0 z-10 flex' : 'contents'}>
+              <LibraryView />
+            </div>
           )}
         </Suspense>
       </main>
@@ -473,6 +495,7 @@ function MainLayout() {
           <SettingsModal
             initialTab={settingsRequest?.tab}
             initialSection={settingsRequest?.section}
+            closeRef={settingsCloseRef}
             onClose={() => {
               setShowSettingsModal(false);
               clearSettingsRequest();

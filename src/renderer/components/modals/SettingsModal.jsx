@@ -15,11 +15,19 @@ import Popover from '../ui/Popover';
 import { Menu, MenuItem, MenuSeparator } from '../ui/Menu';
 import { SettingsHeader, SettingsGroup, SettingsRow, SettingsRadio, IconTile, RunsOnBar, fieldClass } from '../../features/settings/SettingsUi';
 import AppearancePreview, { OptionTile } from '../../features/settings/AppearancePreview';
+import UnsavedChangesBar, { useLeaveGuard } from '../../features/settings/UnsavedChangesBar';
 import { AI_ENGINE_ROLE_DEFINITIONS, SYSTEM_AI_LANGUAGES } from '../../../shared/contracts/ai-engine-roles';
 import retrievalSettingsContract from '../../../shared/retrieval-settings.json';
 
 const RETRIEVAL_SETTING_DEFINITIONS = retrievalSettingsContract.definitions;
 const rangeProps = ({ min, max, step }) => ({ min, max, step });
+
+const BLANK_CONNECTION = {
+  name: '', provider: 'OpenRouter', baseUrl: '', apiKey: '',
+  gcpProjectId: '', gcpRegion: 'us-central1', gcpServiceAccount: '',
+  awsAccessKeyId: '', awsSecretAccessKey: '', awsRegion: 'us-east-1',
+  models: [],
+};
 
 // Callers may still name a legacy tab; each maps to one of the pages.
 function startingPage(tab, section) {
@@ -27,7 +35,7 @@ function startingPage(tab, section) {
   return { api: 'connections', interface: 'appearance', advanced: 'generation', about: 'about' }[tab] || tab || 'connections';
 }
 
-export default function SettingsModal({ onClose, initialTab, initialSection }) {
+export default function SettingsModal({ onClose, initialTab, initialSection, closeRef }) {
   const {
     settings,
     handleSaveSettings,
@@ -71,7 +79,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       // Menus, pickers and dialogs close themselves first; that Escape is not for the page.
       const layered = '[role="menu"], [role="listbox"], [aria-modal="true"]';
       if (event.target?.closest?.(layered) || document.querySelector(layered)) return;
-      onClose?.();
+      guard(onClose)();
     };
     // Capture runs before the layers' own listeners, while they are still on screen.
     window.addEventListener('keydown', onKey, true);
@@ -101,6 +109,10 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
 
   const [modelsList, setModelsList] = useState([]);
   const [newModelName, setNewModelName] = useState('');
+  // What the open connection form started from; null while no form is open.
+  const [connectionBaseline, setConnectionBaseline] = useState(null);
+  const [connectionError, setConnectionError] = useState('');
+  const [savingConnection, setSavingConnection] = useState(false);
 
   const [accentColor, setAccentColor] = useState(settings.interface.accentColor || '#FBCB2D');
   const [fontFamily, setFontFamily] = useState(settings.interface.fontFamily || 'sans');
@@ -442,33 +454,38 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     }, 300);
   };
 
+  const connectionForm = () => ({
+    name: apiName, provider: apiProvider, baseUrl: apiBaseUrl, apiKey,
+    gcpProjectId, gcpRegion, gcpServiceAccount, awsAccessKeyId, awsSecretAccessKey, awsRegion,
+    models: modelsList,
+  });
+
+  const loadConnectionForm = (form) => {
+    setApiName(form.name);
+    setApiProvider(form.provider);
+    setApiBaseUrl(form.baseUrl);
+    setShowBaseUrl(form.provider === 'Local' || !!form.baseUrl);
+    setApiKey(form.apiKey);
+    setGcpProjectId(form.gcpProjectId);
+    setGcpRegion(form.gcpRegion);
+    setGcpServiceAccount(form.gcpServiceAccount);
+    setAwsAccessKeyId(form.awsAccessKeyId);
+    setAwsSecretAccessKey(form.awsSecretAccessKey);
+    setAwsRegion(form.awsRegion);
+    setModelsList(form.models);
+    setNewModelName('');
+    setConnectionBaseline(form);
+    setConnectionError('');
+  };
+
   const openNewApiForm = () => {
     setEditingApiId(null);
-    setApiName('');
-    setApiProvider('OpenRouter');
-    setApiBaseUrl('');
-    setShowBaseUrl(false);
-    setApiKey('');
-    setGcpProjectId('');
-    setGcpRegion('us-central1');
-    setGcpServiceAccount('');
-    setAwsAccessKeyId('');
-    setAwsSecretAccessKey('');
-    setAwsRegion('us-east-1');
-    setModelsList([]);
-    setNewModelName('');
+    loadConnectionForm(BLANK_CONNECTION);
     setFocusModelInput(false);
     setShowAddApiForm(true);
   };
 
   const openEditApiForm = (apiProf) => {
-    setEditingApiId(apiProf.id);
-    setApiName(apiProf.name);
-    setApiProvider(apiProf.provider);
-    setApiBaseUrl(apiProf.baseUrl || '');
-    setShowBaseUrl(apiProf.provider === 'Local' || !!apiProf.baseUrl);
-    setApiKey(apiProf.apiKey || '');
-
     let cfg = {};
     if (apiProf.customConfig) {
       try {
@@ -477,15 +494,21 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         console.error("Failed to parse customConfig in openEditApiForm:", e);
       }
     }
-    setGcpProjectId(cfg.gcpProjectId || '');
-    setGcpRegion(cfg.gcpRegion || 'us-central1');
-    setGcpServiceAccount(cfg.gcpServiceAccount || '');
-    setAwsAccessKeyId(cfg.awsAccessKeyId || '');
-    setAwsSecretAccessKey(cfg.awsSecretAccessKey || '');
-    setAwsRegion(cfg.awsRegion || 'us-east-1');
-
-    setModelsList(apiProf.models ? (typeof apiProf.models === 'string' ? JSON.parse(apiProf.models) : apiProf.models) : []);
-    setNewModelName('');
+    setEditingApiId(apiProf.id);
+    loadConnectionForm({
+      ...BLANK_CONNECTION,
+      name: apiProf.name,
+      provider: apiProf.provider,
+      baseUrl: apiProf.baseUrl || '',
+      apiKey: apiProf.apiKey || '',
+      gcpProjectId: cfg.gcpProjectId || '',
+      gcpRegion: cfg.gcpRegion || 'us-central1',
+      gcpServiceAccount: cfg.gcpServiceAccount || '',
+      awsAccessKeyId: cfg.awsAccessKeyId || '',
+      awsSecretAccessKey: cfg.awsSecretAccessKey || '',
+      awsRegion: cfg.awsRegion || 'us-east-1',
+      models: parseModels(apiProf),
+    });
     setFocusModelInput(false);
     setShowAddApiForm(true);
   };
@@ -519,15 +542,31 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     setModelsList(prev => prev.filter(m => m !== modelName));
   };
 
+  // A model ID typed but not added yet counts as part of the form, so Save keeps it.
+  const pendingModel = newModelName.trim();
+  const modelsToSave = pendingModel && !modelsList.includes(pendingModel) ? [...modelsList, pendingModel] : modelsList;
+  const connectionDirty = showAddApiForm && connectionBaseline !== null
+    && (JSON.stringify(connectionForm()) !== JSON.stringify(connectionBaseline) || Boolean(pendingModel));
+  const { guard, flashKey, dirtyRef } = useLeaveGuard(connectionDirty);
+
+  useEffect(() => {
+    if (closeRef) closeRef.current = guard(onClose);
+  });
+
+  // An error describes the last Save; any edit after it makes it stale.
+  const formKey = JSON.stringify(connectionForm()) + newModelName;
+  useEffect(() => { setConnectionError(''); }, [formKey]);
+
   const handleSaveApi = async () => {
-    if (!apiName.trim()) return;
+    if (!apiName.trim()) { setConnectionError('Give the connection a name.'); return; }
+    if (modelsToSave.length === 0) { setConnectionError('Add at least one model.'); return; }
 
     const isVertex = apiProvider === 'Vertex AI';
     const isBedrock = apiProvider === 'AWS Bedrock';
     // Vertex and Bedrock have no Base URL or API key fields, so nothing hidden is saved or checked.
     const normalizedBaseUrl = isVertex || isBedrock ? '' : apiBaseUrl.trim();
     if (apiProvider === 'Local' && !normalizedBaseUrl) {
-      showToast('Local API connections require a Base URL.', 'error');
+      setConnectionError('Local connections need a Base URL.');
       return;
     }
     if (normalizedBaseUrl) {
@@ -535,7 +574,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         const parsedUrl = new URL(normalizedBaseUrl);
         if (!['http:', 'https:'].includes(parsedUrl.protocol)) throw new Error();
       } catch {
-        showToast('Base URL must be a valid HTTP or HTTPS URL.', 'error');
+        setConnectionError('Base URL must be a valid HTTP or HTTPS URL.');
         return;
       }
     }
@@ -554,15 +593,28 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
       baseUrl: normalizedBaseUrl,
       apiKey: isVertex || isBedrock ? '' : apiKey.trim(),
       customConfig: JSON.stringify(customConfigObj),
-      models: JSON.stringify(modelsList),
+      models: JSON.stringify(modelsToSave),
       // The request limit lives in each workspace, not on the connection.
       contextWindow: null
     };
 
-    await handleSaveApiProfile(apiObject);
+    setSavingConnection(true);
+    try {
+      await handleSaveApiProfile(apiObject);
+    } catch (err) {
+      setConnectionError(`Could not save: ${err?.message || 'unknown error'}`);
+      return;
+    } finally {
+      setSavingConnection(false);
+    }
+    dirtyRef.current = false;
+    setConnectionBaseline(null);
+    setConnectionError('');
     setShowAddApiForm(false);
     setEditingApiId(null);
   };
+
+  const resetConnectionForm = () => loadConnectionForm(connectionBaseline || BLANK_CONNECTION);
 
   const handleOpenWorkspace = () => {
     if (electronAPI.openWorkspaceFolder) electronAPI.openWorkspaceFolder();
@@ -696,11 +748,11 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
     await handleSaveApiProfile({ ...ap, id: 'api_' + Math.random().toString(36).substr(2, 9), name: `${ap.name} copy` });
   };
 
-  const goTo = (tab) => {
+  const goTo = guard((tab) => {
     setActiveTab(tab);
     setShowAddApiForm(false);
     setSearchQuery('');
-  };
+  });
 
   const query = searchQuery.trim().toLowerCase();
   const searchResults = query
@@ -709,7 +761,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
 
   const totalModels = apiProfiles.reduce((sum, ap) => sum + parseModels(ap).length, 0);
   const provider = PROVIDERS.find(p => p.value === apiProvider) || PROVIDERS[0];
-  const canSaveApi = apiName.trim() && modelsList.length > 0;
+  const canSaveApi = Boolean(apiName.trim() && modelsToSave.length > 0);
 
   const strictnessPct = Math.round(similarity * 100);
   const strictnessLabel = strictnessPct === 0 ? 'Everything is retrieved, no filtering'
@@ -763,15 +815,9 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   const connectionEditor = () => (
     <>
       <SettingsHeader
-        back={{ label: 'Connections', onClick: () => setShowAddApiForm(false) }}
+        back={{ label: 'Connections', onClick: guard(() => setShowAddApiForm(false)) }}
         title={editingApiId ? apiName || 'Connection' : 'New connection'}
         description={editingApiId ? `${provider.label} · used by ${describeUsers(connectionUsers(editingApiId)) || 'nothing yet'}` : 'Choose where the models run, then list the ones you want to use.'}
-        actions={(
-          <>
-            <Button variant="subtle" onClick={() => setShowAddApiForm(false)}>Cancel</Button>
-            <Button data-tour="create-connection" onClick={handleSaveApi} disabled={!canSaveApi}>{editingApiId ? 'Save connection' : 'Create connection'}</Button>
-          </>
-        )}
       />
 
       <SettingsGroup title="Provider">
@@ -1432,7 +1478,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
   return (
     <div role="dialog" aria-label="Settings" className="fixed inset-0 z-40 flex surface-page titlebar-nodrag select-none animate-in fade-in duration-150">
       <aside className="flex w-[15.25rem] shrink-0 flex-col border-r border-tint/[0.05] surface-rail px-3.5 pb-4 pt-16">
-        <button type="button" data-tour="settings-back" onClick={onClose} className="inline-flex items-center gap-1.5 self-start rounded-md px-2.5 text-[0.8125rem] font-semibold text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+        <button type="button" data-tour="settings-back" onClick={guard(onClose)} className="inline-flex items-center gap-1.5 self-start rounded-md px-2.5 text-[0.8125rem] font-semibold text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
           <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />Back
         </button>
         <h1 className="mx-2.5 mb-4 mt-3 text-xl font-extrabold tracking-[-0.015em] text-text-primary">Settings</h1>
@@ -1495,10 +1541,22 @@ export default function SettingsModal({ onClose, initialTab, initialSection }) {
         </div>
       </aside>
 
-      <div className="min-w-0 flex-1 overflow-y-auto custom-scrollbar [mask-image:linear-gradient(to_bottom,transparent_0,transparent_2.25rem,black_4.25rem)]">
-        <div className={`mx-auto w-full px-8 pb-16 pt-[4.5rem] ${activeTab === 'appearance' ? 'max-w-[72rem]' : 'max-w-[52rem]'}`}>
-          {renderPage()}
+      <div className="relative min-w-0 flex-1">
+        <div className="h-full overflow-y-auto custom-scrollbar [mask-image:linear-gradient(to_bottom,transparent_0,transparent_2.25rem,black_4.25rem)]">
+          <div className={`mx-auto w-full px-8 pt-[4.5rem] ${showAddApiForm && activeTab === 'connections' ? 'pb-28' : 'pb-16'} ${activeTab === 'appearance' ? 'max-w-[72rem]' : 'max-w-[52rem]'}`}>
+            {renderPage()}
+          </div>
         </div>
+        <UnsavedChangesBar
+          open={connectionDirty || Boolean(connectionError && showAddApiForm)}
+          flashKey={flashKey}
+          error={connectionError}
+          saving={savingConnection}
+          ready={canSaveApi}
+          onReset={resetConnectionForm}
+          onSave={handleSaveApi}
+          saveTour="create-connection"
+        />
       </div>
 
       {connectionToDelete && (

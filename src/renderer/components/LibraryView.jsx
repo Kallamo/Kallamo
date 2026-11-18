@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { copyText } from '../utils/clipboard';
 import ProfileModal from './modals/ProfileModal';
@@ -19,6 +19,10 @@ import { LibraryRail, RailItem, RailEmpty, ProfileDetail, WorkflowDetail, Variab
 export default function LibraryView() {
   const { 
     setCurrentView,
+    libraryOrigin,
+    libraryRequest,
+    clearLibraryRequest,
+    closeLibrary,
     writingProfiles,
     setWritingProfiles,
     handleDeleteProfile,
@@ -36,6 +40,7 @@ export default function LibraryView() {
     chats
   } = useApp();
 
+  const originChat = libraryOrigin ? chats.find(chat => chat.id === libraryOrigin.chatId) : null;
   const [activeTab, setActiveTab] = useState('profiles'); // 'profiles' | 'workflows' | 'variables'
   
   const [showProfileModal, setShowProfileModal] = useState(false);
@@ -129,6 +134,23 @@ export default function LibraryView() {
     setProfileModalTab(tab);
     setShowProfileModal(true);
   };
+
+  // Arriving with a request (a profile that needs a connection) opens it on that field.
+  useEffect(() => {
+    if (!libraryRequest?.profileId) return undefined;
+    const profile = writingProfiles.find(p => p.id === libraryRequest.profileId);
+    clearLibraryRequest();
+    if (!profile) return undefined;
+    openEditProfile(profile);
+    if (libraryRequest.focus !== 'connection') return undefined;
+    // Not cancelled on cleanup: clearing the request re-runs this effect right away.
+    setTimeout(() => {
+      const section = document.querySelector('[data-tour="profile-connection"]');
+      section?.scrollIntoView({ block: 'center' });
+      section?.querySelector('button')?.focus();
+    }, 120);
+    return undefined;
+  }, [libraryRequest]);
 
   const openManageKb = (profile) => {
     setProfileToEdit(profile);
@@ -522,7 +544,8 @@ export default function LibraryView() {
         onTab={tab => { closeEditors(); setActiveTab(tab); }}
         search={searches[activeTab] || ''}
         onSearch={value => setSearches(prev => ({ ...prev, [activeTab]: value }))}
-        onBack={() => setCurrentView('dashboard')}
+        onBack={closeLibrary}
+        backLabel={originChat ? `Back to ${originChat.title || 'workspace'}` : 'Workspaces'}
         newLabel={rail.newLabel}
         onNew={rail.onNew}
         onImport={rail.onImport}

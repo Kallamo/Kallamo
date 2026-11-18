@@ -9,11 +9,11 @@ import { parseMarkdown } from '../../utils/markdown';
 
 const SETUP = 'text-status-setup';
 
-export function LibraryRail({ tabs, activeTab, onTab, search, onSearch, onBack, newLabel, onNew, onImport, children }) {
+export function LibraryRail({ tabs, activeTab, onTab, search, onSearch, onBack, backLabel = 'Workspaces', newLabel, onNew, onImport, children }) {
   return (
     <aside className="flex w-[21.25rem] shrink-0 flex-col border-r border-tint/[0.05] surface-rail px-4 pb-4 pt-16">
-      <button type="button" onClick={onBack} className="inline-flex items-center gap-1.5 self-start rounded-md px-1 text-[0.8125rem] font-semibold text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-        <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />Workspaces
+      <button type="button" onClick={onBack} className="inline-flex items-center gap-1.5 max-w-full self-start rounded-md px-1 text-[0.8125rem] font-semibold text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+        <ArrowLeft className="h-3.5 w-3.5 shrink-0" aria-hidden="true" /><span className="truncate">{backLabel}</span>
       </button>
       <div className="mt-3 flex items-center gap-3 px-1">
         <Logo size={26} className="shrink-0" />

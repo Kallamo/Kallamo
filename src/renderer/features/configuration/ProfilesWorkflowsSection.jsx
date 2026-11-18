@@ -1,12 +1,11 @@
 import { useState } from 'react';
-import { AlertTriangle, BookOpen, Pencil, Plus, Search, Workflow } from 'lucide-react';
+import { useApp } from '../../context/AppContext';
+import { AlertTriangle, Plus, Search, Workflow } from 'lucide-react';
 import { AiGlyph } from '../../components/ui/glyphs';
 import Button from '../../components/ui/Button';
-import IconButton from '../../components/ui/IconButton';
 import Toggle from '../../components/ui/Toggle';
 import ProfileModal from '../../components/modals/ProfileModal';
 import WorkflowModal from '../../components/modals/WorkflowModal';
-import KbManagerModal from '../../components/modals/KbManagerModal';
 import { ConfigSection, FieldLabel, Help } from './ConfigParts';
 
 const parseList = value => {
@@ -25,12 +24,13 @@ const stepCount = workflow => {
 };
 
 /**
- * Which profiles and workflows run here. Each row edits its profile, knowledge or workflow
- * in place, with the same dialogs as the Library, so nothing needs a trip away.
+ * Which profiles and workflows run here. Editing lives in the Library, reached from the
+ * title bar; New stays here because it also turns the new item on for this workspace.
  */
 export default function ProfilesWorkflowsSection({ sectionRef, activeChat, writingProfiles, workflows, handleSaveChat }) {
   const [profileQuery, setProfileQuery] = useState('');
-  // { kind: 'profile' | 'knowledge' | 'workflow', item?: object }
+  const { openLibrary } = useApp();
+  // { kind: 'profile' | 'workflow' }, the New dialog that is open.
   const [editing, setEditing] = useState(null);
   const activeProfiles = parseList(activeChat.activeProfiles);
   const activeWorkflows = parseList(activeChat.activeWorkflows);
@@ -61,7 +61,7 @@ export default function ProfilesWorkflowsSection({ sectionRef, activeChat, writi
           <div className="flex items-center gap-2">
             <FieldLabel>AI Profiles</FieldLabel>
             <span className="flex-1 text-xs tabular-nums text-text-subtle">{profilesOn} of {writingProfiles.length} on</span>
-            <Button variant="subtle" size="sm" icon={Plus} onClick={() => setEditing({ kind: 'profile', item: null })}>New</Button>
+            <Button variant="subtle" size="sm" icon={Plus} onClick={() => setEditing({ kind: 'profile' })}>New</Button>
           </div>
           {writingProfiles.length > 0 && (
             <label className="field-input flex h-8 items-center gap-2 px-2.5 focus-within:border-accent/65">
@@ -90,18 +90,18 @@ export default function ProfilesWorkflowsSection({ sectionRef, activeChat, writi
                       <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-status-warning">
                         <AlertTriangle aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
                         <span className="truncate">Needs an API connection</span>
+                        <span aria-hidden="true">·</span>
+                        <button
+                          type="button"
+                          aria-label={`Set up ${profile.name} in the Library`}
+                          onClick={() => openLibrary({ profileId: profile.id, focus: 'connection' })}
+                          className="shrink-0 rounded font-semibold text-status-setup hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-setup/50"
+                        >
+                          Set up
+                        </button>
                       </span>
                     )}
                   </span>
-                  <IconButton icon={BookOpen} size="sm" label={`Knowledge of ${profile.name}`} onClick={() => setEditing({ kind: 'knowledge', item: profile })} />
-                  <IconButton
-                    icon={Pencil}
-                    size="sm"
-                    label={needsSetup ? `Edit ${profile.name} to connect an API` : `Edit ${profile.name}`}
-                    className={needsSetup ? '!bg-status-warning/14 !text-status-warning ring-1 ring-inset ring-status-warning/35 hover:!bg-status-warning/20' : ''}
-                    onClick={() => setEditing({ kind: 'profile', item: profile })}
-                  />
-                  <span aria-hidden="true" className="mx-1 h-4.5 w-px bg-border-subtle" />
                   <Toggle checked={on} disabled={needsSetup} ariaLabel={`Use ${profile.name}`} onChange={() => toggle('activeProfiles', activeProfiles, profile.id)} />
                 </div>
               );
@@ -113,7 +113,7 @@ export default function ProfilesWorkflowsSection({ sectionRef, activeChat, writi
           <div className="flex items-center gap-2">
             <FieldLabel>Workflows</FieldLabel>
             <span className="flex-1 text-xs tabular-nums text-text-subtle">{workflowsOn} of {workflows.length} on</span>
-            <Button variant="subtle" size="sm" icon={Plus} onClick={() => setEditing({ kind: 'workflow', item: null })}>New</Button>
+            <Button variant="subtle" size="sm" icon={Plus} onClick={() => setEditing({ kind: 'workflow' })}>New</Button>
           </div>
           <div className="max-h-[22rem] divide-y divide-border-subtle overflow-y-auto rounded-card border border-border-subtle bg-surface-inset custom-scrollbar">
             {workflows.length === 0 && (
@@ -132,34 +132,27 @@ export default function ProfilesWorkflowsSection({ sectionRef, activeChat, writi
                     <span className={`block truncate text-[0.8125rem] ${on ? 'font-medium text-text-primary' : 'text-text-secondary'}`}>{workflow.name}</span>
                     <span className="block text-xs text-text-subtle">{steps} {steps === 1 ? 'step' : 'steps'}</span>
                   </span>
-                  <IconButton icon={Pencil} size="sm" label={`Edit ${workflow.name}`} onClick={() => setEditing({ kind: 'workflow', item: workflow })} />
-                  <span aria-hidden="true" className="mx-1 h-4.5 w-px bg-border-subtle" />
                   <Toggle checked={on} ariaLabel={`Use ${workflow.name}`} onChange={() => toggle('activeWorkflows', activeWorkflows, workflow.id)} />
                 </div>
               );
             })}
           </div>
-          <Help>Editing opens the profile, its knowledge or the workflow right here. Changes apply everywhere the profile or workflow is used.</Help>
+          <Help>Profiles, their knowledge and workflows are edited in the Library, from the title bar. Changes apply everywhere they are used.</Help>
         </div>
       </div>
 
       {editing?.kind === 'profile' && (
         <ProfileModal
-          profile={editing.item}
+          profile={null}
           onClose={() => setEditing(null)}
-          onSave={async (saved, { isNew } = {}) => {
-            if (isNew || !editing.item) await addActive('activeProfiles', activeProfiles, saved?.id);
-          }}
+          onSave={async saved => { await addActive('activeProfiles', activeProfiles, saved?.id); }}
         />
       )}
-      {editing?.kind === 'knowledge' && <KbManagerModal profile={editing.item} onClose={() => setEditing(null)} />}
       {editing?.kind === 'workflow' && (
         <WorkflowModal
-          workflow={editing.item}
+          workflow={null}
           onClose={() => setEditing(null)}
-          onSave={async saved => {
-            if (!editing.item) await addActive('activeWorkflows', activeWorkflows, saved?.id);
-          }}
+          onSave={async saved => { await addActive('activeWorkflows', activeWorkflows, saved?.id); }}
         />
       )}
     </ConfigSection>
