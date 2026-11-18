@@ -654,7 +654,8 @@ function excerptNumbers(text) {
 
 /**
  * A span the interpreter cites holds only when its excerpt is literally in the turn and any
- * number written in digits matches the amount. A cited number in words cannot be checked.
+ * number written in digits matches the amount. An amount neither digits nor the text reading
+ * confirm ("not long", a number in words) is kept as unchecked: it may lift the ceiling, never set a floor.
  */
 function verifyStatedSpan(calendar, span, sourceText) {
   if (!span || typeof span !== 'object' || Array.isArray(span)) return null;
@@ -674,7 +675,7 @@ function verifyStatedSpan(calendar, span, sourceText) {
   if ((numbers.length && !numbers.includes(claim.amount)) || (read && read.minutes !== minutes)) {
     return { ...claim, verified: false, reason: 'amount-mismatch' };
   }
-  return { ...claim, verified: true, minutes };
+  return { ...claim, verified: true, amountChecked: numbers.length > 0 || Boolean(read), minutes };
 }
 
 /**
@@ -685,7 +686,7 @@ function resolveStatedSpan(calendar, { claimedSpan = null, sourceText = '' } = {
   const check = verifyStatedSpan(calendar, claimedSpan, sourceText);
   if (check?.verified) {
     const statedSpan = check.asserts === 'history' ? null : {
-      strength: check.asserts === 'now' ? 'strong' : 'weak',
+      strength: check.asserts === 'now' && check.amountChecked ? 'strong' : 'weak',
       minutes: check.minutes,
       evidence: check.excerpt,
       source: 'interpreter'
@@ -704,7 +705,7 @@ function withSpanNotes(advance, timeAdvance) {
   return {
     ...advance,
     ...(stated ? { statedSpan: { strength: stated.strength, minutes: stated.minutes, evidence: stated.evidence, source: stated.source || 'text' } } : {}),
-    ...(check ? { spanCheck: { excerpt: check.excerpt, amount: check.amount, unit: check.unit, asserts: check.asserts, verified: Boolean(check.verified), ...(check.reason ? { reason: check.reason } : {}) } } : {})
+    ...(check ? { spanCheck: { excerpt: check.excerpt, amount: check.amount, unit: check.unit, asserts: check.asserts, verified: Boolean(check.verified), ...(check.verified && !check.amountChecked ? { amountChecked: false } : {}), ...(check.reason ? { reason: check.reason } : {}) } } : {})
   };
 }
 

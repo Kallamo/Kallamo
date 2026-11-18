@@ -250,6 +250,23 @@ describe('Roleplay time advance', () => {
         .toMatchObject({ verified: false, reason: 'amount-mismatch' });
     });
 
+    test('keeps the turn short when the cited excerpt holds no amount to check', () => {
+      const line = 'Vou bater o papo com nossos companheiros lá embaixo, não vai demorar muito.';
+      const resolved = cite(line, { excerpt: line, amount: 1, unit: 'hours', asserts: 'now' });
+
+      expect(resolved.check).toMatchObject({ verified: true, amountChecked: false });
+      expect(resolved.statedSpan).toMatchObject({ strength: 'weak' });
+      const result = frame('turn-unchecked', turn(resolved, { years: 0, months: 0, days: 0, hours: 0, minutes: 2 }));
+      expect(calendarService.durationTotalMinutes(calendar(), result.advance.duration)).toBe(2);
+      expect(result.advance.spanCheck).toMatchObject({ amountChecked: false });
+    });
+
+    test('still moves the clock by a span whose digits match', () => {
+      const resolved = cite('Duas horas depois, 2 horas ao todo, voltaram.', { excerpt: '2 horas ao todo', amount: 2, unit: 'hours', asserts: 'now' });
+
+      expect(resolved.statedSpan).toMatchObject({ strength: 'strong', minutes: 120 });
+    });
+
     test('lets a framing span lift the ceiling without moving the clock', () => {
       const resolved = cite('After six weeks on the road, they reached Kesh.', { excerpt: 'After six weeks', amount: 6, unit: 'weeks', asserts: 'framing' });
 
