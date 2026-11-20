@@ -3,6 +3,7 @@ import { Clock3, History, Info, MapPin, X } from 'lucide-react';
 import Modal from '../../components/ui/Modal';
 import { formatTokens } from '../../components/ui/TokenBadge';
 import { parseMarkdown } from '../../utils/markdown';
+import { parseMessageContent } from '../chat/message-content';
 import { formatFrameDate, formatFrameTime, framePlaceKey, shouldShowTimeTransition } from '../chat/frame-format';
 
 const fileUrl = path => `app-file:///${String(path).replace(/\\/g, '/')}`;
@@ -219,7 +220,7 @@ export default function SummaryLogModal({ block, chatId, electronAPI, background
                 </div>
               );
             }
-            const message = { ...item.message, ...(details[item.message.id] || {}), content: item.message.content };
+            const message = { ...item.message, ...(details[item.message.id] || {}), content: parseMessageContent(String(item.message.content)).response };
             const stamp = formatStamp(message.createdAt);
             if (message.role === 'user') {
               return (
